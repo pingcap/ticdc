@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // GetDiskInfo return the disk space information of the given directory

@@ -25,9 +25,10 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
-	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
@@ -35,7 +36,7 @@ import (
 )
 
 func TestGenerateResolveLockTask(t *testing.T) {
-	client := &SubscriptionClient{
+	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 10),
 	}
 	rawSpan := heartbeatpb.TableSpan{
@@ -99,6 +100,8 @@ func TestGenerateResolveLockTask(t *testing.T) {
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	wg := &sync.WaitGroup{}
 
 	eventsCh1 := make(chan *cdcpb.ChangeDataEvent, 10)
@@ -131,7 +134,6 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		clientConfig,
 		pdClient,
 		regionCache,
-		pdClock,
 		lockResolver,
 		&security.Credential{},
 	)

@@ -48,12 +48,9 @@ type Writer struct {
 	syncPointTableInit     bool
 	lastCleanSyncPointTime time.Time
 
-	ddlTsTableInit   bool
-	tableSchemaStore *util.TableSchemaStore
-
-	// asyncDDLState is used to store the state of async ddl.
-	// key: tableID, value: state(0: unknown state , 1: executing, 2: no executing ddl)
-	asyncDDLState sync.Map
+	ddlTsTableInit      bool
+	ddlTsTableInitMutex sync.Mutex
+	tableSchemaStore    *util.TableSchemaStore
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
@@ -84,7 +81,6 @@ func NewWriter(
 		ChangefeedID:           changefeedID,
 		lastCleanSyncPointTime: time.Now(),
 		ddlTsTableInit:         false,
-		asyncDDLState:          sync.Map{},
 		cachePrepStmts:         cfg.CachePrepStmts,
 		maxAllowedPacket:       cfg.MaxAllowedPacket,
 		stmtCache:              cfg.stmtCache,
@@ -105,9 +101,6 @@ func (w *Writer) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
-		for _, callback := range event.PostTxnFlushed {
-			callback()
-		}
 		return nil
 	}
 
@@ -115,16 +108,8 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		// first we check whether there is some async ddl executed now.
 		w.waitAsyncDDLDone(event)
 	}
-
-	// check the ddl should by async or sync executed.
-	if needAsyncExecDDL(event.GetDDLType()) && w.cfg.IsTiDB {
-		// for async exec ddl, we don't flush ddl ts here. Because they don't block checkpointTs.
-		err := w.asyncExecAddIndexDDLIfTimeout(event)
-		if err != nil {
-			return errors.Trace(err)
-		}
-	} else if !(event.TiDBOnly && !w.cfg.IsTiDB) {
-		if w.cfg.IsTiDB {
+	if w.cfg.IsTiDB || !event.TiDBOnly {
+		if w.cfg.IsTiDB && w.cfg.EnableDDLTs {
 			// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
 			// to ensure the atomic with ddl writing when server is restarted.
 			w.FlushDDLTsPre(event)
@@ -134,7 +119,6 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
-
 		// We need to record ddl' ts after each ddl for each table in the downstream when sink is mysql-compatible.
 		// Only in this way, when the node restart, we can continue sync data from the last ddl ts at least.
 		// Otherwise, after restarting, we may sync old data in new schema, which will leading to data loss.
@@ -142,23 +126,18 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		// We make Flush ddl ts before callback(), in order to make sure the ddl ts is flushed
 		// before new checkpointTs will report to maintainer. Therefore, when the table checkpointTs is forward,
 		// we can ensure the ddl and ddl ts are both flushed downstream successfully.
-		err = w.FlushDDLTs(event)
-		if err != nil {
-			return err
+		if w.cfg.EnableDDLTs {
+			err = w.FlushDDLTs(event)
+			if err != nil {
+				return err
+			}
 		}
-	}
-
-	for _, callback := range event.PostTxnFlushed {
-		callback()
 	}
 	return nil
 }
 
 func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	if w.cfg.DryRun {
-		for _, callback := range event.PostTxnFlushed {
-			callback()
-		}
 		return nil
 	}
 
@@ -170,7 +149,7 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		}
 		w.syncPointTableInit = true
 	}
-	if w.cfg.IsTiDB {
+	if w.cfg.IsTiDB && w.cfg.EnableDDLTs {
 		// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
 		// to ensure the atomic with ddl writing when server is restarted.
 		w.FlushDDLTsPre(event)
@@ -188,15 +167,10 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	// We make Flush ddl ts before callback(), in order to make sure the ddl ts is flushed
 	// before new checkpointTs will report to maintainer. Therefore, when the table checkpointTs is forward,
 	// we can ensure the ddl and ddl ts are both flushed downstream successfully.
-	err = w.FlushDDLTs(event)
-	if err != nil {
-		return err
+	if w.cfg.EnableDDLTs {
+		err = w.FlushDDLTs(event)
 	}
-
-	for _, callback := range event.PostTxnFlushed {
-		callback()
-	}
-	return nil
+	return err
 }
 
 func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
@@ -207,22 +181,20 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 		return nil
 	}
 
+	var err error
 	if !w.cfg.DryRun {
-		if err := w.execDMLWithMaxRetries(dmls); err != nil {
-			return errors.Trace(err)
-		}
+		err = w.execDMLWithMaxRetries(dmls)
 	} else {
 		w.tryDryRunBlock()
-		if err := w.statistics.RecordBatchExecution(func() (int, int64, error) {
+		err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
 			return dmls.rowCount, dmls.approximateSize, nil
-		}); err != nil {
-			return errors.Trace(err)
-		}
+		})
+	}
+	if err != nil {
+		return errors.Trace(err)
 	}
 	for _, event := range events {
-		for _, callback := range event.PostTxnFlushed {
-			callback()
-		}
+		event.PostFlush()
 	}
 	return nil
 }
@@ -243,5 +215,8 @@ func (w *Writer) tryDryRunBlock() {
 func (w *Writer) Close() {
 	if w.stmtCache != nil {
 		w.stmtCache.Purge()
+	}
+	if w.blockerTicker != nil {
+		w.blockerTicker.Stop()
 	}
 }

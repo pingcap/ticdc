@@ -16,10 +16,12 @@ package causality
 import (
 	"context"
 
+	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
+	"go.uber.org/zap"
 )
 
 // ConflictDetector implements a logic that dispatches transaction
@@ -53,13 +55,13 @@ func New(
 	for i := 0; i < opt.Count; i++ {
 		ret.resolvedTxnCaches[i] = newTxnCache(opt)
 	}
+	log.Info("conflict detector initialized", zap.Int("cacheCount", opt.Count),
+		zap.Int("cacheSize", opt.Size), zap.String("BlockStrategy", string(opt.BlockStrategy)))
 	return ret
 }
 
 func (d *ConflictDetector) Run(ctx context.Context) error {
-	defer func() {
-		d.notifiedNodes.CloseAndDrain()
-	}()
+	defer d.closeCache()
 	for {
 		select {
 		case <-ctx.Done():
@@ -106,6 +108,17 @@ func (d *ConflictDetector) sendToCache(event *commonEvent.DMLEvent, id int64) bo
 
 // GetOutChByCacheID returns the output channel by cacheID.
 // Note txns in single cache should be executed sequentially.
-func (d *ConflictDetector) GetOutChByCacheID(id int) <-chan *commonEvent.DMLEvent {
+func (d *ConflictDetector) GetOutChByCacheID(id int) *chann.UnlimitedChannel[*commonEvent.DMLEvent, any] {
 	return d.resolvedTxnCaches[id].out()
+}
+
+func (d *ConflictDetector) closeCache() {
+	// the unlimited channel should be closed when quit wait group, otherwise dmlWriter will be blocked
+	for _, cache := range d.resolvedTxnCaches {
+		cache.out().Close()
+	}
+}
+
+func (d *ConflictDetector) Close() {
+	d.notifiedNodes.CloseAndDrain()
 }

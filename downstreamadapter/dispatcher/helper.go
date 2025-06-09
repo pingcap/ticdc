@@ -46,7 +46,7 @@ func (r *ResendTaskMap) Get(identifier BlockEventIdentifier) *ResendTask {
 }
 
 func (r *ResendTaskMap) Set(identifier BlockEventIdentifier, task *ResendTask) {
-	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("task", task))
+	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("taskDispatcherID", task.dispatcher.id))
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.m[identifier] = task
@@ -228,6 +228,13 @@ func (s *ComponentStateWithMutex) Get() heartbeatpb.ComponentState {
 	return s.componentStatus
 }
 
+type TableSpanStatusWithSeq struct {
+	*heartbeatpb.TableSpanStatus
+	CheckpointTs uint64
+	ResolvedTs   uint64
+	Seq          uint64
+}
+
 /*
 HeartBeatInfo is used to collect the message for HeartBeatRequest for each dispatcher.
 Mainly about the progress of each dispatcher:
@@ -236,7 +243,6 @@ Mainly about the progress of each dispatcher:
 type HeartBeatInfo struct {
 	heartbeatpb.Watermark
 	Id              common.DispatcherID
-	TableSpan       *heartbeatpb.TableSpan
 	ComponentStatus heartbeatpb.ComponentState
 	IsRemoving      bool
 }
@@ -262,7 +268,7 @@ func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher *Dispat
 }
 
 func (t *ResendTask) Execute() time.Time {
-	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.id))
+	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.GetId()))
 	t.dispatcher.blockStatusesChan <- t.message
 	return time.Now().Add(200 * time.Millisecond)
 }
@@ -351,7 +357,7 @@ func (h *DispatcherStatusHandler) Handle(dispatcher *Dispatcher, events ...Dispa
 func (h *DispatcherStatusHandler) GetSize(event DispatcherStatusWithID) int   { return 0 }
 func (h *DispatcherStatusHandler) IsPaused(event DispatcherStatusWithID) bool { return false }
 func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest *Dispatcher) common.GID {
-	return dest.changefeedID.ID()
+	return dest.GetChangefeedID().ID()
 }
 
 func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dynstream.Timestamp {

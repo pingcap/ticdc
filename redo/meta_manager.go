@@ -35,11 +35,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var _ MetaManager = (*metaManager)(nil)
-
 // MetaManager defines an interface that is used to manage redo meta and gc logs in owner.
 type MetaManager interface {
-	redoManager
+	Run(ctx context.Context, _ ...chan<- error) error
 	// UpdateMeta updates the checkpointTs and resolvedTs asynchronously.
 	UpdateMeta(checkpointTs, resolvedTs common.Ts)
 	// GetFlushedMeta returns the flushed meta.
@@ -53,7 +51,7 @@ type MetaManager interface {
 }
 
 type metaManager struct {
-	captureID    common.CaptureID
+	captureID    config.CaptureID
 	changeFeedID common.ChangeFeedID
 	enabled      bool
 
@@ -182,9 +180,9 @@ func (m *metaManager) Run(ctx context.Context, _ ...chan<- error) error {
 	return eg.Wait()
 }
 
-func (m *metaManager) WaitForReady(_ context.Context) {}
+// func (m *metaManager) WaitForReady(_ context.Context) {}
 
-func (m *metaManager) Close() {}
+// func (m *metaManager) Close() {}
 
 // UpdateMeta updates meta.
 func (m *metaManager) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
@@ -548,7 +546,7 @@ func (m *metaManager) bgGC(egCtx context.Context) error {
 }
 
 func getMetafileName(
-	captureID common.CaptureID,
+	captureID config.CaptureID,
 	changeFeedID common.ChangeFeedID,
 	uuidGenerator uuid.Generator,
 ) string {

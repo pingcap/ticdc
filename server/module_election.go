@@ -22,10 +22,11 @@ import (
 	"github.com/pingcap/ticdc/coordinator"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	logcoordinator "github.com/pingcap/ticdc/logservice/coordinator"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.etcd.io/etcd/server/v3/mvcc"
 	"go.uber.org/zap"
@@ -81,7 +82,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == model.LivenessCaptureStopping {
+		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
 			log.Info("do not campaign coordinator, liveness is stopping",
 				zap.Any("captureID", e.svr.info.ID))
 			return nil
@@ -110,7 +111,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == model.LivenessCaptureStopping {
+		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
 			// If the server is stopping, resign actively.
 			log.Info("resign coordinator actively, liveness is stopping")
 			if resignErr := e.resign(ctx); resignErr != nil {
@@ -122,7 +123,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		}
 
 		coordinatorVersion, err := e.svr.EtcdClient.GetOwnerRevision(ctx,
-			model.CaptureID(e.svr.info.ID))
+			config.CaptureID(e.svr.info.ID))
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -134,7 +135,6 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		co := coordinator.New(
 			e.svr.info,
 			e.svr.pdClient,
-			e.svr.PDClock,
 			changefeed.NewEtcdBackend(e.svr.EtcdClient),
 			e.svr.EtcdClient.GetGCServiceID(),
 			coordinatorVersion,
@@ -209,7 +209,7 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == model.LivenessCaptureStopping {
+		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
 			log.Info("do not campaign log coordinator, liveness is stopping",
 				zap.Any("captureID", e.svr.info.ID))
 			return nil
@@ -232,7 +232,7 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == model.LivenessCaptureStopping {
+		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
 			// If the server is stopping, resign actively.
 			log.Info("resign log coordinator actively, liveness is stopping")
 			if resignErr := e.resign(ctx); resignErr != nil {

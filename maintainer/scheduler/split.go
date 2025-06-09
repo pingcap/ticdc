@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
@@ -25,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -65,6 +65,10 @@ func NewSplitScheduler(
 }
 
 func (s *splitScheduler) Execute() time.Time {
+	failpoint.Inject("StopSplitScheduler", func() time.Time {
+		return time.Now().Add(s.checkInterval)
+	})
+
 	if s.splitter == nil {
 		return time.Time{}
 	}
@@ -121,7 +125,7 @@ func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Tim
 		case replica.OpMergeAndSplit:
 			log.Info("Into OP MergeAndSplit")
 			// expectedSpanNum := split.NextExpectedSpansNumber(len(ret.Replications))
-			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()))
+			spans := s.splitter.SplitSpansByWriteKey(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()))
 			if len(spans) > 1 {
 				log.Info("split span",
 					zap.String("changefeed", s.changefeedID.Name()),
@@ -141,7 +145,7 @@ func (s *splitScheduler) valid(c replica.CheckResult) (*heartbeatpb.TableSpan, b
 			zap.Int64("tableId", c.Replications[0].Span.TableID),
 			zap.Stringer("checkResult", c))
 	}
-	span := spanz.TableIDToComparableSpan(c.Replications[0].Span.TableID)
+	span := common.TableIDToComparableSpan(c.Replications[0].Span.TableID)
 	totalSpan := &heartbeatpb.TableSpan{
 		TableID:  span.TableID,
 		StartKey: span.StartKey,
@@ -155,7 +159,7 @@ func (s *splitScheduler) valid(c replica.CheckResult) (*heartbeatpb.TableSpan, b
 				zap.Int64("tableId", c.Replications[0].Span.TableID),
 				zap.Stringer("checkResult", c))
 		}
-		spanMap := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		spanMap := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
 		for _, r := range c.Replications {
 			spanMap.ReplaceOrInsert(r.Span, r)
 		}

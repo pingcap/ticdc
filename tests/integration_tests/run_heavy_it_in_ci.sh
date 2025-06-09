@@ -32,17 +32,17 @@ mysql_groups=(
 	# G00
 	'generate_column many_pk_or_uk'
 	# G01
-	'api_v2'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G02
-	'availability'
+	'availability ddl_for_split_tables_with_failover'
 	# G03
 	'multi_source'
 	# G04
 	'syncpoint syncpoint_check_ts'
 	# G05
-	'move_table'
+	'move_table ddl_for_split_tables_with_merge_and_split'
 	# G06
-	'cdc'
+	'cdc ddl_for_split_tables_with_random_merge_and_split'
 	# G07
 	'resolve_lock'
 	# G08
@@ -54,7 +54,7 @@ mysql_groups=(
 	# G11
 	'ddl_reentrant force_replicate_table'
 	# G12
-	'tidb_mysql_test'
+	'tidb_mysql_test ddl_with_random_move_table'
 	# G13
 	'fail_over region_merge'
 	# G14

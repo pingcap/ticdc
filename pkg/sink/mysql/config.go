@@ -27,14 +27,13 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
-	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/sink"
-	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
 )
 
@@ -85,6 +84,8 @@ const (
 	prepStmtCacheSize int = 16 * 1024
 
 	defaultHasVectorType = false
+
+	defaultEnableDDLTs = true
 )
 
 type Config struct {
@@ -106,9 +107,11 @@ type Config struct {
 	DMLMaxRetry uint64
 
 	IsTiDB bool // IsTiDB is true if the downstream is TiDB
-	// IsBDRModeSupported is true if the downstream is TiDB and write source is existed.
-	// write source exists when the downstream is TiDB and version is greater than or equal to v6.5.0.
-	IsWriteSourceExisted bool
+
+	// EnableDDLTs can be set in the sink URI to enable the DDL ts.
+	// it's default to true to make the mysql sink write DDL-ts
+	// for the kafka-consumer, set this to false.
+	EnableDDLTs bool
 
 	SourceID        uint64
 	BatchDMLEnable  bool
@@ -132,8 +135,8 @@ type Config struct {
 	DryRunBlockInterval time.Duration
 }
 
-// NewConfig returns the default mysql backend config.
-func NewMysqlConfig() *Config {
+// New returns the default mysql backend config.
+func New() *Config {
 	return &Config{
 		WorkerCount:            DefaultWorkerCount,
 		MaxTxnRow:              DefaultMaxTxnRow,
@@ -150,6 +153,7 @@ func NewMysqlConfig() *Config {
 		SourceID:               config.DefaultTiDBSourceID,
 		DMLMaxRetry:            8,
 		HasVectorType:          defaultHasVectorType,
+		EnableDDLTs:            defaultEnableDDLTs,
 	}
 }
 
@@ -164,7 +168,7 @@ func (c *Config) Apply(
 	}
 	c.sinkURI = sinkURI
 	scheme := strings.ToLower(sinkURI.Scheme)
-	if !sink.IsMySQLCompatibleScheme(scheme) {
+	if !helper.IsMySQLCompatibleScheme(scheme) {
 		return cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 	query := sinkURI.Query()
@@ -207,6 +211,9 @@ func (c *Config) Apply(
 	if err = getMultiStmtEnable(query, &c.MultiStmtEnable); err != nil {
 		return err
 	}
+	if err = getEnableDDLTs(query, &c.EnableDDLTs); err != nil {
+		return err
+	}
 
 	// c.EnableOldValue = config.EnableOldValue
 	c.ForceReplicate = cfg.ForceReplicate
@@ -227,36 +234,23 @@ func (c *Config) Apply(
 	return nil
 }
 
-func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, error) {
-	cfg := NewMysqlConfig()
-	err := cfg.Apply(sinkURI, changefeedID, config)
-	if err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
-
-func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, *sql.DB, error) {
+func NewMysqlConfigAndDB(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
+) (*Config, *sql.DB, error) {
 	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
 	// create db connection
-	cfg, err := NewMySQLConfig(changefeedID, sinkURI, config)
+	cfg := New()
+	err := cfg.Apply(sinkURI, changefeedID, config)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	dsnStr, err := GenerateDSN(cfg)
+	dsnStr, err := GenerateDSN(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	db, err := CreateMysqlDBConn(dsnStr)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	cfg.IsTiDB = CheckIsTiDB(ctx, db)
-
-	cfg.IsWriteSourceExisted, err = CheckIfBDRModeIsSupported(ctx, db)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -281,7 +275,7 @@ func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, 
 	cachePrepStmts := cfg.CachePrepStmts
 	if cachePrepStmts {
 		// query the size of the prepared statement cache on serverside
-		maxPreparedStmtCount, err := pmysql.QueryMaxPreparedStmtCount(ctx, db)
+		maxPreparedStmtCount, err := queryMaxPreparedStmtCount(ctx, db)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -311,7 +305,7 @@ func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, 
 
 	cfg.CachePrepStmts = cachePrepStmts
 	cfg.SyncPointRetention = config.SyncPointRetention
-	cfg.MaxAllowedPacket, err = pmysql.QueryMaxAllowedPacket(ctx, db)
+	cfg.MaxAllowedPacket, err = queryMaxAllowedPacket(ctx, db)
 	if err != nil {
 		log.Warn("failed to query max_allowed_packet, use default value",
 			zap.String("changefeed", changefeedID.String()),
@@ -328,7 +322,7 @@ func IsSinkSafeMode(sinkURI *url.URL, replicaConfig *config.ReplicaConfig) (bool
 	}
 
 	scheme := strings.ToLower(sinkURI.Scheme)
-	if !sink.IsMySQLCompatibleScheme(scheme) {
+	if !helper.IsMySQLCompatibleScheme(scheme) {
 		return false, cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 	query := sinkURI.Query()
@@ -578,6 +572,18 @@ func getMultiStmtEnable(values url.Values, multiStmtEnable *bool) error {
 			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
 		}
 		*multiStmtEnable = enable
+	}
+	return nil
+}
+
+func getEnableDDLTs(value url.Values, enableDDLTs *bool) error {
+	s := value.Get("enable-ddl-ts")
+	if len(s) > 0 {
+		enable, err := strconv.ParseBool(s)
+		if err != nil {
+			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		}
+		*enableDDLTs = enable
 	}
 	return nil
 }

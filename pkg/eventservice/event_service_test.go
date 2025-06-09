@@ -15,6 +15,8 @@ package eventservice
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -29,18 +31,17 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	tconfig "github.com/pingcap/tiflow/pkg/config"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
-func initEventService(
+func startEventService(
 	ctx context.Context, t *testing.T,
 	mc messaging.MessageCenter, mockStore eventstore.EventStore,
 ) *eventService {
@@ -65,13 +66,15 @@ func TestEventServiceBasic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	log.Info("start event service basic test")
+
 	mockStore := newMockEventStore(100)
 	mockStore.Run(ctx)
 
 	mc := &mockMessageCenter{
 		messageCh: make(chan *messaging.TargetMessage, 100),
 	}
-	esImpl := initEventService(ctx, t, mc, mockStore)
+	esImpl := startEventService(ctx, t, mc, mockStore)
 	esImpl.Close(ctx)
 
 	dispatcherInfo := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
@@ -81,25 +84,22 @@ func TestEventServiceBasic(t *testing.T) {
 	require.NotNil(t, esImpl.brokers[dispatcherInfo.GetClusterID()])
 
 	// add events to eventStore
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 		`insert into test.t(id,c) values (2, "c2")`,
 	}...)
 	require.NotNil(t, kvEvents)
-	v, ok := mockStore.spansMap.Load(dispatcherInfo.span.TableID)
-	require.True(t, ok)
-
-	sourceSpanStat := v.(*mockSpanStats)
-	// add events to eventStore
-	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-	sourceSpanStat.update(resolvedTs, kvEvents...)
 	schemastore := esImpl.schemaStore.(*mockSchemaStore)
 	schemastore.AppendDDLEvent(dispatcherInfo.span.TableID, ddlEvent)
+
+	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
+	mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents...)
 	// receive events from msg center
 	msgCnt := 0
+	dmlCount := 0
 	for {
 		msg := <-mc.messageCh
 		log.Info("receive message", zap.Any("message", msg))
@@ -116,7 +116,7 @@ func TestEventServiceBasic(t *testing.T) {
 				// 2. The eventCollector will send a reset request to the eventService.
 				// 3. We are here to simulate the reset request.
 				esImpl.resetDispatcher(dispatcherInfo)
-				sourceSpanStat.update(resolvedTs + 1)
+				mockStore.AppendEvents(dispatcherInfo.id, resolvedTs+1)
 			case *commonEvent.HandshakeEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
@@ -124,12 +124,18 @@ func TestEventServiceBasic(t *testing.T) {
 				require.Equal(t, dispatcherInfo.startTs, e.GetStartTs())
 				require.Equal(t, uint64(1), e.Seq)
 				log.Info("receive handshake event", zap.Any("event", e))
-			case *commonEvent.DMLEvent:
+			case *commonEvent.BatchDMLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
-				require.Equal(t, int32(len(kvEvents)), e.Len())
-				require.Equal(t, kvEvents[0].CRTs, e.CommitTs)
-				require.Equal(t, uint64(3), e.Seq)
+				// first dml has one event, sencond dml has two events
+				if dmlCount == 0 {
+					require.Equal(t, int32(1), e.Len())
+				} else if dmlCount == 1 {
+					require.Equal(t, int32(2), e.Len())
+				}
+				dmlCount += len(e.DMLEvents)
+				require.Equal(t, kvEvents[dmlCount-1].CRTs, e.GetCommitTs())
+				require.Equal(t, uint64(dmlCount+2), e.GetSeq())
 			case *commonEvent.DDLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
@@ -196,7 +202,8 @@ var _ eventstore.EventStore = &mockEventStore{}
 // mockEventStore is a mock implementation of the EventStore interface
 type mockEventStore struct {
 	resolvedTsUpdateInterval time.Duration
-	spansMap                 sync.Map
+	dispatcherMap            sync.Map // key is common.DispatcherID, value is span
+	spansMap                 sync.Map // key is *heartbeatpb.TableSpan
 }
 
 func newMockEventStore(resolvedTsUpdateInterval int) *mockEventStore {
@@ -206,19 +213,41 @@ func newMockEventStore(resolvedTsUpdateInterval int) *mockEventStore {
 	}
 }
 
+// AppendEvents appends events to the event store for a specific dispatcher.
+// It will update the span stats and the span stats will notify the resolved ts notifier.
+func (m *mockEventStore) AppendEvents(dispatcherID common.DispatcherID, resolvedTs uint64, events ...*common.RawKVEntry) error {
+	span, ok := m.dispatcherMap.Load(dispatcherID)
+	if !ok {
+		return fmt.Errorf("dispatcher not found: %v", dispatcherID)
+	}
+	spanStats, ok := m.spansMap.Load(span)
+	if !ok {
+		return fmt.Errorf("span not found: %v", span)
+	}
+	log.Info("append events", zap.Any("dispatcherID", dispatcherID), zap.Any("resolvedTs", resolvedTs), zap.Int("eventsNum", len(events)))
+	spanStats.(*mockSpanStats).update(resolvedTs, events...)
+	return nil
+}
+
+// Fake implementation for test
 func (m *mockEventStore) GetDispatcherDMLEventState(dispatcherID common.DispatcherID) (
 	bool,
 	eventstore.DMLEventState,
 ) {
-	v, ok := m.spansMap.Load(dispatcherID)
+	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
 		return false, eventstore.DMLEventState{
 			MaxEventCommitTs: 0,
 		}
 	}
-	spanStats := v.(*mockSpanStats)
+	spanStats, ok := m.spansMap.Load(span)
+	if !ok {
+		return false, eventstore.DMLEventState{
+			MaxEventCommitTs: 0,
+		}
+	}
 	return true, eventstore.DMLEventState{
-		MaxEventCommitTs: spanStats.latestCommitTs(),
+		MaxEventCommitTs: spanStats.(*mockSpanStats).latestCommitTs(),
 	}
 }
 
@@ -255,7 +284,11 @@ func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.Dispat
 }
 
 func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
-	m.spansMap.Delete(dispatcherID)
+	span, ok := m.dispatcherMap.Load(dispatcherID)
+	if !ok {
+		return errors.New("dispatcher not found")
+	}
+	m.spansMap.Delete(span)
 	return nil
 }
 
@@ -263,10 +296,16 @@ func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange
 	iter := &mockEventIterator{
 		events: make([]*common.RawKVEntry, 0),
 	}
-	v, ok := m.spansMap.Load(dataRange.Span.TableID)
+	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
-		return nil, nil
+		return nil, fmt.Errorf("dispatcher not found: %v", dispatcherID)
 	}
+
+	v, ok := m.spansMap.Load(span)
+	if !ok {
+		return nil, fmt.Errorf("span not found: %v, dispatcherID: %v", span, dispatcherID)
+	}
+
 	spanStats := v.(*mockSpanStats)
 	events := spanStats.getAllEvents()
 	for _, e := range events {
@@ -285,14 +324,15 @@ func (m *mockEventStore) RegisterDispatcher(
 	onlyReuse bool,
 	bdrMode bool,
 ) (bool, error) {
-	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", uint64(startTS)))
+	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", uint64(startTS)), zap.Any("dispatcherID", dispatcherID))
 	spanStats := &mockSpanStats{
 		startTs:            uint64(startTS),
 		resolvedTsNotifier: notifier,
 		pendingEvents:      make([]*common.RawKVEntry, 0),
 	}
 	spanStats.resolvedTs = uint64(startTS)
-	m.spansMap.Store(span.TableID, spanStats)
+	m.spansMap.Store(span, spanStats)
+	m.dispatcherMap.Store(dispatcherID, span)
 	return true, nil
 }
 
@@ -410,7 +450,6 @@ func (m *mockSchemaStore) FetchTableDDLEvents(tableID int64, tableFilter filter.
 	r := sort.Search(len(events), func(i int) bool {
 		return events[i].FinishedTs > end
 	})
-	m.DDLEvents[tableID] = events[r:]
 	return events[l:r], nil
 }
 
@@ -471,6 +510,8 @@ type mockDispatcherInfo struct {
 	actionType eventpb.ActionType
 	filter     filter.Filter
 	bdrMode    bool
+	integrity  *integrity.Config
+	tz         *time.Location
 }
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -490,6 +531,9 @@ func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, table
 		startTs:    1,
 		actionType: actionType,
 		filter:     filter,
+		bdrMode:    false,
+		integrity:  config.GetDefaultReplicaConfig().Integrity,
+		tz:         time.Local,
 	}
 }
 
@@ -525,8 +569,8 @@ func (m *mockDispatcherInfo) GetChangefeedID() common.ChangeFeedID {
 	return common.NewChangefeedID4Test("default", "test")
 }
 
-func (m *mockDispatcherInfo) GetFilterConfig() *tconfig.FilterConfig {
-	return &tconfig.FilterConfig{
+func (m *mockDispatcherInfo) GetFilterConfig() *config.FilterConfig {
+	return &config.FilterConfig{
 		Rules: []string{"*.*"},
 	}
 }
@@ -552,21 +596,23 @@ func (m *mockDispatcherInfo) IsOnlyReuse() bool {
 }
 
 func (m *mockDispatcherInfo) GetBdrMode() bool {
-	return false
+	return m.bdrMode
 }
 
-func genEvents(helper *pevent.EventTestHelper, t *testing.T, ddl string, dmls ...string) (pevent.DDLEvent, []*common.RawKVEntry) {
+func (m *mockDispatcherInfo) GetIntegrity() *integrity.Config {
+	return m.integrity
+}
+
+func (m *mockDispatcherInfo) GetTimezone() *time.Location {
+	return m.tz
+}
+
+func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)
-	schema := job.SchemaName
-	table := job.TableName
-	kvEvents := helper.DML2RawKv(schema, table, dmls...)
-	for _, e := range kvEvents {
-		require.Equal(t, job.BinlogInfo.TableInfo.UpdateTS-1, e.StartTs)
-		require.Equal(t, job.BinlogInfo.TableInfo.UpdateTS+1, e.CRTs)
-	}
-	return pevent.DDLEvent{
-		Version:    pevent.DDLEventVersion,
-		FinishedTs: job.BinlogInfo.TableInfo.UpdateTS,
+	kvEvents := helper.DML2RawKv(job.TableID, job.BinlogInfo.FinishedTS, dmls...)
+	return commonEvent.DDLEvent{
+		Version:    commonEvent.DDLEventVersion,
+		FinishedTs: job.BinlogInfo.FinishedTS,
 		TableID:    job.BinlogInfo.TableInfo.ID,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,

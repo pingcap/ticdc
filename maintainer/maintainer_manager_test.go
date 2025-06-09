@@ -32,12 +32,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/tiflow/cdc/model"
-	config2 "github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/orchestrator"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -80,8 +77,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		AddTableBatchSize:    1000,
 		CheckBalanceInterval: 0,
 	}
-	pdClock := pdutil.NewClock4Test()
-	manager := NewMaintainerManager(selfNode, schedulerConf, nil, pdClock, nil)
+	manager := NewMaintainerManager(selfNode, schedulerConf, nil, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -94,9 +90,9 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	go func() {
 		_ = dispManager.Run(ctx)
 	}()
-	cfConfig := &model.ChangeFeedInfo{
-		ID:     "test",
-		Config: config2.GetDefaultReplicaConfig(),
+	cfConfig := &config.ChangeFeedInfo{
+		ChangefeedID: common.NewChangeFeedIDWithName("test"),
+		Config:       config.GetDefaultReplicaConfig(),
 	}
 	data, err := json.Marshal(cfConfig)
 	require.NoError(t, err)
@@ -121,7 +117,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	maintainer := value.(*Maintainer)
 
 	require.Eventually(t, func() bool {
-		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+		return maintainer.controller.replicationDB.GetSchedulingSize() == 4
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Equal(t, 4,
 		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
@@ -150,11 +146,11 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
-		Captures: map[model.CaptureID]*model.CaptureInfo{
-			model.CaptureID(selfNode.ID): {ID: model.CaptureID(selfNode.ID), AdvertiseAddr: selfNode.AdvertiseAddr},
-			model.CaptureID(node2.ID):    {ID: model.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
-			model.CaptureID(node3.ID):    {ID: model.CaptureID(node3.ID), AdvertiseAddr: node3.AdvertiseAddr},
-			model.CaptureID(node4.ID):    {ID: model.CaptureID(node4.ID), AdvertiseAddr: node4.AdvertiseAddr},
+		Captures: map[config.CaptureID]*config.CaptureInfo{
+			config.CaptureID(selfNode.ID): {ID: config.CaptureID(selfNode.ID), AdvertiseAddr: selfNode.AdvertiseAddr},
+			config.CaptureID(node2.ID):    {ID: config.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
+			config.CaptureID(node3.ID):    {ID: config.CaptureID(node3.ID), AdvertiseAddr: node3.AdvertiseAddr},
+			config.CaptureID(node4.ID):    {ID: config.CaptureID(node4.ID), AdvertiseAddr: node4.AdvertiseAddr},
 		},
 	})
 
@@ -181,9 +177,9 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	dn3.stop()
 	dn4.stop()
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
-		Captures: map[model.CaptureID]*model.CaptureInfo{
-			model.CaptureID(selfNode.ID): {ID: model.CaptureID(selfNode.ID), AdvertiseAddr: selfNode.AdvertiseAddr},
-			model.CaptureID(node2.ID):    {ID: model.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
+		Captures: map[config.CaptureID]*config.CaptureInfo{
+			config.CaptureID(selfNode.ID): {ID: config.CaptureID(selfNode.ID), AdvertiseAddr: selfNode.AdvertiseAddr},
+			config.CaptureID(node2.ID):    {ID: config.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
 		},
 	})
 
@@ -286,8 +282,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
-	pdClock := pdutil.NewClock4Test()
-	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, nil, pdClock, nil)
+	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, nil, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -300,7 +295,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	// table1 and table 2 will be reported by remote
 	var remotedIds []common.DispatcherID
 	for i := 1; i < 3; i++ {
-		span := spanz.TableIDToComparableSpan(int64(i))
+		span := common.TableIDToComparableSpan(int64(i))
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  int64(i),
 			StartKey: span.StartKey,
@@ -359,7 +354,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	foundSize := 0
 	hasDDLDispatcher := false
 	for _, stm := range maintainer.controller.replicationDB.GetReplicating() {
-		if stm.Span.Equal(heartbeatpb.DDLSpan) {
+		if stm.Span.Equal(common.DDLSpan) {
 			hasDDLDispatcher = true
 		}
 		for _, remotedId := range remotedIds {
@@ -406,8 +401,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		return nil
 	})
 	schedulerConf := &config.SchedulerConfig{AddTableBatchSize: 1000}
-	pdClock := pdutil.NewClock4Test()
-	manager := NewMaintainerManager(selfNode, schedulerConf, nil, pdClock, nil)
+	manager := NewMaintainerManager(selfNode, schedulerConf, nil, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -495,6 +489,6 @@ func newMockEtcdClient(ownerID string) *mockEtcdClient {
 	}
 }
 
-func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (model.CaptureID, error) {
-	return model.CaptureID(m.ownerID), nil
+func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, error) {
+	return config.CaptureID(m.ownerID), nil
 }

@@ -23,13 +23,11 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
-	"github.com/pingcap/ticdc/pkg/spanz"
-	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -41,7 +39,7 @@ var workerNumberForTest = 2
 func checkResolvedTs(t *testing.T, mgr *logManager, expectedRts uint64) {
 	require.Eventually(t, func() bool {
 		resolvedTs := uint64(math.MaxUint64)
-		mgr.rtsMap.Range(func(span tablepb.Span, value any) bool {
+		mgr.rtsMap.Range(func(span heartbeatpb.TableSpan, value any) bool {
 			v, ok := value.(*statefulRts)
 			require.True(t, ok)
 			ts := v.getFlushed()
@@ -130,17 +128,17 @@ func TestLogManagerInProcessor(t *testing.T) {
 			FlushWorkerNum:        workerNumberForTest,
 			UseFileBackend:        useFileBackend,
 		}
-		dmlMgr := NewDMLManager(common.NewChangeFeedIDWithName("test"), cfg)
+		dmlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
 		var eg errgroup.Group
 		eg.Go(func() error {
 			return dmlMgr.Run(ctx)
 		})
 		// check emit row changed events can move forward resolved ts
-		spans := []tablepb.Span{
-			spanz.TableIDToComparableSpan(53),
-			spanz.TableIDToComparableSpan(55),
-			spanz.TableIDToComparableSpan(57),
-			spanz.TableIDToComparableSpan(59),
+		spans := []heartbeatpb.TableSpan{
+			common.TableIDToComparableSpan(53),
+			common.TableIDToComparableSpan(55),
+			common.TableIDToComparableSpan(57),
+			common.TableIDToComparableSpan(59),
 		}
 
 		startTs := uint64(100)
@@ -149,11 +147,11 @@ func TestLogManagerInProcessor(t *testing.T) {
 		}
 		tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 		testCases := []struct {
-			span tablepb.Span
+			span heartbeatpb.TableSpan
 			rows []*pevent.DMLEvent
 		}{
 			{
-				span: spanz.TableIDToComparableSpan(53),
+				span: common.TableIDToComparableSpan(53),
 				rows: []*pevent.DMLEvent{
 					{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
 					{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
@@ -161,20 +159,20 @@ func TestLogManagerInProcessor(t *testing.T) {
 				},
 			},
 			{
-				span: spanz.TableIDToComparableSpan(55),
+				span: common.TableIDToComparableSpan(55),
 				rows: []*pevent.DMLEvent{
 					{CommitTs: 130, PhysicalTableID: 55, TableInfo: tableInfo},
 					{CommitTs: 135, PhysicalTableID: 55, TableInfo: tableInfo},
 				},
 			},
 			{
-				span: spanz.TableIDToComparableSpan(57),
+				span: common.TableIDToComparableSpan(57),
 				rows: []*pevent.DMLEvent{
 					{CommitTs: 130, PhysicalTableID: 57, TableInfo: tableInfo},
 				},
 			},
 			{
-				span: spanz.TableIDToComparableSpan(59),
+				span: common.TableIDToComparableSpan(59),
 				rows: []*pevent.DMLEvent{
 					{CommitTs: 128, PhysicalTableID: 59, TableInfo: tableInfo},
 					{CommitTs: 130, PhysicalTableID: 59, TableInfo: tableInfo},
@@ -183,7 +181,7 @@ func TestLogManagerInProcessor(t *testing.T) {
 			},
 		}
 		for _, tc := range testCases {
-			err := dmlMgr.EmitDMLEvents(ctx, tc.span, nil, tc.rows...)
+			err := dmlMgr.EmitDMLEvents(ctx, tc.span, tc.rows...)
 			require.NoError(t, err)
 		}
 
@@ -242,7 +240,7 @@ func TestLogManagerInOwner(t *testing.T) {
 			UseFileBackend:        useFileBackend,
 		}
 		startTs := common.Ts(10)
-		ddlMgr := NewDDLManager(common.NewChangeFeedIDWithName("test"), cfg, startTs)
+		ddlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
 
 		var eg errgroup.Group
 		eg.Go(func() error {
@@ -255,7 +253,7 @@ func TestLogManagerInOwner(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, startTs, ddlMgr.GetResolvedTs())
 
-		ddlMgr.UpdateResolvedTs(ctx, ddl.FinishedTs)
+		ddlMgr.UpdateResolvedTs(ctx, *common.DDLSpan, ddl.FinishedTs)
 		checkResolvedTs(t, ddlMgr.logManager, ddl.FinishedTs)
 
 		cancel()
@@ -288,7 +286,7 @@ func TestLogManagerError(t *testing.T) {
 		EncodingWorkerNum:     workerNumberForTest,
 		FlushWorkerNum:        workerNumberForTest,
 	}
-	logMgr := NewDMLManager(common.NewChangeFeedIDWithName("test"), cfg)
+	logMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return logMgr.Run(ctx)
@@ -296,20 +294,20 @@ func TestLogManagerError(t *testing.T) {
 
 	tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 	testCases := []struct {
-		span tablepb.Span
-		rows []writer.RedoEvent
+		span heartbeatpb.TableSpan
+		rows []*pevent.DMLEvent
 	}{
 		{
-			span: spanz.TableIDToComparableSpan(53),
-			rows: []writer.RedoEvent{
-				&pevent.DMLEvent{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
-				&pevent.DMLEvent{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
-				&pevent.DMLEvent{CommitTs: 130, PhysicalTableID: 53, TableInfo: tableInfo},
+			span: common.TableIDToComparableSpan(53),
+			rows: []*pevent.DMLEvent{
+				{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
+				{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
+				{CommitTs: 130, PhysicalTableID: 53, TableInfo: tableInfo},
 			},
 		},
 	}
 	for _, tc := range testCases {
-		err := logMgr.emitRedoEvents(ctx, tc.span, nil, tc.rows...)
+		err := logMgr.EmitDMLEvents(ctx, tc.span, tc.rows...)
 		require.NoError(t, err)
 	}
 
@@ -344,7 +342,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 		UseFileBackend:        useFileBackend,
 	}
-	dmlMgr := NewDMLManager(common.NewChangeFeedIDWithName("test"), cfg)
+	dmlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return dmlMgr.Run(ctx)
@@ -353,12 +351,12 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	// Init tables
 	numOfTables := 200
 	tables := make([]common.TableID, 0, numOfTables)
-	maxTsMap := spanz.NewHashMap[*common.Ts]()
+	maxTsMap := common.NewSpanHashMap[*common.Ts]()
 	startTs := uint64(100)
 	for i := 0; i < numOfTables; i++ {
 		tableID := common.TableID(i)
 		tables = append(tables, tableID)
-		span := spanz.TableIDToComparableSpan(tableID)
+		span := common.TableIDToComparableSpan(tableID)
 		ts := startTs
 		maxTsMap.ReplaceOrInsert(span, &ts)
 		dmlMgr.AddTable(span, startTs)
@@ -371,7 +369,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	for _, tableID := range tables {
 		wg.Add(1)
 		tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: fmt.Sprintf("t_%d", tableID)}}
-		go func(span tablepb.Span) {
+		go func(span heartbeatpb.TableSpan) {
 			defer wg.Done()
 			maxCommitTs := maxTsMap.GetV(span)
 			var rows []*pevent.DMLEvent
@@ -388,20 +386,20 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 
 					b.StartTimer()
 				}
-				dmlMgr.EmitDMLEvents(ctx, span, nil, rows...)
+				dmlMgr.EmitDMLEvents(ctx, span, rows...)
 				if i%100 == 0 {
 					dmlMgr.UpdateResolvedTs(ctx, span, *maxCommitTs)
 				}
 			}
-		}(spanz.TableIDToComparableSpan(tableID))
+		}(common.TableIDToComparableSpan(tableID))
 	}
 	wg.Wait()
 
 	// wait flushed
 	for {
 		ok := true
-		maxTsMap.Range(func(span tablepb.Span, targetp *uint64) bool {
-			flushed := dmlMgr.GetResolvedTs(span)
+		maxTsMap.Range(func(span heartbeatpb.TableSpan, targetp *uint64) bool {
+			flushed := dmlMgr.GetResolvedTs()
 			if flushed != *targetp {
 				ok = false
 				log.Info("", zap.Uint64("targetTs", *targetp),

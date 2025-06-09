@@ -49,8 +49,9 @@ type RedoLogWriter interface {
 // LogWriterConfig is the config for redo log writer.
 type LogWriterConfig struct {
 	config.ConsistentConfig
+	// FIXME
 	LogType      string
-	CaptureID    common.CaptureID
+	CaptureID    config.CaptureID
 	ChangeFeedID common.ChangeFeedID
 
 	URI                *url.URL

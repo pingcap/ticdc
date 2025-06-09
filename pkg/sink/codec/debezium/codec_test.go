@@ -494,12 +494,12 @@ func TestDDLEvent(t *testing.T) {
 	job = helper.DDL2Job("DROP TABLE test.table2")
 	tableInfo = helper.GetTableInfo(job)
 	e = &commonEvent.DDLEvent{
-		FinishedTs:      1,
-		TableInfo:       tableInfo,
-		ExtraSchemaName: job.SchemaName,
-		ExtraTableName:  job.TableName,
-		Query:           job.Query,
-		Type:            byte(timodel.ActionDropTable),
+		FinishedTs: 1,
+		TableInfo:  tableInfo,
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		Query:      job.Query,
+		Type:       byte(timodel.ActionDropTable),
 	}
 	keyBuf.Reset()
 	buf.Reset()
@@ -520,8 +520,8 @@ func TestDDLEvent(t *testing.T) {
 				"name": "test_cluster",
 				"ts_ms": 0,
 				"snapshot": "false",
-				"db": "",
-				"table": "",
+				"db": "test",
+				"table": "table2",
 				"server_id": 0,
 				"gtid": null,
 				"file": "",
@@ -536,7 +536,13 @@ func TestDDLEvent(t *testing.T) {
 			"databaseName": "test", 
       		"schemaName": null,
     		"ddl": "DROP TABLE test.table2",
-			"tableChanges": []
+			"tableChanges": [
+				{
+					"type": "DROP", 
+					"id": "\"test\".\"table2\"", 
+					"table": null
+				}
+			]
 		}
 	}`, buf.String())
 }

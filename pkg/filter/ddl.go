@@ -14,8 +14,8 @@
 package filter
 
 import (
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
 )
 
 // TODO: clean this file

@@ -25,7 +25,6 @@ import (
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -68,27 +67,30 @@ func IsBinaryMySQLType(mysqlType string) bool {
 
 // ExtractBasicMySQLType return the mysql type
 func ExtractBasicMySQLType(mysqlType string) byte {
+	mysqlType = strings.TrimPrefix(mysqlType, "unsigned ")
 	for i := 0; i < len(mysqlType); i++ {
 		if mysqlType[i] == '(' || mysqlType[i] == ' ' {
 			return ptypes.StrToType(mysqlType[:i])
 		}
 	}
-
 	return ptypes.StrToType(mysqlType)
 }
 
-func IsUnsignedFlag(mysqlType string) bool {
+func IsUnsignedMySQLType(mysqlType string) bool {
 	return strings.Contains(mysqlType, "unsigned")
 }
 
-func ExtractFlenDecimal(mysqlType string) (int, int) {
+func ExtractFlenDecimal(mysqlType string, tp byte) (int, int) {
 	if strings.HasPrefix(mysqlType, "enum") || strings.HasPrefix(mysqlType, "set") {
 		return 0, 0
 	}
 	start := strings.Index(mysqlType, "(")
 	end := strings.Index(mysqlType, ")")
 	if start == -1 || end == -1 {
-		return -1, types.UnspecifiedLength
+		if strings.HasPrefix("mysqlType", "bit") {
+			return 8, 0
+		}
+		return mysql.GetDefaultFieldLengthAndDecimal(tp)
 	}
 
 	data := strings.Split(mysqlType[start+1:end], ",")
@@ -189,12 +191,12 @@ func MustQueryTimezone(ctx context.Context, db *sql.DB) string {
 }
 
 func queryRowChecksum(
-	ctx context.Context, db *sql.DB, event *commonEvent.RowChangedEvent,
+	ctx context.Context, db *sql.DB, event *commonEvent.DMLEvent,
 ) error {
 	var (
 		schema   = event.TableInfo.GetSchemaName()
 		table    = event.TableInfo.GetTableName()
-		commitTs = event.CommitTs
+		commitTs = event.GetCommitTs()
 	)
 
 	pkNames := event.TableInfo.GetPrimaryKeyColumnNames()
@@ -212,49 +214,56 @@ func queryRowChecksum(
 	}
 	defer conn.Close()
 
-	if event.Checksum.Current != 0 {
-		conditions := make(map[string]interface{})
-		for _, name := range pkNames {
-			for _, col := range event.Columns {
-				colID := event.TableInfo.ForceGetColumnIDByName(col.Name)
-				if event.TableInfo.ForceGetColumnName(colID) == name {
-					conditions[name] = col.Value
+	event.Rewind()
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			break
+		}
+		columns := event.TableInfo.GetColumns()
+		if row.Checksum.Current != 0 {
+			conditions := make(map[string]any)
+			for _, name := range pkNames {
+				for idx, col := range columns {
+					if col.Name.O == name {
+						d := row.Row.GetDatum(idx, &col.FieldType)
+						conditions[name] = d.GetValue()
+					}
 				}
 			}
-		}
-		result := queryRowChecksumAux(ctx, conn, commitTs, schema, table, conditions)
-		if result != 0 && result != event.Checksum.Current {
-			log.Error("verify upstream TiDB columns-level checksum, current checksum mismatch",
-				zap.Uint32("expected", event.Checksum.Current),
-				zap.Uint32("actual", result))
-			return errors.New("checksum mismatch")
-		}
-	}
-
-	if event.Checksum.Previous != 0 {
-		conditions := make(map[string]interface{})
-		for _, name := range pkNames {
-			for _, col := range event.PreColumns {
-				colID := event.TableInfo.ForceGetColumnIDByName(col.Name)
-				if event.TableInfo.ForceGetColumnName(colID) == name {
-					conditions[name] = col.Value
-				}
+			result := queryRowChecksumAux(ctx, conn, commitTs, schema, table, conditions)
+			if result != 0 && result != row.Checksum.Current {
+				log.Error("verify upstream TiDB columns-level checksum, current checksum mismatch",
+					zap.Uint32("expected", row.Checksum.Current),
+					zap.Uint32("actual", result))
+				return errors.New("checksum mismatch")
 			}
 		}
-		result := queryRowChecksumAux(ctx, conn, commitTs-1, schema, table, conditions)
-		if result != 0 && result != event.Checksum.Previous {
-			log.Error("verify upstream TiDB columns-level checksum, previous checksum mismatch",
-				zap.Uint32("expected", event.Checksum.Previous),
-				zap.Uint32("actual", result))
-			return errors.New("checksum mismatch")
+
+		if row.Checksum.Previous != 0 {
+			conditions := make(map[string]any)
+			for _, name := range pkNames {
+				for idx, col := range columns {
+					if col.Name.O == name {
+						d := row.PreRow.GetDatum(idx, &col.FieldType)
+						conditions[name] = d.GetValue()
+					}
+				}
+			}
+			result := queryRowChecksumAux(ctx, conn, commitTs-1, schema, table, conditions)
+			if result != 0 && result != row.Checksum.Previous {
+				log.Error("verify upstream TiDB columns-level checksum, previous checksum mismatch",
+					zap.Uint32("expected", row.Checksum.Previous),
+					zap.Uint32("actual", result))
+				return errors.New("checksum mismatch")
+			}
 		}
 	}
-
 	return nil
 }
 
 func queryRowChecksumAux(
-	ctx context.Context, conn *sql.Conn, commitTs uint64, schema string, table string, conditions map[string]interface{},
+	ctx context.Context, conn *sql.Conn, commitTs uint64, schema string, table string, conditions map[string]any,
 ) uint32 {
 	var result uint32
 	// 1. set snapshot read
@@ -471,38 +480,4 @@ func UnsafeBytesToString(b []byte) string {
 // UnsafeStringToBytes create byte slice from string without copying
 func UnsafeStringToBytes(s string) []byte {
 	return *(*[]byte)(unsafe.Pointer(&s))
-}
-
-// FakeTableIDAllocator is a fake table id allocator
-type FakeTableIDAllocator struct {
-	tableIDs       map[string]int64
-	currentTableID int64
-}
-
-// NewFakeTableIDAllocator creates a new FakeTableIDAllocator
-func NewFakeTableIDAllocator() *FakeTableIDAllocator {
-	return &FakeTableIDAllocator{
-		tableIDs: make(map[string]int64),
-	}
-}
-
-func (g *FakeTableIDAllocator) allocateByKey(key string) int64 {
-	if tableID, ok := g.tableIDs[key]; ok {
-		return tableID
-	}
-	g.currentTableID++
-	g.tableIDs[key] = g.currentTableID
-	return g.currentTableID
-}
-
-// AllocateTableID allocates a table id
-func (g *FakeTableIDAllocator) AllocateTableID(schema, table string) int64 {
-	key := fmt.Sprintf("`%s`.`%s`", commonType.EscapeName(schema), commonType.EscapeName(table))
-	return g.allocateByKey(key)
-}
-
-// AllocatePartitionID allocates a partition id
-func (g *FakeTableIDAllocator) AllocatePartitionID(schema, table, name string) int64 {
-	key := fmt.Sprintf("`%s`.`%s`.`%s`", commonType.EscapeName(schema), commonType.EscapeName(table), commonType.EscapeName(name))
-	return g.allocateByKey(key)
 }

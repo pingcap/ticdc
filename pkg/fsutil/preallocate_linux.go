@@ -19,7 +19,7 @@ import (
 	"os"
 	"syscall"
 
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"golang.org/x/sys/unix"
 )
 
@@ -39,7 +39,7 @@ func PreAllocate(f *os.File, size int64) error {
 	}
 
 	if err == unix.ENOSPC {
-		return cerror.ErrDiskFull
+		return errors.ErrDiskFull
 	}
 
 	return err

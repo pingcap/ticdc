@@ -92,16 +92,15 @@ type schemaStore struct {
 func New(
 	ctx context.Context,
 	root string,
-	subClient *logpuller.SubscriptionClient,
+	subClient logpuller.SubscriptionClient,
 	pdCli pd.Client,
-	pdClock pdutil.Clock,
 	kvStorage kv.Storage,
 ) SchemaStore {
 	dataStorage := newPersistentStorage(ctx, root, pdCli, kvStorage)
 	upperBound := dataStorage.getUpperBound()
 
 	s := &schemaStore{
-		pdClock:       pdClock,
+		pdClock:       appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		unsortedCache: newDDLCache(),
 		dataStorage:   dataStorage,
 		notifyCh:      make(chan interface{}, 4),

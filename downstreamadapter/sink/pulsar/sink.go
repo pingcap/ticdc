@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -144,13 +143,12 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		s.isNormal.Store(false)
 		return err
 	}
+	event.PostFlush()
 	return nil
 }
 
 func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	if event.TiDBOnly {
-		// run callback directly and return
-		event.PostFlush()
 		return nil
 	}
 	for _, e := range event.GetEvents() {
@@ -183,8 +181,6 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	log.Info("pulsar sink send DDL event",
 		zap.String("namespace", s.changefeedID.Namespace()), zap.String("changefeed", s.changefeedID.Name()),
 		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()))
-	// after flush all the ddl event, we call the callback function.
-	event.PostFlush()
 	return nil
 }
 
@@ -194,10 +190,6 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 
 func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
-}
-
-func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
-	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *sink) sendCheckpoint(ctx context.Context) error {
@@ -294,16 +286,16 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case event := <-s.eventChan:
-			topic := s.comp.eventRouter.GetTopicForRowChange(event.TableInfo)
+			schema := event.TableInfo.GetSchemaName()
+			table := event.TableInfo.GetTableName()
+			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
 			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return errors.Trace(err)
 			}
 
-			schema := event.TableInfo.GetSchemaName()
-			table := event.TableInfo.GetTableName()
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
-			selector := s.comp.columnSelector.GetSelector(schema, table)
+			selector := s.comp.columnSelector.Get(schema, table)
 			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
 				var calledCount atomic.Uint64
 				// The callback of the last row will trigger the callback of the txn.
@@ -331,7 +323,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 				}
 
 				mqEvent := &commonEvent.MQRowEvent{
-					Key: model.TopicPartitionKey{
+					Key: commonEvent.TopicPartitionKey{
 						Topic:          topic,
 						Partition:      index,
 						PartitionKey:   key,
@@ -344,6 +336,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						Event:           row,
 						Callback:        rowCallback,
 						ColumnSelector:  selector,
+						Checksum:        row.Checksum,
 					},
 				}
 				s.rowChan <- mqEvent
@@ -452,8 +445,8 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 }
 
 // group groups messages by its key.
-func (s *sink) group(msgs []*commonEvent.MQRowEvent) map[model.TopicPartitionKey][]*commonEvent.RowEvent {
-	groupedMsgs := make(map[model.TopicPartitionKey][]*commonEvent.RowEvent)
+func (s *sink) group(msgs []*commonEvent.MQRowEvent) map[commonEvent.TopicPartitionKey][]*commonEvent.RowEvent {
+	groupedMsgs := make(map[commonEvent.TopicPartitionKey][]*commonEvent.RowEvent)
 	for _, msg := range msgs {
 		if _, ok := groupedMsgs[msg.Key]; !ok {
 			groupedMsgs[msg.Key] = make([]*commonEvent.RowEvent, 0)

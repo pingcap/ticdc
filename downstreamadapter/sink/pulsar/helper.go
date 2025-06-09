@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	putil "github.com/pingcap/ticdc/pkg/util"
 )
 
@@ -101,18 +100,18 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	scheme := helper.GetScheme(sinkURI)
-	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
+	// pulsar only support canal-json, so we don't need to check the protocol
+	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, topic, true, false)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.columnSelector, err = columnselector.NewColumnSelectors(sinkConfig)
+	pulsarComponent.columnSelector, err = columnselector.New(sinkConfig)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	encoderConfig, err := util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, config.DefaultMaxMessageBytes)
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, config.DefaultMaxMessageBytes)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

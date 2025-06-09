@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/tiflow/cdc/model"
@@ -49,6 +48,7 @@ import (
 	"github.com/pingcap/tiflow/pkg/sink/codec/canal"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tpulsar "github.com/pingcap/tiflow/pkg/sink/pulsar"
+	"github.com/pingcap/tiflow/pkg/spanz"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -578,8 +578,8 @@ func (c *Consumer) appendDDL(ddl *model.DDLEvent) {
 	}
 
 	c.ddlList = append(c.ddlList, ddl)
-	log.Info("DDL event received", zap.Uint64("commitTs", ddl.CommitTs), zap.String("DDL", ddl.Query))
 	c.lastReceivedDDL = ddl
+	log.Info("DDL event received", zap.Uint64("commitTs", ddl.CommitTs), zap.String("DDL", ddl.Query))
 }
 
 func (c *Consumer) getFrontDDL() *model.DDLEvent {

@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -31,11 +30,9 @@ func compareKeys(firstKey, secondKey []byte) bool {
 }
 
 func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte) {
-	idxCol := tableInfo.GetPKIndex()
-	// log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
-	key := genKeyList(row, idxCol, tableInfo)
+	key := genKeyList(row, tableInfo)
 	if len(key) == 0 {
-		log.Panic("the table has no primary key", zap.Any("tableinfo", tableInfo))
+		log.Panic("the table has no primary key", zap.Any("tableInfo", tableInfo))
 	}
 
 	hasher := fnv.New32a()
@@ -46,9 +43,9 @@ func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte)
 	return uint64(hasher.Sum32()), key
 }
 
-func genKeyList(row *chunk.Row, colIdx []int64, tableInfo *common.TableInfo) []byte {
+func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 	var key []byte
-	for _, colID := range colIdx {
+	for _, colID := range tableInfo.GetPKIndex() {
 		info, ok := tableInfo.GetColumnInfo(colID)
 		if !ok || info == nil {
 			return nil
@@ -65,7 +62,7 @@ func genKeyList(row *chunk.Row, colIdx []int64, tableInfo *common.TableInfo) []b
 			return nil
 		}
 
-		val := model.ColumnValueString(value)
+		val := common.ColumnValueString(value)
 		if columnNeeds2LowerCase(info.GetType(), info.GetCollate()) {
 			val = strings.ToLower(val)
 		}

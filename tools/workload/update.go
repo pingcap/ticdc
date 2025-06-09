@@ -167,6 +167,7 @@ func (app *WorkloadApp) executeRegularUpdate(conn *sql.Conn, task updateTask) (s
 	if updateSQL == "" {
 		return nil, nil
 	}
+	task.generatedSQL = updateSQL
 	return app.execute(conn, updateSQL, task.TableIndex)
 }
 
@@ -183,7 +184,6 @@ func (app *WorkloadApp) handleUpdateError(err error, task updateTask) error {
 // processUpdateResult handles the result of update operation
 func (app *WorkloadApp) processUpdateResult(res sql.Result, task updateTask) error {
 	if res == nil {
-		plog.Info("update result is nil")
 		return nil
 	}
 

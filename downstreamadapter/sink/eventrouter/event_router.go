@@ -17,7 +17,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
-	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -25,8 +24,8 @@ import (
 )
 
 type Rule struct {
-	partitionDispatcher partition.PartitionGenerator
-	topicGenerator      topic.TopicGenerator
+	partitionDispatcher partition.Generator
+	topicGenerator      topic.Generator
 	tableFilter.Filter
 }
 
@@ -38,7 +37,9 @@ type EventRouter struct {
 }
 
 // NewEventRouter creates a new EventRouter.
-func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, defaultTopic, scheme string) (*EventRouter, error) {
+func NewEventRouter(
+	sinkConfig *config.SinkConfig, defaultTopic string, isPulsar bool, isAvro bool,
+) (*EventRouter, error) {
 	// If an event does not match any dispatching rules in the config file,
 	// it will be dispatched by the default partition dispatcher and
 	// static topic dispatcher because it matches *.* rule.
@@ -49,7 +50,6 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 	})
 
 	rules := make([]Rule, 0, len(ruleConfigs))
-
 	for _, ruleConfig := range ruleConfigs {
 		f, err := tableFilter.Parse(ruleConfig.Matcher)
 		if err != nil {
@@ -58,14 +58,16 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 		if !sinkConfig.CaseSensitive {
 			f = tableFilter.CaseInsensitive(f)
 		}
-
-		d := partition.GetPartitionGenerator(ruleConfig.PartitionRule, scheme, ruleConfig.IndexName, ruleConfig.Columns)
-
-		topicGenerator, err := topic.GetTopicGenerator(ruleConfig.TopicRule, defaultTopic, protocol, scheme)
+		d := partition.NewGenerator(ruleConfig.PartitionRule, isPulsar, ruleConfig.IndexName, ruleConfig.Columns)
+		topicGenerator, err := topic.GetTopicGenerator(ruleConfig.TopicRule, defaultTopic, isPulsar, isAvro)
 		if err != nil {
 			return nil, err
 		}
-		rules = append(rules, Rule{partitionDispatcher: d, topicGenerator: topicGenerator, Filter: f})
+		rules = append(rules, Rule{
+			partitionDispatcher: d,
+			topicGenerator:      topicGenerator,
+			Filter:              f,
+		})
 	}
 
 	return &EventRouter{
@@ -75,9 +77,9 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 }
 
 // GetTopicForRowChange returns the target topic for row changes.
-func (s *EventRouter) GetTopicForRowChange(tableInfo *common.TableInfo) string {
-	topicGenerator := s.matchTopicGenerator(tableInfo.TableName.Schema, tableInfo.TableName.Table)
-	return topicGenerator.Substitute(tableInfo.TableName.Schema, tableInfo.TableName.Table)
+func (s *EventRouter) GetTopicForRowChange(schema, table string) string {
+	topicGenerator := s.matchTopicGenerator(schema, table)
+	return topicGenerator.Substitute(schema, table)
 }
 
 // GetTopicForDDL returns the target topic for DDL.
@@ -105,7 +107,7 @@ func (s *EventRouter) GetTopicForDDL(ddl *commonEvent.DDLEvent) string {
 // GetActiveTopics returns a list of the corresponding topics
 // for the tables that are actively synchronized.
 func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableName) []string {
-	topics := make([]string, 0)
+	topics := make([]string, 0, len(activeTables))
 	topicsMap := make(map[string]bool, len(activeTables))
 	for _, tableName := range activeTables {
 		topicDispatcher := s.matchTopicGenerator(tableName.SchemaName, tableName.TableName)
@@ -125,8 +127,14 @@ func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableNam
 }
 
 // GetPartitionGenerator returns the target partition by the table information.
-func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.PartitionGenerator {
-	return s.matchPartitionGenerator(schema, table)
+func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.Generator {
+	for _, rule := range s.rules {
+		if rule.MatchTable(schema, table) {
+			return rule.partitionDispatcher
+		}
+	}
+	log.Panic("the dispatch rule must cover all tables")
+	return nil
 }
 
 // GetDefaultTopic returns the default topic name.
@@ -134,21 +142,10 @@ func (s *EventRouter) GetDefaultTopic() string {
 	return s.defaultTopic
 }
 
-func (s *EventRouter) matchTopicGenerator(schema, table string) topic.TopicGenerator {
-	for _, rule := range s.rules {
-		if !rule.MatchTable(schema, table) {
-			continue
-		}
-		return rule.topicGenerator
-	}
-	log.Panic("the dispatch rule must cover all tables")
-	return nil
-}
-
-func (s *EventRouter) matchPartitionGenerator(schema, table string) partition.PartitionGenerator {
+func (s *EventRouter) matchTopicGenerator(schema, table string) topic.Generator {
 	for _, rule := range s.rules {
 		if rule.MatchTable(schema, table) {
-			return rule.partitionDispatcher
+			return rule.topicGenerator
 		}
 	}
 	log.Panic("the dispatch rule must cover all tables")

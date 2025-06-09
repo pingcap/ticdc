@@ -1,0 +1,28 @@
+#!/bin/bash
+# parameter 1: table id
+# parameter 2: changefeed id
+# parameter 3: retry count
+
+set -ex
+
+tableID=${1}
+changefeedID=${2}
+retryCount=${3}
+
+echo "merge table with retry"
+count=0
+
+while [[ $count -lt $retryCount ]]; do
+	result=$(run_cdc_cli changefeed merge-table -c "$changefeedID" -t $tableID)
+	echo $result
+	success=$(echo $result | sed 's/ PASS.*//' | sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
+
+	if [ "$success" == "true" ]; then
+		exit 0
+	fi
+
+	count=$((count + 1))
+done
+
+echo "merge table $tableID failed after $retryCount retries"
+exit 1

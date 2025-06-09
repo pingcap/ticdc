@@ -37,17 +37,22 @@ import (
 	"go.uber.org/zap"
 )
 
-// CheckIfBDRModeIsSupported checks if the downstream supports BDR mode.
+const checkRunningAddIndexSQL = `
+SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, STATE
+FROM information_schema.ddl_jobs
+WHERE TABLE_ID = "%d"
+    AND JOB_TYPE LIKE "add index%%"
+    AND (STATE = "running" OR STATE = "queueing");
+`
+
+const checkRunningSQL = `SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY FROM information_schema.ddl_jobs 
+	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
+
+// CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
 func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
-	isTiDB := CheckIsTiDB(ctx, db)
-	if !isTiDB {
-		return false, nil
-	}
-	testSourceID := 1
-	// downstream is TiDB, set system variables.
 	// We should always try to set this variable, and ignore the error if
 	// downstream does not support this variable, it is by design.
-	query := fmt.Sprintf("SET SESSION %s = %d", "tidb_cdc_write_source", testSourceID)
+	query := "SET SESSION tidb_cdc_write_source = 1"
 	_, err := db.ExecContext(ctx, query)
 	if err != nil {
 		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
@@ -66,7 +71,6 @@ func CheckIsTiDB(ctx context.Context, db *sql.DB) bool {
 	row := db.QueryRowContext(ctx, "select tidb_version()")
 	err := row.Scan(&tidbVer)
 	if err != nil {
-		log.Warn("check tidb version error, the downstream db is not tidb?", zap.Error(err))
 		// In earlier versions, this function returned an `error` along with a boolean value,
 		// which allowed callers to differentiate between network-related issues and
 		// the absence of TiDB. However, since the specific error content wasn't critical to
@@ -83,6 +87,7 @@ func CheckIsTiDB(ctx context.Context, db *sql.DB) bool {
 		// query to retrieve the TiDB version fails.
 		return false
 	}
+	log.Info("mysql sink target is TiDB", zap.String("version", tidbVer))
 	return true
 }
 
@@ -296,7 +301,7 @@ func checkCharsetSupport(db *sql.DB, charsetName string) (bool, error) {
 }
 
 // return dsn
-func GenerateDSN(cfg *Config) (string, error) {
+func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 	dsn, err := GenBasicDSN(cfg)
 	if err != nil {
 		return "", err
@@ -317,6 +322,20 @@ func GenerateDSN(cfg *Config) (string, error) {
 	}
 	// NOTE: quote the string is necessary to avoid ambiguities.
 	dsn.Params["sql_mode"] = strconv.Quote(dsn.Params["sql_mode"])
+
+	cfg.IsTiDB = CheckIsTiDB(ctx, testDB)
+
+	if cfg.IsTiDB {
+		// check if tidb_cdc_write_source is supported
+		// only tidb downstream and version is greater than or equal to v6.5.0 supports this variable
+		bdrModeSupported, err := CheckIfBDRModeIsSupported(ctx, testDB)
+		if err != nil {
+			return "", err
+		}
+		if bdrModeSupported {
+			dsn.Params["tidb_cdc_write_source"] = "1"
+		}
+	}
 
 	dsnStr, err := generateDSNByConfig(dsn, cfg, testDB)
 	if err != nil {
@@ -365,27 +384,15 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	return true
 }
 
-// SetWriteSource sets write source for the transaction.
-// When this variable is set to a value other than 0, data written in this session is considered to be written by TiCDC.
-// DDLs executed in a PRIMARY cluster can be replicated to a SECONDARY cluster by TiCDC.
-func SetWriteSource(ctx context.Context, cfg *Config, txn *sql.Tx) error {
-	// we only set write source when donwstream is TiDB and write source is existed.
-	if !cfg.IsWriteSourceExisted {
-		return nil
+func needWaitAsyncExecDone(t timodel.ActionType) bool {
+	switch t {
+	case timodel.ActionCreateTable, timodel.ActionCreateTables:
+		return false
+	case timodel.ActionCreateSchema:
+		return false
+	default:
+		return true
 	}
-	// downstream is TiDB, set system variables.
-	// We should always try to set this variable, and ignore the error if
-	// downstream does not support this variable, it is by design.
-	query := fmt.Sprintf("SET SESSION %s = %d", "tidb_cdc_write_source", cfg.SourceID)
-	_, err := txn.ExecContext(ctx, query)
-	if err != nil {
-		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
-			mysqlErr.Number == mysql.ErrUnknownSystemVariable {
-			return nil
-		}
-		return err
-	}
-	return nil
 }
 
 // ShouldFormatVectorType return true if vector type should be converted to longtext.
@@ -435,4 +442,74 @@ func getSQLErrCode(err error) (errors.ErrCode, bool) {
 	}
 
 	return errors.ErrCode(mysqlErr.Number), true
+}
+
+// queryMaxPreparedStmtCount gets the value of max_prepared_stmt_count
+func queryMaxPreparedStmtCount(ctx context.Context, db *sql.DB) (int, error) {
+	row := db.QueryRowContext(ctx, "select @@global.max_prepared_stmt_count;")
+	var maxPreparedStmtCount sql.NullInt32
+	err := row.Scan(&maxPreparedStmtCount)
+	if err != nil {
+		err = cerror.WrapError(cerror.ErrMySQLQueryError, err)
+	}
+	return int(maxPreparedStmtCount.Int32), err
+}
+
+// queryMaxAllowedPacket gets the value of max_allowed_packet
+func queryMaxAllowedPacket(ctx context.Context, db *sql.DB) (int64, error) {
+	row := db.QueryRowContext(ctx, "select @@global.max_allowed_packet;")
+	var maxAllowedPacket sql.NullInt64
+	if err := row.Scan(&maxAllowedPacket); err != nil {
+		return 0, cerror.WrapError(cerror.ErrMySQLQueryError, err)
+	}
+	return maxAllowedPacket.Int64, nil
+}
+
+func getDDLCreateTime(ctx context.Context, db *sql.DB) string {
+	ddlCreateTime := "" // default when scan failed
+	row, err := db.QueryContext(ctx, "BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;")
+	if err != nil {
+		return ddlCreateTime
+	}
+	for row.Next() {
+		err = row.Scan(&ddlCreateTime)
+		if err != nil {
+			log.Warn("getting ddlCreateTime failed", zap.Error(err))
+		}
+	}
+	//nolint:sqlclosecheck
+	_ = row.Close()
+	_ = row.Err()
+	return ddlCreateTime
+}
+
+// getDDLStateFromTiDB retrieves the ddl job status of the ddl query from downstream tidb based on the ddl query and the approximate ddl create time.
+func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime string) (timodel.JobState, error) {
+	// ddlCreateTime and createTime are both based on UTC timezone of downstream
+	showJobs := fmt.Sprintf(checkRunningSQL, createTime, ddl)
+	//nolint:rowserrcheck
+	jobsRows, err := db.QueryContext(ctx, showJobs)
+	if err != nil {
+		return timodel.JobStateNone, err
+	}
+
+	var jobsResults [][]string
+	jobsResults, err = export.GetSpecifiedColumnValuesAndClose(jobsRows, "QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE")
+	if err != nil {
+		return timodel.JobStateNone, err
+	}
+	if len(jobsResults) > 0 {
+		result := jobsResults[0]
+		state, jobID, jobType, schemaState := result[1], result[2], result[3], result[4]
+		log.Debug("Find ddl state in downstream",
+			zap.String("jobID", jobID),
+			zap.String("jobType", jobType),
+			zap.String("schemaState", schemaState),
+			zap.String("ddl", ddl),
+			zap.String("state", state),
+			zap.Any("jobsResults", jobsResults),
+		)
+		return timodel.StrToJobState(result[1]), nil
+	}
+	return timodel.JobStateNone, nil
 }

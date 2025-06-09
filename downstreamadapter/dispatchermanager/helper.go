@@ -137,12 +137,6 @@ func toEventFilterRulePB(rule *config.EventFilterRule) *eventpb.EventFilterRule 
 	return eventFilterPB
 }
 
-type TableSpanStatusWithSeq struct {
-	*heartbeatpb.TableSpanStatus
-	StartTs uint64
-	Seq     uint64
-}
-
 type Watermark struct {
 	mutex sync.Mutex
 	*heartbeatpb.Watermark
@@ -191,7 +185,8 @@ func (t *HeartBeatTask) Execute() time.Time {
 	if t.manager.closed.Load() {
 		return time.Time{}
 	}
-	executeInterval := time.Millisecond * 200
+	executeInterval := time.Millisecond * 100
+	// 10s / 100ms = 100
 	completeStatusInterval := int(time.Second * 10 / executeInterval)
 	t.statusTick++
 	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
@@ -255,11 +250,10 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 		switch req.ScheduleAction {
 		case heartbeatpb.ScheduleAction_Create:
 			infos = append(infos, dispatcherCreateInfo{
-				Id:          dispatcherID,
-				TableSpan:   config.Span,
-				StartTs:     config.StartTs,
-				SchemaID:    config.SchemaID,
-				CurrentPDTs: config.CurrentPdTs,
+				Id:        dispatcherID,
+				TableSpan: config.Span,
+				StartTs:   config.StartTs,
+				SchemaID:  config.SchemaID,
 			})
 		case heartbeatpb.ScheduleAction_Remove:
 			if len(reqs) != 1 {
@@ -426,7 +420,7 @@ func (h *CheckpointTsMessageHandler) Handle(eventDispatcherManager *EventDispatc
 	}
 	checkpointTsMessage := messages[0]
 	if eventDispatcherManager.tableTriggerEventDispatcher != nil {
-		eventDispatcherManager.tableTriggerEventDispatcher.HandleCheckpointTs(checkpointTsMessage.CheckpointTs)
+		eventDispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }

@@ -120,7 +120,7 @@ func (c *CrawlerWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 		if !ok {
 			break
 		}
-		buf.WriteString(fmt.Sprintf("UPDATE contents_%d SET content = %s WHERE id = %s;",
+		buf.WriteString(fmt.Sprintf("UPDATE `contents_%d` SET `content` = '%s' WHERE `id` = '%s';",
 			opts.TableIndex, util.GenerateRandomString(1000), key))
 	}
 	return buf.String()

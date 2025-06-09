@@ -12,7 +12,6 @@ import (
 	common "github.com/pingcap/ticdc/pkg/common"
 	config "github.com/pingcap/ticdc/pkg/config"
 	etcd "github.com/pingcap/ticdc/pkg/etcd"
-	model "github.com/pingcap/tiflow/cdc/model"
 	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -41,11 +40,11 @@ func (m *MockOwnerCaptureInfoClient) EXPECT() *MockOwnerCaptureInfoClientMockRec
 }
 
 // GetCaptures mocks base method.
-func (m *MockOwnerCaptureInfoClient) GetCaptures(arg0 context.Context) (int64, []*model.CaptureInfo, error) {
+func (m *MockOwnerCaptureInfoClient) GetCaptures(arg0 context.Context) (int64, []*config.CaptureInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetCaptures", arg0)
 	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].([]*model.CaptureInfo)
+	ret1, _ := ret[1].([]*config.CaptureInfo)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
@@ -57,10 +56,10 @@ func (mr *MockOwnerCaptureInfoClientMockRecorder) GetCaptures(arg0 interface{}) 
 }
 
 // GetOwnerID mocks base method.
-func (m *MockOwnerCaptureInfoClient) GetOwnerID(arg0 context.Context) (model.CaptureID, error) {
+func (m *MockOwnerCaptureInfoClient) GetOwnerID(arg0 context.Context) (config.CaptureID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetOwnerID", arg0)
-	ret0, _ := ret[0].(model.CaptureID)
+	ret0, _ := ret[0].(config.CaptureID)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -72,7 +71,7 @@ func (mr *MockOwnerCaptureInfoClientMockRecorder) GetOwnerID(arg0 interface{}) *
 }
 
 // GetOwnerRevision mocks base method.
-func (m *MockOwnerCaptureInfoClient) GetOwnerRevision(arg0 context.Context, arg1 model.CaptureID) (int64, error) {
+func (m *MockOwnerCaptureInfoClient) GetOwnerRevision(arg0 context.Context, arg1 config.CaptureID) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetOwnerRevision", arg0, arg1)
 	ret0, _ := ret[0].(int64)
@@ -124,7 +123,7 @@ func (mr *MockCDCEtcdClientMockRecorder) CheckMultipleCDCClusterExist(ctx interf
 }
 
 // DeleteCaptureInfo mocks base method.
-func (m *MockCDCEtcdClient) DeleteCaptureInfo(arg0 context.Context, arg1 model.CaptureID) error {
+func (m *MockCDCEtcdClient) DeleteCaptureInfo(arg0 context.Context, arg1 config.CaptureID) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DeleteCaptureInfo", arg0, arg1)
 	ret0, _ := ret[0].(error)
@@ -153,11 +152,11 @@ func (mr *MockCDCEtcdClientMockRecorder) GetAllCDCInfo(ctx interface{}) *gomock.
 }
 
 // GetCaptures mocks base method.
-func (m *MockCDCEtcdClient) GetCaptures(arg0 context.Context) (int64, []*model.CaptureInfo, error) {
+func (m *MockCDCEtcdClient) GetCaptures(arg0 context.Context) (int64, []*config.CaptureInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetCaptures", arg0)
 	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].([]*model.CaptureInfo)
+	ret1, _ := ret[1].([]*config.CaptureInfo)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
@@ -256,10 +255,10 @@ func (mr *MockCDCEtcdClientMockRecorder) GetGCServiceID() *gomock.Call {
 }
 
 // GetOwnerID mocks base method.
-func (m *MockCDCEtcdClient) GetOwnerID(arg0 context.Context) (model.CaptureID, error) {
+func (m *MockCDCEtcdClient) GetOwnerID(arg0 context.Context) (config.CaptureID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetOwnerID", arg0)
-	ret0, _ := ret[0].(model.CaptureID)
+	ret0, _ := ret[0].(config.CaptureID)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -271,7 +270,7 @@ func (mr *MockCDCEtcdClientMockRecorder) GetOwnerID(arg0 interface{}) *gomock.Ca
 }
 
 // GetOwnerRevision mocks base method.
-func (m *MockCDCEtcdClient) GetOwnerRevision(arg0 context.Context, arg1 model.CaptureID) (int64, error) {
+func (m *MockCDCEtcdClient) GetOwnerRevision(arg0 context.Context, arg1 config.CaptureID) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetOwnerRevision", arg0, arg1)
 	ret0, _ := ret[0].(int64)
@@ -286,10 +285,10 @@ func (mr *MockCDCEtcdClientMockRecorder) GetOwnerRevision(arg0, arg1 interface{}
 }
 
 // GetUpstreamInfo mocks base method.
-func (m *MockCDCEtcdClient) GetUpstreamInfo(ctx context.Context, upstreamID model.UpstreamID, namespace string) (*model.UpstreamInfo, error) {
+func (m *MockCDCEtcdClient) GetUpstreamInfo(ctx context.Context, upstreamID config.UpstreamID, namespace string) (*config.UpstreamInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetUpstreamInfo", ctx, upstreamID, namespace)
-	ret0, _ := ret[0].(*model.UpstreamInfo)
+	ret0, _ := ret[0].(*config.UpstreamInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -301,7 +300,7 @@ func (mr *MockCDCEtcdClientMockRecorder) GetUpstreamInfo(ctx, upstreamID, namesp
 }
 
 // PutCaptureInfo mocks base method.
-func (m *MockCDCEtcdClient) PutCaptureInfo(arg0 context.Context, arg1 *model.CaptureInfo, arg2 clientv3.LeaseID) error {
+func (m *MockCDCEtcdClient) PutCaptureInfo(arg0 context.Context, arg1 *config.CaptureInfo, arg2 clientv3.LeaseID) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PutCaptureInfo", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)

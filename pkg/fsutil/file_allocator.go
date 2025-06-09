@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/pingcap/tiflow/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo"
 )
 
 // FileAllocator has two functionalities:

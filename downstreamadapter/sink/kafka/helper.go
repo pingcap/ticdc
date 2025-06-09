@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/br/pkg/utils"
 )
 
@@ -62,14 +61,46 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, config.ProtocolUnknown, errors.Trace(err)
 	}
 
+	topic, err := helper.GetTopic(sinkURI)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
 	options := kafka.NewOptions()
 	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
+	options.Topic = topic
 
 	kafkaComponent.factory, err = factoryCreator(ctx, options, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+
+	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(
+		sinkConfig, topic, false, protocol == config.ProtocolAvro)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	kafkaComponent.columnSelector, err = columnselector.New(sinkConfig)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	kafkaComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
 	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient()
@@ -85,15 +116,6 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		}
 	}()
 
-	topic, err := helper.GetTopic(sinkURI)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
-	// adjust the option configuration before creating the kafka client
-	if err = kafka.AdjustOptions(ctx, kafkaComponent.adminClient, options, topic); err != nil {
-		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
-	}
-
 	kafkaComponent.topicManager, err = topicmanager.GetTopicManagerAndTryCreateTopic(
 		ctx,
 		changefeedID,
@@ -101,32 +123,6 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		options.DeriveTopicConfig(),
 		kafkaComponent.adminClient,
 	)
-
-	scheme := helper.GetScheme(sinkURI)
-	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
-
-	kafkaComponent.columnSelector, err = columnselector.NewColumnSelectors(sinkConfig)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
-
-	encoderConfig, err := util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
-
-	kafkaComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
-
-	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
 	return kafkaComponent, protocol, nil
 }
 

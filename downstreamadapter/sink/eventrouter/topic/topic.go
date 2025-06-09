@@ -13,10 +13,6 @@
 
 package topic
 
-import (
-	"github.com/pingcap/ticdc/pkg/config"
-)
-
 type TopicGeneratorType int
 
 const (
@@ -24,7 +20,7 @@ const (
 	DynamicTopicGeneratorType
 )
 
-type TopicGenerator interface {
+type Generator interface {
 	Substitute(schema, table string) string
 	TopicGeneratorType() TopicGeneratorType
 }
@@ -72,8 +68,8 @@ func (d *DynamicTopicGenerator) TopicGeneratorType() TopicGeneratorType {
 }
 
 func GetTopicGenerator(
-	rule string, defaultTopic string, protocol config.Protocol, scheme string,
-) (TopicGenerator, error) {
+	rule string, defaultTopic string, isPulsar bool, isAvro bool,
+) (Generator, error) {
 	if rule == "" {
 		return newStaticTopic(defaultTopic), nil
 	}
@@ -84,7 +80,7 @@ func GetTopicGenerator(
 
 	// check if this rule is a valid topic expression
 	topicExpr := Expression(rule)
-	err := validateTopicExpression(topicExpr, scheme, protocol)
+	err := validateTopicExpression(topicExpr, isPulsar, isAvro)
 	if err != nil {
 		return nil, err
 	}

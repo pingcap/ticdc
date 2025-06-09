@@ -129,3 +129,8 @@ func IsCliUnprintableError(err error) bool {
 	}
 	return false
 }
+
+// WrapChangefeedUnretryableErr wraps an error into ErrChangefeedUnRetryable.
+func WrapChangefeedUnretryableErr(err error, args ...interface{}) error {
+	return WrapError(ErrChangefeedUnretryable, err, args...)
+}

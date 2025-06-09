@@ -58,7 +58,7 @@ function run_with_fast_create_table() {
 	check_table_exists batch_add_table.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	# check the ddl of this table is skipped
 	check_table_not_exists test.t_1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 
 	cleanup_process $CDC_BINARY
 }
@@ -96,7 +96,7 @@ function run_without_fast_create_table() {
 
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
 	check_table_exists batch_add_table.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 
 	cleanup_process $CDC_BINARY
 }

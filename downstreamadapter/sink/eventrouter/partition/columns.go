@@ -22,8 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/hash"
+	"github.com/pingcap/ticdc/pkg/hash"
 	"go.uber.org/zap"
 )
 
@@ -71,7 +70,7 @@ func (r *ColumnsPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEven
 		if value == nil {
 			continue
 		}
-		r.hasher.Write([]byte(strings.ToLower(r.Columns[idx])), []byte(model.ColumnValueString(value)))
+		r.hasher.Write([]byte(strings.ToLower(r.Columns[idx])), []byte(common.ColumnValueString(value)))
 	}
 
 	sum32 := r.hasher.Sum32()

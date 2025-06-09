@@ -64,7 +64,7 @@ func (event *regionEvent) getSize() int {
 }
 
 type regionEventHandler struct {
-	subClient *SubscriptionClient
+	subClient *subscriptionClient
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
@@ -303,8 +303,8 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 
 	now := time.Now().UnixMilli()
 	lastAdvance := span.lastAdvanceTime.Load()
-	if now-lastAdvance > span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
-		ts := span.rangeLock.ResolvedTs()
+	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
+		ts := span.rangeLock.GetHeapMinTs()
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
 			log.Info("subscription client is initialized",
 				zap.Uint64("subscriptionID", uint64(span.subID)),
@@ -312,7 +312,12 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 				zap.Uint64("resolvedTs", ts))
 		}
 		lastResolvedTs := span.resolvedTs.Load()
-		if ts > lastResolvedTs {
+		// Generally, we don't want to send duplicate resolved ts,
+		// so we check whether `ts` is larger than `lastResolvedTs` before send it.
+		// but when `ts` == `lastResolvedTs` == `span.startTs`,
+		// the span may just be initialized and have not receive any resolved ts before,
+		// so we also send ts in this case for quick notification to downstream.
+		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
 			span.resolvedTs.Store(ts)
 			span.resolvedTsUpdated.Store(time.Now().Unix())
 			return ts

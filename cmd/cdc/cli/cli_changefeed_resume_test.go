@@ -21,9 +21,9 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
+	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/api"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	v2 "github.com/pingcap/tiflow/cdc/api/v2"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -41,7 +41,7 @@ func TestChangefeedResumeCli(t *testing.T) {
 		UpstreamID:     1,
 		Namespace:      "default",
 		ID:             "abc",
-		CheckpointTime: model.JSONTime{},
+		CheckpointTime: api.JSONTime{},
 		Error:          nil,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(&v2.Tso{
@@ -66,7 +66,7 @@ func TestChangefeedResumeCli(t *testing.T) {
 		UpstreamID:     1,
 		Namespace:      "default",
 		ID:             "abc",
-		CheckpointTime: model.JSONTime{},
+		CheckpointTime: api.JSONTime{},
 		CheckpointTs:   2,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(nil, errors.New("test")).AnyTimes()
@@ -78,7 +78,7 @@ func TestChangefeedResumeCli(t *testing.T) {
 		UpstreamID:     1,
 		Namespace:      "default",
 		ID:             "abc",
-		CheckpointTime: model.JSONTime{},
+		CheckpointTime: api.JSONTime{},
 		CheckpointTs:   2,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(&v2.Tso{
@@ -113,7 +113,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		UpstreamID:     1,
 		Namespace:      "default",
 		ID:             "abc",
-		CheckpointTime: model.JSONTime{},
+		CheckpointTime: api.JSONTime{},
 		Error:          nil,
 	}, nil)
 	tso := &v2.Tso{
@@ -134,7 +134,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		UpstreamID:     1,
 		Namespace:      "default",
 		ID:             "abc",
-		CheckpointTime: model.JSONTime{},
+		CheckpointTime: api.JSONTime{},
 		Error:          nil,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(tso, nil).AnyTimes()
@@ -148,7 +148,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		UpstreamID:     1,
 		Namespace:      "default",
 		ID:             "abc",
-		CheckpointTime: model.JSONTime{},
+		CheckpointTime: api.JSONTime{},
 		Error:          nil,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(tso, nil).AnyTimes()
@@ -160,7 +160,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		UpstreamID:     1,
 		Namespace:      "default",
 		ID:             "abc",
-		CheckpointTime: model.JSONTime{},
+		CheckpointTime: api.JSONTime{},
 		Error:          nil,
 	}, nil)
 	tso = &v2.Tso{

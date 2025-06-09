@@ -21,8 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/hash"
+	"github.com/pingcap/ticdc/pkg/hash"
 	"go.uber.org/zap"
 )
 
@@ -40,10 +39,8 @@ func newIndexValuePartitionGenerator(indexName string) *IndexValuePartitionGener
 	}
 }
 
-func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonEvent.RowChange,
-	partitionNum int32,
-	tableInfo *common.TableInfo,
-	commitTs uint64,
+func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(
+	row *commonEvent.RowChange, partitionNum int32, tableInfo *common.TableInfo, _ uint64,
 ) (int32, string, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
@@ -62,8 +59,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 				continue
 			}
 			if tableInfo.IsHandleKey(col.ID) {
-				value := common.ExtractColVal(&rowData, col, idx)
-				r.hasher.Write([]byte(col.Name.L), []byte(model.ColumnValueString(value)))
+				r.hasher.Write([]byte(col.Name.L), []byte(common.ColumnValueString(common.ExtractColVal(&rowData, col, idx))))
 			}
 		}
 	} else {
@@ -81,7 +77,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 			if value == nil {
 				continue
 			}
-			r.hasher.Write([]byte(names[idx]), []byte(model.ColumnValueString(value)))
+			r.hasher.Write([]byte(names[idx]), []byte(common.ColumnValueString(value)))
 		}
 	}
 

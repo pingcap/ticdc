@@ -126,7 +126,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 		now := time.Now()
 		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
 
-		// Fast pause, lazy resume.
+		// fast pause and lazy resume path
 		if !pause && time.Since(lastTime) < as.settings.Load().feedbackInterval {
 			return
 		}
@@ -150,7 +150,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 
 		log.Info("send path feedback", zap.Any("area", as.area),
 			zap.Any("path", path.path), zap.Stringer("feedbackType", feedbackType),
-			zap.Float64("memoryUsageRatio", memoryUsageRatio))
+			zap.Float64("pathMemoryUsageRatio", memoryUsageRatio), zap.String("component", as.settings.Load().component))
 	}
 
 	failpoint.Inject("PausePath", func() {
@@ -189,11 +189,6 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		now := time.Now()
 		lastTime := as.lastSendFeedbackTime.Load().(time.Time)
 
-		// Fast pause, lazy resume.
-		if !pause && time.Since(lastTime) < as.settings.Load().feedbackInterval {
-			return
-		}
-
 		if !as.lastSendFeedbackTime.CompareAndSwap(lastTime, now) {
 			return // Another goroutine already updated the time
 		}
@@ -218,6 +213,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 			zap.Time("lastTime", lastTime),
 			zap.Time("now", now),
 			zap.Duration("sinceLastTime", time.Since(lastTime)),
+			zap.String("component", as.settings.Load().component),
 		)
 	}
 
@@ -236,14 +232,14 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	}
 
 	if algorithm == MemoryControlAlgorithmV2 && as.paused.Load() {
-		log.Panic("area is paused, but the algorithm is v2, this should not happen")
+		log.Panic("area is paused, but the algorithm is v2, this should not happen", zap.String("component", as.settings.Load().component))
 	}
 }
 
 func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
 	as.totalPendingSize.Add(int64(-size))
 	if as.totalPendingSize.Load() < 0 {
-		log.Warn("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
+		log.Warn("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
 		as.totalPendingSize.Store(0)
 	}
 	as.updatePathPauseState(path)
@@ -477,7 +473,8 @@ func calculateThresholds(pathCount int64, areaMemoryUsageRatio float64) (pauseLi
 		{0.8, 0.1, 0.05},  // area usage <= 80%
 		{1.0, 0.05, 0.01}, // area usage <= 100%
 		// Default maxPendingSize is 1024MB, so the default lowest pause limit is 10 MB.
-		{1.2, 0.01, 0.005}, // area usage > 100%
+		{1.2, 0.01, 0.005},  // area usage > 100%
+		{1.5, 0.005, 0.001}, // area usage > 150%, set the lowest pause limit to 1 MB.
 	}
 
 	// find applicable threshold

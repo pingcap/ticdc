@@ -28,15 +28,27 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// If the dispatcher doesn't send heartbeat to the event service for a long time,
+	// we consider it is in-active and remove it.
+	heartbeatTimeout = time.Second * 180
+
+	minScanLimitInBytes     = 1024 * 1024 * 2  // 2MB
+	maxScanLimitInBytes     = 1024 * 1024 * 10 // 10MB
+	updateScanLimitInterval = time.Second * 10
+)
+
 // Store the progress of the dispatcher, and the incremental events stats.
 // Those information will be used to decide when will the worker start to handle the push task of this dispatcher.
 type dispatcherStat struct {
 	id common.DispatcherID
 	// reverse pointer to the changefeed status this dispatcher belongs to.
 	changefeedStat *changefeedStatus
-	// workerIndex is the index of the worker that this dispatcher belongs to.
-	workerIndex int
-	info        DispatcherInfo
+	// scanWorkerIndex is the index of the worker that this dispatcher belongs to.
+	scanWorkerIndex int
+	// messageWorkerIndex is the index of the worker that this dispatcher belongs to.
+	messageWorkerIndex int
+	info               DispatcherInfo
 	// startTableInfo is the table info of the dispatcher when it is registered or reset.
 	startTableInfo atomic.Pointer[common.TableInfo]
 	filter         filter.Filter
@@ -70,6 +82,9 @@ type dispatcherStat struct {
 	// It will be set to false, after it receives the reset event from the dispatcher.
 	isHandshaked atomic.Bool
 
+	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
+	lastReceivedHeartbeatTime atomic.Int64
+
 	// syncpoint related
 	enableSyncPoint   bool
 	nextSyncPoint     uint64
@@ -79,26 +94,40 @@ type dispatcherStat struct {
 	// taskScanning is used to indicate whether the scan task is running.
 	// If so, we should wait until it is done before we send next resolvedTs event of
 	// this dispatcher.
-	taskScanning atomic.Bool
+
+	isTaskScanning atomic.Bool
 
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// If so, we should ignore the errors related to this dispatcher.
 	isRemoved atomic.Bool
+
+	// scanRateLimiter *rate.Limiter
+
+	isReceivedFirstResolvedTs atomic.Bool
+
+	currentScanLimitInBytes atomic.Int64
+	maxScanLimitInBytes     atomic.Int64
+	lastUpdateScanLimitTime atomic.Time
+
+	lastReceivedResolvedTsTime atomic.Time
+	lastSentResolvedTsTime     atomic.Time
 }
 
 func newDispatcherStat(
 	startTs uint64,
 	info DispatcherInfo,
 	filter filter.Filter,
-	workerIndex int,
+	scanWorkerIndex int,
+	messageWorkerIndex int,
 	changefeedStatus *changefeedStatus,
 ) *dispatcherStat {
 	dispStat := &dispatcherStat{
-		id:             info.GetID(),
-		changefeedStat: changefeedStatus,
-		workerIndex:    workerIndex,
-		info:           info,
-		filter:         filter,
+		id:                 info.GetID(),
+		changefeedStat:     changefeedStatus,
+		scanWorkerIndex:    scanWorkerIndex,
+		messageWorkerIndex: messageWorkerIndex,
+		info:               info,
+		filter:             filter,
 	}
 	changefeedStatus.addDispatcher()
 
@@ -111,6 +140,13 @@ func newDispatcherStat(
 	dispStat.checkpointTs.Store(startTs)
 	dispStat.sentResolvedTs.Store(startTs)
 	dispStat.isRunning.Store(true)
+	dispStat.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
+
+	dispStat.resetScanLimit()
+	dispStat.maxScanLimitInBytes.Store(maxScanLimitInBytes)
+
+	dispStat.lastReceivedResolvedTsTime.Store(time.Now())
+	dispStat.lastSentResolvedTsTime.Store(time.Now())
 	return dispStat
 }
 
@@ -129,6 +165,7 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 	// Only update the sentResolvedTs when the dispatcher is handshaked.
 	if a.isHandshaked.Load() {
 		a.sentResolvedTs.Store(resolvedTs)
+		a.lastSentResolvedTsTime.Store(time.Now())
 	}
 }
 
@@ -141,14 +178,21 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.sentResolvedTs.Store(resetTs)
 	a.resetTs.Store(resetTs)
 	a.seq.Store(0)
-	a.taskScanning.Store(false)
+
+	a.isTaskScanning.Store(false)
+
 	a.isRunning.Store(true)
+	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
 func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 	if resolvedTs < a.eventStoreResolvedTs.Load() {
 		log.Panic("resolved ts should not fallback")
+	}
+	if !a.isReceivedFirstResolvedTs.Load() {
+		log.Info("received first resolved ts from event service", zap.Uint64("resolvedTs", resolvedTs), zap.Stringer("dispatcherID", a.id))
+		a.isReceivedFirstResolvedTs.Store(true)
 	}
 	return util.CompareAndMonotonicIncrease(&a.eventStoreResolvedTs, resolvedTs)
 }
@@ -161,6 +205,10 @@ func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
 func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	startTs := a.sentResolvedTs.Load()
 	if startTs < a.resetTs.Load() {
+		log.Warn("resetTs is greater than sentResolvedTs, reset startTs",
+			zap.Uint64("resetTs", a.resetTs.Load()),
+			zap.Uint64("sentResolvedTs", startTs),
+			zap.Stringer("dispatcherID", a.id))
 		startTs = a.resetTs.Load()
 	}
 
@@ -179,6 +227,30 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 
 func (a *dispatcherStat) IsRunning() bool {
 	return a.isRunning.Load() && a.changefeedStat.isRunning.Load()
+}
+
+// getCurrentScanLimitInBytes returns the current scan limit in bytes.
+// It will double the current scan limit in bytes every 10 seconds,
+// and cap the scan limit in bytes to the max scan limit in bytes.
+func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
+	res := a.currentScanLimitInBytes.Load()
+	if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
+		if res >= a.maxScanLimitInBytes.Load() {
+			return res
+		}
+		newLimit := res * 2
+		if newLimit > a.maxScanLimitInBytes.Load() {
+			newLimit = a.maxScanLimitInBytes.Load()
+		}
+		a.currentScanLimitInBytes.Store(newLimit)
+		a.lastUpdateScanLimitTime.Store(time.Now())
+	}
+	return res
+}
+
+func (a *dispatcherStat) resetScanLimit() {
+	a.currentScanLimitInBytes.Store(minScanLimitInBytes)
+	a.lastUpdateScanLimitTime.Store(time.Now())
 }
 
 type scanTask = *dispatcherStat
@@ -209,12 +281,14 @@ type wrapEvent struct {
 	postSendFunc func()
 }
 
-func newWrapDMLEvent(serverID node.ID, e *pevent.DMLEvent, state pevent.EventSenderState) *wrapEvent {
-	e.State = state
+func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState) *wrapEvent {
+	for _, dml := range e.DMLEvents {
+		dml.State = state
+	}
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
-	w.msgType = pevent.TypeDMLEvent
+	w.msgType = e.GetType()
 	return w
 }
 

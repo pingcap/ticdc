@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -50,8 +49,8 @@ import (
 func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
-	// Step 1: group the events by dispatcher id
-	eventsGroup := make(map[common.DispatcherID][]*commonEvent.DMLEvent) // dispatcherID--> events
+	// Step 1: group the events by table ID
+	eventsGroup := make(map[int64][]*commonEvent.DMLEvent) // tableID --> events
 	for _, event := range events {
 		// calculate for metrics
 		dmls.rowCount += int(event.Len())
@@ -59,12 +58,11 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 			dmls.startTs = append(dmls.startTs, event.StartTs)
 		}
 		dmls.approximateSize += event.GetRowsSize()
-		// group by dispatcherID
-		dispatcherID := event.DispatcherID
-		if _, ok := eventsGroup[dispatcherID]; !ok {
-			eventsGroup[dispatcherID] = make([]*commonEvent.DMLEvent, 0)
+		tableID := event.GetTableID()
+		if _, ok := eventsGroup[tableID]; !ok {
+			eventsGroup[tableID] = make([]*commonEvent.DMLEvent, 0)
 		}
-		eventsGroup[dispatcherID] = append(eventsGroup[dispatcherID], event)
+		eventsGroup[tableID] = append(eventsGroup[tableID], event)
 	}
 
 	// Step 2: prepare the dmls for each group
@@ -74,27 +72,13 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
-		if !tableInfo.HasPrimaryKey() || tableInfo.HasVirtualColumns() {
-			// check if the table has a handle key or has a virtual column
+		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg) {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-		} else if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {
-			// if there only one row in the group, we can use the normal sql generate
-			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-		} else if len(eventsInGroup) > 0 {
-			// if the events are in different safe mode, we can't use the batch dml generate
-			firstEventSafeMode := !w.cfg.SafeMode && eventsInGroup[0].CommitTs > eventsInGroup[0].ReplicatingTs
-			finalEventSafeMode := !w.cfg.SafeMode && eventsInGroup[len(eventsInGroup)-1].CommitTs > eventsInGroup[len(eventsInGroup)-1].ReplicatingTs
-			if firstEventSafeMode != finalEventSafeMode {
-				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-			} else {
-				// use the batch dml generate
-				queryList, argsList = w.generateBatchSQL(eventsInGroup)
-			}
+		} else {
+			queryList, argsList = w.generateBatchSQL(eventsInGroup)
 		}
-		for i := 0; i < len(queryList); i++ {
-			dmls.sqls = append(dmls.sqls, queryList[i])
-			dmls.values = append(dmls.values, argsList[i])
-		}
+		dmls.sqls = append(dmls.sqls, queryList...)
+		dmls.values = append(dmls.values, argsList...)
 	}
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
 	// This method is expensive, so we only log it when the log level is debug.
@@ -103,6 +87,63 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	}
 
 	return dmls
+}
+
+// shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
+// Batch SQL generation is used when:
+// 1. BatchDMLEnable = true, and rows > 1
+// 2. The table has a primary key
+// 3. The table doesn't have virtual columns
+// 4. There's more than one row in the group
+// 5. All events have the same safe mode status
+func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent, cfg *Config) bool {
+	if !cfg.BatchDMLEnable {
+		return false
+	}
+
+	if !hasPK || hasVirtualCols {
+		return false
+	}
+
+	if len(events) == 1 && events[0].Len() == 1 {
+		return false
+	}
+
+	return allRowInSameSafeMode(cfg.SafeMode, events)
+}
+
+// allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.
+// Safe mode is either globally enabled via the safemode parameter, or determined per event
+// by comparing CommitTs and ReplicatingTs.
+//
+// Parameters:
+//   - safemode: If true, global safe mode is enabled and the function returns true immediately
+//   - events: A slice of DMLEvents to check for consistent safe mode status
+//
+// Returns:
+//
+//	true if either:
+//	- global safe mode is enabled (safemode=true), or
+//	- all events have the same safe mode status (all events' CommitTs > ReplicatingTs, or all ≤)
+//	false if events have inconsistent safe mode status
+func allRowInSameSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
+	if safemode {
+		return true
+	}
+
+	if len(events) == 0 {
+		return false
+	}
+
+	firstSafeMode := events[0].CommitTs > events[0].ReplicatingTs
+	for _, event := range events {
+		currentSafeMode := event.CommitTs > event.ReplicatingTs
+		if currentSafeMode != firstSafeMode {
+			return false
+		}
+	}
+
+	return true
 }
 
 // for generate batch sql for multi events, we first need to compare the rows with the same pk, to generate the final rows.
@@ -133,7 +174,6 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 }
 
 func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	inSafeMode := true
 	tableInfo := events[0].TableInfo
 	type RowChangeWithKeys struct {
 		RowChange  *commonEvent.RowChange
@@ -182,18 +222,13 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 				rowType := rowLists[i].RowChange.RowType
 				nextRowType := rowLists[j].RowChange.RowType
 				switch rowType {
-				case commonEvent.RowTypeDelete:
-					rowKey := rowLists[i].PreRowKeys
-					if nextRowType == commonEvent.RowTypeUpdate {
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
-						}
-					}
 				case commonEvent.RowTypeInsert:
 					rowKey := rowLists[i].RowKeys
 					if nextRowType == commonEvent.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							sql, values := w.generateNormalSQLs(events)
+							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -225,7 +260,9 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 					preRowKey := rowLists[i].PreRowKeys
 					if nextRowType == commonEvent.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							sql, values := w.generateNormalSQLs(events)
+							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -278,11 +315,10 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 	}
 
 	// step 2. generate sqls
-	return w.batchSingleTxnDmls(finalRowLists, tableInfo, inSafeMode)
+	return w.batchSingleTxnDmls(finalRowLists, tableInfo, true)
 }
 
 func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	inSafeMode := false
 	tableInfo := events[0].TableInfo
 	// step 1. divide update row to delete row and insert row, and set into map based on the key hash
 	rowsMap := make(map[uint64][]*commonEvent.RowChange)
@@ -376,23 +412,26 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		prevType := rowChanges[0].RowType
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
-			if rowType != prevType {
-				prevType = rowType
-			} else {
-				// TODO:add more info here
-				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
+			if rowType == prevType {
+				sql, values := w.generateNormalSQLs(events)
+				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
+					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
+					zap.Any("prevType", prevType), zap.Any("currentType", rowType))
 			}
+			prevType = rowType
 		}
 		rowsList = append(rowsList, rowChanges[len(rowChanges)-1])
 	}
-
 	// step 3. generate sqls
-	return w.batchSingleTxnDmls(rowsList, tableInfo, inSafeMode)
+	return w.batchSingleTxnDmls(rowsList, tableInfo, false)
 }
 
 func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	var querys []string
-	var args [][]interface{}
+	var (
+		queries []string
+		args    [][]interface{}
+	)
 
 	for _, event := range events {
 		if event.Len() == 0 {
@@ -400,18 +439,13 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 		}
 
 		queryList, argsList := w.generateNormalSQL(event)
-		for i := 0; i < len(queryList); i++ {
-			querys = append(querys, queryList[i])
-			args = append(args, argsList[i])
-		}
+		queries = append(queries, queryList...)
+		args = append(args, argsList...)
 	}
-	return querys, args
+	return queries, args
 }
 
 func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	var queryList []string
-	var argsList [][]interface{}
-
 	inSafeMode := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
@@ -420,14 +454,18 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		zap.Bool("safeMode", w.cfg.SafeMode))
 
 	var (
-		query string
-		args  []interface{}
+		queries  []string
+		argsList [][]interface{}
 	)
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
 			break
 		}
+		var (
+			query string
+			args  []interface{}
+		)
 		switch row.RowType {
 		case commonEvent.RowTypeUpdate:
 			if inSafeMode {
@@ -435,7 +473,7 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 			} else {
 				query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 				if query != "" {
-					queryList = append(queryList, query)
+					queries = append(queries, query)
 					argsList = append(argsList, args)
 				}
 				query, args = buildInsert(event.TableInfo, row, inSafeMode)
@@ -447,11 +485,11 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		}
 
 		if query != "" {
-			queryList = append(queryList, query)
+			queries = append(queries, query)
 			argsList = append(argsList, args)
 		}
 	}
-	return queryList, argsList
+	return queries, argsList
 }
 
 func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
@@ -467,41 +505,30 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout += networkDriftDuration
 
 	tryExec := func() (int, int64, error) {
-		tx, err := w.db.BeginTx(w.ctx, nil)
-		if err != nil {
-			return 0, 0, errors.Trace(err)
-		}
-
-		// Set session variables first and then execute the transaction.
-		// we try to set write source for each txn,
-		// so we can use it to trace the data source
-		if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
-			log.Error("Failed to set write source", zap.Error(err))
-			if rbErr := tx.Rollback(); rbErr != nil {
-				if errors.Cause(rbErr) != context.Canceled {
-					log.Warn("failed to rollback txn", zap.Error(rbErr))
-				}
-			}
-			return 0, 0, err
-		}
-
-		if !fallbackToSeqWay {
-			err = w.multiStmtExecute(dmls, tx, writeTimeout)
+		if fallbackToSeqWay {
+			// use sequence way to execute the dmls
+			tx, err := w.db.BeginTx(w.ctx, nil)
 			if err != nil {
-				fallbackToSeqWay = true
-				return 0, 0, err
+				return 0, 0, errors.Trace(err)
 			}
-		} else {
+
 			err = w.sequenceExecute(dmls, tx, writeTimeout)
 			if err != nil {
 				return 0, 0, err
 			}
-		}
 
-		if err = tx.Commit(); err != nil {
-			return 0, 0, err
+			if err = tx.Commit(); err != nil {
+				return 0, 0, err
+			}
+			log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
+		} else {
+			// use multi stmt way to execute the dmls
+			err := w.multiStmtExecute(dmls, writeTimeout)
+			if err != nil {
+				fallbackToSeqWay = true
+				return 0, 0, err
+			}
 		}
-		log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {
@@ -529,8 +556,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			return errors.Trace(err)
 		}
 		return nil
-	}, retry.WithBackoffBaseDelay(pmysql.BackoffBaseDelay.Milliseconds()),
-		retry.WithBackoffMaxDelay(pmysql.BackoffMaxDelay.Milliseconds()),
+	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
+		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(w.cfg.DMLMaxRetry),
 		retry.WithIsRetryableErr(isRetryableDMLError))
 }
@@ -582,27 +609,33 @@ func (w *Writer) sequenceExecute(
 
 // execute SQLs in the multi statements way.
 func (w *Writer) multiStmtExecute(
-	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
+	dmls *preparedDMLs, writeTimeout time.Duration,
 ) error {
 	var multiStmtArgs []any
 	for _, value := range dmls.values {
 		multiStmtArgs = append(multiStmtArgs, value...)
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
+	// we use BEGIN and COMMIT to ensure the transaction is atomic.
+	multiStmtSQLWithTxn := "BEGIN;" + multiStmtSQL + ";COMMIT;"
 
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
 	defer cancel()
 
-	_, err := tx.ExecContext(ctx, multiStmtSQL, multiStmtArgs...)
+	conn, err := w.db.Conn(w.ctx)
 	if err != nil {
-		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", multiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
-		if rbErr := tx.Rollback(); rbErr != nil {
-			if errors.Cause(rbErr) != context.Canceled {
-				log.Warn("failed to rollback txn", zap.Error(rbErr))
-			}
-		}
-		cancel()
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQL, multiStmtArgs)))
+		return errors.Trace(err)
+	}
+	defer conn.Close()
+
+	// we use conn.ExecContext to reduce the overhead of network latency.
+	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
+	// when some error occurs, we just need to close the conn to avoid the session to be reuse unexpectedly.
+	// The txn can ensure the atomicity of the transaction.
+	_, err = conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
+	if err != nil {
+		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", multiStmtSQLWithTxn), zap.Any("multiStmtArgs", multiStmtArgs))
+		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
 	}
 	return nil
 }
@@ -616,15 +649,20 @@ func logDMLTxnErr(
 	}
 	if isRetryableDMLError(err) {
 		log.Warn("execute DMLs with error, retry later",
-			zap.Error(err), zap.Duration("duration", time.Since(start)),
-			zap.String("query", query), zap.Int("count", count),
+			zap.String("changefeed", changefeed),
+			zap.Duration("duration", time.Since(start)),
 			zap.Uint64s("startTs", startTs),
-			zap.String("changefeed", changefeed))
+			zap.Int("count", count),
+			zap.String("query", query),
+			zap.Error(err))
 	} else {
 		log.Error("execute DMLs with error, can not retry",
-			zap.Error(err), zap.Duration("duration", time.Since(start)),
-			zap.String("query", query), zap.Int("count", count),
-			zap.String("changefeed", changefeed))
+			zap.String("changefeed", changefeed),
+			zap.Duration("duration", time.Since(start)),
+			zap.Uint64s("startTs", startTs),
+			zap.Int("count", count),
+			zap.String("query", query),
+			zap.Error(err))
 	}
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", query))
 }

@@ -229,9 +229,9 @@ func (o *Option) fix() {
 }
 
 type AreaSettings struct {
+	component        string
 	maxPendingSize   uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 128 MB.
-	feedbackInterval time.Duration // The interval of sending feedbacks to the upstream. < 0 means no feedback. Must be larger than 0. By default 1 second.
-
+	feedbackInterval time.Duration // The interval of the feedback. By default 1000ms.
 	// Remove it when we determine the v2 is working well.
 	algorithm string // The algorithm of the memory control. By default "v2".
 }
@@ -240,18 +240,21 @@ func (s *AreaSettings) fix() {
 	if s.maxPendingSize <= 0 {
 		s.maxPendingSize = DefaultMaxPendingSize
 	}
+
 	if s.feedbackInterval == 0 {
 		s.feedbackInterval = DefaultFeedbackInterval
 	}
+
 	if s.algorithm == "" {
 		s.algorithm = "v1"
 	}
 }
 
-func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithmVersion string) AreaSettings {
+func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithmVersion string, component string) AreaSettings {
 	return AreaSettings{
-		maxPendingSize:   size,
+		component:        component,
 		feedbackInterval: DefaultFeedbackInterval,
+		maxPendingSize:   size,
 		algorithm:        memoryControlAlgorithmVersion,
 	}
 }

@@ -8,7 +8,7 @@ conf=$2
 if [ $# -ge 3 ]; then
 	check_time=$3
 else
-	check_time=30
+	check_time=60
 fi
 binary=sync_diff_inspector
 

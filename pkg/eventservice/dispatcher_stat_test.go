@@ -39,10 +39,10 @@ func TestNewDispatcherStat(t *testing.T) {
 		changefeedID: info.GetChangefeedID(),
 	}
 
-	stat := newDispatcherStat(startTs, info, info.filter, workerIndex, changefeedStatus)
+	stat := newDispatcherStat(startTs, info, info.filter, workerIndex, workerIndex, changefeedStatus)
 
 	require.Equal(t, info.GetID(), stat.id)
-	require.Equal(t, workerIndex, stat.workerIndex)
+	require.Equal(t, workerIndex, stat.messageWorkerIndex)
 	require.Equal(t, uint64(0), stat.resetTs.Load())
 	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
@@ -60,7 +60,7 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 	changefeedStatus := &changefeedStatus{
 		changefeedID: info.GetChangefeedID(),
 	}
-	stat := newDispatcherStat(100, info, info.filter, 1, changefeedStatus)
+	stat := newDispatcherStat(100, info, info.filter, 1, 1, changefeedStatus)
 
 	// Test normal update
 	updated := stat.onResolvedTs(150)
@@ -84,7 +84,7 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	changefeedStatus := &changefeedStatus{
 		changefeedID: info.GetChangefeedID(),
 	}
-	stat := newDispatcherStat(100, info, info.filter, 1, changefeedStatus)
+	stat := newDispatcherStat(100, info, info.filter, 1, 1, changefeedStatus)
 	stat.eventStoreResolvedTs.Store(200)
 
 	// Normal case
@@ -113,7 +113,7 @@ func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	changefeedStatus := &changefeedStatus{
 		changefeedID: info.GetChangefeedID(),
 	}
-	stat := newDispatcherStat(startTs, info, info.filter, 1, changefeedStatus)
+	stat := newDispatcherStat(startTs, info, info.filter, 1, 1, changefeedStatus)
 
 	// Case 1: no new events, only watermark change
 	stat.onResolvedTs(200)

@@ -14,10 +14,10 @@
 package columnselector
 
 import (
-	ticonfig "github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	filter "github.com/pingcap/tidb/pkg/util/table-filter"
+	"github.com/pingcap/tidb/pkg/util/table-filter"
 )
 
 type Selector interface {
@@ -40,7 +40,7 @@ type ColumnSelector struct {
 }
 
 func newColumnSelector(
-	rule *ticonfig.ColumnSelector, caseSensitive bool,
+	rule *config.ColumnSelector, caseSensitive bool,
 ) (*ColumnSelector, error) {
 	tableM, err := filter.Parse(rule.Matcher)
 	if err != nil {
@@ -78,7 +78,7 @@ type ColumnSelectors struct {
 }
 
 // New return a column selectors
-func NewColumnSelectors(sinkConfig *ticonfig.SinkConfig) (*ColumnSelectors, error) {
+func New(sinkConfig *config.SinkConfig) (*ColumnSelectors, error) {
 	selectors := make([]*ColumnSelector, 0, len(sinkConfig.ColumnSelectors))
 	for _, r := range sinkConfig.ColumnSelectors {
 		selector, err := newColumnSelector(r, sinkConfig.CaseSensitive)
@@ -93,7 +93,7 @@ func NewColumnSelectors(sinkConfig *ticonfig.SinkConfig) (*ColumnSelectors, erro
 	}, nil
 }
 
-func (c *ColumnSelectors) GetSelector(schema, table string) Selector {
+func (c *ColumnSelectors) Get(schema, table string) Selector {
 	for _, s := range c.selectors {
 		if s.match(schema, table) {
 			return s

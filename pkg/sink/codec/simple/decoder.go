@@ -21,27 +21,29 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 
-// decoder implement the RowEventDecoder interface
-type decoder struct {
+// Decoder implement the Decoder interface
+type Decoder struct {
 	config *common.Config
 
 	marshaller marshaller
@@ -53,6 +55,8 @@ type decoder struct {
 	msg   *message
 	memo  TableInfoProvider
 
+	blockedTablesMemo *blockedTablesMemo
+
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
 	// CachedRowChangedEvents are events just decoded from the cachedMessages
@@ -60,14 +64,16 @@ type decoder struct {
 }
 
 // NewDecoder returns a new Decoder
-func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.RowEventDecoder, error) {
+func NewDecoder(
+	ctx context.Context, config *common.Config, db *sql.DB,
+) (common.Decoder, error) {
 	var (
 		externalStorage storage.ExternalStorage
 		err             error
 	)
 	if config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
-		externalStorage, err = util.GetExternalStorage(ctx, storageURI, nil, util.NewS3Retryer(10, 10*time.Second, 10*time.Second))
+		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
@@ -79,12 +85,14 @@ func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.
 	}
 
 	m, err := newMarshaller(config)
-	return &decoder{
+	return &Decoder{
 		config:     config,
 		marshaller: m,
 
 		storage:      externalStorage,
 		upstreamTiDB: db,
+
+		blockedTablesMemo: newBlockedTablesMemo(),
 
 		memo:           newMemoryTableInfoProvider(),
 		cachedMessages: list.New(),
@@ -92,58 +100,60 @@ func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.
 }
 
 // AddKeyValue add the received key and values to the Decoder,
-func (d *decoder) AddKeyValue(_, value []byte) (err error) {
+func (d *Decoder) AddKeyValue(_, value []byte) {
 	if d.value != nil {
-		return errors.ErrCodecDecode.GenWithStack(
-			"Decoder value already exists, not consumed yet")
+		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
-	d.value, err = common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-	return err
+	value, err := common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	if err != nil {
+		log.Panic("decompress the value failed",
+			zap.Any("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value),
+			zap.Error(err))
+	}
+	d.value = value
 }
 
 // HasNext returns whether there is any event need to be consumed
-func (d *decoder) HasNext() (common.MessageType, bool, error) {
+func (d *Decoder) HasNext() (common.MessageType, bool) {
 	if d.value == nil {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 
 	m := new(message)
 	err := d.marshaller.Unmarshal(d.value, m)
 	if err != nil {
-		return common.MessageTypeUnknown, false, errors.WrapError(errors.ErrDecodeFailed, err)
+		log.Panic("decoder unmarshal failed", zap.Any("value", d.value), zap.Error(err))
 	}
 	d.msg = m
 	d.value = nil
 
 	if d.msg.Data != nil || d.msg.Old != nil {
-		return common.MessageTypeRow, true, nil
+		return common.MessageTypeRow, true
 	}
 
 	if m.Type == MessageTypeWatermark {
-		return common.MessageTypeResolved, true, nil
+		return common.MessageTypeResolved, true
 	}
 
-	return common.MessageTypeDDL, true, nil
+	return common.MessageTypeDDL, true
 }
 
 // NextResolvedEvent returns the next resolved event if exists
-func (d *decoder) NextResolvedEvent() (uint64, error) {
+func (d *Decoder) NextResolvedEvent() uint64 {
 	if d.msg.Type != MessageTypeWatermark {
-		return 0, errors.ErrCodecDecode.GenWithStack(
-			"not found resolved event message")
+		log.Panic("message type is not watermark", zap.Any("messageType", d.msg.Type))
 	}
 
 	ts := d.msg.CommitTs
 	d.msg = nil
-
-	return ts, nil
+	return ts
 }
 
 // NextDMLEvent returns the next dml event if exists
-func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
-		return nil, errors.ErrCodecDecode.GenWithStack(
-			"invalid row changed event message")
+		log.Panic("invalid data for the DML event", zap.Any("message", d.msg))
 	}
 
 	if d.msg.ClaimCheckLocation != "" {
@@ -163,46 +173,51 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 			zap.Uint64("version", d.msg.SchemaVersion))
 		d.cachedMessages.PushBack(d.msg)
 		d.msg = nil
-		return nil, nil
+		return nil
 	}
 
-	event, err := buildDMLEvent(d.msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
+	event := buildDMLEvent(d.msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
 	d.msg = nil
 
+	d.blockedTablesMemo.add(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
+
 	log.Debug("row changed event assembled", zap.Any("event", event))
-	return event, err
+	return event
 }
 
-func (d *decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) (*commonEvent.DMLEvent, error) {
+func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := d.storage.ReadFile(context.Background(), claimCheckFileName)
 	if err != nil {
-		return nil, err
+		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 	}
 
 	if !d.config.LargeMessageHandle.ClaimCheckRawValue {
 		claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 		if err != nil {
-			return nil, err
+			log.Panic("unmarshal claim check message failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 		}
 		data = claimCheckM.Value
 	}
 
 	value, err := common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, data)
 	if err != nil {
-		return nil, err
+		log.Panic("decompress the claim check message failed",
+			zap.Any("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value),
+			zap.Error(err))
 	}
 
 	m := new(message)
 	err = d.marshaller.Unmarshal(value, m)
 	if err != nil {
-		return nil, err
+		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err))
 	}
 	d.msg = m
 	return d.NextDMLEvent()
 }
 
-func (d *decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) (*commonEvent.DMLEvent, error) {
+func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.DMLEvent {
 	tableInfo := d.memo.Read(m.Schema, m.Table, m.SchemaVersion)
 	if tableInfo == nil {
 		log.Debug("table info not found for the event, "+
@@ -212,7 +227,7 @@ func (d *decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) (*commonEvent
 			zap.Uint64("version", d.msg.SchemaVersion))
 		d.cachedMessages.PushBack(d.msg)
 		d.msg = nil
-		return nil, nil
+		return nil
 	}
 
 	fieldTypeMap := make(map[string]*types.FieldType, len(tableInfo.GetColumns()))
@@ -251,7 +266,7 @@ func (d *decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) (*commonEvent
 	return d.NextDMLEvent()
 }
 
-func (d *decoder) buildData(
+func (d *Decoder) buildData(
 	holder *common.ColumnsHolder, fieldTypeMap map[string]*types.FieldType, timezone string,
 ) map[string]interface{} {
 	columnsCount := holder.Length()
@@ -268,12 +283,11 @@ func (d *decoder) buildData(
 }
 
 // NextDDLEvent returns the next DDL event if exists
-func (d *decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if d.msg == nil {
-		return nil, errors.ErrCodecDecode.GenWithStack(
-			"no message found when decode DDL event")
+		log.Panic("msg is not set when parse the DDL event")
 	}
-	ddl := buidDDLEvent(d.msg)
+	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
 	d.memo.Write(ddl.TableInfo)
@@ -281,21 +295,18 @@ func (d *decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		d.msg = ele.Value.(*message)
-		event, err := d.NextDMLEvent()
-		if err != nil {
-			return nil, err
-		}
+		event := d.NextDMLEvent()
 		d.CachedRowChangedEvents = append(d.CachedRowChangedEvents, event)
 
 		next := ele.Next()
 		d.cachedMessages.Remove(ele)
 		ele = next
 	}
-	return ddl, nil
+	return ddl
 }
 
 // GetCachedEvents returns the cached events
-func (d *decoder) GetCachedEvents() []*commonEvent.DMLEvent {
+func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
 	result := d.CachedRowChangedEvents
 	d.CachedRowChangedEvents = nil
 	return result
@@ -479,7 +490,44 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 	return commonType.NewTableInfo4Decoder(m.Schema, tidbTableInfo)
 }
 
-func buidDDLEvent(msg *message) *commonEvent.DDLEvent {
+type accessKey struct {
+	schema string
+	table  string
+}
+
+type blockedTablesMemo struct {
+	memo map[accessKey]map[int64]struct{}
+}
+
+func newBlockedTablesMemo() *blockedTablesMemo {
+	return &blockedTablesMemo{
+		memo: make(map[accessKey]map[int64]struct{}),
+	}
+}
+
+func (m *blockedTablesMemo) add(schema, table string, tableID int64) {
+	key := accessKey{schema, table}
+	if _, ok := m.memo[key]; !ok {
+		m.memo[key] = make(map[int64]struct{})
+	}
+	if _, exists := m.memo[key][tableID]; !exists {
+		m.memo[key][tableID] = struct{}{}
+		log.Info("add table id to blocked list",
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID))
+	}
+}
+
+func (m *blockedTablesMemo) blockedTables(schema, table string) []int64 {
+	key := accessKey{schema, table}
+	blocked := m.memo[key]
+	result := make([]int64, 0, len(blocked))
+	for item := range blocked {
+		result = append(result, item)
+	}
+	return result
+}
+
+func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	var (
 		tableInfo    *commonType.TableInfo
 		preTableInfo *commonType.TableInfo
@@ -488,12 +536,36 @@ func buidDDLEvent(msg *message) *commonEvent.DDLEvent {
 	if msg.PreTableSchema != nil {
 		preTableInfo = newTableInfo(msg.PreTableSchema)
 	}
-	return &commonEvent.DDLEvent{
-		FinishedTs:         msg.CommitTs,
-		Query:              msg.SQL,
-		TableInfo:          tableInfo,
-		MultipleTableInfos: []*commonType.TableInfo{preTableInfo, tableInfo},
+
+	result := new(commonEvent.DDLEvent)
+	result.Query = msg.SQL
+	result.TableInfo = tableInfo
+
+	result.FinishedTs = msg.CommitTs
+	result.SchemaName = msg.Schema
+	result.TableName = msg.Table
+	result.TableID = tableInfo.TableName.TableID
+	result.MultipleTableInfos = []*commonType.TableInfo{tableInfo, preTableInfo}
+
+	if result.Query == "" {
+		return result
 	}
+
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
+	physicalTableIDs := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	if actionType == timodel.ActionExchangeTablePartition {
+		stmt, err := parser.New().ParseOneStmt(result.Query, "", "")
+		if err != nil {
+			log.Panic("parse DDL failed", zap.String("DDL", result.Query), zap.Error(err))
+		}
+		exchangedTableName := stmt.(*ast.AlterTableStmt).Specs[0].NewTable.Name.O
+		// assuming it's the same database.
+		exchangedTableID := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), exchangedTableName)
+		physicalTableIDs = append(physicalTableIDs, exchangedTableID...)
+	}
+	result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
+	return result
 }
 
 func parseValue(
@@ -571,11 +643,12 @@ func parseValue(
 	return result
 }
 
-func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) (*commonEvent.DMLEvent, error) {
+func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) *commonEvent.DMLEvent {
 	result := &commonEvent.DMLEvent{
 		CommitTs:        msg.CommitTs,
 		PhysicalTableID: msg.TableID,
 		TableInfo:       tableInfo,
+		Length:          1,
 	}
 
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
@@ -606,25 +679,24 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 	}
 	result.Rows = chk
 
-	// TODO: enableRowChecksum
-	// if enableRowChecksum && msg.Checksum != nil {
-	// 	result.Checksum = &integrity.Checksum{
-	// 		Current:   msg.Checksum.Current,
-	// 		Previous:  msg.Checksum.Previous,
-	// 		Corrupted: msg.Checksum.Corrupted,
-	// 		Version:   msg.Checksum.Version,
-	// 	}
+	if enableRowChecksum && msg.Checksum != nil {
+		result.Checksum = []*integrity.Checksum{{
+			Current:   msg.Checksum.Current,
+			Previous:  msg.Checksum.Previous,
+			Corrupted: msg.Checksum.Corrupted,
+			Version:   msg.Checksum.Version,
+		}}
 
-	// 	err := common.VerifyChecksum(result, db)
-	// 	if err != nil || msg.Checksum.Corrupted {
-	// 		log.Warn("consumer detect checksum corrupted",
-	// 			zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
-	// 		return nil, cerror.ErrDecodeFailed.GenWithStackByArgs("checksum corrupted")
+		err := common.VerifyChecksum(result, db)
+		if err != nil || msg.Checksum.Corrupted {
+			log.Warn("consumer detect checksum corrupted",
+				zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
+			return nil
 
-	// 	}
-	// }
+		}
+	}
 
-	return result, nil
+	return result
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {

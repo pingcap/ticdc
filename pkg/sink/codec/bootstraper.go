@@ -24,7 +24,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -107,7 +106,7 @@ func (b *bootstrapWorker) run(ctx context.Context) error {
 
 func (b *bootstrapWorker) addEvent(
 	ctx context.Context,
-	key model.TopicPartitionKey,
+	key commonEvent.TopicPartitionKey,
 	row *commonEvent.RowEvent,
 ) error {
 	table, ok := b.activeTables.Load(row.TableInfo.TableName.TableID)
@@ -177,7 +176,7 @@ func (b *bootstrapWorker) generateEvents(
 	}
 	for i := int32(0); i < totalPartition; i++ {
 		f := &future{
-			Key: model.TopicPartitionKey{
+			Key: commonEvent.TopicPartitionKey{
 				Topic:     topic,
 				Partition: i,
 			},
@@ -229,7 +228,7 @@ type tableStatistic struct {
 	tableInfo atomic.Value
 }
 
-func newTableStatistic(key model.TopicPartitionKey, row *commonEvent.RowEvent) *tableStatistic {
+func newTableStatistic(key commonEvent.TopicPartitionKey, row *commonEvent.RowEvent) *tableStatistic {
 	res := &tableStatistic{
 		id:    row.TableInfo.TableName.TableID,
 		topic: key.Topic,

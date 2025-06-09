@@ -14,7 +14,6 @@
 package mysql
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,9 +22,9 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
-	"github.com/pingcap/tiflow/pkg/config"
 	"go.uber.org/zap"
 )
 
@@ -269,7 +268,7 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 	return builder.String()
 }
 
-// GetStartTsList return the startTs list for each table in the tableIDs list.
+// GetStartTsList return the startTs list and startTsIsSyncpoint list for each table in the tableIDs list.
 // For each table,
 //  1. If no ddl-ts-v1 table or no the row for the table , startTs = 0; -- means the table is new.
 //  2. Else,
@@ -280,6 +279,9 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 //     (we use related table to find the ddl job -- take `truncate table` as an example, the ddl job used the table truncated, but not the new table)
 //     2.2.2.1 if the latest ddl job time is larger than the createdAt, startTs = ddlTs
 //     2.2.2.2 else startTs = ddlTs - 1
+//
+// for the startTsIsSyncpoint List, only when the ddlTs is finished or we query find the last ddl job time is larger than the createdAt,
+// the startTsIsSyncpoint equals the query result in ddl_ts table, otherwise, the startTsIsSyncpoint is false.
 func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
 	tableIdIdxMap := make(map[int64]int, len(tableIDs))
@@ -508,16 +510,6 @@ func (w *Writer) createTable(dbName string, tableName string, createTableQuery s
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: begin Tx fail;", tableName)))
 	}
 
-	// we try to set cdc write source for the ddl
-	if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			if errors.Cause(rbErr) != context.Canceled {
-				log.Error("Failed to rollback", zap.Error(err))
-			}
-		}
-		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: set write source fail;", tableName)))
-	}
-
 	_, err = tx.Exec("CREATE DATABASE IF NOT EXISTS " + dbName)
 	if err != nil {
 		errRollback := tx.Rollback()
@@ -572,6 +564,8 @@ func (w *Writer) createDDLTsTable() error {
 }
 
 func (w *Writer) createDDLTsTableIfNotExist() error {
+	w.ddlTsTableInitMutex.Lock()
+	defer w.ddlTsTableInitMutex.Unlock()
 	if w.ddlTsTableInit {
 		return nil
 	}

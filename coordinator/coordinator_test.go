@@ -38,10 +38,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/orchestrator"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -183,7 +182,7 @@ func (m *mockMaintainerManager) onDispatchMaintainerRequest(
 		cfID := common.NewChangefeedIDFromPB(req.GetId())
 		cf, ok := m.maintainerMap[cfID]
 		if !ok {
-			cfConfig := &model.ChangeFeedInfo{}
+			cfConfig := &config.ChangeFeedInfo{}
 			err := json.Unmarshal(req.Config, cfConfig)
 			if err != nil {
 				log.Panic("decode changefeed fail", zap.Error(err))
@@ -236,6 +235,8 @@ func TestCoordinatorScheduling(t *testing.T) {
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	nodeManager.GetAliveNodes()[info.ID] = info
 	mc := messaging.NewMessageCenter(ctx,
 		info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
@@ -267,19 +268,19 @@ func TestCoordinatorScheduling(t *testing.T) {
 	for i := 0; i < cfSize; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:      fmt.Sprintf("%d", i),
-			Namespace: model.DefaultNamespace,
+			Namespace: common.DefaultNamespace,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
 				ChangefeedID: cfID,
 				Config:       config.GetDefaultReplicaConfig(),
-				State:        model.StateNormal,
+				State:        config.StateNormal,
 			},
 			Status: &config.ChangeFeedStatus{CheckpointTs: 10},
 		}
 	}
 
-	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, "default", 100, 10000, time.Minute)
+	cr := New(info, &mockPdClient{}, backend, "default", 100, 10000, time.Minute)
 	co := cr.(*coordinator)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -323,20 +324,20 @@ func TestScaleNode(t *testing.T) {
 	for i := 0; i < changefeedNumber; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:      fmt.Sprintf("%d", i),
-			Namespace: model.DefaultNamespace,
+			Namespace: common.DefaultNamespace,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
 				ChangefeedID: cfID,
 				Config:       config.GetDefaultReplicaConfig(),
-				State:        model.StateNormal,
+				State:        config.StateNormal,
 			},
 			Status: &config.ChangeFeedStatus{CheckpointTs: 10},
 		}
 	}
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 
-	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, serviceID, 100, 10000, time.Millisecond*1)
+	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*1)
 
 	// run coordinator
 	go func() { cr.Run(ctx) }()
@@ -373,10 +374,10 @@ func TestScaleNode(t *testing.T) {
 
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
-		Captures: map[model.CaptureID]*model.CaptureInfo{
-			model.CaptureID(info.ID):  {ID: model.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
-			model.CaptureID(info2.ID): {ID: model.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
-			model.CaptureID(info3.ID): {ID: model.CaptureID(info3.ID), AdvertiseAddr: info3.AdvertiseAddr},
+		Captures: map[config.CaptureID]*config.CaptureInfo{
+			config.CaptureID(info.ID):  {ID: config.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
+			config.CaptureID(info2.ID): {ID: config.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
+			config.CaptureID(info3.ID): {ID: config.CaptureID(info3.ID), AdvertiseAddr: info3.AdvertiseAddr},
 		},
 	})
 
@@ -391,9 +392,9 @@ func TestScaleNode(t *testing.T) {
 
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
-		Captures: map[model.CaptureID]*model.CaptureInfo{
-			model.CaptureID(info.ID):  {ID: model.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
-			model.CaptureID(info2.ID): {ID: model.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
+		Captures: map[config.CaptureID]*config.CaptureInfo{
+			config.CaptureID(info.ID):  {ID: config.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
+			config.CaptureID(info2.ID): {ID: config.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
 		},
 	})
 
@@ -428,7 +429,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 		Info: &config.ChangeFeedInfo{
 			ChangefeedID: common.NewChangeFeedIDWithName("cf1"),
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        model.StateNormal,
+			State:        config.StateNormal,
 		},
 		Status: &config.ChangeFeedStatus{CheckpointTs: 10, Progress: config.ProgressRemoving},
 	}
@@ -436,7 +437,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 		Info: &config.ChangeFeedInfo{
 			ChangefeedID: common.NewChangeFeedIDWithName("cf2"),
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        model.StateNormal,
+			State:        config.StateNormal,
 		},
 		Status: &config.ChangeFeedStatus{CheckpointTs: 10, Progress: config.ProgressRemoving},
 	}
@@ -444,7 +445,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 		Info: &config.ChangeFeedInfo{
 			ChangefeedID: common.NewChangeFeedIDWithName("cf1"),
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        model.StateStopped,
+			State:        config.StateStopped,
 		},
 		Status: &config.ChangeFeedStatus{CheckpointTs: 10, Progress: config.ProgressStopping},
 	}
@@ -453,7 +454,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 		Info: &config.ChangeFeedInfo{
 			ChangefeedID: common.NewChangeFeedIDWithName("cf2"),
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        model.StateStopped,
+			State:        config.StateStopped,
 		},
 		Status: &config.ChangeFeedStatus{CheckpointTs: 10, Progress: config.ProgressStopping},
 	}
@@ -483,7 +484,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	}, nil).AnyTimes()
 	backend.EXPECT().DeleteChangefeed(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	backend.EXPECT().SetChangefeedProgress(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, serviceID, 100, 10000, time.Millisecond*10)
+	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*10)
 
 	// run coordinator
 	go func() { cr.Run(ctx) }()
@@ -522,7 +523,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper{}, nil).AnyTimes()
 
 	// Create coordinator
-	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, "test-gc-service", 100, 10000, time.Millisecond*10)
+	cr := New(info, &mockPdClient{}, backend, "test-gc-service", 100, 10000, time.Millisecond*10)
 	co := cr.(*coordinator)
 
 	// Number of goroutines for each operation
@@ -674,6 +675,6 @@ func newMockEtcdClient(ownerID string) *mockEtcdClient {
 	}
 }
 
-func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (model.CaptureID, error) {
-	return model.CaptureID(m.ownerID), nil
+func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, error) {
+	return config.CaptureID(m.ownerID), nil
 }

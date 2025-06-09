@@ -77,6 +77,7 @@ func NewMergeSplitDispatcherOperator(
 	}
 	if op.isPrimary() {
 		op.onFinished = func() {
+			log.Info("operator finished", zap.String("operator", op.String()))
 			op.totalRemoved.Add(1)
 		}
 	}
@@ -108,6 +109,7 @@ func (m *MergeSplitDispatcherOperator) isPrimary() bool {
 func (m *MergeSplitDispatcherOperator) markFinished() {
 	if !m.finished {
 		m.finished = true
+		log.Info("merge-split dispatcher operator finished", zap.Any("replicaSet", m.originReplicaSet.ID))
 		m.onFinished()
 	}
 }
@@ -187,4 +189,8 @@ func (m *MergeSplitDispatcherOperator) String() string {
 
 func (m *MergeSplitDispatcherOperator) Type() string {
 	return "merge-split"
+}
+
+func (m *MergeSplitDispatcherOperator) GetOnFinished() func() {
+	return m.onFinished
 }

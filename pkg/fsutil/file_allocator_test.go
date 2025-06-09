@@ -80,10 +80,10 @@ func benchmarkWriteData(b *testing.B, size int, useFileAlloctor bool) {
 }
 
 // go test -bench ^BenchmarkWrite100EntryWithAllocator$ \
-// -benchtime=30000x github.com/pingcap/tiflow/pkg/fsutil
+// -benchtime=30000x github.com/pingcap/ticdc/pkg/fsutil
 // goos: linux
 // goarch: amd64
-// pkg: github.com/pingcap/tiflow/pkg/fsutil
+// pkg: github.com/pingcap/ticdc/pkg/fsutil
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
 // BenchmarkWrite100EntryWithAllocator-9   	   30000	    204681 ns/op	   3.91 MB/s
 func BenchmarkWrite100EntryWithAllocator(b *testing.B) {
@@ -91,10 +91,10 @@ func BenchmarkWrite100EntryWithAllocator(b *testing.B) {
 }
 
 // go test -bench ^BenchmarkWrite100EntryWithoutAllocator$ \
-// -benchtime=30000x github.com/pingcap/tiflow/pkg/fsutil
+// -benchtime=30000x github.com/pingcap/ticdc/pkg/fsutil
 // goos: linux
 // goarch: amd64
-// pkg: github.com/pingcap/tiflow/pkg/fsutil
+// pkg: github.com/pingcap/ticdc/pkg/fsutil
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
 // BenchmarkWrite100EntryWithoutAllocator-9   	   30000	    303590 ns/op	   2.64 MB/s
 func BenchmarkWrite100EntryWithoutAllocator(b *testing.B) {
@@ -102,10 +102,10 @@ func BenchmarkWrite100EntryWithoutAllocator(b *testing.B) {
 }
 
 // go test -bench ^BenchmarkWrite1000EntryWithAllocator$ \
-// -benchtime=30000x github.com/pingcap/tiflow/pkg/fsutil
+// -benchtime=30000x github.com/pingcap/ticdc/pkg/fsutil
 // goos: linux
 // goarch: amd64
-// pkg: github.com/pingcap/tiflow/pkg/fsutil
+// pkg: github.com/pingcap/ticdc/pkg/fsutil
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
 // BenchmarkWrite1000EntryWithAllocator-9   	   30000	    216718 ns/op	  36.91 MB/s
 func BenchmarkWrite1000EntryWithAllocator(b *testing.B) {
@@ -113,10 +113,10 @@ func BenchmarkWrite1000EntryWithAllocator(b *testing.B) {
 }
 
 // go test -bench ^BenchmarkWrite1000EntryWithoutAllocator$ \
-// -benchtime=30000x github.com/pingcap/tiflow/pkg/fsutil
+// -benchtime=30000x github.com/pingcap/ticdc/pkg/fsutil
 // goos: linux
 // goarch: amd64
-// pkg: github.com/pingcap/tiflow/pkg/fsutil
+// pkg: github.com/pingcap/ticdc/pkg/fsutil
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
 // BenchmarkWrite1000EntryWithoutAllocator-9   	   30000	    293505 ns/op	  27.26 MB/s
 func BenchmarkWrite1000EntryWithoutAllocator(b *testing.B) {
@@ -124,10 +124,10 @@ func BenchmarkWrite1000EntryWithoutAllocator(b *testing.B) {
 }
 
 // go test -bench ^BenchmarkWrite10000EntryWithAllocator$ \
-// -benchtime=30000x github.com/pingcap/tiflow/pkg/fsutil
+// -benchtime=30000x github.com/pingcap/ticdc/pkg/fsutil
 // goos: linux
 // goarch: amd64
-// pkg: github.com/pingcap/tiflow/pkg/fsutil
+// pkg: github.com/pingcap/ticdc/pkg/fsutil
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
 // BenchmarkWrite10000EntryWithAllocator-9   	   30000	    333734 ns/op	 239.71 MB/s
 func BenchmarkWrite10000EntryWithAllocator(b *testing.B) {
@@ -135,10 +135,10 @@ func BenchmarkWrite10000EntryWithAllocator(b *testing.B) {
 }
 
 // go test -bench ^BenchmarkWrite10000EntryWithoutAllocator$ \
-// -benchtime=30000x github.com/pingcap/tiflow/pkg/fsutil
+// -benchtime=30000x github.com/pingcap/ticdc/pkg/fsutil
 // goos: linux
 // goarch: amd64
-// pkg: github.com/pingcap/tiflow/pkg/fsutil
+// pkg: github.com/pingcap/ticdc/pkg/fsutil
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
 // BenchmarkWrite10000EntryWithoutAllocator-9   	   30000	    399723 ns/op	 200.14 MB/s
 func BenchmarkWrite10000EntryWithoutAllocator(b *testing.B) {

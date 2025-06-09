@@ -194,6 +194,20 @@ func (mr *MockClientMockRecorder) Txn(ctx, cmps, opsThen, opsElse interface{}) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Txn", reflect.TypeOf((*MockClient)(nil).Txn), ctx, cmps, opsThen, opsElse)
 }
 
+// Unwrap mocks base method.
+func (m *MockClient) Unwrap() *clientv3.Client {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Unwrap")
+	ret0, _ := ret[0].(*clientv3.Client)
+	return ret0
+}
+
+// Unwrap indicates an expected call of Unwrap.
+func (mr *MockClientMockRecorder) Unwrap() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Unwrap", reflect.TypeOf((*MockClient)(nil).Unwrap))
+}
+
 // Watch mocks base method.
 func (m *MockClient) Watch(ctx context.Context, key, role string, opts ...clientv3.OpOption) clientv3.WatchChan {
 	m.ctrl.T.Helper()
