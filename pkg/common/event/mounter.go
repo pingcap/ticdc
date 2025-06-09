@@ -98,7 +98,7 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		if err != nil {
 			return 0, nil, errors.Trace(err)
 		}
-		preChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(prev+count), raw.Key, recordID, decoder)
+		preChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(prev+count), raw.Key, recordID, decoder, true)
 		if err != nil {
 			return 0, nil, errors.Trace(err)
 		}
@@ -122,7 +122,7 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		if err != nil {
 			return 0, nil, errors.Trace(err)
 		}
-		currentChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(prev+count), raw.Key, recordID, decoder)
+		currentChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(prev+count), raw.Key, recordID, decoder, false)
 		if err != nil {
 			return 0, nil, errors.Trace(err)
 		}

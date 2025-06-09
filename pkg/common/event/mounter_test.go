@@ -19,9 +19,11 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -729,4 +731,36 @@ func TestTablePrefix(t *testing.T) {
 
 	key2 := []byte{'b', 1}
 	require.True(t, bytes.HasPrefix(key2, tablePrefix))
+}
+
+func TestDecodeToChunk(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	// This configuration only takes effect for newly created sessions.
+	helper.tk.MustExec("set global tidb_enable_row_level_checksum=true")
+	helper.tk.RefreshSession()
+	helper.tk.MustExec("use test")
+	ddlJob := helper.DDL2Job("create table t(id int primary key)")
+	require.NotNil(t, ddlJob)
+	tableInfo := helper.GetTableInfo(ddlJob)
+	ts := tableInfo.UpdateTS()
+	dmls := []string{
+		"insert into t values(1)",
+		"insert into t values(2)",
+		"insert into t values(3)",
+	}
+	rawKvs := helper.DML2RawKv(tableInfo.TableName.TableID, ts, dmls...)
+
+	m := NewMounter(time.UTC, &integrity.Config{
+		IntegrityCheckLevel:   integrity.CheckLevelCorrectness,
+		CorruptionHandleLevel: integrity.CorruptionHandleLevelError,
+	})
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
+	for _, rawKv := range rawKvs {
+		count, checksum, err := m.DecodeToChunk(rawKv, tableInfo, chk)
+		require.NoError(t, err)
+		require.Equal(t, count, 1)
+		require.False(t, checksum.Corrupted)
+	}
 }
