@@ -25,6 +25,8 @@ const (
 	HandshakeEventVersion = 0
 )
 
+var _ Event = &HandshakeEvent{}
+
 type HandshakeEvent struct {
 	// Version is the version of the HandshakeEvent struct.
 	Version      byte                `json:"version"`

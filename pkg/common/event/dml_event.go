@@ -31,6 +31,8 @@ const (
 	DMLEventVersion = 0
 )
 
+var _ Event = &BatchDMLEvent{}
+
 type BatchDMLEvent struct {
 	// Version is the version of the BatchDMLEvent struct.
 	Version   byte        `json:"version"`

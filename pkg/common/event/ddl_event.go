@@ -28,6 +28,8 @@ const (
 	DDLEventVersion = 0
 )
 
+var _ Event = &DDLEvent{}
+
 type DDLEvent struct {
 	// Version is the version of the DDLEvent struct.
 	Version      byte                `json:"version"`
