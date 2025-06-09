@@ -240,11 +240,9 @@ func (c *eventBroker) sendResolvedTs(
 		server,
 		re,
 		d.getEventSenderState(),
-		func() {
-			d.updateSentResolvedTs(watermark)
-		},
 	)
 	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
+	d.updateSentResolvedTs(watermark)
 	metricEventServiceSendResolvedTsCount.Inc()
 }
 
@@ -371,6 +369,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		// And the resolvedTs should be the last sent watermark.
 		resolvedTs := task.sentResolvedTs.Load()
 		remoteID := node.ID(task.info.GetServerID())
+
 		c.sendResolvedTs(remoteID, task, resolvedTs)
 		return false, common.DataRange{}
 	}
@@ -644,7 +643,7 @@ func (c *eventBroker) handleResolvedTs(ctx context.Context, cacheMap map[node.ID
 		cache = newResolvedTsCache(resolvedTsCacheSize)
 		cacheMap[m.serverID] = cache
 	}
-	cache.add(m)
+	cache.add(m.resolvedTsEvent)
 	if cache.isFull() {
 		c.flushResolvedTs(ctx, cache, m.serverID, workerIndex)
 	}
@@ -655,13 +654,7 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 		return
 	}
 	msg := &pevent.BatchResolvedEvent{}
-	events := cache.getAll()
-	resolvedTsEvents := make([]pevent.ResolvedEvent, 0, len(events))
-	for _, e := range events {
-		resolvedTsEvents = append(resolvedTsEvents, e.resolvedTsEvent)
-	}
-
-	msg.Events = append(msg.Events, resolvedTsEvents...)
+	msg.Events = append(msg.Events, cache.getAll()...)
 	tMsg := messaging.NewSingleTargetMessage(
 		serverID,
 		messaging.EventCollectorTopic,
@@ -669,10 +662,6 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 		uint64(workerIndex),
 	)
 	c.sendMsg(ctx, tMsg, nil)
-
-	for _, e := range events {
-		e.postSendFunc()
-	}
 }
 
 func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage, postSendMsg func()) {

@@ -325,7 +325,7 @@ func newWrapNotReusableEvent(serverID node.ID, e pevent.NotReusableEvent) *wrapE
 	return w
 }
 
-func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent, state pevent.EventSenderState, postFlushFunc func()) *wrapEvent {
+func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent, state pevent.EventSenderState) *wrapEvent {
 	e.State = state
 	w := getWrapEvent()
 	w.serverID = serverID
@@ -356,7 +356,7 @@ func newWrapSyncPointEvent(serverID node.ID, e *pevent.SyncPointEvent, state pev
 // We use it instead of a primitive slice to reduce the allocation
 // of the memory and reduce the GC pressure.
 type resolvedTsCache struct {
-	cache []*wrapEvent
+	cache []pevent.ResolvedEvent
 	// len is the number of the events in the cache.
 	len int
 	// limit is the max number of the events that the cache can store.
@@ -365,12 +365,12 @@ type resolvedTsCache struct {
 
 func newResolvedTsCache(limit int) *resolvedTsCache {
 	return &resolvedTsCache{
-		cache: make([]*wrapEvent, limit),
+		cache: make([]pevent.ResolvedEvent, limit),
 		limit: limit,
 	}
 }
 
-func (c *resolvedTsCache) add(e *wrapEvent) {
+func (c *resolvedTsCache) add(e pevent.ResolvedEvent) {
 	c.cache[c.len] = e
 	c.len++
 }
@@ -379,7 +379,7 @@ func (c *resolvedTsCache) isFull() bool {
 	return c.len >= c.limit
 }
 
-func (c *resolvedTsCache) getAll() []*wrapEvent {
+func (c *resolvedTsCache) getAll() []pevent.ResolvedEvent {
 	res := c.cache[:c.len]
 	c.reset()
 	return res
