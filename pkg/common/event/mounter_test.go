@@ -757,10 +757,13 @@ func TestDecodeToChunk(t *testing.T) {
 		CorruptionHandleLevel: integrity.CorruptionHandleLevelError,
 	})
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
-	for _, rawKv := range rawKvs {
+	for idx, rawKv := range rawKvs {
 		count, checksum, err := m.DecodeToChunk(rawKv, tableInfo, chk)
 		require.NoError(t, err)
 		require.Equal(t, count, 1)
 		require.False(t, checksum.Corrupted)
+		sum, err := calculateColumnChecksum(tableInfo.GetColumns(), chk.GetRow(idx), time.UTC)
+		require.NoError(t, err)
+		require.Equal(t, sum, checksum.Current)
 	}
 }
