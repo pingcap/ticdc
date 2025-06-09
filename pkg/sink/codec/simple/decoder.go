@@ -390,6 +390,7 @@ func newTiColumnInfo(
 	if column.DataType.Zerofill {
 		col.AddFlag(mysql.ZerofillFlag)
 	}
+
 	col.SetFlen(column.DataType.Length)
 	col.SetDecimal(column.DataType.Decimal)
 	col.SetElems(column.DataType.Elements)
@@ -595,6 +596,9 @@ func parseValue(
 			"location": location,
 			"value":    ts,
 		}
+	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeDuration,
+		mysql.TypeTiDBVectorFloat32, mysql.TypeJSON:
+		return string(value.([]uint8))
 	case mysql.TypeEnum:
 		switch v := value.(type) {
 		case []uint8:
@@ -795,6 +799,10 @@ func formatValue(value any, ft types.FieldType) any {
 			if err != nil {
 				log.Panic("cannot parse int64 value from string", zap.Any("value", value), zap.Error(err))
 			}
+		case int64:
+			v = val
+		default:
+			log.Panic("invalid column value for int", zap.Any("value", value), zap.String("type", fmt.Sprintf("%T", value)))
 		}
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
 			value = uint64(v)
@@ -830,7 +838,7 @@ func formatValue(value any, ft types.FieldType) any {
 	case mysql.TypeJSON:
 		value, err = types.ParseBinaryJSONFromString(value.(string))
 		if err != nil {
-			log.Warn("invalid column value for json. Use zero json instead", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for json. Use zero json instead", zap.Any("value", value), zap.Error(err))
 		}
 	case mysql.TypeNewDecimal:
 		result := new(types.MyDecimal)
@@ -851,17 +859,17 @@ func formatValue(value any, ft types.FieldType) any {
 	case mysql.TypeDuration:
 		value, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, value.(string), ft.GetDecimal())
 		if err != nil {
-			log.Warn("invalid column value for duration. Use zero value instead", zap.Any("value", value))
+			log.Panic("invalid column value for duration.", zap.Any("value", value))
 		}
 	case mysql.TypeDate, mysql.TypeDatetime:
 		value, err = types.ParseTime(types.DefaultStmtNoWarningContext, value.(string), ft.GetType(), ft.GetDecimal())
 		if err != nil {
-			log.Warn("invalid column value for time. Use zero value instead", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for time.", zap.Any("value", value), zap.Error(err))
 		}
 	case mysql.TypeTiDBVectorFloat32:
 		value, err = types.ParseVectorFloat32(value.(string))
 		if err != nil {
-			log.Warn("cannot parse vector32 value from string. Use zero value instead", zap.Any("value", value), zap.Error(err))
+			log.Panic("cannot parse vector32 value from string.", zap.Any("value", value), zap.Error(err))
 		}
 	default:
 	}

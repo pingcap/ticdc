@@ -77,6 +77,42 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 	}
 }
 
+func compareDatum(t *testing.T, a, b *tiTypes.Datum, col *model.ColumnInfo) {
+	if a.IsNull() && b.IsNull() {
+		return
+	}
+	if a.IsNull() || b.IsNull() {
+		require.Fail(t, "one of the datum is null", zap.Any("a", a), zap.Any("b", b))
+		return
+	}
+
+	switch col.GetType() {
+	case mysql.TypeNewDecimal:
+		require.Equal(t, a.GetMysqlDecimal().String(), b.GetMysqlDecimal().String())
+	case mysql.TypeEnum:
+		require.Equal(t, a.GetMysqlEnum().Value, b.GetMysqlEnum().Value)
+	case mysql.TypeSet:
+		require.Equal(t, a.GetMysqlSet().Value, b.GetMysqlSet().Value)
+	case mysql.TypeBit:
+		require.Equal(t, a.GetMysqlBit().Compare(b.GetMysqlBit()), 0)
+	case mysql.TypeTimestamp:
+		require.Equal(t, a.GetMysqlTime(), b.GetMysqlTime())
+	case mysql.TypeString:
+		if mysql.HasBinaryFlag(col.GetFlag()) {
+			actual := a.GetString()
+			expected := b.GetString()
+			length := min(len(actual), len(expected))
+			require.Equal(t, actual[:length], expected[:length])
+		} else {
+			require.Equal(t, a.GetString(), b.GetString())
+		}
+	case mysql.TypeDate:
+		require.Equal(t, a.GetMysqlTime().Compare(b.GetMysqlTime()), 0)
+	default:
+		require.Equal(t, a.GetValue(), b.GetValue(), "type: %v", col.GetType())
+	}
+}
+
 func CompareRow(
 	t *testing.T,
 	origin commonEvent.RowChange,
@@ -91,18 +127,7 @@ func CompareRow(
 		for idx, col := range originTableInfo.GetColumns() {
 			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
 			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
-			switch col.GetType() {
-			case mysql.TypeNewDecimal:
-				expected := a[idx].String()
-				actual := b[offset].String()
-				require.Equal(t, expected, actual)
-			case mysql.TypeEnum:
-				require.Equal(t, a[idx].GetMysqlEnum().Value, b[offset].GetMysqlEnum().Value)
-			case mysql.TypeSet:
-				require.Equal(t, a[idx].GetMysqlSet().Value, b[offset].GetMysqlSet().Value)
-			default:
-				require.Equal(t, a[idx].GetValue(), b[offset].GetValue())
-			}
+			compareDatum(t, &a[idx], &b[offset], col)
 		}
 	}
 
@@ -113,14 +138,7 @@ func CompareRow(
 		for idx, col := range originTableInfo.GetColumns() {
 			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
 			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
-			switch col.GetType() {
-			case mysql.TypeNewDecimal:
-				expected := a[idx].String()
-				actual := b[offset].String()
-				require.Equal(t, expected, actual)
-			default:
-				require.Equal(t, a[idx].GetValue(), b[offset].GetValue())
-			}
+			compareDatum(t, &a[idx], &b[offset], col)
 		}
 	}
 }
