@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// MergeDispatcherOperator is an operator to remove multiple spans belonging to the same table with adjacent ranges in a same node
+// MergeDispatcherOperator is an operator to remove multiple spans belonging to the same table with consecutive ranges in a same node
 // and create a new span to the replication db to the same node.
 type MergeDispatcherOperator struct {
 	db            *replica.ReplicationDB
@@ -52,7 +52,7 @@ func NewMergeDispatcherOperator(
 	toMergedReplicaSets []*replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
 ) *MergeDispatcherOperator {
-	// Step1: ensure toMergedSpans and affectedReplicaSets belong to the same table with adjacent ranges in a same node
+	// Step1: ensure toMergedSpans and affectedReplicaSets belong to the same table with consecutive ranges in a same node
 	if len(toMergedReplicaSets) < 2 {
 		log.Info("toMergedReplicaSets is less than 2, skip merge",
 			zap.Any("toMergedReplicaSets", toMergedReplicaSets))
@@ -69,8 +69,8 @@ func NewMergeDispatcherOperator(
 	nodeID := toMergedReplicaSets[0].GetNodeID()
 	for idx := 1; idx < len(toMergedSpans); idx++ {
 		currentTableSpan := toMergedSpans[idx]
-		if !common.IsTableSpanAdjacent(prevTableSpan, currentTableSpan) {
-			log.Info("toMergedSpans is not adjacent, skip merge", zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)), zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)))
+		if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
+			log.Info("toMergedSpans is not consecutive, skip merge", zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)), zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)))
 			setOccupyOperatorsFinished(occupyOperators)
 			return nil
 		}

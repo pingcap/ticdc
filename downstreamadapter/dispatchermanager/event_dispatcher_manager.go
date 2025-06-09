@@ -670,13 +670,13 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	return &message
 }
 
-// MergeDispatcher merges the mulitple dispatchers belonging to the same table with adjacent ranges.
+// MergeDispatcher merges the mulitple dispatchers belonging to the same table with consecutive ranges.
 func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
 	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
 	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap
 	//         2. whether the dispatcherIDs exist in the dispatcherMap
 	//         3. whether the dispatcherIDs belong to the same table
-	//         4. whether the dispatcherIDs have adjacent ranges
+	//         4. whether the dispatcherIDs have consecutive ranges
 	//         5. whether the dispatcher in working status.
 
 	if len(dispatcherIDs) < 2 {
@@ -729,8 +729,8 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 			schemaID = dispatcher.GetSchemaID()
 		} else {
 			currentTableSpan := dispatcher.GetTableSpan()
-			if !common.IsTableSpanAdjacent(prevTableSpan, currentTableSpan) {
-				log.Error("merge dispatcher failed, the dispatcherIDs are not adjacent",
+			if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
+				log.Error("merge dispatcher failed, the dispatcherIDs are not consecutive",
 					zap.Stringer("changefeedID", e.changefeedID),
 					zap.Any("dispatcherIDs", dispatcherIDs),
 					zap.Any("prevTableSpan", prevTableSpan),
@@ -825,7 +825,7 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 				closedList[idx] = true
 				closedCount++
 			} else {
-				log.Info("/", zap.Stringer("dispatcherID", id))
+				log.Info("dispatcher is still not closed", zap.Stringer("dispatcherID", id))
 			}
 		}
 		time.Sleep(10 * time.Millisecond)

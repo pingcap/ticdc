@@ -586,7 +586,7 @@ func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heart
 	return tableInfo
 }
 
-// ========================== methods for HTTP API | Only For Test==========================
+// ========================== methods for HTTP API | Only For Test ==========================
 // only for test
 // moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
 // moveTable only works for the complete table, not for the table splited.
@@ -750,7 +750,7 @@ func (c *Controller) mergeTable(tableID int64) error {
 		return bytes.Compare(replications[i].Span.StartKey, replications[j].Span.StartKey) < 0
 	})
 
-	// try to select two adjacent spans in the same node to merge
+	// try to select two consecutive spans in the same node to merge
 	// if we can't find, we just move one span to make it satisfied.
 	idx := 0
 	mergeSpanFound := false

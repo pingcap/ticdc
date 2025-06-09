@@ -323,7 +323,7 @@ func (oc *Controller) NewSplitOperator(
 	return NewSplitDispatcherOperator(oc.replicationDB, replicaSet, originNode, splitSpans)
 }
 
-// AddMergeOperator creates a merge operator, which merge adjacent replica sets.
+// AddMergeOperator creates a merge operator, which merge consecutive replica sets.
 // We need create a mergeOperator for the new replicaset, and create len(affectedReplicaSets) empty operator
 // to occupy these replica set not evolve other scheduling among merging.
 func (oc *Controller) AddMergeOperator(
