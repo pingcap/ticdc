@@ -149,3 +149,51 @@ func TestRawKVEntry_SplitUpdate_NotUpdateOperation(t *testing.T) {
 	require.Nil(t, deleteRow)
 	require.Nil(t, insertRow)
 }
+
+func TestRawKVEntry_IsUpdate(t *testing.T) {
+	t.Parallel()
+
+	// Test case 1: Update operation (OpTypePut with both OldValue and Value)
+	t.Run("IsUpdate_UpdateOperation", func(t *testing.T) {
+		entry := &RawKVEntry{
+			OpType:   OpTypePut,
+			Key:      []byte("test-key"),
+			Value:    []byte("new-value"),
+			OldValue: []byte("old-value"),
+		}
+		require.True(t, entry.IsUpdate())
+	})
+
+	// Test case 2: Delete operation (not an update)
+	t.Run("IsUpdate_DeleteOperation", func(t *testing.T) {
+		entry := &RawKVEntry{
+			OpType:   OpTypeDelete,
+			Key:      []byte("test-key"),
+			Value:    []byte("value"),
+			OldValue: []byte("old-value"),
+		}
+		require.False(t, entry.IsUpdate())
+	})
+
+	// Test case 3: Insert operation (OpTypePut but no OldValue)
+	t.Run("IsUpdate_InsertOperation", func(t *testing.T) {
+		entry := &RawKVEntry{
+			OpType:   OpTypePut,
+			Key:      []byte("test-key"),
+			Value:    []byte("new-value"),
+			OldValue: nil, // No old value means it's an insert
+		}
+		require.False(t, entry.IsUpdate())
+	})
+
+	// Test case 4: Update operation with empty old value
+	t.Run("IsUpdate_EmptyOldValue", func(t *testing.T) {
+		entry := &RawKVEntry{
+			OpType:   OpTypePut,
+			Key:      []byte("test-key"),
+			Value:    []byte("new-value"),
+			OldValue: []byte{},
+		}
+		require.False(t, entry.IsUpdate())
+	})
+}
