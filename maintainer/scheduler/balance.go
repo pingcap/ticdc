@@ -53,7 +53,7 @@ type balanceScheduler struct {
 
 func NewBalanceScheduler(
 	changefeedID common.ChangeFeedID, batchSize int,
-	oc *operator.Controller, replicationDB, redoReplicationDB *replica.ReplicationDB,
+	oc *operator.Controller, replicationDB *replica.ReplicationDB,
 	nodeManager *watcher.NodeManager, balanceInterval time.Duration,
 ) *balanceScheduler {
 	return &balanceScheduler{
@@ -62,7 +62,6 @@ func NewBalanceScheduler(
 		random:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		operatorController:   oc,
 		replicationDB:        replicationDB,
-		redoReplicationDB:    redoReplicationDB,
 		nodeManager:          nodeManager,
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),

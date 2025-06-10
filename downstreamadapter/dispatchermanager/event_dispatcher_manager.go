@@ -764,14 +764,11 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) {
 		case <-ticker.C:
 			var ts uint64 = math.MaxUint64
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-				log.Error("redoDispatcherMap", zap.Any("id", id), zap.Any("GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("trigger", dispatcher.IsTableTriggerEventDispatcher()))
 				ts = min(ts, dispatcher.GetCheckpointTs())
 			})
 			if previousTs >= ts {
-				log.Error("not update redo ts", zap.Uint64("previousTs", previousTs), zap.Uint64("ts", ts))
 				continue
 			}
-			log.Info("update redo ts", zap.Uint64("previousTs", previousTs), zap.Uint64("ts", ts))
 			previousTs = ts
 			message := new(heartbeatpb.RedoTsMessage)
 			message.ChangefeedID = e.changefeedID.ToPB()

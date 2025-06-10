@@ -61,20 +61,19 @@ type Controller struct {
 func NewOperatorController(
 	changefeedID common.ChangeFeedID,
 	mc messaging.MessageCenter,
-	db, redoDB *replica.ReplicationDB,
+	db *replica.ReplicationDB,
 	nodeManager *watcher.NodeManager,
 	batchSize int,
 ) *Controller {
 	oc := &Controller{
-		role:              "maintainer",
-		changefeedID:      changefeedID,
-		operators:         make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
-		runningQueue:      make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
-		messageCenter:     mc,
-		batchSize:         batchSize,
-		replicationDB:     db,
-		nodeManager:       nodeManager,
-		redoReplicationDB: redoDB,
+		role:          "maintainer",
+		changefeedID:  changefeedID,
+		operators:     make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
+		runningQueue:  make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
+		messageCenter: mc,
+		batchSize:     batchSize,
+		replicationDB: db,
+		nodeManager:   nodeManager,
 	}
 	return oc
 }

@@ -529,12 +529,15 @@ func (m *Maintainer) calCheckpointTs() {
 	// If all check is successfully, we begin to do the checkpointTs calculation,
 	// otherwise, we just return.
 	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
-	operatorLock := m.controllerManager.operatorController.GetLock()
-	barrierLock := m.controllerManager.barrier.GetLock()
+	operatorController := m.controllerManager.operatorController
+	barrier := m.controllerManager.barrier
+	controller := m.controllerManager.controller
+	operatorLock := operatorController.GetLock()
+	barrierLock := barrier.GetLock()
 
 	defer func() {
-		m.controllerManager.operatorController.ReleaseLock(operatorLock)
-		m.controllerManager.barrier.ReleaseLock(barrierLock)
+		operatorController.ReleaseLock(operatorLock)
+		barrier.ReleaseLock(barrierLock)
 	}()
 
 	if !m.controllerManager.ScheduleFinished() {
@@ -545,7 +548,7 @@ func (m *Maintainer) calCheckpointTs() {
 		)
 		return
 	}
-	if m.controllerManager.barrier.ShouldBlockCheckpointTs() {
+	if barrier.ShouldBlockCheckpointTs() {
 		log.Warn("can not advance checkpointTs since barrier is blocking",
 			zap.String("changefeed", m.id.Name()),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
@@ -557,7 +560,7 @@ func (m *Maintainer) calCheckpointTs() {
 	// if there is no tables, there must be a table trigger dispatcher
 	for id := range m.bootstrapper.GetAllNodes() {
 		// maintainer node has the table trigger dispatcher
-		if id != m.selfNode.ID && m.controllerManager.controller.GetTaskSizeByNodeID(id) <= 0 {
+		if id != m.selfNode.ID && controller.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
 		// node level watermark reported, ignore this round
@@ -786,7 +789,10 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 		m.statusChanged.Store(true)
 	}
 	if !m.cascadeRemoving {
-		m.controllerManager.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
+		m.controllerManager.RemoveTasksByTableIDs(false, m.ddlSpan.Span.TableID)
+		if m.redoDDLSpan != nil {
+			m.controllerManager.RemoveTasksByTableIDs(true, m.redoDDLSpan.Span.TableID)
+		}
 		return !m.ddlSpan.IsWorking()
 	}
 	return m.trySendMaintainerCloseRequestToAllNode()

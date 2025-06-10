@@ -28,7 +28,7 @@ import (
 
 func NewScheduleController(changefeedID common.ChangeFeedID,
 	batchSize int,
-	oc *operator.Controller,
+	oc, redoOC *operator.Controller,
 	db, redoDB *replica.ReplicationDB,
 	nodeM *watcher.NodeManager,
 	balanceInterval time.Duration,
@@ -37,11 +37,10 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 ) *pkgscheduler.Controller {
 	schedulers := map[string]pkgscheduler.Scheduler{
 		pkgscheduler.BasicScheduler: scheduler.NewBasicScheduler(
-			changefeedID.String(),
+			changefeedID,
 			batchSize,
 			oc,
 			db,
-			redoDB,
 			nodeM,
 			schedulerCfg,
 		),
@@ -50,7 +49,6 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			batchSize,
 			oc,
 			db,
-			redoDB,
 			nodeM,
 			balanceInterval,
 		),
@@ -62,10 +60,38 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			splitter,
 			oc,
 			db,
+			nodeM,
+			balanceInterval,
+		)
+	}
+	if redoDB != nil {
+		schedulers["redo-basic-scheduler"] = scheduler.NewBasicScheduler(
+			changefeedID,
+			batchSize,
+			redoOC,
+			redoDB,
+			nodeM,
+			schedulerCfg,
+		)
+		schedulers["redo-balance-scheduler"] = scheduler.NewBalanceScheduler(
+			changefeedID,
+			batchSize,
+			redoOC,
 			redoDB,
 			nodeM,
 			balanceInterval,
 		)
+		if splitter != nil {
+			schedulers["redo-split-scheduler"] = scheduler.NewSplitScheduler(
+				changefeedID,
+				batchSize,
+				splitter,
+				redoOC,
+				redoDB,
+				nodeM,
+				balanceInterval,
+			)
+		}
 	}
 	return pkgscheduler.NewController(schedulers)
 }

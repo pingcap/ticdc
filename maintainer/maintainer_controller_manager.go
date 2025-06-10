@@ -50,12 +50,13 @@ import (
 type ControllerManager struct {
 	bootstrapped bool
 
-	schedulerController *pkgscheduler.Controller
-	operatorController  *operator.Controller
-	controller          *Controller
-	redoController      *Controller
-	barrier             *Barrier
-	redoBarrier         *Barrier
+	schedulerController    *pkgscheduler.Controller
+	operatorController     *operator.Controller
+	redoOperatorController *operator.Controller
+	controller             *Controller
+	redoController         *Controller
+	barrier                *Barrier
+	redoBarrier            *Barrier
 
 	messageCenter messaging.MessageCenter
 
@@ -91,24 +92,26 @@ func NewControllerManager(changefeedID common.ChangeFeedID,
 	}
 
 	controller := NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
 	var (
 		redoController *Controller
 		redoDB         *replica.ReplicationDB
+		redoOC         *operator.Controller
 	)
 	if redo.IsConsistentEnabled(cfConfig.Consistent.Level) {
 		redoController = NewController(changefeedID, redoDDLSpan, splitter, enableTableAcrossNodes)
 		redoDB = redoController.replicationDB
+		redoOC = operator.NewOperatorController(changefeedID, mc, redoDB, nodeManager, batchSize)
 	}
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-
-	oc := operator.NewOperatorController(changefeedID, mc, controller.replicationDB, redoDB, nodeManager, batchSize)
+	oc := operator.NewOperatorController(changefeedID, mc, controller.replicationDB, nodeManager, batchSize)
 
 	var schedulerCfg *config.ChangefeedSchedulerConfig
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
 	sc := NewScheduleController(
-		changefeedID, batchSize, oc, controller.replicationDB, redoDB, nodeManager, balanceInterval, splitter, schedulerCfg,
+		changefeedID, batchSize, oc, redoOC, controller.replicationDB, redoDB, nodeManager, balanceInterval, splitter, schedulerCfg,
 	)
 
 	return &ControllerManager{
@@ -117,6 +120,7 @@ func NewControllerManager(changefeedID common.ChangeFeedID,
 		bootstrapped:           false,
 		schedulerController:    sc,
 		operatorController:     oc,
+		redoOperatorController: redoOC,
 		controller:             controller,
 		redoController:         redoController,
 		messageCenter:          mc,
@@ -132,7 +136,8 @@ func (cm *ControllerManager) HandleStatus(from node.ID, statusList []*heartbeatp
 	var stm *replica.SpanReplication
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		cm.operatorController.UpdateOperatorStatus(dispatcherID, from, status)
+		operatorController := cm.getOC(status.Redo)
+		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		if status.Redo {
 			stm = cm.redoController.GetTask(dispatcherID)
 		} else {
@@ -142,7 +147,7 @@ func (cm *ControllerManager) HandleStatus(from node.ID, statusList []*heartbeatp
 			if status.ComponentStatus != heartbeatpb.ComponentState_Working {
 				continue
 			}
-			if op := cm.operatorController.GetOperator(dispatcherID); op == nil {
+			if op := operatorController.GetOperator(dispatcherID); op == nil {
 				// it's normal case when the span is not found in replication db
 				// the span is removed from replication db first, so here we only check if the span status is working or not
 				log.Warn("no span found, remove it",
@@ -245,7 +250,7 @@ func (cm *ControllerManager) FinishBootstrap(
 	cm.initializeComponents()
 	cm.barrier = cm.newBarrier(cm.operatorController, cm.controller, allNodesResp)
 	if cm.redoController != nil {
-		cm.redoBarrier = cm.newBarrier(cm.operatorController, cm.redoController, allNodesResp)
+		cm.redoBarrier = cm.newBarrier(cm.redoOperatorController, cm.redoController, allNodesResp)
 	}
 
 	// Step 7: Prepare response
@@ -427,6 +432,10 @@ func (cm *ControllerManager) initializeComponents() {
 
 	// Start operator controllerManager
 	cm.taskHandles = append(cm.taskHandles, cm.taskPool.Submit(cm.operatorController, time.Now()))
+	// redo
+	if cm.redoOperatorController != nil {
+		cm.taskHandles = append(cm.taskHandles, cm.taskPool.Submit(cm.redoOperatorController, time.Now()))
+	}
 }
 
 func (cm *ControllerManager) prepareSchemaInfoResponse(
@@ -439,24 +448,18 @@ func (cm *ControllerManager) prepareSchemaInfoResponse(
 	return initSchemaInfos
 }
 
-// RemoveAllTasks remove all tasks
-func (cm *ControllerManager) RemoveAllTasks() {
-	cm.operatorController.RemoveAllTasks()
-}
-
-// RemoveTasksBySchemaID remove all tasks by schema id
-func (cm *ControllerManager) RemoveTasksBySchemaID(schemaID int64) {
-	cm.operatorController.RemoveTasksBySchemaID(schemaID)
-}
-
 // RemoveTasksByTableIDs remove all tasks by table id
-func (cm *ControllerManager) RemoveTasksByTableIDs(tables ...int64) {
-	cm.operatorController.RemoveTasksByTableIDs(tables...)
+func (cm *ControllerManager) RemoveTasksByTableIDs(redo bool, tables ...int64) {
+	operatorController := cm.getOC(redo)
+	operatorController.RemoveTasksByTableIDs(tables...)
 }
 
 // RemoveNode is called when a node is removed
 func (cm *ControllerManager) RemoveNode(id node.ID) {
 	cm.operatorController.OnNodeRemoved(id)
+	if cm.redoOperatorController != nil {
+		cm.redoOperatorController.OnNodeRemoved(id)
+	}
 }
 
 // ScheduleFinished return false if not all task are running in working state
@@ -674,4 +677,11 @@ func (cm *ControllerManager) MergeTable(tableID int64) error {
 	}
 
 	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
+}
+
+func (cm *ControllerManager) getOC(redo bool) *operator.Controller {
+	if redo {
+		return cm.redoOperatorController
+	}
+	return cm.operatorController
 }
