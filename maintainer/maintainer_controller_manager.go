@@ -103,9 +103,9 @@ func NewControllerManager(changefeedID common.ChangeFeedID,
 		log.Error("redo manager")
 		redoController = NewController(changefeedID, redoDDLSpan, splitter, enableTableAcrossNodes)
 		redoDB = redoController.replicationDB
-		redoOC = operator.NewOperatorController(changefeedID, mc, redoDB, nodeManager, batchSize)
+		redoOC = operator.NewOperatorController(changefeedID, mc, redoDB, nodeManager, batchSize, true)
 	}
-	oc := operator.NewOperatorController(changefeedID, mc, controller.replicationDB, nodeManager, batchSize)
+	oc := operator.NewOperatorController(changefeedID, mc, controller.replicationDB, nodeManager, batchSize, false)
 
 	var schedulerCfg *config.ChangefeedSchedulerConfig
 	if cfConfig != nil {
