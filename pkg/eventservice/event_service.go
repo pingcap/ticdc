@@ -117,7 +117,7 @@ func (s *eventService) Run(ctx context.Context) error {
 				log.Panic("invalid action type", zap.Any("info", info))
 			}
 		case heartbeat := <-s.dispatcherHeartbeat:
-			s.handleDispatcherHeartbeat(ctx, heartbeat)
+			s.handleDispatcherHeartbeat(heartbeat)
 		}
 	}
 }
@@ -210,13 +210,13 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	c.resetDispatcher(dispatcherInfo)
 }
 
-func (s *eventService) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
+func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	clusterID := heartbeat.heartbeat.ClusterID
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		return
 	}
-	c.handleDispatcherHeartbeat(ctx, heartbeat)
+	c.handleDispatcherHeartbeat(heartbeat)
 }
 
 func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
