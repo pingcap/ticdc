@@ -786,6 +786,10 @@ func (m *Maintainer) handleResendMessage() {
 	if m.postBootstrapMsg != nil {
 		m.sendPostBootstrapRequest()
 	}
+	if m.controllerManager.redoBarrier != nil {
+		// resend redo barrier ack messages
+		m.sendMessages(m.controllerManager.redoBarrier.Resend())
+	}
 	if m.controllerManager.barrier != nil {
 		// resend barrier ack messages
 		m.sendMessages(m.controllerManager.barrier.Resend())
@@ -800,6 +804,7 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 		m.controllerManager.RemoveTasksByTableIDs(false, m.ddlSpan.Span.TableID)
 		if m.redoDDLSpan != nil {
 			m.controllerManager.RemoveTasksByTableIDs(true, m.redoDDLSpan.Span.TableID)
+			return !m.ddlSpan.IsWorking() && !m.redoDDLSpan.IsWorking()
 		}
 		return !m.ddlSpan.IsWorking()
 	}

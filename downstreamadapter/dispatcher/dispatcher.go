@@ -394,6 +394,7 @@ func (d *Dispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	}
 	return block
 }
+
 func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
 	d.tableProgress.Add(event)
 	d.sink.AddDMLEvent(event)
