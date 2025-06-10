@@ -74,6 +74,7 @@ const (
 	TypeDispatcherHeartbeat
 	TypeDispatcherHeartbeatResponse
 	TypeRedoTsMessage
+	TypeMergeDispatcherRequest
 
 	// Coordinator related
 	TypeCoordinatorBootstrapRequest
@@ -155,6 +156,10 @@ func (t IOType) String() string {
 		return "DispatcherHeartbeat"
 	case TypeRedoTsMessage:
 		return "RedoTsMessage"
+	case TypeDispatcherHeartbeatResponse:
+		return "DispatcherHeartbeatResponse"
+	case TypeMergeDispatcherRequest:
+		return "MergeDispatcherRequest"
 	default:
 	}
 	return "Unknown"
@@ -303,7 +308,9 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 	case TypeCoordinatorBootstrapResponse:
 		m = &heartbeatpb.CoordinatorBootstrapResponse{}
 	case TypeDispatcherRequest:
-		m = &DispatcherRequest{}
+		m = &DispatcherRequest{
+			DispatcherRequest: &eventpb.DispatcherRequest{},
+		}
 	case TypeMaintainerBootstrapResponse:
 		m = &heartbeatpb.MaintainerBootstrapResponse{}
 	case TypeMaintainerPostBootstrapRequest:
@@ -324,6 +331,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &commonEvent.DispatcherHeartbeatResponse{}
 	case TypeRedoTsMessage:
 		m = &heartbeatpb.RedoTsMessage{}
+	case TypeMergeDispatcherRequest:
+		m = &heartbeatpb.MergeDispatcherRequest{}
 	default:
 		log.Panic("Unimplemented IOType", zap.Stringer("Type", ioType))
 	}
@@ -418,6 +427,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeDispatcherHeartbeatResponse
 	case *heartbeatpb.RedoTsMessage:
 		ioType = TypeRedoTsMessage
+	case *heartbeatpb.MergeDispatcherRequest:
+		ioType = TypeMergeDispatcherRequest
 	default:
 		panic("unknown io type")
 	}

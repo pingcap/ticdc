@@ -289,6 +289,11 @@ func Benchmark100KRegions(b *testing.B) {
 func TestRangeLockGetHeapMinTs(t *testing.T) {
 	t.Parallel()
 
+	updateLockedRangeResolvedTs := func(l *RangeLock, state *LockedRangeState, resolvedTs uint64) {
+		state.ResolvedTs.Store(resolvedTs)
+		l.UpdateLockedRangeStateHeap(state)
+	}
+
 	// Test case 1: empty heap
 	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
 	require.Equal(t, uint64(100), l.GetHeapMinTs())
@@ -296,12 +301,12 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 	// Test case 2: Lock a range and then unlock it
 	l = NewRangeLock(1, []byte("a"), []byte("z"), 50)
 	res := l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
-	res.LockedRangeState.ResolvedTs.Store(101)
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 101)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	require.Equal(t, uint64(50), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 	res = l.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
-	res.LockedRangeState.ResolvedTs.Store(60)
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 60)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	require.Equal(t, uint64(60), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
@@ -314,16 +319,16 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 
 	l = NewRangeLock(1, []byte("a"), []byte("z"), 100)
 	res = l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
-	res.LockedRangeState.ResolvedTs.Store(101)
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 101)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	res = l.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
-	res.LockedRangeState.ResolvedTs.Store(102)
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 102)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	require.Equal(t, uint64(101), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 
 	// Update the resolvedTs of the first range
-	res.LockedRangeState.ResolvedTs.Store(50)
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 50)
 	require.Equal(t, uint64(50), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 }

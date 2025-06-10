@@ -600,6 +600,10 @@ func (rd *RedoDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
 	return rd.componentStatus.Get()
 }
 
+func (rd *RedoDispatcher) SetComponentStatus(status heartbeatpb.ComponentState) {
+	rd.componentStatus.Set(status)
+}
+
 func (rd *RedoDispatcher) GetRemovingStatus() bool {
 	return rd.isRemoving.Load()
 }
@@ -638,6 +642,16 @@ func (rd *RedoDispatcher) GetSyncPointInterval() time.Duration {
 
 func (rd *RedoDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
 	return rd.blockStatusesChan
+}
+
+// SetStartTs only be called after the dispatcher is created
+func (rd *RedoDispatcher) SetStartTs(startTs uint64) {
+	rd.startTs = startTs
+	rd.resolvedTs = startTs
+}
+
+func (rd *RedoDispatcher) SetCurrentPDTs(currentPDTs uint64) {
+	rd.creationPDTs = currentPDTs
 }
 
 func (rd *RedoDispatcher) GetType() int {

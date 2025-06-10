@@ -272,7 +272,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("regionID", regionID))
 				return
 			}
-			// kvEvents = append(kvEvents, assembleRowEvent(regionID, entry))
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:
 			if !state.isInitialized() {
@@ -300,6 +299,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		return 0
 	}
 	state.updateResolvedTs(resolvedTs)
+	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 
 	now := time.Now().UnixMilli()
 	lastAdvance := span.lastAdvanceTime.Load()
@@ -312,7 +312,12 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 				zap.Uint64("resolvedTs", ts))
 		}
 		lastResolvedTs := span.resolvedTs.Load()
-		if ts > lastResolvedTs {
+		// Generally, we don't want to send duplicate resolved ts,
+		// so we check whether `ts` is larger than `lastResolvedTs` before send it.
+		// but when `ts` == `lastResolvedTs` == `span.startTs`,
+		// the span may just be initialized and have not receive any resolved ts before,
+		// so we also send ts in this case for quick notification to downstream.
+		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
 			span.resolvedTs.Store(ts)
 			span.resolvedTsUpdated.Store(time.Now().Unix())
 			return ts

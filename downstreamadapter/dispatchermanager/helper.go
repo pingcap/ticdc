@@ -15,7 +15,6 @@ package dispatchermanager
 import (
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
@@ -24,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
 )
 
@@ -163,58 +161,6 @@ func (w *Watermark) Set(watermark *heartbeatpb.Watermark) {
 	w.Watermark = watermark
 }
 
-// HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
-type HeartBeatTask struct {
-	taskHandle *threadpool.TaskHandle
-	manager    *EventDispatcherManager
-	// Used to determine when to collect complete status
-	statusTick int
-}
-
-func newHeartBeatTask(manager *EventDispatcherManager) *HeartBeatTask {
-	taskScheduler := GetHeartBeatTaskScheduler()
-	t := &HeartBeatTask{
-		manager:    manager,
-		statusTick: 0,
-	}
-	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(time.Second*1))
-	return t
-}
-
-func (t *HeartBeatTask) Execute() time.Time {
-	if t.manager.closed.Load() {
-		return time.Time{}
-	}
-	executeInterval := time.Millisecond * 100
-	// 10s / 100ms = 100
-	completeStatusInterval := int(time.Second * 10 / executeInterval)
-	t.statusTick++
-	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
-	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
-	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
-	return time.Now().Add(executeInterval)
-}
-
-func (t *HeartBeatTask) Cancel() {
-	t.taskHandle.Cancel()
-}
-
-var (
-	heartBeatTaskSchedulerOnce sync.Once
-	heartBeatTaskScheduler     threadpool.ThreadPool
-)
-
-func GetHeartBeatTaskScheduler() threadpool.ThreadPool {
-	heartBeatTaskSchedulerOnce.Do(func() {
-		heartBeatTaskScheduler = threadpool.NewThreadPoolDefault()
-	})
-	return heartBeatTaskScheduler
-}
-
-func SetHeartBeatTaskScheduler(taskScheduler threadpool.ThreadPool) {
-	heartBeatTaskScheduler = taskScheduler
-}
-
 func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
@@ -285,9 +231,11 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 		if err != nil {
 			select {
 			case eventDispatcherManager.errCh <- err:
+				log.Error("new dispatcher meet error", zap.String("ChangefeedID", eventDispatcherManager.changefeedID.String()),
+					zap.Error(err))
 			default:
 				log.Error("error channel is full, discard error",
-					zap.Any("ChangefeedID", eventDispatcherManager.changefeedID.String()),
+					zap.String("ChangefeedID", eventDispatcherManager.changefeedID.String()),
 					zap.Error(err))
 			}
 		}
@@ -522,3 +470,60 @@ func (h *RedoTsMessageHandler) GetType(event RedoTsMessage) dynstream.EventType 
 	return dynstream.DefaultEventType
 }
 func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) {}
+
+func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *EventDispatcherManager, *MergeDispatcherRequestHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		func(id common.GID) uint64 { return id.FastHash() },
+		&MergeDispatcherRequestHandler{})
+	ds.Start()
+	return ds
+}
+
+type MergeDispatcherRequest struct {
+	*heartbeatpb.MergeDispatcherRequest
+	redo bool
+}
+
+func NewMergeDispatcherRequest(req *heartbeatpb.MergeDispatcherRequest, redo bool) MergeDispatcherRequest {
+	return MergeDispatcherRequest{req, redo}
+}
+
+type MergeDispatcherRequestHandler struct{}
+
+func (h *MergeDispatcherRequestHandler) Path(mergeDispatcherRequest MergeDispatcherRequest) common.GID {
+	return common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID)
+}
+
+func (h *MergeDispatcherRequestHandler) Handle(eventDispatcherManager *EventDispatcherManager, reqs ...MergeDispatcherRequest) bool {
+	if len(reqs) != 1 {
+		panic("invalid request count")
+	}
+
+	mergeDispatcherRequest := reqs[0]
+	dispatcherIDs := make([]common.DispatcherID, 0, len(mergeDispatcherRequest.DispatcherIDs))
+	for _, id := range mergeDispatcherRequest.DispatcherIDs {
+		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))
+	}
+	if mergeDispatcherRequest.redo {
+		eventDispatcherManager.MergeRedoDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID))
+	} else {
+		eventDispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID))
+	}
+	return false
+}
+
+func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) int   { return 0 }
+func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool { return false }
+func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
+	return 0
+}
+
+func (h *MergeDispatcherRequestHandler) GetTimestamp(event MergeDispatcherRequest) dynstream.Timestamp {
+	return 0
+}
+
+func (h *MergeDispatcherRequestHandler) GetType(event MergeDispatcherRequest) dynstream.EventType {
+	return dynstream.DefaultEventType
+}
+
+func (h *MergeDispatcherRequestHandler) OnDrop(event MergeDispatcherRequest) {}

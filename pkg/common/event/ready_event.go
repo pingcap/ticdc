@@ -23,6 +23,8 @@ const (
 	ReadyEventVersion = 0
 )
 
+var _ Event = &ReadyEvent{}
+
 type ReadyEvent struct {
 	Version      byte
 	DispatcherID common.DispatcherID

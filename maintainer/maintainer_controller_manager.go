@@ -572,9 +572,9 @@ func (cm *ControllerManager) moveSplitTable(tableId int64, targetNode node.ID) e
 }
 
 // only for test
-// SplitTableByRegionCount split table based on region count
+// splitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
-func (cm *ControllerManager) SplitTableByRegionCount(tableID int64) error {
+func (cm *ControllerManager) splitTableByRegionCount(tableID int64) error {
 	if !cm.controller.replicationDB.IsTableExists(tableID) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
@@ -628,9 +628,9 @@ func (cm *ControllerManager) SplitTableByRegionCount(tableID int64) error {
 }
 
 // only for test
-// MergeTable merge two nearby dispatchers in this table into one dispatcher,
+// mergeTable merge two nearby dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
-func (cm *ControllerManager) MergeTable(tableID int64) error {
+func (cm *ControllerManager) mergeTable(tableID int64) error {
 	if !cm.controller.replicationDB.IsTableExists(tableID) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)

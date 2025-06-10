@@ -160,7 +160,7 @@ func TestOnNotify(t *testing.T) {
 	}
 
 	// Case 5: Do scan, it will update the sentResolvedTs.
-	broker.doScan(context.TODO(), task, 0)
+	broker.doScan(context.TODO(), task)
 	require.False(t, disp.isTaskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())
 	log.Info("pass case 5")
@@ -169,7 +169,7 @@ func TestOnNotify(t *testing.T) {
 	// Set the schemaStore's maxDDLCommitTs to the sentResolvedTs, so the broker will not scan the schemaStore.
 	ss.maxDDLCommitTs = disp.sentResolvedTs.Load()
 	broker.onNotify(disp, notifyMsgs5.resolvedTs, notifyMsgs5.latestCommitTs)
-	broker.doScan(context.TODO(), task, 0)
+	broker.doScan(context.TODO(), task)
 	require.Equal(t, notifyMsgs5.resolvedTs, disp.sentResolvedTs.Load())
 	log.Info("Pass case 6")
 }

@@ -155,7 +155,7 @@ func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *com
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeDB,
 		}
-	case timodel.ActionTruncateTable, timodel.ActionRenameTable, timodel.ActionDropTable,
+	case timodel.ActionTruncateTable, timodel.ActionRenameTable, timodel.ActionDropTable, timodel.ActionRecoverTable,
 		timodel.ActionAddColumn, timodel.ActionDropColumn,
 		timodel.ActionModifyColumn, timodel.ActionSetDefaultValue,
 		timodel.ActionAddIndex, timodel.ActionDropIndex, timodel.ActionRenameIndex,

@@ -1018,12 +1018,12 @@ func (m *Maintainer) GetTables() []*replica.SpanReplication {
 // it can split the table whether the table have one dispatcher or multiple dispatchers
 func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
 	// m.redoController.SplitTableByRegionCount(tableId)
-	return m.controllerManager.SplitTableByRegionCount(tableId)
+	return m.controllerManager.splitTableByRegionCount(tableId)
 }
 
 // MergeTable merge two dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
 func (m *Maintainer) MergeTable(tableId int64) error {
 	// m.redoController.MergeTable(tableId)
-	return m.controllerManager.MergeTable(tableId)
+	return m.controllerManager.mergeTable(tableId)
 }

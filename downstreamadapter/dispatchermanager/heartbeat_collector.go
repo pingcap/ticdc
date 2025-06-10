@@ -40,6 +40,7 @@ Receiving messages include:
  1. HeartBeatResponse: the ack and actions for block events(Need a better name)
  2. SchedulerDispatcherRequest: ask for create or remove a dispatcher
  3. CheckpointTsMessage: the latest checkpoint ts of the changefeed, it only for the MQ-class Sink
+ 4. MergeDispatcherRequest: ask for merge dispatchers
 
 HeartBeatCollector is an server level component.
 */
@@ -54,8 +55,8 @@ type HeartBeatCollector struct {
 	schedulerDispatcherRequestDynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler]
 	checkpointTsMessageDynamicStream        dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler]
 	redoTsMessageDynamicStream              dynstream.DynamicStream[int, common.GID, RedoTsMessage, *EventDispatcherManager, *RedoTsMessageHandler]
-
-	mc messaging.MessageCenter
+	mergeDispatcherRequestDynamicStream     dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *EventDispatcherManager, *MergeDispatcherRequestHandler]
+	mc                                      messaging.MessageCenter
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -72,6 +73,7 @@ func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
 		schedulerDispatcherRequestDynamicStream: newSchedulerDispatcherRequestDynamicStream(),
 		checkpointTsMessageDynamicStream:        newCheckpointTsMessageDynamicStream(),
 		redoTsMessageDynamicStream:              newRedoTsMessageDynamicStream(),
+		mergeDispatcherRequestDynamicStream:     newMergeDispatcherRequestDynamicStream(),
 		mc:                                      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 	}
 	heartBeatCollector.mc.RegisterHandler(messaging.HeartbeatCollectorTopic, heartBeatCollector.RecvMessages)
@@ -114,6 +116,10 @@ func (c *HeartBeatCollector) RegisterEventDispatcherManager(m *EventDispatcherMa
 	if err != nil {
 		return errors.Trace(err)
 	}
+	err = c.mergeDispatcherRequestDynamicStream.AddPath(m.changefeedID.Id, m)
+	if err != nil {
+		return errors.Trace(err)
+	}
 	return nil
 }
 
@@ -133,6 +139,10 @@ func (c *HeartBeatCollector) RemoveEventDispatcherManager(m *EventDispatcherMana
 		return errors.Trace(err)
 	}
 	err = c.schedulerDispatcherRequestDynamicStream.RemovePath(m.changefeedID.Id)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	err = c.mergeDispatcherRequestDynamicStream.RemovePath(m.changefeedID.Id)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -221,13 +231,18 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 	case messaging.TypeCheckpointTsMessage:
 		checkpointTsMessage := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		c.checkpointTsMessageDynamicStream.Push(
-			common.NewChangefeedIDFromPB(checkpointTsMessage.ChangefeedID).Id,
+			common.NewChangefeedGIDFromPB(checkpointTsMessage.ChangefeedID),
 			NewCheckpointTsMessage(checkpointTsMessage))
 	case messaging.TypeRedoTsMessage:
 		redoTsMessage := msg.Message[0].(*heartbeatpb.RedoTsMessage)
 		c.redoTsMessageDynamicStream.Push(
 			common.NewChangefeedIDFromPB(redoTsMessage.ChangefeedID).Id,
 			NewRedoTsMessage(redoTsMessage))
+	case messaging.TypeMergeDispatcherRequest:
+		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
+		c.mergeDispatcherRequestDynamicStream.Push(
+			common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID),
+			NewMergeDispatcherRequest(mergeDispatcherRequest, msg.Redo))
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))
 	}
@@ -244,6 +259,7 @@ func (c *HeartBeatCollector) Close() {
 	c.heartBeatResponseDynamicStream.Close()
 	c.schedulerDispatcherRequestDynamicStream.Close()
 	c.dispatcherStatusDynamicStream.Close()
+	c.mergeDispatcherRequestDynamicStream.Close()
 
 	log.Info("heartbeat collector is closed")
 }

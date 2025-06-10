@@ -22,6 +22,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var _ Event = &BatchResolvedEvent{}
+
 type BatchResolvedEvent struct {
 	// Version is the version of the BatchResolvedEvent struct.
 	Version byte
@@ -100,6 +102,8 @@ func (b *BatchResolvedEvent) IsPaused() bool {
 const (
 	ResolvedEventVersion = 0
 )
+
+var _ Event = &ResolvedEvent{}
 
 // ResolvedEvent represents a resolvedTs event of a dispatcher.
 type ResolvedEvent struct {
