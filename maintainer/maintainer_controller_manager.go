@@ -100,7 +100,6 @@ func NewControllerManager(changefeedID common.ChangeFeedID,
 		redoOC         *operator.Controller
 	)
 	if redo.IsConsistentEnabled(cfConfig.Consistent.Level) {
-		log.Error("redo manager")
 		redoController = NewController(changefeedID, redoDDLSpan, splitter, enableTableAcrossNodes)
 		redoDB = redoController.replicationDB
 		redoOC = operator.NewOperatorController(changefeedID, mc, redoDB, nodeManager, batchSize, true)

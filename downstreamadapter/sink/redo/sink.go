@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/ticdc/redo/writer/factory"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 // Sink manages redo log writer, buffers un-persistent redo logs, calculates
@@ -106,14 +105,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 }
 
 func (s *Sink) Run(ctx context.Context) error {
-	eg, ctx := errgroup.WithContext(ctx)
-	eg.Go(func() error {
-		return s.ddlWriter.Run(ctx)
-	})
-	eg.Go(func() error {
-		return s.dmlWriter.Run(ctx)
-	})
-	return eg.Wait()
+	return s.dmlWriter.Run(ctx)
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {

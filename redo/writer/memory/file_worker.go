@@ -25,6 +25,7 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -190,26 +191,10 @@ func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
 		case <-egCtx.Done():
 			return errors.Trace(egCtx.Err())
 		case file := <-f.flushCh:
-			start := time.Now()
-
-			if err := file.writer.Close(); err != nil {
-				return errors.Trace(err)
-			}
-			var err error
-			if f.cfg.FlushConcurrency <= 1 {
-				err = f.extStorage.WriteFile(egCtx, file.filename, file.writer.buf.Bytes())
-			} else {
-				err = f.multiPartUpload(egCtx, file)
-			}
-			f.metricFlushAllDuration.Observe(time.Since(start).Seconds())
+			err := f.syncWriteFile(egCtx, file)
 			if err != nil {
 				return errors.Trace(err)
 			}
-			file.markFlushed()
-
-			bufPtr := &file.data
-			file.data = nil
-			f.pool.Put(bufPtr)
 		}
 	}
 }
@@ -239,31 +224,56 @@ func (f *fileWorkerGroup) bgWriteLogs(
 				log.Error("inputCh of redo file worker is closed unexpectedly")
 				return errors.ErrUnexpected.FastGenByArgs("inputCh of redo file worker is closed unexpectedly")
 			}
-			err := f.syncWrite(egCtx, event)
+			hasNew, err := f.writeToCache(egCtx, event)
 			if err != nil {
 				return errors.Trace(err)
 			}
+			err = f.flushAll(egCtx, hasNew)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			event.PostFlush()
 		}
 	}
 }
 
 func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event writer.RedoEvent) error {
-	// TODO: cache event
-	err := f.writeToCache(egCtx, event)
+	rl, data, err := f.encodeData(event)
 	if err != nil {
 		return err
 	}
-	err = f.flushAll(egCtx)
-	if err != nil {
-		return err
-	}
+	file := f.newFileCache(data, rl.GetCommitTs())
+	f.syncWriteFile(egCtx, file)
 	// flush
 	event.PostFlush()
 	return nil
 }
 
+func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) error {
+	var err error
+	start := time.Now()
+	if err = file.writer.Close(); err != nil {
+		return err
+	}
+	if f.cfg.FlushConcurrency <= 1 {
+		err = f.extStorage.WriteFile(egCtx, file.filename, file.writer.buf.Bytes())
+	} else {
+		err = f.multiPartUpload(egCtx, file)
+	}
+	f.metricFlushAllDuration.Observe(time.Since(start).Seconds())
+	if err != nil {
+		return err
+	}
+	file.markFlushed()
+
+	bufPtr := &file.data
+	file.data = nil
+	f.pool.Put(bufPtr)
+	return nil
+}
+
 // newFileCache write event to a new file cache.
-func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) error {
+func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCache {
 	bufPtr := f.pool.Get().(*[]byte)
 	buf := *bufPtr
 	buf = buf[:0]
@@ -279,7 +289,8 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) error {
 	}
 	_, err := wr.Write(data)
 	if err != nil {
-		return errors.Trace(err)
+		log.Error("write to new file failed", zap.Error(err))
+		return nil
 	}
 
 	dw := &dataWriter{
@@ -287,7 +298,7 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) error {
 		writer: wr,
 		closer: closer,
 	}
-	file := &fileCache{
+	return &fileCache{
 		data:        buf,
 		fileSize:    int64(len(data)),
 		maxCommitTs: commitTs,
@@ -295,18 +306,13 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) error {
 		flushed:     make(chan struct{}),
 		writer:      dw,
 	}
-	f.files = append(f.files, file)
-	return nil
 }
 
-// encoding format: lenField(8 bytes) + rawData + padding bytes(force 8 bytes alignment)
-func (f *fileWorkerGroup) writeToCache(
-	egCtx context.Context, event writer.RedoEvent,
-) error {
+func (f *fileWorkerGroup) encodeData(event writer.RedoEvent) (*event.RedoLog, []byte, error) {
 	rl := event.ToRedoLog()
 	rawData, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	uint64buf := make([]byte, 8)
 	lenField, padBytes := writer.EncodeFrameSize(len(rawData))
@@ -315,15 +321,28 @@ func (f *fileWorkerGroup) writeToCache(
 	if padBytes != 0 {
 		data = append(data, make([]byte, padBytes)...)
 	}
+	return rl, rawData, nil
+}
+
+// encoding format: lenField(8 bytes) + rawData + padding bytes(force 8 bytes alignment)
+func (f *fileWorkerGroup) writeToCache(
+	egCtx context.Context, event writer.RedoEvent,
+) (bool, error) {
+	rl, data, err := f.encodeData(event)
+	if err != nil {
+		return false, err
+	}
 	writeLen := int64(len(data))
 	if writeLen > f.cfg.MaxLogSizeInBytes {
 		// TODO: maybe we need to deal with the oversized event.
-		return errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes)
+		return false, errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes)
 	}
 	defer f.metricWriteBytes.Add(float64(writeLen))
 
 	if len(f.files) == 0 {
-		return f.newFileCache(data, rl.GetCommitTs())
+		file := f.newFileCache(data, rl.GetCommitTs())
+		f.files = append(f.files, file)
+		return true, nil
 	}
 
 	file := f.files[len(f.files)-1]
@@ -331,16 +350,17 @@ func (f *fileWorkerGroup) writeToCache(
 		file.filename = f.getLogFileName(file.maxCommitTs)
 		select {
 		case <-egCtx.Done():
-			return errors.Trace(egCtx.Err())
+			return false, errors.Trace(egCtx.Err())
 		case f.flushCh <- file:
 		}
-
-		return f.newFileCache(data, rl.GetCommitTs())
+		file := f.newFileCache(data, rl.GetCommitTs())
+		f.files = append(f.files, file)
+		return true, nil
 	}
 
 	_, err = file.writer.Write(data)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	file.fileSize += writeLen
@@ -351,20 +371,22 @@ func (f *fileWorkerGroup) writeToCache(
 	if commitTs < file.minCommitTs {
 		file.minCommitTs = commitTs
 	}
-	return nil
+	return false, err
 }
 
-func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {
+func (f *fileWorkerGroup) flushAll(egCtx context.Context, hasNew bool) error {
 	if len(f.files) == 0 {
 		return nil
 	}
 
-	file := f.files[len(f.files)-1]
-	file.filename = f.getLogFileName(file.maxCommitTs)
-	select {
-	case <-egCtx.Done():
-		return errors.Trace(egCtx.Err())
-	case f.flushCh <- file:
+	if hasNew {
+		file := f.files[len(f.files)-1]
+		file.filename = f.getLogFileName(file.maxCommitTs)
+		select {
+		case <-egCtx.Done():
+			return errors.Trace(egCtx.Err())
+		case f.flushCh <- file:
+		}
 	}
 
 	// wait all files flushed

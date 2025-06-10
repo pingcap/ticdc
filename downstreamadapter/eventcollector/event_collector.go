@@ -300,7 +300,6 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 }
 
 func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID, isRedo bool) {
-	log.Error("WakeDispatcher", zap.Any("id", dispatcherID), zap.Any("redo", isRedo))
 	if isRedo {
 		c.redoDs.Wake(dispatcherID)
 		return

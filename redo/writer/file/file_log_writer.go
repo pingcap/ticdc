@@ -26,7 +26,6 @@ import (
 
 var _ writer.RedoLogWriter = &logWriter{}
 
-// logWriter implement the RedoLogWriter interface
 type logWriter struct {
 	cfg           *writer.LogWriterConfig
 	backendWriter *fileWriter
