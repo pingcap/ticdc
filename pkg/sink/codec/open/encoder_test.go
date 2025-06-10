@@ -1301,7 +1301,6 @@ func TestHandleOnlyEvent(t *testing.T) {
 }
 
 func TestRenameTables(t *testing.T) {
-
 }
 
 func TestDDLSequence(t *testing.T) {
