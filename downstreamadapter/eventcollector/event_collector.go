@@ -292,7 +292,13 @@ func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID) {
 
 func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
 	groupedHeartbeats := c.groupHeartbeat(heartbeat)
+	var availableMemory uint64
+	memoryMetrics := c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics
+	if len(memoryMetrics) > 0 {
+		availableMemory = uint64(memoryMetrics[0].MaxMemory()) - uint64(memoryMetrics[0].MemoryUsage())
+	}
 	for _, heartbeatWithTarget := range groupedHeartbeats {
+		heartbeatWithTarget.Heartbeat.AvailableMemory = availableMemory
 		c.dispatcherHeartbeatChan.In() <- heartbeatWithTarget
 	}
 }
