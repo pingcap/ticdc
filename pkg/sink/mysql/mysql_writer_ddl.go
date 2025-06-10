@@ -37,7 +37,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	// exchange partition is not Idempotent, so we need to check ddl_ts_table whether the ddl is executed before.
-	if timodel.ActionType(event.Type) == timodel.ActionExchangeTablePartition {
+	if timodel.ActionType(event.Type) == timodel.ActionExchangeTablePartition && w.cfg.EnableDDLTs {
 		tableID := event.BlockedTables.TableIDs[0]
 		ddlTs := event.GetCommitTs()
 		flag, err := w.isDDLExecuted(tableID, ddlTs)
