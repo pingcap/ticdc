@@ -470,7 +470,7 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 
 	if d.idx == 0 {
 		physicalTableIDs := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
-		result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
+		result.BlockedTables = common.GetInfluenceTables(result.Query, actionType, physicalTableIDs)
 		log.Debug("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
 			zap.Any("actionType", actionType.String()), zap.Any("tableID", physicalTableIDs))
 		tableInfoAccessor.Remove(result.SchemaName, result.TableName)

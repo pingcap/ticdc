@@ -1300,6 +1300,10 @@ func TestHandleOnlyEvent(t *testing.T) {
 	log.Info("pass TestHandleOnlyEvent")
 }
 
+func TestRenameTables(t *testing.T) {
+
+}
+
 func TestDDLSequence(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

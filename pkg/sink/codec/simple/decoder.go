@@ -565,7 +565,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 		exchangedTableID := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), exchangedTableName)
 		physicalTableIDs = append(physicalTableIDs, exchangedTableID...)
 	}
-	result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
+	result.BlockedTables = common.GetInfluenceTables(result.Query, actionType, physicalTableIDs)
 	return result
 }
 
