@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -76,7 +77,7 @@ type EventStore interface {
 
 	GetDispatcherDMLEventState(dispatcherID common.DispatcherID) (bool, DMLEventState)
 
-	// return an iterator which scan the data in ts range (dataRange.StartTs, dataRange.EndTs]
+	// GetIterator return an iterator which scan the data in ts range (dataRange.StartTs, dataRange.EndTs]
 	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error)
 }
 
@@ -133,10 +134,12 @@ type subscriptionStat struct {
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
 type eventWithCallback struct {
-	subID    logpuller.SubscriptionID
-	tableID  int64
-	kvs      []common.RawKVEntry
-	callback func()
+	subID   logpuller.SubscriptionID
+	tableID int64
+	kvs     []common.RawKVEntry
+	// kv with commitTs <= currentResolvedTs will be filtered out
+	currentResolvedTs uint64
+	callback          func()
 }
 
 func eventWithCallbackSizer(e eventWithCallback) int {
@@ -160,8 +163,7 @@ type eventStore struct {
 	messageCenter messaging.MessageCenter
 
 	coordinatorInfo struct {
-		sync.Mutex
-		id node.ID
+		value atomic.Value
 	}
 	// The channel is used to gather the subscription info
 	// which need to be uploaded to log coordinator periodically.
@@ -267,15 +269,14 @@ func (p *writeTaskPool) run(ctx context.Context) {
 }
 
 func (e *eventStore) setCoordinatorInfo(id node.ID) {
-	e.coordinatorInfo.Lock()
-	defer e.coordinatorInfo.Unlock()
-	e.coordinatorInfo.id = id
+	e.coordinatorInfo.value.Store(id)
 }
 
 func (e *eventStore) getCoordinatorInfo() node.ID {
-	e.coordinatorInfo.Lock()
-	defer e.coordinatorInfo.Unlock()
-	return e.coordinatorInfo.id
+	if v := e.coordinatorInfo.value.Load(); v != nil {
+		return v.(node.ID)
+	}
+	return ""
 }
 
 func (e *eventStore) Name() string {
@@ -444,20 +445,14 @@ func (e *eventStore) RegisterDispatcher(
 			if kv.CRTs > maxCommitTs {
 				maxCommitTs = kv.CRTs
 			}
-			if kv.CRTs <= subStat.resolvedTs.Load() {
-				log.Warn("event store received kv with commitTs less than resolvedTs",
-					zap.Uint64("commitTs", kv.CRTs),
-					zap.Uint64("resolvedTs", subStat.resolvedTs.Load()),
-					zap.Uint64("subID", uint64(subStat.subID)),
-					zap.Int64("tableID", subStat.tableSpan.TableID))
-			}
 		}
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
-			subID:    subStat.subID,
-			tableID:  subStat.tableSpan.TableID,
-			kvs:      kvs,
-			callback: finishCallback,
+			subID:             subStat.subID,
+			tableID:           subStat.tableSpan.TableID,
+			kvs:               kvs,
+			currentResolvedTs: subStat.resolvedTs.Load(),
+			callback:          finishCallback,
 		})
 		return true
 	}
@@ -597,11 +592,12 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		return nil, nil
 	}
 	subscriptionStat := stat.subStat
-	if dataRange.StartTs < subscriptionStat.checkpointTs.Load() {
+	checkpoint := subscriptionStat.checkpointTs.Load()
+	if dataRange.StartTs < checkpoint {
 		log.Panic("dataRange startTs is smaller than subscriptionStat checkpointTs, it should not happen",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Uint64("checkpointTs", subscriptionStat.checkpointTs.Load()),
-			zap.Uint64("startTs", dataRange.StartTs))
+			zap.Uint64("startTs", dataRange.StartTs),
+			zap.Uint64("checkpointTs", checkpoint))
 	}
 	db := e.dbs[subscriptionStat.dbIndex]
 	e.dispatcherMeta.RUnlock()
@@ -615,10 +611,11 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		UpperBound: end,
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 	startTime := time.Now()
-	iter.First()
+	// todo: what happens if iter.First() returns false?
+	_ = iter.First()
 	metricEventStoreFirstReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	metrics.EventStoreScanRequestsCount.Inc()
 
@@ -745,6 +742,14 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 	for _, event := range events {
 		kvCount += len(event.kvs)
 		for _, kv := range event.kvs {
+			if kv.CRTs <= event.currentResolvedTs {
+				log.Warn("event store received kv with commitTs less than resolvedTs",
+					zap.Uint64("commitTs", kv.CRTs),
+					zap.Uint64("resolvedTs", event.currentResolvedTs),
+					zap.Uint64("subID", uint64(event.subID)),
+					zap.Int64("tableID", event.tableID))
+				continue
+			}
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
 			value := kv.Encode()
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
@@ -755,7 +760,6 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 	CounterKv.Add(float64(kvCount))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
-	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(float64(time.Since(start).Milliseconds()) / 1000)
@@ -786,10 +790,6 @@ type eventStoreIter struct {
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
-	if iter.innerIter == nil {
-		log.Panic("iter is nil")
-	}
-
 	rawKV := &common.RawKVEntry{}
 	for {
 		if !iter.innerIter.Valid() {
@@ -801,20 +801,19 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
 		metrics.EventStoreScanBytes.Add(float64(len(value)))
-		if iter.needCheckSpan {
-			comparableKey := common.ToComparableKey(rawKV.Key)
-			if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
-				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
-				break
-			}
-			log.Debug("event store iter skip kv not in table span",
-				zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
-				zap.String("key", hex.EncodeToString(rawKV.Key)),
-				zap.Uint64("startTs", rawKV.StartTs),
-				zap.Uint64("commitTs", rawKV.CRTs))
-		} else {
+		if !iter.needCheckSpan {
 			break
 		}
+		comparableKey := common.ToComparableKey(rawKV.Key)
+		if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
+			bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
+			break
+		}
+		log.Debug("event store iter skip kv not in table span",
+			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
+			zap.String("key", hex.EncodeToString(rawKV.Key)),
+			zap.Uint64("startTs", rawKV.StartTs),
+			zap.Uint64("commitTs", rawKV.CRTs))
 		iter.innerIter.Next()
 	}
 	isNewTxn := false
@@ -826,7 +825,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	iter.rowCount++
 	startTime := time.Now()
 	iter.innerIter.Next()
-	metricEventStoreNextReadDurationHistogram.Observe(float64(time.Since(startTime).Seconds()))
+	metricEventStoreNextReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	return rawKV, isNewTxn, nil
 }
 

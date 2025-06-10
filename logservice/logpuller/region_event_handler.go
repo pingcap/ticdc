@@ -272,7 +272,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("regionID", regionID))
 				return
 			}
-			// kvEvents = append(kvEvents, assembleRowEvent(regionID, entry))
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:
 			if !state.isInitialized() {
@@ -300,6 +299,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		return 0
 	}
 	state.updateResolvedTs(resolvedTs)
+	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 
 	now := time.Now().UnixMilli()
 	lastAdvance := span.lastAdvanceTime.Load()

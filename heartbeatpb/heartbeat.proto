@@ -83,6 +83,12 @@ message ScheduleDispatcherRequest {
     ScheduleAction scheduleAction = 3;
 }
 
+message MergeDispatcherRequest {
+    ChangefeedID changefeedID = 1;
+    repeated DispatcherID dispatcherIDs = 2; // dispatcherIDs from the dispatchers that need to be merged
+    DispatcherID mergedDispatcherID = 3;  // the dispatcherID of the new dispatcher to be merged to.
+}
+
 message MaintainerHeartbeat {
     repeated MaintainerStatus statuses = 1;
 }
@@ -249,6 +255,9 @@ enum ComponentState {
     Stopped = 1;
     Removed = 2;
     Initializing = 3;
+    Preparing = 4; // Preparing for merge, not ready for receive data from event collector
+    MergeReady = 5; // Ready for merge(upstream is finishing prepare data), but not begin send data to dispatcher. 
+    WaitingMerge = 6; // the old dispatcher is waiting merge ready and then be closed
 }
 
 message RunningError {

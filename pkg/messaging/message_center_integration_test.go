@@ -16,55 +16,18 @@ package messaging
 import (
 	"context"
 	"fmt"
-	"net"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/phayes/freeport"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
 )
 
 var mockEpoch = uint64(1)
-
-func NewMessageCenterForTest(t *testing.T) (*messageCenter, string, func()) {
-	port := freeport.GetPort()
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	lis, err := net.Listen("tcp", addr)
-	require.NoError(t, err)
-
-	var opts []grpc.ServerOption
-	grpcServer := grpc.NewServer(opts...)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	mcConfig := config.NewDefaultMessageCenterConfig(addr)
-	id := node.NewID()
-	mc := NewMessageCenter(ctx, id, mcConfig, nil)
-	mcs := NewMessageCenterServer(mc)
-	proto.RegisterMessageServiceServer(grpcServer, mcs)
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_ = grpcServer.Serve(lis)
-	}()
-
-	stop := func() {
-		grpcServer.Stop()
-		cancel()
-		wg.Wait()
-	}
-	return mc, string(addr), stop
-}
 
 func setupMessageCenters(t *testing.T) (*messageCenter, *messageCenter, *messageCenter, func()) {
 	mc1, mc1Addr, mc1Stop := NewMessageCenterForTest(t)

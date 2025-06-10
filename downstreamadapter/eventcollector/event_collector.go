@@ -16,6 +16,7 @@ package eventcollector
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -112,8 +113,7 @@ type EventCollector struct {
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	coordinatorInfo struct {
-		sync.Mutex
-		id node.ID
+		value atomic.Value
 	}
 
 	wg     sync.WaitGroup
@@ -125,22 +125,26 @@ type EventCollector struct {
 }
 
 func New(serverId node.ID) *EventCollector {
-	eventCollector := EventCollector{
+	receiveChannels := make([]chan *messaging.TargetMessage, config.DefaultBasicEventHandlerConcurrency)
+	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
+		receiveChannels[i] = make(chan *messaging.TargetMessage, receiveChanSize)
+	}
+	eventCollector := &EventCollector{
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
 		dispatcherRequestChan:                chann.NewAutoDrainChann[DispatcherRequestWithTarget](),
 		logCoordinatorRequestChan:            chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		dispatcherHeartbeatChan:              chann.NewAutoDrainChann[*DispatcherHeartbeatWithTarget](),
-		receiveChannels:                      make([]chan *messaging.TargetMessage, config.DefaultBasicEventHandlerConcurrency),
+		receiveChannels:                      receiveChannels,
 		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
 		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs"),
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 	}
-	eventCollector.ds = NewEventDynamicStream(&eventCollector)
+	eventCollector.ds = NewEventDynamicStream(eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
-	return &eventCollector
+	return eventCollector
 }
 
 func (c *EventCollector) Run(ctx context.Context) {
@@ -148,12 +152,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 	c.cancel = cancel
 
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
-		ch := make(chan *messaging.TargetMessage, receiveChanSize)
-		c.receiveChannels[i] = ch
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			c.runProcessMessage(ctx, ch)
+			c.runProcessMessage(ctx, c.receiveChannels[i])
 		}()
 	}
 
@@ -260,6 +262,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
 func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, startTs uint64) {
+	log.Info("commit add dispatcher", zap.Stringer("dispatcher", target.GetId()), zap.Uint64("startTs", startTs))
 	c.addDispatcherRequestToSendingQueue(
 		c.serverId,
 		eventServiceTopic,
@@ -398,15 +401,14 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 }
 
 func (c *EventCollector) setCoordinatorInfo(id node.ID) {
-	c.coordinatorInfo.Lock()
-	defer c.coordinatorInfo.Unlock()
-	c.coordinatorInfo.id = id
+	c.coordinatorInfo.value.Store(id)
 }
 
 func (c *EventCollector) getCoordinatorInfo() node.ID {
-	c.coordinatorInfo.Lock()
-	defer c.coordinatorInfo.Unlock()
-	return c.coordinatorInfo.id
+	if v := c.coordinatorInfo.value.Load(); v != nil {
+		return v.(node.ID)
+	}
+	return ""
 }
 
 func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
@@ -497,7 +499,7 @@ func (c *EventCollector) sendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatW
 	return nil
 }
 
-func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) error {
+func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
 	if len(targetMessage.Message) != 1 {
 		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
 	}
@@ -518,7 +520,6 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			}
 		}
 	}
-	return nil
 }
 
 // RecvEventsMessage is the handler for the events message from EventService.
@@ -572,10 +573,12 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 					case event.TypeBatchResolvedEvent:
 						events := e.(*event.BatchResolvedEvent).Events
 						from := &targetMessage.From
+						resolvedTsCount := int32(0)
 						for _, resolvedEvent := range events {
 							c.ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+							resolvedTsCount += resolvedEvent.Len()
 						}
-						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))
+						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					case event.TypeBatchDMLEvent:
 						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
 						if !ok {
