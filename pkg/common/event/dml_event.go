@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -295,6 +296,11 @@ func newDMLEvent(
 		TableInfo:       tableInfo,
 		RowTypes:        make([]RowType, 0),
 	}
+}
+
+func (t *DMLEvent) String() string {
+	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, TableInfo: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
+		t.Version, t.DispatcherID, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo, t.Checksum, t.Length, t.ApproximateSize)
 }
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,

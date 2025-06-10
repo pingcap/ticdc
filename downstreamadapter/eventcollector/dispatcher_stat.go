@@ -295,8 +295,12 @@ func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 	defer d.eventServiceInfo.RUnlock()
 
 	serverID := d.eventServiceInfo.serverID
-	if serverID == "" {
-		serverID = eventCollector.serverId
+	if serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		log.Info("ignore resume dispatcher request because the eventService is not ready",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
+		// Just ignore the request if the dispatcher is not ready.
+		return
 	}
 
 	eventCollector.addDispatcherRequestToSendingQueue(serverID, eventServiceTopic, DispatcherRequest{

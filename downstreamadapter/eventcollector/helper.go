@@ -67,6 +67,8 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 	return event.GetDispatcherID()
 }
 
+var dmlCounter = 0
+
 // Invariant: at any times, we can receive events from at most two event service, and one of them must be local event service.
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
 	if len(events) == 0 {
@@ -80,6 +82,14 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		hasInvalidEvent := false
 		hasValidEvent := false
 		for _, event := range events {
+			if event.GetType() == commonEvent.TypeDMLEvent {
+				dmlCounter++
+				if dmlCounter%5000 == 0 {
+					log.Info("fizz, drop event", zap.Any("event", event))
+					continue
+				}
+			}
+
 			if stat.isEventFromCurrentEventService(event) {
 				hasValidEvent = true
 				if !stat.isEventSeqValid(event) {
@@ -92,6 +102,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 				hasInvalidEvent = true
 			}
 		}
+
 		if !hasValidEvent {
 			return false
 		}
