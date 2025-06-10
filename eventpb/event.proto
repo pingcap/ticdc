@@ -69,7 +69,7 @@ message IntegrityConfig {
 	string CorruptionHandleLevel  = 2;
 }
 
-message DispatcherRegisterReq {
+message DispatcherRegAddReq {
     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
     uint64 cluster_id = 1;
     heartbeatpb.ChangefeedID changefeed_id = 2;
