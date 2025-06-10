@@ -139,13 +139,7 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 			cdcpb.Event_ROLLBACK:
 			return dynstream.Timestamp(entries[0].CommitTs)
 		default:
-			for _, entry := range entries {
-				log.Warn("unknown event entry",
-					zap.Any("type", entry.Type),
-					zap.Uint64("commitTs", entry.CommitTs),
-					zap.Uint64("startTs", entry.StartTs),
-					zap.Uint64("regionID", event.state.getRegionID()))
-			}
+			log.Warn("unknown event entries", zap.Any("event", event.entries))
 			return 0
 		}
 	} else {
