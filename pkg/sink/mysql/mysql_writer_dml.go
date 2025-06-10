@@ -480,8 +480,10 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 			}
 		case commonEvent.RowTypeDelete:
 			query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
+			log.Info("build delete sql", zap.String("query", query), zap.Any("args", args))
 		case commonEvent.RowTypeInsert:
 			query, args = buildInsert(event.TableInfo, row, inSafeMode)
+			log.Info("build insert sql", zap.String("query", query), zap.Any("args", args))
 		}
 
 		if query != "" {
@@ -637,6 +639,10 @@ func (w *Writer) multiStmtExecute(
 		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", multiStmtSQLWithTxn), zap.Any("multiStmtArgs", multiStmtArgs))
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
 	}
+
+	log.Info("execute DMLs in multi-statement way",
+		zap.Any("multiStmts", multiStmtSQLWithTxn), zap.Any("multiStmtArgs", multiStmtArgs))
+
 	return nil
 }
 

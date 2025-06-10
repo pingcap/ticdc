@@ -361,6 +361,9 @@ func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.T
 	columns := newTiColumns(rawColumns)
 	tableInfo.Columns = columns
 	tableInfo.Indices = newTiIndices(columns)
+	if len(tableInfo.Indices) != 0 {
+		tableInfo.PKIsHandle = true
+	}
 	return commonType.NewTableInfo4Decoder(key.Schema, tableInfo)
 }
 
@@ -373,7 +376,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		col.Name = pmodel.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
 
-		if isPrimary(raw.Flag) {
+		if isPrimary(raw.Flag) || isHandle(raw.Flag) {
 			col.AddFlag(mysql.PriKeyFlag)
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
@@ -424,10 +427,10 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 		}
 	}
 
-	result := make([]*timodel.IndexInfo, 0, 1)
 	if len(indexColumns) == 0 {
-		return result
+		return nil
 	}
+	result := make([]*timodel.IndexInfo, 0, 1)
 	indexInfo := &timodel.IndexInfo{
 		ID:      1,
 		Name:    pmodel.NewCIStr("primary"),

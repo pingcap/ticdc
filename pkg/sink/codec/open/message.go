@@ -334,6 +334,10 @@ func isPrimary(flag uint64) bool {
 	return flag&primaryKeyFlag != 0
 }
 
+func isHandle(flag uint64) bool {
+	return flag&handleKeyFlag != 0
+}
+
 func isUnique(flag uint64) bool {
 	return flag&uniqueKeyFlag != 0
 }
