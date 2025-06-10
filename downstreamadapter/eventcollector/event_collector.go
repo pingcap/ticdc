@@ -51,7 +51,7 @@ type DispatcherRequest struct {
 	Dispatcher dispatcher.EventDispatcher
 	ActionType eventpb.ActionType
 	StartTs    uint64
-	OnlyUse    bool
+	OnlyReuse  bool
 	BDRMode    bool
 }
 
@@ -450,7 +450,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			ServerId:  c.serverId.String(),
 			TableSpan: req.Dispatcher.GetTableSpan(),
 			StartTs:   req.StartTs,
-			OnlyReuse: req.OnlyUse,
+			OnlyReuse: req.OnlyReuse,
 			BdrMode:   req.BDRMode,
 		},
 	}

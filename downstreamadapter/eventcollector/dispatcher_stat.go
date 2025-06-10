@@ -265,7 +265,7 @@ func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent
 					Dispatcher: d.target,
 					StartTs:    d.target.GetStartTs(),
 					ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-					OnlyUse:    true,
+					OnlyReuse:  true,
 				},
 			)
 			d.eventServiceInfo.serverID = d.eventServiceInfo.remoteCandidates[0]
@@ -355,7 +355,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 			Dispatcher: d.target,
 			StartTs:    d.target.GetStartTs(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-			OnlyUse:    true,
+			OnlyReuse:  true,
 		},
 	)
 }

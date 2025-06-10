@@ -64,23 +64,12 @@ message EventFeed {
     TableInfo table_info = 5; // 包含 table 相关信息，包括表名，主键，列名等
 }
 
-enum ActionType {
-    ACTION_TYPE_UNSPECIFIED = 0;
-    ACTION_TYPE_REGISTER = 1;
-    ACTION_TYPE_REMOVE = 2;
-    ACTION_TYPE_PAUSE = 3;
-    ACTION_TYPE_RESUME = 4;
-    ACTION_TYPE_RESET = 5;
-}
-
 message IntegrityConfig {
 	string IntegrityCheckLevel  = 1;
 	string CorruptionHandleLevel  = 2;
 }
 
-// DispatcherRequest is used to send a dispatcher request to the event service.
-// A request can be a register, remove, pause, resume, reset dispatcher request.
-message DispatcherRequest {
+message DispatcherRegisterReq {
     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
     uint64 cluster_id = 1;
     heartbeatpb.ChangefeedID changefeed_id = 2;
@@ -88,13 +77,42 @@ message DispatcherRequest {
     heartbeatpb.TableSpan table_span = 4;
     uint64 start_ts = 5;
     string server_id = 6;
-    ActionType action_type = 7;
-    FilterConfig filter_config = 8;
-    bool enable_sync_point = 9;
-    uint64 sync_point_ts = 10;
-    uint64 sync_point_interval = 11;
-    bool only_reuse = 12;
-    bool bdr_mode = 13;
-    IntegrityConfig integrity = 14;
-	string timezone = 15;
+    FilterConfig filter_config = 7;
+    bool enable_sync_point = 8;
+    uint64 sync_point_ts = 9;
+    uint64 sync_point_interval = 10;
+    bool only_reuse = 11;
+    bool bdr_mode = 12;
+    IntegrityConfig integrity = 13;
+	string timezone = 14;
+}
+
+message DispatcherRemoveReq {
+    // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
+    uint64 cluster_id = 1;
+    heartbeatpb.ChangefeedID changefeed_id = 2;
+    heartbeatpb.DispatcherID dispatcher_id = 3;
+}
+
+message DispatcherPauseReq {
+     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
+    uint64 cluster_id = 1;
+    heartbeatpb.ChangefeedID changefeed_id = 2;
+    heartbeatpb.DispatcherID dispatcher_id = 3;
+}
+
+message DispatcherResumeReq {
+     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
+    uint64 cluster_id = 1;
+    heartbeatpb.ChangefeedID changefeed_id = 2;
+    heartbeatpb.DispatcherID dispatcher_id = 3;
+}
+
+message DispatcherResetReq {
+    // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
+    uint64 cluster_id = 1;
+    heartbeatpb.ChangefeedID changefeed_id = 2;
+    heartbeatpb.DispatcherID dispatcher_id = 3;
+    uint64 start_ts = 4;
+    uint64 epoch = 5;
 }
