@@ -275,7 +275,7 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 	return e.tableTriggerEventDispatcher.GetStartTs(), nil
 }
 
-func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
+func (e *EventDispatcherManager) InitializeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
 	if e.tableTriggerEventDispatcher == nil {
 		return nil
 	}

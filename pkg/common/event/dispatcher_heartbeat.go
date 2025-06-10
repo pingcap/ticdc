@@ -81,6 +81,7 @@ type DispatcherHeartbeat struct {
 	Version              byte
 	ClusterID            uint64
 	DispatcherCount      uint32
+	AvailableMemory      uint64 // in bytes, used to report the available memory
 	DispatcherProgresses []DispatcherProgress
 }
 
@@ -102,6 +103,7 @@ func (d *DispatcherHeartbeat) GetSize() int {
 	size := 1 // version
 	size += 8 // clusterID
 	size += 4 // dispatcher count
+	size += 8 // available memory
 	for _, dp := range d.DispatcherProgresses {
 		size += dp.GetSize()
 	}
@@ -119,8 +121,9 @@ func (d *DispatcherHeartbeat) Unmarshal(data []byte) error {
 func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.WriteByte(d.Version)
-	binary.Write(buf, binary.BigEndian, d.ClusterID)
-	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
+	_ = binary.Write(buf, binary.BigEndian, d.ClusterID)
+	_ = binary.Write(buf, binary.BigEndian, d.DispatcherCount)
+	_ = binary.Write(buf, binary.BigEndian, d.AvailableMemory)
 	for _, dp := range d.DispatcherProgresses {
 		dpData, err := dp.Marshal()
 		if err != nil {
@@ -140,11 +143,12 @@ func (d *DispatcherHeartbeat) decodeV0(data []byte) error {
 	}
 	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
+	d.AvailableMemory = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherProgresses = make([]DispatcherProgress, 0, d.DispatcherCount)
 	for range d.DispatcherCount {
 		var dp DispatcherProgress
 		dpData := buf.Next(dp.GetSize())
-		if err := dp.Unmarshal(dpData); err != nil {
+		if err = dp.Unmarshal(dpData); err != nil {
 			return err
 		}
 		d.DispatcherProgresses = append(d.DispatcherProgresses, dp)

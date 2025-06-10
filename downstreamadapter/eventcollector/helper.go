@@ -28,11 +28,7 @@ func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[co
 	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
 	option.EnableMemoryControl = true
-	if option.EnableMemoryControl {
-		log.Info("New EventDynamicStream, memory control is enabled")
-	} else {
-		log.Info("New EventDynamicStream, memory control is disabled")
-	}
+	log.Info("New EventDynamicStream, memory control is enabled")
 
 	eventsHandler := &EventsHandler{
 		eventCollector: collector,
