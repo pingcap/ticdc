@@ -29,8 +29,18 @@ type dispatcherCreateInfo struct {
 	SchemaID  int64
 }
 
+type cleanMap struct {
+	id       common.DispatcherID
+	schemaID int64
+	redo     bool
+}
+
 func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.Dispatcher] {
 	return e.dispatcherMap
+}
+
+func (e *EventDispatcherManager) GetRedoDispatcherMap() *DispatcherMap[*dispatcher.RedoDispatcher] {
+	return e.redoDispatcherMap
 }
 
 func (e *EventDispatcherManager) GetMaintainerID() node.ID {
@@ -68,7 +78,14 @@ func (e *EventDispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQu
 }
 
 // Get all dispatchers id of the specified schemaID. Including the tableTriggerEventDispatcherID if exists.
-func (e *EventDispatcherManager) GetAllDispatchers(schemaID int64) []common.DispatcherID {
+func (e *EventDispatcherManager) GetAllDispatchers(schemaID int64, redo bool) []common.DispatcherID {
+	if redo {
+		dispatcherIDs := e.redoSchemaIDToDispatchers.GetDispatcherIDs(schemaID)
+		if e.redoTableTriggerEventDispatcher != nil {
+			dispatcherIDs = append(dispatcherIDs, e.redoTableTriggerEventDispatcher.GetId())
+		}
+		return dispatcherIDs
+	}
 	dispatcherIDs := e.schemaIDToDispatchers.GetDispatcherIDs(schemaID)
 	if e.tableTriggerEventDispatcher != nil {
 		dispatcherIDs = append(dispatcherIDs, e.tableTriggerEventDispatcher.GetId())

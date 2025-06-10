@@ -39,8 +39,8 @@ type basicScheduler struct {
 
 	operatorController *operator.Controller
 	replicationDB      *replica.ReplicationDB
-	redoReplicationDB  *replica.ReplicationDB
 	nodeManager        *watcher.NodeManager
+	redo               bool
 }
 
 func NewBasicScheduler(
@@ -49,6 +49,7 @@ func NewBasicScheduler(
 	replicationDB *replica.ReplicationDB,
 	nodeManager *watcher.NodeManager,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	redo bool,
 ) *basicScheduler {
 	scheduler := &basicScheduler{
 		changefeedID:               changefeedID,
@@ -57,6 +58,7 @@ func NewBasicScheduler(
 		replicationDB:              replicationDB,
 		nodeManager:                nodeManager,
 		schedulingTaskCountPerNode: 1,
+		redo:                       redo,
 	}
 
 	if schedulerCfg != nil && schedulerCfg.SchedulingTaskCountPerNode > 0 {
@@ -121,7 +123,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	absentReplications := s.replicationDB.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, scheduleNodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
-		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.replicationDB, replication, id, false))
+		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.replicationDB, replication, id, s.redo))
 	})
 
 	scheduled = len(absentReplications)

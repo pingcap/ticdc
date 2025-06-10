@@ -333,10 +333,11 @@ func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, c
 
 type HeartBeatResponse struct {
 	*heartbeatpb.HeartBeatResponse
+	redo bool
 }
 
-func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse {
-	return HeartBeatResponse{resp}
+func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse, redo bool) HeartBeatResponse {
+	return HeartBeatResponse{resp, redo}
 }
 
 type HeartBeatResponseHandler struct {
@@ -371,7 +372,7 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 		case heartbeatpb.InfluenceType_DB:
 			schemaID := dispatcherStatus.InfluencedDispatchers.SchemaID
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
-			dispatcherIds := eventDispatcherManager.GetAllDispatchers(schemaID)
+			dispatcherIds := eventDispatcherManager.GetAllDispatchers(schemaID, heartbeatResponse.redo)
 			for _, id := range dispatcherIds {
 				if id != excludeDispatcherID {
 					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
@@ -379,11 +380,19 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 			}
 		case heartbeatpb.InfluenceType_All:
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
-			eventDispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.Dispatcher) {
-				if id != excludeDispatcherID {
-					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
-				}
-			})
+			if heartbeatResponse.redo {
+				eventDispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
+					if id != excludeDispatcherID {
+						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
+					}
+				})
+			} else {
+				eventDispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.Dispatcher) {
+					if id != excludeDispatcherID {
+						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
+					}
+				})
+			}
 		}
 	}
 	return false

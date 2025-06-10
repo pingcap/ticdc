@@ -140,7 +140,6 @@ func (b *Barrier) HandleStatus(from node.ID,
 				zap.String("detail", status.String()))
 			continue
 		}
-		log.Error("HandleStatus", zap.Any("status", status), zap.Any("action", action))
 		eventDispatcherIDsMap[event] = append(eventDispatcherIDsMap[event], status.ID)
 		if action != nil {
 			actions = append(actions, action)

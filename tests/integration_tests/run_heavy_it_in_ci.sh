@@ -44,11 +44,11 @@ mysql_groups=(
 	# G06
 	'cdc ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'resolve_lock'
+	'consistent_partition_table consistent_replicate_ddl consistent_replicate_gbk'
 	# G08
-	'bank'
+	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
 	# G09
-	'drop_many_tables'
+	'drop_many_tables bank resolve_lock'
 	# G10
 	'default_value http_proxies'
 	# G11

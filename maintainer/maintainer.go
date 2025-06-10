@@ -646,23 +646,31 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	if !m.bootstrapped.Load() {
 		return
 	}
-	// need redo barrier?
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
-	// blockStatuses := make([]*heartbeatpb.TableSpanBlockStatus, 0, len(req.BlockStatuses))
-	// redoBlockStatuses := make([]*heartbeatpb.TableSpanBlockStatus, 0, len(req.BlockStatuses))
-	// for _, bs := range req.BlockStatuses {
-	// 	if bs.Redo {
-	// 		redoBlockStatuses = append(redoBlockStatuses, bs)
-	// 	} else {
-	// 		blockStatuses = append(blockStatuses, bs)
-	// 	}
-	// }
-	// req.BlockStatuses = redoBlockStatuses
-	// ackMsg := m.redoBarrier.HandleStatus(msg.From, req)
-	// m.sendMessages([]*messaging.TargetMessage{ackMsg})
-	// req.BlockStatuses = blockStatuses
-	ackMsg := m.controllerManager.barrier.HandleStatus(msg.From, req)
-	m.sendMessages([]*messaging.TargetMessage{ackMsg})
+	blockStatuses := make([]*heartbeatpb.TableSpanBlockStatus, 0, len(req.BlockStatuses))
+	redoBlockStatuses := make([]*heartbeatpb.TableSpanBlockStatus, 0, len(req.BlockStatuses))
+	for _, bs := range req.BlockStatuses {
+		if bs.Redo {
+			redoBlockStatuses = append(redoBlockStatuses, bs)
+		} else {
+			blockStatuses = append(blockStatuses, bs)
+		}
+	}
+	if len(redoBlockStatuses) > 0 {
+		req.BlockStatuses = redoBlockStatuses
+		ackMsg := m.controllerManager.redoBarrier.HandleStatus(msg.From, req)
+		if ackMsg != nil {
+			ackMsg.Redo = true
+			m.sendMessages([]*messaging.TargetMessage{ackMsg})
+		}
+	}
+	if len(blockStatuses) > 0 {
+		req.BlockStatuses = blockStatuses
+		ackMsg := m.controllerManager.barrier.HandleStatus(msg.From, req)
+		if ackMsg != nil {
+			m.sendMessages([]*messaging.TargetMessage{ackMsg})
+		}
+	}
 }
 
 // onMaintainerBootstrapResponse is called when a maintainer bootstrap response(send by dispatcher manager) is received.

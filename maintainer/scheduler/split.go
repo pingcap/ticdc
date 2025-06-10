@@ -38,7 +38,6 @@ type splitScheduler struct {
 	splitter     *split.Splitter
 	opController *operator.Controller
 	db           *replica.ReplicationDB
-	redoDB       *replica.ReplicationDB
 	nodeManager  *watcher.NodeManager
 
 	maxCheckTime  time.Duration
@@ -46,12 +45,14 @@ type splitScheduler struct {
 	lastCheckTime time.Time
 
 	batchSize int
+	redo      bool
 }
 
 func NewSplitScheduler(
 	changefeedID common.ChangeFeedID, batchSize int, splitter *split.Splitter,
 	oc *operator.Controller, db *replica.ReplicationDB, nodeManager *watcher.NodeManager,
 	checkInterval time.Duration,
+	redo bool,
 ) *splitScheduler {
 	return &splitScheduler{
 		changefeedID:  changefeedID,
@@ -62,6 +63,7 @@ func NewSplitScheduler(
 		batchSize:     batchSize,
 		maxCheckTime:  time.Second * 500,
 		checkInterval: checkInterval,
+		redo:          redo,
 	}
 }
 

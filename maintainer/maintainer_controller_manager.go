@@ -100,6 +100,7 @@ func NewControllerManager(changefeedID common.ChangeFeedID,
 		redoOC         *operator.Controller
 	)
 	if redo.IsConsistentEnabled(cfConfig.Consistent.Level) {
+		log.Error("redo manager")
 		redoController = NewController(changefeedID, redoDDLSpan, splitter, enableTableAcrossNodes)
 		redoDB = redoController.replicationDB
 		redoOC = operator.NewOperatorController(changefeedID, mc, redoDB, nodeManager, batchSize)
@@ -248,10 +249,10 @@ func (cm *ControllerManager) FinishBootstrap(
 
 	// Step 6: Initialize and start sub components
 	cm.initializeComponents()
-	cm.barrier = cm.newBarrier(cm.operatorController, cm.controller, allNodesResp)
 	if cm.redoController != nil {
 		cm.redoBarrier = cm.newBarrier(cm.redoOperatorController, cm.redoController, allNodesResp)
 	}
+	cm.barrier = cm.newBarrier(cm.operatorController, cm.controller, allNodesResp)
 
 	// Step 7: Prepare response
 	initSchemaInfos := cm.prepareSchemaInfoResponse(schemaInfos)
@@ -387,6 +388,9 @@ func (cm *ControllerManager) processTableSpans(
 			zap.Stringer("changefeed", cm.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
+		if cm.redoController != nil {
+			cm.redoController.addWorkingSpans(tableSpans)
+		}
 		cm.controller.addWorkingSpans(tableSpans)
 
 		if cm.enableTableAcrossNodes {
@@ -395,10 +399,10 @@ func (cm *ControllerManager) processTableSpans(
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
-		cm.controller.AddNewTable(table, cm.startCheckpointTs)
 		if cm.redoController != nil {
 			cm.redoController.AddNewTable(table, cm.startCheckpointTs)
 		}
+		cm.controller.AddNewTable(table, cm.startCheckpointTs)
 	}
 }
 
@@ -410,10 +414,10 @@ func (cm *ControllerManager) handleTableHoles(
 	holes := split.FindHoles(tableSpans, tableSpan)
 	// Todo: split the hole
 	// Add holes to the replicationDB
-	cm.controller.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
 	if cm.redoController != nil {
 		cm.redoController.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
 	}
+	cm.controller.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
 }
 
 func (cm *ControllerManager) handleRemainingWorkingTasks(
@@ -429,13 +433,12 @@ func (cm *ControllerManager) handleRemainingWorkingTasks(
 func (cm *ControllerManager) initializeComponents() {
 	// Start scheduler
 	cm.taskHandles = append(cm.taskHandles, cm.schedulerController.Start(cm.taskPool)...)
-
-	// Start operator controllerManager
-	cm.taskHandles = append(cm.taskHandles, cm.taskPool.Submit(cm.operatorController, time.Now()))
 	// redo
 	if cm.redoOperatorController != nil {
 		cm.taskHandles = append(cm.taskHandles, cm.taskPool.Submit(cm.redoOperatorController, time.Now()))
 	}
+	// Start operator controllerManager
+	cm.taskHandles = append(cm.taskHandles, cm.taskPool.Submit(cm.operatorController, time.Now()))
 }
 
 func (cm *ControllerManager) prepareSchemaInfoResponse(
@@ -456,10 +459,10 @@ func (cm *ControllerManager) RemoveTasksByTableIDs(redo bool, tables ...int64) {
 
 // RemoveNode is called when a node is removed
 func (cm *ControllerManager) RemoveNode(id node.ID) {
-	cm.operatorController.OnNodeRemoved(id)
 	if cm.redoOperatorController != nil {
 		cm.redoOperatorController.OnNodeRemoved(id)
 	}
+	cm.operatorController.OnNodeRemoved(id)
 }
 
 // ScheduleFinished return false if not all task are running in working state

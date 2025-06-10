@@ -90,7 +90,8 @@ type EventDispatcherManager struct {
 	// redoMap record dispatcherID -> redo dispatcherID
 	redoMap map[common.DispatcherID]common.DispatcherID
 	// schemaIDToDispatchers is store the schemaID info for all normal dispatchers.
-	schemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
+	schemaIDToDispatchers     *dispatcher.SchemaIDToDispatchers
+	redoSchemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
 
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
@@ -181,6 +182,7 @@ func NewEventDispatcherManager(
 		redoMeta:                               redo.NewRedoMeta(changefeedID, cfConfig.Consistent, startTs),
 		redoGlobalTs:                           math.MaxUint64,
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
+		redoSchemaIDToDispatchers:              dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(0),
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
@@ -564,27 +566,15 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 		return nil
 	}
 
-	newStartTsList := startTsList
-	if e.latestWatermark.Get().CheckpointTs == 0 {
-		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
-		smallestStartTs := int64(math.MaxInt64)
-		for _, startTs := range newStartTsList {
-			if startTs < smallestStartTs {
-				smallestStartTs = startTs
-			}
-		}
-		e.latestWatermark = NewWatermark(uint64(smallestStartTs))
-	}
-
 	for idx, id := range dispatcherIds {
 		rd := dispatcher.NewRedoDispatcher(
 			e.changefeedID,
 			id, tableSpans[idx], e.redoSink,
-			uint64(newStartTsList[idx]),
+			uint64(startTsList[idx]),
 			e.statusesChan,
 			e.blockStatusesChan,
 			schemaIds[idx],
-			e.schemaIDToDispatchers,
+			e.redoSchemaIDToDispatchers,
 			e.filterConfig,
 			currentPdTs,
 			e.errCh,
@@ -596,7 +586,7 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 		if rd.IsTableTriggerEventDispatcher() {
 			e.redoTableTriggerEventDispatcher = rd
 		} else {
-			// e.schemaIDToDispatchers.Set(schemaIds[idx], id)
+			e.redoSchemaIDToDispatchers.Set(schemaIds[idx], id)
 			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(rd, e.redoQuota)
 		}
 
@@ -607,7 +597,7 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
-			zap.Int64("startTs", newStartTsList[idx]))
+			zap.Int64("startTs", startTsList[idx]))
 	}
 	log.Info("batch create new redo dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID),
@@ -805,8 +795,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		Watermark:       heartbeatpb.NewMaxWatermark(),
 	}
 
-	toCleanDispatcherIDs := make([]common.DispatcherID, 0)
-	cleanDispatcherSchemaIDs := make([]int64, 0)
+	toCleanMap := make([]cleanMap, 0)
 	heartBeatInfo := &dispatcher.HeartBeatInfo{}
 
 	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
@@ -832,8 +821,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 					CheckpointTs:    watermark.CheckpointTs,
 					Redo:            true,
 				})
-				toCleanDispatcherIDs = append(toCleanDispatcherIDs, id)
-				cleanDispatcherSchemaIDs = append(cleanDispatcherSchemaIDs, dispatcherItem.GetSchemaID())
+				toCleanMap = append(toCleanMap, cleanMap{id, dispatcherItem.GetSchemaID(), true})
 			}
 		}
 
@@ -864,8 +852,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 					ComponentStatus: heartbeatpb.ComponentState_Stopped,
 					CheckpointTs:    watermark.CheckpointTs,
 				})
-				toCleanDispatcherIDs = append(toCleanDispatcherIDs, id)
-				cleanDispatcherSchemaIDs = append(cleanDispatcherSchemaIDs, dispatcherItem.GetSchemaID())
+				toCleanMap = append(toCleanMap, cleanMap{id, dispatcherItem.GetSchemaID(), false})
 			}
 			return
 		}
@@ -886,8 +873,12 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
-		for idx, id := range toCleanDispatcherIDs {
-			e.cleanDispatcher(id, cleanDispatcherSchemaIDs[idx])
+		for _, m := range toCleanMap {
+			if m.redo {
+				e.cleanRedoDispatcher(m.id, m.schemaID)
+			} else {
+				e.cleanDispatcher(m.id, m.schemaID)
+			}
 		}
 	}
 
@@ -1076,13 +1067,19 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 	} else {
 		e.metricEventDispatcherCount.Dec()
 	}
-	if e.redoSink.Enabled() {
-		e.redoDispatcherMap.Delete(id)
-		if e.redoTableTriggerEventDispatcher != nil && e.redoTableTriggerEventDispatcher.GetId() == id {
-			e.redoTableTriggerEventDispatcher = nil
-		}
-	}
 	log.Info("table event dispatcher completely stopped, and delete it from event dispatcher manager",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", id),
+	)
+}
+
+func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {
+	e.redoDispatcherMap.Delete(id)
+	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
+	if e.redoTableTriggerEventDispatcher != nil && e.redoTableTriggerEventDispatcher.GetId() == id {
+		e.redoTableTriggerEventDispatcher = nil
+	}
+	log.Info("redo table event dispatcher completely stopped, and delete it from event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", id),
 	)

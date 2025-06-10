@@ -43,6 +43,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			db,
 			nodeM,
 			schedulerCfg,
+			false,
 		),
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,
@@ -51,6 +52,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			db,
 			nodeM,
 			balanceInterval,
+			false,
 		),
 	}
 	if splitter != nil {
@@ -62,6 +64,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			db,
 			nodeM,
 			balanceInterval,
+			false,
 		)
 	}
 	if redoDB != nil {
@@ -72,6 +75,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			redoDB,
 			nodeM,
 			schedulerCfg,
+			true,
 		)
 		schedulers["redo-balance-scheduler"] = scheduler.NewBalanceScheduler(
 			changefeedID,
@@ -80,6 +84,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			redoDB,
 			nodeM,
 			balanceInterval,
+			true,
 		)
 		if splitter != nil {
 			schedulers["redo-split-scheduler"] = scheduler.NewSplitScheduler(
@@ -90,6 +95,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 				redoDB,
 				nodeM,
 				balanceInterval,
+				true,
 			)
 		}
 	}
