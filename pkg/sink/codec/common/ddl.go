@@ -172,7 +172,7 @@ func GetInfluenceTables(ddl string, action timodel.ActionType, physicalTableID [
 		timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
 		timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
 		timodel.ActionModifyTableCharsetAndCollate, timodel.ActionAlterIndexVisibility,
-		timodel.ActionRebaseAutoID:
+		timodel.ActionRebaseAutoID, timodel.ActionMultiSchemaChange:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      physicalTableID,
