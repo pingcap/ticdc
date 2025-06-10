@@ -323,7 +323,7 @@ func (m *mockEventStore) RegisterDispatcher(
 	notifier eventstore.ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
-) (bool, error) {
+) bool {
 	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", uint64(startTS)), zap.Any("dispatcherID", dispatcherID))
 	spanStats := &mockSpanStats{
 		startTs:            uint64(startTS),
@@ -333,7 +333,7 @@ func (m *mockEventStore) RegisterDispatcher(
 	spanStats.resolvedTs = uint64(startTS)
 	m.spansMap.Store(span, spanStats)
 	m.dispatcherMap.Store(dispatcherID, span)
-	return true, nil
+	return true
 }
 
 type mockEventIterator struct {

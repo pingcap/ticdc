@@ -68,7 +68,7 @@ type EventStore interface {
 		notifier ResolvedTsNotifier,
 		onlyReuse bool,
 		bdrMode bool,
-	) (bool, error)
+	) bool
 
 	UnregisterDispatcher(dispatcherID common.DispatcherID) error
 
@@ -347,7 +347,7 @@ func (e *eventStore) RegisterDispatcher(
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
-) (bool, error) {
+) bool {
 	log.Info("register dispatcher",
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.String("span", common.FormatTableSpan(dispatcherSpan)),
@@ -404,14 +404,14 @@ func (e *eventStore) RegisterDispatcher(
 					zap.Uint64("subID", uint64(subStat.subID)),
 					zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 					zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
-				return true, nil
+				return true
 			}
 		}
 	}
 	e.dispatcherMeta.Unlock()
 
 	if onlyReuse {
-		return false, nil
+		return false
 	}
 
 	// cannot share data from existing subscription, create a new subscription
@@ -488,7 +488,7 @@ func (e *eventStore) RegisterDispatcher(
 		ResolvedTs:   startTs,
 	}
 	metrics.EventStoreSubscriptionGauge.Inc()
-	return true, nil
+	return true
 }
 
 func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {

@@ -78,13 +78,6 @@ func (d *DispatcherHeartbeatWithTarget) incRetryCounter() {
 	d.retryCounter++
 }
 
-const (
-	eventServiceTopic         = messaging.EventServiceTopic
-	eventCollectorTopic       = messaging.EventCollectorTopic
-	logCoordinatorTopic       = messaging.LogCoordinatorTopic
-	typeRegisterDispatcherReq = messaging.TypeDispatcherRequest
-)
-
 /*
 EventCollector is the relay between EventService and DispatcherManager, responsible for:
 1. Send dispatcher request to EventService.
@@ -248,7 +241,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 
-	err = c.mustSendDispatcherRequest(c.serverId, eventServiceTopic, DispatcherRequest{
+	err = c.mustSendDispatcherRequest(c.serverId, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
@@ -265,7 +258,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 	log.Info("commit add dispatcher", zap.Stringer("dispatcher", target.GetId()), zap.Uint64("startTs", startTs))
 	c.addDispatcherRequestToSendingQueue(
 		c.serverId,
-		eventServiceTopic,
+		messaging.EventServiceTopic,
 		DispatcherRequest{
 			Dispatcher: target,
 			StartTs:    startTs,
@@ -341,7 +334,7 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
 	c.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
-		eventServiceTopic,
+		messaging.EventServiceTopic,
 		DispatcherRequest{
 			Dispatcher: d.target,
 			StartTs:    d.sentCommitTs.Load(),
@@ -424,7 +417,7 @@ func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
 				time.Sleep(10 * time.Millisecond)
 				continue
 			}
-			targetMessage := messaging.NewSingleTargetMessage(coordinatorID, logCoordinatorTopic, req)
+			targetMessage := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, req)
 			err := c.mc.SendCommand(targetMessage)
 			if err != nil {
 				log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
@@ -464,7 +457,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		message.DispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
 	}
 
-	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, eventServiceTopic, message))
+	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, messaging.EventServiceTopic, message))
 	if err != nil {
 		log.Info("failed to send dispatcher request message to event service, try again later",
 			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),
@@ -560,6 +553,7 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	return nil
 }
 
+// receive events from the channel and push them to the dynamic stream for processing.
 func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) {
 	for {
 		select {

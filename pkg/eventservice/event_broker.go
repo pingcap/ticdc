@@ -802,7 +802,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	start = time.Now()
 
-	success, err := c.eventStore.RegisterDispatcher(
+	success := c.eventStore.RegisterDispatcher(
 		id,
 		span,
 		info.GetStartTs(),
@@ -810,30 +810,19 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		info.IsOnlyReuse(),
 		info.GetBdrMode(),
 	)
-	if err != nil {
-		log.Error("register dispatcher to eventStore failed",
-			zap.Stringer("dispatcherID", id),
-			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", info.GetStartTs()),
-			zap.Error(err),
-		)
-		return err
-	}
-
 	if !success {
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
 				zap.Stringer("dispatcherID", id),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Uint64("startTs", info.GetStartTs()),
-				zap.Error(err),
 			)
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
 	}
 
-	err = c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
+	err := c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Stringer("dispatcherID", id),
