@@ -55,7 +55,9 @@ func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEn
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	lock.Lock()
 	clear(columnFlagsCache)
+	lock.Unlock()
 	return &batchEncoder{
 		config:     config,
 		claimCheck: claimCheck,
