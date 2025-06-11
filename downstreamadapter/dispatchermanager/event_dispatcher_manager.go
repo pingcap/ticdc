@@ -631,7 +631,6 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			})
 		}
-
 	})
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
