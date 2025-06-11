@@ -135,7 +135,7 @@ func newDispatcherStat(
 }
 
 func (d *dispatcherStat) run() {
-	msg := messaging.NewSingleTargetMessage(d.eventCollector.serverId, eventServiceTopic, newDispatcherAddRequest(d.target, false))
+	msg := messaging.NewSingleTargetMessage(d.eventCollector.getLocalServerID(), eventServiceTopic, newDispatcherAddRequest(d.target, false))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -145,24 +145,24 @@ func (d *dispatcherStat) reset() {
 		zap.Uint64("startTs", d.sentCommitTs.Load()))
 	d.lastEventSeq.Store(0)
 	d.waitHandshake.Store(true)
-	msg := messaging.NewSingleTargetMessage(d.eventCollector.serverId, eventServiceTopic, newDispatcherResetRequest(d.target))
+	msg := messaging.NewSingleTargetMessage(d.eventCollector.getLocalServerID(), eventServiceTopic, newDispatcherResetRequest(d.target))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
 func (d *dispatcherStat) remove() {
 	// unregister from local event service
-	msg := messaging.NewSingleTargetMessage(d.eventCollector.serverId, eventServiceTopic, newDispatcherRemoveRequest(d.target))
+	msg := messaging.NewSingleTargetMessage(d.eventCollector.getLocalServerID(), eventServiceTopic, newDispatcherRemoveRequest(d.target))
 	d.eventCollector.enqueueMessageForSend(msg)
 
 	// check if it is need to unregister from remote event service
 	eventServiceID := d.connState.getEventServiceID()
-	if eventServiceID != "" && eventServiceID != d.eventCollector.serverId {
+	if eventServiceID != "" && eventServiceID != d.eventCollector.getLocalServerID() {
 		msg := messaging.NewSingleTargetMessage(eventServiceID, eventServiceTopic, newDispatcherRemoveRequest(d.target))
 		d.eventCollector.enqueueMessageForSend(msg)
 	}
 }
 
-func (d *dispatcherStat) pause(eventCollector *EventCollector) {
+func (d *dispatcherStat) pause() {
 	// Just ignore the request if the dispatcher is not ready.
 	if !d.connState.isReceivingDataEvent() {
 		log.Info("ignore pause dispatcher request because the eventService is not ready",
@@ -176,7 +176,7 @@ func (d *dispatcherStat) pause(eventCollector *EventCollector) {
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
-func (d *dispatcherStat) resume(eventCollector *EventCollector) {
+func (d *dispatcherStat) resume() {
 	// Just ignore the request if the dispatcher is not ready.
 	if !d.connState.isReceivingDataEvent() {
 		log.Info("ignore resume dispatcher request because the eventService is not ready",
@@ -269,7 +269,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 		log.Panic("should not happen: server ID is not set")
 	}
 	if !d.connState.isCurrentEventService(*event.From) {
-		if !d.connState.isCurrentEventService(d.eventCollector.serverId) {
+		if !d.connState.isCurrentEventService(d.eventCollector.getLocalServerID()) {
 			log.Panic("receive handshake event from remote event service, but current event service is not local event service",
 				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 				zap.Stringer("dispatcher", d.target.GetId()),
@@ -300,14 +300,14 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent) {
 		log.Panic("should not happen")
 	}
 
-	if d.connState.isCurrentEventService(d.eventCollector.serverId) {
+	if d.connState.isCurrentEventService(d.eventCollector.getLocalServerID()) {
 		// already received ready signal from local event service
 		return
 	}
 
 	// if a dispatcher's readyCallback is set, it will just register to local event service.
 	if d.readyCallback != nil {
-		d.connState.setEventServiceID(d.eventCollector.serverId)
+		d.connState.setEventServiceID(d.eventCollector.getLocalServerID())
 		d.connState.readyEventReceived.Store(true)
 		d.readyCallback()
 		return
@@ -332,7 +332,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent) {
 		d.connState.setEventServiceID(eventServiceID)
 		d.connState.readyEventReceived.Store(true)
 		d.reset()
-	} else if eventServiceID == d.eventCollector.serverId {
+	} else if eventServiceID == d.eventCollector.getLocalServerID() {
 		// case 3: received first ready signal from local event service
 		oldEventServiceID := d.connState.getEventServiceID()
 		if oldEventServiceID != "" {
@@ -371,8 +371,7 @@ func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent
 	}
 }
 
-// TODO: better name
-func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *EventCollector) {
+func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 	log.Info("set remote candidates",
 		zap.Strings("nodes", nodes),
 		zap.Stringer("dispatcherID", d.target.GetId()))
@@ -398,7 +397,7 @@ func newDispatcherAddRequest(target dispatcher.EventDispatcher, onlyReuse bool) 
 		EnableSyncPoint:   target.EnableSyncPoint(),
 		SyncPointInterval: uint64(syncPointInterval.Seconds()),
 		SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, target.GetStartTsIsSyncpoint()),
-		OnlyReuse:         false,
+		OnlyReuse:         onlyReuse,
 		BdrMode:           target.GetBDRMode(),
 	}
 }

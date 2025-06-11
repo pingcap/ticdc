@@ -54,18 +54,15 @@ type DispatcherRequest struct {
 
 func (d *DispatcherRequest) incrAndCheckRetry() bool {
 	d.RetryCount++
-	if d.RetryCount >= retryLimit {
-		return false
-	}
-	return true
+	return d.RetryCount < retryLimit
 }
 
-type DispatcherHeartbeatWithTarget struct {
-	Target       node.ID
-	Topic        string
-	Heartbeat    *event.DispatcherHeartbeat
-	retryCounter int
-}
+// type DispatcherHeartbeatWithTarget struct {
+// 	Target       node.ID
+// 	Topic        string
+// 	Heartbeat    *event.DispatcherHeartbeat
+// 	retryCounter int
+// }
 
 // // shouldRetry returns true if the retry counter is less than 3.
 // // We set the limit to avoid retry sending heartbeat endlessly.
@@ -291,6 +288,10 @@ func (c *EventCollector) wakeDispatcher(dispatcherID common.DispatcherID) {
 	c.ds.Wake(dispatcherID)
 }
 
+func (c *EventCollector) getLocalServerID() node.ID {
+	return c.serverId
+}
+
 func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
 	groupedHeartbeats := c.groupHeartbeat(heartbeat)
 	for serverID, heartbeat := range groupedHeartbeats {
@@ -356,9 +357,9 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 			case dynstream.PauseArea, dynstream.ResumeArea:
 				// Ignore it, because it is no need to pause and resume an area in event collector.
 			case dynstream.PausePath:
-				feedback.Dest.pause(c)
+				feedback.Dest.pause()
 			case dynstream.ResumePath:
-				feedback.Dest.resume(c)
+				feedback.Dest.resume()
 			}
 		}
 	}
@@ -545,7 +546,7 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 			if !ok {
 				continue
 			}
-			value.(*dispatcherStat).setRemoteCandidates(msg.(*logservicepb.ReusableEventServiceResponse).Nodes, c)
+			value.(*dispatcherStat).setRemoteCandidates(msg.(*logservicepb.ReusableEventServiceResponse).Nodes)
 		case *event.DispatcherHeartbeatResponse:
 			c.handleDispatcherHeartbeatResponse(targetMessage)
 		default:
