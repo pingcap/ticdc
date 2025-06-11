@@ -297,24 +297,6 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 	return groupedHeartbeats
 }
 
-// resetDispatcher is used to reset the dispatcher when it receives a out-of-order event.
-// It will send a reset request to the event service to reset the remote dispatcher.
-// And it will reset the dispatcher stat to wait for a new handshake event.
-// func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
-// 	c.addDispatcherRequestToSendingQueue(
-// 		d.eventServiceInfo.serverID,
-// 		eventServiceTopic,
-// 		DispatcherRequest{
-// 			Dispatcher: d.target,
-// 			StartTs:    d.sentCommitTs.Load(),
-// 			ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
-// 		})
-// 	d.reset()
-// 	log.Info("Send reset dispatcher request to event service",
-// 		zap.Stringer("dispatcher", d.target.GetId()),
-// 		zap.Uint64("startTs", d.sentCommitTs.Load()))
-// }
-
 func (c *EventCollector) processFeedback(ctx context.Context) {
 	log.Info("Start process feedback from dynamic stream")
 	defer log.Info("Stop process feedback from dynamic stream")

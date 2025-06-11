@@ -47,11 +47,11 @@ func newLogCoordinatorClient(eventCollector *EventCollector) *LogCoordinatorClie
 		mc:                        appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		logCoordinatorRequestChan: chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
 	}
-	client.mc.RegisterHandler(logCoordinatorClientTopic, client.RecvEventsMessage)
+	client.mc.RegisterHandler(logCoordinatorClientTopic, client.MessageCenterHandler)
 	return client
 }
 
-func (l *LogCoordinatorClient) RecvEventsMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
+func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
 	for _, msg := range targetMessage.Message {
 		switch msg := msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
