@@ -333,6 +333,13 @@ func newJSONMessageForDML(
 				out.String(claimCheckFileName)
 			}
 		}
+
+		// Only when both EnableTiDBExtension and OutputRowKey are true, the rowkey will be output.
+		if config.OutputRowKey {
+			out.RawByte(',')
+			out.RawString("\"rowkey\":")
+			out.Base64Bytes(e.Event.RowKey)
+		}
 		out.RawByte('}')
 	}
 	out.RawByte('}')
