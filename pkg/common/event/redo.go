@@ -16,8 +16,10 @@ package event
 import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tidb/pkg/meta/model"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tiflow/cdc/model"
 )
 
 //go:generate msgp
@@ -145,17 +147,18 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 					Charset:   column.GetCharset(),
 					Collation: column.GetCollate(),
 				})
+				isHandleKey := r.TableInfo.IsHandleKey(column.ID)
 				switch row.RowType {
 				case RowTypeInsert:
-					v := parseColumnValue(&row.Row, column, i)
+					v := parseColumnValue(&row.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
 				case RowTypeDelete:
-					v := parseColumnValue(&row.PreRow, column, i)
+					v := parseColumnValue(&row.PreRow, column, i, isHandleKey)
 					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
 				case RowTypeUpdate:
-					v := parseColumnValue(&row.Row, column, i)
+					v := parseColumnValue(&row.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-					v = parseColumnValue(&row.PreRow, column, i)
+					v = parseColumnValue(&row.PreRow, column, i, isHandleKey)
 					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
 				default:
 				}
@@ -217,13 +220,44 @@ func (r RedoDMLEvent) IsUpdate() bool {
 	return len(r.Row.PreColumns) > 0 && len(r.Row.Columns) > 0
 }
 
-func parseColumnValue(row *chunk.Row, column *model.ColumnInfo, i int) RedoColumnValue {
-	v := common.ExtractColVal(row, column, i)
+func parseColumnValue(row *chunk.Row, colInfo *timodel.ColumnInfo, i int, isHandleKey bool) RedoColumnValue {
+	v := common.ExtractColVal(row, colInfo, i)
 	rrv := RedoColumnValue{Value: v}
 	switch t := rrv.Value.(type) {
 	case []byte:
 		rrv.ValueIsEmptyBytes = len(t) == 0
 	}
-	rrv.Flag = uint64(column.GetFlag())
+	// FIXME: Use tidb column flag
+	rrv.Flag = convertFlag(colInfo, isHandleKey)
 	return rrv
+}
+
+// For compatibility
+func convertFlag(colInfo *timodel.ColumnInfo, isHandleKey bool) uint64 {
+	var flag model.ColumnFlagType
+	if isHandleKey {
+		flag.SetIsHandleKey()
+	}
+	if colInfo.GetCharset() == "binary" {
+		flag.SetIsBinary()
+	}
+	if colInfo.IsGenerated() {
+		flag.SetIsGeneratedColumn()
+	}
+	if mysql.HasPriKeyFlag(colInfo.GetFlag()) {
+		flag.SetIsPrimaryKey()
+	}
+	if mysql.HasUniKeyFlag(colInfo.GetFlag()) {
+		flag.SetIsUniqueKey()
+	}
+	if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
+		flag.SetIsNullable()
+	}
+	if mysql.HasMultipleKeyFlag(colInfo.GetFlag()) {
+		flag.SetIsMultipleKey()
+	}
+	if mysql.HasUnsignedFlag(colInfo.GetFlag()) {
+		flag.SetIsUnsigned()
+	}
+	return uint64(flag)
 }
