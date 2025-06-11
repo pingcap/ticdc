@@ -278,7 +278,7 @@ func TestE2EPartitionTable(t *testing.T) {
 
 		decodedDDL = dec.NextDDLEvent()
 		for _, item := range physicalTableID {
-			require.Contains(t, decodedDDL.GetBlockedTables().TableIDs, item)
+			require.Contains(t, decodedDDL.GetBlockedTables().TableIDs, item, format)
 		}
 	}
 }

@@ -543,13 +543,13 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.TableInfo = tableInfo
 
 	result.FinishedTs = msg.CommitTs
-	result.SchemaName = msg.Schema
-	result.TableName = msg.Table
+	result.SchemaName = msg.TableSchema.Schema
+	result.TableName = msg.TableSchema.Table
+	result.TableID = msg.TableSchema.TableID
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
 		result.ExtraTableName = preTableInfo.GetTableName()
 	}
-	result.TableID = tableInfo.TableName.TableID
 	result.MultipleTableInfos = []*commonType.TableInfo{tableInfo, preTableInfo}
 
 	if result.Query == "" {
