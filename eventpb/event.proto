@@ -69,50 +69,53 @@ message IntegrityConfig {
 	string CorruptionHandleLevel  = 2;
 }
 
-message DispatcherRegAddReq {
+message DispatcherAddRequest {
     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
     uint64 cluster_id = 1;
     heartbeatpb.ChangefeedID changefeed_id = 2;
     heartbeatpb.DispatcherID dispatcher_id = 3;
     heartbeatpb.TableSpan table_span = 4;
     uint64 start_ts = 5;
-    string server_id = 6;
-    FilterConfig filter_config = 7;
-    bool enable_sync_point = 8;
-    uint64 sync_point_ts = 9;
-    uint64 sync_point_interval = 10;
-    bool only_reuse = 11;
-    bool bdr_mode = 12;
-    IntegrityConfig integrity = 13;
-	string timezone = 14;
+    FilterConfig filter_config = 6;
+    bool enable_sync_point = 7;
+    uint64 sync_point_ts = 8;
+    uint64 sync_point_interval = 9;
+    bool only_reuse = 10;
+    bool bdr_mode = 11;
+    IntegrityConfig integrity = 12;
+	string timezone = 13;
 }
 
-message DispatcherRemoveReq {
-    // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
-    uint64 cluster_id = 1;
-    heartbeatpb.ChangefeedID changefeed_id = 2;
-    heartbeatpb.DispatcherID dispatcher_id = 3;
-}
-
-message DispatcherPauseReq {
-     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
-    uint64 cluster_id = 1;
-    heartbeatpb.ChangefeedID changefeed_id = 2;
-    heartbeatpb.DispatcherID dispatcher_id = 3;
-}
-
-message DispatcherResumeReq {
-     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
-    uint64 cluster_id = 1;
-    heartbeatpb.ChangefeedID changefeed_id = 2;
-    heartbeatpb.DispatcherID dispatcher_id = 3;
-}
-
-message DispatcherResetReq {
+message DispatcherResetRequest {
     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
     uint64 cluster_id = 1;
     heartbeatpb.ChangefeedID changefeed_id = 2;
     heartbeatpb.DispatcherID dispatcher_id = 3;
     uint64 start_ts = 4;
     uint64 epoch = 5;
+    FilterConfig filter_config = 6;
+    bool enable_sync_point = 7;
+    uint64 sync_point_ts = 8;
+    uint64 sync_point_interval = 9;
+}
+
+message DispatcherRemoveRequest {
+    // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
+    uint64 cluster_id = 1;
+    heartbeatpb.ChangefeedID changefeed_id = 2;
+    heartbeatpb.DispatcherID dispatcher_id = 3;
+}
+
+message DispatcherPauseRequest {
+     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
+    uint64 cluster_id = 1;
+    heartbeatpb.ChangefeedID changefeed_id = 2;
+    heartbeatpb.DispatcherID dispatcher_id = 3;
+}
+
+message DispatcherResumeRequest {
+     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
+    uint64 cluster_id = 1;
+    heartbeatpb.ChangefeedID changefeed_id = 2;
+    heartbeatpb.DispatcherID dispatcher_id = 3;
 }

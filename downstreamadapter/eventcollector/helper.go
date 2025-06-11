@@ -34,9 +34,7 @@ func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[co
 		log.Info("New EventDynamicStream, memory control is disabled")
 	}
 
-	eventsHandler := &EventsHandler{
-		eventCollector: collector,
-	}
+	eventsHandler := &EventsHandler{}
 	stream := dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return (common.GID)(id).FastHash() }, eventsHandler, option)
 	stream.Start()
 	return stream
@@ -59,9 +57,7 @@ func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[co
 // Otherwise, we can get a batch events.
 // We always return block = true for Handle() except we only receive the resolvedTs events.
 // So we only will reach next Handle() when previous events are all push downstream successfully.
-type EventsHandler struct {
-	eventCollector *EventCollector
-}
+type EventsHandler struct{}
 
 func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.DispatcherID {
 	return event.GetDispatcherID()
@@ -85,7 +81,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 				if !stat.isEventSeqValid(event) {
 					// if event seq is invalid, there must be some events dropped
 					// we need drop all events in this batch and reset the dispatcher
-					h.eventCollector.resetDispatcher(stat)
+					stat.reset()
 					return false
 				}
 			} else {
@@ -114,7 +110,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 			}
 			validEvents = events[validEventStartIndex:]
 		}
-		return stat.target.HandleEvents(validEvents, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
+		return stat.target.HandleEvents(validEvents, func() { stat.wake() })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
 		// TypeDDLEvent and TypeSyncPointEvent is handled one by one
@@ -122,21 +118,21 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 			return false
 		}
 		if !stat.isEventSeqValid(events[0]) {
-			h.eventCollector.resetDispatcher(stat)
+			stat.reset()
 			return false
 		}
 		if !stat.isEventCommitTsValid(events[0]) {
 			return false
 		}
-		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
+		return stat.target.HandleEvents(events, func() { stat.wake() })
 	case commonEvent.TypeHandshakeEvent:
-		stat.handleHandshakeEvent(events[0], h.eventCollector)
+		stat.handleHandshakeEvent(events[0])
 		return false
 	case commonEvent.TypeReadyEvent:
-		stat.handleReadyEvent(events[0], h.eventCollector)
+		stat.handleReadyEvent(events[0])
 		return false
 	case commonEvent.TypeNotReusableEvent:
-		stat.handleNotReusableEvent(events[0], h.eventCollector)
+		stat.handleNotReusableEvent(events[0])
 		return false
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(events[0].GetType())))
