@@ -1300,7 +1300,79 @@ func TestHandleOnlyEvent(t *testing.T) {
 	log.Info("pass TestHandleOnlyEvent")
 }
 
-func TestRenameTables(t *testing.T) {
+func TestRenameTable(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	createTableDDL := helper.DDL2Event(`create table test.t(a int primary key, b int)`)
+
+	insertEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 1)`)
+	insertRow, ok := insertEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      insertEvent.TableInfo,
+		CommitTs:       1,
+		Event:          insertRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+	renameTableDDL := helper.DDL2Event(`rename table test.t to test.t1`)
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	dec, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+
+	m, err := encoder.EncodeDDLEvent(createTableDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decodedDDL := dec.NextDDLEvent()
+	require.Equal(t, createTableDDL.Query, decodedDDL.Query)
+	require.Equal(t, decodedDDL.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+
+	decoder1, err := NewDecoder(ctx, 1, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	m = encoder.Build()[0]
+
+	decoder1.AddKeyValue(m.Key, m.Value)
+	messageType, hasNext = decoder1.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decodedInsert := decoder1.NextDMLEvent()
+	require.NotZero(t, decodedInsert.GetTableID())
+	require.Contains(t, tableInfoAccessor.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
+
+	m, err = encoder.EncodeDDLEvent(renameTableDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+	messageType, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decodedDDL = dec.NextDDLEvent()
+	require.Equal(t, renameTableDDL.Query, decodedDDL.Query)
+	require.Equal(t, renameTableDDL.Type, decodedDDL.Type)
+	require.Equal(t, decodedDDL.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+	require.Contains(t, decodedDDL.GetBlockedTables().TableIDs, decodedInsert.GetTableID())
 }
 
 func TestDDLSequence(t *testing.T) {

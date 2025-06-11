@@ -545,6 +545,10 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.FinishedTs = msg.CommitTs
 	result.SchemaName = msg.Schema
 	result.TableName = msg.Table
+	if preTableInfo != nil {
+		result.ExtraSchemaName = preTableInfo.GetSchemaName()
+		result.ExtraTableName = preTableInfo.GetTableName()
+	}
 	result.TableID = tableInfo.TableName.TableID
 	result.MultipleTableInfos = []*commonType.TableInfo{tableInfo, preTableInfo}
 
@@ -554,7 +558,14 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	physicalTableIDs := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+
+	schemaName := result.SchemaName
+	tableName := result.TableName
+	if actionType == timodel.ActionRenameTable {
+		schemaName = result.ExtraSchemaName
+		tableName = result.ExtraTableName
+	}
+	physicalTableIDs := d.blockedTablesMemo.blockedTables(schemaName, tableName)
 	if actionType == timodel.ActionExchangeTablePartition {
 		stmt, err := parser.New().ParseOneStmt(result.Query, "", "")
 		if err != nil {

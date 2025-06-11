@@ -28,6 +28,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -179,16 +181,32 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
 
+	if result.Type == byte(timodel.ActionRenameTable) {
+		stmt, err := parser.New().ParseOneStmt(m.Query, "", "")
+		if err != nil {
+			log.Panic("parse statement failed", zap.Any("DDL", m.Query), zap.Error(err))
+		}
+		result.ExtraSchemaName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
+		result.ExtraTableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
+	}
+
 	// only the DDL comes from the first partition will be processed.
 	// since tableInfoAccessor is global, we need to make sure the table info
 	// is not removed by other partitions' decoder.
 	if b.idx == 0 {
-		physicalTableIDs := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
+		tableName := result.TableName
+		schemaName := result.SchemaName
+		if result.Type == byte(timodel.ActionRenameTable) {
+			tableName = result.ExtraTableName
+			schemaName = result.ExtraSchemaName
+		}
+		physicalTableIDs := tableInfoAccessor.GetBlockedTables(schemaName, tableName)
 		result.BlockedTables = common.GetInfluenceTables(result.Query, m.Type, physicalTableIDs)
 		log.Debug("set blocked tables for the DDL event",
 			zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+			zap.String("extraSchema", result.ExtraSchemaName), zap.String("extraTable", result.ExtraTableName),
 			zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
-		tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
+		tableInfoAccessor.Remove(result.SchemaName, tableName)
 	}
 	b.nextKey = nil
 	b.valueBytes = nil

@@ -30,6 +30,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -351,13 +353,28 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
-	physicalTableID := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
+	schemaName := result.SchemaName
+	tableName := result.TableName
+	if result.Type == byte(timodel.ActionRenameTable) {
+		stmt, err := parser.New().ParseOneStmt(result.Query, "", "")
+		if err != nil {
+			log.Panic("parse statement failed", zap.Any("DDL", result.Query), zap.Error(err))
+		}
+		result.ExtraSchemaName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
+		result.ExtraTableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
+
+		schemaName = result.ExtraSchemaName
+		tableName = result.ExtraTableName
+	}
+
+	physicalTableID := tableInfoAccessor.GetBlockedTables(schemaName, tableName)
 	result.BlockedTables = common.GetInfluenceTables(result.Query, actionType, physicalTableID)
 	log.Debug("set blocked tables for the DDL event",
 		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+		zap.String("extraSchema", result.ExtraSchemaName), zap.String("extraTable", result.ExtraTableName),
 		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
 
-	tableInfoAccessor.Remove(result.SchemaName, result.TableName)
+	tableInfoAccessor.Remove(schemaName, tableName)
 	return result
 }
 
