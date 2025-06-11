@@ -68,7 +68,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 		)
 	}
 	if redoDB != nil {
-		schedulers["redo-basic-scheduler"] = scheduler.NewBasicScheduler(
+		schedulers[pkgscheduler.RedoBasicScheduler] = scheduler.NewBasicScheduler(
 			changefeedID,
 			batchSize,
 			redoOC,
@@ -77,7 +77,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			schedulerCfg,
 			true,
 		)
-		schedulers["redo-balance-scheduler"] = scheduler.NewBalanceScheduler(
+		schedulers[pkgscheduler.RedoBalanceScheduler] = scheduler.NewBalanceScheduler(
 			changefeedID,
 			batchSize,
 			redoOC,
@@ -87,7 +87,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			true,
 		)
 		if splitter != nil {
-			schedulers["redo-split-scheduler"] = scheduler.NewSplitScheduler(
+			schedulers[pkgscheduler.RedoSplitScheduler] = scheduler.NewSplitScheduler(
 				changefeedID,
 				batchSize,
 				splitter,

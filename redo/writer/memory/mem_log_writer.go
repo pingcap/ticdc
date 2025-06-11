@@ -101,8 +101,6 @@ func (l *memoryLogWriter) AsyncWriteEvents(ctx context.Context, events ...writer
 func (l *memoryLogWriter) Close() error {
 	if l.cancel != nil {
 		l.cancel()
-	} else {
-		log.Panic("redo writer close without init")
 	}
 	return nil
 }

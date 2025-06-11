@@ -1418,7 +1418,7 @@ func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs uint64) bool {
 	})
 	// only update meta on the one node
 	if e.tableTriggerEventDispatcher != nil {
-		log.Info("Update redo meta", zap.Any("resolvedTs", resolvedTs), zap.Any("checkpointTs", checkpointTs))
+		log.Info("update redo meta", zap.Any("resolvedTs", resolvedTs), zap.Any("checkpointTs", checkpointTs))
 		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
 	return atomic.CompareAndSwapUint64(&e.redoGlobalTs, e.redoGlobalTs, checkpointTs)

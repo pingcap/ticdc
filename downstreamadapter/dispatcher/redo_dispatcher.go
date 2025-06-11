@@ -263,9 +263,9 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			rd.updateComponentStatus()
 		}
 
+		atomic.StoreUint64(&rd.resolvedTs, event.GetCommitTs())
 		switch event.GetType() {
 		case commonEvent.TypeResolvedEvent:
-			atomic.StoreUint64(&rd.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
 		case commonEvent.TypeDMLEvent:
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {

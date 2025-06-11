@@ -100,7 +100,10 @@ func (s *balanceScheduler) Execute() time.Time {
 }
 
 func (s *balanceScheduler) Name() string {
-	return "balance-scheduler"
+	if s.redo {
+		return pkgScheduler.RedoBalanceScheduler
+	}
+	return pkgScheduler.BalanceScheduler
 }
 
 func (s *balanceScheduler) schedulerGroup(nodes map[node.ID]*node.Info) int {
