@@ -344,7 +344,8 @@ func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
 
 	// Reset the path to release all the pending events.
 	c.ds.RemovePath(d.target.GetId())
-	c.ds.AddPath(d.target.GetId(), d, dynstream.NewAreaSettingsWithMaxPendingSize(0, dynstream.MemoryControlAlgorithmV2, "eventCollector"))
+	settings := dynstream.NewAreaSettingsWithMaxPendingSize(0, dynstream.MemoryControlAlgorithmV2, "eventCollector")
+	c.ds.AddPath(d.target.GetId(), d, settings)
 
 	c.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
@@ -598,6 +599,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						dispatcherStat := stat.(*dispatcherStat)
 						// Which means that this dispatcherStat has not received handshake event yet. Just ignore the dml event.
 						if dispatcherStat.waitHandshake.Load() {
+							log.Info("fizz, drop dml event because wait handshake", zap.Any("event", e))
 							metricsDroppedEventCount.Add(float64(e.Len()))
 							continue
 						}
@@ -626,12 +628,21 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						if !ok {
 							continue
 						}
+						dispatcherStat := stat.(*dispatcherStat)
 						log.Info("get handshake event",
 							zap.Stringer("dispatcherID", e.GetDispatcherID()),
 							zap.String("serverID", targetMessage.From.String()))
-						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
+						dispatcherStat.setTableInfo(e.(*event.HandshakeEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						dispatcherStat.handleHandshakeEvent(dispatcher.NewDispatcherEvent(&targetMessage.From, e), c)
+						//c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+					case event.TypeReadyEvent:
+						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						dispatcherStat := stat.(*dispatcherStat)
+						dispatcherStat.handleReadyEvent(dispatcher.NewDispatcherEvent(&targetMessage.From, e), c)
 					default:
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
