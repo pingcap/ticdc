@@ -989,7 +989,12 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
-	c.dmlEventsQuota.Store(heartbeat.heartbeat.AvailableMemory)
+	var count uint64
+	c.changefeedMap.Range(func(key, value interface{}) bool {
+		count++
+		return true
+	})
+	c.dmlEventsQuota.Store(heartbeat.heartbeat.AvailableMemory / count)
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcher, ok := c.getDispatcher(dp.DispatcherID)

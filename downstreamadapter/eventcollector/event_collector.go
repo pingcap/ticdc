@@ -294,8 +294,8 @@ func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHear
 	groupedHeartbeats := c.groupHeartbeat(heartbeat)
 	var availableMemory uint64
 	memoryMetrics := c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics
-	if len(memoryMetrics) > 0 {
-		availableMemory = uint64(memoryMetrics[0].MaxMemory()) - uint64(memoryMetrics[0].MemoryUsage())
+	for _, area := range memoryMetrics {
+		availableMemory += uint64(area.MaxMemory()) - uint64(area.MemoryUsage())
 	}
 	for _, heartbeatWithTarget := range groupedHeartbeats {
 		heartbeatWithTarget.Heartbeat.AvailableMemory = availableMemory
