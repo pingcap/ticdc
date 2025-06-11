@@ -215,13 +215,32 @@ func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) 
 func (f *fileWorkerGroup) bgWriteLogs(
 	egCtx context.Context, inputCh <-chan writer.RedoEvent,
 ) (err error) {
-	batchSize := 1000
+	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
 	num := 0
+	batchSize := 1000
 	cacheEventPostFlush := make([]func(), 0, batchSize)
+	flush := func() error {
+		err = f.flushAll(egCtx)
+		if err != nil {
+			return err
+		}
+		for _, fn := range cacheEventPostFlush {
+			fn()
+		}
+		num = 0
+		cacheEventPostFlush = cacheEventPostFlush[:0]
+		return nil
+	}
 	for {
 		select {
 		case <-egCtx.Done():
 			return errors.Trace(egCtx.Err())
+		case <-ticker.C:
+			err := flush()
+			if err != nil {
+				return errors.Trace(err)
+			}
 		case event := <-inputCh:
 			if event == nil {
 				log.Error("inputCh of redo file worker is closed unexpectedly")
@@ -233,16 +252,11 @@ func (f *fileWorkerGroup) bgWriteLogs(
 			}
 			num++
 			if num > batchSize {
-				err = f.flushAll(egCtx)
+				err := flush()
 				if err != nil {
 					return errors.Trace(err)
 				}
-				for _, fn := range cacheEventPostFlush {
-					fn()
-				}
-				cacheEventPostFlush = cacheEventPostFlush[:0]
 				event.PostFlush()
-				num = 0
 			} else {
 				cacheEventPostFlush = append(cacheEventPostFlush, event.PostFlush)
 			}
