@@ -763,13 +763,14 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 
 func (c *eventBroker) getDispatcher(id common.DispatcherID) (*dispatcherStat, bool) {
 	stat, ok := c.dispatchers.Load(id)
-	if !ok {
-		stat, ok = c.tableTriggerDispatchers.Load(id)
+	if ok {
+		return stat.(*dispatcherStat), true
 	}
-	if !ok {
-		return nil, false
+	stat, ok = c.tableTriggerDispatchers.Load(id)
+	if ok {
+		return stat.(*dispatcherStat), true
 	}
-	return stat.(*dispatcherStat), true
+	return nil, false
 }
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
@@ -798,11 +799,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return nil
 	}
 
-	brokerRegisterDuration := time.Since(start)
-
-	start = time.Now()
-
-	success, err := c.eventStore.RegisterDispatcher(
+	success := c.eventStore.RegisterDispatcher(
 		id,
 		span,
 		info.GetStartTs(),
@@ -810,15 +807,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		info.IsOnlyReuse(),
 		info.GetBdrMode(),
 	)
-	if err != nil {
-		log.Error("register dispatcher to eventStore failed",
-			zap.Stringer("dispatcherID", id),
-			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", info.GetStartTs()),
-			zap.Error(err),
-		)
-		return err
-	}
 
 	if !success {
 		if !info.IsOnlyReuse() {
@@ -826,14 +814,13 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 				zap.Stringer("dispatcherID", id),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Uint64("startTs", info.GetStartTs()),
-				zap.Error(err),
 			)
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
 	}
 
-	err = c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
+	err := c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Stringer("dispatcherID", id),
@@ -854,18 +841,14 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return err
 	}
 	dispatcher.updateTableInfo(tableInfo)
-	eventStoreRegisterDuration := time.Since(start)
 	c.dispatchers.Store(id, dispatcher)
-
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", startTs),
-		zap.Duration("brokerRegisterDuration", brokerRegisterDuration),
-		zap.Duration("eventStoreRegisterDuration", eventStoreRegisterDuration),
-	)
+		zap.Duration("duration", time.Since(start)))
 	return nil
 }
 
@@ -894,7 +877,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat.(*dispatcherStat).isRemoved.Store(true)
 	stat.(*dispatcherStat).isRunning.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
-	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
+	// todo: how to handle this error?
+	_ = c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",

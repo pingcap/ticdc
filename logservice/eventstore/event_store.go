@@ -68,9 +68,9 @@ type EventStore interface {
 		notifier ResolvedTsNotifier,
 		onlyReuse bool,
 		bdrMode bool,
-	) (bool, error)
+	) bool
 
-	UnregisterDispatcher(dispatcherID common.DispatcherID) error
+	UnregisterDispatcher(dispatcherID common.DispatcherID)
 
 	// TODO: Implement this after checkpointTs is correctly reported by the downstream dispatcher.
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64) error
@@ -347,7 +347,7 @@ func (e *eventStore) RegisterDispatcher(
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
-) (bool, error) {
+) bool {
 	log.Info("register dispatcher",
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.String("span", common.FormatTableSpan(dispatcherSpan)),
@@ -404,14 +404,14 @@ func (e *eventStore) RegisterDispatcher(
 					zap.Uint64("subID", uint64(subStat.subID)),
 					zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 					zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
-				return true, nil
+				return true
 			}
 		}
 	}
 	e.dispatcherMeta.Unlock()
 
 	if onlyReuse {
-		return false, nil
+		return false
 	}
 
 	// cannot share data from existing subscription, create a new subscription
@@ -488,10 +488,10 @@ func (e *eventStore) RegisterDispatcher(
 		ResolvedTs:   startTs,
 	}
 	metrics.EventStoreSubscriptionGauge.Inc()
-	return true, nil
+	return true
 }
 
-func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
+func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
 	log.Info("unregister dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 	defer func() {
 		log.Info("unregister dispatcher done", zap.Stringer("dispatcherID", dispatcherID))
@@ -500,7 +500,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 	defer e.dispatcherMeta.Unlock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
-		return nil
+		return
 	}
 	subStat := stat.subStat
 	delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
@@ -511,7 +511,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 		subStat.idleTime.Store(time.Now().UnixMilli())
 	}
 	subStat.dispatchers.Unlock()
-	return nil
+	return
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(
