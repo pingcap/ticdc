@@ -985,7 +985,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 	return stat.(*changefeedStatus)
 }
 
-func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
+func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
@@ -1006,10 +1006,10 @@ func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *
 		// Update the last received heartbeat time to the current time.
 		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 	}
-	c.sendDispatcherResponse(ctx, responseMap)
+	c.sendDispatcherResponse(responseMap)
 }
 
-func (c *eventBroker) sendDispatcherResponse(ctx context.Context, responseMap map[string]*event.DispatcherHeartbeatResponse) {
+func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {
 	for serverID, response := range responseMap {
 		msg := messaging.NewSingleTargetMessage(node.ID(serverID), messaging.EventCollectorTopic, response)
 		c.msgSender.SendCommand(msg)

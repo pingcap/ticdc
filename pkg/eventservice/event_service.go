@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )
 
@@ -97,27 +98,60 @@ func (s *eventService) Run(ctx context.Context) error {
 	defer func() {
 		log.Info("event service exited")
 	}()
+
+	ticker := time.NewTicker(10 * time.Second)
+	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
+	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
+
+	registerHandled := metrics.EventServiceHandledEventCount.WithLabelValues("register")
+	removeHandled := metrics.EventServiceHandledEventCount.WithLabelValues("remove")
+	pauseHandled := metrics.EventServiceHandledEventCount.WithLabelValues("pause")
+	resumeHandled := metrics.EventServiceHandledEventCount.WithLabelValues("resume")
+	resetHandled := metrics.EventServiceHandledEventCount.WithLabelValues("reset")
+	heartbeatHandled := metrics.EventServiceHandledEventCount.WithLabelValues("heartbeat")
+	defer func() {
+		metrics.EventServiceChannelSizeGauge.DeleteLabelValues("dispatcherInfo")
+		metrics.EventServiceChannelSizeGauge.DeleteLabelValues("heartbeat")
+
+		metrics.EventServiceHandledEventCount.DeleteLabelValues("register")
+		metrics.EventServiceHandledEventCount.DeleteLabelValues("remove")
+		metrics.EventServiceHandledEventCount.DeleteLabelValues("pause")
+		metrics.EventServiceHandledEventCount.DeleteLabelValues("resume")
+		metrics.EventServiceHandledEventCount.DeleteLabelValues("reset")
+		metrics.EventServiceHandledEventCount.DeleteLabelValues("heartbeat")
+		defer ticker.Stop()
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-ticker.C:
+			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
+			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
 		case info := <-s.dispatcherInfoChan:
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
 				s.registerDispatcher(ctx, info)
+				registerHandled.Inc()
 			case eventpb.ActionType_ACTION_TYPE_REMOVE:
 				s.deregisterDispatcher(info)
+				removeHandled.Inc()
 			case eventpb.ActionType_ACTION_TYPE_PAUSE:
 				s.pauseDispatcher(info)
+				pauseHandled.Inc()
 			case eventpb.ActionType_ACTION_TYPE_RESUME:
 				s.resumeDispatcher(info)
+				resumeHandled.Inc()
 			case eventpb.ActionType_ACTION_TYPE_RESET:
 				s.resetDispatcher(info)
+				resetHandled.Inc()
 			default:
 				log.Panic("invalid action type", zap.Any("info", info))
 			}
 		case heartbeat := <-s.dispatcherHeartbeat:
-			s.handleDispatcherHeartbeat(ctx, heartbeat)
+			s.handleDispatcherHeartbeat(heartbeat)
+			heartbeatHandled.Inc()
 		}
 	}
 }
@@ -210,13 +244,13 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	c.resetDispatcher(dispatcherInfo)
 }
 
-func (s *eventService) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
+func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	clusterID := heartbeat.heartbeat.ClusterID
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		return
 	}
-	c.handleDispatcherHeartbeat(ctx, heartbeat)
+	c.handleDispatcherHeartbeat(heartbeat)
 }
 
 func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
