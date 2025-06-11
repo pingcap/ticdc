@@ -63,7 +63,6 @@ type DMLEventInRedoLog struct {
 	Columns    []*RedoColumn `msg:"columns"`
 	PreColumns []*RedoColumn `msg:"pre-columns"`
 
-	// TODO: seems it's unused. Maybe we can remove it?
 	IndexColumns [][]int `msg:"index-columns"`
 }
 
@@ -125,6 +124,7 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 	if r.TableInfo != nil {
 		redoLog.RedoRow.Row.Table = new(common.TableName)
 		*redoLog.RedoRow.Row.Table = r.TableInfo.TableName
+		redoLog.RedoRow.Row.IndexColumns = getIndexColumns(r.TableInfo)
 
 		columnCount := len(r.TableInfo.GetColumns())
 		columns := make([]*RedoColumn, 0, columnCount)
@@ -260,4 +260,18 @@ func convertFlag(colInfo *timodel.ColumnInfo, isHandleKey bool) uint64 {
 		flag.SetIsUnsigned()
 	}
 	return uint64(flag)
+}
+
+// For compatibility
+func getIndexColumns(tableInfo *common.TableInfo) [][]int {
+	indexColumns := make([][]int, 0, len(tableInfo.GetIndexColumns()))
+	rowColumnsOffset := tableInfo.GetRowColumnsOffset()
+	for _, index := range tableInfo.GetIndexColumns() {
+		offsets := make([]int, 0, len(index))
+		for _, id := range index {
+			offsets = append(offsets, rowColumnsOffset[id])
+		}
+		indexColumns = append(indexColumns, offsets)
+	}
+	return indexColumns
 }
