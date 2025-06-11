@@ -16,12 +16,10 @@ package eventcollector
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
-	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -46,6 +44,11 @@ var (
 	metricsDSPendingQueueLen   = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector")
 )
 
+const (
+	eventServiceTopic   = messaging.EventServiceTopic
+	eventCollectorTopic = messaging.EventCollectorTopic
+)
+
 // DispatcherRequest is the request send to EventService.
 type DispatcherRequest struct {
 	Message    *messaging.TargetMessage
@@ -56,29 +59,6 @@ func (d *DispatcherRequest) incrAndCheckRetry() bool {
 	d.RetryCount++
 	return d.RetryCount < retryLimit
 }
-
-// type DispatcherHeartbeatWithTarget struct {
-// 	Target       node.ID
-// 	Topic        string
-// 	Heartbeat    *event.DispatcherHeartbeat
-// 	retryCounter int
-// }
-
-// // shouldRetry returns true if the retry counter is less than 3.
-// // We set the limit to avoid retry sending heartbeat endlessly.
-// func (d *DispatcherHeartbeatWithTarget) shouldRetry() bool {
-// 	return d.retryCounter < 3
-// }
-
-// func (d *DispatcherHeartbeatWithTarget) incRetryCounter() {
-// 	d.retryCounter++
-// }
-
-const (
-	eventServiceTopic   = messaging.EventServiceTopic
-	eventCollectorTopic = messaging.EventCollectorTopic
-	logCoordinatorTopic = messaging.LogCoordinatorTopic
-)
 
 /*
 EventCollector is the relay between EventService and DispatcherManager, responsible for:
@@ -93,25 +73,17 @@ type EventCollector struct {
 
 	mc messaging.MessageCenter
 
+	logCoordinatorClient *LogCoordinatorClient
+
 	// dispatcherRequestChan buffers requests to the EventService.
 	// It automatically retries failed requests up to a configured maximum retry limit.
 	dispatcherRequestChan *chann.DrainableChann[DispatcherRequest]
-
-	// dispatcherHeartbeatChan is used to send the dispatcher heartbeat to the event service.
-	// dispatcherHeartbeatChan *chann.DrainableChann[*DispatcherHeartbeatWithTarget]
-
-	// TODO: move log coordinator interaction logic to a separate component.
-	logCoordinatorRequestChan *chann.DrainableChann[*logservicepb.ReusableEventServiceRequest]
 
 	receiveChannels []chan *messaging.TargetMessage
 	// ds is the dynamicStream for dispatcher events.
 	// All the events from event service will be sent to ds to handle.
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
-
-	coordinatorInfo struct {
-		value atomic.Value
-	}
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -130,13 +102,13 @@ func New(serverId node.ID) *EventCollector {
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
 		dispatcherRequestChan:                chann.NewAutoDrainChann[DispatcherRequest](),
-		logCoordinatorRequestChan:            chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		receiveChannels:                      receiveChannels,
 		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
 		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs"),
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 	}
+	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
 	eventCollector.ds = NewEventDynamicStream(eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
@@ -158,6 +130,12 @@ func (c *EventCollector) Run(ctx context.Context) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
+		c.logCoordinatorClient.run(ctx)
+	}()
+
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
 		c.processFeedback(ctx)
 	}()
 
@@ -165,12 +143,6 @@ func (c *EventCollector) Run(ctx context.Context) {
 	go func() {
 		defer c.wg.Done()
 		c.processDispatcherRequests(ctx)
-	}()
-
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.processLogCoordinatorRequest(ctx)
 	}()
 
 	c.wg.Add(1)
@@ -206,13 +178,7 @@ func (c *EventCollector) Close() {
 
 func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
 	c.PrepareAddDispatcher(target, memoryQuota, nil)
-	if target.GetTableSpan().TableID != 0 {
-		c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
-			ID:      target.GetId().ToPB(),
-			Span:    target.GetTableSpan(),
-			StartTs: target.GetStartTs(),
-		}
-	}
+	c.logCoordinatorClient.requestReusableEventService(target)
 }
 
 // PrepareAddDispatcher is used to prepare the dispatcher to be added to the event collector.
@@ -284,12 +250,16 @@ func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
 	}
 }
 
-func (c *EventCollector) wakeDispatcher(dispatcherID common.DispatcherID) {
-	c.ds.Wake(dispatcherID)
-}
-
 func (c *EventCollector) getLocalServerID() node.ID {
 	return c.serverId
+}
+
+func (c *EventCollector) getDispatcherStatByID(dispatcherID common.DispatcherID) *dispatcherStat {
+	value, ok := c.dispatcherMap.Load(dispatcherID)
+	if !ok {
+		return nil
+	}
+	return value.(*dispatcherStat)
 }
 
 func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
@@ -387,113 +357,9 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 				// TODO: requests can to different EventService, so we should improve the logic here.
 				time.Sleep(10 * time.Millisecond)
 			}
-			// case heartbeat := <-c.dispatcherHeartbeatChan.Out():
-			// 	if err := c.sendDispatcherHeartbeat(heartbeat); err != nil {
-			// 		// Sleep a short time to avoid too many requests in a short time.
-			// 		time.Sleep(10 * time.Millisecond)
-			// 	}
 		}
 	}
 }
-
-func (c *EventCollector) setCoordinatorInfo(id node.ID) {
-	c.coordinatorInfo.value.Store(id)
-}
-
-func (c *EventCollector) getCoordinatorInfo() node.ID {
-	if v := c.coordinatorInfo.value.Load(); v != nil {
-		return v.(node.ID)
-	}
-	return ""
-}
-
-func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case req := <-c.logCoordinatorRequestChan.Out():
-			coordinatorID := c.getCoordinatorInfo()
-			if coordinatorID == "" {
-				log.Info("coordinator info is empty, try send request later")
-				c.logCoordinatorRequestChan.In() <- req
-				time.Sleep(10 * time.Millisecond)
-				continue
-			}
-			targetMessage := messaging.NewSingleTargetMessage(coordinatorID, logCoordinatorTopic, req)
-			err := c.mc.SendCommand(targetMessage)
-			if err != nil {
-				log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
-				c.logCoordinatorRequestChan.In() <- req
-				time.Sleep(10 * time.Millisecond)
-			}
-		}
-	}
-}
-
-// // mustSendDispatcherRequest will keep retrying to send the dispatcher request to EventService until it succeed.
-// // Caller should avoid to use this method when the remote EventService is offline forever.
-// // And this method may be deprecated in the future.
-// // FIXME: Add a checking mechanism to avoid sending request to offline EventService.
-// // A simple way is to use a NodeManager to check if the target is online.
-// func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string, req DispatcherRequest) error {
-// 	message := &messaging.DispatcherRequest{
-// 		DispatcherRequest: &eventpb.DispatcherRequest{
-// 			ChangefeedId: req.Dispatcher.GetChangefeedID().ToPB(),
-// 			DispatcherId: req.Dispatcher.GetId().ToPB(),
-// 			ActionType:   req.ActionType,
-// 			// ServerId is the id of the request sender.
-// 			ServerId:  c.serverId.String(),
-// 			TableSpan: req.Dispatcher.GetTableSpan(),
-// 			StartTs:   req.StartTs,
-// 			OnlyReuse: req.OnlyReuse,
-// 			BdrMode:   req.BDRMode,
-// 		},
-// 	}
-
-// 	// If the action type is register and reset, we need fill all config related fields.
-// 	if req.ActionType == eventpb.ActionType_ACTION_TYPE_REGISTER ||
-// 		req.ActionType == eventpb.ActionType_ACTION_TYPE_RESET {
-// 		message.DispatcherRequest.FilterConfig = req.Dispatcher.GetFilterConfig()
-// 		message.DispatcherRequest.EnableSyncPoint = req.Dispatcher.EnableSyncPoint()
-// 		message.DispatcherRequest.SyncPointInterval = uint64(req.Dispatcher.GetSyncPointInterval().Seconds())
-// 		message.DispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
-// 	}
-
-// 	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, eventServiceTopic, message))
-// 	if err != nil {
-// 		log.Info("failed to send dispatcher request message to event service, try again later",
-// 			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),
-// 			zap.Stringer("dispatcher", req.Dispatcher.GetId()),
-// 			zap.Any("target", target.String()),
-// 			zap.Any("request", req),
-// 			zap.Error(err))
-// 		// Put the request back to the channel for later retry.
-// 		c.dispatcherRequestChan.In() <- DispatcherRequestWithTarget{
-// 			Target: target,
-// 			Topic:  topic,
-// 			Req:    req,
-// 		}
-// 		return err
-// 	}
-// 	return nil
-// }
-
-// sendDispatcherHeartbeat sends the dispatcher heartbeat to the event service.
-// It will retry to send the heartbeat to the event service until it exceeds the retry limit.
-// func (c *EventCollector) sendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatWithTarget) error {
-// 	message := messaging.NewSingleTargetMessage(heartbeat.Target, heartbeat.Topic, heartbeat.Heartbeat)
-// 	err := c.mc.SendCommand(message)
-// 	if err != nil {
-// 		if heartbeat.shouldRetry() {
-// 			heartbeat.incRetryCounter()
-// 			log.Info("failed to send dispatcher heartbeat message to event service, try again later", zap.Error(err), zap.Stringer("target", heartbeat.Target))
-// 			c.dispatcherHeartbeatChan.In() <- heartbeat
-// 		}
-// 		return err
-// 	}
-// 	return nil
-// }
 
 func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
 	if len(targetMessage.Message) != 1 {
@@ -536,17 +402,6 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 
 	for _, msg := range targetMessage.Message {
 		switch msg.(type) {
-		case *common.LogCoordinatorBroadcastRequest:
-			c.setCoordinatorInfo(targetMessage.From)
-		case *logservicepb.ReusableEventServiceResponse:
-			// TODO: can we handle it here?
-			resp := msg.(*logservicepb.ReusableEventServiceResponse)
-			dispatcherID := common.NewDispatcherIDFromPB(resp.ID)
-			value, ok := c.dispatcherMap.Load(dispatcherID)
-			if !ok {
-				continue
-			}
-			value.(*dispatcherStat).setRemoteCandidates(msg.(*logservicepb.ReusableEventServiceResponse).Nodes)
 		case *event.DispatcherHeartbeatResponse:
 			c.handleDispatcherHeartbeatResponse(targetMessage)
 		default:

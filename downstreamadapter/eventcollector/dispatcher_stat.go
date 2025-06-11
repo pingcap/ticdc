@@ -191,7 +191,7 @@ func (d *dispatcherStat) resume() {
 }
 
 func (d *dispatcherStat) wake() {
-	d.eventCollector.wakeDispatcher(d.getDispatcherID())
+	d.eventCollector.ds.Wake(d.getDispatcherID())
 }
 
 func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
