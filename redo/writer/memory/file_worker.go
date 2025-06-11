@@ -279,6 +279,7 @@ func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event writer.RedoEven
 func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) error {
 	var err error
 	start := time.Now()
+	file.filename = f.getLogFileName(file.maxCommitTs)
 	if err = file.writer.Close(); err != nil {
 		return err
 	}
@@ -374,7 +375,6 @@ func (f *fileWorkerGroup) writeToCache(
 
 	file := f.files[len(f.files)-1]
 	if file.fileSize+writeLen > f.cfg.MaxLogSizeInBytes {
-		file.filename = f.getLogFileName(file.maxCommitTs)
 		select {
 		case <-egCtx.Done():
 			return errors.Trace(egCtx.Err())
@@ -407,7 +407,6 @@ func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {
 	}
 
 	file := f.files[len(f.files)-1]
-	file.filename = f.getLogFileName(file.maxCommitTs)
 	select {
 	case <-egCtx.Done():
 		return errors.Trace(egCtx.Err())
