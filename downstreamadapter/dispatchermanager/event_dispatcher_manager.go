@@ -592,12 +592,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	toCleanDispatcherIDs := make([]common.DispatcherID, 0)
 	cleanDispatcherSchemaIDs := make([]int64, 0)
 	heartBeatInfo := &dispatcher.HeartBeatInfo{}
-
-	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
-		Version:              event.DispatcherHeartbeatVersion,
-		DispatcherCount:      0,
-		DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
-	}
+	dispatcherCount := 0
 
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
 		// the merged dispatcher in preparing state, don't need to join the calculation of the heartbeat
@@ -633,8 +628,9 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 				CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			})
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, heartBeatInfo.Watermark.CheckpointTs))
 		}
+
+		dispatcherCount++
 	})
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
@@ -652,8 +648,16 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			// add tableTriggerEventDispatcher heartbeat
 			heartBeatInfo := &dispatcher.HeartBeatInfo{}
 			e.tableTriggerEventDispatcher.GetHeartBeatInfo(heartBeatInfo)
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(e.tableTriggerEventDispatcher.GetId(), heartBeatInfo.Watermark.CheckpointTs))
 		}
+
+		eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
+			Version:              event.DispatcherHeartbeatVersion,
+			DispatcherCount:      0,
+			DispatcherProgresses: make([]event.DispatcherProgress, 0, dispatcherCount),
+		}
+		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
