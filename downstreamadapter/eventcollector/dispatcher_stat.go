@@ -31,6 +31,7 @@ type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	target       dispatcher.EventDispatcher
 
+	// readyCallback is called when the dispatcher receives ready event from local event service.
 	readyCallback func()
 
 	eventServiceInfo struct {
@@ -52,7 +53,7 @@ type dispatcherStat struct {
 	// Dispatcher will drop all data events before receiving a handshake event.
 	waitHandshake atomic.Bool
 
-	// The largest commit ts that has been sent to the dispatcher.
+	// The largest commit ts that has been sent to the target dispatcher.
 	sentCommitTs atomic.Uint64
 
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
@@ -108,6 +109,7 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -125,6 +127,12 @@ func (d *dispatcherStat) isEventCommitTsValid(event dispatcher.DispatcherEvent) 
 			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
 		return false
 	}
+	log.Info("fizz update sent commit ts",
+		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+		zap.Stringer("dispatcher", d.target.GetId()),
+		zap.Any("event", event.Event),
+		zap.Uint64("eventCommitTs", event.GetCommitTs()),
+		zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
 	d.sentCommitTs.Store(event.GetCommitTs())
 	return true
 }
@@ -136,7 +144,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		log.Panic("should not happen")
 	}
 	if d.eventServiceInfo.serverID == "" {
-		log.Panic("should not happen: server ID is not set")
+		log.Panic("should not happen: server ID is not set, it must be set when receive ready event")
 	}
 	if d.eventServiceInfo.serverID != *event.From {
 		// check invariant: if the handshake event is not from the current event service, we must be reading from local event service.
@@ -265,7 +273,7 @@ func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent
 					Dispatcher: d.target,
 					StartTs:    d.target.GetStartTs(),
 					ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-					OnlyUse:    true,
+					OnlyReuse:  true,
 				},
 			)
 			d.eventServiceInfo.serverID = d.eventServiceInfo.remoteCandidates[0]
@@ -353,7 +361,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 			Dispatcher: d.target,
 			StartTs:    d.target.GetStartTs(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-			OnlyUse:    true,
+			OnlyReuse:  true,
 		},
 	)
 }

@@ -84,7 +84,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		for _, event := range events {
 			if event.GetType() == commonEvent.TypeDMLEvent {
 				dmlCounter++
-				if dmlCounter%5000 == 0 {
+				if dmlCounter%3 == 0 {
 					log.Info("fizz, drop event", zap.Any("event", event))
 					continue
 				}

@@ -658,8 +658,6 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
-
-		log.Info("fizz checkpointTs", zap.Uint64("checkpointTs", message.Watermark.CheckpointTs))
 	}
 
 	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))
