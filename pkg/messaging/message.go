@@ -134,7 +134,7 @@ func (t IOType) String() string {
 	case TypeCoordinatorBootstrapResponse:
 		return "CoordinatorBootstrapResponse"
 	case TypeDispatcherRequest:
-		return "TypeDispatcherRequest"
+		return "DispatcherRequest"
 	case TypeMaintainerBootstrapRequest:
 		return "BootstrapMaintainerRequest"
 	case TypeMaintainerBootstrapResponse:
