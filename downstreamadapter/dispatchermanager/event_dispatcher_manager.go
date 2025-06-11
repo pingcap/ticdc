@@ -595,6 +595,8 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	dispatcherCount := 0
 
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
+		dispatcherCount++
+
 		// the merged dispatcher in preparing state, don't need to join the calculation of the heartbeat
 		// the dispatcher still not know the startTs of it, and the dispatchers to be merged are still in the calculation of the checkpointTs
 		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Preparing || dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_MergeReady {
@@ -630,7 +632,6 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			})
 		}
 
-		dispatcherCount++
 	})
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
