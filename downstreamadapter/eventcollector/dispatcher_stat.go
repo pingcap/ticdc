@@ -138,7 +138,7 @@ func (d *dispatcherStat) run() {
 }
 
 func (d *dispatcherStat) registerTo(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, newDispatcherRegisterRequest(d.target, false))
+	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherRegisterRequest(false))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -148,7 +148,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("startTs", d.sentCommitTs.Load()))
 	d.lastEventSeq.Store(0)
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, newDispatcherResetRequest(d.target))
+	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherResetRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -164,7 +164,7 @@ func (d *dispatcherStat) remove() {
 }
 
 func (d *dispatcherStat) removeFrom(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, newDispatcherRemoveRequest(d.target))
+	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherRemoveRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -178,7 +178,7 @@ func (d *dispatcherStat) pause() {
 		return
 	}
 	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, eventServiceTopic, newDispatcherPauseRequest(d.target))
+	msg := messaging.NewSingleTargetMessage(eventServiceID, eventServiceTopic, d.newDispatcherPauseRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -192,7 +192,7 @@ func (d *dispatcherStat) resume() {
 		return
 	}
 	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, eventServiceTopic, newDispatcherResumeRequest(d.target))
+	msg := messaging.NewSingleTargetMessage(eventServiceID, eventServiceTopic, d.newDispatcherResumeRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -468,7 +468,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 			FilterConfig:      d.target.GetFilterConfig(),
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
-			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, target.GetStartTsIsSyncpoint()),
+			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			OnlyReuse:         onlyReuse,
 			BdrMode:           d.target.GetBDRMode(),
 		},
@@ -489,7 +489,7 @@ func (d *dispatcherStat) newDispatcherResetRequest() *messaging.DispatcherReques
 			FilterConfig:      d.target.GetFilterConfig(),
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
-			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, target.GetStartTsIsSyncpoint()),
+			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 		},
 	}
 }
