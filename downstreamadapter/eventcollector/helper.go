@@ -74,7 +74,8 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		commonEvent.TypeResolvedEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent,
-		commonEvent.TypeHandshakeEvent:
+		commonEvent.TypeHandshakeEvent,
+		commonEvent.TypeBatchDMLEvent:
 		return stat.handleDataEvents(events...)
 	case commonEvent.TypeReadyEvent,
 		commonEvent.TypeNotReusableEvent:
