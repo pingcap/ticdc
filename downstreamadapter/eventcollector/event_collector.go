@@ -155,9 +155,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
 		c.wg.Add(1)
+		id := i
 		go func() {
 			defer c.wg.Done()
-			c.runProcessMessage(ctx, c.receiveChannels[i])
+			c.runProcessMessage(ctx, c.receiveChannels[id], id)
 		}()
 	}
 
@@ -534,6 +535,14 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 // RecvEventsMessage is the handler for the events message from from logService or logCoordinator.
 // It will forward the message to the corresponding channel to handle it in multi-thread.
 func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
+	// 添加消息接收日志
+	log.Info("fizz RecvEventsMessage called",
+		zap.String("from", targetMessage.From.String()),
+		zap.String("type", targetMessage.Type.String()),
+		zap.Int64("createAt", targetMessage.CreateAt),
+		zap.Uint64("group", targetMessage.GetGroup()),
+		zap.Int("messageCount", len(targetMessage.Message)))
+
 	inflightDuration := time.Since(time.UnixMilli(targetMessage.CreateAt)).Seconds()
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
 	start := time.Now()
@@ -544,7 +553,11 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	// If the message is a log service event, we need to forward it to the
 	// corresponding channel to handle it in multi-thread.
 	if targetMessage.Type.IsLogServiceEvent() {
-		c.receiveChannels[targetMessage.GetGroup()%uint64(len(c.receiveChannels))] <- targetMessage
+		channelIndex := targetMessage.GetGroup() % uint64(len(c.receiveChannels))
+		log.Info("fizz forwarding to channel",
+			zap.Uint64("channelIndex", channelIndex),
+			zap.Int64("createAt", targetMessage.CreateAt))
+		c.receiveChannels[channelIndex] <- targetMessage
 		return nil
 	}
 
@@ -570,12 +583,19 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	return nil
 }
 
-func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) {
+func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage, workerIndex int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case targetMessage := <-inCh:
+			// 添加消息处理开始日志
+			log.Info("fizz processing message in worker",
+				zap.Int("workerIndex", workerIndex),
+				zap.String("from", targetMessage.From.String()),
+				zap.Int64("createAt", targetMessage.CreateAt),
+				zap.Int("messageCount", len(targetMessage.Message)))
+
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
@@ -598,21 +618,30 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						dispatcherStat := stat.(*dispatcherStat)
 						// Which means that this dispatcherStat has not received handshake event yet. Just ignore the dml event.
 						if dispatcherStat.waitHandshake.Load() {
-							log.Info("fizz, drop dml event because wait handshake", zap.Any("event", e))
 							metricsDroppedEventCount.Add(float64(e.Len()))
 							continue
 						}
 
-						// 添加接收日志
+						// 添加批量事件详细日志
 						batchDMLEvent := e.(*event.BatchDMLEvent)
-						for _, dml := range batchDMLEvent.DMLEvents {
+						log.Info("fizz BatchDMLEvent details",
+							zap.Stringer("dispatcherID", e.GetDispatcherID()),
+							zap.Int("batchSize", len(batchDMLEvent.DMLEvents)),
+							zap.String("from", targetMessage.From.String()),
+							zap.Int64("createAt", targetMessage.CreateAt),
+							zap.Int("workerIndex", workerIndex))
+
+						// 添加接收日志
+						for i, dml := range batchDMLEvent.DMLEvents {
 							log.Info("fizz receiving DML event",
 								zap.Stringer("dispatcherID", e.GetDispatcherID()),
+								zap.Int("batchIndex", i),
 								zap.Uint64("seq", dml.Seq),
 								zap.Uint64("commitTs", dml.GetCommitTs()),
 								zap.Uint64("startTs", dml.StartTs),
 								zap.String("from", targetMessage.From.String()),
-								zap.Int64("createAt", targetMessage.CreateAt))
+								zap.Int64("createAt", targetMessage.CreateAt),
+								zap.Int("workerIndex", workerIndex))
 						}
 
 						tableInfo, ok := dispatcherStat.tableInfo.Load().(*common.TableInfo)

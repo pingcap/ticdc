@@ -95,7 +95,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 				hasValidEvent = true
 				if !stat.isEventSeqValid(event) {
 					log.Panic("event seq is invalid", zap.Any("event", event.Event))
-					return false
+					//return false
 				}
 			} else {
 				hasInvalidEvent = true

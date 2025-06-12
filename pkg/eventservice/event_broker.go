@@ -175,18 +175,19 @@ func newEventBroker(
 	return c
 }
 
-func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
+func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat, workerIndex int) {
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
-			for _, dml := range e.DMLEvents {
-				log.Info("fizz sending DML event",
-					zap.Stringer("dispatcher", d.id),
-					zap.Uint64("seq", dml.Seq),
-					zap.Uint64("commitTs", dml.GetCommitTs()),
-					zap.Uint64("startTs", dml.StartTs),
-					zap.String("remoteID", string(remoteID)))
-			}
+			dml := e.DMLEvents[0]
+			log.Info("fizz sending DML event",
+				zap.Stringer("dispatcher", d.id),
+				zap.Uint64("seq", dml.Seq),
+				zap.Uint64("commitTs", dml.GetCommitTs()),
+				zap.Uint64("startTs", dml.StartTs),
+				zap.String("remoteID", string(remoteID)),
+				zap.Int("workerIndex", workerIndex))
+
 			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
 			metricEventServiceSendKvCount.Add(float64(e.Len()))
 		}
@@ -367,7 +368,9 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		return false, common.DataRange{}
 	}
 
-	c.checkAndSendHandshake(task)
+	if !c.checkAndSendHandshake(task) {
+		return false, common.DataRange{}
+	}
 
 	// Only check scan when the dispatcher is running.
 	if !task.IsRunning() {
@@ -527,7 +530,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, workerIndex int
 		return
 	}
 
-	log.Info("fizz scan events", zap.Stringer("dispatcher", task.id), zap.Int("workerIndex", workerIndex), zap.Int("eventCount", len(events)))
+	log.Info("fizz scan events", zap.Int("workerIndex", workerIndex), zap.Int("eventCount", len(events)), zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Bool("isBroken", isBroken))
 
 	// If the task is not running, we don't send the events to the dispatcher.
 	if !task.isRunning.Load() {
@@ -551,7 +554,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, workerIndex int
 			if !ok {
 				log.Panic("expect a DMLEvent, but got", zap.Any("event", e))
 			}
-			c.sendDML(remoteID, dmls, task)
+			c.sendDML(remoteID, dmls, task, workerIndex)
 		case pevent.TypeDDLEvent:
 			ddl, ok := e.(*pevent.DDLEvent)
 			if !ok {
