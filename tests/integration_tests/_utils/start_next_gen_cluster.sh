@@ -43,42 +43,34 @@ Environment Variables:
 EOF
 }
 
-print_variables() {
-    cat <<EOF
-Current Configuration:
-=====================
-Binary Paths:
-  DB_BINPATH: $DB_BINPATH
-  KV_BINPATH: $KV_BINPATH
-  PD_BINPATH: $PD_BINPATH
-  CSE_CTL_BINPATH: $CSE_CTL_BINPATH
-  CDC_BINPATH: $CDC_BINPATH
-  TIKV_WORKER_BINPATH: $TIKV_WORKER_BINPATH
-
-Port Settings:
-  UPSTREAM_PORT_OFFSET: $UPSTREAM_PORT_OFFSET
-  CDC_PD_PORT_OFFSET: $CDC_PD_PORT_OFFSET
-  PD_PORT: $PD_PORT
-  CDC_PD_PORT: $CDC_PD_PORT
-  CDC_PORT: $CDC_PORT
-
-MinIO Configuration:
-  MINIO_CONTAINER_NAME: $MINIO_CONTAINER_NAME
-  MINIO_ROOT_USER: $MINIO_ROOT_USER
-  MINIO_ROOT_PASSWORD: $MINIO_ROOT_PASSWORD
-  MINIO_MC_ALIAS: $MINIO_MC_ALIAS
-  MINIO_API_PORT: $MINIO_API_PORT
-  MINIO_CONSOLE_PORT: $MINIO_CONSOLE_PORT
-
-TiDB Configuration:
-  TIDB_VERSION: $TIDB_VERSION
-  TIDB_PLAYGROUND_TAG: $TIDB_PLAYGROUND_TAG
-  TIDB_PLAYGROUND_TAG_CDC_PD: $TIDB_PLAYGROUND_TAG_CDC_PD
-  KEYSPACE_NAME: $KEYSPACE_NAME
-
-Working Directory:
-  WORK_DIR: $WORK_DIR
+dump_variables() {
+    cat > "$WORK_DIR/next_gen.env" <<EOF
+DB_BINPATH=$DB_BINPATH
+KV_BINPATH=$KV_BINPATH
+PD_BINPATH=$PD_BINPATH
+CSE_CTL_BINPATH=$CSE_CTL_BINPATH
+CDC_BINPATH=$CDC_BINPATH
+TIKV_WORKER_BINPATH=$TIKV_WORKER_BINPATH
+UPSTREAM_PORT_OFFSET=$UPSTREAM_PORT_OFFSET
+CDC_PD_PORT_OFFSET=$CDC_PD_PORT_OFFSET
+PD_PORT=$PD_PORT
+CDC_PD_PORT=$CDC_PD_PORT
+CDC_PORT=$CDC_PORT
+MINIO_CONTAINER_NAME=$MINIO_CONTAINER_NAME
+MINIO_ROOT_USER=$MINIO_ROOT_USER
+MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
+MINIO_MC_ALIAS=$MINIO_MC_ALIAS
+MINIO_API_PORT=$MINIO_API_PORT
+MINIO_CONSOLE_PORT=$MINIO_CONSOLE_PORT
+TIDB_VERSION=$TIDB_VERSION
+TIDB_PLAYGROUND_TAG=$TIDB_PLAYGROUND_TAG
+TIDB_PLAYGROUND_TAG_CDC_PD=$TIDB_PLAYGROUND_TAG_CDC_PD
+KEYSPACE_NAME=$KEYSPACE_NAME
+WORK_DIR=$WORK_DIR
+UPSTREAM_TIUP_PID=$UPSTREAM_TIUP_PID
+CDC_PD_TIUP_PID=$CDC_PD_TIUP_PID
 EOF
+    echo "Variables dumped to $WORK_DIR/next_gen.env"
 }
 
 check_port_available() {
@@ -135,11 +127,6 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         *)
-            echo "variables"
-            print_variables
-
-            echo "args: $*"
-
             echo "Unknown option: $1"
             exit 1
             ;;
@@ -161,8 +148,8 @@ fi
 : "${MINIO_CONSOLE_PORT:=9001}"
 
 : "${TIDB_VERSION:=v7.5.6}"
-: "${TIDB_PLAYGROUND_TAG=serverless-cdc}"
-: "${TIDB_PLAYGROUND_TAG_CDC_PD=serverless-cdc-pd}"
+: "${TIDB_PLAYGROUND_TAG:=serverless-cdc}"
+: "${TIDB_PLAYGROUND_TAG_CDC_PD:=serverless-cdc-pd}"
 
 : "${KEYSPACE_NAME:=tenant-1}"
 
@@ -183,17 +170,8 @@ check_bin "$TIKV_WORKER_BINPATH" || exit 1
 
 mkdir -p "$WORK_DIR"
 
-tiup clean "$TIDB_PLAYGROUND_TAG" "$TIDB_PLAYGROUND_TAG_CDC_PD"
-rm -rf "$WORK_DIR/tiup-cluster" "$WORK_DIR/cdc-data" "$WORK_DIR/cdc-log"
-docker rm -f "$MINIO_CONTAINER_NAME"
-if [ -f "$WORK_DIR/upstream_tiup.pid" ]; then
-    pid=$(cat "$WORK_DIR/upstream_tiup.pid")
-    kill -9 "$pid" 2>/dev/null || true
-fi
-if [ -f "$WORK_DIR/cdc_pd_tiup.pid" ]; then
-    pid=$(cat "$WORK_DIR/cdc_pd_tiup.pid")
-    kill -9 "$pid" 2>/dev/null || true
-fi
+CLEANUP_SCRIPT="$(dirname "$0")/cleanup_next_gen_cluster.sh"
+[ -x "$CLEANUP_SCRIPT" ] && "$CLEANUP_SCRIPT"
 
 
 echo "Deploy minio"
@@ -248,8 +226,8 @@ nohup tiup playground "$TIDB_VERSION" --tag "$TIDB_PLAYGROUND_TAG" \
     --pd.config "$WORK_DIR/pd.toml" --pd.binpath "$PD_BINPATH" \
     --port-offset "$UPSTREAM_PORT_OFFSET" \
     --tiflash 0 &
-UPSTREAM_PID=$!
-echo -n "$UPSTREAM_PID" > "$WORK_DIR/upstream_tiup.pid"
+UPSTREAM_TIUP_PID=$!
+echo "upstream tiup pid: $UPSTREAM_TIUP_PID"
 check_port_available "$TIDB_PORT" "Wait for upstream TiDB to be available"
 
 echo "run backup"
@@ -278,8 +256,8 @@ nohup tiup playground "${TIDB_VERSION}" --tag "$TIDB_PLAYGROUND_TAG_CDC_PD" \
      --pd 1 \
      --kv 0 \
      --db 0 &
-CDC_PD_PID=$!
-echo -n "$CDC_PD_PID" > "$WORK_DIR/cdc_pd_tiup.pid"
+CDC_PD_TIUP_PID=$!
+echo "cdc pd tiup pid: $CDC_PD_TIUP_PID"
 check_port_available "$CDC_PD_PORT" "Wait for CDC PD to be available"
 
 echo "deploy cdc"
@@ -303,3 +281,5 @@ s3-bucket = "cse"
 s3-region = "local"
 EOF
 nohup "$TIKV_WORKER_BINPATH" --config "$WORK_DIR/replication_config.toml"  --pd-endpoints "127.0.0.1:$PD_PORT" &
+
+dump_variables
