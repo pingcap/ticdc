@@ -307,8 +307,8 @@ func NewDMLEvent(
 }
 
 func (t *DMLEvent) String() string {
-	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, TableInfo: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
-		t.Version, t.DispatcherID, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo, t.Checksum, t.Length, t.ApproximateSize)
+	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, TableInfo: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
+		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo, t.Checksum, t.Length, t.ApproximateSize)
 }
 
 // SetRows sets the Rows chunk for this DMLEvent

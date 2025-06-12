@@ -58,6 +58,9 @@ type dispatcherStat struct {
 
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
+
+	// The memory quota of the dispatcher.
+	memoryQuota uint64
 }
 
 func (d *dispatcherStat) reset() {
@@ -89,7 +92,7 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent:
-		log.Debug("check event sequence",
+		log.Info("check event sequence",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()),
 			zap.Int("eventType", event.GetType()),
@@ -99,7 +102,7 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 
 		expectedSeq := d.lastEventSeq.Add(1)
 		if event.GetSeq() != expectedSeq {
-			log.Warn("Received an out-of-order event, reset the dispatcher",
+			log.Error("Received an out-of-order event, reset the dispatcher",
 				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 				zap.Stringer("dispatcher", d.target.GetId()),
 				zap.Int("eventType", event.GetType()),
@@ -127,12 +130,6 @@ func (d *dispatcherStat) isEventCommitTsValid(event dispatcher.DispatcherEvent) 
 			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
 		return false
 	}
-	log.Info("fizz update sent commit ts",
-		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-		zap.Stringer("dispatcher", d.target.GetId()),
-		zap.Any("event", event.Event),
-		zap.Uint64("eventCommitTs", event.GetCommitTs()),
-		zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
 	d.sentCommitTs.Store(event.GetCommitTs())
 	return true
 }
@@ -161,7 +158,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		return
 	}
 	if !d.isEventSeqValid(event) {
-		eventCollector.resetDispatcher(d)
+		log.Panic("fizz, event seq is invalid", zap.String("changefeedID", d.target.GetChangefeedID().ID().String()), zap.Stringer("dispatcher", d.target.GetId()), zap.Any("event", event))
 		return
 	}
 	d.waitHandshake.Store(false)

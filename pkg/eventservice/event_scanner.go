@@ -531,8 +531,6 @@ func (p *dmlProcessor) processNewTransaction(
 		}
 		p.insertRowCache = make([]*common.RawKVEntry, 0)
 	}
-	// Create a new DMLEvent for the current transaction
-	log.Info("fizz, create new DMLEvent", zap.Stringer("dispatcherID", dispatcherID), zap.Int64("tableID", tableID), zap.Uint64("startTs", rawEvent.StartTs), zap.Uint64("commitTs", rawEvent.CRTs), zap.String("dispatcher", dispatcherID.String()))
 	p.currentDML = pevent.NewDMLEvent(dispatcherID, tableID, rawEvent.StartTs, rawEvent.CRTs, tableInfo)
 	p.batchDML.AppendDMLEvent(p.currentDML)
 	return p.appendRow(rawEvent)

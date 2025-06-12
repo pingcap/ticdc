@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -140,7 +141,7 @@ func newEventBroker(
 		taskChan := make(chan scanTask, scanTaskQueueSize)
 		c.taskChan[i] = taskChan
 		g.Go(func() error {
-			c.runScanWorker(ctx, taskChan)
+			c.runScanWorker(ctx, taskChan, i)
 			return nil
 		})
 	}
@@ -178,6 +179,14 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
+			for _, dml := range e.DMLEvents {
+				log.Info("fizz sending DML event",
+					zap.Stringer("dispatcher", d.id),
+					zap.Uint64("seq", dml.Seq),
+					zap.Uint64("commitTs", dml.GetCommitTs()),
+					zap.Uint64("startTs", dml.StartTs),
+					zap.String("remoteID", string(remoteID)))
+			}
 			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
 			metricEventServiceSendKvCount.Add(float64(e.Len()))
 		}
@@ -268,13 +277,13 @@ func (c *eventBroker) getMessageCh(workerIndex int) chan *wrapEvent {
 	return c.messageCh[workerIndex]
 }
 
-func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) {
+func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask, idx int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case task := <-taskChan:
-			c.doScan(ctx, task)
+			c.doScan(ctx, task, idx)
 		}
 	}
 }
@@ -479,7 +488,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
-func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
+func (c *eventBroker) doScan(ctx context.Context, task scanTask, workerIndex int) {
 	remoteID := node.ID(task.info.GetServerID())
 
 	isBroken := false
@@ -517,6 +526,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
+
+	log.Info("fizz scan events", zap.Stringer("dispatcher", task.id), zap.Int("workerIndex", workerIndex), zap.Int("eventCount", len(events)))
 
 	// If the task is not running, we don't send the events to the dispatcher.
 	if !task.isRunning.Load() {
@@ -659,6 +670,15 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage, postSendMsg func()) {
 	start := time.Now()
 	congestedRetryInterval := time.Millisecond * 10
+	retryCount := 0
+
+	// 添加发送开始日志
+	log.Debug("fizz sending message",
+		zap.String("targetID", string(tMsg.To)),
+		zap.String("topic", tMsg.Topic),
+		zap.String("messageType", fmt.Sprintf("%T", tMsg.Message[0])),
+		zap.Int("messageCount", len(tMsg.Message)))
+
 	// Send the message to messageCenter. Retry if to send failed.
 	for {
 		select {
@@ -669,8 +689,9 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		// Send the message to the dispatcher.
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
+			retryCount++
 			_, ok := err.(apperror.AppError)
-			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
+			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok), zap.Int("retryCount", retryCount))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
 				// Wait for a while and retry to avoid the dropped message flood.
@@ -684,6 +705,15 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 				return
 			}
 		}
+
+		// 添加发送成功日志
+		if retryCount > 0 {
+			log.Info("fizz message sent successfully after retry",
+				zap.String("targetID", string(tMsg.To)),
+				zap.Int("retryCount", retryCount),
+				zap.Duration("duration", time.Since(start)))
+		}
+
 		if postSendMsg != nil {
 			postSendMsg()
 		}
@@ -944,14 +974,28 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		return
 	}
 
+	log.Info("fizz reset dispatcher start",
+		zap.Stringer("dispatcherID", stat.id),
+		zap.Uint64("oldSeq", stat.seq.Load()),
+		zap.Uint64("oldSentResolvedTs", stat.sentResolvedTs.Load()),
+		zap.Bool("isTaskScanning", stat.isTaskScanning.Load()),
+		zap.Bool("isRunning", stat.isRunning.Load()))
+
 	// Must set the isRunning to false before reset the dispatcher.
 	// Otherwise, the scan task goroutine will not return before reset the dispatcher.
 	stat.isRunning.Store(false)
 
 	// Wait until the scan task goroutine return before reset the dispatcher.
+	waitCount := 0
 	for {
 		if !stat.isTaskScanning.Load() {
 			break
+		}
+		waitCount++
+		if waitCount%100 == 0 { // 每1秒记录一次等待日志
+			log.Info("fizz waiting for scan task to complete",
+				zap.Stringer("dispatcherID", stat.id),
+				zap.Int("waitCount", waitCount))
 		}
 		// Give other goroutines a chance to acquire the write lock
 		time.Sleep(10 * time.Millisecond)
@@ -970,6 +1014,11 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("newSeq", stat.seq.Load()),
 		zap.Uint64("oldSentResolvedTs", oldSentResolvedTs),
 		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()))
+
+	log.Info("fizz reset dispatcher complete",
+		zap.Stringer("dispatcherID", stat.id),
+		zap.Uint64("resetTs", stat.resetTs.Load()),
+		zap.Bool("isHandshaked", stat.isHandshaked.Load()))
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

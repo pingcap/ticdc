@@ -128,7 +128,7 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 	GetType(event T) EventType
 	// OnDrop is called when an event is dropped. Could be caused by the memory control or cannot find the path.
 	// Do nothing by default implementation.
-	OnDrop(event T)
+	OnDrop(event T) interface{}
 }
 
 type PathAndDest[P Path, D Dest] struct {
@@ -233,7 +233,7 @@ type AreaSettings struct {
 	maxPendingSize   uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 128 MB.
 	feedbackInterval time.Duration // The interval of the feedback. By default 1000ms.
 	// Remove it when we determine the v2 is working well.
-	algorithm string // The algorithm of the memory control. By default "v2".
+	algorithm int // The algorithm of the memory control. By default 2.
 }
 
 func (s *AreaSettings) fix() {
@@ -245,12 +245,9 @@ func (s *AreaSettings) fix() {
 		s.feedbackInterval = DefaultFeedbackInterval
 	}
 
-	if s.algorithm == "" {
-		s.algorithm = "v1"
-	}
 }
 
-func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithmVersion string, component string) AreaSettings {
+func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithmVersion int, component string) AreaSettings {
 	return AreaSettings{
 		component:        component,
 		feedbackInterval: DefaultFeedbackInterval,

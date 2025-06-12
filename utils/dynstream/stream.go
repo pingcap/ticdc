@@ -291,6 +291,7 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	pendingSize          atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
 	paused               atomic.Bool  // The path is paused to send events.
+	dead                 atomic.Bool  // The path is dead, so we don't need to handle its events.
 	lastSendFeedbackTime atomic.Value
 }
 
