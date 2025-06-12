@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/table/tables"
 	datumTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -457,13 +456,8 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 				colSchema.IndexColumns = append(colSchema.IndexColumns, []int64{col.ID})
 				colSchema.PKIndex = []int64{col.ID}
 			} else if tableInfo.IsCommonHandle {
-				colSchema.HandleKeyIDs[col.ID] = struct{}{}
+				clear(colSchema.HandleKeyIDs)
 				colSchema.HandleColID = colSchema.HandleColID[:0]
-				pkIdx := tables.FindPrimaryIndex(tableInfo)
-				for _, pkCol := range pkIdx.Columns {
-					id := tableInfo.Columns[pkCol.Offset].ID
-					colSchema.HandleColID = append(colSchema.HandleColID, id)
-				}
 			}
 		} else {
 			colSchema.VirtualColumnCount += 1
@@ -604,6 +598,7 @@ func (s *columnSchema) initIndex(tableName string) {
 			if !hasPrimary {
 				for _, col := range idx.Columns {
 					s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
+					s.HandleColID = append(s.HandleColID, s.Columns[col.Offset].ID)
 				}
 				hasPrimary = true
 			}
