@@ -486,6 +486,7 @@ func (d *dispatcherStat) newDispatcherResetRequest() *messaging.DispatcherReques
 		DispatcherRequest: &eventpb.DispatcherRequest{
 			ChangefeedId: d.target.GetChangefeedID().ToPB(),
 			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
 			StartTs:      startTs,
 			// ServerId is the id of the request sender.
 			ServerId:          d.eventCollector.getLocalServerID().String(),
@@ -503,6 +504,7 @@ func (d *dispatcherStat) newDispatcherRemoveRequest() *messaging.DispatcherReque
 		DispatcherRequest: &eventpb.DispatcherRequest{
 			ChangefeedId: d.target.GetChangefeedID().ToPB(),
 			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
@@ -515,6 +517,7 @@ func (d *dispatcherStat) newDispatcherPauseRequest() *messaging.DispatcherReques
 		DispatcherRequest: &eventpb.DispatcherRequest{
 			ChangefeedId: d.target.GetChangefeedID().ToPB(),
 			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
@@ -527,6 +530,7 @@ func (d *dispatcherStat) newDispatcherResumeRequest() *messaging.DispatcherReque
 		DispatcherRequest: &eventpb.DispatcherRequest{
 			ChangefeedId: d.target.GetChangefeedID().ToPB(),
 			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
