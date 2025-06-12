@@ -447,12 +447,13 @@ func (h *RedoTsMessageHandler) Handle(eventDispatcherManager *EventDispatcherMan
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	ts := messages[0].CheckpointTs
-	//
-	eventDispatcherManager.SetGlobalRedoTs(ts)
-	eventDispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
-		dispatcher.HandleCacheEvents()
-	})
+	msg := messages[0]
+	ok := eventDispatcherManager.SetGlobalRedoTs(msg.CheckpointTs, msg.ResolvedTs)
+	if ok {
+		eventDispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+			dispatcher.HandleCacheEvents()
+		})
+	}
 	return false
 }
 

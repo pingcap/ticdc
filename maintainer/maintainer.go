@@ -93,8 +93,12 @@ type Maintainer struct {
 	// It is sent to dispatcher managers during bootstrap to initialize their
 	// checkpointTs.
 	startCheckpointTs uint64
-	// redoTs is global redo checkpointTs
-	redoTs      uint64
+	redoTsMap         map[node.ID]*heartbeatpb.RedoTsMessage
+	// redoTs is global redoTs to forward
+	redoTs struct {
+		mu sync.RWMutex
+		*heartbeatpb.RedoTsMessage
+	}
 	redoDDLSpan *replica.SpanReplication
 
 	// ddlSpan represents the table trigger event dispatcher that handles DDL events.
@@ -192,7 +196,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		redoTs:            checkpointTs,
+		redoTsMap:         make(map[node.ID]*heartbeatpb.RedoTsMessage),
 		controllerManager: NewControllerManager(cfID, checkpointTs, pdAPI, regionCache, taskScheduler,
 			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:                    mc,
@@ -222,6 +226,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
 	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: checkpointTs,
+		ResolvedTs:   checkpointTs,
+	}
+	m.redoTs.RedoTsMessage = &heartbeatpb.RedoTsMessage{
+		ChangefeedID: cfID.ToPB(),
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
@@ -437,7 +446,7 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		m.onCheckpointTsPersisted(req)
 	case messaging.TypeRedoTsMessage:
 		req := msg.Message[0].(*heartbeatpb.RedoTsMessage)
-		m.onRedoTsPersisted(req)
+		m.onRedoTsPersisted(msg.From, req)
 	default:
 		log.Panic("unexpected message type",
 			zap.String("changefeed", m.id.Name()),
@@ -469,11 +478,27 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 	})
 }
 
-func (m *Maintainer) onRedoTsPersisted(msg *heartbeatpb.RedoTsMessage) {
-	if msg.CheckpointTs > m.redoTs {
-		m.redoTs = msg.CheckpointTs
+// onRedoTsPersisted forwards the redoTs message to the dispatcher manager.
+// - CheckpointTs: All events with Commit-Ts less than or equal to this value have been written to the downstream system.
+// - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
+func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessage) {
+	m.redoTs.mu.Lock()
+	defer m.redoTs.mu.Unlock()
+	// need check when node changed?
+	m.redoTsMap[id] = msg
+	var (
+		checkpointTs uint64 = math.MaxUint64
+		resolvedTs   uint64 = math.MaxUint64
+	)
+	for _, redoTs := range m.redoTsMap {
+		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
+		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
+	}
+	if m.redoTs.CheckpointTs < checkpointTs || m.redoTs.ResolvedTs < resolvedTs {
+		m.redoTs.CheckpointTs = checkpointTs
+		m.redoTs.ResolvedTs = resolvedTs
 		m.sendMessages([]*messaging.TargetMessage{
-			messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, msg),
+			messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, m.redoTs.RedoTsMessage),
 		})
 	}
 }
@@ -494,6 +519,8 @@ func (m *Maintainer) onNodeChanged() {
 			removedNodes = append(removedNodes, id)
 			delete(m.checkpointTsByCapture, id)
 			m.controllerManager.RemoveNode(id)
+			// redo
+			delete(m.redoTsMap, id)
 		}
 	}
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),

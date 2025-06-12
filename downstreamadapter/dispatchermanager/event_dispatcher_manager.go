@@ -255,7 +255,7 @@ func NewEventDispatcherManager(
 	// redo manager
 	if manager.redoSink.Enabled() {
 		// set global redo ts
-		manager.SetGlobalRedoTs(startTs)
+		manager.SetGlobalRedoTs(startTs, startTs)
 		manager.wg.Add(3)
 		go func() {
 			defer manager.wg.Done()
@@ -745,24 +745,31 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	ticker := time.NewTicker(time.Second * 1)
-	var previousTs uint64
+	var previousCheckpointTs uint64
+	var previousResolvedTs uint64
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			var ts uint64 = math.MaxUint64
-			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-				ts = min(ts, dispatcher.GetCheckpointTs())
+			var checkpointTs uint64 = math.MaxUint64
+			var resolvedTs uint64 = math.MaxUint64
+			e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+				checkpointTs = min(checkpointTs, dispatcher.GetCheckpointTs())
 			})
-			if previousTs >= ts {
+			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
+				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
+			})
+			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
 				continue
 			}
-			previousTs = ts
+			previousCheckpointTs = checkpointTs
+			previousResolvedTs = resolvedTs
 			message := new(heartbeatpb.RedoTsMessage)
 			message.ChangefeedID = e.changefeedID.ToPB()
-			message.CheckpointTs = ts
+			message.CheckpointTs = checkpointTs
+			message.ResolvedTs = resolvedTs
 			err := mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
@@ -1411,17 +1418,13 @@ func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, sch
 	)
 }
 
-func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs uint64) bool {
-	var resolvedTs uint64 = math.MaxUint64
-	e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-		resolvedTs = min(resolvedTs, dispatcher.GetResolvedTs())
-	})
+func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
 	// only update meta on the one node
 	if e.tableTriggerEventDispatcher != nil {
 		log.Info("update redo meta", zap.Any("resolvedTs", resolvedTs), zap.Any("checkpointTs", checkpointTs))
 		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
-	return atomic.CompareAndSwapUint64(&e.redoGlobalTs, e.redoGlobalTs, checkpointTs)
+	return atomic.CompareAndSwapUint64(&e.redoGlobalTs, e.redoGlobalTs, resolvedTs)
 }
 
 func (e *EventDispatcherManager) cleanMetrics() {
