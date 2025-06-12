@@ -129,7 +129,8 @@ func (_m *mockFileWriter) SyncWrite(event writer.RedoEvent) error {
 func newMockFileWriter(t interface {
 	mock.TestingT
 	Cleanup(func())
-}) *mockFileWriter {
+},
+) *mockFileWriter {
 	mock := &mockFileWriter{}
 	mock.Mock.Test(t)
 
