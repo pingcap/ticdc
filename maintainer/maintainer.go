@@ -497,9 +497,11 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 	if m.redoTs.CheckpointTs < checkpointTs || m.redoTs.ResolvedTs < resolvedTs {
 		m.redoTs.CheckpointTs = checkpointTs
 		m.redoTs.ResolvedTs = resolvedTs
-		m.sendMessages([]*messaging.TargetMessage{
-			messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, m.redoTs.RedoTsMessage),
-		})
+		for id := range m.redoTsMap {
+			m.sendMessages([]*messaging.TargetMessage{
+				messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, m.redoTs.RedoTsMessage),
+			})
+		}
 	}
 }
 
@@ -519,10 +521,15 @@ func (m *Maintainer) onNodeChanged() {
 			removedNodes = append(removedNodes, id)
 			delete(m.checkpointTsByCapture, id)
 			m.controllerManager.RemoveNode(id)
-			// redo
-			delete(m.redoTsMap, id)
+
 		}
 	}
+	// redo
+	m.redoTs.mu.Lock()
+	for _, id := range removedNodes {
+		delete(m.redoTsMap, id)
+	}
+	m.redoTs.mu.Unlock()
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),
 		zap.Int("new", len(newNodes)),
 		zap.Int("removed", len(removedNodes)))
