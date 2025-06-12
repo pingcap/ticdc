@@ -81,12 +81,13 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		commonEvent.TypeResolvedEvent:
 		hasInvalidEvent := false
 		hasValidEvent := false
+
 		for _, event := range events {
 			if event.GetType() == commonEvent.TypeDMLEvent {
 				dmlCounter++
 				if dmlCounter%3 == 0 {
 					log.Info("fizz, drop event", zap.Any("event", event))
-					continue
+
 				}
 			}
 
