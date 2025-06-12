@@ -457,59 +457,69 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 	}
 }
 
-func newDispatcherRegisterRequest(target dispatcher.EventDispatcher, onlyReuse bool) *eventpb.DispatcherRequest {
+func newDispatcherRegisterRequest(target dispatcher.EventDispatcher, onlyReuse bool) *messaging.DispatcherRequest {
 	startTs := target.GetStartTs()
 	syncPointInterval := target.GetSyncPointInterval()
-	return &eventpb.DispatcherRequest{
-		ChangefeedId:      target.GetChangefeedID().ToPB(),
-		DispatcherId:      target.GetId().ToPB(),
-		TableSpan:         target.GetTableSpan(),
-		StartTs:           startTs,
-		ActionType:        eventpb.ActionType_ACTION_TYPE_REGISTER,
-		FilterConfig:      target.GetFilterConfig(),
-		EnableSyncPoint:   target.EnableSyncPoint(),
-		SyncPointInterval: uint64(syncPointInterval.Seconds()),
-		SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, target.GetStartTsIsSyncpoint()),
-		OnlyReuse:         onlyReuse,
-		BdrMode:           target.GetBDRMode(),
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId:      target.GetChangefeedID().ToPB(),
+			DispatcherId:      target.GetId().ToPB(),
+			TableSpan:         target.GetTableSpan(),
+			StartTs:           startTs,
+			ActionType:        eventpb.ActionType_ACTION_TYPE_REGISTER,
+			FilterConfig:      target.GetFilterConfig(),
+			EnableSyncPoint:   target.EnableSyncPoint(),
+			SyncPointInterval: uint64(syncPointInterval.Seconds()),
+			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, target.GetStartTsIsSyncpoint()),
+			OnlyReuse:         onlyReuse,
+			BdrMode:           target.GetBDRMode(),
+		},
 	}
 }
 
-func newDispatcherResetRequest(target dispatcher.EventDispatcher) *eventpb.DispatcherRequest {
+func newDispatcherResetRequest(target dispatcher.EventDispatcher) *messaging.DispatcherRequest {
 	startTs := target.GetStartTs()
 	syncPointInterval := target.GetSyncPointInterval()
-	return &eventpb.DispatcherRequest{
-		ChangefeedId:      target.GetChangefeedID().ToPB(),
-		DispatcherId:      target.GetId().ToPB(),
-		StartTs:           startTs,
-		ActionType:        eventpb.ActionType_ACTION_TYPE_RESET,
-		FilterConfig:      target.GetFilterConfig(),
-		EnableSyncPoint:   target.EnableSyncPoint(),
-		SyncPointInterval: uint64(syncPointInterval.Seconds()),
-		SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, target.GetStartTsIsSyncpoint()),
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId:      target.GetChangefeedID().ToPB(),
+			DispatcherId:      target.GetId().ToPB(),
+			StartTs:           startTs,
+			ActionType:        eventpb.ActionType_ACTION_TYPE_RESET,
+			FilterConfig:      target.GetFilterConfig(),
+			EnableSyncPoint:   target.EnableSyncPoint(),
+			SyncPointInterval: uint64(syncPointInterval.Seconds()),
+			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, target.GetStartTsIsSyncpoint()),
+		},
 	}
 }
 
-func newDispatcherRemoveRequest(target dispatcher.EventDispatcher) *eventpb.DispatcherRequest {
-	return &eventpb.DispatcherRequest{
-		ChangefeedId: target.GetChangefeedID().ToPB(),
-		DispatcherId: target.GetId().ToPB(),
-		ActionType:   eventpb.ActionType_ACTION_TYPE_REMOVE,
+func newDispatcherRemoveRequest(target dispatcher.EventDispatcher) *messaging.DispatcherRequest {
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId: target.GetChangefeedID().ToPB(),
+			DispatcherId: target.GetId().ToPB(),
+			ActionType:   eventpb.ActionType_ACTION_TYPE_REMOVE,
+		},
 	}
 }
 
-func newDispatcherPauseRequest(target dispatcher.EventDispatcher) *eventpb.DispatcherRequest {
-	return &eventpb.DispatcherRequest{
-		ChangefeedId: target.GetChangefeedID().ToPB(),
-		DispatcherId: target.GetId().ToPB(),
-		ActionType:   eventpb.ActionType_ACTION_TYPE_PAUSE,
+func newDispatcherPauseRequest(target dispatcher.EventDispatcher) *messaging.DispatcherRequest {
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId: target.GetChangefeedID().ToPB(),
+			DispatcherId: target.GetId().ToPB(),
+			ActionType:   eventpb.ActionType_ACTION_TYPE_PAUSE,
+		},
 	}
 }
 
-func newDispatcherResumeRequest(target dispatcher.EventDispatcher) *eventpb.DispatcherRequest {
-	return &eventpb.DispatcherRequest{
-		ChangefeedId: target.GetChangefeedID().ToPB(),
-		DispatcherId: target.GetId().ToPB(),
-		ActionType:   eventpb.ActionType_ACTION_TYPE_RESUME,
+func newDispatcherResumeRequest(target dispatcher.EventDispatcher) *messaging.DispatcherRequest {
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId: target.GetChangefeedID().ToPB(),
+			DispatcherId: target.GetId().ToPB(),
+			ActionType:   eventpb.ActionType_ACTION_TYPE_RESUME,
+		},
 	}
 }

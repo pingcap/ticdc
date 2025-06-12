@@ -49,13 +49,13 @@ const (
 	eventCollectorTopic = messaging.EventCollectorTopic
 )
 
-// DispatcherRequest is the request send to EventService.
-type DispatcherRequest struct {
+// DispatcherMessage is the message send to EventService.
+type DispatcherMessage struct {
 	Message    *messaging.TargetMessage
 	RetryCount int
 }
 
-func (d *DispatcherRequest) incrAndCheckRetry() bool {
+func (d *DispatcherMessage) incrAndCheckRetry() bool {
 	d.RetryCount++
 	return d.RetryCount < retryLimit
 }
@@ -75,9 +75,9 @@ type EventCollector struct {
 
 	logCoordinatorClient *LogCoordinatorClient
 
-	// dispatcherRequestChan buffers requests to the EventService.
+	// dispatcherMessageChan buffers requests to the EventService.
 	// It automatically retries failed requests up to a configured maximum retry limit.
-	dispatcherRequestChan *chann.DrainableChann[DispatcherRequest]
+	dispatcherMessageChan *chann.DrainableChann[DispatcherMessage]
 
 	receiveChannels []chan *messaging.TargetMessage
 	// ds is the dynamicStream for dispatcher events.
@@ -101,7 +101,7 @@ func New(serverId node.ID) *EventCollector {
 	eventCollector := &EventCollector{
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
-		dispatcherRequestChan:                chann.NewAutoDrainChann[DispatcherRequest](),
+		dispatcherMessageChan:                chann.NewAutoDrainChann[DispatcherMessage](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		receiveChannels:                      receiveChannels,
 		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
@@ -243,7 +243,7 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 // Messages may be dropped if errors occur. For reliable delivery, implement retry/ack logic at caller side
 func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
 	if msg != nil {
-		c.dispatcherRequestChan.In() <- DispatcherRequest{
+		c.dispatcherMessageChan.In() <- DispatcherMessage{
 			Message:    msg,
 			RetryCount: 0,
 		}
@@ -322,7 +322,7 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case req := <-c.dispatcherRequestChan.Out():
+		case req := <-c.dispatcherMessageChan.Out():
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
 				log.Info("failed to send dispatcher request message, try again later",
@@ -334,7 +334,7 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 					continue
 				}
 				// Put the request back to the channel for later retry.
-				c.dispatcherRequestChan.In() <- req
+				c.dispatcherMessageChan.In() <- req
 				// Sleep a short time to avoid too many requests in a short time.
 				// TODO: requests can to different EventService, so we should improve the logic here.
 				time.Sleep(10 * time.Millisecond)
