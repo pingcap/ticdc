@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -303,6 +304,11 @@ func NewDMLEvent(
 		TableInfo:       tableInfo,
 		RowTypes:        make([]RowType, 0),
 	}
+}
+
+func (t *DMLEvent) String() string {
+	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, TableInfo: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
+		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo, t.Checksum, t.Length, t.ApproximateSize)
 }
 
 // SetRows sets the Rows chunk for this DMLEvent

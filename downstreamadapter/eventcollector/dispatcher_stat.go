@@ -31,6 +31,7 @@ type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	target       dispatcher.EventDispatcher
 
+	// readyCallback is called when the dispatcher receives ready event from local event service.
 	readyCallback func()
 
 	eventServiceInfo struct {
@@ -52,11 +53,14 @@ type dispatcherStat struct {
 	// Dispatcher will drop all data events before receiving a handshake event.
 	waitHandshake atomic.Bool
 
-	// The largest commit ts that has been sent to the dispatcher.
+	// The largest commit ts that has been sent to the target dispatcher.
 	sentCommitTs atomic.Uint64
 
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
+
+	// The memory quota of the dispatcher.
+	memoryQuota uint64
 }
 
 func (d *dispatcherStat) reset() {
@@ -88,7 +92,7 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent:
-		log.Debug("check event sequence",
+		log.Info("check event sequence",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()),
 			zap.Int("eventType", event.GetType()),
@@ -98,7 +102,7 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 
 		expectedSeq := d.lastEventSeq.Add(1)
 		if event.GetSeq() != expectedSeq {
-			log.Warn("Received an out-of-order event, reset the dispatcher",
+			log.Error("Received an out-of-order event, reset the dispatcher",
 				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 				zap.Stringer("dispatcher", d.target.GetId()),
 				zap.Int("eventType", event.GetType()),
@@ -108,6 +112,7 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -136,7 +141,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		log.Panic("should not happen")
 	}
 	if d.eventServiceInfo.serverID == "" {
-		log.Panic("should not happen: server ID is not set")
+		log.Panic("should not happen: server ID is not set, it must be set when receive ready event")
 	}
 	if d.eventServiceInfo.serverID != *event.From {
 		// check invariant: if the handshake event is not from the current event service, we must be reading from local event service.
@@ -153,7 +158,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		return
 	}
 	if !d.isEventSeqValid(event) {
-		eventCollector.resetDispatcher(d)
+		log.Panic("fizz, event seq is invalid", zap.String("changefeedID", d.target.GetChangefeedID().ID().String()), zap.Stringer("dispatcher", d.target.GetId()), zap.Any("event", event))
 		return
 	}
 	d.waitHandshake.Store(false)
@@ -265,7 +270,7 @@ func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent
 					Dispatcher: d.target,
 					StartTs:    d.target.GetStartTs(),
 					ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-					OnlyUse:    true,
+					OnlyReuse:  true,
 				},
 			)
 			d.eventServiceInfo.serverID = d.eventServiceInfo.remoteCandidates[0]
@@ -295,18 +300,16 @@ func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
 
-	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Info("ignore pause dispatcher request because the eventService is not ready",
-			zap.Stringer("dispatcherID", d.dispatcherID),
+	serverID := d.eventServiceInfo.serverID
+	if serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		log.Info("ignore resume dispatcher request because the eventService is not ready",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Any("eventServiceID", d.eventServiceInfo.serverID),
-			zap.Bool("readyEventReceived", d.eventServiceInfo.readyEventReceived),
-		)
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}
 
-	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
+	eventCollector.addDispatcherRequestToSendingQueue(serverID, eventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
 	})
@@ -355,7 +358,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 			Dispatcher: d.target,
 			StartTs:    d.target.GetStartTs(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-			OnlyUse:    true,
+			OnlyReuse:  true,
 		},
 	)
 }

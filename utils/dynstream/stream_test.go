@@ -83,8 +83,9 @@ func (h *mockHandler) GetArea(path string, dest any) int       { return 0 }
 func (h *mockHandler) GetTimestamp(event *mockEvent) Timestamp { return 0 }
 func (h *mockHandler) GetType(event *mockEvent) EventType      { return DefaultEventType }
 func (h *mockHandler) IsPaused(event *mockEvent) bool          { return false }
-func (h *mockHandler) OnDrop(event *mockEvent) {
+func (h *mockHandler) OnDrop(event *mockEvent) interface{} {
 	h.droppedEvents = append(h.droppedEvents, event)
+	return nil
 }
 
 func (h *mockHandler) drainDroppedEvents() []*mockEvent {

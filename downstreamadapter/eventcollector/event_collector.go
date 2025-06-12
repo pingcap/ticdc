@@ -43,6 +43,7 @@ const (
 
 var (
 	metricsHandleEventDuration = metrics.EventCollectorHandleEventDuration
+	metricsDroppedEventCount   = metrics.EventCollectorDroppedEventCount
 	metricsDSInputChanLen      = metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector")
 	metricsDSPendingQueueLen   = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector")
 )
@@ -51,7 +52,7 @@ type DispatcherRequest struct {
 	Dispatcher dispatcher.EventDispatcher
 	ActionType eventpb.ActionType
 	StartTs    uint64
-	OnlyUse    bool
+	OnlyReuse  bool
 	BDRMode    bool
 }
 
@@ -64,8 +65,8 @@ type DispatcherRequestWithTarget struct {
 type DispatcherHeartbeatWithTarget struct {
 	Target       node.ID
 	Topic        string
-	Heartbeat    *event.DispatcherHeartbeat
 	retryCounter int
+	Heartbeat    *event.DispatcherHeartbeat
 }
 
 // shouldRetry returns true if the retry counter is less than 3.
@@ -92,6 +93,7 @@ EventCollector is the relay between EventService and DispatcherManager, responsi
 EventCollector is an instance-level component.
 */
 type EventCollector struct {
+	// serverID is the local serverID.
 	serverId        node.ID
 	dispatcherMap   sync.Map // key: dispatcherID, value: dispatcherStat
 	changefeedIDMap sync.Map // key: changefeedID.GID, value: changefeedID
@@ -162,7 +164,7 @@ func (c *EventCollector) Run(ctx context.Context) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		c.processFeedback(ctx)
+		c.processDSFeedback(ctx)
 	}()
 
 	c.wg.Add(1)
@@ -220,21 +222,21 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 }
 
-// PrepareAddDispatcher is used to prepare the dispatcher to be added to the event collector.
-// It will send a register request to local event service and call `readyCallback` when local event service is ready.
+// PrepareAddDispatcher sends a register request to local event service and call `readyCallback` when local event service is ready.
 func (c *EventCollector) PrepareAddDispatcher(
 	target dispatcher.EventDispatcher,
 	memoryQuota uint64,
 	readyCallback func(),
 ) {
-	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
+	log.Info("prepare add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
-		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
+		log.Info("prepare add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
 	stat := &dispatcherStat{
 		dispatcherID:  target.GetId(),
 		target:        target,
 		readyCallback: readyCallback,
+		memoryQuota:   memoryQuota,
 	}
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
@@ -242,7 +244,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
@@ -338,19 +340,24 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 // resetDispatcher is used to reset the dispatcher when it receives a out-of-order event.
 // It will send a reset request to the event service to reset the remote dispatcher.
 // And it will reset the dispatcher stat to wait for a new handshake event.
-func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
+func (c *EventCollector) resetDispatcher(d *dispatcherStat, resetTs uint64) {
+	d.reset()
+	// Reset the path to release all the pending events.
+	c.ds.RemovePath(d.target.GetId())
+	settings := dynstream.NewAreaSettingsWithMaxPendingSize(d.memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
+	c.ds.AddPath(d.target.GetId(), d, settings)
+
 	c.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
 		eventServiceTopic,
 		DispatcherRequest{
 			Dispatcher: d.target,
-			StartTs:    d.sentCommitTs.Load(),
+			StartTs:    resetTs,
 			ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 		})
-	d.reset()
 	log.Info("Send reset dispatcher request to event service",
 		zap.Stringer("dispatcher", d.target.GetId()),
-		zap.Uint64("startTs", d.sentCommitTs.Load()))
+		zap.Uint64("resetTs", resetTs))
 }
 
 func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, topic string, req DispatcherRequest) {
@@ -361,7 +368,8 @@ func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, to
 	}
 }
 
-func (c *EventCollector) processFeedback(ctx context.Context) {
+// processDSFeedback is used to process the feedback from the dynamic stream.
+func (c *EventCollector) processDSFeedback(ctx context.Context) {
 	log.Info("Start process feedback from dynamic stream")
 	defer log.Info("Stop process feedback from dynamic stream")
 	for {
@@ -450,7 +458,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			ServerId:  c.serverId.String(),
 			TableSpan: req.Dispatcher.GetTableSpan(),
 			StartTs:   req.StartTs,
-			OnlyReuse: req.OnlyUse,
+			OnlyReuse: req.OnlyReuse,
 			BdrMode:   req.BDRMode,
 		},
 	}
@@ -499,6 +507,7 @@ func (c *EventCollector) sendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatW
 	return nil
 }
 
+// handleDispatcherHeartbeatResponse is used to handle the dispatcher heartbeat response from the event service.
 func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
 	if len(targetMessage.Message) != 1 {
 		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
@@ -516,13 +525,14 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
 			if stat.getServerID() == c.serverId {
 				// register the dispatcher again
-				c.resetDispatcher(stat)
+				c.resetDispatcher(stat, stat.sentCommitTs.Load())
 			}
 		}
 	}
 }
 
-// RecvEventsMessage is the handler for the events message from EventService.
+// RecvEventsMessage is the handler for the events message from from logService or logCoordinator.
+// It will forward the message to the corresponding channel to handle it in multi-thread.
 func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
 	inflightDuration := time.Since(time.UnixMilli(targetMessage.CreateAt)).Seconds()
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
@@ -584,9 +594,30 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						if !ok {
 							continue
 						}
-						tableInfo, ok := stat.(*dispatcherStat).tableInfo.Load().(*common.TableInfo)
-						if !ok {
+
+						dispatcherStat := stat.(*dispatcherStat)
+						// Which means that this dispatcherStat has not received handshake event yet. Just ignore the dml event.
+						if dispatcherStat.waitHandshake.Load() {
+							log.Info("fizz, drop dml event because wait handshake", zap.Any("event", e))
+							metricsDroppedEventCount.Add(float64(e.Len()))
 							continue
+						}
+
+						// 添加接收日志
+						batchDMLEvent := e.(*event.BatchDMLEvent)
+						for _, dml := range batchDMLEvent.DMLEvents {
+							log.Info("fizz receiving DML event",
+								zap.Stringer("dispatcherID", e.GetDispatcherID()),
+								zap.Uint64("seq", dml.Seq),
+								zap.Uint64("commitTs", dml.GetCommitTs()),
+								zap.Uint64("startTs", dml.StartTs),
+								zap.String("from", targetMessage.From.String()),
+								zap.Int64("createAt", targetMessage.CreateAt))
+						}
+
+						tableInfo, ok := dispatcherStat.tableInfo.Load().(*common.TableInfo)
+						if !ok {
+							log.Panic("should not happen: tableInfo is not set", zap.Stringer("dispatcherID", e.GetDispatcherID()))
 						}
 						events := e.(*event.BatchDMLEvent)
 						events.AssembleRows(tableInfo)
@@ -608,12 +639,21 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						if !ok {
 							continue
 						}
+						dispatcherStat := stat.(*dispatcherStat)
 						log.Info("get handshake event",
 							zap.Stringer("dispatcherID", e.GetDispatcherID()),
 							zap.String("serverID", targetMessage.From.String()))
-						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
+						dispatcherStat.setTableInfo(e.(*event.HandshakeEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						dispatcherStat.handleHandshakeEvent(dispatcher.NewDispatcherEvent(&targetMessage.From, e), c)
+						//c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+					case event.TypeReadyEvent:
+						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						dispatcherStat := stat.(*dispatcherStat)
+						dispatcherStat.handleReadyEvent(dispatcher.NewDispatcherEvent(&targetMessage.From, e), c)
 					default:
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
@@ -656,4 +696,9 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (c *EventCollector) handleDropEvent(event *event.DropEvent, dispatcherStat *dispatcherStat) {
+	log.Info("fizz, handle drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
+	c.resetDispatcher(dispatcherStat, event.GetCommitTs()-1)
 }

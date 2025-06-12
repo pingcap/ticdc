@@ -74,24 +74,34 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	}
 	// Only check the first event type, because all event types should be same
 	switch events[0].GetType() {
+	case commonEvent.TypeDropEvent:
+		dropEvent, ok := events[0].Event.(*commonEvent.DropEvent)
+		if !ok {
+			log.Panic("drop event is not a drop event", zap.Any("event", events[0]))
+		}
+		h.eventCollector.handleDropEvent(dropEvent, stat)
+		return false
 	// note: TypeDMLEvent and TypeResolvedEvent can be in the same batch, so we should handle them together.
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent:
+		if stat.waitHandshake.Load() {
+			return false
+		}
+
 		hasInvalidEvent := false
 		hasValidEvent := false
 		for _, event := range events {
 			if stat.isEventFromCurrentEventService(event) {
 				hasValidEvent = true
 				if !stat.isEventSeqValid(event) {
-					// if event seq is invalid, there must be some events dropped
-					// we need drop all events in this batch and reset the dispatcher
-					h.eventCollector.resetDispatcher(stat)
+					log.Panic("event seq is invalid", zap.Any("event", event.Event))
 					return false
 				}
 			} else {
 				hasInvalidEvent = true
 			}
 		}
+
 		if !hasValidEvent {
 			return false
 		}
@@ -117,12 +127,17 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		return stat.target.HandleEvents(validEvents, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
+
+		if stat.waitHandshake.Load() {
+			return false
+		}
+
 		// TypeDDLEvent and TypeSyncPointEvent is handled one by one
 		if !stat.isEventFromCurrentEventService(events[0]) {
 			return false
 		}
 		if !stat.isEventSeqValid(events[0]) {
-			h.eventCollector.resetDispatcher(stat)
+			log.Panic("event seq is invalid", zap.Any("event", events[0].Event))
 			return false
 		}
 		if !stat.isEventCommitTsValid(events[0]) {
@@ -130,11 +145,9 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		}
 		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
 	case commonEvent.TypeHandshakeEvent:
-		stat.handleHandshakeEvent(events[0], h.eventCollector)
-		return false
+		log.Panic("fizz, handshake event should not be received in handle function", zap.Any("event", events[0]))
 	case commonEvent.TypeReadyEvent:
-		stat.handleReadyEvent(events[0], h.eventCollector)
-		return false
+		log.Panic("fizz, ready event should not be received in handle function", zap.Any("event", events[0]))
 	case commonEvent.TypeNotReusableEvent:
 		stat.handleNotReusableEvent(events[0], h.eventCollector)
 		return false
@@ -151,6 +164,7 @@ const (
 	DataGroupHandshake       = 4
 	DataGroupReady           = 5
 	DataGroupNotReusable     = 6
+	DataGroupDrop            = 7
 )
 
 func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.EventType {
@@ -169,6 +183,8 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 		return dynstream.EventType{DataGroup: DataGroupReady, Property: dynstream.NonBatchable}
 	case commonEvent.TypeNotReusableEvent:
 		return dynstream.EventType{DataGroup: DataGroupNotReusable, Property: dynstream.NonBatchable}
+	case commonEvent.TypeDropEvent:
+		return dynstream.EventType{DataGroup: DataGroupDrop, Property: dynstream.NonBatchable}
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(event.GetType())))
 	}
@@ -187,13 +203,12 @@ func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream
 	return dynstream.Timestamp(event.GetCommitTs())
 }
 
-func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) {
-	if event.GetType() != commonEvent.TypeResolvedEvent {
-		// It is normal to drop resolved event
-		log.Info("event dropped",
-			zap.Any("dispatcher", event.GetDispatcherID()),
-			zap.Any("type", event.GetType()),
-			zap.Any("commitTs", event.GetCommitTs()),
-			zap.Any("sequence", event.GetSeq()))
+func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
+	switch event.GetType() {
+	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent:
+		log.Info("fizz, drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
+		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetCommitTs())
+		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
 	}
+	return nil
 }
