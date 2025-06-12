@@ -170,7 +170,6 @@ func (rd *RedoDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				zap.Uint64("resolvedTs", rd.GetResolvedTs()),
 				zap.Uint64("actionCommitTs", action.CommitTs),
 				zap.Stringer("dispatcher", rd.id))
-			// we have not received the block event, and the action is for the future event, so just ignore
 			return
 		}
 		if rd.blockEventStatus.actionMatchs(action) {

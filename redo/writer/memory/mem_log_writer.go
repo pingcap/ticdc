@@ -61,9 +61,9 @@ func NewLogWriter(
 }
 
 func (l *memoryLogWriter) Run(ctx context.Context) error {
-	ctx, cancel := context.WithCancel(ctx)
+	newCtx, cancel := context.WithCancel(ctx)
 	l.cancel = cancel
-	return l.fileWorkers.Run(ctx)
+	return l.fileWorkers.Run(newCtx)
 }
 
 func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent) error {

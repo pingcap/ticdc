@@ -275,11 +275,23 @@ func NewEventDispatcherManager(
 		}()
 		go func() {
 			defer manager.wg.Done()
-			manager.collectRedoTs(ctx)
+			err := manager.collectRedoTs(ctx)
+			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+				select {
+				case <-ctx.Done():
+					return
+				case manager.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Stringer("changefeedID", changefeedID),
+						zap.Error(err),
+					)
+				}
+			}
 		}()
 		go func() {
 			defer manager.wg.Done()
-			err := manager.redoMeta.Run(context.Background())
+			err := manager.redoMeta.Run(ctx)
 			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 				select {
 				case <-ctx.Done():
@@ -742,16 +754,16 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 	}
 }
 
-func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) {
+func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
 	var previousCheckpointTs uint64
 	var previousResolvedTs uint64
-	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-ticker.C:
 			var checkpointTs uint64 = math.MaxUint64
 			var resolvedTs uint64 = math.MaxUint64
