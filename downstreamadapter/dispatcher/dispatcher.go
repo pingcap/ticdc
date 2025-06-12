@@ -268,6 +268,8 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		log.Warn("Cache event",
 			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 			zap.Stringer("dispatcher", d.id),
+			zap.Int("length", len(dispatcherEvents)),
+			zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
 			zap.Uint64("redoGlobalTs", *d.redoGlobalTs),
 		)
 		return true

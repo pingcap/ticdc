@@ -156,7 +156,7 @@ func (cm *ControllerManager) HandleStatus(from node.ID, statusList []*heartbeatp
 					zap.Any("status", status),
 					zap.String("span", dispatcherID.String()))
 				// if the span is not found, and the status is working, we need to remove it from dispatcher
-				_ = cm.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, cm.changefeedID, status.ID))
+				_ = cm.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, cm.changefeedID, status.ID, status.Redo))
 			}
 			continue
 		}
@@ -600,13 +600,13 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64) error {
 
 	randomIdx := rand.Intn(len(replications))
 	primaryID := replications[randomIdx].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
+	primaryOp := operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil, false)
 	for _, replicaSet := range replications {
 		var op *operator.MergeSplitDispatcherOperator
 		if replicaSet.ID == primaryID {
 			op = primaryOp
 		} else {
-			op = operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
+			op = operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished(), false)
 		}
 		cm.operatorController.AddOperator(op)
 	}
@@ -661,8 +661,8 @@ func (cm *ControllerManager) mergeTable(tableID int64) error {
 	mergeReplication := replications[:2]
 
 	primaryID := replications[0].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil)
-	secondaryOp := operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished())
+	primaryOp := operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil, false)
+	secondaryOp := operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished(), false)
 	cm.operatorController.AddOperator(primaryOp)
 	cm.operatorController.AddOperator(secondaryOp)
 

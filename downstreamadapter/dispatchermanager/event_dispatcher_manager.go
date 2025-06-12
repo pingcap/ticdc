@@ -768,11 +768,16 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			var checkpointTs uint64 = math.MaxUint64
 			var resolvedTs uint64 = math.MaxUint64
 			e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+				log.Error("dispatcherMap redoTs", zap.Any("id", id), zap.Any("dispatcher.GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("IsTableTriggerEventDispatcher", dispatcher.IsTableTriggerEventDispatcher()))
 				checkpointTs = min(checkpointTs, dispatcher.GetCheckpointTs())
 			})
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
+				log.Error("redoDispatcherMap redoTs", zap.Any("id", id), zap.Any("dispatcher.GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("IsTableTriggerEventDispatcher", dispatcher.IsTableTriggerEventDispatcher()))
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
+			log.Error("previous redoTs",
+				zap.Any("previousCheckpointTs", previousCheckpointTs), zap.Any("previousResolvedTs", previousResolvedTs),
+				zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs))
 			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
 				continue
 			}
@@ -1357,6 +1362,53 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 // removeDispatcher is called when the dispatcher is scheduled
 func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 	dispatcherItem, ok := e.dispatcherMap.Get(id)
+	if ok {
+		if dispatcherItem.GetRemovingStatus() {
+			return
+		}
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
+		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
+		if dispatcherItem.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
+			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
+			if err != nil {
+				log.Error("remove checkpointTs message ds failed", zap.Error(err))
+			}
+		}
+		dispatcherItem.Remove()
+
+		count := 0
+		ok := false
+		// We don't want to block the ds handle function, so we just try 10 times.
+		// If the dispatcher is not closed, we can wait for the next message to check it again
+		for !ok && count < 10 {
+			_, ok = dispatcherItem.TryClose()
+			time.Sleep(10 * time.Millisecond)
+			count += 1
+			if count%5 == 0 {
+				log.Info("waiting for dispatcher to close",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Stringer("dispatcherID", dispatcherItem.GetId()),
+					zap.Any("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
+					zap.Int("count", count),
+				)
+			}
+		}
+		if ok {
+			dispatcherItem.Remove()
+		}
+	} else {
+		e.statusesChan <- dispatcher.TableSpanStatusWithSeq{
+			TableSpanStatus: &heartbeatpb.TableSpanStatus{
+				ID:              id.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			},
+			Seq: e.dispatcherMap.GetSeq(),
+		}
+	}
+}
+
+func (e *EventDispatcherManager) removeRedoDispatcher(id common.DispatcherID) {
+	dispatcherItem, ok := e.redoDispatcherMap.Get(id)
 	if ok {
 		if dispatcherItem.GetRemovingStatus() {
 			return

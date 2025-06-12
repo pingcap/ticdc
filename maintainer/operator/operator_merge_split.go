@@ -47,6 +47,7 @@ type MergeSplitDispatcherOperator struct {
 	affectedReplicaSets []*replica.SpanReplication
 	splitSpans          []*heartbeatpb.TableSpan
 	splitSpanInfo       string
+	redo                bool
 }
 
 // NewMergeSplitDispatcherOperator creates a new MergeSplitDispatcherOperator
@@ -57,6 +58,7 @@ func NewMergeSplitDispatcherOperator(
 	affectedReplicaSets []*replica.SpanReplication,
 	splitSpans []*heartbeatpb.TableSpan,
 	onFinished func(),
+	redo bool,
 ) *MergeSplitDispatcherOperator {
 	spansInfo := ""
 	for _, span := range splitSpans {
@@ -74,6 +76,7 @@ func NewMergeSplitDispatcherOperator(
 		splitSpans:          splitSpans,
 		splitSpanInfo:       spansInfo,
 		onFinished:          onFinished,
+		redo:                redo,
 	}
 	if op.isPrimary() {
 		op.onFinished = func() {
@@ -155,7 +158,7 @@ func (m *MergeSplitDispatcherOperator) Check(from node.ID, status *heartbeatpb.T
 }
 
 func (m *MergeSplitDispatcherOperator) Schedule() *messaging.TargetMessage {
-	return m.originReplicaSet.NewRemoveDispatcherMessage(m.originNode)
+	return m.originReplicaSet.NewRemoveDispatcherMessage(m.originNode, m.redo)
 }
 
 // OnTaskRemoved is called when the task is removed by ddl
@@ -181,10 +184,10 @@ func (m *MergeSplitDispatcherOperator) PostFinish() {
 
 func (m *MergeSplitDispatcherOperator) String() string {
 	if m.originReplicaSet.ID == m.primary {
-		return fmt.Sprintf("merge-split dispatcher operator[primary]: %s, totalAffected: %d, finished: %d, splitSpans:%s",
-			m.originReplicaSet.ID, len(m.affectedReplicaSets), m.totalRemoved.Load(), m.splitSpanInfo)
+		return fmt.Sprintf("merge-split dispatcher operator[primary]: %s, totalAffected: %d, finished: %d, splitSpans: %s, redo: %v",
+			m.originReplicaSet.ID, len(m.affectedReplicaSets), m.totalRemoved.Load(), m.splitSpanInfo, m.redo)
 	}
-	return fmt.Sprintf("merge-split dispatcher operator[secondary]: %s, primary: %s", m.originReplicaSet.ID, m.primary)
+	return fmt.Sprintf("merge-split dispatcher operator[secondary]: %s, primary: %s, redo: %v", m.originReplicaSet.ID, m.primary, m.redo)
 }
 
 func (m *MergeSplitDispatcherOperator) Type() string {

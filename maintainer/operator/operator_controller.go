@@ -116,7 +116,7 @@ func (oc *Controller) RemoveAllTasks() {
 	defer oc.mu.Unlock()
 
 	for _, replicaSet := range oc.replicationDB.RemoveAll() {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet, oc.redo))
 	}
 }
 
@@ -126,7 +126,7 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 	for _, replicaSet := range oc.replicationDB.RemoveBySchemaID(schemaID) {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet, oc.redo))
 	}
 }
 
@@ -136,7 +136,7 @@ func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 	for _, replicaSet := range oc.replicationDB.RemoveByTableIDs(tables...) {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet, oc.redo))
 	}
 }
 
@@ -326,7 +326,7 @@ func (oc *Controller) NewRemoveOperator(replicaSet *replica.SpanReplication) ope
 func (oc *Controller) NewSplitOperator(
 	replicaSet *replica.SpanReplication, originNode node.ID, splitSpans []*heartbeatpb.TableSpan,
 ) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return NewSplitDispatcherOperator(oc.replicationDB, replicaSet, originNode, splitSpans)
+	return NewSplitDispatcherOperator(oc.replicationDB, replicaSet, originNode, splitSpans, oc.redo)
 }
 
 // AddMergeOperator creates a merge operator, which merge consecutive replica sets.
@@ -395,18 +395,19 @@ func (oc *Controller) AddMergeSplitOperator(
 	}
 	randomIdx := rand.Intn(len(affectedReplicaSets))
 	primaryID := affectedReplicaSets[randomIdx].ID
-	primaryOp := NewMergeSplitDispatcherOperator(oc.replicationDB, primaryID, affectedReplicaSets[randomIdx], affectedReplicaSets, splitSpans, nil)
+	primaryOp := NewMergeSplitDispatcherOperator(oc.replicationDB, primaryID, affectedReplicaSets[randomIdx], affectedReplicaSets, splitSpans, nil, oc.redo)
 	for _, replicaSet := range affectedReplicaSets {
 		var op *MergeSplitDispatcherOperator
 		if replicaSet.ID == primaryID {
 			op = primaryOp
 		} else {
-			op = NewMergeSplitDispatcherOperator(oc.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.onFinished)
+			op = NewMergeSplitDispatcherOperator(oc.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.onFinished, oc.redo)
 		}
 		oc.pushOperator(op)
 	}
 	log.Info("add merge split operator",
 		zap.String("role", oc.role),
+		zap.Bool("redo", oc.redo),
 		zap.String("changefeed", oc.changefeedID.Name()),
 		zap.String("primary", primaryID.String()),
 		zap.Int64("tableID", splitSpans[0].TableID),

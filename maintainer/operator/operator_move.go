@@ -96,7 +96,7 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 		}
 		return msg
 	}
-	return m.replicaSet.NewRemoveDispatcherMessage(m.origin)
+	return m.replicaSet.NewRemoveDispatcherMessage(m.origin, m.redo)
 }
 
 func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
@@ -195,7 +195,7 @@ func (m *MoveDispatcherOperator) String() string {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	return fmt.Sprintf("move dispatcher operator: %s, origin:%s, dest:%s, redo:%v",
+	return fmt.Sprintf("move dispatcher operator: %s, origin: %s, dest: %s, redo: %v",
 		m.replicaSet.ID, m.origin, m.dest, m.redo)
 }
 

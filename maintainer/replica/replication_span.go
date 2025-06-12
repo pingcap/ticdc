@@ -223,17 +223,18 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, redo bool) (*m
 		}), nil
 }
 
-func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB())
+func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID, redo bool) *messaging.TargetMessage {
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), redo)
 }
 
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID) *messaging.TargetMessage {
+func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, redo bool) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: cfID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
 				DispatcherID: dispatcherID,
+				Redo:         redo,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
 		})
