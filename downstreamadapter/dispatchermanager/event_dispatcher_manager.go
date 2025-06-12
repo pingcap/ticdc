@@ -237,7 +237,7 @@ func NewEventDispatcherManager(
 	manager.wg.Add(1)
 	go func() {
 		defer manager.wg.Done()
-		err = manager.sink.Run(ctx)
+		err := manager.sink.Run(ctx)
 		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 			select {
 			case <-ctx.Done():
@@ -259,7 +259,7 @@ func NewEventDispatcherManager(
 		manager.wg.Add(3)
 		go func() {
 			defer manager.wg.Done()
-			err = manager.redoSink.Run(ctx)
+			err := manager.redoSink.Run(ctx)
 			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 				select {
 				case <-ctx.Done():
