@@ -62,7 +62,6 @@ func (d *dispatcherConnState) isCurrentEventService(serverID node.ID) bool {
 	return d.eventServiceID == serverID
 }
 
-// TODO: whether this check is need? Or whether this check is enough?
 func (d *dispatcherConnState) isReceivingDataEvent() bool {
 	d.RLock()
 	defer d.RUnlock()
@@ -401,8 +400,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			// note: this must be the first ready event from local event service
 			oldEventServiceID := d.connState.getEventServiceID()
 			if oldEventServiceID != "" {
-				msg := messaging.NewSingleTargetMessage(oldEventServiceID, eventServiceTopic, newDispatcherRemoveRequest(d.target))
-				d.eventCollector.enqueueMessageForSend(msg)
+				d.removeFrom(oldEventServiceID)
 			}
 			log.Info("received ready signal from local event service, prepare to reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
@@ -435,8 +433,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 		}
 		candidate := d.connState.getNextRemoteCandidate()
 		if candidate != "" {
-			msg := messaging.NewSingleTargetMessage(candidate, eventServiceTopic, newDispatcherRegisterRequest(d.target, true))
-			d.eventCollector.enqueueMessageForSend(msg)
+			d.registerTo(candidate)
 		}
 	default:
 		log.Panic("should not happen: unknown signal event type")
@@ -452,8 +449,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 	}
 	if d.connState.trySetRemoteCandidates(nodes) {
 		candidate := d.connState.getNextRemoteCandidate()
-		msg := messaging.NewSingleTargetMessage(candidate, eventServiceTopic, newDispatcherRegisterRequest(d.target, true))
-		d.eventCollector.enqueueMessageForSend(msg)
+		d.registerTo(candidate)
 	}
 }
 
