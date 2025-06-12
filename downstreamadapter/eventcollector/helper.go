@@ -68,71 +68,21 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	if len(events) == 0 {
 		return false
 	}
-	// Only check the first event type, because all event types should be same
+	// Only check the first event type, because all events in the same batch should be in the same type group.
 	switch events[0].GetType() {
-	// note: TypeDMLEvent and TypeResolvedEvent can be in the same batch, so we should handle them together.
 	case commonEvent.TypeDMLEvent,
-		commonEvent.TypeResolvedEvent:
-		hasInvalidEvent := false
-		hasValidEvent := false
-		for _, event := range events {
-			if stat.isEventFromCurrentEventService(event) {
-				hasValidEvent = true
-				if !stat.isEventSeqValid(event) {
-					// if event seq is invalid, there must be some events dropped
-					// we need drop all events in this batch and reset the dispatcher
-					stat.reset()
-					return false
-				}
-			} else {
-				hasInvalidEvent = true
-			}
+		commonEvent.TypeResolvedEvent,
+		commonEvent.TypeDDLEvent,
+		commonEvent.TypeSyncPointEvent,
+		commonEvent.TypeHandshakeEvent:
+		return stat.handleDataEvents(events...)
+	case commonEvent.TypeReadyEvent,
+		commonEvent.TypeNotReusableEvent:
+		if len(events) > 1 {
+			log.Panic("unexpected multiple events for TypeReadyEvent or TypeNotReusableEvent",
+				zap.Int("count", len(events)))
 		}
-		if !hasValidEvent {
-			return false
-		}
-		var validEvents []dispatcher.DispatcherEvent
-		if hasInvalidEvent {
-			for _, event := range events {
-				if stat.isEventFromCurrentEventService(event) && stat.isEventCommitTsValid(event) {
-					validEvents = append(validEvents, event)
-				}
-			}
-		} else {
-			// event is sort by commitTs, so we can find the first valid event
-			validEventStartIndex := 0
-			for _, event := range events {
-				if stat.isEventCommitTsValid(event) {
-					break
-				} else {
-					validEventStartIndex++
-				}
-			}
-			validEvents = events[validEventStartIndex:]
-		}
-		return stat.target.HandleEvents(validEvents, func() { stat.wake() })
-	case commonEvent.TypeDDLEvent,
-		commonEvent.TypeSyncPointEvent:
-		// TypeDDLEvent and TypeSyncPointEvent is handled one by one
-		if !stat.isEventFromCurrentEventService(events[0]) {
-			return false
-		}
-		if !stat.isEventSeqValid(events[0]) {
-			stat.reset()
-			return false
-		}
-		if !stat.isEventCommitTsValid(events[0]) {
-			return false
-		}
-		return stat.target.HandleEvents(events, func() { stat.wake() })
-	case commonEvent.TypeHandshakeEvent:
-		stat.handleHandshakeEvent(events[0])
-		return false
-	case commonEvent.TypeReadyEvent:
-		stat.handleReadyEvent(events[0])
-		return false
-	case commonEvent.TypeNotReusableEvent:
-		stat.handleNotReusableEvent(events[0])
+		stat.handleSignalEvent(events[0])
 		return false
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(events[0].GetType())))
@@ -147,6 +97,7 @@ const (
 	DataGroupHandshake       = 4
 	DataGroupReady           = 5
 	DataGroupNotReusable     = 6
+	DataGroupBatchDML        = 7
 )
 
 func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.EventType {
@@ -165,6 +116,9 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 		return dynstream.EventType{DataGroup: DataGroupReady, Property: dynstream.NonBatchable}
 	case commonEvent.TypeNotReusableEvent:
 		return dynstream.EventType{DataGroup: DataGroupNotReusable, Property: dynstream.NonBatchable}
+	case commonEvent.TypeBatchDMLEvent:
+		// Note: set TypeBatchDMLEvent to NonBatchable for simplicity.
+		return dynstream.EventType{DataGroup: DataGroupBatchDML, Property: dynstream.NonBatchable}
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(event.GetType())))
 	}

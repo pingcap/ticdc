@@ -110,7 +110,7 @@ func New(serverId node.ID) *EventCollector {
 	}
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
 	eventCollector.ds = NewEventDynamicStream(eventCollector)
-	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
+	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)
 
 	return eventCollector
 }
@@ -123,7 +123,7 @@ func (c *EventCollector) Run(ctx context.Context) {
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			c.runProcessMessage(ctx, c.receiveChannels[i])
+			c.runDispatchMessage(ctx, c.receiveChannels[i])
 		}()
 	}
 
@@ -217,7 +217,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 		return
 	}
 	stat := value.(*dispatcherStat)
-	stat.reset()
+	stat.reset(c.getLocalServerID())
 }
 
 func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
@@ -360,14 +360,14 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
 			if stat.connState.isCurrentEventService(targetMessage.From) {
 				// register the dispatcher again
-				stat.reset()
+				stat.reset(targetMessage.From)
 			}
 		}
 	}
 }
 
-// RecvEventsMessage is the handler for the events message from EventService.
-func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
+// MessageCenterHandler is the handler for the events message from EventService.
+func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
 	inflightDuration := time.Since(time.UnixMilli(targetMessage.CreateAt)).Seconds()
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
 	start := time.Now()
@@ -393,7 +393,10 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	return nil
 }
 
-func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) {
+// runDispatchMessage dispatches messages from the input channel to the dynamic stream.
+// Note: Avoid implementing any message handling logic within this function
+// as messages may be stale and could be filtered out by subsequent processing.
+func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -412,41 +415,6 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 							resolvedTsCount += resolvedEvent.Len()
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
-					case event.TypeBatchDMLEvent:
-						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
-						if !ok {
-							continue
-						}
-						tableInfo, ok := stat.(*dispatcherStat).tableInfo.Load().(*common.TableInfo)
-						if !ok {
-							continue
-						}
-						events := e.(*event.BatchDMLEvent)
-						events.AssembleRows(tableInfo)
-						from := &targetMessage.From
-						for _, dml := range events.DMLEvents {
-							c.ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
-						}
-						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-					case event.TypeDDLEvent:
-						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
-						if !ok {
-							continue
-						}
-						stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
-						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
-					case event.TypeHandshakeEvent:
-						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
-						if !ok {
-							continue
-						}
-						log.Info("get handshake event",
-							zap.Stringer("dispatcherID", e.GetDispatcherID()),
-							zap.String("serverID", targetMessage.From.String()))
-						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
-						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					default:
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
