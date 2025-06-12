@@ -361,15 +361,19 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 			if tableInfo != nil {
 				d.tableInfo.Store(tableInfo)
 			}
-		} else {
+		} else if events[0].GetType() == commonEvent.TypeDDLEvent {
 			if !d.verifyEventCommitTs(events[0]) {
 				return false
 			}
-			if events[0].GetType() == commonEvent.TypeDDLEvent {
-				tableInfo := events[0].Event.(*event.HandshakeEvent).TableInfo
-				if tableInfo != nil {
-					d.tableInfo.Store(tableInfo)
-				}
+			tableInfo := events[0].Event.(*event.DDLEvent).TableInfo
+			if tableInfo != nil {
+				d.tableInfo.Store(tableInfo)
+			}
+			return d.target.HandleEvents(events, func() { d.wake() })
+		} else {
+			// SyncPointEvent
+			if !d.verifyEventCommitTs(events[0]) {
+				return false
 			}
 			return d.target.HandleEvents(events, func() { d.wake() })
 		}
