@@ -453,69 +453,79 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 	}
 }
 
-func newDispatcherRegisterRequest(target dispatcher.EventDispatcher, onlyReuse bool) *messaging.DispatcherRequest {
-	startTs := target.GetStartTs()
-	syncPointInterval := target.GetSyncPointInterval()
+func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging.DispatcherRequest {
+	startTs := d.target.GetStartTs()
+	syncPointInterval := d.target.GetSyncPointInterval()
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId:      target.GetChangefeedID().ToPB(),
-			DispatcherId:      target.GetId().ToPB(),
-			TableSpan:         target.GetTableSpan(),
-			StartTs:           startTs,
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
+			StartTs:      startTs,
+			// ServerId is the id of the request sender.
+			ServerId:          d.eventCollector.getLocalServerID().String(),
 			ActionType:        eventpb.ActionType_ACTION_TYPE_REGISTER,
-			FilterConfig:      target.GetFilterConfig(),
-			EnableSyncPoint:   target.EnableSyncPoint(),
+			FilterConfig:      d.target.GetFilterConfig(),
+			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, target.GetStartTsIsSyncpoint()),
 			OnlyReuse:         onlyReuse,
-			BdrMode:           target.GetBDRMode(),
+			BdrMode:           d.target.GetBDRMode(),
 		},
 	}
 }
 
-func newDispatcherResetRequest(target dispatcher.EventDispatcher) *messaging.DispatcherRequest {
-	startTs := target.GetStartTs()
-	syncPointInterval := target.GetSyncPointInterval()
+func (d *dispatcherStat) newDispatcherResetRequest() *messaging.DispatcherRequest {
+	startTs := d.target.GetStartTs()
+	syncPointInterval := d.target.GetSyncPointInterval()
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId:      target.GetChangefeedID().ToPB(),
-			DispatcherId:      target.GetId().ToPB(),
-			StartTs:           startTs,
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			StartTs:      startTs,
+			// ServerId is the id of the request sender.
+			ServerId:          d.eventCollector.getLocalServerID().String(),
 			ActionType:        eventpb.ActionType_ACTION_TYPE_RESET,
-			FilterConfig:      target.GetFilterConfig(),
-			EnableSyncPoint:   target.EnableSyncPoint(),
+			FilterConfig:      d.target.GetFilterConfig(),
+			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, target.GetStartTsIsSyncpoint()),
 		},
 	}
 }
 
-func newDispatcherRemoveRequest(target dispatcher.EventDispatcher) *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherRemoveRequest() *messaging.DispatcherRequest {
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: target.GetChangefeedID().ToPB(),
-			DispatcherId: target.GetId().ToPB(),
-			ActionType:   eventpb.ActionType_ACTION_TYPE_REMOVE,
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			// ServerId is the id of the request sender.
+			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
 		},
 	}
 }
 
-func newDispatcherPauseRequest(target dispatcher.EventDispatcher) *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherPauseRequest() *messaging.DispatcherRequest {
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: target.GetChangefeedID().ToPB(),
-			DispatcherId: target.GetId().ToPB(),
-			ActionType:   eventpb.ActionType_ACTION_TYPE_PAUSE,
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			// ServerId is the id of the request sender.
+			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
 		},
 	}
 }
 
-func newDispatcherResumeRequest(target dispatcher.EventDispatcher) *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherResumeRequest() *messaging.DispatcherRequest {
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: target.GetChangefeedID().ToPB(),
-			DispatcherId: target.GetId().ToPB(),
-			ActionType:   eventpb.ActionType_ACTION_TYPE_RESUME,
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			// ServerId is the id of the request sender.
+			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
 		},
 	}
 }
