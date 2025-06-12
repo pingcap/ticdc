@@ -524,12 +524,6 @@ func (m *Maintainer) onNodeChanged() {
 
 		}
 	}
-	// redo
-	m.redoTs.mu.Lock()
-	for _, id := range removedNodes {
-		delete(m.redoTsMap, id)
-	}
-	m.redoTs.mu.Unlock()
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),
 		zap.Int("new", len(newNodes)),
 		zap.Int("removed", len(removedNodes)))
@@ -538,6 +532,12 @@ func (m *Maintainer) onNodeChanged() {
 	if cachedResponse != nil {
 		log.Info("bootstrap done after removed some nodes", zap.String("id", m.id.String()))
 		m.onBootstrapDone(cachedResponse)
+	}
+	// redo
+	m.redoTs.mu.Lock()
+	defer m.redoTs.mu.Unlock()
+	for _, id := range removedNodes {
+		delete(m.redoTsMap, id)
 	}
 }
 
