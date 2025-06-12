@@ -28,7 +28,7 @@ var _ writer.RedoLogWriter = &logWriter{}
 
 type logWriter struct {
 	cfg           *writer.LogWriterConfig
-	backendWriter *fileWriter
+	backendWriter fileWriter
 }
 
 // NewLogWriter create a new logWriter.
@@ -74,7 +74,7 @@ func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent)
 		return errors.ErrRedoWriterStopped.GenWithStackByArgs()
 	}
 	for _, event := range events {
-		if err := l.backendWriter.syncWrite(event); err != nil {
+		if err := l.backendWriter.SyncWrite(event); err != nil {
 			return errors.Trace(err)
 		}
 	}
@@ -86,7 +86,7 @@ func (l *logWriter) AsyncWriteEvents(ctx context.Context, events ...writer.RedoE
 		select {
 		case <-ctx.Done():
 			log.Error("write dml event failed", zap.Error(ctx.Err()), zap.Any("event", event))
-		case l.backendWriter.inputCh <- event:
+		case l.backendWriter.GetInputCh() <- event:
 		}
 	}
 }

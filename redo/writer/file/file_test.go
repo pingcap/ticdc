@@ -56,7 +56,7 @@ func TestWriterWrite(t *testing.T) {
 
 	for idx, cf := range cfs {
 		uuidGen := uuid.NewConstGenerator("const-uuid")
-		w := &fileWriter{
+		w := &Writer{
 			logType: redo.RedoRowLogFileType,
 			cfg: &writer.LogWriterConfig{
 				MaxLogSizeInBytes: 10,
@@ -147,7 +147,7 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
 
-		w1 := &fileWriter{
+		w1 := &Writer{
 			logType: redo.RedoRowLogFileType,
 			cfg: &writer.LogWriterConfig{
 				MaxLogSizeInBytes: 10,
@@ -196,12 +196,12 @@ func TestWriterWrite(t *testing.T) {
 func TestAdvanceTs(t *testing.T) {
 	t.Parallel()
 
-	w := &fileWriter{}
+	w := &Writer{}
 	w.AdvanceTs(111)
 	require.EqualValues(t, 111, w.eventCommitTS.Load())
 }
 
-func TestNewFileWriter(t *testing.T) {
+func TestNewWriter(t *testing.T) {
 	t.Parallel()
 
 	_, err := NewFileWriter(context.Background(), nil, redo.RedoRowLogFileType)
@@ -241,7 +241,7 @@ func TestNewFileWriter(t *testing.T) {
 		Namespace: "abcd",
 		Name:      "test",
 	})
-	w = &fileWriter{
+	w = &Writer{
 		logType: redo.RedoDDLLogFileType,
 		cfg: &writer.LogWriterConfig{
 			Dir:          dir,
@@ -299,7 +299,7 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 		Namespace: "abcd",
 		Name:      "test",
 	})
-	w := &fileWriter{
+	w := &Writer{
 		logType: redo.RedoRowLogFileType,
 		cfg: &writer.LogWriterConfig{
 			Dir:          dir,
@@ -366,7 +366,7 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 		Namespace: "abcd",
 		Name:      "test",
 	})
-	w := &fileWriter{
+	w := &Writer{
 		logType: redo.RedoDDLLogFileType,
 		cfg: &writer.LogWriterConfig{
 			Dir:          dir,

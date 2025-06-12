@@ -95,6 +95,9 @@ func (m *mockEventDispatcher) GetSchemaID() int64 {
 	return 0
 }
 
+func (m *mockEventDispatcher) SetComponentStatus(heartbeatpb.ComponentState) {
+}
+
 func (m *mockEventDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
 	return 0
 }
@@ -135,6 +138,12 @@ func (m *mockEventDispatcher) Remove() {
 
 func (m *mockEventDispatcher) GetBDRMode() bool {
 	return false
+}
+
+func (m *mockEventDispatcher) SetCurrentPDTs(uint64) {
+}
+
+func (m *mockEventDispatcher) SetStartTs(uint64) {
 }
 
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {

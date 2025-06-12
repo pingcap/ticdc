@@ -42,9 +42,9 @@ func TestScheduleEvent(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "test1")
-	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
-	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	controllerManager := NewControllerManager(cfID, 1, nil, nil, nil, nil, ddlSpan, nil, 1000, 0)
+	controllerManager.controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controllerManager.operatorController, controllerManager.controller, &heartbeatpb.State{
 		IsBlocked:         true,
 		BlockTs:           10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_All},
@@ -52,9 +52,9 @@ func TestScheduleEvent(t *testing.T) {
 	}, true)
 	event.scheduleBlockEvent()
 	// drop table will be executed first
-	require.Equal(t, 2, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 2, controllerManager.controller.replicationDB.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controllerManager.operatorController, controllerManager.controller, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -65,9 +65,9 @@ func TestScheduleEvent(t *testing.T) {
 	}, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, controllerManager.controller.replicationDB.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controllerManager.operatorController, controllerManager.controller, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -78,7 +78,7 @@ func TestScheduleEvent(t *testing.T) {
 	}, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, controllerManager.controller.replicationDB.GetAbsentSize())
 }
 
 func TestResendAction(t *testing.T) {
@@ -93,17 +93,17 @@ func TestResendAction(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
-	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
+	controllerManager := NewControllerManager(cfID, 1, nil, nil, nil, nil, ddlSpan, nil, 1000, 0)
+	controllerManager.controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	controllerManager.controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	var dispatcherIDs []common.DispatcherID
-	absents := controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
+	absents := controllerManager.controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
 	for _, stm := range absents {
-		controller.replicationDB.BindSpanToNode("", "node1", stm)
-		controller.replicationDB.MarkSpanReplicating(stm)
+		controllerManager.controller.replicationDB.BindSpanToNode("", "node1", stm)
+		controllerManager.controller.replicationDB.MarkSpanReplicating(stm)
 		dispatcherIDs = append(dispatcherIDs, stm.ID)
 	}
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controllerManager.operatorController, controllerManager.controller, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -129,7 +129,7 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controllerManager.operatorController, controllerManager.controller, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -147,7 +147,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_DB)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controllerManager.operatorController, controllerManager.controller, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -165,7 +165,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_All)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
-	event = NewBlockEvent(cfID, dispatcherIDs[0], controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, dispatcherIDs[0], controllerManager.operatorController, controllerManager.controller, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -197,11 +197,11 @@ func TestUpdateSchemaID(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
-	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
-	require.Len(t, controller.GetTasksBySchemaID(1), 1)
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	controllerManager := NewControllerManager(cfID, 1, nil, nil, nil, nil, ddlSpan, nil, 1000, 0)
+	controllerManager.controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	require.Equal(t, 1, controllerManager.controller.replicationDB.GetAbsentSize())
+	require.Len(t, controllerManager.controller.GetTasksBySchemaID(1), 1)
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controllerManager.operatorController, controllerManager.controller, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -216,11 +216,11 @@ func TestUpdateSchemaID(t *testing.T) {
 		},
 	}, true)
 	event.scheduleBlockEvent()
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, controllerManager.controller.replicationDB.GetAbsentSize())
 	// check the schema id and map is updated
-	require.Len(t, controller.GetTasksBySchemaID(1), 0)
-	require.Len(t, controller.GetTasksBySchemaID(2), 1)
-	require.Equal(t, controller.GetTasksByTableID(1)[0].GetSchemaID(), int64(2))
+	require.Len(t, controllerManager.controller.GetTasksBySchemaID(1), 0)
+	require.Len(t, controllerManager.controller.GetTasksBySchemaID(2), 1)
+	require.Equal(t, controllerManager.controller.GetTasksByTableID(1)[0].GetSchemaID(), int64(2))
 }
 
 func setNodeManagerAndMessageCenter() *watcher.NodeManager {
