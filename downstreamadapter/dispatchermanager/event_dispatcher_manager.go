@@ -255,8 +255,38 @@ func NewEventDispatcherManager(
 	// redo manager
 	if manager.redoSink.Enabled() {
 		// set global redo ts
-		manager.SetGlobalRedoTs(startTs, startTs)
 		manager.wg.Add(3)
+		go func() {
+			defer manager.wg.Done()
+			err := manager.redoMeta.PreStart(ctx)
+			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+				select {
+				case <-ctx.Done():
+					return
+				case manager.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Stringer("changefeedID", changefeedID),
+						zap.Error(err),
+					)
+				}
+			}
+			meta := manager.redoMeta.GetFlushedMeta()
+			manager.SetGlobalRedoTs(max(meta.CheckpointTs, startTs), max(meta.ResolvedTs, startTs))
+			err = manager.redoMeta.Run(ctx)
+			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+				select {
+				case <-ctx.Done():
+					return
+				case manager.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Stringer("changefeedID", changefeedID),
+						zap.Error(err),
+					)
+				}
+			}
+		}()
 		go func() {
 			defer manager.wg.Done()
 			err := manager.redoSink.Run(ctx)
@@ -276,22 +306,6 @@ func NewEventDispatcherManager(
 		go func() {
 			defer manager.wg.Done()
 			err := manager.collectRedoTs(ctx)
-			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-				select {
-				case <-ctx.Done():
-					return
-				case manager.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", changefeedID),
-						zap.Error(err),
-					)
-				}
-			}
-		}()
-		go func() {
-			defer manager.wg.Done()
-			err := manager.redoMeta.Run(ctx)
 			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 				select {
 				case <-ctx.Done():
@@ -1269,6 +1283,9 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		zap.Stringer("changefeedID", e.changefeedID))
 
 	defer e.closing.Store(false)
+	if e.redoSink.Enabled() {
+		e.closeRedoAllDispatchers()
+	}
 	e.closeAllDispatchers()
 
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
@@ -1288,10 +1305,10 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
-	e.sink.Close(removeChangefeed)
 	if e.redoSink.Enabled() {
 		e.redoSink.Close(removeChangefeed)
 	}
+	e.sink.Close(removeChangefeed)
 	e.cancel()
 	e.wg.Wait()
 
@@ -1347,6 +1364,46 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 			count += 1
 			if count%100 == 0 {
 				log.Info("waiting for dispatcher to close",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Stringer("dispatcherID", dispatcher.GetId()),
+					zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
+					zap.Int("count", count),
+				)
+			}
+		}
+		// Remove should be called after dispatcher is closed
+		dispatcher.Remove()
+	}
+}
+
+func (e *EventDispatcherManager) closeRedoAllDispatchers() {
+	leftToCloseDispatchers := make([]*dispatcher.RedoDispatcher, 0)
+	e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
+		// Remove dispatcher from eventService
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
+
+		_, ok := dispatcher.TryClose()
+		if !ok {
+			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcher)
+		} else {
+			dispatcher.Remove()
+		}
+	})
+	// wait all dispatchers finish syncing the data to sink
+	for _, dispatcher := range leftToCloseDispatchers {
+		log.Info("closing redo dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", dispatcher.GetId()),
+			zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
+		)
+		ok := false
+		count := 0
+		for !ok {
+			_, ok = dispatcher.TryClose()
+			time.Sleep(10 * time.Millisecond)
+			count += 1
+			if count%100 == 0 {
+				log.Info("waiting for redo dispatcher to close",
 					zap.Stringer("changefeedID", e.changefeedID),
 					zap.Stringer("dispatcherID", dispatcher.GetId()),
 					zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
