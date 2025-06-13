@@ -111,8 +111,12 @@ type dispatcherStat struct {
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
 
-	// The largest commit ts that has been sent to the dispatcher.
+	// sentCommitTs is the largest commit timestamp that has been sent to the dispatcher.
 	sentCommitTs atomic.Uint64
+	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
+	gotDDLOnTs atomic.Bool
+	// gotSyncpointOnTS indicates whether a sync point was received at the sentCommitTs.
+	gotSyncpointOnTS atomic.Bool
 
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
@@ -164,6 +168,9 @@ func (d *dispatcherStat) remove() {
 }
 
 func (d *dispatcherStat) removeFrom(serverID node.ID) {
+	log.Info("Send remove dispatcher request to event service",
+		zap.Stringer("dispatcher", d.target.GetId()),
+		zap.Stringer("eventServiceID", serverID))
 	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherRemoveRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
@@ -256,10 +263,22 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 }
 
 func (d *dispatcherStat) verifyEventCommitTs(event dispatcher.DispatcherEvent) bool {
-	// Note: a commit ts may have multiple transactions.
-	// it is ok to send the same txn multiple times?
-	// (we just want to avoid send old dml after new ddl)
-	if event.GetCommitTs() < d.sentCommitTs.Load() {
+	shouldIgnore := false
+	if event.GetCommitTs() < d.target.GetStartTs() {
+		shouldIgnore = true
+	} else if event.GetCommitTs() == d.sentCommitTs.Load() {
+		// Avoid send the same DDL event or SyncPoint event multiple times.
+		switch event.GetType() {
+		case commonEvent.TypeDDLEvent:
+			shouldIgnore = d.gotDDLOnTs.Load()
+		case commonEvent.TypeSyncPointEvent:
+			shouldIgnore = d.gotSyncpointOnTS.Load()
+		default:
+			// TODO: check whether it is ok for other types of events?
+			// a commit ts may have multiple transactions, it is ok to send the same txn multiple times?
+		}
+	}
+	if shouldIgnore {
 		log.Warn("Receive a event older than sendCommitTs, ignore it",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
@@ -269,7 +288,19 @@ func (d *dispatcherStat) verifyEventCommitTs(event dispatcher.DispatcherEvent) b
 			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
 		return false
 	}
+	if event.GetCommitTs() > d.sentCommitTs.Load() {
+		// if the commit ts is larger than the last sent commit ts,
+		// it means we have received a new event, so we need to reset the DDL and SyncPoint flags.
+		d.gotDDLOnTs.Store(false)
+		d.gotSyncpointOnTS.Store(false)
+	}
 	d.sentCommitTs.Store(event.GetCommitTs())
+	switch event.GetType() {
+	case commonEvent.TypeDDLEvent:
+		d.gotDDLOnTs.Store(true)
+	case commonEvent.TypeSyncPointEvent:
+		d.gotSyncpointOnTS.Store(true)
+	}
 	return true
 }
 
