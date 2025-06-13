@@ -102,7 +102,7 @@ type dispatcherStat struct {
 	tableSpan *heartbeatpb.TableSpan
 	// the max ts of events which is not needed by this dispatcher
 	checkpointTs uint64
-	// the subscription which this dipatcher depends on
+	// the subscription which this dispatcher depends on
 	subStat *subscriptionStat
 }
 
