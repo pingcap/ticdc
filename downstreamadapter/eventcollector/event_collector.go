@@ -142,7 +142,7 @@ func (c *EventCollector) Run(ctx context.Context) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		c.processDispatcherRequests(ctx)
+		c.sendDispatcherRequests(ctx)
 	}()
 
 	c.wg.Add(1)
@@ -317,7 +317,7 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 	}
 }
 
-func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
+func (c *EventCollector) sendDispatcherRequests(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -395,7 +395,7 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 
 // runDispatchMessage dispatches messages from the input channel to the dynamic stream.
 // Note: Avoid implementing any message handling logic within this function
-// as messages may be stale and could be filtered out by subsequent processing.
+// as messages may be stale and need be verified before process.
 func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) {
 	for {
 		select {
