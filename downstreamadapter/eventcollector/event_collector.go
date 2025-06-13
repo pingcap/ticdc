@@ -240,7 +240,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 		memoryQuota:   memoryQuota,
 	}
 	stat.reset()
-	stat.sentCommitTs.Store(target.GetStartTs())
+	stat.lastEventCommitTs.Store(target.GetStartTs())
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
@@ -526,7 +526,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
 			if stat.getServerID() == c.serverId {
 				// register the dispatcher again
-				c.resetDispatcher(stat, stat.sentCommitTs.Load())
+				c.resetDispatcher(stat, stat.lastEventCommitTs.Load())
 			}
 		}
 	}

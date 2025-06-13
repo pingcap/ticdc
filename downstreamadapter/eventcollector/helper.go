@@ -93,14 +93,15 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 			if stat.isEventFromCurrentEventService(event) {
 				hasValidEvent = true
 				if !stat.isEventSeqValid(event) {
-					log.Panic("event seq is invalid", zap.Any("event", event.Event))
-					//return false
+					// if event seq is invalid, there must be some events dropped
+					// we need drop all events in this batch and reset the dispatcher
+					h.eventCollector.resetDispatcher(stat, stat.lastEventCommitTs.Load()-1)
+					return false
 				}
 			} else {
 				hasInvalidEvent = true
 			}
 		}
-
 		if !hasValidEvent {
 			return false
 		}
@@ -128,13 +129,12 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		commonEvent.TypeSyncPointEvent:
 		if stat.waitHandshake.Load() {
 			return false
-		}
-		// TypeDDLEvent and TypeSyncPointEvent is handled one by one
+		} // TypeDDLEvent and TypeSyncPointEvent is handled one by one
 		if !stat.isEventFromCurrentEventService(events[0]) {
 			return false
 		}
 		if !stat.isEventSeqValid(events[0]) {
-			log.Panic("event seq is invalid", zap.Any("event", events[0].Event))
+			h.eventCollector.resetDispatcher(stat, stat.lastEventCommitTs.Load()-1)
 			return false
 		}
 		if !stat.isEventCommitTsValid(events[0]) {

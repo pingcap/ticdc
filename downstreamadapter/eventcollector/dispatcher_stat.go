@@ -53,8 +53,9 @@ type dispatcherStat struct {
 	// Dispatcher will drop all data events before receiving a handshake event.
 	waitHandshake atomic.Bool
 
-	// The largest commit ts that has been sent to the target dispatcher.
-	sentCommitTs atomic.Uint64
+	// The largest commitTs of DML/DDL Event that has been sent to the target dispatcher.
+	// Note: It did not record the commitTs of resolvedTs event!
+	lastEventCommitTs atomic.Uint64
 
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
@@ -99,7 +100,6 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 			zap.Uint64("receivedSeq", event.GetSeq()),
 			zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
 			zap.Uint64("commitTs", event.GetCommitTs()))
-
 		expectedSeq := d.lastEventSeq.Add(1)
 		if event.GetSeq() != expectedSeq {
 			log.Error("Received an out-of-order event, reset the dispatcher",
@@ -108,7 +108,9 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 				zap.Int("eventType", event.GetType()),
 				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("expectedSeq", expectedSeq),
-				zap.Uint64("commitTs", event.GetCommitTs()))
+				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+			)
 			return false
 		}
 	}
@@ -120,17 +122,21 @@ func (d *dispatcherStat) isEventCommitTsValid(event dispatcher.DispatcherEvent) 
 	// Note: a commit ts may have multiple transactions.
 	// it is ok to send the same txn multiple times?
 	// (we just want to avoid send old dml after new ddl)
-	if event.GetCommitTs() < d.sentCommitTs.Load() {
+	if event.GetCommitTs() < d.lastEventCommitTs.Load() {
 		log.Warn("Receive a event older than sendCommitTs, ignore it",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.target.GetId()),
 			zap.Any("event", event.Event),
 			zap.Uint64("eventCommitTs", event.GetCommitTs()),
-			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
+			zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
 		return false
 	}
-	d.sentCommitTs.Store(event.GetCommitTs())
+
+	if event.GetType() == commonEvent.TypeDDLEvent ||
+		event.GetType() == commonEvent.TypeDMLEvent {
+		d.lastEventCommitTs.Store(event.GetCommitTs())
+	}
 	return true
 }
 
@@ -213,7 +219,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
-				StartTs:    d.sentCommitTs.Load(),
+				StartTs:    d.lastEventCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 			},
 		)
@@ -242,7 +248,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
-				StartTs:    d.sentCommitTs.Load(),
+				StartTs:    d.lastEventCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 			},
 		)
