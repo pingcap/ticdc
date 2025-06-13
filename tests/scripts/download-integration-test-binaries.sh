@@ -20,10 +20,10 @@ set -euo pipefail
 # Default values
 DEFAULT_BRANCH=${1:-master}
 
-TIDB_BRANCH=${TIDB_BRANCH:-v8.5.1}
-TIKV_BRANCH=${TIKV_BRANCH:-v8.5.1}
-PD_BRANCH=${PD_BRANCH:-v8.5.1}
-TIFLASH_BRANCH=${TIFLASH_BRANCH:-v8.5.1}
+TIDB_BRANCH=${TIDB_BRANCH:-$DEFAULT_BRANCH}
+TIKV_BRANCH=${TIKV_BRANCH:-$DEFAULT_BRANCH}
+PD_BRANCH=${PD_BRANCH:-$DEFAULT_BRANCH}
+TIFLASH_BRANCH=${TIFLASH_BRANCH:-$DEFAULT_BRANCH}
 
 COMMUNITY=${2:-false}
 VERSION=${3:-v8.5.0}
@@ -138,6 +138,8 @@ download_binaries() {
 	local pd_sha1=$(echo "$pd_branch_sha1" | cut -d':' -f2)
 	local tiflash_branch=$(echo "$tiflash_branch_sha1" | cut -d':' -f1)
 	local tiflash_sha1=$(echo "$tiflash_branch_sha1" | cut -d':' -f2)
+
+    local tidb_sha1="fea86c8e35ad4a86a5e1160701f99493c2ee547c"
 
 	# Define download URLs
 	local tidb_download_url="${FILE_SERVER_URL}/download/builds/pingcap/tidb/${tidb_sha1}/centos7/tidb-server.tar.gz"
