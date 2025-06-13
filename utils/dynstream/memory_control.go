@@ -97,18 +97,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		}
 	}
 
-	// For test, we drop 1 event every 10000 events.
-	if as.settings.Load().algorithm == MemoryControlForEventCollector && counter.Load()%10000 == 0 {
-		dropEvent := handler.OnDrop(event.event)
-		if dropEvent != nil {
-			event.eventType = handler.GetType(dropEvent.(T))
-			event.event = dropEvent.(T)
-			path.pendingQueue.PushBack(event)
-			path.dead.Store(true)
-			return true
-		}
-	}
-
 	// Drop the event if the memory usage ratio is greater than 1.
 	if as.memoryUsageRatio() > 1 && as.settings.Load().algorithm == MemoryControlForEventCollector {
 		dropEvent := handler.OnDrop(event.event)
