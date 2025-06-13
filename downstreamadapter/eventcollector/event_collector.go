@@ -163,7 +163,6 @@ func (c *EventCollector) Run(ctx context.Context) {
 
 	g.Go(func() error {
 		return c.processLogCoordinatorRequest(ctx)
-
 	})
 
 	g.Go(func() error {
