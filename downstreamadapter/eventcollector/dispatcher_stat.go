@@ -338,8 +338,8 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 	if len(nodes) == 0 {
 		return
 	}
-	d.eventServiceInfo.RLock()
-	defer d.eventServiceInfo.RUnlock()
+	d.eventServiceInfo.Lock()
+	defer d.eventServiceInfo.Unlock()
 	// reading from a event service or checking remotes already, ignore
 	if d.eventServiceInfo.serverID != "" {
 		return
