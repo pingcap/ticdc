@@ -26,6 +26,7 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +48,8 @@ type scanLimit struct {
 	// maxBytes is the maximum number of bytes to scan
 	maxBytes int64
 	// timeout is the maximum time to spend scanning
-	timeout time.Duration
+	timeout       time.Duration
+	dmlEventQuota *atomic.Uint64
 }
 
 // eventScanner scans events from eventStore and schemaStore
@@ -205,9 +207,7 @@ func (s *eventScanner) scanAndMergeEvents(
 		if rawEvent == nil {
 			return s.finalizeScan(session, merger, processor)
 		}
-
-		eventSize := int64(len(rawEvent.Key) + len(rawEvent.Value) + len(rawEvent.OldValue))
-		session.addBytes(eventSize)
+		session.addBytes(rawEvent.ApproximateDataSize())
 
 		if isNewTxn && checker.checkLimits(session.totalBytes) {
 			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
@@ -216,13 +216,13 @@ func (s *eventScanner) scanAndMergeEvents(
 		}
 
 		if isNewTxn {
-			if err := s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
+			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
 				return nil, false, err
 			}
 			continue
 		}
 
-		if err := processor.appendRow(rawEvent); err != nil {
+		if err = processor.appendRow(rawEvent); err != nil {
 			log.Error("append row failed", zap.Error(err),
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
@@ -237,11 +237,15 @@ func (s *eventScanner) scanAndMergeEvents(
 // return true if the scan should be stopped, false otherwise
 func (s *eventScanner) checkScanConditions(session *scanSession) (bool, error) {
 	if session.isContextDone() {
-		log.Warn("scan exits since context done", zap.Error(session.ctx.Err()), zap.Stringer("dispatcherID", session.dispatcherStat.id))
-		return true, session.ctx.Err()
+		log.Warn("scan exits since context done", zap.Error(context.Cause(session.ctx)), zap.Stringer("dispatcherID", session.dispatcherStat.id))
+		return true, context.Cause(session.ctx)
 	}
 
 	if !session.dispatcherStat.isRunning.Load() {
+		return true, nil
+	}
+
+	if session.limit.dmlEventQuota.Load() <= 1024*1024*8 {
 		return true, nil
 	}
 
@@ -309,6 +313,19 @@ func (s *eventScanner) finalizeScan(
 	events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
 	session.events = append(session.events, events...)
 
+	var approximateBytes uint64
+	for _, event := range session.events {
+		approximateBytes += uint64(event.GetSize())
+	}
+
+	quota := session.limit.dmlEventQuota.Load()
+	if approximateBytes > quota {
+		log.Warn("scan exceeds DML event quota, report broken",
+			zap.Uint64("approximateBytes", approximateBytes), zap.Uint64("quota", quota))
+		return session.events, true, nil
+	}
+	session.limit.dmlEventQuota.Sub(approximateBytes)
+
 	// Append remaining DDLs
 	remainingEvents := merger.appendRemainingDDLs(session.dataRange.EndTs)
 	session.events = append(session.events, remainingEvents...)
@@ -344,8 +361,11 @@ type scanSession struct {
 	limit          scanLimit
 
 	// State tracking
-	startTime    time.Time
-	totalBytes   int64
+	startTime time.Time
+
+	// totalBytes record the total bytes scanned in this session
+	totalBytes int64
+
 	lastCommitTs uint64
 	dmlCount     int
 

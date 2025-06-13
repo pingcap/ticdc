@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -83,6 +84,8 @@ type eventBroker struct {
 
 	// metricsCollector handles all metrics collection and reporting
 	metricsCollector *metricsCollector
+
+	dmlEventsQuota *atomic.Uint64
 }
 
 func newEventBroker(
@@ -126,6 +129,7 @@ func newEventBroker(
 		taskChan:                make([]chan scanTask, scanWorkerCount),
 		sendMessageWorkerCount:  sendMessageWorkerCount,
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
+		dmlEventsQuota:          atomic.NewUint64(0),
 		cancel:                  cancel,
 		g:                       g,
 	}
@@ -501,6 +505,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
+	if c.dmlEventsQuota.Load() <= 1024*1024*128 {
+		log.Info("scan quota is not enough, skip scan",
+			zap.String("changefeed", task.info.GetChangefeedID().String()),
+			zap.String("dispatcher", task.id.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("dmlEventQuota", c.dmlEventsQuota.Load()))
+		return
+	}
+
 	needScan, dataRange := c.checkNeedScan(task, true)
 	if !needScan {
 		return
@@ -508,8 +521,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
 	sl := scanLimit{
-		maxBytes: task.getCurrentScanLimitInBytes(),
-		timeout:  time.Millisecond * 1000, // 1 Second
+		dmlEventQuota: c.dmlEventsQuota,
+		maxBytes:      task.getCurrentScanLimitInBytes(),
+		timeout:       time.Millisecond * 1000, // 1 Second
 	}
 
 	events, isBroken, err := scanner.scan(ctx, task, dataRange, sl)
@@ -802,7 +816,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	start = time.Now()
 
-	success, err := c.eventStore.RegisterDispatcher(
+	success := c.eventStore.RegisterDispatcher(
 		id,
 		span,
 		info.GetStartTs(),
@@ -810,30 +824,19 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		info.IsOnlyReuse(),
 		info.GetBdrMode(),
 	)
-	if err != nil {
-		log.Error("register dispatcher to eventStore failed",
-			zap.Stringer("dispatcherID", id),
-			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", info.GetStartTs()),
-			zap.Error(err),
-		)
-		return err
-	}
-
 	if !success {
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
 				zap.Stringer("dispatcherID", id),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Uint64("startTs", info.GetStartTs()),
-				zap.Error(err),
 			)
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
 	}
 
-	err = c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
+	err := c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Stringer("dispatcherID", id),
@@ -985,7 +988,8 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 	return stat.(*changefeedStatus)
 }
 
-func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
+func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
+	c.dmlEventsQuota.Store(heartbeat.heartbeat.AvailableMemory)
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
@@ -1006,10 +1010,10 @@ func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *
 		// Update the last received heartbeat time to the current time.
 		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 	}
-	c.sendDispatcherResponse(ctx, responseMap)
+	c.sendDispatcherHeartbeatResponse(responseMap)
 }
 
-func (c *eventBroker) sendDispatcherResponse(ctx context.Context, responseMap map[string]*event.DispatcherHeartbeatResponse) {
+func (c *eventBroker) sendDispatcherHeartbeatResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {
 	for serverID, response := range responseMap {
 		msg := messaging.NewSingleTargetMessage(node.ID(serverID), messaging.EventCollectorTopic, response)
 		c.msgSender.SendCommand(msg)

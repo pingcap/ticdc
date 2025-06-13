@@ -207,7 +207,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	}
 
 	// init table schema store
-	err := manager.InitalizeTableTriggerEventDispatcher(req.Schemas)
+	err := manager.InitializeTableTriggerEventDispatcher(req.Schemas)
 	if err != nil {
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
