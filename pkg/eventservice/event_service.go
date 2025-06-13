@@ -82,8 +82,8 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
 		brokers:             make(map[uint64]*eventBroker),
-		dispatcherInfoChan:  make(chan DispatcherInfo, basicChannelSize*16),
-		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, basicChannelSize),
+		dispatcherInfoChan:  make(chan DispatcherInfo, 32),
+		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 32),
 	}
 	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
 	return es
@@ -100,28 +100,9 @@ func (s *eventService) Run(ctx context.Context) error {
 	}()
 
 	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
 	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
-
-	registerHandled := metrics.EventServiceHandledEventCount.WithLabelValues("register")
-	removeHandled := metrics.EventServiceHandledEventCount.WithLabelValues("remove")
-	pauseHandled := metrics.EventServiceHandledEventCount.WithLabelValues("pause")
-	resumeHandled := metrics.EventServiceHandledEventCount.WithLabelValues("resume")
-	resetHandled := metrics.EventServiceHandledEventCount.WithLabelValues("reset")
-	heartbeatHandled := metrics.EventServiceHandledEventCount.WithLabelValues("heartbeat")
-	defer func() {
-		metrics.EventServiceChannelSizeGauge.DeleteLabelValues("dispatcherInfo")
-		metrics.EventServiceChannelSizeGauge.DeleteLabelValues("heartbeat")
-
-		metrics.EventServiceHandledEventCount.DeleteLabelValues("register")
-		metrics.EventServiceHandledEventCount.DeleteLabelValues("remove")
-		metrics.EventServiceHandledEventCount.DeleteLabelValues("pause")
-		metrics.EventServiceHandledEventCount.DeleteLabelValues("resume")
-		metrics.EventServiceHandledEventCount.DeleteLabelValues("reset")
-		metrics.EventServiceHandledEventCount.DeleteLabelValues("heartbeat")
-		defer ticker.Stop()
-	}()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -133,25 +114,19 @@ func (s *eventService) Run(ctx context.Context) error {
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
 				s.registerDispatcher(ctx, info)
-				registerHandled.Inc()
 			case eventpb.ActionType_ACTION_TYPE_REMOVE:
 				s.deregisterDispatcher(info)
-				removeHandled.Inc()
 			case eventpb.ActionType_ACTION_TYPE_PAUSE:
 				s.pauseDispatcher(info)
-				pauseHandled.Inc()
 			case eventpb.ActionType_ACTION_TYPE_RESUME:
 				s.resumeDispatcher(info)
-				resumeHandled.Inc()
 			case eventpb.ActionType_ACTION_TYPE_RESET:
 				s.resetDispatcher(info)
-				resetHandled.Inc()
 			default:
 				log.Panic("invalid action type", zap.Any("info", info))
 			}
 		case heartbeat := <-s.dispatcherHeartbeat:
 			s.handleDispatcherHeartbeat(heartbeat)
-			heartbeatHandled.Inc()
 		}
 	}
 }

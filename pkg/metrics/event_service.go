@@ -25,13 +25,6 @@ var (
 		Help:      "The size of the event service channel",
 	}, []string{"type"})
 
-	EventServiceHandledEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "ticdc",
-		Subsystem: "event_service",
-		Name:      "handled_event_count",
-		Help:      "The number of events handled by the event service",
-	}, []string{"type"})
-
 	// EventServiceSendEventCount is the metric that counts events sent by the event service.
 	EventServiceSendEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
@@ -135,7 +128,6 @@ var (
 // InitEventServiceMetrics registers all metrics in this file.
 func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceChannelSizeGauge)
-	registry.MustRegister(EventServiceHandledEventCount)
 	registry.MustRegister(EventServiceSendEventCount)
 	registry.MustRegister(EventServiceSendEventDuration)
 	registry.MustRegister(EventServiceResolvedTsGauge)
