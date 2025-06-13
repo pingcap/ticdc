@@ -526,7 +526,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
 			if stat.getServerID() == c.serverId {
 				// register the dispatcher again
-				c.resetDispatcher(stat, stat.lastEventCommitTs.Load())
+				c.resetDispatcher(stat, stat.lastEventCommitTs.Load()-1)
 			}
 		}
 	}
@@ -689,6 +689,6 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 }
 
 func (c *EventCollector) handleDropEvent(event *event.DropEvent, dispatcherStat *dispatcherStat) {
-	log.Info("Handle drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
+	log.Info("Handle drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Uint64("lastEventCommitTs", dispatcherStat.lastEventCommitTs.Load()), zap.Any("event", event))
 	c.resetDispatcher(dispatcherStat, event.GetCommitTs()-1)
 }

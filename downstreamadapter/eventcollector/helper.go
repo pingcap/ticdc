@@ -14,6 +14,8 @@
 package eventcollector
 
 import (
+	"sync/atomic"
+
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -67,6 +69,8 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 	return event.GetDispatcherID()
 }
 
+var counter atomic.Uint64
+
 // Invariant: at any times, we can receive events from at most two event service, and one of them must be local event service.
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
 	if len(events) == 0 {
@@ -95,7 +99,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 				if !stat.isEventSeqValid(event) {
 					// if event seq is invalid, there must be some events dropped
 					// we need drop all events in this batch and reset the dispatcher
-					h.eventCollector.resetDispatcher(stat, stat.lastEventCommitTs.Load()-1)
+					h.eventCollector.resetDispatcher(stat, stat.getResetTs())
 					return false
 				}
 			} else {

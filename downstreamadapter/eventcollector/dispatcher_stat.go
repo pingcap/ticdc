@@ -69,6 +69,10 @@ func (d *dispatcherStat) reset() {
 	d.waitHandshake.Store(true)
 }
 
+func (d *dispatcherStat) getResetTs() uint64 {
+	return max(d.target.GetStartTs(), d.lastEventCommitTs.Load()-1)
+}
+
 // TODO: add epoch to event and use it to filter irrelevant events
 func (d *dispatcherStat) isEventFromCurrentEventService(event dispatcher.DispatcherEvent) bool {
 	d.eventServiceInfo.RLock()
@@ -93,14 +97,30 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent:
-		log.Debug("check event sequence",
+		log.Info("check event sequence",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()),
 			zap.Int("eventType", event.GetType()),
 			zap.Uint64("receivedSeq", event.GetSeq()),
 			zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
 			zap.Uint64("commitTs", event.GetCommitTs()))
+
 		expectedSeq := d.lastEventSeq.Add(1)
+
+		counter.Add(1)
+		if counter.Load()%66 == 0 {
+			log.Error("Mock Received an out-of-order event, reset the dispatcher",
+				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+				zap.Stringer("dispatcher", d.target.GetId()),
+				zap.Int("eventType", event.GetType()),
+				zap.Uint64("receivedSeq", event.GetSeq()),
+				zap.Uint64("expectedSeq", expectedSeq),
+				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+			)
+			return false
+		}
+
 		if event.GetSeq() != expectedSeq {
 			log.Error("Received an out-of-order event, reset the dispatcher",
 				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
@@ -163,8 +183,10 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 			zap.Stringer("from", event.From))
 		return
 	}
+
 	if !d.isEventSeqValid(event) {
-		log.Panic("fizz, event seq is invalid", zap.String("changefeedID", d.target.GetChangefeedID().ID().String()), zap.Stringer("dispatcher", d.target.GetId()), zap.Any("event", event))
+		log.Error("fizz, event seq is invalid", zap.String("changefeedID", d.target.GetChangefeedID().ID().String()), zap.Stringer("dispatcher", d.target.GetId()), zap.String("eventType", commonEvent.TypeToString(event.GetType())), zap.Any("event", event))
+		eventCollector.resetDispatcher(d, d.getResetTs())
 		return
 	}
 	d.waitHandshake.Store(false)
