@@ -87,7 +87,6 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		if stat.waitHandshake.Load() {
 			return false
 		}
-
 		hasInvalidEvent := false
 		hasValidEvent := false
 		for _, event := range events {
@@ -127,11 +126,9 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		return stat.target.HandleEvents(validEvents, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
-
 		if stat.waitHandshake.Load() {
 			return false
 		}
-
 		// TypeDDLEvent and TypeSyncPointEvent is handled one by one
 		if !stat.isEventFromCurrentEventService(events[0]) {
 			return false
@@ -144,15 +141,11 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 			return false
 		}
 		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
-	case commonEvent.TypeHandshakeEvent:
-		log.Panic("fizz, handshake event should not be received in handle function", zap.Any("event", events[0]))
-	case commonEvent.TypeReadyEvent:
-		log.Panic("fizz, ready event should not be received in handle function", zap.Any("event", events[0]))
 	case commonEvent.TypeNotReusableEvent:
 		stat.handleNotReusableEvent(events[0], h.eventCollector)
 		return false
 	default:
-		log.Panic("unknown event type", zap.Int("type", int(events[0].GetType())))
+		log.Panic("unexpected event type", zap.String("dispatcher", stat.dispatcherID.String()), zap.Int("type", int(events[0].GetType())), zap.Any("event", events[0].Event))
 	}
 	return false
 }
@@ -206,7 +199,7 @@ func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream
 func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent:
-		log.Info("fizz, drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
+		log.Info("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
 		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetCommitTs())
 		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
 	}

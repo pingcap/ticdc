@@ -103,7 +103,7 @@ func TestProcessMessage(t *testing.T) {
 	did := common.NewDispatcherID()
 	ch := make(chan *messaging.TargetMessage, receiveChanSize)
 	go func() {
-		c.runProcessMessage(ctx, ch)
+		c.runProcessMessage(ctx, ch, 0)
 	}()
 
 	var seq atomic.Uint64

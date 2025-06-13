@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -664,14 +663,6 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	start := time.Now()
 	congestedRetryInterval := time.Millisecond * 10
 	retryCount := 0
-
-	// 添加发送开始日志
-	log.Debug("fizz sending message",
-		zap.String("targetID", string(tMsg.To)),
-		zap.String("topic", tMsg.Topic),
-		zap.String("messageType", fmt.Sprintf("%T", tMsg.Message[0])),
-		zap.Int("messageCount", len(tMsg.Message)))
-
 	// Send the message to messageCenter. Retry if to send failed.
 	for {
 		select {
@@ -698,15 +689,6 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 				return
 			}
 		}
-
-		// 添加发送成功日志
-		if retryCount > 0 {
-			log.Info("fizz message sent successfully after retry",
-				zap.String("targetID", string(tMsg.To)),
-				zap.Int("retryCount", retryCount),
-				zap.Duration("duration", time.Since(start)))
-		}
-
 		if postSendMsg != nil {
 			postSendMsg()
 		}
@@ -966,14 +948,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		_ = c.addDispatcher(dispatcherInfo)
 		return
 	}
-
-	log.Info("fizz reset dispatcher start",
-		zap.Stringer("dispatcherID", stat.id),
-		zap.Uint64("oldSeq", stat.seq.Load()),
-		zap.Uint64("oldSentResolvedTs", stat.sentResolvedTs.Load()),
-		zap.Bool("isTaskScanning", stat.isTaskScanning.Load()),
-		zap.Bool("isRunning", stat.isRunning.Load()))
-
 	// Must set the isRunning to false before reset the dispatcher.
 	// Otherwise, the scan task goroutine will not return before reset the dispatcher.
 	stat.isRunning.Store(false)
@@ -985,8 +959,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 			break
 		}
 		waitCount++
-		if waitCount%100 == 0 { // 每1秒记录一次等待日志
-			log.Info("fizz waiting for scan task to complete",
+		if waitCount%100 == 0 {
+			log.Info("waiting for scan task to complete",
 				zap.Stringer("dispatcherID", stat.id),
 				zap.Int("waitCount", waitCount))
 		}
@@ -1007,11 +981,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("newSeq", stat.seq.Load()),
 		zap.Uint64("oldSentResolvedTs", oldSentResolvedTs),
 		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()))
-
-	log.Info("fizz reset dispatcher complete",
-		zap.Stringer("dispatcherID", stat.id),
-		zap.Uint64("resetTs", stat.resetTs.Load()),
-		zap.Bool("isHandshaked", stat.isHandshaked.Load()))
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

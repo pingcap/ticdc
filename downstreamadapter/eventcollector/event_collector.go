@@ -689,6 +689,6 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 }
 
 func (c *EventCollector) handleDropEvent(event *event.DropEvent, dispatcherStat *dispatcherStat) {
-	log.Info("fizz, handle drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
+	log.Info("Handle drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
 	c.resetDispatcher(dispatcherStat, event.GetCommitTs()-1)
 }
