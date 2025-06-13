@@ -254,25 +254,11 @@ func NewEventDispatcherManager(
 
 	// redo manager
 	if manager.redoSink.Enabled() {
-		// set global redo ts
+		// every node
+		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoTsMessageDs(manager)
 		manager.wg.Add(3)
 		go func() {
 			defer manager.wg.Done()
-			err := manager.redoMeta.PreStart(ctx)
-			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-				select {
-				case <-ctx.Done():
-					return
-				case manager.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", changefeedID),
-						zap.Error(err),
-					)
-				}
-			}
-			meta := manager.redoMeta.GetFlushedMeta()
-			manager.SetGlobalRedoTs(max(meta.CheckpointTs, startTs), max(meta.ResolvedTs, startTs))
 			err = manager.redoMeta.Run(ctx)
 			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 				select {
@@ -428,7 +414,6 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	// redo
 	if e.redoSink.Enabled() {
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota)
-		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoTsMessageDs(e)
 	}
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.sinkQuota)
@@ -569,7 +554,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	return nil
 }
 
-func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, _ bool) error {
+func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
 	currentPdTs := e.pdClock.CurrentTS()
 
@@ -843,6 +828,11 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	}
 
 	e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
+		// the merged dispatcher in preparing state, don't need to join the calculation of the heartbeat
+		// the dispatcher still not know the startTs of it, and the dispatchers to be merged are still in the calculation of the checkpointTs
+		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Preparing || dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_MergeReady {
+			return
+		}
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
 		// If it's closed successfully, we could clean it up.
@@ -1505,6 +1495,7 @@ func (e *EventDispatcherManager) removeRedoDispatcher(id common.DispatcherID) {
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
+				Redo:            true,
 			},
 			Seq: e.dispatcherMap.GetSeq(),
 		}
@@ -1542,7 +1533,7 @@ func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, sch
 func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
 	// only update meta on the one node
 	if e.tableTriggerEventDispatcher != nil {
-		log.Info("update redo meta", zap.Any("resolvedTs", resolvedTs), zap.Any("checkpointTs", checkpointTs))
+		log.Info("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs), zap.Any("node", e.GetMaintainerID()))
 		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
 	return atomic.CompareAndSwapUint64(&e.redoGlobalTs, e.redoGlobalTs, resolvedTs)

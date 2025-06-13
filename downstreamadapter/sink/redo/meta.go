@@ -101,7 +101,7 @@ func (m *RedoMeta) Running() bool {
 	return m.running.Load()
 }
 
-func (m *RedoMeta) PreStart(ctx context.Context) error {
+func (m *RedoMeta) preStart(ctx context.Context) error {
 	uri, err := storage.ParseRawURL(m.cfg.Storage)
 	if err != nil {
 		return err
@@ -143,6 +143,9 @@ func (m *RedoMeta) PreStart(ctx context.Context) error {
 
 // Run runs bgFlushMeta and bgGC.
 func (m *RedoMeta) Run(ctx context.Context) error {
+	if err := m.preStart(ctx); err != nil {
+		return err
+	}
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return m.bgFlushMeta(egCtx)

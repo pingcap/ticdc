@@ -283,6 +283,11 @@ func (cm *ControllerManager) determineStartTs(allNodesResp map[node.ID]*heartbea
 			zap.Int("spanCount", len(resp.Spans)))
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
+			// if cm.redoController != nil {
+			// 	status := cm.redoController.replicationDB.GetDDLDispatcher().GetStatus()
+			// 	status.CheckpointTs = startTs
+			// 	cm.redoController.replicationDB.UpdateStatus(cm.redoController.replicationDB.GetDDLDispatcher(), status)
+			// }
 			status := cm.controller.replicationDB.GetDDLDispatcher().GetStatus()
 			status.CheckpointTs = startTs
 			cm.controller.replicationDB.UpdateStatus(cm.controller.replicationDB.GetDDLDispatcher(), status)
@@ -306,7 +311,7 @@ func (cm *ControllerManager) buildWorkingTaskMap(
 				continue
 			}
 			spanReplication := cm.createSpanReplication(spanInfo, node)
-			cm.addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
+			addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
 		}
 	}
 	return workingTaskMap
@@ -327,19 +332,6 @@ func (cm *ControllerManager) createSpanReplication(spanInfo *heartbeatpb.Bootstr
 		status,
 		node,
 	)
-}
-
-func (cm *ControllerManager) addToWorkingTaskMap(
-	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-	span *heartbeatpb.TableSpan,
-	spanReplication *replica.SpanReplication,
-) {
-	tableSpans, ok := workingTaskMap[span.TableID]
-	if !ok {
-		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
-		workingTaskMap[span.TableID] = tableSpans
-	}
-	tableSpans.ReplaceOrInsert(span, spanReplication)
 }
 
 func (cm *ControllerManager) processTablesAndBuildSchemaInfo(
@@ -387,9 +379,9 @@ func (cm *ControllerManager) processTableSpans(
 			zap.Stringer("changefeed", cm.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
-		if cm.redoController != nil {
-			cm.redoController.addWorkingSpans(tableSpans)
-		}
+		// if cm.redoController != nil {
+		// 	cm.redoController.addWorkingSpans(tableSpans)
+		// }
 		cm.controller.addWorkingSpans(tableSpans)
 
 		if cm.enableTableAcrossNodes {
@@ -398,9 +390,9 @@ func (cm *ControllerManager) processTableSpans(
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
-		if cm.redoController != nil {
-			cm.redoController.AddNewTable(table, cm.startCheckpointTs)
-		}
+		// if cm.redoController != nil {
+		// 	cm.redoController.AddNewTable(table, cm.startCheckpointTs)
+		// }
 		cm.controller.AddNewTable(table, cm.startCheckpointTs)
 	}
 }
@@ -411,11 +403,12 @@ func (cm *ControllerManager) handleTableHoles(
 	tableSpan *heartbeatpb.TableSpan,
 ) {
 	holes := split.FindHoles(tableSpans, tableSpan)
+	// redo
+	// if cm.redoController != nil {
+	// 	cm.redoController.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
+	// }
 	// Todo: split the hole
 	// Add holes to the replicationDB
-	if cm.redoController != nil {
-		cm.redoController.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
-	}
 	cm.controller.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
 }
 
@@ -686,4 +679,17 @@ func (cm *ControllerManager) getOC(redo bool) *operator.Controller {
 		return cm.redoOperatorController
 	}
 	return cm.operatorController
+}
+
+func addToWorkingTaskMap(
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	span *heartbeatpb.TableSpan,
+	spanReplication *replica.SpanReplication,
+) {
+	tableSpans, ok := workingTaskMap[span.TableID]
+	if !ok {
+		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
+		workingTaskMap[span.TableID] = tableSpans
+	}
+	tableSpans.ReplaceOrInsert(span, spanReplication)
 }

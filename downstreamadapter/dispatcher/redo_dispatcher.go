@@ -259,7 +259,7 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
 		if rd.isFirstEvent(event) {
-			rd.updateComponentStatus()
+			rd.updateComponentStatusToWorking()
 		}
 
 		switch event.GetType() {
@@ -493,17 +493,17 @@ func (rd *RedoDispatcher) isFirstEvent(event commonEvent.Event) bool {
 	return false
 }
 
-func (rd *RedoDispatcher) updateComponentStatus() {
+func (rd *RedoDispatcher) updateComponentStatusToWorking() {
 	rd.componentStatus.Set(heartbeatpb.ComponentState_Working)
 	rd.statusesChan <- TableSpanStatusWithSeq{
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
 			ID:              rd.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    rd.GetCheckpointTs(),
 			Redo:            true,
 		},
-		CheckpointTs: rd.GetCheckpointTs(),
-		ResolvedTs:   rd.GetResolvedTs(),
-		Seq:          rd.seq,
+		ResolvedTs: rd.GetResolvedTs(),
+		Seq:        rd.seq,
 	}
 }
 

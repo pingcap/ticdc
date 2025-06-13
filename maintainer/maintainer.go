@@ -189,6 +189,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 				ID:              tableTriggerEventDispatcherID.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Working,
 				CheckpointTs:    checkpointTs,
+				Redo:            true,
 			}, selfNode.ID)
 	}
 	m := &Maintainer{
@@ -654,13 +655,16 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 			m.checkpointTsByCapture[msg.From] = *req.Watermark
 		}
 	}
-	m.controllerManager.HandleStatus(msg.From, req.Statuses)
-	if req.Err != nil {
-		log.Warn("dispatcher report an error",
-			zap.Stringer("changefeed", m.id),
-			zap.Stringer("sourceNode", msg.From),
-			zap.String("error", req.Err.Message))
-		m.onError(msg.From, req.Err)
+	if len(req.Statuses) > 0 {
+		log.Error("onHeartBeatRequest", zap.Any("Statuses", req.Statuses), zap.Any("Statuses[0]", req.Statuses[0].Redo))
+		m.controllerManager.HandleStatus(msg.From, req.Statuses)
+		if req.Err != nil {
+			log.Warn("dispatcher report an error",
+				zap.Stringer("changefeed", m.id),
+				zap.Stringer("sourceNode", msg.From),
+				zap.String("error", req.Err.Message))
+			m.onError(msg.From, req.Err)
+		}
 	}
 }
 

@@ -81,7 +81,8 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		log.Warn("table already add, ignore",
 			zap.String("changefeed", c.changefeedID.Name()),
 			zap.Int64("schema", table.SchemaID),
-			zap.Int64("table", table.TableID))
+			zap.Int64("table", table.TableID),
+		)
 		return
 	}
 	span := common.TableIDToComparableSpan(table.TableID)

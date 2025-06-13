@@ -320,6 +320,7 @@ func (oc *Controller) NewRemoveOperator(replicaSet *replica.SpanReplication) ope
 	return &removeDispatcherOperator{
 		replicaSet: replicaSet,
 		db:         oc.replicationDB,
+		redo:       oc.redo,
 	}
 }
 
