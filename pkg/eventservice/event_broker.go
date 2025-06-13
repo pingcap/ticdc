@@ -179,14 +179,6 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
-			dml := e.DMLEvents[0]
-			log.Info("fizz sending DML event",
-				zap.Stringer("dispatcher", d.id),
-				zap.Uint64("seq", dml.Seq),
-				zap.Uint64("commitTs", dml.GetCommitTs()),
-				zap.Uint64("startTs", dml.StartTs),
-				zap.String("remoteID", string(remoteID)),
-				zap.Int("workerIndex", workerIndex))
 
 			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
 			metricEventServiceSendKvCount.Add(float64(e.Len()))
@@ -529,8 +521,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, workerIndex int
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
-
-	log.Info("fizz scan events", zap.Int("workerIndex", workerIndex), zap.Int("eventCount", len(events)), zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Bool("isBroken", isBroken))
 
 	// If the task is not running, we don't send the events to the dispatcher.
 	if !task.isRunning.Load() {

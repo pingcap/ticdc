@@ -132,7 +132,6 @@ func newDispatcherStat(
 	changefeedStatus.addDispatcher()
 
 	if info.SyncPointEnabled() {
-		log.Info("fizz sync point enabled", zap.Stringer("dispatcher", dispStat.id), zap.Uint64("syncPointTs", info.GetSyncPointTs()), zap.Duration("syncPointInterval", info.GetSyncPointInterval()))
 		dispStat.enableSyncPoint = true
 		dispStat.nextSyncPoint = info.GetSyncPointTs()
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
