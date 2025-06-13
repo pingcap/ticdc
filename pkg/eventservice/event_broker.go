@@ -140,24 +140,20 @@ func newEventBroker(
 		taskChan := make(chan scanTask, scanTaskQueueSize)
 		c.taskChan[i] = taskChan
 		g.Go(func() error {
-			c.runScanWorker(ctx, taskChan)
-			return nil
+			return c.runScanWorker(ctx, taskChan)
 		})
 	}
 
 	g.Go(func() error {
-		c.tickTableTriggerDispatchers(ctx)
-		return nil
+		return c.tickTableTriggerDispatchers(ctx)
 	})
 
 	g.Go(func() error {
-		c.logUnresetDispatchers(ctx)
-		return nil
+		return c.logUnresetDispatchers(ctx)
 	})
 
 	g.Go(func() error {
-		c.reportDispatcherStatToStore(ctx)
-		return nil
+		return c.reportDispatcherStatToStore(ctx)
 	})
 
 	g.Go(func() error {
@@ -166,8 +162,7 @@ func newEventBroker(
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
 		g.Go(func() error {
-			c.runSendMessageWorker(ctx, i)
-			return nil
+			return c.runSendMessageWorker(ctx, i)
 		})
 	}
 	log.Info("new event broker created", zap.Uint64("id", id))
@@ -268,11 +263,11 @@ func (c *eventBroker) getMessageCh(workerIndex int) chan *wrapEvent {
 	return c.messageCh[workerIndex]
 }
 
-func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) {
+func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case task := <-taskChan:
 			c.doScan(ctx, task)
 		}
@@ -281,13 +276,13 @@ func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask)
 
 // TODO: maybe event driven model is better. It is coupled with the detail implementation of
 // the schemaStore, we will refactor it later.
-func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
+func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 	ticker := time.NewTicker(time.Millisecond * 50)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case <-ticker.C:
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcherStat := value.(*dispatcherStat)
@@ -319,13 +314,13 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 	}
 }
 
-func (c *eventBroker) logUnresetDispatchers(ctx context.Context) {
+func (c *eventBroker) logUnresetDispatchers(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case <-ticker.C:
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
@@ -561,7 +556,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	metricEventBrokerScanTaskCount.Inc()
 }
 
-func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) {
+func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) error {
 	flushResolvedTsTicker := time.NewTicker(defaultFlushResolvedTsInterval)
 	defer flushResolvedTsTicker.Stop()
 
@@ -571,7 +566,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case m := <-messageCh:
 			batchM = append(batchM, m)
 
@@ -692,13 +687,13 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	}
 }
 
-func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) {
+func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) error {
 	ticker := time.NewTicker(time.Second * 10)
 	log.Info("update dispatcher send ts goroutine is started")
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case <-ticker.C:
 			inActiveDispatchers := make([]*dispatcherStat, 0)
 			c.dispatchers.Range(func(key, value interface{}) bool {
