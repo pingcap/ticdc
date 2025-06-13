@@ -204,9 +204,6 @@ func (d *dispatcherStat) resume() {
 }
 
 func (d *dispatcherStat) wake() {
-	log.Info("wake up dispatcher",
-		zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
-		zap.Stringer("dispatcherID", d.getDispatcherID()))
 	d.eventCollector.ds.Wake(d.getDispatcherID())
 }
 
@@ -265,6 +262,8 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 	return true
 }
 
+// verifyEventCommitTs verifies if the event's commit timestamp is valid.
+// Note: this function must be called on every event received.
 func (d *dispatcherStat) verifyEventCommitTs(event dispatcher.DispatcherEvent) bool {
 	shouldIgnore := false
 	if event.GetCommitTs() < d.sentCommitTs.Load() {
