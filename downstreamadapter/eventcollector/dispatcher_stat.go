@@ -204,6 +204,9 @@ func (d *dispatcherStat) resume() {
 }
 
 func (d *dispatcherStat) wake() {
+	log.Info("wake up dispatcher",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+		zap.Stringer("dispatcherID", d.getDispatcherID()))
 	d.eventCollector.ds.Wake(d.getDispatcherID())
 }
 
@@ -290,7 +293,7 @@ func (d *dispatcherStat) verifyEventCommitTs(event dispatcher.DispatcherEvent) b
 	}
 	if event.GetCommitTs() > d.sentCommitTs.Load() {
 		// if the commit ts is larger than the last sent commit ts,
-		// it means we have received a new event, so we need to reset the DDL and SyncPoint flags.
+		// we need to reset the DDL and SyncPoint flags.
 		d.gotDDLOnTs.Store(false)
 		d.gotSyncpointOnTS.Store(false)
 	}
