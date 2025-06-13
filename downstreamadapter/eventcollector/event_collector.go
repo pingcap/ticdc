@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -78,13 +79,6 @@ func (d *DispatcherHeartbeatWithTarget) incRetryCounter() {
 	d.retryCounter++
 }
 
-const (
-	eventServiceTopic         = messaging.EventServiceTopic
-	eventCollectorTopic       = messaging.EventCollectorTopic
-	logCoordinatorTopic       = messaging.LogCoordinatorTopic
-	typeRegisterDispatcherReq = messaging.TypeDispatcherRequest
-)
-
 /*
 EventCollector is the relay between EventService and DispatcherManager, responsible for:
 1. Send dispatcher request to EventService.
@@ -116,7 +110,7 @@ type EventCollector struct {
 		value atomic.Value
 	}
 
-	wg     sync.WaitGroup
+	g      *errgroup.Group
 	cancel context.CancelFunc
 
 	metricDispatcherReceivedKVEventCount         prometheus.Counter
@@ -148,46 +142,38 @@ func New(serverId node.ID) *EventCollector {
 }
 
 func (c *EventCollector) Run(ctx context.Context) {
+	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
+	c.g = g
 	c.cancel = cancel
 
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
-		c.wg.Add(1)
-		go func() {
-			defer c.wg.Done()
-			c.runProcessMessage(ctx, c.receiveChannels[i])
-		}()
+		g.Go(func() error {
+			return c.runProcessMessage(ctx, c.receiveChannels[i])
+		})
 	}
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.processFeedback(ctx)
-	}()
+	g.Go(func() error {
+		return c.processFeedback(ctx)
+	})
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.processDispatcherRequests(ctx)
-	}()
+	g.Go(func() error {
+		return c.processDispatcherRequests(ctx)
+	})
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.processLogCoordinatorRequest(ctx)
-	}()
+	g.Go(func() error {
+		return c.processLogCoordinatorRequest(ctx)
+	})
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.updateMetrics(ctx)
-	}()
+	g.Go(func() error {
+		return c.updateMetrics(ctx)
+	})
 }
 
 func (c *EventCollector) Close() {
 	log.Info("event collector is closing")
 	c.cancel()
-	c.wg.Wait()
+	_ = c.g.Wait()
 	c.ds.Close()
 	c.changefeedIDMap.Range(func(key, value any) bool {
 		cfID := value.(common.ChangeFeedID)
@@ -248,7 +234,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 
-	err = c.mustSendDispatcherRequest(c.serverId, eventServiceTopic, DispatcherRequest{
+	err = c.mustSendDispatcherRequest(c.serverId, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
@@ -265,7 +251,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 	log.Info("commit add dispatcher", zap.Stringer("dispatcher", target.GetId()), zap.Uint64("startTs", startTs))
 	c.addDispatcherRequestToSendingQueue(
 		c.serverId,
-		eventServiceTopic,
+		messaging.EventServiceTopic,
 		DispatcherRequest{
 			Dispatcher: target,
 			StartTs:    startTs,
@@ -341,7 +327,7 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
 	c.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
-		eventServiceTopic,
+		messaging.EventServiceTopic,
 		DispatcherRequest{
 			Dispatcher: d.target,
 			StartTs:    d.sentCommitTs.Load(),
@@ -361,13 +347,13 @@ func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, to
 	}
 }
 
-func (c *EventCollector) processFeedback(ctx context.Context) {
+func (c *EventCollector) processFeedback(ctx context.Context) error {
 	log.Info("Start process feedback from dynamic stream")
 	defer log.Info("Stop process feedback from dynamic stream")
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case feedback := <-c.ds.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea, dynstream.ResumeArea:
@@ -381,11 +367,11 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 	}
 }
 
-func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
+func (c *EventCollector) processDispatcherRequests(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case req := <-c.dispatcherRequestChan.Out():
 			if err := c.mustSendDispatcherRequest(req.Target, req.Topic, req.Req); err != nil {
 				// Sleep a short time to avoid too many requests in a short time.
@@ -411,11 +397,11 @@ func (c *EventCollector) getCoordinatorInfo() node.ID {
 	return ""
 }
 
-func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
+func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case req := <-c.logCoordinatorRequestChan.Out():
 			coordinatorID := c.getCoordinatorInfo()
 			if coordinatorID == "" {
@@ -424,7 +410,7 @@ func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
 				time.Sleep(10 * time.Millisecond)
 				continue
 			}
-			targetMessage := messaging.NewSingleTargetMessage(coordinatorID, logCoordinatorTopic, req)
+			targetMessage := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, req)
 			err := c.mc.SendCommand(targetMessage)
 			if err != nil {
 				log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
@@ -464,7 +450,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		message.DispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
 	}
 
-	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, eventServiceTopic, message))
+	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, messaging.EventServiceTopic, message))
 	if err != nil {
 		log.Info("failed to send dispatcher request message to event service, try again later",
 			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),
@@ -560,11 +546,11 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	return nil
 }
 
-func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) {
+func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case targetMessage := <-inCh:
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
@@ -626,13 +612,13 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 	}
 }
 
-func (c *EventCollector) updateMetrics(ctx context.Context) {
+func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case <-ticker.C:
 			dsMetrics := c.ds.GetMetrics()
 			metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))

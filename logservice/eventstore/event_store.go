@@ -68,12 +68,12 @@ type EventStore interface {
 		notifier ResolvedTsNotifier,
 		onlyReuse bool,
 		bdrMode bool,
-	) (bool, error)
+	) bool
 
-	UnregisterDispatcher(dispatcherID common.DispatcherID) error
+	UnregisterDispatcher(dispatcherID common.DispatcherID)
 
 	// TODO: Implement this after checkpointTs is correctly reported by the downstream dispatcher.
-	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64) error
+	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
 	GetDispatcherDMLEventState(dispatcherID common.DispatcherID) (bool, DMLEventState)
 
@@ -102,7 +102,7 @@ type dispatcherStat struct {
 	tableSpan *heartbeatpb.TableSpan
 	// the max ts of events which is not needed by this dispatcher
 	checkpointTs uint64
-	// the subscription which this dipatcher depends on
+	// the subscription which this dispatcher depends on
 	subStat *subscriptionStat
 }
 
@@ -347,7 +347,7 @@ func (e *eventStore) RegisterDispatcher(
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
-) (bool, error) {
+) bool {
 	log.Info("register dispatcher",
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.String("span", common.FormatTableSpan(dispatcherSpan)),
@@ -404,14 +404,14 @@ func (e *eventStore) RegisterDispatcher(
 					zap.Uint64("subID", uint64(subStat.subID)),
 					zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 					zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
-				return true, nil
+				return true
 			}
 		}
 	}
 	e.dispatcherMeta.Unlock()
 
 	if onlyReuse {
-		return false, nil
+		return false
 	}
 
 	// cannot share data from existing subscription, create a new subscription
@@ -488,10 +488,10 @@ func (e *eventStore) RegisterDispatcher(
 		ResolvedTs:   startTs,
 	}
 	metrics.EventStoreSubscriptionGauge.Inc()
-	return true, nil
+	return true
 }
 
-func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
+func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
 	log.Info("unregister dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 	defer func() {
 		log.Info("unregister dispatcher done", zap.Stringer("dispatcherID", dispatcherID))
@@ -500,7 +500,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 	defer e.dispatcherMeta.Unlock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
-		return nil
+		return
 	}
 	subStat := stat.subStat
 	delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
@@ -511,61 +511,67 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 		subStat.idleTime.Store(time.Now().UnixMilli())
 	}
 	subStat.dispatchers.Unlock()
-	return nil
+	return
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(
 	dispatcherID common.DispatcherID,
 	checkpointTs uint64,
-) error {
+) {
 	e.dispatcherMeta.RLock()
 	defer e.dispatcherMeta.RUnlock()
-	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
-		stat.checkpointTs = checkpointTs
-		subStat := stat.subStat
-		// calculate the new checkpoint ts of the subscription
-		newCheckpointTs := uint64(0)
-		for dispatcherID := range subStat.dispatchers.notifiers {
-			dispatcherStat := e.dispatcherMeta.dispatcherStats[dispatcherID]
-			if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
-				newCheckpointTs = dispatcherStat.checkpointTs
-			}
-		}
-		if newCheckpointTs == 0 {
-			return nil
-		}
-		if newCheckpointTs < subStat.checkpointTs.Load() {
-			log.Panic("should not happen",
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
-		}
 
-		if subStat.checkpointTs.Load() < newCheckpointTs {
-			e.gcManager.addGCItem(
-				subStat.dbIndex,
-				uint64(subStat.subID),
-				stat.tableSpan.TableID,
-				subStat.checkpointTs.Load(),
-				newCheckpointTs,
-			)
-			e.subscriptionChangeCh.In() <- SubscriptionChange{
-				ChangeType:   SubscriptionChangeTypeUpdate,
-				SubID:        uint64(stat.subStat.subID),
-				Span:         stat.tableSpan,
-				CheckpointTs: newCheckpointTs,
-				ResolvedTs:   subStat.resolvedTs.Load(),
-			}
-			subStat.checkpointTs.CompareAndSwap(subStat.checkpointTs.Load(), newCheckpointTs)
-			if log.GetLevel() <= zap.DebugLevel {
-				log.Debug("update checkpoint ts",
-					zap.Any("dispatcherID", dispatcherID),
-					zap.Uint64("subID", uint64(subStat.subID)),
-					zap.Uint64("newCheckpointTs", newCheckpointTs),
-					zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
-			}
+	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
+	if !ok {
+		return
+	}
+
+	stat.checkpointTs = checkpointTs
+	subStat := stat.subStat
+	// calculate the new checkpoint ts of the subscription
+	var newCheckpointTs uint64
+	for id := range subStat.dispatchers.notifiers {
+		dispatcherStat := e.dispatcherMeta.dispatcherStats[id]
+		if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
+			newCheckpointTs = dispatcherStat.checkpointTs
 		}
 	}
-	return nil
+
+	if newCheckpointTs == 0 {
+		return
+	}
+
+	oldCheckpointTs := subStat.checkpointTs.Load()
+	if newCheckpointTs == oldCheckpointTs {
+		return
+	}
+	if newCheckpointTs < oldCheckpointTs {
+		log.Panic("should not happen",
+			zap.Uint64("newCheckpointTs", newCheckpointTs),
+			zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+	}
+	e.gcManager.addGCItem(
+		subStat.dbIndex,
+		uint64(subStat.subID),
+		stat.tableSpan.TableID,
+		subStat.checkpointTs.Load(),
+		newCheckpointTs,
+	)
+	e.subscriptionChangeCh.In() <- SubscriptionChange{
+		ChangeType:   SubscriptionChangeTypeUpdate,
+		SubID:        uint64(stat.subStat.subID),
+		Span:         stat.tableSpan,
+		CheckpointTs: newCheckpointTs,
+		ResolvedTs:   subStat.resolvedTs.Load(),
+	}
+	subStat.checkpointTs.CompareAndSwap(subStat.checkpointTs.Load(), newCheckpointTs)
+	if log.GetLevel() <= zap.DebugLevel {
+		log.Debug("update checkpoint ts",
+			zap.Any("dispatcherID", dispatcherID),
+			zap.Uint64("subID", uint64(subStat.subID)),
+			zap.Uint64("newCheckpointTs", newCheckpointTs),
+			zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
+	}
 }
 
 func (e *eventStore) GetDispatcherDMLEventState(dispatcherID common.DispatcherID) (bool, DMLEventState) {

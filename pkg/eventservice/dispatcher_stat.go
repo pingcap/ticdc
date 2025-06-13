@@ -140,13 +140,12 @@ func newDispatcherStat(
 	dispStat.checkpointTs.Store(startTs)
 	dispStat.sentResolvedTs.Store(startTs)
 	dispStat.isRunning.Store(true)
-	dispStat.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
-
 	dispStat.resetScanLimit()
-	dispStat.maxScanLimitInBytes.Store(maxScanLimitInBytes)
 
-	dispStat.lastReceivedResolvedTsTime.Store(time.Now())
-	dispStat.lastSentResolvedTsTime.Store(time.Now())
+	now := time.Now()
+	dispStat.lastReceivedResolvedTsTime.Store(now)
+	dispStat.lastSentResolvedTsTime.Store(now)
+	dispStat.lastReceivedHeartbeatTime.Store(now.UnixNano())
 	return dispStat
 }
 
@@ -251,6 +250,7 @@ func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 
 func (a *dispatcherStat) resetScanLimit() {
 	a.currentScanLimitInBytes.Store(minScanLimitInBytes)
+	a.maxScanLimitInBytes.Store(maxScanLimitInBytes)
 	a.lastUpdateScanLimitTime.Store(time.Now())
 }
 

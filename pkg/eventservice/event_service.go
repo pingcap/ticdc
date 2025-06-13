@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )
 
@@ -81,8 +82,8 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
 		brokers:             make(map[uint64]*eventBroker),
-		dispatcherInfoChan:  make(chan DispatcherInfo, basicChannelSize*16),
-		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, basicChannelSize),
+		dispatcherInfoChan:  make(chan DispatcherInfo, 32),
+		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 32),
 	}
 	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
 	return es
@@ -97,10 +98,18 @@ func (s *eventService) Run(ctx context.Context) error {
 	defer func() {
 		log.Info("event service exited")
 	}()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
+	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-ticker.C:
+			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
+			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
 		case info := <-s.dispatcherInfoChan:
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
@@ -117,7 +126,7 @@ func (s *eventService) Run(ctx context.Context) error {
 				log.Panic("invalid action type", zap.Any("info", info))
 			}
 		case heartbeat := <-s.dispatcherHeartbeat:
-			s.handleDispatcherHeartbeat(ctx, heartbeat)
+			s.handleDispatcherHeartbeat(heartbeat)
 		}
 	}
 }
@@ -210,13 +219,13 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	c.resetDispatcher(dispatcherInfo)
 }
 
-func (s *eventService) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
+func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	clusterID := heartbeat.heartbeat.ClusterID
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		return
 	}
-	c.handleDispatcherHeartbeat(ctx, heartbeat)
+	c.handleDispatcherHeartbeat(heartbeat)
 }
 
 func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
