@@ -294,8 +294,8 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.EventDispatcher) {
 	}
 }
 
-func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID, isRedo bool) {
-	if isRedo {
+func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID, redo bool) {
+	if redo {
 		c.redoDs.Wake(dispatcherID)
 		return
 	}

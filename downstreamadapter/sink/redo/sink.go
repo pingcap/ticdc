@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/ticdc/redo/writer/factory"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 // Sink manages redo log writer, buffers un-persistent redo logs, calculates
@@ -105,7 +106,14 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 }
 
 func (s *Sink) Run(ctx context.Context) error {
-	return s.dmlWriter.Run(ctx)
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return s.dmlWriter.Run(ctx)
+	})
+	g.Go(func() error {
+		return s.sendMessages(ctx)
+	})
+	return g.Wait()
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -117,7 +125,21 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWriter.AsyncWriteEvents(s.ctx, event)
+	event.Rewind()
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			return
+		}
+
+		s.logBuffer <- &commonEvent.RedoRowEvent{
+			StartTs:   event.StartTs,
+			CommitTs:  event.CommitTs,
+			Event:     row,
+			TableInfo: event.TableInfo,
+			Callback:  event.PostFlush,
+		}
+	}
 }
 
 func (s *Sink) IsNormal() bool {
@@ -158,4 +180,15 @@ func (s *Sink) Close(_ bool) {
 	log.Info("redo manager closed",
 		zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
 		zap.String("changefeed", s.cfg.ChangeFeedID.Name()))
+}
+
+func (s *Sink) sendMessages(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case e := <-s.logBuffer:
+			s.dmlWriter.AsyncWriteEvents(ctx, e)
+		}
+	}
 }

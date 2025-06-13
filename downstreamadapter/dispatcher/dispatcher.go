@@ -264,14 +264,18 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	if len(dispatcherEvents) > 0 && atomic.LoadUint64(d.redoGlobalTs) < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
 		// cache here
 		cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
-		d.cacheEvents <- cacheEvents
-		log.Warn("Cache event",
-			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
-			zap.Stringer("dispatcher", d.id),
-			zap.Int("length", len(dispatcherEvents)),
-			zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
-			zap.Uint64("redoGlobalTs", *d.redoGlobalTs),
-		)
+		select {
+		case d.cacheEvents <- cacheEvents:
+			log.Warn("cache event",
+				zap.Stringer("dispatcher", d.id),
+				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
+				zap.Int("length", len(dispatcherEvents)),
+				zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
+				zap.Uint64("redoGlobalTs", *d.redoGlobalTs),
+			)
+		default:
+			log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents)))
+		}
 		return true
 	}
 	return d.handleEvents(dispatcherEvents, wakeCallback)

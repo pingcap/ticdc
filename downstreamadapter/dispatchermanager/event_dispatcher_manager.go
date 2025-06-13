@@ -801,16 +801,11 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			var checkpointTs uint64 = math.MaxUint64
 			var resolvedTs uint64 = math.MaxUint64
 			e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
-				log.Error("dispatcherMap redoTs", zap.Any("id", id), zap.Any("GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("IsTableTriggerEventDispatcher", dispatcher.IsTableTriggerEventDispatcher()))
 				checkpointTs = min(checkpointTs, dispatcher.GetCheckpointTs())
 			})
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-				log.Error("redoDispatcherMap redoTs", zap.Any("id", id), zap.Any("GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("IsTableTriggerEventDispatcher", dispatcher.IsTableTriggerEventDispatcher()))
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
-			log.Error("collectRedoTs",
-				zap.Any("previousCheckpointTs", previousCheckpointTs), zap.Any("previousResolvedTs", previousResolvedTs),
-				zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs))
 			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
 				continue
 			}

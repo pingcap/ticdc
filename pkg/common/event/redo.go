@@ -22,8 +22,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/model"
 )
 
-//go:generate msgp
-
 // RedoLogType is the type of log
 type RedoLogType int
 
@@ -90,6 +88,14 @@ type RedoColumnValue struct {
 	Flag              uint64 `msg:"flag"`
 }
 
+type RedoRowEvent struct {
+	StartTs   uint64
+	CommitTs  uint64
+	TableInfo *common.TableInfo
+	Event     RowChange
+	Callback  func()
+}
+
 const (
 	// RedoLogTypeRow is row type of log
 	RedoLogTypeRow RedoLogType = 1
@@ -97,15 +103,15 @@ const (
 	RedoLogTypeDDL RedoLogType = 2
 )
 
-// ToRedoLog converts row changed event to redo log
-func (r *DMLEvent) ToRedoLog() *RedoLog {
-	r.Rewind()
-	startTs := r.GetStartTs()
-	commitTs := r.GetCommitTs()
-	row, ok := r.GetNextRow()
-	if !ok {
-		return nil
+func (r *RedoRowEvent) PostFlush() {
+	if r.Callback != nil {
+		r.Callback()
 	}
+}
+
+func (r *RedoRowEvent) ToRedoLog() *RedoLog {
+	startTs := r.StartTs
+	commitTs := r.CommitTs
 	redoLog := &RedoLog{
 		RedoRow: RedoDMLEvent{
 			Row: &DMLEventInRedoLog{
@@ -128,7 +134,7 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 
 		columnCount := len(r.TableInfo.GetColumns())
 		columns := make([]*RedoColumn, 0, columnCount)
-		switch row.RowType {
+		switch r.Event.RowType {
 		case RowTypeInsert:
 			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
 		case RowTypeDelete:
@@ -148,23 +154,23 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 					Collation: column.GetCollate(),
 				})
 				isHandleKey := r.TableInfo.IsHandleKey(column.ID)
-				switch row.RowType {
+				switch r.Event.RowType {
 				case RowTypeInsert:
-					v := parseColumnValue(&row.Row, column, i, isHandleKey)
+					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
 				case RowTypeDelete:
-					v := parseColumnValue(&row.PreRow, column, i, isHandleKey)
+					v := parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
 					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
 				case RowTypeUpdate:
-					v := parseColumnValue(&row.Row, column, i, isHandleKey)
+					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-					v = parseColumnValue(&row.PreRow, column, i, isHandleKey)
+					v = parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
 					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
 				default:
 				}
 			}
 		}
-		switch row.RowType {
+		switch r.Event.RowType {
 		case RowTypeInsert:
 			redoLog.RedoRow.Row.Columns = columns
 		case RowTypeDelete:

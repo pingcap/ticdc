@@ -30,20 +30,17 @@ func TestWriteDDL(t *testing.T) {
 
 	rows := []writer.RedoEvent{
 		nil,
-		&pevent.DMLEvent{
-			PhysicalTableID: 11,
-			CommitTs:        11,
-			TableInfo:       &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t1"}},
+		&pevent.RedoRowEvent{
+			CommitTs:  11,
+			TableInfo: &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t1"}},
 		},
-		&pevent.DMLEvent{
-			PhysicalTableID: 12,
-			CommitTs:        15,
-			TableInfo:       &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t2"}},
+		&pevent.RedoRowEvent{
+			CommitTs:  15,
+			TableInfo: &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t2"}},
 		},
-		&pevent.DMLEvent{
-			PhysicalTableID: 12,
-			CommitTs:        8,
-			TableInfo:       &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t2"}},
+		&pevent.RedoRowEvent{
+			CommitTs:  8,
+			TableInfo: &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t2"}},
 		},
 	}
 	testWriteEvents(t, rows)

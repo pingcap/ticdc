@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	_ RedoEvent = (*pevent.DMLEvent)(nil)
+	_ RedoEvent = (*pevent.RedoRowEvent)(nil)
 	_ RedoEvent = (*pevent.DDLEvent)(nil)
 )
 
@@ -33,7 +33,6 @@ var (
 type RedoEvent interface {
 	PostFlush()
 	ToRedoLog() *pevent.RedoLog
-	GetType() int
 }
 
 // RedoLogWriter defines the interfaces used to write redo log, all operations are thread-safe.
