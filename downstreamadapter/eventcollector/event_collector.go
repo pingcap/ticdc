@@ -416,6 +416,11 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					default:
+						log.Info("received event from event service",
+							zap.Stringer("dispatcherID", e.GetDispatcherID()),
+							zap.Any("type", e.GetType()),
+							zap.Stringer("from", targetMessage.From),
+							zap.Int32("eventCount", e.Len()))
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					}
