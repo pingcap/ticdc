@@ -560,6 +560,7 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
 	startTsList := make([]int64, 0, len(infos))
+	tableIds := make([]int64, 0, len(infos))
 	tableSpans := make([]*heartbeatpb.TableSpan, 0, len(infos))
 	schemaIds := make([]int64, 0, len(infos))
 	for _, info := range infos {
@@ -569,6 +570,7 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 		}
 		dispatcherIds = append(dispatcherIds, id)
 		startTsList = append(startTsList, int64(info.StartTs))
+		tableIds = append(tableIds, info.TableSpan.TableID)
 		tableSpans = append(tableSpans, info.TableSpan)
 		schemaIds = append(schemaIds, info.SchemaID)
 	}
@@ -577,11 +579,28 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 		return nil
 	}
 
+	var newStartTsList []int64
+	var err error
+	if e.sink.SinkType() == common.MysqlSinkType {
+		newStartTsList, _, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		log.Info("calculate real startTs for redo dispatchers",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("receiveStartTs", startTsList),
+			zap.Any("realStartTs", newStartTsList),
+			zap.Bool("removeDDLTs", removeDDLTs),
+		)
+	} else {
+		newStartTsList = startTsList
+	}
+
 	for idx, id := range dispatcherIds {
 		rd := dispatcher.NewRedoDispatcher(
 			e.changefeedID,
 			id, tableSpans[idx], e.redoSink,
-			uint64(startTsList[idx]),
+			uint64(newStartTsList[idx]),
 			e.statusesChan,
 			e.blockStatusesChan,
 			schemaIds[idx],
@@ -608,7 +627,7 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
-			zap.Int64("startTs", startTsList[idx]))
+			zap.Int64("startTs", newStartTsList[idx]))
 	}
 	log.Info("batch create new redo dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID),
@@ -767,14 +786,14 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			var checkpointTs uint64 = math.MaxUint64
 			var resolvedTs uint64 = math.MaxUint64
 			e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
-				log.Error("dispatcherMap redoTs", zap.Any("id", id), zap.Any("dispatcher.GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("IsTableTriggerEventDispatcher", dispatcher.IsTableTriggerEventDispatcher()))
+				log.Error("dispatcherMap redoTs", zap.Any("id", id), zap.Any("GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("IsTableTriggerEventDispatcher", dispatcher.IsTableTriggerEventDispatcher()))
 				checkpointTs = min(checkpointTs, dispatcher.GetCheckpointTs())
 			})
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-				log.Error("redoDispatcherMap redoTs", zap.Any("id", id), zap.Any("dispatcher.GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("IsTableTriggerEventDispatcher", dispatcher.IsTableTriggerEventDispatcher()))
+				log.Error("redoDispatcherMap redoTs", zap.Any("id", id), zap.Any("GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("IsTableTriggerEventDispatcher", dispatcher.IsTableTriggerEventDispatcher()))
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
-			log.Error("previous redoTs",
+			log.Error("collectRedoTs",
 				zap.Any("previousCheckpointTs", previousCheckpointTs), zap.Any("previousResolvedTs", previousResolvedTs),
 				zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs))
 			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {

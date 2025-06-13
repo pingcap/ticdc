@@ -283,11 +283,11 @@ func (cm *ControllerManager) determineStartTs(allNodesResp map[node.ID]*heartbea
 			zap.Int("spanCount", len(resp.Spans)))
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
-			// if cm.redoController != nil {
-			// 	status := cm.redoController.replicationDB.GetDDLDispatcher().GetStatus()
-			// 	status.CheckpointTs = startTs
-			// 	cm.redoController.replicationDB.UpdateStatus(cm.redoController.replicationDB.GetDDLDispatcher(), status)
-			// }
+			if cm.redoController != nil {
+				status := cm.redoController.replicationDB.GetDDLDispatcher().GetStatus()
+				status.CheckpointTs = startTs
+				cm.redoController.replicationDB.UpdateStatus(cm.redoController.replicationDB.GetDDLDispatcher(), status)
+			}
 			status := cm.controller.replicationDB.GetDDLDispatcher().GetStatus()
 			status.CheckpointTs = startTs
 			cm.controller.replicationDB.UpdateStatus(cm.controller.replicationDB.GetDDLDispatcher(), status)
@@ -379,9 +379,9 @@ func (cm *ControllerManager) processTableSpans(
 			zap.Stringer("changefeed", cm.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
-		// if cm.redoController != nil {
-		// 	cm.redoController.addWorkingSpans(tableSpans)
-		// }
+		if cm.redoController != nil {
+			cm.redoController.addWorkingSpans(tableSpans)
+		}
 		cm.controller.addWorkingSpans(tableSpans)
 
 		if cm.enableTableAcrossNodes {
@@ -390,9 +390,9 @@ func (cm *ControllerManager) processTableSpans(
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
-		// if cm.redoController != nil {
-		// 	cm.redoController.AddNewTable(table, cm.startCheckpointTs)
-		// }
+		if cm.redoController != nil {
+			cm.redoController.AddNewTable(table, cm.startCheckpointTs)
+		}
 		cm.controller.AddNewTable(table, cm.startCheckpointTs)
 	}
 }
