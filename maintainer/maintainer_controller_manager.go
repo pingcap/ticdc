@@ -404,9 +404,9 @@ func (cm *ControllerManager) handleTableHoles(
 ) {
 	holes := split.FindHoles(tableSpans, tableSpan)
 	// redo
-	// if cm.redoController != nil {
-	// 	cm.redoController.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
-	// }
+	if cm.redoController != nil {
+		cm.redoController.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
+	}
 	// Todo: split the hole
 	// Add holes to the replicationDB
 	cm.controller.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)

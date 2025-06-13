@@ -53,7 +53,6 @@ type DispatcherRequest struct {
 	StartTs    uint64
 	OnlyUse    bool
 	BDRMode    bool
-	Redo       bool
 }
 
 type DispatcherRequestWithTarget struct {
@@ -231,18 +230,16 @@ func (c *EventCollector) PrepareAddDispatcher(
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()), zap.Int("type", target.GetType()))
 	}()
-	isRedo := dispatcher.IsRedoDispatcher(target)
 	stat := &dispatcherStat{
 		dispatcherID:  target.GetId(),
 		target:        target,
-		isRedo:        isRedo,
 		readyCallback: readyCallback,
 	}
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
 	c.dispatcherMap.Store(target.GetId(), stat)
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
-	ds := c.getDynamicStream(isRedo)
+	ds := c.getDynamicStream(dispatcher.IsRedoDispatcher(target))
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
@@ -255,7 +252,6 @@ func (c *EventCollector) PrepareAddDispatcher(
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 		BDRMode:    target.GetBDRMode(),
-		Redo:       isRedo,
 	})
 	if err != nil {
 		// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
@@ -273,7 +269,6 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 			Dispatcher: target,
 			StartTs:    startTs,
 			ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
-			Redo:       dispatcher.IsRedoDispatcher(target),
 		},
 	)
 }
@@ -356,7 +351,6 @@ func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
 			Dispatcher: d.target,
 			StartTs:    d.sentCommitTs.Load(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
-			Redo:       d.isRedo,
 		})
 	d.reset()
 	log.Info("Send reset dispatcher request to event service",
@@ -472,7 +466,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			StartTs:   req.StartTs,
 			OnlyReuse: req.OnlyUse,
 			BdrMode:   req.BDRMode,
-			Redo:      req.Redo,
+			Redo:      dispatcher.IsRedoDispatcher(req.Dispatcher),
 		},
 	}
 

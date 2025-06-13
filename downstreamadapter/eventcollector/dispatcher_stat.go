@@ -31,7 +31,6 @@ import (
 type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	target       dispatcher.EventDispatcher
-	isRedo       bool
 
 	readyCallback func()
 
@@ -212,7 +211,6 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 				Dispatcher: d.target,
 				StartTs:    d.sentCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
-				Redo:       d.isRedo,
 			},
 		)
 	} else if eventServiceID == eventCollector.serverId {
@@ -224,7 +222,6 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 				DispatcherRequest{
 					Dispatcher: d.target,
 					ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-					Redo:       d.isRedo,
 				},
 			)
 		}
@@ -243,7 +240,6 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 				Dispatcher: d.target,
 				StartTs:    d.sentCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
-				Redo:       d.isRedo,
 			},
 		)
 	} else {
@@ -271,7 +267,6 @@ func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent
 					StartTs:    d.target.GetStartTs(),
 					ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 					OnlyUse:    true,
-					Redo:       d.isRedo,
 				},
 			)
 			d.eventServiceInfo.serverID = d.eventServiceInfo.remoteCandidates[0]
@@ -287,14 +282,12 @@ func (d *dispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
 	eventCollector.mustSendDispatcherRequest(eventCollector.serverId, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-		Redo:       d.isRedo,
 	})
 	// unregister from remote event service if have
 	if d.eventServiceInfo.serverID != "" && d.eventServiceInfo.serverID != eventCollector.serverId {
 		eventCollector.mustSendDispatcherRequest(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
 			Dispatcher: d.target,
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-			Redo:       d.isRedo,
 		})
 	}
 }
@@ -317,7 +310,6 @@ func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
-		Redo:       d.isRedo,
 	})
 }
 
@@ -336,7 +328,6 @@ func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
-		Redo:       d.isRedo,
 	})
 }
 
@@ -366,7 +357,6 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 			StartTs:    d.target.GetStartTs(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 			OnlyUse:    true,
-			Redo:       d.isRedo,
 		},
 	)
 }

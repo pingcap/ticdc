@@ -114,7 +114,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 			}
 			validEvents = events[validEventStartIndex:]
 		}
-		return stat.target.HandleEvents(validEvents, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID, stat.isRedo) })
+		return stat.target.HandleEvents(validEvents, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID, dispatcher.IsRedoDispatcher(stat.target)) })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
 		// TypeDDLEvent and TypeSyncPointEvent is handled one by one
@@ -128,7 +128,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		if !stat.isEventCommitTsValid(events[0]) {
 			return false
 		}
-		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID, stat.isRedo) })
+		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID, dispatcher.IsRedoDispatcher(stat.target)) })
 	case commonEvent.TypeHandshakeEvent:
 		stat.handleHandshakeEvent(events[0], h.eventCollector)
 		return false

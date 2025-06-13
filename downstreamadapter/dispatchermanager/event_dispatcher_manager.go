@@ -259,6 +259,21 @@ func NewEventDispatcherManager(
 		manager.wg.Add(3)
 		go func() {
 			defer manager.wg.Done()
+			err := manager.redoMeta.PreStart(ctx)
+			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+				select {
+				case <-ctx.Done():
+					return
+				case manager.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Stringer("changefeedID", changefeedID),
+						zap.Error(err),
+					)
+				}
+			}
+			meta := manager.redoMeta.GetFlushedMeta()
+			manager.SetGlobalRedoTs(meta.CheckpointTs, meta.ResolvedTs)
 			err = manager.redoMeta.Run(ctx)
 			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 				select {
