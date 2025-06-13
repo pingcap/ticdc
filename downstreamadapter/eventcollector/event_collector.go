@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -116,7 +117,9 @@ func New(serverId node.ID) *EventCollector {
 }
 
 func (c *EventCollector) Run(ctx context.Context) {
+	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
+	c.g = g
 	c.cancel = cancel
 
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
@@ -145,17 +148,15 @@ func (c *EventCollector) Run(ctx context.Context) {
 		c.sendDispatcherRequests(ctx)
 	}()
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.updateMetrics(ctx)
-	}()
+	g.Go(func() error {
+		return c.updateMetrics(ctx)
+	})
 }
 
 func (c *EventCollector) Close() {
 	log.Info("event collector is closing")
 	c.cancel()
-	c.wg.Wait()
+	_ = c.g.Wait()
 	c.ds.Close()
 	c.changefeedIDMap.Range(func(key, value any) bool {
 		cfID := value.(common.ChangeFeedID)
@@ -303,7 +304,7 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case feedback := <-c.ds.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea, dynstream.ResumeArea:
@@ -400,7 +401,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case targetMessage := <-inCh:
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
@@ -427,13 +428,13 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 	}
 }
 
-func (c *EventCollector) updateMetrics(ctx context.Context) {
+func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case <-ticker.C:
 			dsMetrics := c.ds.GetMetrics()
 			metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))

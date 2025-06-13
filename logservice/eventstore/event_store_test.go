@@ -94,9 +94,8 @@ func TestEventStoreRegisterDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("e"),
 		}
-		ok, err := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
-		require.Nil(t, err)
 	}
 	// register another dispatcher with the same span
 	{
@@ -106,9 +105,8 @@ func TestEventStoreRegisterDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("e"),
 		}
-		ok, err := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
-		require.Nil(t, err)
 	}
 	// check two dispatchers can reuse the same subscription
 	{
@@ -122,9 +120,8 @@ func TestEventStoreRegisterDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("b"),
 		}
-		ok, err := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
-		require.Nil(t, err)
 	}
 	// check a new subscription is created
 	{
@@ -138,9 +135,8 @@ func TestEventStoreRegisterDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("c"),
 		}
-		ok, err := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		ok := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.True(t, ok)
-		require.Nil(t, err)
 	}
 	// check no new subscription is created
 	{

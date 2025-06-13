@@ -471,6 +471,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			d.connState.readyEventReceived.Store(true)
 			d.reset(*event.From)
 		}
+<<<<<<< HEAD
 	case commonEvent.TypeNotReusableEvent:
 		if *event.From == localServerID {
 			log.Panic("should not happen: local event service should not send not reusable event")
@@ -478,13 +479,152 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 		candidate := d.connState.getNextRemoteCandidate()
 		if candidate != "" {
 			d.registerTo(candidate)
+=======
+		// case 2: first ready signal from the server
+		// (must be a remote candidate, because we won't set d.eventServiceInfo.serverID to local event service until we receive ready signal)
+		log.Info("received ready signal from remote event service, prepare to reset the dispatcher",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Stringer("dispatcher", d.target.GetId()),
+			zap.Stringer("eventServiceID", eventServiceID))
+
+		d.eventServiceInfo.serverID = eventServiceID
+		d.eventServiceInfo.readyEventReceived = true
+		eventCollector.addDispatcherRequestToSendingQueue(
+			eventServiceID,
+			messaging.EventServiceTopic,
+			DispatcherRequest{
+				Dispatcher: d.target,
+				StartTs:    d.sentCommitTs.Load(),
+				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
+			},
+		)
+	} else if eventServiceID == eventCollector.serverId {
+		// case 3: received first ready signal from local event service
+		if d.eventServiceInfo.serverID != "" {
+			eventCollector.addDispatcherRequestToSendingQueue(
+				d.eventServiceInfo.serverID,
+				messaging.EventServiceTopic,
+				DispatcherRequest{
+					Dispatcher: d.target,
+					ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
+				},
+			)
+		}
+		log.Info("received ready signal from local event service, prepare to reset the dispatcher",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Stringer("dispatcher", d.target.GetId()),
+			zap.Stringer("eventServiceID", eventServiceID))
+
+		d.eventServiceInfo.serverID = eventServiceID
+		d.eventServiceInfo.readyEventReceived = true
+		d.eventServiceInfo.remoteCandidates = nil
+		eventCollector.addDispatcherRequestToSendingQueue(
+			eventServiceID,
+			messaging.EventServiceTopic,
+			DispatcherRequest{
+				Dispatcher: d.target,
+				StartTs:    d.sentCommitTs.Load(),
+				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
+			},
+		)
+	} else {
+		log.Panic("should not happen: we have received ready signal from other remote server",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Stringer("dispatcher", d.target.GetId()),
+			zap.Stringer("newRemoteEventService", eventServiceID),
+			zap.Stringer("oldRemoteEventService", d.eventServiceInfo.serverID))
+	}
+}
+
+func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
+	d.eventServiceInfo.Lock()
+	defer d.eventServiceInfo.Unlock()
+	if event.GetType() != commonEvent.TypeNotReusableEvent {
+		log.Panic("should not happen")
+	}
+	if *event.From == d.eventServiceInfo.serverID {
+		if len(d.eventServiceInfo.remoteCandidates) > 0 {
+			eventCollector.addDispatcherRequestToSendingQueue(
+				d.eventServiceInfo.remoteCandidates[0],
+				messaging.EventServiceTopic,
+				DispatcherRequest{
+					Dispatcher: d.target,
+					StartTs:    d.target.GetStartTs(),
+					ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
+					OnlyUse:    true,
+				},
+			)
+			d.eventServiceInfo.serverID = d.eventServiceInfo.remoteCandidates[0]
+			d.eventServiceInfo.remoteCandidates = d.eventServiceInfo.remoteCandidates[1:]
+>>>>>>> master
 		}
 	default:
 		log.Panic("should not happen: unknown signal event type")
 	}
 }
 
+<<<<<<< HEAD
 func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
+=======
+func (d *dispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
+	d.eventServiceInfo.RLock()
+	defer d.eventServiceInfo.RUnlock()
+	// must unregister from local event service
+	eventCollector.mustSendDispatcherRequest(eventCollector.serverId, messaging.EventServiceTopic, DispatcherRequest{
+		Dispatcher: d.target,
+		ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
+	})
+	// unregister from remote event service if have
+	if d.eventServiceInfo.serverID != "" && d.eventServiceInfo.serverID != eventCollector.serverId {
+		eventCollector.mustSendDispatcherRequest(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
+			Dispatcher: d.target,
+			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
+		})
+	}
+}
+
+func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
+	d.eventServiceInfo.RLock()
+	defer d.eventServiceInfo.RUnlock()
+
+	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		log.Info("ignore pause dispatcher request because the eventService is not ready",
+			zap.Stringer("dispatcherID", d.dispatcherID),
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID),
+			zap.Bool("readyEventReceived", d.eventServiceInfo.readyEventReceived),
+		)
+		// Just ignore the request if the dispatcher is not ready.
+		return
+	}
+
+	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
+		Dispatcher: d.target,
+		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
+	})
+}
+
+func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
+	d.eventServiceInfo.RLock()
+	defer d.eventServiceInfo.RUnlock()
+
+	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		log.Info("ignore resume dispatcher request because the eventService is not ready",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
+		// Just ignore the request if the dispatcher is not ready.
+		return
+	}
+
+	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
+		Dispatcher: d.target,
+		ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
+	})
+}
+
+// TODO: better name
+func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *EventCollector) {
+>>>>>>> master
 	log.Info("set remote candidates",
 		zap.Strings("nodes", nodes),
 		zap.Stringer("dispatcherID", d.target.GetId()))
@@ -495,6 +635,23 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 		candidate := d.connState.getNextRemoteCandidate()
 		d.registerTo(candidate)
 	}
+<<<<<<< HEAD
+=======
+	d.eventServiceInfo.serverID = node.ID(nodes[0])
+	for i := 1; i < len(nodes); i++ {
+		d.eventServiceInfo.remoteCandidates = append(d.eventServiceInfo.remoteCandidates, node.ID(nodes[i]))
+	}
+	eventCollector.addDispatcherRequestToSendingQueue(
+		d.eventServiceInfo.serverID,
+		messaging.EventServiceTopic,
+		DispatcherRequest{
+			Dispatcher: d.target,
+			StartTs:    d.target.GetStartTs(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
+			OnlyUse:    true,
+		},
+	)
+>>>>>>> master
 }
 
 func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging.DispatcherRequest {
