@@ -69,11 +69,11 @@ func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMes
 	return nil
 }
 
-func (l *LogCoordinatorClient) run(ctx context.Context) {
+func (l *LogCoordinatorClient) run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case req := <-l.logCoordinatorRequestChan.Out():
 			coordinatorID := l.getCoordinatorInfo()
 			if coordinatorID == "" {

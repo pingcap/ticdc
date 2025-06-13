@@ -86,7 +86,7 @@ type EventCollector struct {
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
-	wg     sync.WaitGroup
+	g      *errgroup.Group
 	cancel context.CancelFunc
 
 	metricDispatcherReceivedKVEventCount         prometheus.Counter
@@ -123,30 +123,22 @@ func (c *EventCollector) Run(ctx context.Context) {
 	c.cancel = cancel
 
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
-		c.wg.Add(1)
-		go func() {
-			defer c.wg.Done()
-			c.runDispatchMessage(ctx, c.receiveChannels[i])
-		}()
+		g.Go(func() error {
+			return c.runDispatchMessage(ctx, c.receiveChannels[i])
+		})
 	}
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.logCoordinatorClient.run(ctx)
-	}()
+	g.Go(func() error {
+		return c.logCoordinatorClient.run(ctx)
+	})
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.processFeedback(ctx)
-	}()
+	g.Go(func() error {
+		return c.processFeedback(ctx)
+	})
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.sendDispatcherRequests(ctx)
-	}()
+	g.Go(func() error {
+		return c.sendDispatcherRequests(ctx)
+	})
 
 	g.Go(func() error {
 		return c.updateMetrics(ctx)
@@ -298,7 +290,7 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 	return groupedHeartbeats
 }
 
-func (c *EventCollector) processFeedback(ctx context.Context) {
+func (c *EventCollector) processFeedback(ctx context.Context) error {
 	log.Info("Start process feedback from dynamic stream")
 	defer log.Info("Stop process feedback from dynamic stream")
 	for {
@@ -318,11 +310,11 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 	}
 }
 
-func (c *EventCollector) sendDispatcherRequests(ctx context.Context) {
+func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case req := <-c.dispatcherMessageChan.Out():
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
@@ -397,7 +389,7 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 // runDispatchMessage dispatches messages from the input channel to the dynamic stream.
 // Note: Avoid implementing any message handling logic within this function
 // as messages may be stale and need be verified before process.
-func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) {
+func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) error {
 	for {
 		select {
 		case <-ctx.Done():
