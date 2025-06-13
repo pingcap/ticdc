@@ -16,6 +16,7 @@ package eventcollector
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -112,8 +113,7 @@ type EventCollector struct {
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	coordinatorInfo struct {
-		sync.Mutex
-		id node.ID
+		value atomic.Value
 	}
 
 	wg     sync.WaitGroup
@@ -401,15 +401,14 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 }
 
 func (c *EventCollector) setCoordinatorInfo(id node.ID) {
-	c.coordinatorInfo.Lock()
-	defer c.coordinatorInfo.Unlock()
-	c.coordinatorInfo.id = id
+	c.coordinatorInfo.value.Store(id)
 }
 
 func (c *EventCollector) getCoordinatorInfo() node.ID {
-	c.coordinatorInfo.Lock()
-	defer c.coordinatorInfo.Unlock()
-	return c.coordinatorInfo.id
+	if v := c.coordinatorInfo.value.Load(); v != nil {
+		return v.(node.ID)
+	}
+	return ""
 }
 
 func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {

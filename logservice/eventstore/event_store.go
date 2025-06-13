@@ -163,8 +163,7 @@ type eventStore struct {
 	messageCenter messaging.MessageCenter
 
 	coordinatorInfo struct {
-		sync.Mutex
-		id node.ID
+		value atomic.Value
 	}
 	// The channel is used to gather the subscription info
 	// which need to be uploaded to log coordinator periodically.
@@ -270,15 +269,14 @@ func (p *writeTaskPool) run(ctx context.Context) {
 }
 
 func (e *eventStore) setCoordinatorInfo(id node.ID) {
-	e.coordinatorInfo.Lock()
-	defer e.coordinatorInfo.Unlock()
-	e.coordinatorInfo.id = id
+	e.coordinatorInfo.value.Store(id)
 }
 
 func (e *eventStore) getCoordinatorInfo() node.ID {
-	e.coordinatorInfo.Lock()
-	defer e.coordinatorInfo.Unlock()
-	return e.coordinatorInfo.id
+	if v := e.coordinatorInfo.value.Load(); v != nil {
+		return v.(node.ID)
+	}
+	return ""
 }
 
 func (e *eventStore) Name() string {
