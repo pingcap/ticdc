@@ -140,7 +140,7 @@ func newEventBroker(
 		taskChan := make(chan scanTask, scanTaskQueueSize)
 		c.taskChan[i] = taskChan
 		g.Go(func() error {
-			c.runScanWorker(ctx, taskChan)
+			c.runScanWorker(ctx, taskChan, i)
 			return nil
 		})
 	}
@@ -174,10 +174,11 @@ func newEventBroker(
 	return c
 }
 
-func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
+func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat, workerIndex int) {
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
+
 			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
 			metricEventServiceSendKvCount.Add(float64(e.Len()))
 		}
@@ -268,13 +269,13 @@ func (c *eventBroker) getMessageCh(workerIndex int) chan *wrapEvent {
 	return c.messageCh[workerIndex]
 }
 
-func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) {
+func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask, idx int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case task := <-taskChan:
-			c.doScan(ctx, task)
+			c.doScan(ctx, task, idx)
 		}
 	}
 }
@@ -358,7 +359,9 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		return false, common.DataRange{}
 	}
 
-	c.checkAndSendHandshake(task)
+	if !c.checkAndSendHandshake(task) {
+		return false, common.DataRange{}
+	}
 
 	// Only check scan when the dispatcher is running.
 	if !task.IsRunning() {
@@ -479,7 +482,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
-func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
+func (c *eventBroker) doScan(ctx context.Context, task scanTask, workerIndex int) {
 	remoteID := node.ID(task.info.GetServerID())
 
 	isBroken := false
@@ -540,7 +543,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			if !ok {
 				log.Panic("expect a DMLEvent, but got", zap.Any("event", e))
 			}
-			c.sendDML(remoteID, dmls, task)
+			c.sendDML(remoteID, dmls, task, workerIndex)
 		case pevent.TypeDDLEvent:
 			ddl, ok := e.(*pevent.DDLEvent)
 			if !ok {
@@ -659,6 +662,7 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage, postSendMsg func()) {
 	start := time.Now()
 	congestedRetryInterval := time.Millisecond * 10
+	retryCount := 0
 	// Send the message to messageCenter. Retry if to send failed.
 	for {
 		select {
@@ -669,8 +673,9 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		// Send the message to the dispatcher.
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
+			retryCount++
 			_, ok := err.(apperror.AppError)
-			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
+			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok), zap.Int("retryCount", retryCount))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
 				// Wait for a while and retry to avoid the dropped message flood.
@@ -943,15 +948,21 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		_ = c.addDispatcher(dispatcherInfo)
 		return
 	}
-
 	// Must set the isRunning to false before reset the dispatcher.
 	// Otherwise, the scan task goroutine will not return before reset the dispatcher.
 	stat.isRunning.Store(false)
 
 	// Wait until the scan task goroutine return before reset the dispatcher.
+	waitCount := 0
 	for {
 		if !stat.isTaskScanning.Load() {
 			break
+		}
+		waitCount++
+		if waitCount%100 == 0 {
+			log.Info("waiting for scan task to complete",
+				zap.Stringer("dispatcherID", stat.id),
+				zap.Int("waitCount", waitCount))
 		}
 		// Give other goroutines a chance to acquire the write lock
 		time.Sleep(10 * time.Millisecond)

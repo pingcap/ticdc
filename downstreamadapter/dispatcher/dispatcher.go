@@ -238,7 +238,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	block = false
 	dmlWakeOnce := &sync.Once{}
 	// Dispatcher is ready, handle the events
-	for _, dispatcherEvent := range dispatcherEvents {
+	for i, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
 			zap.Stringer("dispatcher", d.id),
 			zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
@@ -268,6 +268,13 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		}
 
 		switch event.GetType() {
+		case commonEvent.TypeDropEvent:
+			log.Panic("dispatcher receive drop event unexpectedly",
+				zap.Stringer("dispatcher", d.id),
+				zap.Int("index", i),
+				zap.Int("eventType", event.GetType()),
+				zap.Int("eventCount", len(dispatcherEvents)),
+				zap.Any("event", dispatcherEvents))
 		case commonEvent.TypeResolvedEvent:
 			atomic.StoreUint64(&d.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
 		case commonEvent.TypeDMLEvent:

@@ -71,6 +71,8 @@ const (
 	TypeReadyEvent
 	// TypeNotReusableEvent is the event type to indicate the event service has no data for reuse.
 	TypeNotReusableEvent
+	// TypeDropEvent is the event type to indicate an event has been dropped.
+	TypeDropEvent
 )
 
 func TypeToString(t int) string {
@@ -93,6 +95,8 @@ func TypeToString(t int) string {
 		return "ReadyEvent"
 	case TypeNotReusableEvent:
 		return "NotReusableEvent"
+	case TypeDropEvent:
+		return "DropEvent"
 	default:
 		return "unknown"
 	}

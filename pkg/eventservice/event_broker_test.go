@@ -91,13 +91,11 @@ func TestCheckNeedScan(t *testing.T) {
 	require.Equal(t, event.TypeReadyEvent, e.msgType)
 	log.Info("Pass case 2")
 
-	// Case 3: ResetTs is not 0, it should return true.
-	// And we can get a scan task.
-	// And the task.scanning should be true.
+	// Case 3: ResetTs is not 0, but not handshake, it should return false.
 	// And the broker will send a handshake event.
 	disp.resetTs.Store(100)
 	needScan, _ = broker.checkNeedScan(disp, false)
-	require.True(t, needScan)
+	require.False(t, needScan)
 	e = <-broker.messageCh[0]
 	require.Equal(t, event.TypeHandshakeEvent, e.msgType)
 	log.Info("Pass case 3")
@@ -160,7 +158,7 @@ func TestOnNotify(t *testing.T) {
 	}
 
 	// Case 5: Do scan, it will update the sentResolvedTs.
-	broker.doScan(context.TODO(), task)
+	broker.doScan(context.TODO(), task, 0)
 	require.False(t, disp.isTaskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())
 	log.Info("pass case 5")
@@ -169,7 +167,7 @@ func TestOnNotify(t *testing.T) {
 	// Set the schemaStore's maxDDLCommitTs to the sentResolvedTs, so the broker will not scan the schemaStore.
 	ss.maxDDLCommitTs = disp.sentResolvedTs.Load()
 	broker.onNotify(disp, notifyMsgs5.resolvedTs, notifyMsgs5.latestCommitTs)
-	broker.doScan(context.TODO(), task)
+	broker.doScan(context.TODO(), task, 0)
 	require.Equal(t, notifyMsgs5.resolvedTs, disp.sentResolvedTs.Load())
 	log.Info("Pass case 6")
 }

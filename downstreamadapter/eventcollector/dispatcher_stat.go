@@ -31,6 +31,7 @@ type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	target       dispatcher.EventDispatcher
 
+	// readyCallback is called when the dispatcher receives ready event from local event service.
 	readyCallback func()
 
 	eventServiceInfo struct {
@@ -52,16 +53,24 @@ type dispatcherStat struct {
 	// Dispatcher will drop all data events before receiving a handshake event.
 	waitHandshake atomic.Bool
 
-	// The largest commit ts that has been sent to the dispatcher.
-	sentCommitTs atomic.Uint64
+	// The largest commitTs of DML/DDL Event that has been sent to the target dispatcher.
+	// Note: It did not record the commitTs of resolvedTs event!
+	lastEventCommitTs atomic.Uint64
 
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
+
+	// The memory quota of the dispatcher.
+	memoryQuota uint64
 }
 
 func (d *dispatcherStat) reset() {
 	d.lastEventSeq.Store(0)
 	d.waitHandshake.Store(true)
+}
+
+func (d *dispatcherStat) getResetTs() uint64 {
+	return max(d.target.GetStartTs(), d.lastEventCommitTs.Load()-1)
 }
 
 // TODO: add epoch to event and use it to filter irrelevant events
@@ -88,7 +97,7 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent:
-		log.Debug("check event sequence",
+		log.Info("check event sequence",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()),
 			zap.Int("eventType", event.GetType()),
@@ -97,17 +106,35 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 			zap.Uint64("commitTs", event.GetCommitTs()))
 
 		expectedSeq := d.lastEventSeq.Add(1)
-		if event.GetSeq() != expectedSeq {
-			log.Warn("Received an out-of-order event, reset the dispatcher",
+
+		counter.Add(1)
+		if counter.Load()%66 == 0 {
+			log.Error("Mock Received an out-of-order event, reset the dispatcher",
 				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 				zap.Stringer("dispatcher", d.target.GetId()),
 				zap.Int("eventType", event.GetType()),
 				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("expectedSeq", expectedSeq),
-				zap.Uint64("commitTs", event.GetCommitTs()))
+				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+			)
+			return false
+		}
+
+		if event.GetSeq() != expectedSeq {
+			log.Error("Received an out-of-order event, reset the dispatcher",
+				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+				zap.Stringer("dispatcher", d.target.GetId()),
+				zap.Int("eventType", event.GetType()),
+				zap.Uint64("receivedSeq", event.GetSeq()),
+				zap.Uint64("expectedSeq", expectedSeq),
+				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+			)
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -115,17 +142,21 @@ func (d *dispatcherStat) isEventCommitTsValid(event dispatcher.DispatcherEvent) 
 	// Note: a commit ts may have multiple transactions.
 	// it is ok to send the same txn multiple times?
 	// (we just want to avoid send old dml after new ddl)
-	if event.GetCommitTs() < d.sentCommitTs.Load() {
+	if event.GetCommitTs() < d.lastEventCommitTs.Load() {
 		log.Warn("Receive a event older than sendCommitTs, ignore it",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.target.GetId()),
 			zap.Any("event", event.Event),
 			zap.Uint64("eventCommitTs", event.GetCommitTs()),
-			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
+			zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
 		return false
 	}
-	d.sentCommitTs.Store(event.GetCommitTs())
+
+	if event.GetType() == commonEvent.TypeDDLEvent ||
+		event.GetType() == commonEvent.TypeDMLEvent {
+		d.lastEventCommitTs.Store(event.GetCommitTs())
+	}
 	return true
 }
 
@@ -136,7 +167,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		log.Panic("should not happen")
 	}
 	if d.eventServiceInfo.serverID == "" {
-		log.Panic("should not happen: server ID is not set")
+		log.Panic("should not happen: server ID is not set, it must be set when receive ready event")
 	}
 	if d.eventServiceInfo.serverID != *event.From {
 		// check invariant: if the handshake event is not from the current event service, we must be reading from local event service.
@@ -152,8 +183,10 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 			zap.Stringer("from", event.From))
 		return
 	}
+
 	if !d.isEventSeqValid(event) {
-		eventCollector.resetDispatcher(d)
+		log.Error("fizz, event seq is invalid", zap.String("changefeedID", d.target.GetChangefeedID().ID().String()), zap.Stringer("dispatcher", d.target.GetId()), zap.String("eventType", commonEvent.TypeToString(event.GetType())), zap.Any("event", event))
+		eventCollector.resetDispatcher(d, d.getResetTs())
 		return
 	}
 	d.waitHandshake.Store(false)
@@ -208,7 +241,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
-				StartTs:    d.sentCommitTs.Load(),
+				StartTs:    d.lastEventCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 			},
 		)
@@ -237,7 +270,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
-				StartTs:    d.sentCommitTs.Load(),
+				StartTs:    d.lastEventCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 			},
 		)
@@ -265,7 +298,7 @@ func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent
 					Dispatcher: d.target,
 					StartTs:    d.target.GetStartTs(),
 					ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-					OnlyUse:    true,
+					OnlyReuse:  true,
 				},
 			)
 			d.eventServiceInfo.serverID = d.eventServiceInfo.remoteCandidates[0]
@@ -295,18 +328,16 @@ func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
 
-	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Info("ignore pause dispatcher request because the eventService is not ready",
-			zap.Stringer("dispatcherID", d.dispatcherID),
+	serverID := d.eventServiceInfo.serverID
+	if serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		log.Info("ignore resume dispatcher request because the eventService is not ready",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Any("eventServiceID", d.eventServiceInfo.serverID),
-			zap.Bool("readyEventReceived", d.eventServiceInfo.readyEventReceived),
-		)
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}
 
-	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
+	eventCollector.addDispatcherRequestToSendingQueue(serverID, eventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
 	})
@@ -355,7 +386,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 			Dispatcher: d.target,
 			StartTs:    d.target.GetStartTs(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-			OnlyUse:    true,
+			OnlyReuse:  true,
 		},
 	)
 }
