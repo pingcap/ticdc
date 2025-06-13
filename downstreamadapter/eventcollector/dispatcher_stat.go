@@ -264,7 +264,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 
 func (d *dispatcherStat) verifyEventCommitTs(event dispatcher.DispatcherEvent) bool {
 	shouldIgnore := false
-	if event.GetCommitTs() < d.target.GetStartTs() {
+	if event.GetCommitTs() < d.sentCommitTs.Load() {
 		shouldIgnore = true
 	} else if event.GetCommitTs() == d.sentCommitTs.Load() {
 		// Avoid send the same DDL event or SyncPoint event multiple times.
