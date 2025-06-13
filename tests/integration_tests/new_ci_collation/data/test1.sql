@@ -44,6 +44,7 @@ insert into t5 (a) values ('a'),('A'),(' a'),(' A'),('a\t'),('ab'),('Ab');
 update t1 set b = b + 1;
 update t2 set b = 13;
 update t3 set b = 11 where a > 'A';
+drop index `primary` on t4;
 update t5 set b = 12;
 
 
@@ -83,3 +84,4 @@ insert into tt4 values (1,'A','A','1'),(2,'a\t','a\t','2'),(3,'ab','ab','3'),(4,
 update tt1 set b = b + 1;
 update tt3 set b = 11 where a > 'A';
 update tt3 set b = '14' where a > 'À';
+drop index `primary` on tt4;
