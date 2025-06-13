@@ -262,9 +262,9 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 	return true
 }
 
-// verifyEventCommitTs verifies if the event's commit timestamp is valid.
+// filterAndUpdateEventByCommitTs verifies if the event's commit timestamp is valid.
 // Note: this function must be called on every event received.
-func (d *dispatcherStat) verifyEventCommitTs(event dispatcher.DispatcherEvent) bool {
+func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.DispatcherEvent) bool {
 	shouldIgnore := false
 	if event.GetCommitTs() < d.sentCommitTs.Load() {
 		shouldIgnore = true
@@ -335,21 +335,28 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 		var validEvents []dispatcher.DispatcherEvent
 		if containsStaleEvents {
 			for _, event := range events {
-				if d.connState.isCurrentEventService(*event.From) && d.verifyEventCommitTs(event) {
+				if d.connState.isCurrentEventService(*event.From) && d.filterAndUpdateEventByCommitTs(event) {
 					validEvents = append(validEvents, event)
 				}
 			}
 		} else {
-			// event is sort by commitTs, so we can find the first valid event
-			validEventStartIndex := 0
+			invalidEventCount := 0
+			meetValidEvent := false
 			for _, event := range events {
-				if d.verifyEventCommitTs(event) {
-					break
+				if !d.filterAndUpdateEventByCommitTs(event) {
+					if meetValidEvent {
+						// event is sort by commitTs, so no invalid event should be after a valid event
+						log.Panic("should not happen: invalid event after valid event",
+							zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+							zap.Stringer("dispatcherID", d.target.GetId()))
+					}
+					events[invalidEventCount] = event
+					invalidEventCount++
 				} else {
-					validEventStartIndex++
+					meetValidEvent = true
 				}
 			}
-			validEvents = events[validEventStartIndex:]
+			validEvents = events[invalidEventCount:]
 		}
 		return d.target.HandleEvents(validEvents, func() { d.wake() })
 	case commonEvent.TypeDDLEvent,
@@ -384,7 +391,7 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 			dmlEvents := make([]dispatcher.DispatcherEvent, 0, len(batchDML.DMLEvents))
 			for _, dml := range batchDML.DMLEvents {
 				dmlEvent := dispatcher.NewDispatcherEvent(from, dml)
-				if d.verifyEventCommitTs(dmlEvent) {
+				if d.filterAndUpdateEventByCommitTs(dmlEvent) {
 					dmlEvents = append(dmlEvents, dmlEvent)
 				}
 			}
@@ -395,7 +402,7 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 				d.tableInfo.Store(tableInfo)
 			}
 		} else if events[0].GetType() == commonEvent.TypeDDLEvent {
-			if !d.verifyEventCommitTs(events[0]) {
+			if !d.filterAndUpdateEventByCommitTs(events[0]) {
 				return false
 			}
 			tableInfo := events[0].Event.(*event.DDLEvent).TableInfo
@@ -405,7 +412,7 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 			return d.target.HandleEvents(events, func() { d.wake() })
 		} else {
 			// SyncPointEvent
-			if !d.verifyEventCommitTs(events[0]) {
+			if !d.filterAndUpdateEventByCommitTs(events[0]) {
 				return false
 			}
 			return d.target.HandleEvents(events, func() { d.wake() })
