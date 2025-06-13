@@ -3,7 +3,7 @@
 This file shows how to run debezium integration test locally
 
 ```
-cd tiflow/tests/integration_tests/debezium
+cd ticdc/tests/integration_tests/debezium
 docker compose up
 ```
 

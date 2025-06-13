@@ -430,6 +430,102 @@ func TestTextTypes(t *testing.T) {
 	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
+func TestVectorType(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	ddlEvent := helper.DDL2Event(`CREATE TABLE test.t(id int primary key, data VECTOR(5));`)
+	insertEvent := helper.DML2Event("test", "t", `INSERT INTO test.t(id, data) VALUES (1, '[1,2,3,4,5]')`)
+
+	row, ok := insertEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      ddlEvent.TableInfo,
+		CommitTs:       insertEvent.GetCommitTs(),
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	dec, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event := dec.NextDMLEvent()
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, event.TableInfo)
+}
+
+func TestCollation(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	_ = helper.DDL2Event(`CREATE TABLE tt3 (
+                    id int primary key auto_increment,
+                    a varchar(20) charset utf8mb4 collate utf8mb4_0900_ai_ci,
+                    b int default 10);`)
+
+	dmlEvent := helper.DML2Event(`test`, `tt3`, `insert into tt3 (a) values ('');`)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      dmlEvent.TableInfo,
+		CommitTs:       dmlEvent.GetCommitTs(),
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+
+	decoder.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event := decoder.NextDMLEvent()
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+}
+
 func TestOtherTypes(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -463,7 +559,6 @@ func TestOtherTypes(t *testing.T) {
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)
-	codecConfig.ContentCompatible = true
 
 	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
@@ -1105,6 +1200,54 @@ func TestOnlyOutputUpdatedEvent(t *testing.T) {
 	common.CompareRow(t, updateRowEvent.Event, updateRowEvent.TableInfo, change, decoded.TableInfo)
 }
 
+func TestUniqueKeyWithoutPKDMLEvent(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	_ = helper.DDL2Event(`create table test.t(a int, b int not null, c int not null, UNIQUE KEY idx(b, c))`)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 1, 1)`)
+	require.NotNil(t, dmlEvent)
+	insertRow, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      dmlEvent.TableInfo,
+		CommitTs:       dmlEvent.GetCommitTs(),
+		Event:          insertRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	dec, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event := dec.NextDMLEvent()
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, event.TableInfo)
+}
+
 func TestHandleOnlyEvent(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -1155,6 +1298,81 @@ func TestHandleOnlyEvent(t *testing.T) {
 	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
 
 	log.Info("pass TestHandleOnlyEvent")
+}
+
+func TestRenameTable(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	createTableDDL := helper.DDL2Event(`create table test.t(a int primary key, b int)`)
+
+	insertEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 1)`)
+	insertRow, ok := insertEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      insertEvent.TableInfo,
+		CommitTs:       1,
+		Event:          insertRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+	renameTableDDL := helper.DDL2Event(`rename table test.t to test.t1`)
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	dec, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+
+	m, err := encoder.EncodeDDLEvent(createTableDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decodedDDL := dec.NextDDLEvent()
+	require.Equal(t, createTableDDL.Query, decodedDDL.Query)
+	require.Equal(t, decodedDDL.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+
+	decoder1, err := NewDecoder(ctx, 1, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	m = encoder.Build()[0]
+
+	decoder1.AddKeyValue(m.Key, m.Value)
+	messageType, hasNext = decoder1.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decodedInsert := decoder1.NextDMLEvent()
+	require.NotZero(t, decodedInsert.GetTableID())
+	require.Contains(t, tableInfoAccessor.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
+
+	m, err = encoder.EncodeDDLEvent(renameTableDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+	messageType, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decodedDDL = dec.NextDDLEvent()
+	require.Equal(t, renameTableDDL.Query, decodedDDL.Query)
+	require.Equal(t, renameTableDDL.Type, decodedDDL.Type)
+	require.Equal(t, decodedDDL.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+	require.Contains(t, decodedDDL.GetBlockedTables().TableIDs, decodedInsert.GetTableID())
 }
 
 func TestDDLSequence(t *testing.T) {
