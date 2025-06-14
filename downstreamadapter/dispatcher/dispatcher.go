@@ -45,6 +45,8 @@ type EventDispatcher interface {
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
 	GetTableSpan() *heartbeatpb.TableSpan
+	GetTimezone() string
+	GetIntegrityConfig() *eventpb.IntegrityConfig
 	GetFilterConfig() *eventpb.FilterConfig
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
@@ -123,6 +125,9 @@ type Dispatcher struct {
 	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
 	schemaIDToDispatchers *SchemaIDToDispatchers
 
+	timezone        string
+	integrityConfig *eventpb.IntegrityConfig
+
 	// if syncPointInfo is not nil, means enable Sync Point feature,
 	syncPointConfig *syncpoint.SyncPointConfig
 
@@ -168,6 +173,8 @@ func NewDispatcher(
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
+	timezone string,
+	integrityConfig *eventpb.IntegrityConfig,
 	syncPointConfig *syncpoint.SyncPointConfig,
 	startTsIsSyncpoint bool,
 	filterConfig *eventpb.FilterConfig,
@@ -184,6 +191,8 @@ func NewDispatcher(
 		startTsIsSyncpoint:    startTsIsSyncpoint,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
+		timezone:              timezone,
+		integrityConfig:       integrityConfig,
 		syncPointConfig:       syncPointConfig,
 		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
 		resolvedTs:            startTs,

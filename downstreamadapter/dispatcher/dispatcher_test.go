@@ -57,6 +57,8 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		1, // schemaID
 		NewSchemaIDToDispatchers(),
+		"system",
+		nil,
 		&syncpoint.SyncPointConfig{
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),

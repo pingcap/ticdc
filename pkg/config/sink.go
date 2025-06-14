@@ -204,8 +204,8 @@ type SinkConfig struct {
 
 	CaseSensitive bool `toml:"case-sensitive" json:"case-sensitive"`
 	// Integrity is only available when the downstream is MQ.
-	Integrity      *Config `toml:"integrity" json:"integrity"`
-	ForceReplicate bool    `toml:"force-replicate" json:"force-replicate"`
+	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
+	ForceReplicate bool             `toml:"force-replicate" json:"force-replicate"`
 }
 
 // MaskSensitiveData masks sensitive data in SinkConfig
