@@ -276,10 +276,22 @@ func createBootstrapResponse(
 		Spans:        make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
 	}
 
+	// table trigger dispatcher startTs
 	if startTs != 0 {
 		response.CheckpointTs = startTs
 	}
 
+	manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
+		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
+			ID:              id.ToPB(),
+			SchemaID:        d.GetSchemaID(),
+			Span:            d.GetTableSpan(),
+			ComponentStatus: d.GetComponentStatus(),
+			CheckpointTs:    d.GetCheckpointTs(),
+			BlockState:      d.GetBlockEventStatus(),
+			Redo:            true,
+		})
+	})
 	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.Dispatcher) {
 		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 			ID:              id.ToPB(),

@@ -238,20 +238,17 @@ func (cm *ControllerManager) FinishBootstrap(
 	}
 
 	// Step 3: Build working task map from bootstrap responses
-	workingTaskMap := cm.buildWorkingTaskMap(allNodesResp)
+	workingTaskMap, redoWorkingTaskMap := cm.buildWorkingTaskMap(allNodesResp)
 
 	// Step 4: Process tables and build schema info
-	schemaInfos := cm.processTablesAndBuildSchemaInfo(tables, workingTaskMap, isMysqlCompatibleBackend)
+	schemaInfos := cm.processTablesAndBuildSchemaInfo(tables, workingTaskMap, redoWorkingTaskMap, isMysqlCompatibleBackend)
 
 	// Step 5: Handle any remaining working tasks (likely dropped tables)
-	cm.handleRemainingWorkingTasks(workingTaskMap)
+	cm.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
 	// Step 6: Initialize and start sub components
 	cm.initializeComponents()
-	if cm.redoController != nil {
-		cm.redoBarrier = cm.newBarrier(cm.redoOperatorController, cm.redoController, allNodesResp)
-	}
-	cm.barrier = cm.newBarrier(cm.operatorController, cm.controller, allNodesResp)
+	cm.newBarrier(cm.operatorController, cm.controller, allNodesResp)
 
 	// Step 7: Prepare response
 	initSchemaInfos := cm.prepareSchemaInfoResponse(schemaInfos)
@@ -266,11 +263,14 @@ func (cm *ControllerManager) FinishBootstrap(
 	}, nil
 }
 
-func (cm *ControllerManager) newBarrier(oc *operator.Controller, c *Controller, allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) *Barrier {
+func (cm *ControllerManager) newBarrier(oc *operator.Controller, c *Controller, allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
 	// Initialize barrier
-	barrier := NewBarrier(oc, c, cm.cfConfig.Scheduler.EnableTableAcrossNodes)
-	barrier.HandleBootstrapResponse(allNodesResp)
-	return barrier
+	if cm.redoController != nil {
+		cm.redoBarrier = NewBarrier(oc, c, cm.cfConfig.Scheduler.EnableTableAcrossNodes)
+		cm.redoBarrier.HandleBootstrapResponse(allNodesResp, true)
+	}
+	cm.barrier = NewBarrier(oc, c, cm.cfConfig.Scheduler.EnableTableAcrossNodes)
+	cm.barrier.HandleBootstrapResponse(allNodesResp, false)
 }
 
 func (cm *ControllerManager) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) uint64 {
@@ -302,19 +302,28 @@ func (cm *ControllerManager) determineStartTs(allNodesResp map[node.ID]*heartbea
 
 func (cm *ControllerManager) buildWorkingTaskMap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-) map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication] {
+) (
+	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+) {
 	workingTaskMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
+	redoWorkingTaskMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
 	for node, resp := range allNodesResp {
 		for _, spanInfo := range resp.Spans {
 			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
-			if cm.controller.isDDLDispatcher(dispatcherID) {
+			controller := cm.getController(spanInfo.Redo)
+			if controller.isDDLDispatcher(dispatcherID) {
 				continue
 			}
 			spanReplication := cm.createSpanReplication(spanInfo, node)
-			addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
+			if spanInfo.Redo {
+				addToWorkingTaskMap(redoWorkingTaskMap, spanInfo.Span, spanReplication)
+			} else {
+				addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
+			}
 		}
 	}
-	return workingTaskMap
+	return workingTaskMap, redoWorkingTaskMap
 }
 
 func (cm *ControllerManager) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableSpan, node node.ID) *replica.SpanReplication {
@@ -322,6 +331,7 @@ func (cm *ControllerManager) createSpanReplication(spanInfo *heartbeatpb.Bootstr
 		ComponentStatus: spanInfo.ComponentStatus,
 		ID:              spanInfo.ID,
 		CheckpointTs:    spanInfo.CheckpointTs,
+		Redo:            spanInfo.Redo,
 	}
 
 	return replica.NewWorkingSpanReplication(
@@ -336,7 +346,7 @@ func (cm *ControllerManager) createSpanReplication(spanInfo *heartbeatpb.Bootstr
 
 func (cm *ControllerManager) processTablesAndBuildSchemaInfo(
 	tables []commonEvent.Table,
-	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	isMysqlCompatibleBackend bool,
 ) map[int64]*heartbeatpb.SchemaInfo {
 	schemaInfos := make(map[int64]*heartbeatpb.SchemaInfo)
@@ -354,7 +364,7 @@ func (cm *ControllerManager) processTablesAndBuildSchemaInfo(
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
 		// Process table spans
-		cm.processTableSpans(table, workingTaskMap)
+		cm.processTableSpans(table, workingTaskMap, redoWorkingTaskMap)
 	}
 
 	return schemaInfos
@@ -362,9 +372,14 @@ func (cm *ControllerManager) processTablesAndBuildSchemaInfo(
 
 func (cm *ControllerManager) processTableSpans(
 	table commonEvent.Table,
-	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
+	redoTableSpans, reodIsTableWorking := redoWorkingTaskMap[table.TableID]
+	if cm.redoController != nil && isTableWorking != reodIsTableWorking {
+		log.Error("found different table status when processing table spans",
+			zap.Any("isTableWorking", isTableWorking), zap.Any("reodIsTableWorking", reodIsTableWorking))
+	}
 
 	// Add new table if not working
 	if isTableWorking {
@@ -380,15 +395,18 @@ func (cm *ControllerManager) processTableSpans(
 			zap.Int64("tableID", table.TableID))
 
 		if cm.redoController != nil {
-			cm.redoController.addWorkingSpans(tableSpans)
+			cm.redoController.addWorkingSpans(redoTableSpans)
 		}
 		cm.controller.addWorkingSpans(tableSpans)
 
 		if cm.enableTableAcrossNodes {
-			cm.handleTableHoles(table, tableSpans, tableSpan)
+			cm.handleTableHoles(table, tableSpans, redoTableSpans, tableSpan)
 		}
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
+		if reodIsTableWorking {
+			delete(redoWorkingTaskMap, table.TableID)
+		}
 	} else {
 		if cm.redoController != nil {
 			cm.redoController.AddNewTable(table, cm.startCheckpointTs)
@@ -399,22 +417,28 @@ func (cm *ControllerManager) processTableSpans(
 
 func (cm *ControllerManager) handleTableHoles(
 	table commonEvent.Table,
-	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	tableSpans, redoTableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	tableSpan *heartbeatpb.TableSpan,
 ) {
-	holes := split.FindHoles(tableSpans, tableSpan)
 	// redo
 	if cm.redoController != nil {
+		holes := split.FindHoles(redoTableSpans, tableSpan)
 		cm.redoController.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
 	}
+	holes := split.FindHoles(tableSpans, tableSpan)
 	// Todo: split the hole
 	// Add holes to the replicationDB
 	cm.controller.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
 }
 
 func (cm *ControllerManager) handleRemainingWorkingTasks(
-	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 ) {
+	for tableID := range redoWorkingTaskMap {
+		log.Warn("found a redo working table that is not in initial table map, just ignore it",
+			zap.Stringer("changefeed", cm.changefeedID),
+			zap.Int64("id", tableID))
+	}
 	for tableID := range workingTaskMap {
 		log.Warn("found a working table that is not in initial table map, just ignore it",
 			zap.Stringer("changefeed", cm.changefeedID),
@@ -679,6 +703,13 @@ func (cm *ControllerManager) getOC(redo bool) *operator.Controller {
 		return cm.redoOperatorController
 	}
 	return cm.operatorController
+}
+
+func (cm *ControllerManager) getController(redo bool) *Controller {
+	if redo {
+		return cm.redoController
+	}
+	return cm.controller
 }
 
 func addToWorkingTaskMap(

@@ -172,9 +172,12 @@ func (b *Barrier) HandleStatus(from node.ID,
 }
 
 // HandleBootstrapResponse rebuild the block event from the bootstrap response
-func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
+func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse, redo bool) {
 	for _, resp := range bootstrapRespMap {
 		for _, span := range resp.Spans {
+			if redo != span.Redo {
+				continue
+			}
 			// we only care about the WAITING, WRITING and DONE stage
 			if span.BlockState == nil || span.BlockState.Stage == heartbeatpb.BlockStage_NONE {
 				continue

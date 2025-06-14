@@ -192,6 +192,7 @@ message BootstrapTableSpan {
     ComponentState component_status = 4;
     uint64 checkpoint_ts = 5;
     State block_state = 6;
+    bool redo = 7;
 }
 
 message MaintainerCloseRequest {

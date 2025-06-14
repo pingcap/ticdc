@@ -330,38 +330,31 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	return block
 }
 
-func (rd *RedoDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
-	switch event.GetType() {
-	case commonEvent.TypeDDLEvent:
-		ddlEvent := event.(*commonEvent.DDLEvent)
-		if ddlEvent.BlockedTables == nil {
-			return false
-		}
-		switch ddlEvent.GetBlockedTables().InfluenceType {
-		case commonEvent.InfluenceTypeNormal:
-			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
-				return true
-			}
-			if !common.IsCompleteSpan(rd.tableSpan) {
-				// if the table is split, even the blockTable only itself, it should block
-				return true
-			}
-			return false
-		case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
+func (rd *RedoDispatcher) shouldBlock(ddlEvent *commonEvent.DDLEvent) bool {
+	if ddlEvent.BlockedTables == nil {
+		return false
+	}
+	switch ddlEvent.BlockedTables.InfluenceType {
+	case commonEvent.InfluenceTypeNormal:
+		if len(ddlEvent.BlockedTables.TableIDs) > 1 {
 			return true
 		}
-	default:
-		log.Error("invalid event type", zap.Any("eventType", event.GetType()))
+		if !common.IsCompleteSpan(rd.tableSpan) {
+			// if the table is split, even the blockTable only itself, it should block
+			return true
+		}
+		return false
+	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
+		return true
 	}
 	return false
 }
 
-func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
+func (rd *RedoDispatcher) dealWithBlockEvent(event *commonEvent.DDLEvent) {
 	if !rd.shouldBlock(event) {
-		ddl, ok := event.(*commonEvent.DDLEvent)
 		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
 		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
-		if ok && rd.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
+		if rd.bdrMode && event.BDRMode != string(ast.BDRRolePrimary) {
 			rd.PassBlockEventToSink(event)
 		} else {
 			err := rd.AddBlockEventToSink(event)
@@ -385,14 +378,12 @@ func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					BlockTs:           event.GetCommitTs(),
 					NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
 					NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-					IsSyncPoint:       false, // sync point event must should block
 					Stage:             heartbeatpb.BlockStage_NONE,
 				},
 				Redo: true,
 			}
 			identifier := BlockEventIdentifier{
-				CommitTs:    event.GetCommitTs(),
-				IsSyncPoint: false,
+				CommitTs: event.GetCommitTs(),
 			}
 
 			if event.GetNeedAddedTables() != nil {
@@ -435,8 +426,7 @@ func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 			Redo: true,
 		}
 		identifier := BlockEventIdentifier{
-			CommitTs:    event.GetCommitTs(),
-			IsSyncPoint: false,
+			CommitTs: event.GetCommitTs(),
 		}
 		rd.resendTaskMap.Set(identifier, newResendTask(message, rd, nil))
 		rd.blockStatusesChan <- message

@@ -215,7 +215,8 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 		zap.String("query", e.Query),
 		zap.Int64("eventTableID", e.TableID),
 		zap.Uint64("commitTs", e.FinishedTs),
-		zap.Uint64("seq", e.Seq))
+		zap.Uint64("seq", e.Seq),
+		zap.Bool("redo", d.info.GetRedo()))
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState(), d.info.GetRedo())
 	select {
 	case <-ctx.Done():
