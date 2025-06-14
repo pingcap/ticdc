@@ -441,6 +441,12 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 	switch event.GetType() {
 	case commonEvent.TypeReadyEvent:
 		if *event.From == localServerID {
+			if d.readyCallback != nil {
+				d.connState.setEventServiceID(localServerID)
+				d.connState.readyEventReceived.Store(true)
+				d.readyCallback()
+				return
+			}
 			// note: this must be the first ready event from local event service
 			oldEventServiceID := d.connState.getEventServiceID()
 			if oldEventServiceID != "" {
