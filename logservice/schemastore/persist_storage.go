@@ -402,7 +402,6 @@ func (p *persistentStorage) fetchTableDDLEvents(tableID int64, tableFilter filte
 		zap.Int64("tableID", tableID),
 		zap.Uint64("start", start),
 		zap.Uint64("end", end),
-		zap.Any("history", history),
 		zap.Any("allTargetTs", allTargetTs))
 
 	return events, nil
