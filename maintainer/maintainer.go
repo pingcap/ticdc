@@ -182,11 +182,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoDDLSpan *replica.SpanReplication
 	)
 	if redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
-		tableTriggerEventDispatcherID := common.NewDispatcherID()
-		redoDDLSpan = replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		redoTableTriggerEventDispatcherID := common.NewDispatcherID()
+		redoDDLSpan = replica.NewWorkingSpanReplication(cfID, redoTableTriggerEventDispatcherID,
 			common.DDLSpanSchemaID,
 			common.DDLSpan, &heartbeatpb.TableSpanStatus{
-				ID:              tableTriggerEventDispatcherID.ToPB(),
+				ID:              redoTableTriggerEventDispatcherID.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Working,
 				CheckpointTs:    checkpointTs,
 			}, selfNode.ID)
@@ -534,10 +534,12 @@ func (m *Maintainer) onNodeChanged() {
 		m.onBootstrapDone(cachedResponse)
 	}
 	// redo
-	m.redoTs.mu.Lock()
-	defer m.redoTs.mu.Unlock()
-	for _, id := range removedNodes {
-		delete(m.redoTsMap, id)
+	if m.redoDDLSpan != nil {
+		m.redoTs.mu.Lock()
+		defer m.redoTs.mu.Unlock()
+		for _, id := range removedNodes {
+			delete(m.redoTsMap, id)
+		}
 	}
 }
 
@@ -683,26 +685,14 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
-	blockStatuses := make([]*heartbeatpb.TableSpanBlockStatus, 0, len(req.BlockStatuses))
-	redoBlockStatuses := make([]*heartbeatpb.TableSpanBlockStatus, 0, len(req.BlockStatuses))
-	for _, bs := range req.BlockStatuses {
-		if bs.Redo {
-			redoBlockStatuses = append(redoBlockStatuses, bs)
-		} else {
-			blockStatuses = append(blockStatuses, bs)
+	if len(req.BlockStatuses) > 0 {
+		if m.controllerManager.redoBarrier != nil {
+			ackMsg := m.controllerManager.redoBarrier.HandleStatus(msg.From, req, true)
+			if ackMsg != nil {
+				m.sendMessages([]*messaging.TargetMessage{ackMsg})
+			}
 		}
-	}
-	if len(redoBlockStatuses) > 0 {
-		req.BlockStatuses = redoBlockStatuses
-		ackMsg := m.controllerManager.redoBarrier.HandleStatus(msg.From, req)
-		if ackMsg != nil {
-			ackMsg.Redo = true
-			m.sendMessages([]*messaging.TargetMessage{ackMsg})
-		}
-	}
-	if len(blockStatuses) > 0 {
-		req.BlockStatuses = blockStatuses
-		ackMsg := m.controllerManager.barrier.HandleStatus(msg.From, req)
+		ackMsg := m.controllerManager.barrier.HandleStatus(msg.From, req, false)
 		if ackMsg != nil {
 			m.sendMessages([]*messaging.TargetMessage{ackMsg})
 		}
@@ -785,7 +775,6 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	// Memory Consumption is 64(tableName/schemaName limit) * 4(utf8.UTFMax) * 2(tableName+schemaName) * tableNum
 	// For an extreme case(100w tables, and 64 utf8 characters for each name), the memory consumption is about 488MB.
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.
-	// InitializeTableSchemaStore
 	m.postBootstrapMsg = msg
 	m.sendPostBootstrapRequest()
 	// set status changed to true, trigger the maintainer manager to send heartbeat to coordinator
@@ -1040,13 +1029,11 @@ func (m *Maintainer) GetDispatcherCount() int {
 
 // MoveTable moves a table to a specific node.
 func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
-	// m.redoController.moveTable(tableId,targetNode)
 	return m.controllerManager.moveTable(tableId, targetNode)
 }
 
 // MoveSplitTable moves all the dispatchers in a split table to a specific node.
 func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
-	// m.redoController.moveSplitTable(tableId, targetNode)
 	return m.controllerManager.moveSplitTable(tableId, targetNode)
 }
 
@@ -1058,13 +1045,11 @@ func (m *Maintainer) GetTables() []*replica.SpanReplication {
 // SplitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
 func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
-	// m.redoController.SplitTableByRegionCount(tableId)
 	return m.controllerManager.splitTableByRegionCount(tableId)
 }
 
 // MergeTable merge two dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
 func (m *Maintainer) MergeTable(tableId int64) error {
-	// m.redoController.MergeTable(tableId)
 	return m.controllerManager.mergeTable(tableId)
 }

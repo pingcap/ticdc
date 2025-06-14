@@ -40,13 +40,6 @@ type RedoDispatcher struct {
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
 	startTs            uint64
 	startTsIsSyncpoint bool
-	// The ts from pd when the dispatcher is createrd.
-	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
-	// to determine whether the insert event should use `Replace` or just `Insert`
-	// Because when the dispatcher scheduled or the node restarts, there may be some dml events to receive twice.
-	// So we need to use `Replace` to avoid duplicate key error.
-	// Table Trigger Event Dispatcher doesn't need this, because it doesn't deal with dml events.
-	creationPDTs uint64
 	// componentStatus is the status of the dispatcher, such as working, removing, stopperd.
 	componentStatus *ComponentStateWithMutex
 	// the config of filter
@@ -106,7 +99,6 @@ func NewRedoDispatcher(
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	filterConfig *eventpb.FilterConfig,
-	currentPdTs uint64,
 	errCh chan error,
 	bdrMode bool,
 ) *RedoDispatcher {
@@ -128,7 +120,6 @@ func NewRedoDispatcher(
 		schemaID:              schemaID,
 		schemaIDToDispatchers: schemaIDToDispatchers,
 		resendTaskMap:         newResendTaskMap(),
-		creationPDTs:          currentPdTs,
 		errCh:                 errCh,
 		bdrMode:               bdrMode,
 		BootstrapState:        BootstrapFinished,
@@ -271,7 +262,6 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				return block
 			}
 			block = true
-			dml.ReplicatingTs = rd.creationPDTs
 			dml.AddPostFlushFunc(func() {
 				// Considering dml event in sink may be written to downstream not in order,
 				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
@@ -640,7 +630,6 @@ func (rd *RedoDispatcher) SetStartTs(startTs uint64) {
 }
 
 func (rd *RedoDispatcher) SetCurrentPDTs(currentPDTs uint64) {
-	rd.creationPDTs = currentPDTs
 }
 
 func (rd *RedoDispatcher) GetType() int {

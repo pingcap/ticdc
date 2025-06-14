@@ -221,36 +221,18 @@ func NewEventDispatcherManager(
 
 	var tableTriggerStartTs uint64 = 0
 	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
-	if tableTriggerEventDispatcherID != nil {
-		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs, newChangefeed, false)
-		if err != nil {
-			return nil, 0, errors.Trace(err)
-		}
-	}
 	if redoTableTriggerEventDispatcherID != nil && manager.redoSink.Enabled() {
 		_, err = manager.NewTableTriggerEventDispatcher(redoTableTriggerEventDispatcherID, startTs, newChangefeed, true)
 		if err != nil {
 			return nil, 0, errors.Trace(err)
 		}
 	}
-
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
-		err := manager.sink.Run(ctx)
-		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-			select {
-			case <-ctx.Done():
-				return
-			case manager.errCh <- err:
-			default:
-				log.Error("error channel is full, discard error",
-					zap.Stringer("changefeedID", changefeedID),
-					zap.Error(err),
-				)
-			}
+	if tableTriggerEventDispatcherID != nil {
+		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs, newChangefeed, false)
+		if err != nil {
+			return nil, 0, errors.Trace(err)
 		}
-	}()
+	}
 
 	// redo manager
 	if manager.redoSink.Enabled() {
@@ -321,6 +303,24 @@ func NewEventDispatcherManager(
 			}
 		}()
 	}
+
+	manager.wg.Add(1)
+	go func() {
+		defer manager.wg.Done()
+		err := manager.sink.Run(ctx)
+		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+			select {
+			case <-ctx.Done():
+				return
+			case manager.errCh <- err:
+			default:
+				log.Error("error channel is full, discard error",
+					zap.Stringer("changefeedID", changefeedID),
+					zap.Error(err),
+				)
+			}
+		}
+	}()
 
 	// collect errors from error channel
 	manager.wg.Add(1)
@@ -401,7 +401,7 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 	log.Info("table trigger event dispatcher created",
 		zap.Bool("redo", redo),
 		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", e.tableTriggerEventDispatcher.GetId()),
+		zap.Stringer("dispatcherID", tableTriggerEventDispatcher.GetId()),
 		zap.Uint64("startTs", tableTriggerEventDispatcher.GetStartTs()),
 	)
 	return tableTriggerEventDispatcher.GetStartTs(), nil
@@ -571,7 +571,6 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 
 func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
-	currentPdTs := e.pdClock.CurrentTS()
 
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
 	startTsList := make([]int64, 0, len(infos))
@@ -621,7 +620,6 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 			schemaIds[idx],
 			e.redoSchemaIDToDispatchers,
 			e.filterConfig,
-			currentPdTs,
 			e.errCh,
 			e.config.BDRMode)
 		if e.heartBeatTask == nil {
@@ -1189,7 +1187,6 @@ func (e *EventDispatcherManager) MergeRedoDispatcher(dispatcherIDs []common.Disp
 		schemaID,
 		e.redoSchemaIDToDispatchers,
 		e.filterConfig,
-		0, // currentPDTs will be calculated later.
 		e.errCh,
 		e.config.BDRMode,
 	)

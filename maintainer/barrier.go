@@ -120,6 +120,7 @@ func (b *Barrier) ReleaseLock(mutex *sync.Mutex) {
 // HandleStatus handle the block status from dispatcher manager
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
+	redo bool,
 ) *messaging.TargetMessage {
 	log.Info("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
@@ -128,6 +129,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 	actions := []*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	for _, status := range request.BlockStatuses {
+		if redo != status.Redo {
+			continue
+		}
 		// deal with block status, and check whether need to return action.
 		// we need to deal with the block status in order, otherwise scheduler may have problem
 		// e.g. TODO（truncate + create table)

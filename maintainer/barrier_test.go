@@ -72,7 +72,7 @@ func TestOneBlockEvent(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.NotNil(t, msg)
 	key := eventKey{
 		blockTs:     10,
@@ -118,7 +118,7 @@ func TestOneBlockEvent(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.NotNil(t, msg)
 	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
@@ -147,7 +147,7 @@ func TestOneBlockEvent(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.Len(t, barrier.blockedEvents.m, 0)
 	// no event if found, no message will be sent
 	require.NotNil(t, msg)
@@ -212,7 +212,7 @@ func TestNormalBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.NotNil(t, msg)
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
@@ -236,7 +236,7 @@ func TestNormalBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.NotNil(t, msg)
 	key := eventKey{
 		blockTs:     10,
@@ -277,7 +277,7 @@ func TestNormalBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == selectDispatcherID)
 
@@ -294,7 +294,7 @@ func TestNormalBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.Len(t, barrier.blockedEvents.m, 1)
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -316,7 +316,7 @@ func TestNormalBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.Len(t, barrier.blockedEvents.m, 0)
 }
 
@@ -365,7 +365,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.NotNil(t, msg)
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
@@ -410,7 +410,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.NotNil(t, msg)
 	key := eventKey{
 		blockTs:     10,
@@ -436,7 +436,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.Len(t, barrier.blockedEvents.m, 1)
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -450,7 +450,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.Len(t, barrier.blockedEvents.m, 1)
 	// resend to check removed tables
 	event.resend()
@@ -531,7 +531,7 @@ func TestSchemaBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.NotNil(t, msg)
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
@@ -558,7 +558,7 @@ func TestSchemaBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.NotNil(t, msg)
 	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 2)
@@ -592,7 +592,7 @@ func TestSchemaBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	// ack and write message
 	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
@@ -615,8 +615,8 @@ func TestSchemaBlock(t *testing.T) {
 				},
 			},
 		},
-	})
-	// pass action message to no node, because tables are removed
+	}, false)
+	// pass action message to,false no node, because tables are removed
 	msgs := barrier.Resend()
 	require.Len(t, msgs, 0)
 	require.Len(t, barrier.blockedEvents.m, 0)
@@ -708,7 +708,7 @@ func TestSyncPointBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	// 3 ack messages, including the ddl dispatcher
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
@@ -732,7 +732,7 @@ func TestSyncPointBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	// ack and write message
 	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 2)
@@ -759,7 +759,7 @@ func TestSyncPointBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	msgs := barrier.Resend()
 	// 2 pass action messages to one node
 	require.Len(t, msgs, 2)
@@ -796,7 +796,7 @@ func TestSyncPointBlock(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.Len(t, barrier.blockedEvents.m, 0)
 }
 
@@ -836,7 +836,7 @@ func TestNonBlocked(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	// 1 ack  message
 	require.NotNil(t, msg)
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -878,7 +878,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	require.NotNil(t, msg)
 	key := eventKey{
 		blockTs:     10,
@@ -956,7 +956,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	event := barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.False(t, event.selected.Load())
@@ -995,7 +995,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
@@ -1033,7 +1033,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
@@ -1062,7 +1062,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, false)
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.Nil(t, event)
 }
@@ -1114,7 +1114,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID:  cfID.ToPB(),
 		BlockStatuses: blockStatus,
-	})
+	}, false)
 	require.NotNil(t, msg)
 	log.Info("duration", zap.Duration("duration", time.Since(now)))
 
@@ -1134,7 +1134,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 	barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID:  cfID.ToPB(),
 		BlockStatuses: passStatus,
-	})
+	}, false)
 	require.NotNil(t, msg)
 	log.Info("duration", zap.Duration("duration", time.Since(now)))
 }
