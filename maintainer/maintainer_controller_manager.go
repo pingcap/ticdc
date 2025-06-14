@@ -248,7 +248,7 @@ func (cm *ControllerManager) FinishBootstrap(
 
 	// Step 6: Initialize and start sub components
 	cm.initializeComponents()
-	cm.newBarrier(cm.operatorController, cm.controller, allNodesResp)
+	cm.newBarrier(allNodesResp)
 
 	// Step 7: Prepare response
 	initSchemaInfos := cm.prepareSchemaInfoResponse(schemaInfos)
@@ -263,13 +263,13 @@ func (cm *ControllerManager) FinishBootstrap(
 	}, nil
 }
 
-func (cm *ControllerManager) newBarrier(oc *operator.Controller, c *Controller, allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
+func (cm *ControllerManager) newBarrier(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
 	// Initialize barrier
 	if cm.redoController != nil {
-		cm.redoBarrier = NewBarrier(oc, c, cm.cfConfig.Scheduler.EnableTableAcrossNodes)
+		cm.redoBarrier = NewBarrier(cm.redoOperatorController, cm.redoController, cm.cfConfig.Scheduler.EnableTableAcrossNodes)
 		cm.redoBarrier.HandleBootstrapResponse(allNodesResp, true)
 	}
-	cm.barrier = NewBarrier(oc, c, cm.cfConfig.Scheduler.EnableTableAcrossNodes)
+	cm.barrier = NewBarrier(cm.operatorController, cm.controller, cm.cfConfig.Scheduler.EnableTableAcrossNodes)
 	cm.barrier.HandleBootstrapResponse(allNodesResp, false)
 }
 

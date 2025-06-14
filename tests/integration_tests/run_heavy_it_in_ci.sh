@@ -44,7 +44,7 @@ mysql_groups=(
 	# G06
 	'cdc ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'consistent_partition_table consistent_replicate_ddl consistent_replicate_gbk'
+	'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
 	# G08
 	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
 	# G09
