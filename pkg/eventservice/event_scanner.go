@@ -206,9 +206,8 @@ func (s *eventScanner) scanAndMergeEvents(
 			return s.finalizeScan(session, merger, processor)
 		}
 
-		eventSize := int64(len(rawEvent.Key) + len(rawEvent.Value) + len(rawEvent.OldValue))
-		session.addBytes(eventSize)
-
+		session.addBytes(rawEvent.ApproximateDataSize())
+		session.entryCount++
 		if isNewTxn && checker.checkLimits(session.totalBytes) {
 			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
 				return s.interruptScan(session, merger, processor)
@@ -347,6 +346,7 @@ type scanSession struct {
 	startTime    time.Time
 	totalBytes   int64
 	lastCommitTs uint64
+	entryCount   int
 	dmlCount     int
 
 	// Result collection
@@ -388,6 +388,8 @@ func (s *scanSession) isContextDone() bool {
 // recordMetrics records the scan duration metrics
 func (s *scanSession) recordMetrics() {
 	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
+	metrics.EventServiceScannedBytes.Observe(float64(s.totalBytes))
+	metrics.EventServiceScannedCount.Observe(float64(s.dmlCount))
 }
 
 // limitChecker manages scan limits and interruption logic

@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -113,7 +114,7 @@ type EventCollector struct {
 		value atomic.Value
 	}
 
-	wg     sync.WaitGroup
+	g      *errgroup.Group
 	cancel context.CancelFunc
 
 	metricDispatcherReceivedKVEventCount         prometheus.Counter
@@ -146,46 +147,38 @@ func New(serverId node.ID) *EventCollector {
 }
 
 func (c *EventCollector) Run(ctx context.Context) {
+	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
+	c.g = g
 	c.cancel = cancel
 
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
-		c.wg.Add(1)
-		go func() {
-			defer c.wg.Done()
-			c.runProcessMessage(ctx, c.receiveChannels[i])
-		}()
+		g.Go(func() error {
+			return c.runProcessMessage(ctx, c.receiveChannels[i])
+		})
 	}
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.processFeedback(ctx)
-	}()
+	g.Go(func() error {
+		return c.processFeedback(ctx)
+	})
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.processDispatcherRequests(ctx)
-	}()
+	g.Go(func() error {
+		return c.processDispatcherRequests(ctx)
+	})
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.processLogCoordinatorRequest(ctx)
-	}()
+	g.Go(func() error {
+		return c.processLogCoordinatorRequest(ctx)
+	})
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.updateMetrics(ctx)
-	}()
+	g.Go(func() error {
+		return c.updateMetrics(ctx)
+	})
 }
 
 func (c *EventCollector) Close() {
 	log.Info("event collector is closing")
 	c.cancel()
-	c.wg.Wait()
+	_ = c.g.Wait()
 	c.ds.Close()
 	c.redoDs.Close()
 	c.changefeedIDMap.Range(func(key, value any) bool {
@@ -238,15 +231,15 @@ func (c *EventCollector) PrepareAddDispatcher(
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
 	c.dispatcherMap.Store(target.GetId(), stat)
+	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
+	metrics.EventCollectorRegisteredDispatcherCount.Inc()
+
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
 	ds := c.getDynamicStream(dispatcher.IsRedoDispatcher(target))
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
-	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
-	metrics.EventCollectorRegisteredDispatcherCount.Inc()
-	// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
 	err = c.mustSendDispatcherRequest(c.serverId, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
@@ -366,13 +359,13 @@ func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, to
 	}
 }
 
-func (c *EventCollector) processFeedback(ctx context.Context) {
+func (c *EventCollector) processFeedback(ctx context.Context) error {
 	log.Info("Start process feedback from dynamic stream")
 	defer log.Info("Stop process feedback from dynamic stream")
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case feedback := <-c.ds.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea, dynstream.ResumeArea:
@@ -395,11 +388,11 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 	}
 }
 
-func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
+func (c *EventCollector) processDispatcherRequests(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case req := <-c.dispatcherRequestChan.Out():
 			if err := c.mustSendDispatcherRequest(req.Target, req.Topic, req.Req); err != nil {
 				// Sleep a short time to avoid too many requests in a short time.
@@ -425,11 +418,11 @@ func (c *EventCollector) getCoordinatorInfo() node.ID {
 	return ""
 }
 
-func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
+func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case req := <-c.logCoordinatorRequestChan.Out():
 			coordinatorID := c.getCoordinatorInfo()
 			if coordinatorID == "" {
@@ -575,11 +568,11 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	return nil
 }
 
-func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) {
+func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case targetMessage := <-inCh:
 			ds := c.getDynamicStream(targetMessage.Redo)
 			for _, msg := range targetMessage.Message {
@@ -642,13 +635,13 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 	}
 }
 
-func (c *EventCollector) updateMetrics(ctx context.Context) {
+func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case <-ticker.C:
 			// FIXME: record ds?
 			dsMetrics := c.ds.GetMetrics()

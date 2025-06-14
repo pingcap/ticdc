@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -279,17 +278,14 @@ func (m *mockEventStore) Close(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, gcTS uint64) error {
-	return nil
+func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, gcTS uint64) {
 }
 
-func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
+func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
-	if !ok {
-		return errors.New("dispatcher not found")
+	if ok {
+		m.spansMap.Delete(span)
 	}
-	m.spansMap.Delete(span)
-	return nil
 }
 
 func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (eventstore.EventIterator, error) {
@@ -321,19 +317,19 @@ func (m *mockEventStore) RegisterDispatcher(
 	span *heartbeatpb.TableSpan,
 	startTS common.Ts,
 	notifier eventstore.ResolvedTsNotifier,
-	onlyReuse bool,
-	bdrMode bool,
-) (bool, error) {
-	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", uint64(startTS)), zap.Any("dispatcherID", dispatcherID))
+	_ bool,
+	_ bool,
+) bool {
+	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", startTS), zap.Any("dispatcherID", dispatcherID))
 	spanStats := &mockSpanStats{
-		startTs:            uint64(startTS),
+		startTs:            startTS,
 		resolvedTsNotifier: notifier,
 		pendingEvents:      make([]*common.RawKVEntry, 0),
 	}
-	spanStats.resolvedTs = uint64(startTS)
+	spanStats.resolvedTs = startTS
 	m.spansMap.Store(span, spanStats)
 	m.dispatcherMap.Store(dispatcherID, span)
-	return true, nil
+	return true
 }
 
 type mockEventIterator struct {
