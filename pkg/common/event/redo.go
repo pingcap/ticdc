@@ -16,11 +16,11 @@ package event
 import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tidb/pkg/meta/model"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tiflow/cdc/model"
 )
-
-//go:generate msgp
 
 // RedoLogType is the type of log
 type RedoLogType int
@@ -61,7 +61,6 @@ type DMLEventInRedoLog struct {
 	Columns    []*RedoColumn `msg:"columns"`
 	PreColumns []*RedoColumn `msg:"pre-columns"`
 
-	// TODO: seems it's unused. Maybe we can remove it?
 	IndexColumns [][]int `msg:"index-columns"`
 }
 
@@ -89,6 +88,14 @@ type RedoColumnValue struct {
 	Flag              uint64 `msg:"flag"`
 }
 
+type RedoRowEvent struct {
+	StartTs   uint64
+	CommitTs  uint64
+	TableInfo *common.TableInfo
+	Event     RowChange
+	Callback  func()
+}
+
 const (
 	// RedoLogTypeRow is row type of log
 	RedoLogTypeRow RedoLogType = 1
@@ -96,15 +103,15 @@ const (
 	RedoLogTypeDDL RedoLogType = 2
 )
 
-// ToRedoLog converts row changed event to redo log
-func (r *DMLEvent) ToRedoLog() *RedoLog {
-	r.Rewind()
-	startTs := r.GetStartTs()
-	commitTs := r.GetCommitTs()
-	row, ok := r.GetNextRow()
-	if !ok {
-		return nil
+func (r *RedoRowEvent) PostFlush() {
+	if r.Callback != nil {
+		r.Callback()
 	}
+}
+
+func (r *RedoRowEvent) ToRedoLog() *RedoLog {
+	startTs := r.StartTs
+	commitTs := r.CommitTs
 	redoLog := &RedoLog{
 		RedoRow: RedoDMLEvent{
 			Row: &DMLEventInRedoLog{
@@ -123,10 +130,11 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 	if r.TableInfo != nil {
 		redoLog.RedoRow.Row.Table = new(common.TableName)
 		*redoLog.RedoRow.Row.Table = r.TableInfo.TableName
+		redoLog.RedoRow.Row.IndexColumns = getIndexColumns(r.TableInfo)
 
 		columnCount := len(r.TableInfo.GetColumns())
 		columns := make([]*RedoColumn, 0, columnCount)
-		switch row.RowType {
+		switch r.Event.RowType {
 		case RowTypeInsert:
 			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
 		case RowTypeDelete:
@@ -145,24 +153,32 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 					Charset:   column.GetCharset(),
 					Collation: column.GetCollate(),
 				})
-				switch row.RowType {
+				isHandleKey := r.TableInfo.IsHandleKey(column.ID)
+				switch r.Event.RowType {
 				case RowTypeInsert:
-					v := parseColumnValue(&row.Row, column, i)
+					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
 				case RowTypeDelete:
-					v := parseColumnValue(&row.PreRow, column, i)
+					v := parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
 					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
 				case RowTypeUpdate:
-					v := parseColumnValue(&row.Row, column, i)
+					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-					v = parseColumnValue(&row.PreRow, column, i)
+					v = parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
 					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
 				default:
 				}
 			}
 		}
-		redoLog.RedoRow.Row.Columns = columns
-		redoLog.RedoRow.Row.PreColumns = columns
+		switch r.Event.RowType {
+		case RowTypeInsert:
+			redoLog.RedoRow.Row.Columns = columns
+		case RowTypeDelete:
+			redoLog.RedoRow.Row.PreColumns = columns
+		case RowTypeUpdate:
+			redoLog.RedoRow.Row.Columns = columns
+			redoLog.RedoRow.Row.PreColumns = columns
+		}
 	}
 	return redoLog
 }
@@ -210,13 +226,58 @@ func (r RedoDMLEvent) IsUpdate() bool {
 	return len(r.Row.PreColumns) > 0 && len(r.Row.Columns) > 0
 }
 
-func parseColumnValue(row *chunk.Row, column *model.ColumnInfo, i int) RedoColumnValue {
-	v := common.ExtractColVal(row, column, i)
+func parseColumnValue(row *chunk.Row, colInfo *timodel.ColumnInfo, i int, isHandleKey bool) RedoColumnValue {
+	v := common.ExtractColVal(row, colInfo, i)
 	rrv := RedoColumnValue{Value: v}
 	switch t := rrv.Value.(type) {
 	case []byte:
 		rrv.ValueIsEmptyBytes = len(t) == 0
 	}
-	rrv.Flag = uint64(column.GetFlag())
+	// FIXME: Use tidb column flag
+	rrv.Flag = convertFlag(colInfo, isHandleKey)
 	return rrv
+}
+
+// For compatibility
+func convertFlag(colInfo *timodel.ColumnInfo, isHandleKey bool) uint64 {
+	var flag model.ColumnFlagType
+	if isHandleKey {
+		flag.SetIsHandleKey()
+	}
+	if colInfo.GetCharset() == "binary" {
+		flag.SetIsBinary()
+	}
+	if colInfo.IsGenerated() {
+		flag.SetIsGeneratedColumn()
+	}
+	if mysql.HasPriKeyFlag(colInfo.GetFlag()) {
+		flag.SetIsPrimaryKey()
+	}
+	if mysql.HasUniKeyFlag(colInfo.GetFlag()) {
+		flag.SetIsUniqueKey()
+	}
+	if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
+		flag.SetIsNullable()
+	}
+	if mysql.HasMultipleKeyFlag(colInfo.GetFlag()) {
+		flag.SetIsMultipleKey()
+	}
+	if mysql.HasUnsignedFlag(colInfo.GetFlag()) {
+		flag.SetIsUnsigned()
+	}
+	return uint64(flag)
+}
+
+// For compatibility
+func getIndexColumns(tableInfo *common.TableInfo) [][]int {
+	indexColumns := make([][]int, 0, len(tableInfo.GetIndexColumns()))
+	rowColumnsOffset := tableInfo.GetRowColumnsOffset()
+	for _, index := range tableInfo.GetIndexColumns() {
+		offsets := make([]int, 0, len(index))
+		for _, id := range index {
+			offsets = append(offsets, rowColumnsOffset[id])
+		}
+		indexColumns = append(indexColumns, offsets)
+	}
+	return indexColumns
 }

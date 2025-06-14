@@ -13,6 +13,7 @@
 package dispatchermanager
 
 import (
+	"math"
 	"sync/atomic"
 	"testing"
 
@@ -40,6 +41,7 @@ func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id comm
 		StartKey: startKey,
 		EndKey:   endKey,
 	}
+	var redoTs uint64 = math.MaxUint64
 	d := dispatcher.NewDispatcher(
 		manager.changefeedID,
 		id,
@@ -56,6 +58,7 @@ func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id comm
 		0,
 		make(chan error, 1),
 		false,
+		&redoTs,
 	)
 	d.SetComponentStatus(heartbeatpb.ComponentState_Working)
 	return d
@@ -66,7 +69,7 @@ func createTestManager(t *testing.T) *EventDispatcherManager {
 	changefeedID := common.NewChangeFeedIDWithName("test")
 	manager := &EventDispatcherManager{
 		changefeedID:            changefeedID,
-		dispatcherMap:           newDispatcherMap(),
+		dispatcherMap:           newDispatcherMap[*dispatcher.Dispatcher](),
 		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),

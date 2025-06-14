@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -47,6 +48,7 @@ func getUncompleteTableSpan() *heartbeatpb.TableSpan {
 }
 
 func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dispatcher {
+	var redoTs common.Ts = math.MaxUint64
 	return NewDispatcher(
 		common.NewChangefeedID(),
 		common.NewDispatcherID(),
@@ -66,6 +68,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 		common.Ts(0), // pdTs
 		make(chan error, 1),
 		false,
+		&redoTs,
 	)
 }
 

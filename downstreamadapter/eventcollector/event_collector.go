@@ -84,6 +84,8 @@ EventCollector is the relay between EventService and DispatcherManager, responsi
 1. Send dispatcher request to EventService.
 2. Collect the events from EvenService and dispatch them to different dispatchers.
 EventCollector is an instance-level component.
+
+here exist two dispatcherMap and two dynamicStream
 */
 type EventCollector struct {
 	serverId        node.ID
@@ -105,6 +107,8 @@ type EventCollector struct {
 	// All the events from event service will be sent to ds to handle.
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
+	// redoDs is the dynamicStream for redo dispatcher events.
+	redoDs dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	coordinatorInfo struct {
 		value atomic.Value
@@ -136,6 +140,7 @@ func New(serverId node.ID) *EventCollector {
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 	}
 	eventCollector.ds = NewEventDynamicStream(eventCollector)
+	eventCollector.redoDs = NewEventDynamicStream(eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
 	return eventCollector
@@ -174,6 +179,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closing")
 	c.cancel()
 	_ = c.g.Wait()
+	c.redoDs.Close()
 	c.ds.Close()
 	c.changefeedIDMap.Range(func(key, value any) bool {
 		cfID := value.(common.ChangeFeedID)
@@ -215,7 +221,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 ) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
-		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
+		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()), zap.Int("type", target.GetType()))
 	}()
 	stat := &dispatcherStat{
 		dispatcherID:  target.GetId(),
@@ -229,11 +235,11 @@ func (c *EventCollector) PrepareAddDispatcher(
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
-	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
+	ds := c.getDynamicStream(dispatcher.IsRedoDispatcher(target))
+	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
-
 	err = c.mustSendDispatcherRequest(c.serverId, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
@@ -260,11 +266,12 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 	)
 }
 
-func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
+func (c *EventCollector) RemoveDispatcher(target dispatcher.EventDispatcher) {
 	log.Info("remove dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
+	isRedo := dispatcher.IsRedoDispatcher(target)
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
 		return
@@ -273,13 +280,18 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 	stat.unregisterDispatcher(c)
 	c.dispatcherMap.Delete(target.GetId())
 
-	err := c.ds.RemovePath(target.GetId())
+	ds := c.getDynamicStream(isRedo)
+	err := ds.RemovePath(target.GetId())
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 	}
 }
 
-func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID) {
+func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID, redo bool) {
+	if redo {
+		c.redoDs.Wake(dispatcherID)
+		return
+	}
 	c.ds.Wake(dispatcherID)
 }
 
@@ -363,6 +375,15 @@ func (c *EventCollector) processFeedback(ctx context.Context) error {
 			case dynstream.ResumePath:
 				feedback.Dest.resumeDispatcher(c)
 			}
+		case feedback := <-c.redoDs.Feedback():
+			switch feedback.FeedbackType {
+			case dynstream.PauseArea, dynstream.ResumeArea:
+				// Ignore it, because it is no need to pause and resume an area in event collector.
+			case dynstream.PausePath:
+				feedback.Dest.pauseDispatcher(c)
+			case dynstream.ResumePath:
+				feedback.Dest.resumeDispatcher(c)
+			}
 		}
 	}
 }
@@ -438,6 +459,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			StartTs:   req.StartTs,
 			OnlyReuse: req.OnlyUse,
 			BdrMode:   req.BDRMode,
+			Redo:      dispatcher.IsRedoDispatcher(req.Dispatcher),
 		},
 	}
 
@@ -552,6 +574,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case targetMessage := <-inCh:
+			ds := c.getDynamicStream(targetMessage.Redo)
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
@@ -561,7 +584,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						from := &targetMessage.From
 						resolvedTsCount := int32(0)
 						for _, resolvedEvent := range events {
-							c.ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
 							resolvedTsCount += resolvedEvent.Len()
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
@@ -578,7 +601,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						events.AssembleRows(tableInfo)
 						from := &targetMessage.From
 						for _, dml := range events.DMLEvents {
-							c.ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
+							ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
 						}
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 					case event.TypeDDLEvent:
@@ -588,7 +611,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						}
 						stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					case event.TypeHandshakeEvent:
 						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
 						if !ok {
@@ -599,10 +622,10 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 							zap.String("serverID", targetMessage.From.String()))
 						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					default:
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))
@@ -620,6 +643,7 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
+			// FIXME: record ds?
 			dsMetrics := c.ds.GetMetrics()
 			metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
 			metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
@@ -642,4 +666,11 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (c *EventCollector) getDynamicStream(redo bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+	if redo {
+		return c.redoDs
+	}
+	return c.ds
 }

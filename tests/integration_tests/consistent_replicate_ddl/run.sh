@@ -47,7 +47,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 	# Inject the failpoint to prevent sink execution, but the global resolved can be moved forward.
 	# Then we can apply redo log to reach an eventual consistent state in downstream.
-	export GO_FAILPOINTS='github.com/pingcap/tiflow/cdc/sink/dmlsink/txn/mysql/MySQLSinkHangLongTime=return(true);github.com/pingcap/tiflow/cdc/sink/ddlsink/mysql/MySQLSinkExecDDLDelay=return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true);github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix consistent_replicate_ddl.server2
 
 	# case 1:

@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
-	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
+	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
@@ -45,12 +45,14 @@ type splitScheduler struct {
 	lastCheckTime time.Time
 
 	batchSize int
+	redo      bool
 }
 
 func NewSplitScheduler(
 	changefeedID common.ChangeFeedID, batchSize int, splitter *split.Splitter,
 	oc *operator.Controller, db *replica.ReplicationDB, nodeManager *watcher.NodeManager,
 	checkInterval time.Duration,
+	redo bool,
 ) *splitScheduler {
 	return &splitScheduler{
 		changefeedID:  changefeedID,
@@ -61,6 +63,7 @@ func NewSplitScheduler(
 		batchSize:     batchSize,
 		maxCheckTime:  time.Second * 500,
 		checkInterval: checkInterval,
+		redo:          redo,
 	}
 }
 
@@ -95,7 +98,10 @@ func (s *splitScheduler) Execute() time.Time {
 }
 
 func (s *splitScheduler) Name() string {
-	return pkgscheduler.SplitScheduler
+	if s.redo {
+		return pkgScheduler.RedoSplitScheduler
+	}
+	return pkgScheduler.SplitScheduler
 }
 
 func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Time) (int, bool) {

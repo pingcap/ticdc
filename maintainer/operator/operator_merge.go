@@ -45,12 +45,14 @@ type MergeDispatcherOperator struct {
 	checkpointTs        uint64
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+	redo            bool
 }
 
 func NewMergeDispatcherOperator(
 	db *replica.ReplicationDB,
 	toMergedReplicaSets []*replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	redo bool,
 ) *MergeDispatcherOperator {
 	// Step1: ensure toMergedSpans and affectedReplicaSets belong to the same table with consecutive ranges in a same node
 	if len(toMergedReplicaSets) < 2 {
@@ -122,6 +124,7 @@ func NewMergeDispatcherOperator(
 		mergedSpanInfo:      spansInfo,
 		occupyOperators:     occupyOperators,
 		newReplicaSet:       newReplicaSet,
+		redo:                redo,
 	}
 	return op
 }
@@ -173,13 +176,15 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.removed.Load() {
 		return nil
 	}
-	return messaging.NewSingleTargetMessage(m.node,
+	msg := messaging.NewSingleTargetMessage(m.node,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.MergeDispatcherRequest{
 			ChangefeedID:       m.toMergedReplicaSets[0].ChangefeedID.ToPB(),
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
 		})
+	msg.Redo = m.redo
+	return msg
 }
 
 // OnTaskRemoved is called when the task is removed by ddl
