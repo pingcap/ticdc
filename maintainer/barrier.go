@@ -236,13 +236,13 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 }
 
 // Resend resends the message to the dispatcher manger, the pass action is handle here
-func (b *Barrier) Resend() []*messaging.TargetMessage {
+func (b *Barrier) Resend(redo bool) []*messaging.TargetMessage {
 	var msgs []*messaging.TargetMessage
 
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
-		msgs = append(msgs, barrierEvent.resend()...)
+		msgs = append(msgs, barrierEvent.resend(redo)...)
 
 		eventList = append(eventList, barrierEvent)
 		return true

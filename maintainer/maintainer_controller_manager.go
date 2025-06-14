@@ -137,12 +137,9 @@ func (cm *ControllerManager) HandleStatus(from node.ID, statusList []*heartbeatp
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		operatorController := cm.getOC(status.Redo)
+		controller := cm.getController(status.Redo)
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
-		if status.Redo {
-			stm = cm.redoController.GetTask(dispatcherID)
-		} else {
-			stm = cm.controller.GetTask(dispatcherID)
-		}
+		stm = controller.GetTask(dispatcherID)
 		if stm == nil {
 			if status.ComponentStatus != heartbeatpb.ComponentState_Working {
 				continue

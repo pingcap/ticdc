@@ -58,6 +58,7 @@ message DispatcherStatus {
 message HeartBeatResponse {
     ChangefeedID changefeedID = 1;
     repeated DispatcherStatus dispatcherStatuses = 2;
+    bool redo = 3;
 }
 
 message CheckpointTsMessage {

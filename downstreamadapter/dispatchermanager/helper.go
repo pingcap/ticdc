@@ -285,11 +285,10 @@ func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, c
 
 type HeartBeatResponse struct {
 	*heartbeatpb.HeartBeatResponse
-	redo bool
 }
 
-func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse, redo bool) HeartBeatResponse {
-	return HeartBeatResponse{resp, redo}
+func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse {
+	return HeartBeatResponse{resp}
 }
 
 type HeartBeatResponseHandler struct {
@@ -324,7 +323,7 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 		case heartbeatpb.InfluenceType_DB:
 			schemaID := dispatcherStatus.InfluencedDispatchers.SchemaID
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
-			dispatcherIds := eventDispatcherManager.GetAllDispatchers(schemaID, heartbeatResponse.redo)
+			dispatcherIds := eventDispatcherManager.GetAllDispatchers(schemaID, heartbeatResponse.Redo)
 			for _, id := range dispatcherIds {
 				if id != excludeDispatcherID {
 					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
@@ -332,7 +331,7 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 			}
 		case heartbeatpb.InfluenceType_All:
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
-			if heartbeatResponse.redo {
+			if heartbeatResponse.Redo {
 				eventDispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
 					if id != excludeDispatcherID {
 						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))

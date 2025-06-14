@@ -552,14 +552,23 @@ func (rd *RedoDispatcher) GetFilterConfig() *eventpb.FilterConfig {
 }
 
 func (rd *RedoDispatcher) Remove() {
-	log.Info("redo table event dispatcher component status changed to stopping",
-		zap.Stringer("changefeedID", rd.changefeedID),
-		zap.Stringer("dispatcher", rd.id),
-		zap.String("table", common.FormatTableSpan(rd.tableSpan)),
-		zap.Uint64("checkpointTs", rd.GetCheckpointTs()),
-		zap.Uint64("resolvedTs", rd.GetResolvedTs()),
-	)
-	rd.isRemoving.Store(true)
+	if rd.isRemoving.CompareAndSwap(false, true) {
+		log.Info("Remove dispatcher",
+			zap.Stringer("dispatcher", rd.id),
+			zap.Stringer("changefeedID", rd.changefeedID),
+			zap.String("table", common.FormatTableSpan(rd.tableSpan)))
+		dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+		err := dispatcherStatusDS.RemovePath(rd.id)
+		if err != nil {
+			log.Error("remove dispatcher from dynamic stream failed",
+				zap.Stringer("changefeedID", rd.changefeedID),
+				zap.Stringer("dispatcher", rd.id),
+				zap.String("table", common.FormatTableSpan(rd.tableSpan)),
+				zap.Uint64("checkpointTs", rd.GetCheckpointTs()),
+				zap.Uint64("resolvedTs", rd.GetResolvedTs()),
+				zap.Error(err))
+		}
+	}
 }
 
 func (rd *RedoDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {

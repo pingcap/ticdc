@@ -91,7 +91,7 @@ func TestOneBlockEvent(t *testing.T) {
 	require.True(t, resp.DispatcherStatuses[1].Action.IsSyncPoint)
 
 	// test resend action and syncpoint is set
-	msgs := event.resend()
+	msgs := event.resend(false)
 	require.Len(t, msgs, 1)
 	require.True(t, msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.Action == heartbeatpb.Action_Write)
 	require.True(t, msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.IsSyncPoint)
@@ -453,7 +453,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	}, false)
 	require.Len(t, barrier.blockedEvents.m, 1)
 	// resend to check removed tables
-	event.resend()
+	event.resend(false)
 	barrier.checkEventFinish(event)
 	require.Len(t, barrier.blockedEvents.m, 0)
 }
@@ -617,7 +617,7 @@ func TestSchemaBlock(t *testing.T) {
 		},
 	}, false)
 	// pass action message to,false no node, because tables are removed
-	msgs := barrier.Resend()
+	msgs := barrier.Resend(false)
 	require.Len(t, msgs, 0)
 	require.Len(t, barrier.blockedEvents.m, 0)
 
@@ -760,7 +760,7 @@ func TestSyncPointBlock(t *testing.T) {
 			},
 		},
 	}, false)
-	msgs := barrier.Resend()
+	msgs := barrier.Resend(false)
 	// 2 pass action messages to one node
 	require.Len(t, msgs, 2)
 	require.Len(t, barrier.blockedEvents.m, 1)

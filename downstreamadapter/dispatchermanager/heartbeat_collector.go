@@ -220,7 +220,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		heartbeatResponse := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 		c.heartBeatResponseDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(heartbeatResponse.ChangefeedID),
-			NewHeartBeatResponse(heartbeatResponse, msg.Redo))
+			NewHeartBeatResponse(heartbeatResponse))
 	case messaging.TypeScheduleDispatcherRequest:
 		schedulerDispatcherRequest := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 		c.schedulerDispatcherRequestDynamicStream.Push(

@@ -813,11 +813,11 @@ func (m *Maintainer) handleResendMessage() {
 	}
 	if m.controllerManager.redoBarrier != nil {
 		// resend redo barrier ack messages
-		m.sendMessages(m.controllerManager.redoBarrier.Resend())
+		m.sendMessages(m.controllerManager.redoBarrier.Resend(true))
 	}
 	if m.controllerManager.barrier != nil {
 		// resend barrier ack messages
-		m.sendMessages(m.controllerManager.barrier.Resend())
+		m.sendMessages(m.controllerManager.barrier.Resend(false))
 	}
 }
 
