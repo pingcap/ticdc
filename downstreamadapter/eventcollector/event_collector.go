@@ -460,6 +460,8 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		message.DispatcherRequest.EnableSyncPoint = req.Dispatcher.EnableSyncPoint()
 		message.DispatcherRequest.SyncPointInterval = uint64(req.Dispatcher.GetSyncPointInterval().Seconds())
 		message.DispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
+		message.DispatcherRequest.Integrity = req.Dispatcher.GetIntegrityConfig()
+		message.DispatcherRequest.Timezone = req.Dispatcher.GetTimezone()
 	}
 
 	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, eventServiceTopic, message))

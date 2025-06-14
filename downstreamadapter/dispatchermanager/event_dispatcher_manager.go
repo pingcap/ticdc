@@ -72,8 +72,9 @@ type EventDispatcherManager struct {
 
 	pdClock pdutil.Clock
 
-	config       *config.ChangefeedConfig
-	filterConfig *eventpb.FilterConfig
+	config          *config.ChangefeedConfig
+	integrityConfig *eventpb.IntegrityConfig
+	filterConfig    *eventpb.FilterConfig
 	// only not nil when enable sync point
 	// TODO: changefeed update config
 	syncPointConfig *syncpoint.SyncPointConfig
@@ -146,6 +147,10 @@ func NewEventDispatcherManager(
 		ForceReplicate: cfConfig.ForceReplicate,
 		FilterConfig:   toFilterConfigPB(cfConfig.Filter),
 	}
+	integrityCfg := &eventpb.IntegrityConfig{
+		IntegrityCheckLevel:   cfConfig.SinkConfig.Integrity.IntegrityCheckLevel,
+		CorruptionHandleLevel: cfConfig.SinkConfig.Integrity.CorruptionHandleLevel,
+	}
 	log.Info("New EventDispatcherManager",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.String("config", cfConfig.String()),
@@ -160,6 +165,7 @@ func NewEventDispatcherManager(
 		errCh:                                  make(chan error, 1),
 		cancel:                                 cancel,
 		config:                                 cfConfig,
+		integrityConfig:                        integrityCfg,
 		filterConfig:                           filterCfg,
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(0),
@@ -384,6 +390,8 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.blockStatusesChan,
 			schemaIds[idx],
 			e.schemaIDToDispatchers,
+			e.config.TimeZone,
+			e.integrityConfig,
 			e.syncPointConfig,
 			startTsIsSyncpointList[idx],
 			e.filterConfig,
