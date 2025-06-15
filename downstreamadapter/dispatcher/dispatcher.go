@@ -165,6 +165,7 @@ type Dispatcher struct {
 
 	BootstrapState bootstrapState
 
+	redo         bool
 	redoGlobalTs *common.Ts
 	cacheEvents  chan cacheEvents
 }
@@ -185,6 +186,7 @@ func NewDispatcher(
 	currentPdTs uint64,
 	errCh chan error,
 	bdrMode bool,
+	redo bool,
 	redoGlobalTs *common.Ts,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
@@ -210,7 +212,8 @@ func NewDispatcher(
 		errCh:                 errCh,
 		bdrMode:               bdrMode,
 		BootstrapState:        BootstrapFinished,
-		// block first
+		// redo
+		redo:         redo,
 		redoGlobalTs: redoGlobalTs,
 		cacheEvents:  make(chan cacheEvents, 1),
 	}
@@ -260,8 +263,7 @@ func (d *Dispatcher) HandleCacheEvents() {
 // When we handle events, we don't have any previous events still in sink.
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// redo check
-	// TODO: optimize it
-	if len(dispatcherEvents) > 0 && atomic.LoadUint64(d.redoGlobalTs) < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
+	if d.redo && len(dispatcherEvents) > 0 && atomic.LoadUint64(d.redoGlobalTs) < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
 		// cache here
 		cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
 		select {

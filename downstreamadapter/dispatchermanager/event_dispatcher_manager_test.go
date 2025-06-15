@@ -58,6 +58,7 @@ func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id comm
 		0,
 		make(chan error, 1),
 		false,
+		false,
 		&redoTs,
 	)
 	d.SetComponentStatus(heartbeatpb.ComponentState_Working)

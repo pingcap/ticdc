@@ -526,6 +526,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			currentPdTs,
 			e.errCh,
 			e.config.BDRMode,
+			e.redoSink.Enabled(),
 			&e.redoGlobalTs,
 		)
 		if e.heartBeatTask == nil {
@@ -1063,6 +1064,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		0, // currentPDTs will be calculated later.
 		e.errCh,
 		e.config.BDRMode,
+		e.redoSink.Enabled(),
 		&e.redoGlobalTs,
 	)
 

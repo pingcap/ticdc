@@ -36,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/redo"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -99,7 +98,7 @@ func NewControllerManager(changefeedID common.ChangeFeedID,
 		redoDB         *replica.ReplicationDB
 		redoOC         *operator.Controller
 	)
-	if redo.IsConsistentEnabled(cfConfig.Consistent.Level) {
+	if redoDDLSpan != nil {
 		redoController = NewController(changefeedID, redoDDLSpan, splitter, enableTableAcrossNodes)
 		redoDB = redoController.replicationDB
 		redoOC = operator.NewOperatorController(changefeedID, mc, redoDB, nodeManager, batchSize, true)

@@ -68,6 +68,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 		common.Ts(0), // pdTs
 		make(chan error, 1),
 		false,
+		false,
 		&redoTs,
 	)
 }
