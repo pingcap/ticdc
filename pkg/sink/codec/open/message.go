@@ -61,6 +61,9 @@ type column struct {
 
 // formatColumn formats a codec column.
 func formatColumn(c column, ft types.FieldType) column {
+	if c.Value == nil {
+		return c
+	}
 	var err error
 	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
@@ -329,6 +332,10 @@ func isBinary(flag uint64) bool {
 
 func isPrimary(flag uint64) bool {
 	return flag&primaryKeyFlag != 0
+}
+
+func isHandle(flag uint64) bool {
+	return flag&handleKeyFlag != 0
 }
 
 func isUnique(flag uint64) bool {

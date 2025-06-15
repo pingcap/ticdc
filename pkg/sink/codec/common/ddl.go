@@ -47,6 +47,9 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionTruncateTable
 	}
 	if strings.HasPrefix(query, "rename table") {
+		if strings.Contains(query, ",") {
+			return timodel.ActionRenameTables
+		}
 		return timodel.ActionRenameTable
 	}
 
@@ -138,12 +141,15 @@ func GetDDLActionType(query string) timodel.ActionType {
 	if strings.Contains(query, "invisible") {
 		return timodel.ActionAlterIndexVisibility
 	}
+	if strings.Contains(query, "create view") {
+		return timodel.ActionCreateView
+	}
 
 	log.Panic("how to set action for the DDL ?", zap.String("query", query))
 	return timodel.ActionNone
 }
 
-func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *commonEvent.InfluencedTables {
+func GetInfluenceTables(ddl string, action timodel.ActionType, physicalTableID []int64) *commonEvent.InfluencedTables {
 	switch action {
 	// create schema means the database not exist yet, so should not block tables.
 	case timodel.ActionCreateSchema, timodel.ActionCreateTable:
@@ -155,6 +161,10 @@ func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *com
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeDB,
 		}
+	case timodel.ActionCreateView:
+		return &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeAll,
+		}
 	case timodel.ActionTruncateTable, timodel.ActionRenameTable, timodel.ActionDropTable, timodel.ActionRecoverTable,
 		timodel.ActionAddColumn, timodel.ActionDropColumn,
 		timodel.ActionModifyColumn, timodel.ActionSetDefaultValue,
@@ -162,7 +172,7 @@ func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *com
 		timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
 		timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
 		timodel.ActionModifyTableCharsetAndCollate, timodel.ActionAlterIndexVisibility,
-		timodel.ActionRebaseAutoID:
+		timodel.ActionRebaseAutoID, timodel.ActionMultiSchemaChange:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      physicalTableID,
@@ -176,7 +186,7 @@ func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *com
 			TableIDs:      physicalTableID,
 		}
 	default:
-		log.Panic("unsupported DDL action", zap.String("action", action.String()))
+		log.Panic("unsupported DDL action", zap.String("DDL", ddl), zap.String("action", action.String()))
 	}
 	return nil
 }

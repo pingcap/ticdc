@@ -278,7 +278,7 @@ func TestE2EPartitionTable(t *testing.T) {
 
 		decodedDDL = dec.NextDDLEvent()
 		for _, item := range physicalTableID {
-			require.Contains(t, decodedDDL.GetBlockedTables().TableIDs, item)
+			require.Contains(t, decodedDDL.GetBlockedTables().TableIDs, item, format)
 		}
 	}
 }
@@ -1400,8 +1400,8 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 	for _, format := range []common.EncodingFormatType{
-		common.EncodingFormatAvro,
 		common.EncodingFormatJSON,
+		common.EncodingFormatAvro,
 	} {
 		codecConfig.EncodingFormat = format
 		for _, compressionType := range []string{
@@ -1628,8 +1628,8 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 	}
 
 	for _, format := range []common.EncodingFormatType{
-		common.EncodingFormatJSON,
 		common.EncodingFormatAvro,
+		common.EncodingFormatJSON,
 	} {
 		codecConfig.EncodingFormat = format
 		for _, compressionType := range []string{
