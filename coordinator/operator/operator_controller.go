@@ -121,7 +121,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 }
 
 // StopChangefeed stop changefeed when the changefeed is stopped/removed.
-// if remove is true, it will remove the changefeed from the chagnefeed DB
+// if remove is true, it will remove the changefeed from the changefeed DB
 // if remove is false, it only marks as the changefeed stooped in changefeed DB, so we will not schedule the changefeed again
 func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID, removed bool) {
 	oc.mu.Lock()
@@ -145,18 +145,13 @@ func (oc *Controller) pushStopChangefeedOperator(cfID common.ChangeFeedID, nodeI
 	op := NewStopChangefeedOperator(cfID, nodeID, oc.selfNode.ID, oc.backend, remove)
 	if old, ok := oc.operators[cfID]; ok {
 		oldStop, ok := old.OP.(*StopChangefeedOperator)
-		if ok {
-			if oldStop.changefeedIsRemoved {
-				log.Info("changefeed is in removing progress, skip the stop operator",
-					zap.String("role", oc.role),
-					zap.String("changefeed", cfID.Name()))
-				return
-			}
+		if ok && oldStop.changefeedIsRemoved {
+			log.Info("changefeed is in removing progress, skip the stop operator",
+				zap.String("role", oc.role), zap.String("changefeed", cfID.Name()))
+			return
 		}
-		log.Info("changefeed is stopped , replace the old one",
-			zap.String("role", oc.role),
-			zap.String("changefeed", cfID.Name()),
-			zap.String("operator", old.OP.String()))
+		log.Info("changefeed is stopped , replace the old one", zap.String("role", oc.role),
+			zap.String("changefeed", cfID.Name()), zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()
 		old.IsRemoved = true
