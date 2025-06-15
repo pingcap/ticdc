@@ -32,12 +32,14 @@ type removeDispatcherOperator struct {
 	replicaSet *replica.SpanReplication
 	finished   atomic.Bool
 	db         *replica.ReplicationDB
+	redo       bool
 }
 
-func newRemoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
+func newRemoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication, redo bool) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
 		replicaSet: replicaSet,
 		db:         db,
+		redo:       redo,
 	}
 }
 
@@ -52,7 +54,7 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 }
 
 func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
-	return m.replicaSet.NewRemoveDispatcherMessage(m.replicaSet.GetNodeID())
+	return m.replicaSet.NewRemoveDispatcherMessage(m.replicaSet.GetNodeID(), m.redo)
 }
 
 // OnNodeRemove is called when node offline, and the replicaset must already move to absent status and will be scheduled again
@@ -92,8 +94,8 @@ func (m *removeDispatcherOperator) PostFinish() {
 }
 
 func (m *removeDispatcherOperator) String() string {
-	return fmt.Sprintf("remove dispatcher operator: %s, dest %s",
-		m.replicaSet.ID, m.replicaSet.GetNodeID())
+	return fmt.Sprintf("remove dispatcher operator: %s, dest: %s, redo: %v",
+		m.replicaSet.ID, m.replicaSet.GetNodeID(), m.redo)
 }
 
 func (m *removeDispatcherOperator) Type() string {

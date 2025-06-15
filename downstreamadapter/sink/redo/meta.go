@@ -35,22 +35,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// MetaManager defines an interface that is used to manage redo meta and gc logs in owner.
-type MetaManager interface {
-	Run(ctx context.Context, _ ...chan<- error) error
-	// UpdateMeta updates the checkpointTs and resolvedTs asynchronously.
-	UpdateMeta(checkpointTs, resolvedTs common.Ts)
-	// GetFlushedMeta returns the flushed meta.
-	GetFlushedMeta() misc.LogMeta
-	// Cleanup deletes all redo logs, which are only called from the owner
-	// when changefeed is deleted.
-	Cleanup(ctx context.Context) error
-
-	// Running return true if the meta manager is running or not.
-	Running() bool
-}
-
-type metaManager struct {
+type RedoMeta struct {
 	captureID    config.CaptureID
 	changeFeedID common.ChangeFeedID
 	enabled      bool
@@ -76,23 +61,16 @@ type metaManager struct {
 	flushIntervalInMs int64
 }
 
-// NewDisabledMetaManager creates a disabled Meta Manager.
-func NewDisabledMetaManager() *metaManager {
-	return &metaManager{
-		enabled: false,
-	}
-}
-
-// NewMetaManager creates a new meta Manager.
-func NewMetaManager(
-	changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig, checkpoint common.Ts,
-) *metaManager {
+// NewRedoMeta creates a new meta Manager.
+func NewRedoMeta(
+	changefeedID common.ChangeFeedID, checkpoint common.Ts, cfg *config.ConsistentConfig,
+) *RedoMeta {
 	// return a disabled Manager if no consistent config or normal consistent level
 	if cfg == nil || !redo.IsConsistentEnabled(cfg.Level) {
-		return &metaManager{enabled: false}
+		return &RedoMeta{enabled: false}
 	}
 
-	m := &metaManager{
+	m := &RedoMeta{
 		captureID:         config.GetGlobalServerConfig().AdvertiseAddr,
 		changeFeedID:      changefeedID,
 		uuidGenerator:     uuid.NewGenerator(),
@@ -113,17 +91,17 @@ func NewMetaManager(
 }
 
 // Enabled returns whether this log manager is enabled
-func (m *metaManager) Enabled() bool {
+func (m *RedoMeta) Enabled() bool {
 	return m.enabled
 }
 
 // Running return whether the meta manager is initialized,
 // which means the external storage is accessible to the meta manager.
-func (m *metaManager) Running() bool {
+func (m *RedoMeta) Running() bool {
 	return m.running.Load()
 }
 
-func (m *metaManager) preStart(ctx context.Context) error {
+func (m *RedoMeta) PreStart(ctx context.Context) error {
 	uri, err := storage.ParseRawURL(m.cfg.Storage)
 	if err != nil {
 		return err
@@ -164,10 +142,7 @@ func (m *metaManager) preStart(ctx context.Context) error {
 }
 
 // Run runs bgFlushMeta and bgGC.
-func (m *metaManager) Run(ctx context.Context, _ ...chan<- error) error {
-	if err := m.preStart(ctx); err != nil {
-		return err
-	}
+func (m *RedoMeta) Run(ctx context.Context) error {
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return m.bgFlushMeta(egCtx)
@@ -180,12 +155,8 @@ func (m *metaManager) Run(ctx context.Context, _ ...chan<- error) error {
 	return eg.Wait()
 }
 
-// func (m *metaManager) WaitForReady(_ context.Context) {}
-
-// func (m *metaManager) Close() {}
-
 // UpdateMeta updates meta.
-func (m *metaManager) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
+func (m *RedoMeta) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 	if ok := m.metaResolvedTs.checkAndSetUnflushed(resolvedTs); !ok {
 		log.Warn("update redo meta with a regressed resolved ts, ignore",
 			zap.Uint64("currResolvedTs", m.metaResolvedTs.getFlushed()),
@@ -203,7 +174,7 @@ func (m *metaManager) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 }
 
 // GetFlushedMeta gets flushed meta.
-func (m *metaManager) GetFlushedMeta() misc.LogMeta {
+func (m *RedoMeta) GetFlushedMeta() misc.LogMeta {
 	checkpointTs := m.metaCheckpointTs.getFlushed()
 	resolvedTs := m.metaResolvedTs.getFlushed()
 	return misc.LogMeta{CheckpointTs: checkpointTs, ResolvedTs: resolvedTs}
@@ -211,7 +182,7 @@ func (m *metaManager) GetFlushedMeta() misc.LogMeta {
 
 // initMeta will read the meta file from external storage and
 // use it to initialize the meta field of the metaManager.
-func (m *metaManager) initMeta(ctx context.Context) error {
+func (m *RedoMeta) initMeta(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
@@ -285,7 +256,7 @@ func (m *metaManager) initMeta(ctx context.Context) error {
 	return util.DeleteFilesInExtStorage(ctx, m.extStorage, toRemoveMetaFiles)
 }
 
-func (m *metaManager) preCleanupExtStorage(ctx context.Context) error {
+func (m *RedoMeta) preCleanupExtStorage(ctx context.Context) error {
 	deleteMarker := getDeletedChangefeedMarker(m.changeFeedID)
 	ret, err := m.extStorage.FileExists(ctx, deleteMarker)
 	if err != nil {
@@ -316,7 +287,7 @@ func (m *metaManager) preCleanupExtStorage(ctx context.Context) error {
 
 // shouldRemoved remove the file which maxCommitTs in file name less than checkPointTs, since
 // all event ts < checkPointTs already sent to sink, the log is not needed any more for recovery
-func (m *metaManager) shouldRemoved(path string, checkPointTs uint64) bool {
+func (m *RedoMeta) shouldRemoved(path string, checkPointTs uint64) bool {
 	changefeedMatcher := getChangefeedMatcher(m.changeFeedID)
 	if !strings.Contains(path, changefeedMatcher) {
 		return false
@@ -346,7 +317,7 @@ func (m *metaManager) shouldRemoved(path string, checkPointTs uint64) bool {
 }
 
 // deleteAllLogs delete all redo logs and leave a deleted mark.
-func (m *metaManager) deleteAllLogs(ctx context.Context) error {
+func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	// when one changefeed with redo enabled gets deleted, it's extStorage should always be set to not nil
 	// otherwise it should have already meet panic during changefeed running time.
 	// the extStorage may be nil in the unit test, so just set the external storage to make unit test happy.
@@ -379,12 +350,12 @@ func (m *metaManager) deleteAllLogs(ctx context.Context) error {
 	}, nil)
 }
 
-func (m *metaManager) maybeFlushMeta(ctx context.Context) error {
+func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 	hasChange, unflushed := m.prepareForFlushMeta()
 	if !hasChange {
 		// check stuck
 		if time.Since(m.lastFlushTime) > redo.FlushWarnDuration {
-			log.Warn("Redo meta has not changed for a long time, owner may be stuck",
+			log.Debug("Redo meta has not changed for a long time, owner may be stuck",
 				zap.String("namespace", m.changeFeedID.Namespace()),
 				zap.String("changefeed", m.changeFeedID.Name()),
 				zap.Duration("lastFlushTime", time.Since(m.lastFlushTime)),
@@ -405,7 +376,7 @@ func (m *metaManager) maybeFlushMeta(ctx context.Context) error {
 	return nil
 }
 
-func (m *metaManager) prepareForFlushMeta() (bool, misc.LogMeta) {
+func (m *RedoMeta) prepareForFlushMeta() (bool, misc.LogMeta) {
 	flushed := misc.LogMeta{}
 	flushed.CheckpointTs = m.metaCheckpointTs.getFlushed()
 	flushed.ResolvedTs = m.metaResolvedTs.getFlushed()
@@ -422,12 +393,12 @@ func (m *metaManager) prepareForFlushMeta() (bool, misc.LogMeta) {
 	return hasChange, unflushed
 }
 
-func (m *metaManager) postFlushMeta(meta misc.LogMeta) {
+func (m *RedoMeta) postFlushMeta(meta misc.LogMeta) {
 	m.metaResolvedTs.checkAndSetFlushed(meta.ResolvedTs)
 	m.metaCheckpointTs.checkAndSetFlushed(meta.CheckpointTs)
 }
 
-func (m *metaManager) flush(ctx context.Context, meta misc.LogMeta) error {
+func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 	start := time.Now()
 	data, err := meta.MarshalMsg(nil)
 	if err != nil {
@@ -467,7 +438,7 @@ func (m *metaManager) flush(ctx context.Context, meta misc.LogMeta) error {
 	return nil
 }
 
-func (m *metaManager) cleanup(logType string) {
+func (m *RedoMeta) cleanup(logType string) {
 	misc.RedoFlushLogDurationHistogram.
 		DeleteLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), logType)
 	misc.RedoWriteLogDurationHistogram.
@@ -480,14 +451,14 @@ func (m *metaManager) cleanup(logType string) {
 
 // Cleanup removes all redo logs of this manager, it is called when changefeed is removed
 // only owner should call this method.
-func (m *metaManager) Cleanup(ctx context.Context) error {
+func (m *RedoMeta) Cleanup(ctx context.Context) error {
 	m.cleanup(redo.RedoMetaFileType)
 	m.cleanup(redo.RedoRowLogFileType)
 	m.cleanup(redo.RedoDDLLogFileType)
 	return m.deleteAllLogs(ctx)
 }
 
-func (m *metaManager) bgFlushMeta(egCtx context.Context) (err error) {
+func (m *RedoMeta) bgFlushMeta(egCtx context.Context) (err error) {
 	ticker := time.NewTicker(time.Duration(m.flushIntervalInMs) * time.Millisecond)
 	defer func() {
 		ticker.Stop()
@@ -510,7 +481,7 @@ func (m *metaManager) bgFlushMeta(egCtx context.Context) (err error) {
 }
 
 // bgGC cleans stale files before the flushed checkpoint in background.
-func (m *metaManager) bgGC(egCtx context.Context) error {
+func (m *RedoMeta) bgGC(egCtx context.Context) error {
 	ticker := time.NewTicker(time.Duration(redo.DefaultGCIntervalInMs) * time.Millisecond)
 	defer ticker.Stop()
 

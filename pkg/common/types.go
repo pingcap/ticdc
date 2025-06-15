@@ -300,4 +300,5 @@ const (
 	PulsarSinkType
 	CloudStorageSinkType
 	BlackHoleSinkType
+	RedoSinkType
 )

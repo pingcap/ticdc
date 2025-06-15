@@ -35,7 +35,7 @@ func TestNewRemoveDispatcherMessage(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), 1, getTableSpanByID(4), 10)
-	msg := replicaSet.NewRemoveDispatcherMessage("node1")
+	msg := replicaSet.NewRemoveDispatcherMessage("node1", false)
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, req.ScheduleAction)
 	require.Equal(t, replicaSet.ID.ToPB(), req.Config.DispatcherID)
@@ -47,7 +47,7 @@ func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), 1, getTableSpanByID(4), 10)
 
-	msg, err := replicaSet.NewAddDispatcherMessage("node1")
+	msg, err := replicaSet.NewAddDispatcherMessage("node1", false)
 	require.Nil(t, err)
 	require.Equal(t, "node1", msg.To.String())
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)

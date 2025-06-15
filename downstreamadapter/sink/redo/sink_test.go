@@ -16,43 +16,22 @@ package redo
 import (
 	"context"
 	"fmt"
-	"math"
 	"math/rand"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
 // Use a smaller worker number for test to speed up the test.
 var workerNumberForTest = 2
-
-func checkResolvedTs(t *testing.T, mgr *logManager, expectedRts uint64) {
-	require.Eventually(t, func() bool {
-		resolvedTs := uint64(math.MaxUint64)
-		mgr.rtsMap.Range(func(span heartbeatpb.TableSpan, value any) bool {
-			v, ok := value.(*statefulRts)
-			require.True(t, ok)
-			ts := v.getFlushed()
-			if ts < resolvedTs {
-				resolvedTs = ts
-			}
-			return true
-		})
-		return resolvedTs == expectedRts
-		// This retry 80 times, with redo.MinFlushIntervalInMs(50ms) interval,
-		// it will take 4s at most.
-	}, time.Second*4, time.Millisecond*redo.MinFlushIntervalInMs)
-}
 
 func TestConsistentConfig(t *testing.T) {
 	t.Parallel()
@@ -110,9 +89,24 @@ func TestConsistentConfig(t *testing.T) {
 	}
 }
 
-// TestLogManagerInProcessor tests how redo log manager is used in processor.
-func TestLogManagerInProcessor(t *testing.T) {
-	t.Parallel()
+// TestRedoSinkInProcessor tests how redo log manager is used in processor.
+func TestRedoSinkInProcessor(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t1 (id int, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+	createTableSQL = "create table t2 (id int, name varchar(32));"
+	job = helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+	createTableSQL = "create table t3 (id int, name varchar(32));"
+	job = helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+	createTableSQL = "create table t4 (id int, name varchar(32));"
+	job = helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -128,82 +122,58 @@ func TestLogManagerInProcessor(t *testing.T) {
 			FlushWorkerNum:        workerNumberForTest,
 			UseFileBackend:        useFileBackend,
 		}
-		dmlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
+		startTs := uint64(100)
+		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test"), startTs, cfg)
 		var eg errgroup.Group
 		eg.Go(func() error {
 			return dmlMgr.Run(ctx)
 		})
-		// check emit row changed events can move forward resolved ts
-		spans := []heartbeatpb.TableSpan{
-			common.TableIDToComparableSpan(53),
-			common.TableIDToComparableSpan(55),
-			common.TableIDToComparableSpan(57),
-			common.TableIDToComparableSpan(59),
-		}
 
-		startTs := uint64(100)
-		for _, span := range spans {
-			dmlMgr.AddTable(span, startTs)
-		}
-		tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 		testCases := []struct {
-			span heartbeatpb.TableSpan
-			rows []*pevent.DMLEvent
+			rows []*commonEvent.DMLEvent
 		}{
 			{
-				span: common.TableIDToComparableSpan(53),
-				rows: []*pevent.DMLEvent{
-					{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
-					{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
-					{CommitTs: 130, PhysicalTableID: 53, TableInfo: tableInfo},
+				rows: []*commonEvent.DMLEvent{
+					helper.DML2Event("test", "t1",
+						"insert into t1 values (1, 'test1')"),
+					helper.DML2Event("test", "t1",
+						"insert into t1 values (2, 'test2')"),
+					helper.DML2Event("test", "t1",
+						"insert into t1 values (3, 'test3')"),
+					helper.DML2Event("test", "t1",
+						"insert into t1 values (4, 'test4')"),
 				},
 			},
 			{
-				span: common.TableIDToComparableSpan(55),
-				rows: []*pevent.DMLEvent{
-					{CommitTs: 130, PhysicalTableID: 55, TableInfo: tableInfo},
-					{CommitTs: 135, PhysicalTableID: 55, TableInfo: tableInfo},
+				rows: []*commonEvent.DMLEvent{
+					helper.DML2Event("test", "t2",
+						"insert into t2 values (1, 'test1')"),
+					helper.DML2Event("test", "t2",
+						"insert into t2 values (2, 'test2')"),
 				},
 			},
 			{
-				span: common.TableIDToComparableSpan(57),
-				rows: []*pevent.DMLEvent{
-					{CommitTs: 130, PhysicalTableID: 57, TableInfo: tableInfo},
+				rows: []*commonEvent.DMLEvent{
+					helper.DML2Event("test", "t3",
+						"insert into t3 values (1, 'test1')"),
 				},
 			},
 			{
-				span: common.TableIDToComparableSpan(59),
-				rows: []*pevent.DMLEvent{
-					{CommitTs: 128, PhysicalTableID: 59, TableInfo: tableInfo},
-					{CommitTs: 130, PhysicalTableID: 59, TableInfo: tableInfo},
-					{CommitTs: 133, PhysicalTableID: 59, TableInfo: tableInfo},
+				rows: []*commonEvent.DMLEvent{
+					helper.DML2Event("test", "t4",
+						"insert into t4 values (1, 'test1')"),
+					helper.DML2Event("test", "t4",
+						"insert into t4 values (2, 'test1')"),
+					helper.DML2Event("test", "t4",
+						"insert into t4 values (3, 'test1')"),
 				},
 			},
 		}
 		for _, tc := range testCases {
-			err := dmlMgr.EmitDMLEvents(ctx, tc.span, tc.rows...)
-			require.NoError(t, err)
+			for _, row := range tc.rows {
+				dmlMgr.AddDMLEvent(row)
+			}
 		}
-
-		// check UpdateResolvedTs can move forward the resolved ts when there is not row event.
-		flushResolvedTs := uint64(150)
-		for _, span := range spans {
-			checkResolvedTs(t, dmlMgr.logManager, startTs)
-			err := dmlMgr.UpdateResolvedTs(ctx, span, flushResolvedTs)
-			require.NoError(t, err)
-		}
-		checkResolvedTs(t, dmlMgr.logManager, flushResolvedTs)
-
-		// check remove table can work normally
-		removeTable := spans[len(spans)-1]
-		spans = spans[:len(spans)-1]
-		dmlMgr.RemoveTable(removeTable)
-		flushResolvedTs = uint64(200)
-		for _, span := range spans {
-			err := dmlMgr.UpdateResolvedTs(ctx, span, flushResolvedTs)
-			require.NoError(t, err)
-		}
-		checkResolvedTs(t, dmlMgr.logManager, flushResolvedTs)
 
 		cancel()
 		require.ErrorIs(t, eg.Wait(), context.Canceled)
@@ -220,60 +190,15 @@ func TestLogManagerInProcessor(t *testing.T) {
 	}
 }
 
-// TestLogManagerInOwner tests how redo log manager is used in owner,
-// where the redo log manager needs to handle DDL event only.
-func TestLogManagerInOwner(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// TestRedoSinkError tests whether internal error in bgUpdateLog could be managed correctly.
+func TestRedoSinkError(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
 
-	testWriteDDLs := func(storage string, useFileBackend bool) {
-		ctx, cancel := context.WithCancel(ctx)
-		cfg := &config.ConsistentConfig{
-			Level:                 string(redo.ConsistentLevelEventual),
-			MaxLogSize:            redo.DefaultMaxLogSize,
-			Storage:               storage,
-			FlushIntervalInMs:     redo.MinFlushIntervalInMs,
-			MetaFlushIntervalInMs: redo.MinFlushIntervalInMs,
-			EncodingWorkerNum:     workerNumberForTest,
-			FlushWorkerNum:        workerNumberForTest,
-			UseFileBackend:        useFileBackend,
-		}
-		startTs := common.Ts(10)
-		ddlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
-
-		var eg errgroup.Group
-		eg.Go(func() error {
-			return ddlMgr.Run(ctx)
-		})
-
-		require.Equal(t, startTs, ddlMgr.GetResolvedTs())
-		ddl := &pevent.DDLEvent{FinishedTs: 120, Query: "CREATE TABLE `TEST.T1`"}
-		err := ddlMgr.EmitDDLEvent(ctx, ddl)
-		require.NoError(t, err)
-		require.Equal(t, startTs, ddlMgr.GetResolvedTs())
-
-		ddlMgr.UpdateResolvedTs(ctx, *common.DDLSpan, ddl.FinishedTs)
-		checkResolvedTs(t, ddlMgr.logManager, ddl.FinishedTs)
-
-		cancel()
-		require.ErrorIs(t, eg.Wait(), context.Canceled)
-	}
-
-	testWriteDDLs("blackhole://", true)
-	storages := []string{
-		fmt.Sprintf("file://%s", t.TempDir()),
-		fmt.Sprintf("nfs://%s", t.TempDir()),
-	}
-	for _, storage := range storages {
-		testWriteDDLs(storage, true)
-		testWriteDDLs(storage, false)
-	}
-}
-
-// TestManagerError tests whether internal error in bgUpdateLog could be managed correctly.
-func TestLogManagerError(t *testing.T) {
-	t.Parallel()
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
@@ -286,29 +211,30 @@ func TestLogManagerError(t *testing.T) {
 		EncodingWorkerNum:     workerNumberForTest,
 		FlushWorkerNum:        workerNumberForTest,
 	}
-	logMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
+	logMgr := New(ctx, common.NewChangeFeedIDWithName("test"), 0, cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return logMgr.Run(ctx)
 	})
 
-	tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 	testCases := []struct {
-		span heartbeatpb.TableSpan
-		rows []*pevent.DMLEvent
+		rows []*commonEvent.DMLEvent
 	}{
 		{
-			span: common.TableIDToComparableSpan(53),
-			rows: []*pevent.DMLEvent{
-				{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
-				{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
-				{CommitTs: 130, PhysicalTableID: 53, TableInfo: tableInfo},
+			rows: []*commonEvent.DMLEvent{
+				helper.DML2Event("test", "t",
+					"insert into t values (1, 'test1')"),
+				helper.DML2Event("test", "t",
+					"insert into t values (2, 'test2')"),
+				helper.DML2Event("test", "t",
+					"insert into t values (3, 'test3')"),
 			},
 		},
 	}
 	for _, tc := range testCases {
-		err := logMgr.EmitDMLEvents(ctx, tc.span, tc.rows...)
-		require.NoError(t, err)
+		for _, row := range tc.rows {
+			logMgr.AddDMLEvent(row)
+		}
 	}
 
 	err := eg.Wait()
@@ -342,7 +268,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 		UseFileBackend:        useFileBackend,
 	}
-	dmlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
+	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test"), 0, cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return dmlMgr.Run(ctx)
@@ -359,7 +285,6 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		span := common.TableIDToComparableSpan(tableID)
 		ts := startTs
 		maxTsMap.ReplaceOrInsert(span, &ts)
-		dmlMgr.AddTable(span, startTs)
 	}
 
 	// write rows
@@ -372,13 +297,13 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		go func(span heartbeatpb.TableSpan) {
 			defer wg.Done()
 			maxCommitTs := maxTsMap.GetV(span)
-			var rows []*pevent.DMLEvent
+			var rows []*commonEvent.DMLEvent
 			for i := 0; i < maxRowCount; i++ {
 				if i%100 == 0 {
 					// prepare new row change events
 					b.StopTimer()
 					*maxCommitTs += rand.Uint64() % 10
-					rows = []*pevent.DMLEvent{
+					rows = []*commonEvent.DMLEvent{
 						{CommitTs: *maxCommitTs, PhysicalTableID: span.TableID, TableInfo: tableInfo},
 						{CommitTs: *maxCommitTs, PhysicalTableID: span.TableID, TableInfo: tableInfo},
 						{CommitTs: *maxCommitTs, PhysicalTableID: span.TableID, TableInfo: tableInfo},
@@ -386,34 +311,14 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 
 					b.StartTimer()
 				}
-				dmlMgr.EmitDMLEvents(ctx, span, rows...)
-				if i%100 == 0 {
-					dmlMgr.UpdateResolvedTs(ctx, span, *maxCommitTs)
+				for _, row := range rows {
+					dmlMgr.AddDMLEvent(row)
 				}
 			}
 		}(common.TableIDToComparableSpan(tableID))
 	}
 	wg.Wait()
 
-	// wait flushed
-	for {
-		ok := true
-		maxTsMap.Range(func(span heartbeatpb.TableSpan, targetp *uint64) bool {
-			flushed := dmlMgr.GetResolvedTs()
-			if flushed != *targetp {
-				ok = false
-				log.Info("", zap.Uint64("targetTs", *targetp),
-					zap.Uint64("flushed", flushed),
-					zap.Any("tableID", span.TableID))
-				return false
-			}
-			return true
-		})
-		if ok {
-			break
-		}
-		time.Sleep(time.Millisecond * 500)
-	}
 	cancel()
 
 	require.ErrorIs(b, eg.Wait(), context.Canceled)

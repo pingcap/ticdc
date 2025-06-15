@@ -247,7 +247,7 @@ func sortAndWriteFile(
 		Dir:               cfg.dir,
 		MaxLogSizeInBytes: math.MaxInt32,
 	}
-	w, err := file.NewFileWriter(egCtx, writerCfg, writer.WithLogFileName(func() string {
+	w, err := file.NewFileWriter(egCtx, writerCfg, cfg.fileType, writer.WithLogFileName(func() string {
 		return sortedName
 	}))
 	if err != nil {
