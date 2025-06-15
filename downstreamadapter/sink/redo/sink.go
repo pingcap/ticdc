@@ -188,7 +188,10 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case e := <-s.logBuffer:
-			s.dmlWriter.AsyncWriteEvents(ctx, e)
+			err := s.dmlWriter.AsyncWriteEvents(ctx, e)
+			if err != nil {
+				return err
+			}
 		}
 	}
 }

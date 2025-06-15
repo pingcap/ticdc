@@ -63,7 +63,7 @@ type RedoMeta struct {
 
 // NewRedoMeta creates a new meta Manager.
 func NewRedoMeta(
-	changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig, checkpoint common.Ts,
+	changefeedID common.ChangeFeedID, checkpoint common.Ts, cfg *config.ConsistentConfig,
 ) *RedoMeta {
 	// return a disabled Manager if no consistent config or normal consistent level
 	if cfg == nil || !redo.IsConsistentEnabled(cfg.Level) {

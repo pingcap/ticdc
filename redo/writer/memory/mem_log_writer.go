@@ -82,7 +82,7 @@ func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.Redo
 	return nil
 }
 
-func (l *memoryLogWriter) AsyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) {
+func (l *memoryLogWriter) AsyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
 	for _, e := range events {
 		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
@@ -92,10 +92,10 @@ func (l *memoryLogWriter) AsyncWriteEvents(ctx context.Context, events ...writer
 			continue
 		}
 		if err := l.fileWorkers.input(ctx, e); err != nil {
-			log.Error("write dml event failed", zap.Error(err), zap.Any("event", e))
-			return
+			return err
 		}
 	}
+	return nil
 }
 
 func (l *memoryLogWriter) Close() error {

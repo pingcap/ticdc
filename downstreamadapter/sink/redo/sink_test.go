@@ -23,7 +23,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/stretchr/testify/require"
@@ -91,7 +91,22 @@ func TestConsistentConfig(t *testing.T) {
 
 // TestRedoSinkInProcessor tests how redo log manager is used in processor.
 func TestRedoSinkInProcessor(t *testing.T) {
-	t.Parallel()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t1 (id int, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+	createTableSQL = "create table t2 (id int, name varchar(32));"
+	job = helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+	createTableSQL = "create table t3 (id int, name varchar(32));"
+	job = helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+	createTableSQL = "create table t4 (id int, name varchar(32));"
+	job = helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -114,38 +129,43 @@ func TestRedoSinkInProcessor(t *testing.T) {
 			return dmlMgr.Run(ctx)
 		})
 
-		tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 		testCases := []struct {
-			span heartbeatpb.TableSpan
-			rows []*pevent.DMLEvent
+			rows []*commonEvent.DMLEvent
 		}{
 			{
-				span: common.TableIDToComparableSpan(53),
-				rows: []*pevent.DMLEvent{
-					{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
-					{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
-					{CommitTs: 130, PhysicalTableID: 53, TableInfo: tableInfo},
+				rows: []*commonEvent.DMLEvent{
+					helper.DML2Event("test", "t1",
+						"insert into t1 values (1, 'test1')"),
+					helper.DML2Event("test", "t1",
+						"insert into t1 values (2, 'test2')"),
+					helper.DML2Event("test", "t1",
+						"insert into t1 values (3, 'test3')"),
+					helper.DML2Event("test", "t1",
+						"insert into t1 values (4, 'test4')"),
 				},
 			},
 			{
-				span: common.TableIDToComparableSpan(55),
-				rows: []*pevent.DMLEvent{
-					{CommitTs: 130, PhysicalTableID: 55, TableInfo: tableInfo},
-					{CommitTs: 135, PhysicalTableID: 55, TableInfo: tableInfo},
+				rows: []*commonEvent.DMLEvent{
+					helper.DML2Event("test", "t2",
+						"insert into t2 values (1, 'test1')"),
+					helper.DML2Event("test", "t2",
+						"insert into t2 values (2, 'test2')"),
 				},
 			},
 			{
-				span: common.TableIDToComparableSpan(57),
-				rows: []*pevent.DMLEvent{
-					{CommitTs: 130, PhysicalTableID: 57, TableInfo: tableInfo},
+				rows: []*commonEvent.DMLEvent{
+					helper.DML2Event("test", "t3",
+						"insert into t3 values (1, 'test1')"),
 				},
 			},
 			{
-				span: common.TableIDToComparableSpan(59),
-				rows: []*pevent.DMLEvent{
-					{CommitTs: 128, PhysicalTableID: 59, TableInfo: tableInfo},
-					{CommitTs: 130, PhysicalTableID: 59, TableInfo: tableInfo},
-					{CommitTs: 133, PhysicalTableID: 59, TableInfo: tableInfo},
+				rows: []*commonEvent.DMLEvent{
+					helper.DML2Event("test", "t4",
+						"insert into t4 values (1, 'test1')"),
+					helper.DML2Event("test", "t4",
+						"insert into t4 values (2, 'test1')"),
+					helper.DML2Event("test", "t4",
+						"insert into t4 values (3, 'test1')"),
 				},
 			},
 		}
@@ -172,7 +192,13 @@ func TestRedoSinkInProcessor(t *testing.T) {
 
 // TestRedoSinkError tests whether internal error in bgUpdateLog could be managed correctly.
 func TestRedoSinkError(t *testing.T) {
-	t.Parallel()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
@@ -191,17 +217,17 @@ func TestRedoSinkError(t *testing.T) {
 		return logMgr.Run(ctx)
 	})
 
-	tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 	testCases := []struct {
-		span heartbeatpb.TableSpan
-		rows []*pevent.DMLEvent
+		rows []*commonEvent.DMLEvent
 	}{
 		{
-			span: common.TableIDToComparableSpan(53),
-			rows: []*pevent.DMLEvent{
-				{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
-				{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
-				{CommitTs: 130, PhysicalTableID: 53, TableInfo: tableInfo},
+			rows: []*commonEvent.DMLEvent{
+				helper.DML2Event("test", "t",
+					"insert into t values (1, 'test1')"),
+				helper.DML2Event("test", "t",
+					"insert into t values (2, 'test2')"),
+				helper.DML2Event("test", "t",
+					"insert into t values (3, 'test3')"),
 			},
 		},
 	}
@@ -271,13 +297,13 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		go func(span heartbeatpb.TableSpan) {
 			defer wg.Done()
 			maxCommitTs := maxTsMap.GetV(span)
-			var rows []*pevent.DMLEvent
+			var rows []*commonEvent.DMLEvent
 			for i := 0; i < maxRowCount; i++ {
 				if i%100 == 0 {
 					// prepare new row change events
 					b.StopTimer()
 					*maxCommitTs += rand.Uint64() % 10
-					rows = []*pevent.DMLEvent{
+					rows = []*commonEvent.DMLEvent{
 						{CommitTs: *maxCommitTs, PhysicalTableID: span.TableID, TableInfo: tableInfo},
 						{CommitTs: *maxCommitTs, PhysicalTableID: span.TableID, TableInfo: tableInfo},
 						{CommitTs: *maxCommitTs, PhysicalTableID: span.TableID, TableInfo: tableInfo},

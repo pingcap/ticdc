@@ -17,11 +17,9 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/errors"
-	"go.uber.org/zap"
 )
 
 var _ writer.RedoLogWriter = &logWriter{}
@@ -81,14 +79,15 @@ func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent)
 	return nil
 }
 
-func (l *logWriter) AsyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) {
+func (l *logWriter) AsyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
 	for _, event := range events {
 		select {
 		case <-ctx.Done():
-			log.Error("write dml event failed", zap.Error(ctx.Err()), zap.Any("event", event))
+			return ctx.Err()
 		case l.backendWriter.GetInputCh() <- event:
 		}
 	}
+	return nil
 }
 
 // Close implements RedoLogWriter.Close.

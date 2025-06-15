@@ -666,6 +666,13 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 			m.onError(msg.From, req.Err)
 		}
 	}
+	if req.Err != nil {
+		log.Warn("dispatcher report an error",
+			zap.Stringer("changefeed", m.id),
+			zap.Stringer("sourceNode", msg.From),
+			zap.String("error", req.Err.Message))
+		m.onError(msg.From, req.Err)
+	}
 }
 
 func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {

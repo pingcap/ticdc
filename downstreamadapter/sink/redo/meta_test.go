@@ -80,7 +80,7 @@ func TestInitAndWriteMeta(t *testing.T) {
 		EncodingWorkerNum:     redo.DefaultEncodingWorkerNum,
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 	}
-	m := NewRedoMeta(changefeedID, cfg, startTs)
+	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
 	eg.Go(func() error {
@@ -161,7 +161,7 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 		EncodingWorkerNum:     redo.DefaultEncodingWorkerNum,
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 	}
-	m := NewRedoMeta(changefeedID, cfg, startTs)
+	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
 	eg.Go(func() error {
@@ -296,7 +296,7 @@ func TestGCAndCleanup(t *testing.T) {
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 	}
 
-	m := NewRedoMeta(changefeedID, cfg, startTs)
+	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
 	eg.Go(func() error {

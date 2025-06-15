@@ -87,8 +87,6 @@ type EventDispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.Dispatcher]
 	// dispatcherMap restore all the redo dispatchers in the EventDispatcherManager, including redo table trigger event dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
-	// redoMap record dispatcherID -> redo dispatcherID
-	redoMap map[common.DispatcherID]common.DispatcherID
 	// schemaIDToDispatchers is store the schemaID info for all normal dispatchers.
 	schemaIDToDispatchers     *dispatcher.SchemaIDToDispatchers
 	redoSchemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
@@ -169,7 +167,6 @@ func NewEventDispatcherManager(
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap[*dispatcher.Dispatcher](),
 		redoDispatcherMap:                      newDispatcherMap[*dispatcher.RedoDispatcher](),
-		redoMap:                                make(map[common.DispatcherID]common.DispatcherID),
 		changefeedID:                           changefeedID,
 		pdClock:                                pdClock,
 		statusesChan:                           make(chan dispatcher.TableSpanStatusWithSeq, 8192),
@@ -179,7 +176,7 @@ func NewEventDispatcherManager(
 		config:                                 cfConfig,
 		filterConfig:                           filterCfg,
 		redoSink:                               redo.New(ctx, changefeedID, startTs, cfConfig.Consistent),
-		redoMeta:                               redo.NewRedoMeta(changefeedID, cfConfig.Consistent, startTs),
+		redoMeta:                               redo.NewRedoMeta(changefeedID, startTs, cfConfig.Consistent),
 		redoGlobalTs:                           math.MaxUint64,
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		redoSchemaIDToDispatchers:              dispatcher.NewSchemaIDToDispatchers(),

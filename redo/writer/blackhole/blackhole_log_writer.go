@@ -45,9 +45,6 @@ func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoE
 	if bs.invalid {
 		return errors.New("[WriteLog] invalid black hole writer")
 	}
-	if len(events) == 0 {
-		return nil
-	}
 	rl := events[len(events)-1].ToRedoLog()
 	current := rl.GetCommitTs()
 	log.Debug("write redo events", zap.Int("count", len(events)),
@@ -59,8 +56,12 @@ func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoE
 	return
 }
 
-func (bs *blackHoleWriter) AsyncWriteEvents(_ context.Context, events ...writer.RedoEvent) {
+func (bs *blackHoleWriter) AsyncWriteEvents(_ context.Context, events ...writer.RedoEvent) error {
+	if bs.invalid {
+		return errors.New("[WriteLog] invalid black hole writer")
+	}
 	bs.WriteEvents(nil, events...)
+	return nil
 }
 
 func (bs *blackHoleWriter) Close() error {
