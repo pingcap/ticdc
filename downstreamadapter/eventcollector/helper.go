@@ -24,7 +24,7 @@ import (
 
 func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
 	option := dynstream.NewOption()
-	option.BatchCount = 419600
+	option.BatchCount = 4196
 	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
 	option.EnableMemoryControl = true
@@ -68,13 +68,14 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	if len(events) == 0 {
 		return false
 	}
+
+	log.Info("fizz handle events", zap.Any("events", events))
 	// Only check the first event type, because all events in the same batch should be in the same type group.
 	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent,
-		commonEvent.TypeHandshakeEvent,
 		commonEvent.TypeBatchDMLEvent:
 		return stat.handleDataEvents(events...)
 	case commonEvent.TypeReadyEvent,
@@ -84,6 +85,20 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 				zap.Int("count", len(events)))
 		}
 		stat.handleSignalEvent(events[0])
+		return false
+	case commonEvent.TypeDropEvent:
+		if len(events) > 1 {
+			log.Panic("unexpected multiple events for TypeDropEvent",
+				zap.Int("count", len(events)))
+		}
+		stat.handleDropEvent(events[0])
+		return false
+	case commonEvent.TypeHandshakeEvent:
+		if len(events) > 1 {
+			log.Panic("unexpected multiple events for TypeHandshakeEvent",
+				zap.Int("count", len(events)))
+		}
+		stat.handleHandshakeEvent(events[0])
 		return false
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(events[0].GetType())))
@@ -99,6 +114,7 @@ const (
 	DataGroupReady           = 5
 	DataGroupNotReusable     = 6
 	DataGroupBatchDML        = 7
+	DataGroupDrop            = 8
 )
 
 func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.EventType {
@@ -120,6 +136,8 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 	case commonEvent.TypeBatchDMLEvent:
 		// Note: set TypeBatchDMLEvent to NonBatchable for simplicity.
 		return dynstream.EventType{DataGroup: DataGroupBatchDML, Property: dynstream.NonBatchable}
+	case commonEvent.TypeDropEvent:
+		return dynstream.EventType{DataGroup: DataGroupDrop, Property: dynstream.NonBatchable}
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(event.GetType())))
 	}
