@@ -15,7 +15,7 @@ type MemoryControlAlgorithm interface {
 // NewMemoryControlAlgorithm creates a new MemoryControlAlgorithm based on the algorithm type.
 func NewMemoryControlAlgorithm(algorithm int) MemoryControlAlgorithm {
 	switch algorithm {
-	case EventCollectorMemoryControl:
+	case MemoryControlForEventCollector:
 		return &EventCollectorMemoryControl{}
 	default:
 		return &PullerMemoryControl{}
