@@ -292,6 +292,8 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	pendingSize          atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
 	paused               atomic.Bool  // The path is paused to send events.
 	lastSendFeedbackTime atomic.Value
+	// When a path is dead, we don't need to handle its events.
+	dead atomic.Bool
 }
 
 func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {

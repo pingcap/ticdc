@@ -24,13 +24,13 @@ import (
 )
 
 const (
-	// MemoryControlAlgorithmV1 is the algorithm of the memory control.
+	// MemoryControlForPuller is the algorithm of the memory control.
 	// It sill send pause and resume [area, path] feedback.
-	MemoryControlAlgorithmV1 = "v1"
-	// MemoryControlAlgorithmV2 is the algorithm of the memory control.
+	MemoryControlForPuller = 0
+	// MemoryControlForEventCollector is the algorithm of the memory control.
 	// It will only send pause and resume [path] feedback.
 	// For now, we only use it in event collector.
-	MemoryControlAlgorithmV2 = "v2"
+	MemoryControlForEventCollector = 1
 )
 
 // areaMemStat is used to store the memory statistics of an area.
@@ -74,8 +74,12 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
-	_ H,
+	handler H,
 ) bool {
+	if path.dead.Load() {
+		return false
+	}
+
 	defer as.updatePathPauseState(path)
 	defer as.updateAreaPauseState(path)
 
@@ -90,12 +94,27 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		}
 	}
 
+	if as.memoryUsageRatio() > 1 && as.settings.Load().algorithm == MemoryControlForEventCollector {
+		dropEvent := handler.OnDrop(event.event)
+		if dropEvent != nil {
+			event.eventType = handler.GetType(dropEvent.(T))
+			event.event = dropEvent.(T)
+			path.pendingQueue.PushBack(event)
+			path.dead.Store(true)
+			return true
+		}
+	}
+
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
 	path.updatePendingSize(int64(event.eventSize))
 	as.totalPendingSize.Add(int64(event.eventSize))
 	return true
+}
+
+func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
+	return float64(as.totalPendingSize.Load()) / float64(as.settings.Load().maxPendingSize)
 }
 
 // updatePathPauseState determines the pause state of a path and sends feedback to handler if the state is changed.
@@ -106,7 +125,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 	var pause, resume bool
 	var memoryUsageRatio float64
 	switch algorithm {
-	case MemoryControlAlgorithmV2:
+	case MemoryControlForEventCollector:
 		pause, resume, memoryUsageRatio = shouldPausePathV2(
 			path.paused.Load(),
 			path.pendingSize.Load(),
@@ -171,7 +190,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	var pause, resume bool
 	var memoryUsageRatio float64
 	switch algorithm {
-	case MemoryControlAlgorithmV2:
+	case MemoryControlForEventCollector:
 		pause, resume, memoryUsageRatio = shouldPauseAreaV2(
 			as.paused.Load(),
 			as.totalPendingSize.Load(),
@@ -217,7 +236,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		)
 	}
 
-	if algorithm != MemoryControlAlgorithmV2 {
+	if algorithm != MemoryControlForEventCollector {
 		failpoint.Inject("PauseArea", func() {
 			log.Warn("inject PauseArea")
 			sendFeedback(true)
@@ -231,7 +250,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		sendFeedback(false)
 	}
 
-	if algorithm == MemoryControlAlgorithmV2 && as.paused.Load() {
+	if algorithm == MemoryControlForEventCollector && as.paused.Load() {
 		log.Panic("area is paused, but the algorithm is v2, this should not happen", zap.String("component", as.settings.Load().component))
 	}
 }

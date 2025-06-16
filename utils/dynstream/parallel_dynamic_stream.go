@@ -111,6 +111,10 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 		s.pathMap.RUnlock()
 	}
 
+	if pi.dead.Load() {
+		return
+	}
+
 	ew := eventWrap[A, P, T, D, H]{
 		event:     e,
 		pathInfo:  pi,
