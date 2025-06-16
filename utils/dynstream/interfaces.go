@@ -128,7 +128,7 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 	GetType(event T) EventType
 	// OnDrop is called when an event is dropped. Could be caused by the memory control or cannot find the path.
 	// Do nothing by default implementation.
-	OnDrop(event T)
+	OnDrop(event T) interface{}
 }
 
 type PathAndDest[P Path, D Dest] struct {

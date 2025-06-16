@@ -138,13 +138,12 @@ func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream
 	return dynstream.Timestamp(event.GetCommitTs())
 }
 
-func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) {
-	if event.GetType() != commonEvent.TypeResolvedEvent {
-		// It is normal to drop resolved event
-		log.Info("event dropped",
-			zap.Any("dispatcher", event.GetDispatcherID()),
-			zap.Any("type", event.GetType()),
-			zap.Any("commitTs", event.GetCommitTs()),
-			zap.Any("sequence", event.GetSeq()))
+func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
+	switch event.GetType() {
+	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent:
+		log.Info("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
+		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetCommitTs())
+		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
 	}
+	return nil
 }
