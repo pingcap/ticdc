@@ -162,7 +162,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		if len(queries) != len(d.MultipleTableInfos) {
 			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
-		if len(d.TableNameChange.DropName) != len(d.MultipleTableInfos) {
+		if len(d.TableNameChange.DropName) > 0 && len(d.TableNameChange.DropName) != len(d.MultipleTableInfos) {
 			log.Panic("drop name length should be equal to multipleTableInfos length", zap.Any("query", d.TableNameChange.DropName), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
 		for i, info := range d.MultipleTableInfos {
