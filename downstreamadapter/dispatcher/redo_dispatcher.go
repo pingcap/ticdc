@@ -221,6 +221,9 @@ func (rd *RedoDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 // by setting them with different event types in DispatcherEventsHandler.GetType
 // When we handle events, we don't have any previous events still in sink.
 func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+	if rd.isRemoving.Load() {
+		return true
+	}
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	dmlWakeOnce := &sync.Once{}

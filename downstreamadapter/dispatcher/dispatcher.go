@@ -262,6 +262,9 @@ func (d *Dispatcher) HandleCacheEvents() {
 // by setting them with different event types in DispatcherEventsHandler.GetType
 // When we handle events, we don't have any previous events still in sink.
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+	if d.isRemoving.Load() {
+		return true
+	}
 	// redo check
 	if d.redo && len(dispatcherEvents) > 0 && atomic.LoadUint64(d.redoGlobalTs) < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
 		// cache here

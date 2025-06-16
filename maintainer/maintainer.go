@@ -497,9 +497,14 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 	if m.redoTs.CheckpointTs < checkpointTs || m.redoTs.ResolvedTs < resolvedTs {
 		m.redoTs.CheckpointTs = checkpointTs
 		m.redoTs.ResolvedTs = resolvedTs
+		redoTsMessage := &heartbeatpb.RedoTsMessage{
+			ChangefeedID: m.redoTs.ChangefeedID,
+			CheckpointTs: m.redoTs.CheckpointTs,
+			ResolvedTs:   m.redoTs.ResolvedTs,
+		}
 		for id := range m.redoTsMap {
 			m.sendMessages([]*messaging.TargetMessage{
-				messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, m.redoTs.RedoTsMessage),
+				messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, redoTsMessage),
 			})
 		}
 	}
