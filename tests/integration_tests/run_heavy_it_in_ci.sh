@@ -32,17 +32,17 @@ mysql_groups=(
 	# G00
 	'generate_column many_pk_or_uk'
 	# G01
-	'api_v2 ddl_for_split_tables_with_random_move_table'
+	'api_v2 consistent_ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
 	# G02
-	'availability ddl_for_split_tables_with_failover'
+	'availability consistent_ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
 	# G03
 	'multi_source'
 	# G04
 	'syncpoint syncpoint_check_ts'
 	# G05
-	'move_table ddl_for_split_tables_with_merge_and_split'
+	'move_table consistent_ddl_for_split_tables_with_merge_and_split ddl_for_split_tables_with_merge_and_split'
 	# G06
-	'cdc ddl_for_split_tables_with_random_merge_and_split'
+	'cdc consistent_ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
 	# G07
 	'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
 	# G08
@@ -58,9 +58,9 @@ mysql_groups=(
 	# G13
 	'fail_over region_merge'
 	# G14
-	'fail_over_ddl_mix'
+	'consistent_fail_over_ddl_mix fail_over_ddl_mix'
 	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	'consistent_fail_over_ddl_mix_with_syncpoint fail_over_ddl_mix_with_syncpoint'
 )
 
 kafka_groups=(

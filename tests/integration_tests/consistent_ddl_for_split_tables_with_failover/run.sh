@@ -126,7 +126,6 @@ main() {
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $KILL_SERVER_PID
 
-
 	# to ensure row changed events have been replicated to TiCDC
 	sleep 120
 	changefeed_id="test"
