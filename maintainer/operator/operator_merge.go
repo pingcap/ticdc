@@ -92,8 +92,8 @@ func NewMergeDispatcherOperator(
 
 	spansInfo := ""
 	for _, span := range toMergedSpans {
-		spansInfo += fmt.Sprintf("[%s,%s]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
+		spansInfo += fmt.Sprintf("[%s,%s,%d]",
+			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID)
 	}
 
 	// bind the new replica set to the node.

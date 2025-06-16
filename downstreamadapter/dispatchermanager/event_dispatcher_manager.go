@@ -850,6 +850,12 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 	t.mergedDispatcher.SetCurrentPDTs(e.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, minCheckpointTs)
+	log.Info("merge dispatcher commit add dispatcher",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
+		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
+		zap.Uint64("startTs", minCheckpointTs),
+	)
 
 	// Step3: cancel the merge task
 	t.Cancel()

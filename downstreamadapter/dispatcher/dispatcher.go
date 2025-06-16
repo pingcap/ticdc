@@ -394,9 +394,26 @@ func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 // which will lead to the new dispatcher receive the previous dml, which is not match the new schema,
 // leading to writing downstream failed.
 func (d *Dispatcher) TryClose(waitDDL bool) (w heartbeatpb.Watermark, ok bool) {
-	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully.
+	// If sink is normal(not meet error),
+	//        if waitDDL = true, we need to wait all the events in sink to flushed downstream successfully, and no ddl waiting flushing or passing
+	//        if waitDDL = false, we just need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
-	if !d.sink.IsNormal() || d.tableProgress.Empty() {
+
+	closeOk := false
+	if waitDDL {
+		if d.blockEventStatus.isNil() && d.tableProgress.Empty() {
+			closeOk = true
+		}
+	} else {
+		if d.tableProgress.Empty() {
+			closeOk = true
+		}
+	}
+	if !d.sink.IsNormal() {
+		closeOk = true
+	}
+
+	if closeOk {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
