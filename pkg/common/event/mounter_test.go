@@ -766,4 +766,30 @@ func TestDecodeToChunk(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, sum, checksum.Current)
 	}
+
+	dmls = []string{
+		"insert into t values(4)",
+		"insert into t values(5)",
+		"insert into t values(6)",
+	}
+	rawKvs = helper.DML2RawKv(tableInfo.TableName.TableID, ts, dmls...)
+	prev := chk.NumRows()
+	for idx, rawKv := range rawKvs {
+		count, checksum, err := m.DecodeToChunk(rawKv, tableInfo, chk)
+		require.NoError(t, err)
+		require.Equal(t, count, 1)
+		require.False(t, checksum.Corrupted)
+		sum, err := calculateColumnChecksum(tableInfo.GetColumns(), chk.GetRow(idx), time.UTC)
+		require.NoError(t, err)
+		require.NotEqual(t, sum, checksum.Current)
+	}
+	for idx, rawKv := range rawKvs {
+		count, checksum, err := m.DecodeToChunk(rawKv, tableInfo, chk)
+		require.NoError(t, err)
+		require.Equal(t, count, 1)
+		require.False(t, checksum.Corrupted)
+		sum, err := calculateColumnChecksum(tableInfo.GetColumns(), chk.GetRow(prev+idx), time.UTC)
+		require.NoError(t, err)
+		require.Equal(t, sum, checksum.Current)
+	}
 }
