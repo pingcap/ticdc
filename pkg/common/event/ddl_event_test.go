@@ -41,8 +41,9 @@ func TestDDLEvent(t *testing.T) {
 		Query:        ddlJob.Query,
 		TableInfo:    common.WrapTableInfo(ddlJob.SchemaName, ddlJob.BinlogInfo.TableInfo),
 		FinishedTs:   ddlJob.BinlogInfo.FinishedTS,
-		Err:          apperror.ErrDDLEventError.GenWithStackByArgs("test"),
+		Err:          apperror.ErrDDLEventError.GenWithStackByArgs("test").Error(),
 	}
+	ddlEvent.TableInfo.InitPrivateFields()
 
 	data, err := ddlEvent.Marshal()
 	require.Nil(t, err)
@@ -63,7 +64,7 @@ func TestDDLEvent(t *testing.T) {
 	require.Equal(t, ddlEvent.Query, reverseEvent.Query)
 	require.Equal(t, ddlEvent.TableInfo, reverseEvent.TableInfo)
 	require.Equal(t, ddlEvent.FinishedTs, reverseEvent.FinishedTs)
-	require.Equal(t, ddlEvent.Err.Error(), reverseEvent.Err.Error())
+	require.Equal(t, ddlEvent.Err, reverseEvent.Err)
 }
 
 // TestSplitQueries tests the SplitQueries function

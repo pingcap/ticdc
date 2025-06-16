@@ -33,6 +33,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	eventStoreTopic           = messaging.EventStoreTopic
+	logCoordinatorTopic       = messaging.LogCoordinatorTopic
+	logCoordinatorClientTopic = messaging.LogCoordinatorClientTopic
+)
+
 type LogCoordinator interface {
 	Run(ctx context.Context) error
 }
@@ -68,7 +74,7 @@ func New() LogCoordinator {
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
 
 	// recv and handle messages
-	messageCenter.RegisterHandler(messaging.LogCoordinatorTopic, c.handleMessage)
+	messageCenter.RegisterHandler(logCoordinatorTopic, c.handleMessage)
 	// watch node changes
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodes := nodeManager.GetAliveNodes()
@@ -90,8 +96,8 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 			c.nodes.Lock()
 			messages := make([]*messaging.TargetMessage, 0, 2*len(c.nodes.m))
 			for id := range c.nodes.m {
-				messages = append(messages, messaging.NewSingleTargetMessage(id, messaging.EventStoreTopic, &common.LogCoordinatorBroadcastRequest{}))
-				messages = append(messages, messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, &common.LogCoordinatorBroadcastRequest{}))
+				messages = append(messages, messaging.NewSingleTargetMessage(id, eventStoreTopic, &common.LogCoordinatorBroadcastRequest{}))
+				messages = append(messages, messaging.NewSingleTargetMessage(id, logCoordinatorClientTopic, &common.LogCoordinatorBroadcastRequest{}))
 			}
 			c.nodes.Unlock()
 			for _, message := range messages {
@@ -106,7 +112,7 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 				ID:    req.req.GetID(),
 				Nodes: nodes,
 			}
-			err := c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(req.target, messaging.EventCollectorTopic, response))
+			err := c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(req.target, logCoordinatorClientTopic, response))
 			if err != nil {
 				log.Warn("send reusable event service response failed", zap.Error(err))
 			}

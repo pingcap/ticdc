@@ -37,6 +37,7 @@ var (
 	metricEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts")
 	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl")
 	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command")
+	metricEventServiceSkipResolvedTsCount = metrics.EventServiceSkipResolvedTsCount
 )
 
 // metricsSnapshot holds all metrics data collected at a point in time
@@ -79,8 +80,8 @@ func (mc *metricsCollector) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("metrics collector stopping")
-			return ctx.Err()
+			log.Info("metrics collector stopped")
+			return context.Cause(ctx)
 		case <-ticker.C:
 			snapshot := mc.collectMetrics()
 			mc.updateMetricsFromSnapshot(snapshot)

@@ -250,6 +250,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
 			zap.Stringer("dispatcher", d.id),
+			zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
 			zap.Any("event", dispatcherEvent.Event))
 		failpoint.Inject("HandleEventsSlowly", func() {
 			lag := time.Duration(rand.Intn(5000)) * time.Millisecond
@@ -272,7 +273,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
 		if d.isFirstEvent(event) {
-			d.updateComponentStatus()
+			d.updateComponentStatusToWorking()
 		}
 
 		switch event.GetType() {
@@ -532,15 +533,14 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	return true
 }
 
-func (d *Dispatcher) updateComponentStatus() {
+func (d *Dispatcher) updateComponentStatusToWorking() {
 	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
 	d.statusesChan <- TableSpanStatusWithSeq{
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
 			ID:              d.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    d.GetCheckpointTs(),
 		},
-		CheckpointTs: d.GetCheckpointTs(),
-		ResolvedTs:   d.GetResolvedTs(),
-		Seq:          d.seq,
+		Seq: d.seq,
 	}
 }

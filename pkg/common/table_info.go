@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -87,8 +88,8 @@ type TableInfo struct {
 	Sequence *model.SequenceInfo `json:"sequence"`
 
 	preSQLs struct {
+		isInitialized atomic.Bool
 		mutex         sync.Mutex
-		isInitialized bool
 		m             [4]string
 	} `json:"-"`
 }
@@ -98,9 +99,15 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
+	if ti.preSQLs.isInitialized.Load() {
+		return
+	}
+
 	ti.preSQLs.mutex.Lock()
 	defer ti.preSQLs.mutex.Unlock()
-	if ti.preSQLs.isInitialized {
+
+	// Double-checked locking
+	if ti.preSQLs.isInitialized.Load() {
 		return
 	}
 
@@ -108,7 +115,8 @@ func (ti *TableInfo) InitPrivateFields() {
 	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteString())
-	ti.preSQLs.isInitialized = true
+
+	ti.preSQLs.isInitialized.Store(true)
 }
 
 func (ti *TableInfo) Marshal() ([]byte, error) {
@@ -407,7 +415,7 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 
 // IsHandleKey shows whether the column is selected as the handle key
 func (ti *TableInfo) IsHandleKey(colID int64) bool {
-	_, ok := ti.columnSchema.handleKeyIDs[colID]
+	_, ok := ti.columnSchema.HandleKeyIDs[colID]
 	return ok
 }
 

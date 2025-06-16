@@ -140,13 +140,12 @@ func newDispatcherStat(
 	dispStat.checkpointTs.Store(startTs)
 	dispStat.sentResolvedTs.Store(startTs)
 	dispStat.isRunning.Store(true)
-	dispStat.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
-
 	dispStat.resetScanLimit()
-	dispStat.maxScanLimitInBytes.Store(maxScanLimitInBytes)
 
-	dispStat.lastReceivedResolvedTsTime.Store(time.Now())
-	dispStat.lastSentResolvedTsTime.Store(time.Now())
+	now := time.Now()
+	dispStat.lastReceivedResolvedTsTime.Store(now)
+	dispStat.lastSentResolvedTsTime.Store(now)
+	dispStat.lastReceivedHeartbeatTime.Store(now.UnixNano())
 	return dispStat
 }
 
@@ -235,12 +234,13 @@ func (a *dispatcherStat) IsRunning() bool {
 func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 	res := a.currentScanLimitInBytes.Load()
 	if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
-		if res >= a.maxScanLimitInBytes.Load() {
-			return res
+		maxScanLimit := a.maxScanLimitInBytes.Load()
+		if res > maxScanLimit {
+			return maxScanLimit
 		}
 		newLimit := res * 2
-		if newLimit > a.maxScanLimitInBytes.Load() {
-			newLimit = a.maxScanLimitInBytes.Load()
+		if newLimit > maxScanLimit {
+			newLimit = maxScanLimit
 		}
 		a.currentScanLimitInBytes.Store(newLimit)
 		a.lastUpdateScanLimitTime.Store(time.Now())
@@ -250,6 +250,7 @@ func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 
 func (a *dispatcherStat) resetScanLimit() {
 	a.currentScanLimitInBytes.Store(minScanLimitInBytes)
+	a.maxScanLimitInBytes.Store(maxScanLimitInBytes)
 	a.lastUpdateScanLimitTime.Store(time.Now())
 }
 
@@ -301,7 +302,7 @@ func (w *wrapEvent) reset() {
 	wrapEventPool.Put(w)
 }
 
-func (w wrapEvent) getDispatcherID() common.DispatcherID {
+func (w *wrapEvent) getDispatcherID() common.DispatcherID {
 	e, ok := w.e.(pevent.Event)
 	if !ok {
 		log.Panic("cast event failed", zap.Any("event", w.e))
