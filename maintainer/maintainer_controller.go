@@ -243,6 +243,8 @@ func (c *Controller) FinishBootstrap(
 
 	// Step 1: Determine start timestamp and update DDL dispatcher
 	startTs := c.determineStartTs(allNodesResp)
+	// update start CheckpointTs
+	c.startCheckpointTs = startTs
 
 	// Step 2: Load tables from schema store
 	tables, err := c.loadTables(startTs)
