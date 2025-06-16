@@ -31,11 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
-	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
-	targetMessage.From = id
-	return targetMessage
-}
+var _ dispatcher.EventDispatcher = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
 	id     common.DispatcherID
@@ -55,7 +51,7 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
-	return &heartbeatpb.TableSpan{}
+	return nil
 }
 
 func (m *mockEventDispatcher) GetFilterConfig() *eventpb.FilterConfig {
@@ -85,6 +81,16 @@ func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.Dispatc
 	return false
 }
 
+func (m *mockEventDispatcher) GetBDRMode() bool {
+	return false
+}
+
+func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
+	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
+	targetMessage.From = id
+	return targetMessage
+}
+
 func TestProcessMessage(t *testing.T) {
 	ctx := context.Background()
 	node := node.NewInfo("127.0.0.1:18300", "")
@@ -96,7 +102,7 @@ func TestProcessMessage(t *testing.T) {
 	did := common.NewDispatcherID()
 	ch := make(chan *messaging.TargetMessage, receiveChanSize)
 	go func() {
-		c.runProcessMessage(ctx, ch)
+		c.runDispatchMessage(ctx, ch)
 	}()
 
 	var seq atomic.Uint64
@@ -137,7 +143,7 @@ func TestProcessMessage(t *testing.T) {
 			done <- struct{}{}
 		}
 	}
-	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota, *config.GetDefaultReplicaConfig().BDRMode)
+	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota)
 
 	ch <- newMessage(node.ID, &readyEvent)
 	ch <- newMessage(node.ID, handshakeEvent)

@@ -135,7 +135,6 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		co := coordinator.New(
 			e.svr.info,
 			e.svr.pdClient,
-			e.svr.PDClock,
 			changefeed.NewEtcdBackend(e.svr.EtcdClient),
 			e.svr.EtcdClient.GetGCServiceID(),
 			coordinatorVersion,

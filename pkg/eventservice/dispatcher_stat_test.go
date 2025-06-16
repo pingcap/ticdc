@@ -99,9 +99,8 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	r, ok = stat.getDataRange()
 	require.False(t, ok)
 
-	// When reset ts is larger than watermark
-	stat.resetTs.Store(150)
-	stat.sentResolvedTs.Store(100)
+	// When reset, the data range should be start from the reset ts.
+	stat.resetState(150)
 	r, ok = stat.getDataRange()
 	require.True(t, ok)
 	require.Equal(t, uint64(150), r.StartTs)

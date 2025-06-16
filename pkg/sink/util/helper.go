@@ -297,7 +297,7 @@ func (s *TableIDStore) GetTableIdsByDB(schemaID int64) []int64 {
 	tableIds := s.GetNormalTableIdsByDB(schemaID)
 	// Add the table id of the span of table trigger event dispatcher
 	// Each influence-DB ddl must have table trigger event dispatcher's participation
-	tableIds = append(tableIds, heartbeatpb.DDLSpan.TableID)
+	tableIds = append(tableIds, commonType.DDLSpan.TableID)
 	return tableIds
 }
 
@@ -315,6 +315,6 @@ func (s *TableIDStore) GetAllTableIds() []int64 {
 	tableIds := s.GetAllNormalTableIds()
 	// Add the table id of the span of table trigger event dispatcher
 	// Each influence-DB ddl must have table trigger event dispatcher's participation
-	tableIds = append(tableIds, heartbeatpb.DDLSpan.TableID)
+	tableIds = append(tableIds, commonType.DDLSpan.TableID)
 	return tableIds
 }

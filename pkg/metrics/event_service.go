@@ -18,6 +18,13 @@ import (
 )
 
 var (
+	EventServiceChannelSizeGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "channel_size",
+		Help:      "The size of the event service channel",
+	}, []string{"type"})
+
 	// EventServiceSendEventCount is the metric that counts events sent by the event service.
 	EventServiceSendEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
@@ -32,7 +39,7 @@ var (
 		Subsystem: "event_service",
 		Name:      "send_event_duration",
 		Help:      "The duration of sending events by the event service",
-		Buckets:   prometheus.DefBuckets,
+		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 	}, []string{"type"})
 	EventServiceResolvedTsGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -54,8 +61,25 @@ var (
 			Subsystem: "event_service",
 			Name:      "scan_duration",
 			Help:      "The duration of scanning a data range from eventStore",
-			Buckets:   prometheus.DefBuckets,
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
+	EventServiceScannedBytes = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scanned_bytes",
+			Help:      "The number of bytes scanned from eventStore",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 15),
+		})
+	EventServiceScannedCount = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scanned_count",
+			Help:      "The number of events scanned from eventStore",
+			Buckets:   prometheus.ExponentialBuckets(10, 2.0, 8),
+		})
+
 	EventServiceDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -68,7 +92,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "event_service",
 			Name:      "scan_task_count",
-			Help:      "The number of scan tasks that have been done",
+			Help:      "The number of scan tasks that have finished",
 		})
 	EventServicePendingScanTaskCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -84,17 +108,37 @@ var (
 			Name:      "dispatcher_status_count",
 			Help:      "The number of different dispatcher status",
 		}, []string{"status"})
+	EventServiceDispatcherUpdateResolvedTsDiff = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "dispatcher_update_resolved_ts_diff",
+			Help:      "The lag difference between received and sent resolved ts of dispatchers",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+		})
+	EventServiceSkipResolvedTsCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "skip_resolved_ts_count",
+			Help:      "The number of skipped resolved ts",
+		})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
 func InitEventServiceMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(EventServiceChannelSizeGauge)
 	registry.MustRegister(EventServiceSendEventCount)
 	registry.MustRegister(EventServiceSendEventDuration)
 	registry.MustRegister(EventServiceResolvedTsGauge)
 	registry.MustRegister(EventServiceResolvedTsLagGauge)
 	registry.MustRegister(EventServiceScanDuration)
+	registry.MustRegister(EventServiceScannedBytes)
+	registry.MustRegister(EventServiceScannedCount)
 	registry.MustRegister(EventServiceDispatcherGauge)
 	registry.MustRegister(EventServiceScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherStatusCount)
 	registry.MustRegister(EventServicePendingScanTaskCount)
+	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
+	registry.MustRegister(EventServiceSkipResolvedTsCount)
 }

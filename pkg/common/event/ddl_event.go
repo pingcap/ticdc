@@ -16,9 +16,9 @@ package event
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
@@ -27,6 +27,8 @@ import (
 const (
 	DDLEventVersion = 0
 )
+
+var _ Event = &DDLEvent{}
 
 type DDLEvent struct {
 	// Version is the version of the DDLEvent struct.
@@ -83,13 +85,13 @@ type DDLEvent struct {
 
 	TiDBOnly bool   `json:"tidb_only"`
 	BDRMode  string `json:"bdr_mode"`
+	Err      string `json:"err"`
 
 	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
 
-	Err error `json:"-"`
 	// for simple protocol
 	IsBootstrap bool `msg:"-"`
 }
@@ -107,7 +109,10 @@ func (d *DDLEvent) GetStartTs() common.Ts {
 }
 
 func (d *DDLEvent) GetError() error {
-	return d.Err
+	if len(d.Err) == 0 {
+		return nil
+	}
+	return errors.New(d.Err)
 }
 
 func (d *DDLEvent) GetCommitTs() common.Ts {
@@ -271,30 +276,13 @@ func (t DDLEvent) Marshal() ([]byte, error) {
 	binary.BigEndian.PutUint64(multipletableInfosDataSize, uint64(len(t.MultipleTableInfos)))
 	data = append(data, multipletableInfosDataSize...)
 
-	if t.Err != nil {
-		errData := []byte(t.Err.Error())
-		errDataSize := make([]byte, 8)
-		binary.BigEndian.PutUint64(errDataSize, uint64(len(errData)))
-		data = append(data, errData...)
-		data = append(data, errDataSize...)
-	} else {
-		errDataSize := make([]byte, 8)
-		binary.BigEndian.PutUint64(errDataSize, 0)
-		data = append(data, errDataSize...)
-	}
 	return data, nil
 }
 
 func (t *DDLEvent) Unmarshal(data []byte) error {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize | errorData | errorDataSize
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
 	t.eventSize = int64(len(data))
-	errorDataSize := binary.BigEndian.Uint64(data[len(data)-8:])
-	if errorDataSize > 0 {
-		errorData := data[len(data)-8-int(errorDataSize) : len(data)-8]
-		log.Info("errorData", zap.String("errorData", string(errorData)))
-		t.Err = apperror.ErrDDLEventError.FastGen(string(errorData))
-	}
-	end := len(data) - 8 - int(errorDataSize)
+	end := len(data)
 	multipletableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	for i := 0; i < int(multipletableInfosDataSize); i++ {
 		tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
@@ -327,6 +315,14 @@ func (t *DDLEvent) Unmarshal(data []byte) error {
 	if err != nil {
 		return err
 	}
+
+	for _, info := range t.MultipleTableInfos {
+		info.InitPrivateFields()
+	}
+	if t.TableInfo != nil {
+		t.TableInfo.InitPrivateFields()
+	}
+
 	return nil
 }
 

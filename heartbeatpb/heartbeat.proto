@@ -75,14 +75,18 @@ message DispatcherConfig {
     uint64 startTs = 2;
     DispatcherID dispatcherID = 3;
     int64 schemaID = 4;
-    // it's the pd time when scheduling the dispatcher, for MySQL sink event before this tso should use replace mode
-    uint64 current_pd_ts = 5;
 }
 
 message ScheduleDispatcherRequest {
     ChangefeedID changefeedID = 1;
     DispatcherConfig config = 2;
     ScheduleAction scheduleAction = 3;
+}
+
+message MergeDispatcherRequest {
+    ChangefeedID changefeedID = 1;
+    repeated DispatcherID dispatcherIDs = 2; // dispatcherIDs from the dispatchers that need to be merged
+    DispatcherID mergedDispatcherID = 3;  // the dispatcherID of the new dispatcher to be merged to.
 }
 
 message MaintainerHeartbeat {
@@ -251,6 +255,9 @@ enum ComponentState {
     Stopped = 1;
     Removed = 2;
     Initializing = 3;
+    Preparing = 4; // Preparing for merge, not ready for receive data from event collector
+    MergeReady = 5; // Ready for merge(upstream is finishing prepare data), but not begin send data to dispatcher. 
+    WaitingMerge = 6; // the old dispatcher is waiting merge ready and then be closed
 }
 
 message RunningError {

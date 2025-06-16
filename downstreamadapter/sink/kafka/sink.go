@@ -400,6 +400,9 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
+
+					log.Debug("send message to kafka", zap.String("messageKey", string(message.Key)), zap.String("messageValue", string(message.Value)))
+
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
@@ -534,10 +537,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 
 func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
-}
-
-func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
-	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {

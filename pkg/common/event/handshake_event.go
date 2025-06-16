@@ -15,7 +15,6 @@ package event
 
 import (
 	"encoding/binary"
-	"encoding/json"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -25,6 +24,8 @@ import (
 const (
 	HandshakeEventVersion = 0
 )
+
+var _ Event = &HandshakeEvent{}
 
 type HandshakeEvent struct {
 	// Version is the version of the HandshakeEvent struct.
@@ -109,7 +110,7 @@ func (e *HandshakeEvent) decode(data []byte) error {
 }
 
 func (e HandshakeEvent) encodeV0() ([]byte, error) {
-	tableInfoData, err := json.Marshal(e.TableInfo)
+	tableInfoData, err := e.TableInfo.Marshal()
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +141,17 @@ func (e *HandshakeEvent) decodeV0(data []byte) error {
 	e.State.decode(data[offset:])
 	offset += e.State.GetSize()
 	dispatcherIDData := data[offset:]
-	e.DispatcherID.Unmarshal(dispatcherIDData)
+	var err error
+	err = e.DispatcherID.Unmarshal(dispatcherIDData)
+	if err != nil {
+		return err
+	}
 	offset += e.DispatcherID.GetSize()
-	return json.Unmarshal(data[offset:], &e.TableInfo)
+	e.TableInfo, err = common.UnmarshalJSONToTableInfo(data[offset:])
+	if err != nil {
+		return err
+	}
+	// Initialize private fields after unmarshaling
+	e.TableInfo.InitPrivateFields()
+	return nil
 }

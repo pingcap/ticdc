@@ -295,10 +295,6 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
 }
 
-func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
-	return startTsList, make([]bool, len(startTsList)), nil
-}
-
 func (s *sink) initCron(
 	ctx context.Context, sinkURI *url.URL, cleanupJobs []func(),
 ) (err error) {

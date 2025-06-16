@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -55,7 +54,6 @@ type Controller struct {
 	replicationDB       *replica.ReplicationDB
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
-	pdClock             pdutil.Clock
 
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
@@ -74,7 +72,6 @@ type Controller struct {
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
 	pdAPIClient pdutil.PDAPIClient,
-	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 	taskPool threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
@@ -115,7 +112,6 @@ func NewController(changefeedID common.ChangeFeedID,
 		nodeManager:            nodeManager,
 		taskPool:               taskPool,
 		cfConfig:               cfConfig,
-		pdClock:                pdClock,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
@@ -138,7 +134,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.String("changefeed", c.changefeedID.Name()),
 					zap.String("from", from.String()),
 					zap.Any("status", status),
-					zap.String("span", dispatcherID.String()))
+					zap.String("dispatcherID", dispatcherID.String()))
 				// if the span is not found, and the status is working, we need to remove it from dispatcher
 				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID))
 			}
@@ -182,7 +178,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 			zap.Int64("table", table.TableID))
 		return
 	}
-	span := spanz.TableIDToComparableSpan(table.TableID)
+	span := common.TableIDToComparableSpan(table.TableID)
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  table.TableID,
 		StartKey: span.StartKey,
@@ -247,6 +243,8 @@ func (c *Controller) FinishBootstrap(
 
 	// Step 1: Determine start timestamp and update DDL dispatcher
 	startTs := c.determineStartTs(allNodesResp)
+	// update start CheckpointTs
+	c.startCheckpointTs = startTs
 
 	// Step 2: Load tables from schema store
 	tables, err := c.loadTables(startTs)
@@ -331,7 +329,6 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 	return replica.NewWorkingSpanReplication(
 		c.changefeedID,
 		common.NewDispatcherIDFromPB(spanInfo.ID),
-		c.pdClock,
 		spanInfo.SchemaID,
 		spanInfo.Span,
 		status,
@@ -346,7 +343,7 @@ func (c *Controller) addToWorkingTaskMap(
 ) {
 	tableSpans, ok := workingTaskMap[span.TableID]
 	if !ok {
-		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
 		workingTaskMap[span.TableID] = tableSpans
 	}
 	tableSpans.ReplaceOrInsert(span, spanReplication)
@@ -387,7 +384,7 @@ func (c *Controller) processTableSpans(
 	// Add new table if not working
 	if isTableWorking {
 		// Handle existing table spans
-		span := spanz.TableIDToComparableSpan(table.TableID)
+		span := common.TableIDToComparableSpan(table.TableID)
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  table.TableID,
 			StartKey: span.StartKey,
@@ -520,8 +517,7 @@ func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID,
-			dispatcherID, c.pdClock, schemaID, span, startTs)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
 		c.replicationDB.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -564,6 +560,35 @@ func (c *Controller) checkParams(tableId int64, targetNode node.ID) error {
 	return nil
 }
 
+func (c *Controller) isDDLDispatcher(dispatcherID common.DispatcherID) bool {
+	return dispatcherID == c.ddlDispatcherID
+}
+
+func (c *Controller) Stop() {
+	for _, handler := range c.taskHandles {
+		handler.Cancel()
+	}
+}
+
+func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {
+	schemaInfo := &heartbeatpb.SchemaInfo{}
+	schemaInfo.SchemaID = table.SchemaID
+	if !isMysqlCompatibleBackend {
+		schemaInfo.SchemaName = table.SchemaName
+	}
+	return schemaInfo
+}
+
+func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.TableInfo {
+	tableInfo := &heartbeatpb.TableInfo{}
+	tableInfo.TableID = table.TableID
+	if !isMysqlCompatibleBackend {
+		tableInfo.TableName = table.TableName
+	}
+	return tableInfo
+}
+
+// ========================== methods for HTTP API | Only For Test ==========================
 // only for test
 // moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
 // moveTable only works for the complete table, not for the table splited.
@@ -647,9 +672,9 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 }
 
 // only for test
-// SplitTableByRegionCount split table based on region count
+// splitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
-func (c *Controller) SplitTableByRegionCount(tableID int64) error {
+func (c *Controller) splitTableByRegionCount(tableID int64) error {
 	if !c.replicationDB.IsTableExists(tableID) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
@@ -661,7 +686,7 @@ func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 
 	replications := c.replicationDB.GetTasksByTableID(tableID)
 
-	span := spanz.TableIDToComparableSpan(tableID)
+	span := common.TableIDToComparableSpan(tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
 		TableID:  span.TableID,
 		StartKey: span.StartKey,
@@ -703,9 +728,9 @@ func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 }
 
 // only for test
-// MergeTable merge two nearby dispatchers in this table into one dispatcher,
+// mergeTable merge two nearby dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
-func (c *Controller) MergeTable(tableID int64) error {
+func (c *Controller) mergeTable(tableID int64) error {
 	if !c.replicationDB.IsTableExists(tableID) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
@@ -727,25 +752,53 @@ func (c *Controller) MergeTable(tableID int64) error {
 		return bytes.Compare(replications[i].Span.StartKey, replications[j].Span.StartKey) < 0
 	})
 
-	// choose the first two replication to merge a new replication
-	newSpan := &heartbeatpb.TableSpan{
-		TableID:  replications[0].Span.TableID,
-		StartKey: replications[0].Span.StartKey,
-		EndKey:   replications[1].Span.EndKey,
+	// try to select two consecutive spans in the same node to merge
+	// if we can't find, we just move one span to make it satisfied.
+	idx := 0
+	mergeSpanFound := false
+	for idx+1 < len(replications) {
+		if replications[idx].GetNodeID() == replications[idx+1].GetNodeID() {
+			mergeSpanFound = true
+			break
+		} else {
+			idx++
+		}
 	}
 
-	mergeReplication := replications[:2]
+	if !mergeSpanFound {
+		idx = 0
+		// try to move the second span to the first span's node
+		moveOp := c.operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
+		c.operatorController.AddOperator(moveOp)
 
-	primaryID := replications[0].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil)
-	secondaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished())
-	c.operatorController.AddOperator(primaryOp)
-	c.operatorController.AddOperator(secondaryOp)
+		count := 0
+		maxTry := 30
+		flag := false
+		for count < maxTry {
+			if moveOp.IsFinished() {
+				flag = true
+				break
+			}
+			time.Sleep(1 * time.Second)
+			count += 1
+			log.Info("wait for move table table operator finished", zap.Int("count", count))
+		}
+
+		if !flag {
+			return apperror.ErrTimeout.GenWithStackByArgs("move table operator before merge table is timeout")
+		}
+	}
+
+	operator := c.operatorController.AddMergeOperator(replications[idx : idx+2])
+	if operator == nil {
+		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge operator")
+	}
+	c.operatorController.AddOperator(operator)
 
 	count := 0
 	maxTry := 30
 	for count < maxTry {
-		if primaryOp.IsFinished() {
+		if operator.IsFinished() {
 			return nil
 		}
 
@@ -755,32 +808,4 @@ func (c *Controller) MergeTable(tableID int64) error {
 	}
 
 	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
-}
-
-func (c *Controller) isDDLDispatcher(dispatcherID common.DispatcherID) bool {
-	return dispatcherID == c.ddlDispatcherID
-}
-
-func (c *Controller) Stop() {
-	for _, handler := range c.taskHandles {
-		handler.Cancel()
-	}
-}
-
-func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {
-	schemaInfo := &heartbeatpb.SchemaInfo{}
-	schemaInfo.SchemaID = table.SchemaID
-	if !isMysqlCompatibleBackend {
-		schemaInfo.SchemaName = table.SchemaName
-	}
-	return schemaInfo
-}
-
-func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.TableInfo {
-	tableInfo := &heartbeatpb.TableInfo{}
-	tableInfo.TableID = table.TableID
-	if !isMysqlCompatibleBackend {
-		tableInfo.TableName = table.TableName
-	}
-	return tableInfo
 }

@@ -223,7 +223,6 @@ func (db *ReplicationDB) ReplaceReplicaSet(
 		new := NewSpanReplication(
 			old.ChangefeedID,
 			common.NewDispatcherID(),
-			old.GetPDClock(),
 			old.GetSchemaID(),
 			span, checkpointTs)
 		news = append(news, new)
@@ -345,6 +344,12 @@ func (db *ReplicationDB) addAbsentReplicaSetWithoutLock(spans ...*SpanReplicatio
 		db.AddAbsentWithoutLock(span)
 		db.addToSchemaAndTableMap(span)
 	}
+}
+
+func (db *ReplicationDB) RemoveReplicatingSpan(span *SpanReplication) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.removeSpanWithoutLock(span)
 }
 
 // removeSpanWithoutLock removes the spans from the db without lock

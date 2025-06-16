@@ -42,7 +42,7 @@ type SchemaStore interface {
 
 	UnregisterTable(tableID int64) error
 
-	// return table info with largest version <= ts
+	// GetTableInfo return table info with the largest version <= ts
 	GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error)
 
 	// TODO: how to respect tableFilter
@@ -94,14 +94,13 @@ func New(
 	root string,
 	subClient logpuller.SubscriptionClient,
 	pdCli pd.Client,
-	pdClock pdutil.Clock,
 	kvStorage kv.Storage,
 ) SchemaStore {
 	dataStorage := newPersistentStorage(ctx, root, pdCli, kvStorage)
 	upperBound := dataStorage.getUpperBound()
 
 	s := &schemaStore{
-		pdClock:       pdClock,
+		pdClock:       appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		unsortedCache: newDDLCache(),
 		dataStorage:   dataStorage,
 		notifyCh:      make(chan interface{}, 4),

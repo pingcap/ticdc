@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -68,9 +67,6 @@ func TestEventServiceBasic(t *testing.T) {
 
 	log.Info("start event service basic test")
 
-	// Set the max task time range to a very large value to avoid the test case being blocked.
-	maxTaskTimeRange = time.Duration(math.MaxInt64)
-
 	mockStore := newMockEventStore(100)
 	mockStore.Run(ctx)
 
@@ -89,7 +85,7 @@ func TestEventServiceBasic(t *testing.T) {
 	// add events to eventStore
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 		`insert into test.t(id,c) values (2, "c2")`,
@@ -221,11 +217,11 @@ func newMockEventStore(resolvedTsUpdateInterval int) *mockEventStore {
 func (m *mockEventStore) AppendEvents(dispatcherID common.DispatcherID, resolvedTs uint64, events ...*common.RawKVEntry) error {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
-		return errors.New(fmt.Sprintf("dispatcher not found: %v", dispatcherID))
+		return fmt.Errorf("dispatcher not found: %v", dispatcherID)
 	}
 	spanStats, ok := m.spansMap.Load(span)
 	if !ok {
-		return errors.New(fmt.Sprintf("span not found: %v", span))
+		return fmt.Errorf("span not found: %v", span)
 	}
 	log.Info("append events", zap.Any("dispatcherID", dispatcherID), zap.Any("resolvedTs", resolvedTs), zap.Int("eventsNum", len(events)))
 	spanStats.(*mockSpanStats).update(resolvedTs, events...)
@@ -282,17 +278,14 @@ func (m *mockEventStore) Close(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, gcTS uint64) error {
-	return nil
+func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, gcTS uint64) {
 }
 
-func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
+func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
-	if !ok {
-		return errors.New("dispatcher not found")
+	if ok {
+		m.spansMap.Delete(span)
 	}
-	m.spansMap.Delete(span)
-	return nil
 }
 
 func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (eventstore.EventIterator, error) {
@@ -301,12 +294,12 @@ func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange
 	}
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("dispatcher not found: %v", dispatcherID))
+		return nil, fmt.Errorf("dispatcher not found: %v", dispatcherID)
 	}
 
 	v, ok := m.spansMap.Load(span)
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("span not found: %v, dispatcherID: %v", span, dispatcherID))
+		return nil, fmt.Errorf("span not found: %v, dispatcherID: %v", span, dispatcherID)
 	}
 
 	spanStats := v.(*mockSpanStats)
@@ -324,19 +317,19 @@ func (m *mockEventStore) RegisterDispatcher(
 	span *heartbeatpb.TableSpan,
 	startTS common.Ts,
 	notifier eventstore.ResolvedTsNotifier,
-	onlyReuse bool,
-	bdrMode bool,
-) (bool, error) {
-	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", uint64(startTS)), zap.Any("dispatcherID", dispatcherID))
+	_ bool,
+	_ bool,
+) bool {
+	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", startTS), zap.Any("dispatcherID", dispatcherID))
 	spanStats := &mockSpanStats{
-		startTs:            uint64(startTS),
+		startTs:            startTS,
 		resolvedTsNotifier: notifier,
 		pendingEvents:      make([]*common.RawKVEntry, 0),
 	}
-	spanStats.resolvedTs = uint64(startTS)
+	spanStats.resolvedTs = startTS
 	m.spansMap.Store(span, spanStats)
 	m.dispatcherMap.Store(dispatcherID, span)
-	return true, nil
+	return true
 }
 
 type mockEventIterator struct {
@@ -610,11 +603,9 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
-func genEvents(helper *commonEvent.EventTestHelper, t *testing.T, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
+func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)
-	schema := job.SchemaName
-	table := job.TableName
-	kvEvents := helper.DML2RawKv(schema, table, job.BinlogInfo.FinishedTS, dmls...)
+	kvEvents := helper.DML2RawKv(job.TableID, job.BinlogInfo.FinishedTS, dmls...)
 	return commonEvent.DDLEvent{
 		Version:    commonEvent.DDLEventVersion,
 		FinishedTs: job.BinlogInfo.FinishedTS,
@@ -624,6 +615,18 @@ func genEvents(helper *commonEvent.EventTestHelper, t *testing.T, ddl string, dm
 		Query:      ddl,
 		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
 	}, kvEvents
+}
+
+// insertToDeleteRow converts an insert row to a delete row to facilitate the test.
+func insertToDeleteRow(rawEvent *common.RawKVEntry) *common.RawKVEntry {
+	res := &common.RawKVEntry{
+		StartTs:  rawEvent.StartTs,
+		CRTs:     rawEvent.CRTs,
+		Key:      rawEvent.Key,
+		OldValue: rawEvent.Value,
+		OpType:   common.OpTypeDelete,
+	}
+	return res
 }
 
 // This test is to test the mockEventIterator works as expected.

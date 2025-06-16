@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -249,153 +250,18 @@ func NewEventDispatcherManager(
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
 		zap.Uint64("startTs", startTs),
-		zap.Uint64("tableTriggerStartTs", tableTriggerStartTs))
+		zap.Uint64("tableTriggerStartTs", tableTriggerStartTs),
+	)
 	return manager, tableTriggerStartTs, nil
-}
-
-func (e *EventDispatcherManager) TryClose(removeChangefeed bool) bool {
-	if e.closed.Load() {
-		return true
-	}
-	if e.closing.Load() {
-		return e.closed.Load()
-	}
-	e.cleanMetrics()
-	e.closing.Store(true)
-	go e.close(removeChangefeed)
-	return false
-}
-
-func (e *EventDispatcherManager) cleanMetrics() {
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-		"event-collector",
-		"max",
-		e.changefeedID.String(),
-	)
-
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-		"event-collector",
-		"used",
-		e.changefeedID.String(),
-	)
-
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-}
-
-func (e *EventDispatcherManager) close(removeChangefeed bool) {
-	log.Info("closing event dispatcher manager",
-		zap.Stringer("changefeedID", e.changefeedID))
-
-	defer e.closing.Store(false)
-	e.closeAllDispatchers()
-
-	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
-	if err != nil {
-		log.Error("remove event dispatcher manager from heartbeat collector failed",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Error(err),
-		)
-		return
-	}
-
-	// heartbeatTask only will be generated when create new dispatchers.
-	// We check heartBeatTask after we remove the stream in heartbeat collector,
-	// so we won't get add dispatcher messages to create heartbeatTask.
-	// Thus there will not data race when we check heartBeatTask.
-	if e.heartBeatTask != nil {
-		e.heartBeatTask.Cancel()
-	}
-
-	e.sink.Close(removeChangefeed)
-	e.cancel()
-	e.wg.Wait()
-
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-
-	e.closed.Store(true)
-	log.Info("event dispatcher manager closed",
-		zap.Stringer("changefeedID", e.changefeedID))
-}
-
-func (e *EventDispatcherManager) closeAllDispatchers() {
-	leftToCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
-	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
-		// Remove dispatcher from eventService
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
-
-		if dispatcher.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
-			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
-			if err != nil {
-				log.Error("remove checkpointTs message failed",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Error(err),
-				)
-			}
-		}
-
-		_, ok := dispatcher.TryClose()
-		if !ok {
-			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcher)
-		} else {
-			// Remove should be called after dispatcher is closed
-			dispatcher.Remove()
-		}
-	})
-
-	for _, dispatcher := range leftToCloseDispatchers {
-		log.Info("closing dispatcher",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Stringer("dispatcherID", dispatcher.GetId()),
-			zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
-		)
-		ok := false
-		count := 0
-		for !ok {
-			_, ok = dispatcher.TryClose()
-			time.Sleep(10 * time.Millisecond)
-			count += 1
-			if count%100 == 0 {
-				log.Info("waiting for dispatcher to close",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Stringer("dispatcherID", dispatcher.GetId()),
-					zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
-					zap.Int("count", count),
-				)
-			}
-		}
-		// Remove should be called after dispatcher is closed
-		dispatcher.Remove()
-	}
-}
-
-type dispatcherCreateInfo struct {
-	Id          common.DispatcherID
-	TableSpan   *heartbeatpb.TableSpan
-	StartTs     uint64
-	SchemaID    int64
-	CurrentPDTs uint64
 }
 
 func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) (uint64, error) {
 	err := e.newDispatchers([]dispatcherCreateInfo{
 		{
-			Id:          common.NewDispatcherIDFromPB(id),
-			TableSpan:   heartbeatpb.DDLSpan,
-			StartTs:     startTs,
-			SchemaID:    0,
-			CurrentPDTs: 0,
+			Id:        common.NewDispatcherIDFromPB(id),
+			TableSpan: common.DDLSpan,
+			StartTs:   startTs,
+			SchemaID:  0,
 		},
 	}, newChangefeed)
 	if err != nil {
@@ -429,7 +295,7 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	}
 
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.config.MemoryQuota, e.config.BDRMode)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.config.MemoryQuota)
 
 	// when sink is not mysql-class, table trigger event dispatcher need to receive the checkpointTs message from maintainer.
 	if e.sink.SinkType() != common.MysqlSinkType {
@@ -445,13 +311,13 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 // 2. changefeed is total new created, or resumed with overwriteCheckpointTs
 func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
+	currentPdTs := e.pdClock.CurrentTS()
 
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
 	tableIds := make([]int64, 0, len(infos))
 	startTsList := make([]int64, 0, len(infos))
 	tableSpans := make([]*heartbeatpb.TableSpan, 0, len(infos))
 	schemaIds := make([]int64, 0, len(infos))
-	pdTsList := make([]uint64, 0, len(infos))
 	for _, info := range infos {
 		id := info.Id
 		if _, ok := e.dispatcherMap.Get(id); ok {
@@ -462,7 +328,6 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		startTsList = append(startTsList, int64(info.StartTs))
 		tableSpans = append(tableSpans, info.TableSpan)
 		schemaIds = append(schemaIds, info.SchemaID)
-		pdTsList = append(pdTsList, info.CurrentPDTs)
 	}
 
 	if len(dispatcherIds) == 0 {
@@ -475,10 +340,30 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	// so we just return the startTs we get.
 	// Besides, we batch the creation for the dispatchers,
 	// mainly because we need to batch the query for startTs when sink is mysql-class to reduce the time cost.
-	newStartTsList, startTsIsSyncpointList, err := e.sink.GetStartTsList(tableIds, startTsList, removeDDLTs)
-	if err != nil {
-		return errors.Trace(err)
+	//
+	// When we enable syncpoint, we also need to know the last ddl commitTs whether is a syncpoint event.
+	// because the commitTs of a syncpoint event can be the same as a ddl event
+	// If there is a ddl event and a syncpoint event at the same time, we ensure the syncpoint event always after the ddl event.
+	// So we need to know whether the commitTs is from a syncpoint event or a ddl event,
+	// to decide whether we need to send generate the syncpoint event of this commitTs to downstream.
+	var newStartTsList []int64
+	startTsIsSyncpointList := make([]bool, len(startTsList))
+	var err error
+	if e.sink.SinkType() == common.MysqlSinkType {
+		newStartTsList, startTsIsSyncpointList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		log.Info("calculate real startTs for dispatchers",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("receiveStartTs", startTsList),
+			zap.Any("realStartTs", newStartTsList),
+			zap.Bool("removeDDLTs", removeDDLTs),
+		)
+	} else {
+		newStartTsList = startTsList
 	}
+
 	if e.latestWatermark.Get().CheckpointTs == 0 {
 		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
 		smallestStartTs := int64(math.MaxInt64)
@@ -502,7 +387,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.syncPointConfig,
 			startTsIsSyncpointList[idx],
 			e.filterConfig,
-			pdTsList[idx],
+			currentPdTs,
 			e.errCh,
 			e.config.BDRMode)
 
@@ -520,7 +405,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			// we don't register table trigger event dispatcher in event collector, when created.
 			// Table trigger event dispatcher is a special dispatcher,
 			// it need to wait get the initial table schema store from the maintainer, then will register to event collector to receive events.
-			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(d, e.config.MemoryQuota, e.config.BDRMode)
+			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(d, e.config.MemoryQuota)
 		}
 
 		seq := e.dispatcherMap.Set(id, d)
@@ -543,7 +428,8 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	log.Info("batch create new dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Int("count", len(dispatcherIds)),
-		zap.Duration("duration", time.Since(start)))
+		zap.Duration("duration", time.Since(start)),
+	)
 	return nil
 }
 
@@ -703,17 +589,19 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		Watermark:       heartbeatpb.NewMaxWatermark(),
 	}
 
-	toRemoveDispatcherIDs := make([]common.DispatcherID, 0)
-	removedDispatcherSchemaIDs := make([]int64, 0)
+	toCleanDispatcherIDs := make([]common.DispatcherID, 0)
+	cleanDispatcherSchemaIDs := make([]int64, 0)
 	heartBeatInfo := &dispatcher.HeartBeatInfo{}
-
-	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
-		Version:              event.DispatcherHeartbeatVersion,
-		DispatcherCount:      0,
-		DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
-	}
+	dispatcherCount := 0
 
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
+		dispatcherCount++
+
+		// the merged dispatcher in preparing state, don't need to join the calculation of the heartbeat
+		// the dispatcher still not know the startTs of it, and the dispatchers to be merged are still in the calculation of the checkpointTs
+		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Preparing || dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_MergeReady {
+			return
+		}
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
 		// If it's closed successfully, we could clean it up.
@@ -721,7 +609,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		if heartBeatInfo.IsRemoving {
 			watermark, ok := dispatcherItem.TryClose()
 			if ok {
-				// remove successfully
+				// it's ok to clean the dispatcher
 				message.Watermark.UpdateMin(watermark)
 				// If the dispatcher is removed successfully, we need to add the tableSpan into message whether needCompleteStatus is true or not.
 				message.Statuses = append(message.Statuses, &heartbeatpb.TableSpanStatus{
@@ -729,8 +617,8 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 					ComponentStatus: heartbeatpb.ComponentState_Stopped,
 					CheckpointTs:    watermark.CheckpointTs,
 				})
-				toRemoveDispatcherIDs = append(toRemoveDispatcherIDs, id)
-				removedDispatcherSchemaIDs = append(removedDispatcherSchemaIDs, dispatcherItem.GetSchemaID())
+				toCleanDispatcherIDs = append(toCleanDispatcherIDs, id)
+				cleanDispatcherSchemaIDs = append(cleanDispatcherSchemaIDs, dispatcherItem.GetSchemaID())
 			}
 		}
 
@@ -742,7 +630,6 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 				CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			})
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, heartBeatInfo.Watermark.CheckpointTs))
 		}
 	})
 	message.Watermark.Seq = seq
@@ -750,8 +637,8 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
-		for idx, id := range toRemoveDispatcherIDs {
-			e.cleanDispatcher(id, removedDispatcherSchemaIDs[idx])
+		for idx, id := range toCleanDispatcherIDs {
+			e.cleanDispatcher(id, cleanDispatcherSchemaIDs[idx])
 		}
 	}
 
@@ -761,8 +648,16 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			// add tableTriggerEventDispatcher heartbeat
 			heartBeatInfo := &dispatcher.HeartBeatInfo{}
 			e.tableTriggerEventDispatcher.GetHeartBeatInfo(heartBeatInfo)
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(e.tableTriggerEventDispatcher.GetId(), heartBeatInfo.Watermark.CheckpointTs))
 		}
+
+		eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
+			Version:              event.DispatcherHeartbeatVersion,
+			DispatcherCount:      0,
+			DispatcherProgresses: make([]event.DispatcherProgress, 0, dispatcherCount),
+		}
+		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
@@ -775,9 +670,311 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	pdTime := e.pdClock.CurrentTime()
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
+
 	return &message
 }
 
+// MergeDispatcher merges the mulitple dispatchers belonging to the same table with consecutive ranges.
+func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
+	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
+	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap
+	//         2. whether the dispatcherIDs exist in the dispatcherMap
+	//         3. whether the dispatcherIDs belong to the same table
+	//         4. whether the dispatcherIDs have consecutive ranges
+	//         5. whether the dispatcher in working status.
+
+	if len(dispatcherIDs) < 2 {
+		log.Error("merge dispatcher failed, invalid dispatcherIDs",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("dispatcherIDs", dispatcherIDs))
+		return nil
+	}
+	if dispatcherItem, ok := e.dispatcherMap.Get(mergedDispatcherID); ok {
+		// if the status is working, means the mergeDispatcher is outdated, return the latest status info
+		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Working {
+			e.statusesChan <- dispatcher.TableSpanStatusWithSeq{
+				TableSpanStatus: &heartbeatpb.TableSpanStatus{
+					ID:              mergedDispatcherID.ToPB(),
+					CheckpointTs:    dispatcherItem.GetCheckpointTs(),
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+				},
+				Seq: e.dispatcherMap.GetSeq(),
+			}
+		}
+		// otherwise, merge is in process, just return.
+		return nil
+	}
+	var prevTableSpan *heartbeatpb.TableSpan
+	var startKey []byte
+	var endKey []byte
+	var schemaID int64
+	var fakeStartTs uint64 = math.MaxUint64 // we calculate the fake startTs as the min-checkpointTs of these dispatchers
+	for idx, id := range dispatcherIDs {
+		dispatcher, ok := e.dispatcherMap.Get(id)
+		if !ok {
+			log.Error("merge dispatcher failed, the dispatcher is not found",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Any("dispatcherID", id))
+			return nil
+		}
+		if dispatcher.GetComponentStatus() != heartbeatpb.ComponentState_Working {
+			log.Error("merge dispatcher failed, the dispatcher is not working",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Any("dispatcherID", id),
+				zap.Any("componentStatus", dispatcher.GetComponentStatus()))
+			return nil
+		}
+		if dispatcher.GetCheckpointTs() < fakeStartTs {
+			fakeStartTs = dispatcher.GetCheckpointTs()
+		}
+		if idx == 0 {
+			prevTableSpan = dispatcher.GetTableSpan()
+			startKey = prevTableSpan.StartKey
+			schemaID = dispatcher.GetSchemaID()
+		} else {
+			currentTableSpan := dispatcher.GetTableSpan()
+			if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
+				log.Error("merge dispatcher failed, the dispatcherIDs are not consecutive",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Any("dispatcherIDs", dispatcherIDs),
+					zap.Any("prevTableSpan", prevTableSpan),
+					zap.Any("currentTableSpan", currentTableSpan),
+				)
+				return nil
+			}
+			prevTableSpan = currentTableSpan
+			endKey = currentTableSpan.EndKey
+		}
+	}
+
+	// Step 2: create a new dispatcher with the merged ranges, and set it to preparing state;
+	//         set the old dispatchers to waiting merge state.
+	//         now, we just create a non-working dispatcher, we will make the dispatcher into work when DoMerge() called
+	mergedSpan := &heartbeatpb.TableSpan{
+		TableID:  prevTableSpan.TableID,
+		StartKey: startKey,
+		EndKey:   endKey,
+	}
+
+	mergedDispatcher := dispatcher.NewDispatcher(
+		e.changefeedID,
+		mergedDispatcherID,
+		mergedSpan,
+		e.sink,
+		fakeStartTs, // real startTs will be calculated later.
+		e.statusesChan,
+		e.blockStatusesChan,
+		schemaID,
+		e.schemaIDToDispatchers,
+		e.syncPointConfig,
+		false,
+		e.filterConfig,
+		0, // currentPDTs will be calculated later.
+		e.errCh,
+		e.config.BDRMode,
+	)
+
+	log.Info("new dispatcher created(merge dispatcher)",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", mergedDispatcherID),
+		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
+
+	mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Preparing)
+	seq := e.dispatcherMap.Set(mergedDispatcherID, mergedDispatcher)
+	mergedDispatcher.SetSeq(seq)
+	e.schemaIDToDispatchers.Set(mergedDispatcher.GetSchemaID(), mergedDispatcherID)
+	e.metricEventDispatcherCount.Inc()
+
+	for _, id := range dispatcherIDs {
+		dispatcher, ok := e.dispatcherMap.Get(id)
+		if ok {
+			dispatcher.SetComponentStatus(heartbeatpb.ComponentState_WaitingMerge)
+		}
+	}
+
+	// Step 3: register mergeDispatcher into event collector, and generate a task to check the merged dispatcher status
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).PrepareAddDispatcher(
+		mergedDispatcher,
+		e.config.MemoryQuota,
+		func() {
+			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
+		})
+	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
+}
+
+func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
+	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
+	minCheckpointTs := uint64(math.MaxUint64)
+	closedList := make([]bool, len(t.dispatcherIDs)) // record whether the dispatcher is closed successfully
+	closedCount := 0
+	count := 0
+	for closedCount < len(t.dispatcherIDs) {
+		for idx, id := range t.dispatcherIDs {
+			if closedList[idx] {
+				continue
+			}
+			dispatcher, ok := e.dispatcherMap.Get(id)
+			if !ok {
+				log.Panic("dispatcher not found when do merge", zap.Stringer("dispatcherID", id))
+			}
+			if count == 0 {
+				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
+			}
+
+			watermark, ok := dispatcher.TryClose()
+			if ok {
+				if watermark.CheckpointTs < minCheckpointTs {
+					minCheckpointTs = watermark.CheckpointTs
+				}
+				closedList[idx] = true
+				closedCount++
+			} else {
+				log.Info("dispatcher is still not closed", zap.Stringer("dispatcherID", id))
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		count += 1
+		log.Info("event dispatcher manager is doing merge, waiting for dispatchers to be closed",
+			zap.Int("closedCount", closedCount),
+			zap.Int("total", len(t.dispatcherIDs)),
+			zap.Int("count", count),
+		)
+	}
+
+	// Step2: set the minCheckpointTs as the startTs of the merged dispatcher,
+	//        set the pd clock currentTs as the currentPDTs of the merged dispatcher,
+	//        change the component status of the merged dispatcher to Initializing
+	//        set dispatcher into dispatcherMap and related field
+	//        notify eventCollector to update the merged dispatcher startTs
+	t.mergedDispatcher.SetStartTs(minCheckpointTs)
+	t.mergedDispatcher.SetCurrentPDTs(e.pdClock.CurrentTS())
+	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, minCheckpointTs)
+
+	// Step3: cancel the merge task
+	t.Cancel()
+
+	// Step4: remove all the dispatchers to be merged
+	// we set dispatcher removing status to true after we set the merged dispatcher into dispatcherMap and change its status to Initializing.
+	// so that we can ensure the calculate of checkpointTs of the event dispatcher manager will include the merged dispatcher of the dispatchers to be merged
+	// to avoid the fallback of the checkpointTs
+	for _, id := range t.dispatcherIDs {
+		dispatcher, ok := e.dispatcherMap.Get(id)
+		if !ok {
+			log.Panic("dispatcher not found when do merge", zap.Stringer("dispatcherID", id))
+		}
+		dispatcher.Remove()
+	}
+}
+
+// ==== remove and clean related functions ====
+
+func (e *EventDispatcherManager) TryClose(removeChangefeed bool) bool {
+	if e.closed.Load() {
+		return true
+	}
+	if e.closing.Load() {
+		return e.closed.Load()
+	}
+	e.cleanMetrics()
+	e.closing.Store(true)
+	go e.close(removeChangefeed)
+	return false
+}
+
+func (e *EventDispatcherManager) close(removeChangefeed bool) {
+	log.Info("closing event dispatcher manager",
+		zap.Stringer("changefeedID", e.changefeedID))
+
+	defer e.closing.Store(false)
+	e.closeAllDispatchers()
+
+	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
+	if err != nil {
+		log.Error("remove event dispatcher manager from heartbeat collector failed",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	// heartbeatTask only will be generated when create new dispatchers.
+	// We check heartBeatTask after we remove the stream in heartbeat collector,
+	// so we won't get add dispatcher messages to create heartbeatTask.
+	// Thus there will not data race when we check heartBeatTask.
+	if e.heartBeatTask != nil {
+		e.heartBeatTask.Cancel()
+	}
+
+	e.sink.Close(removeChangefeed)
+	e.cancel()
+	e.wg.Wait()
+
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+
+	e.closed.Store(true)
+	log.Info("event dispatcher manager closed",
+		zap.Stringer("changefeedID", e.changefeedID))
+}
+
+// closeAllDispatchers is called when the event dispatcher manager is closing
+func (e *EventDispatcherManager) closeAllDispatchers() {
+	leftToCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
+	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+		// Remove dispatcher from eventService
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
+
+		if dispatcher.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
+			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
+			if err != nil {
+				log.Error("remove checkpointTs message failed",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Error(err),
+				)
+			}
+		}
+
+		_, ok := dispatcher.TryClose()
+		if !ok {
+			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcher)
+		} else {
+			dispatcher.Remove()
+		}
+	})
+	// wait all dispatchers finish syncing the data to sink
+	for _, dispatcher := range leftToCloseDispatchers {
+		log.Info("closing dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", dispatcher.GetId()),
+			zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
+		)
+		ok := false
+		count := 0
+		for !ok {
+			_, ok = dispatcher.TryClose()
+			time.Sleep(10 * time.Millisecond)
+			count += 1
+			if count%100 == 0 {
+				log.Info("waiting for dispatcher to close",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Stringer("dispatcherID", dispatcher.GetId()),
+					zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
+					zap.Int("count", count),
+				)
+			}
+		}
+		// Remove should be called after dispatcher is closed
+		dispatcher.Remove()
+	}
+}
+
+// removeDispatcher is called when the dispatcher is scheduled
 func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 	dispatcherItem, ok := e.dispatcherMap.Get(id)
 	if ok {
@@ -792,7 +989,26 @@ func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 			log.Error("remove checkpointTs message ds failed", zap.Error(err))
 		}
 
-		dispatcherItem.Remove()
+		count := 0
+		ok := false
+		// We don't want to block the ds handle function, so we just try 10 times.
+		// If the dispatcher is not closed, we can wait for the next message to check it again
+		for !ok && count < 10 {
+			_, ok = dispatcherItem.TryClose()
+			time.Sleep(10 * time.Millisecond)
+			count += 1
+			if count%5 == 0 {
+				log.Info("waiting for dispatcher to close",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Stringer("dispatcherID", dispatcherItem.GetId()),
+					zap.Any("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
+					zap.Int("count", count),
+				)
+			}
+		}
+		if ok {
+			dispatcherItem.Remove()
+		}
 	} else {
 		e.statusesChan <- dispatcher.TableSpanStatusWithSeq{
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
@@ -820,45 +1036,26 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 	)
 }
 
-func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {
-	return e.dispatcherMap
+func (e *EventDispatcherManager) cleanMetrics() {
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"max",
+		e.changefeedID.String(),
+	)
+
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"used",
+		e.changefeedID.String(),
+	)
+
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 }
 
-func (e *EventDispatcherManager) GetMaintainerID() node.ID {
-	e.meta.Lock()
-	defer e.meta.Unlock()
-	return e.meta.maintainerID
-}
-
-func (e *EventDispatcherManager) SetMaintainerID(maintainerID node.ID) {
-	e.meta.Lock()
-	defer e.meta.Unlock()
-	e.meta.maintainerID = maintainerID
-}
-
-func (e *EventDispatcherManager) GetMaintainerEpoch() uint64 {
-	e.meta.Lock()
-	defer e.meta.Unlock()
-	return e.meta.maintainerEpoch
-}
-
-func (e *EventDispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.Dispatcher {
-	return e.tableTriggerEventDispatcher
-}
-
-func (e *EventDispatcherManager) SetHeartbeatRequestQueue(heartbeatRequestQueue *HeartbeatRequestQueue) {
-	e.heartbeatRequestQueue = heartbeatRequestQueue
-}
-
-func (e *EventDispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQueue *BlockStatusRequestQueue) {
-	e.blockStatusRequestQueue = blockStatusRequestQueue
-}
-
-// Get all dispatchers id of the specified schemaID. Including the tableTriggerEventDispatcherID if exists.
-func (e *EventDispatcherManager) GetAllDispatchers(schemaID int64) []common.DispatcherID {
-	dispatcherIDs := e.schemaIDToDispatchers.GetDispatcherIDs(schemaID)
-	if e.tableTriggerEventDispatcher != nil {
-		dispatcherIDs = append(dispatcherIDs, e.tableTriggerEventDispatcher.GetId())
-	}
-	return dispatcherIDs
-}
+// ==== remove and clean related functions END ====

@@ -14,6 +14,7 @@
 package common
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -69,4 +70,30 @@ func (d *DataRange) Merge(other *DataRange) *DataRange {
 		d.EndTs = other.EndTs
 	}
 	return d
+}
+
+// IsTableSpanConsecutive checks if the two table spans are consecutive.
+// The two table spans are consecutive if they are for the same table and the end key of the previous span is the same as the start key of the current span.
+func IsTableSpanConsecutive(prev *heartbeatpb.TableSpan, current *heartbeatpb.TableSpan) bool {
+	if prev.TableID != current.TableID {
+		return false
+	}
+	if bytes.Equal(prev.EndKey, current.StartKey) {
+		return true
+	}
+	return false
+}
+
+// DDLSpanSchemaID is the special schema id for DDL
+var DDLSpanSchemaID int64 = 0
+
+// DDLSpan is the special span for Table Trigger Event Dispatcher
+var DDLSpan = &heartbeatpb.TableSpan{
+	TableID:  0,
+	StartKey: TableIDToComparableSpan(0).StartKey,
+	EndKey:   TableIDToComparableSpan(0).EndKey,
+}
+
+func LessTableSpan(t1, t2 *heartbeatpb.TableSpan) bool {
+	return t1.Less(t2)
 }

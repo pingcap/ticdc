@@ -24,7 +24,6 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/pingcap/failpoint"
-	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -83,7 +82,7 @@ func CheckClusterVersion(
 	ctx context.Context, client pd.Client, pdAddrs []string,
 	credential *security.Credential, errorTiKVIncompat bool,
 ) error {
-	err := CheckStoreVersion(ctx, client, 0 /* check all TiKV */)
+	err := CheckStoreVersion(ctx, client)
 	if err != nil {
 		if errorTiKVIncompat {
 			return err
@@ -199,18 +198,11 @@ func checkPDVersion(ctx context.Context, pdAddr string, credential *security.Cre
 
 // CheckStoreVersion checks whether the given TiKV is compatible with this CDC.
 // If storeID is 0, it checks all TiKV.
-func CheckStoreVersion(ctx context.Context, client pd.Client, storeID uint64) error {
+func CheckStoreVersion(ctx context.Context, client pd.Client) error {
 	failpoint.Inject("GetStoreFailed", func() {
-		failpoint.Return(cerror.WrapError(cerror.ErrGetAllStoresFailed, fmt.Errorf("unknown store %d", storeID)))
+		failpoint.Return(cerror.WrapError(cerror.ErrGetAllStoresFailed, fmt.Errorf("unknown store")))
 	})
-	var stores []*metapb.Store
-	var err error
-	if storeID == 0 {
-		stores, err = client.GetAllStores(ctx, pd.WithExcludeTombstone())
-	} else {
-		stores = make([]*metapb.Store, 1)
-		stores[0], err = client.GetStore(ctx, storeID)
-	}
+	stores, err := client.GetAllStores(ctx, pd.WithExcludeTombstone())
 	if err != nil {
 		return cerror.WrapError(cerror.ErrGetAllStoresFailed, err)
 	}

@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
@@ -32,17 +33,12 @@ import (
 	misc "github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/ticdc/redo/writer/factory"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
-var (
-	_ DDLManager = (*ddlManager)(nil)
-	_ DMLManager = (*dmlManager)(nil)
-)
-
-type redoManager interface {
+// RedoManager defines an interface that is used to manage logs.
+type RedoManager interface {
 	// Run all sub goroutines and block the current one. If an error occurs
 	// in any sub goroutine, return it and cancel all others.
 	//
@@ -60,113 +56,70 @@ type redoManager interface {
 
 	// Enabled returns whether the manager is enabled
 	Enabled() bool
-}
-
-// DDLManager defines an interface that is used to manage ddl logs in owner.
-type DDLManager interface {
-	redoManager
-	EmitDDLEvent(ctx context.Context, ddl *pevent.DDLEvent) error
-	UpdateResolvedTs(ctx context.Context, resolvedTs uint64) error
+	AddTable(span heartbeatpb.TableSpan, startTs uint64)
+	StartTable(span heartbeatpb.TableSpan, startTs uint64)
+	RemoveTable(span heartbeatpb.TableSpan)
+	UpdateResolvedTs(ctx context.Context, span heartbeatpb.TableSpan, resolvedTs uint64) error
 	GetResolvedTs() common.Ts
-}
-
-// NewDisabledDDLManager creates a disabled ddl Manager.
-func NewDisabledDDLManager() *ddlManager {
-	return &ddlManager{
-		logManager: &logManager{enabled: false},
-	}
-}
-
-// NewDDLManager creates a new ddl Manager.
-func NewDDLManager(
-	changefeedID common.ChangeFeedID,
-	cfg *config.ConsistentConfig, ddlStartTs common.Ts,
-) *ddlManager {
-	m := newLogManager(changefeedID, cfg, redo.RedoDDLLogFileType)
-	span := spanz.TableIDToComparableSpan(0)
-	m.AddTable(span, ddlStartTs)
-	return &ddlManager{
-		logManager: m,
-		// The current fakeSpan is meaningless, find a meaningful span in the future.
-		fakeSpan: span,
-	}
-}
-
-type ddlManager struct {
-	*logManager
-	fakeSpan tablepb.Span
-}
-
-func (m *ddlManager) EmitDDLEvent(ctx context.Context, ddl *pevent.DDLEvent) error {
-	return m.logManager.emitRedoEvents(ctx, m.fakeSpan, nil, ddl)
-}
-
-func (m *ddlManager) UpdateResolvedTs(ctx context.Context, resolvedTs uint64) error {
-	return m.logManager.UpdateResolvedTs(ctx, m.fakeSpan, resolvedTs)
-}
-
-func (m *ddlManager) GetResolvedTs() common.Ts {
-	return m.logManager.GetResolvedTs(m.fakeSpan)
-}
-
-// DMLManager defines an interface that is used to manage dml logs in processor.
-type DMLManager interface {
-	redoManager
-	AddTable(span tablepb.Span, startTs uint64)
-	StartTable(span tablepb.Span, startTs uint64)
-	RemoveTable(span tablepb.Span)
-	UpdateResolvedTs(ctx context.Context, span tablepb.Span, resolvedTs uint64) error
-	GetResolvedTs(span tablepb.Span) common.Ts
+	EmitDDLEvent(ctx context.Context, ddl *pevent.DDLEvent) error
 	EmitDMLEvents(
 		ctx context.Context,
-		span tablepb.Span,
-		releaseRowsMemory func(),
+		span heartbeatpb.TableSpan,
 		rows ...*pevent.DMLEvent,
 	) error
 }
 
-// NewDMLManager creates a new dml Manager.
-func NewDMLManager(changefeedID common.ChangeFeedID,
+// NewRedoManager creates a new dml Manager.
+func NewRedoManager(changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
-) *dmlManager {
-	return &dmlManager{
-		logManager: newLogManager(changefeedID, cfg, redo.RedoRowLogFileType),
+) *redoManager {
+	return &redoManager{
+		logManager: newLogManager(changefeedID, cfg),
 	}
 }
 
 // NewDisabledDMLManager creates a disabled dml Manager.
-func NewDisabledDMLManager() *dmlManager {
-	return &dmlManager{
+func NewDisabledDMLManager() *redoManager {
+	return &redoManager{
 		logManager: &logManager{enabled: false},
 	}
 }
 
-type dmlManager struct {
+type redoManager struct {
 	*logManager
+	fakeSpan heartbeatpb.TableSpan
+}
+
+func (m *redoManager) EmitDDLEvent(ctx context.Context, ddl *pevent.DDLEvent) error {
+	return m.logManager.emitRedoEvents(ctx, m.fakeSpan, ddl)
+}
+
+func (m *redoManager) UpdateResolvedTs(ctx context.Context, span heartbeatpb.TableSpan, resolvedTs uint64) error {
+	return m.logManager.UpdateResolvedTs(ctx, span, resolvedTs)
+}
+
+func (m *redoManager) GetResolvedTs() common.Ts {
+	return m.logManager.GetResolvedTs(m.fakeSpan)
 }
 
 // EmitDMLEvents emits row changed events to the redo log.
-func (m *dmlManager) EmitDMLEvents(
+func (m *redoManager) EmitDMLEvents(
 	ctx context.Context,
-	span tablepb.Span,
-	releaseRowsMemory func(),
+	span heartbeatpb.TableSpan,
 	rows ...*pevent.DMLEvent,
 ) error {
 	var events []writer.RedoEvent
 	for _, row := range rows {
 		events = append(events, row)
 	}
-	return m.logManager.emitRedoEvents(ctx, span, releaseRowsMemory, events...)
+	return m.logManager.emitRedoEvents(ctx, span, events...)
 }
 
 type cacheEvents struct {
-	span            tablepb.Span
+	span            heartbeatpb.TableSpan
 	events          []writer.RedoEvent
 	resolvedTs      common.Ts
 	isResolvedEvent bool
-
-	// releaseMemory is used to track memory usage of the events.
-	releaseMemory func()
 }
 
 type statefulRts struct {
@@ -197,7 +150,7 @@ func (s *statefulRts) checkAndSetFlushed(flushed common.Ts) (ok bool) {
 }
 
 // logManager manages redo log writer, buffers un-persistent redo logs, calculates
-// redo log resolved ts. It implements DDLManager and DMLManager interface.
+// redo log resolved ts. It implements redoManager and DMLManager interface.
 type logManager struct {
 	enabled bool
 	cfg     *writer.LogWriterConfig
@@ -214,9 +167,8 @@ type logManager struct {
 	// and flushed is updated in flushLog.
 	rtsMap spanz.SyncMap
 
-	flushing         int64
-	lastFlushTime    time.Time
-	releaseMemoryCbs []func()
+	flushing      int64
+	lastFlushTime time.Time
 
 	metricWriteLogDuration    prometheus.Observer
 	metricFlushLogDuration    prometheus.Observer
@@ -226,7 +178,7 @@ type logManager struct {
 
 func newLogManager(
 	changefeedID common.ChangeFeedID,
-	cfg *config.ConsistentConfig, logType string,
+	cfg *config.ConsistentConfig,
 ) *logManager {
 	// return a disabled Manager if no consistent config or normal consistent level
 	if cfg == nil || !redo.IsConsistentEnabled(cfg.Level) {
@@ -237,7 +189,6 @@ func newLogManager(
 		enabled: true,
 		cfg: &writer.LogWriterConfig{
 			ConsistentConfig:  *cfg,
-			LogType:           logType,
 			CaptureID:         config.GetGlobalServerConfig().AdvertiseAddr,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: cfg.MaxLogSize * redo.Megabyte,
@@ -245,13 +196,13 @@ func newLogManager(
 		logBuffer: chann.NewAutoDrainChann[cacheEvents](),
 		rtsMap:    spanz.SyncMap{},
 		metricWriteLogDuration: misc.RedoWriteLogDurationHistogram.
-			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), logType),
+			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "event"),
 		metricFlushLogDuration: misc.RedoFlushLogDurationHistogram.
-			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), logType),
+			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "event"),
 		metricTotalRowsCount: misc.RedoTotalRowsCountGauge.
-			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), logType),
+			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "event"),
 		metricRedoWorkerBusyRatio: misc.RedoWorkerBusyRatio.
-			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), logType),
+			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "event"),
 	}
 }
 
@@ -282,7 +233,7 @@ func (m *logManager) Run(ctx context.Context, _ ...chan<- error) error {
 func (m *logManager) getFlushDuration() time.Duration {
 	flushIntervalInMs := m.cfg.FlushIntervalInMs
 	defaultFlushIntervalInMs := redo.DefaultFlushIntervalInMs
-	if m.cfg.LogType == redo.RedoDDLLogFileType {
+	if m.cfg.LogType == redo.RedoMetaFileType {
 		flushIntervalInMs = m.cfg.MetaFlushIntervalInMs
 		defaultFlushIntervalInMs = redo.DefaultMetaFlushIntervalInMs
 	}
@@ -314,8 +265,7 @@ func (m *logManager) Enabled() bool {
 // to redo logs and sends to log writer.
 func (m *logManager) emitRedoEvents(
 	ctx context.Context,
-	span tablepb.Span,
-	releaseRowsMemory func(),
+	span heartbeatpb.TableSpan,
 	events ...writer.RedoEvent,
 ) error {
 	return m.withLock(func(m *logManager) error {
@@ -325,7 +275,6 @@ func (m *logManager) emitRedoEvents(
 		case m.logBuffer.In() <- cacheEvents{
 			span:            span,
 			events:          events,
-			releaseMemory:   releaseRowsMemory,
 			isResolvedEvent: false,
 		}:
 		}
@@ -335,7 +284,7 @@ func (m *logManager) emitRedoEvents(
 
 // StartTable starts a table, which means the table is ready to emit redo events.
 // Note that this function should only be called once when adding a new table to processor.
-func (m *logManager) StartTable(span tablepb.Span, resolvedTs uint64) {
+func (m *logManager) StartTable(span heartbeatpb.TableSpan, resolvedTs uint64) {
 	// advance unflushed resolved ts
 	m.onResolvedTsMsg(span, resolvedTs)
 
@@ -348,7 +297,7 @@ func (m *logManager) StartTable(span tablepb.Span, resolvedTs uint64) {
 // UpdateResolvedTs asynchronously updates resolved ts of a single table.
 func (m *logManager) UpdateResolvedTs(
 	ctx context.Context,
-	span tablepb.Span,
+	span heartbeatpb.TableSpan,
 	resolvedTs uint64,
 ) error {
 	return m.withLock(func(m *logManager) error {
@@ -366,7 +315,7 @@ func (m *logManager) UpdateResolvedTs(
 }
 
 // GetResolvedTs returns the resolved ts of a table
-func (m *logManager) GetResolvedTs(span tablepb.Span) common.Ts {
+func (m *logManager) GetResolvedTs(span heartbeatpb.TableSpan) common.Ts {
 	if value, ok := m.rtsMap.Load(span); ok {
 		return value.(*statefulRts).getFlushed()
 	}
@@ -374,7 +323,7 @@ func (m *logManager) GetResolvedTs(span tablepb.Span) common.Ts {
 }
 
 // AddTable adds a new table in redo log manager
-func (m *logManager) AddTable(span tablepb.Span, startTs uint64) {
+func (m *logManager) AddTable(span heartbeatpb.TableSpan, startTs uint64) {
 	rts := newStatefulRts(startTs)
 	_, loaded := m.rtsMap.LoadOrStore(span, &rts)
 	if loaded {
@@ -387,7 +336,7 @@ func (m *logManager) AddTable(span tablepb.Span, startTs uint64) {
 }
 
 // RemoveTable removes a table from redo log manager
-func (m *logManager) RemoveTable(span tablepb.Span) {
+func (m *logManager) RemoveTable(span heartbeatpb.TableSpan) {
 	if _, ok := m.rtsMap.LoadAndDelete(span); !ok {
 		log.Warn("remove a table not maintained in redo log manager",
 			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
@@ -397,9 +346,9 @@ func (m *logManager) RemoveTable(span tablepb.Span) {
 	}
 }
 
-func (m *logManager) prepareForFlush() *spanz.HashMap[common.Ts] {
-	tableRtsMap := spanz.NewHashMap[common.Ts]()
-	m.rtsMap.Range(func(span tablepb.Span, value interface{}) bool {
+func (m *logManager) prepareForFlush() *common.SpanHashMap[common.Ts] {
+	tableRtsMap := common.NewSpanHashMap[common.Ts]()
+	m.rtsMap.Range(func(span heartbeatpb.TableSpan, value interface{}) bool {
 		rts := value.(*statefulRts)
 		unflushed := rts.getUnflushed()
 		flushed := rts.getFlushed()
@@ -412,8 +361,8 @@ func (m *logManager) prepareForFlush() *spanz.HashMap[common.Ts] {
 	return tableRtsMap
 }
 
-func (m *logManager) postFlush(tableRtsMap *spanz.HashMap[common.Ts]) {
-	tableRtsMap.Range(func(span tablepb.Span, flushed uint64) bool {
+func (m *logManager) postFlush(tableRtsMap *common.SpanHashMap[common.Ts]) {
+	tableRtsMap.Range(func(span heartbeatpb.TableSpan, flushed uint64) bool {
 		if value, loaded := m.rtsMap.Load(span); loaded {
 			changed := value.(*statefulRts).checkAndSetFlushed(flushed)
 			if !changed {
@@ -451,8 +400,6 @@ func (m *logManager) flushLog(
 	}
 
 	m.lastFlushTime = time.Now()
-	releaseMemoryCbs := m.releaseMemoryCbs
-	m.releaseMemoryCbs = make([]func(), 0, 1024)
 	go func() {
 		defer atomic.StoreInt64(&m.flushing, 0)
 
@@ -465,9 +412,6 @@ func (m *logManager) flushLog(
 		err := m.withLock(func(m *logManager) error {
 			return m.writer.FlushLog(ctx)
 		})
-		for _, releaseMemory := range releaseMemoryCbs {
-			releaseMemory()
-		}
 		m.metricFlushLogDuration.Observe(time.Since(m.lastFlushTime).Seconds())
 		if err != nil {
 			handleErr(err)
@@ -488,10 +432,6 @@ func (m *logManager) handleEvent(
 	if e.isResolvedEvent {
 		m.onResolvedTsMsg(e.span, e.resolvedTs)
 	} else {
-		if e.releaseMemory != nil {
-			m.releaseMemoryCbs = append(m.releaseMemoryCbs, e.releaseMemory)
-		}
-
 		start := time.Now()
 		err := m.writer.WriteEvents(ctx, e.events...)
 		if err != nil {
@@ -510,7 +450,7 @@ func (m *logManager) handleEvent(
 	return nil
 }
 
-func (m *logManager) onResolvedTsMsg(span tablepb.Span, resolvedTs common.Ts) {
+func (m *logManager) onResolvedTsMsg(span heartbeatpb.TableSpan, resolvedTs common.Ts) {
 	// It's possible that the table is removed while redo log is still in writing.
 	if value, loaded := m.rtsMap.Load(span); loaded {
 		value.(*statefulRts).checkAndSetUnflushed(resolvedTs)
@@ -518,7 +458,6 @@ func (m *logManager) onResolvedTsMsg(span tablepb.Span, resolvedTs common.Ts) {
 }
 
 func (m *logManager) bgUpdateLog(ctx context.Context, flushDuration time.Duration) error {
-	m.releaseMemoryCbs = make([]func(), 0, 1024)
 	ticker := time.NewTicker(flushDuration)
 	defer ticker.Stop()
 	log.Info("redo manager bgUpdateLog is running",

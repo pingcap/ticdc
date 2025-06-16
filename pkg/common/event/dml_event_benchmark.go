@@ -107,15 +107,16 @@ func createBatchDMLEvent(b *testing.B, dmlNum, rowNum int) {
 	tableInfo := helper.GetTableInfo(ddlJob)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	rawKvs := helper.DML2RawKv("test", "t", ts, dml)
+	rawKvs := helper.DML2RawKv(tableInfo.TableName.TableID, ts, dml)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for k := 0; k < b.N; k++ {
 		for i := 0; i < dmlNum; i++ {
-			batchDMLEvent.AppendDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+			dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+			batchDMLEvent.AppendDMLEvent(dmlEvent)
 			for j := 0; j < rowNum; j++ {
 				for _, rawKV := range rawKvs {
-					err := batchDMLEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk)
+					err := dmlEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk)
 					require.NoError(b, err)
 				}
 			}
@@ -133,13 +134,13 @@ func createDMLEvents(b *testing.B, dmlNum, rowNum int) {
 	tableInfo := helper.GetTableInfo(ddlJob)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	rawKvs := helper.DML2RawKv("test", "t", ts, dml)
+	rawKvs := helper.DML2RawKv(tableInfo.TableName.TableID, ts, dml)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for k := 0; k < b.N; k++ {
 		for i := 0; i < dmlNum; i++ {
-			event := newDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-			event.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
+			event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+			event.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount))
 			for j := 0; j < rowNum; j++ {
 				for _, rawKV := range rawKvs {
 					err := event.AppendRow(rawKV, helper.mounter.DecodeToChunk)

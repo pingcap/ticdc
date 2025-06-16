@@ -42,6 +42,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	tiserver "github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/tcpserver"
+	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/tikv/client-go/v2/tikv"
@@ -52,8 +53,9 @@ import (
 )
 
 const (
-	closeServiceTimeout = 15 * time.Second
-	cleanMetaDuration   = 10 * time.Second
+	closeServiceTimeout  = 15 * time.Second
+	cleanMetaDuration    = 10 * time.Second
+	oldArchCheckInterval = 100 * time.Millisecond
 )
 
 type server struct {
@@ -64,11 +66,12 @@ type server struct {
 
 	liveness api.Liveness
 
-	pdClient      pd.Client
-	pdAPIClient   pdutil.PDAPIClient
-	pdEndpoints   []string
-	coordinatorMu sync.Mutex
-	coordinator   tiserver.Coordinator
+	pdClient        pd.Client
+	pdAPIClient     pdutil.PDAPIClient
+	pdEndpoints     []string
+	coordinatorMu   sync.Mutex
+	coordinator     tiserver.Coordinator
+	upstreamManager *upstream.Manager
 
 	// session keeps alive between the server and etcd
 	session *concurrency.Session
@@ -86,8 +89,17 @@ type server struct {
 	// preServices is the preServices will be start before the server is running
 	// And will be closed when the server is closing
 	preServices []common.Closeable
-	// subModules is the modules will be start after PreServices are started
-	// And will be closed when the server is closing
+	// subCommonModules contains common modules that start after PreServices.
+	// These modules will be closed when the server shuts down.
+	// These are shared modules across all components that:
+	// 1. Can coexist with old architecture components
+	// 2. Can guide the old architecture components offline
+	// 3. Must start before subModules
+	subCommonModules []common.SubModule
+	// subModules contains modules that will be started after PreServices are started
+	// and will be closed when the server is closing.
+	// These modules must not start while old-architecture servers are still online
+	// to avoid compatibility issues and unexpected behavior.
 	subModules []common.SubModule
 
 	closed atomic.Bool
@@ -143,25 +155,40 @@ func (c *server) initialize(ctx context.Context) error {
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore: 8,
-		}, c.pdClient, c.RegionCache, c.PDClock,
+		}, c.pdClient, c.RegionCache,
 		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), c.security,
 	)
-	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.PDClock, c.KVStorage)
-	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient, c.PDClock)
+	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.KVStorage)
+	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient)
 	eventService := eventservice.New(eventStore, schemaStore)
-	c.subModules = []common.SubModule{
+	c.upstreamManager = upstream.NewManager(ctx, upstream.NodeTopologyCfg{
+		Info:        c.info,
+		GCServiceID: c.EtcdClient.GetGCServiceID(),
+		SessionTTL:  int64(conf.CaptureSessionTTL),
+	})
+	_, err := c.upstreamManager.AddDefaultUpstream(c.pdEndpoints, conf.Security, c.pdClient, c.EtcdClient.GetEtcdClient())
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	c.subCommonModules = []common.SubModule{
 		nodeManager,
-		subscriptionClient,
-		schemaStore,
 		NewElector(c),
 		NewHttpServer(c, c.tcpServer.HTTP1Listener()),
 		NewGrpcServer(c.tcpServer.GrpcListener()),
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler,
-			c.pdAPIClient, c.PDClock, c.RegionCache),
+	}
+
+	c.subModules = []common.SubModule{
+		subscriptionClient,
+		schemaStore,
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, c.pdAPIClient, c.RegionCache),
 		eventStore,
 		eventService,
 	}
 	// register it into global var
+	for _, subCommonModule := range c.subCommonModules {
+		appctx.SetService(subCommonModule.Name(), subCommonModule)
+	}
 	for _, subModule := range c.subModules {
 		appctx.SetService(subModule.Name(), subModule)
 	}
@@ -234,6 +261,23 @@ func (c *server) Run(ctx context.Context) error {
 
 	log.Info("server initialized", zap.Any("server", c.info))
 	// start all submodules
+	for _, sub := range c.subCommonModules {
+		func(m common.SubModule) {
+			g.Go(func() error {
+				log.Info("starting sub common module", zap.String("module", m.Name()))
+				defer log.Info("sub common module exited", zap.String("module", m.Name()))
+				return m.Run(ctx)
+			})
+		}(sub)
+	}
+
+	// check the environment is valid to start the server
+	err = c.validCheck(ctx)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	// start all submodules
 	for _, sub := range c.subModules {
 		func(m common.SubModule) {
 			g.Go(func() error {
@@ -249,6 +293,38 @@ func (c *server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 	return g.Wait()
+}
+
+// validCheck checks whether the environment is valid to start the server
+// return only when all the old-arch cdc capture is not running
+// old-arch cdc capture will return when receive the unknown etcd key
+// such as the election key for logCoordinator in func `LogCoordinatorKey()`
+func (c *server) validCheck(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		default:
+			// check whether the old-arch capture is running
+			_, captureInfos, err := c.EtcdClient.GetCaptures(ctx)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			oldArchCaptureRunning := false
+			for _, captureInfo := range captureInfos {
+				if !captureInfo.IsNewArch {
+					log.Info("old-arch capture is running, server will not start", zap.String("captureID", captureInfo.ID))
+					oldArchCaptureRunning = true
+					break
+				}
+			}
+			if !oldArchCaptureRunning {
+				log.Info("new arch server is valid to start")
+				return nil
+			}
+			time.Sleep(oldArchCheckInterval)
+		}
+	}
 }
 
 // SelfInfo gets the server info
@@ -306,6 +382,15 @@ func (c *server) Close(ctx context.Context) {
 				zap.Error(err))
 		}
 		log.Info("sub module closed", zap.String("module", subModule.Name()))
+	}
+
+	for _, subCommonModule := range c.subCommonModules {
+		if err := subCommonModule.Close(ctx); err != nil {
+			log.Warn("failed to close sub common module",
+				zap.String("module", subCommonModule.Name()),
+				zap.Error(err))
+		}
+		log.Info("sub common module closed", zap.String("module", subCommonModule.Name()))
 	}
 
 	// delete server info from etcd

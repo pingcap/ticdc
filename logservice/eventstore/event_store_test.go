@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
@@ -80,8 +81,10 @@ func (s *mockSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
 
 func TestEventStoreRegisterDispatcher(t *testing.T) {
 	ctx := context.Background()
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	subClient := NewMockSubscriptionClient()
-	eventStore := New(ctx, fmt.Sprintf("/tmp/%s", t.Name()), subClient, pdutil.NewClock4Test())
+	eventStore := New(ctx, fmt.Sprintf("/tmp/%s", t.Name()), subClient)
 
 	// register a dispatcher
 	{
@@ -91,9 +94,8 @@ func TestEventStoreRegisterDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("e"),
 		}
-		ok, err := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
-		require.Nil(t, err)
 	}
 	// register another dispatcher with the same span
 	{
@@ -103,9 +105,8 @@ func TestEventStoreRegisterDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("e"),
 		}
-		ok, err := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
-		require.Nil(t, err)
 	}
 	// check two dispatchers can reuse the same subscription
 	{
@@ -119,9 +120,8 @@ func TestEventStoreRegisterDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("b"),
 		}
-		ok, err := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
-		require.Nil(t, err)
 	}
 	// check a new subscription is created
 	{
@@ -135,9 +135,8 @@ func TestEventStoreRegisterDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("c"),
 		}
-		ok, err := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		ok := eventStore.RegisterDispatcher(id, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.True(t, ok)
-		require.Nil(t, err)
 	}
 	// check no new subscription is created
 	{

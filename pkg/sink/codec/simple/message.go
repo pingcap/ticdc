@@ -89,7 +89,7 @@ func getDDLType(t timodel.ActionType) MessageType {
 		timodel.ActionSetDefaultValue, timodel.ActionModifyTableComment, timodel.ActionRenameIndex, timodel.ActionAddTablePartition,
 		timodel.ActionDropTablePartition, timodel.ActionModifyTableCharsetAndCollate, timodel.ActionTruncateTablePartition,
 		timodel.ActionAlterIndexVisibility, timodel.ActionMultiSchemaChange, timodel.ActionReorganizePartition,
-		timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning:
+		timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning, timodel.ActionExchangeTablePartition:
 		return DDLTypeAlter
 	default:
 		return DDLTypeQuery
@@ -317,7 +317,7 @@ func newDDLMessage(ddl *commonEvent.DDLEvent) *message {
 	return msg
 }
 
-func (a *JSONMarshaller) newDMLMessage(
+func (a *jsonMarshaller) newDMLMessage(
 	event *commonEvent.RowEvent,
 	onlyHandleKey bool, claimCheckFileName string,
 ) *message {
@@ -354,7 +354,7 @@ func (a *JSONMarshaller) newDMLMessage(
 	return m
 }
 
-func (a *JSONMarshaller) formatColumns(
+func (a *jsonMarshaller) formatColumns(
 	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool, columnSelector columnselector.Selector,
 ) map[string]interface{} {
 	colInfos := tableInfo.GetColumns()

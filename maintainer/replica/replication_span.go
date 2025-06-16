@@ -23,10 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
-	"github.com/pingcap/ticdc/pkg/spanz"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -46,18 +43,15 @@ type SpanReplication struct {
 	groupID     replica.GroupID
 	status      *atomic.Pointer[heartbeatpb.TableSpanStatus]
 	blockState  *atomic.Pointer[heartbeatpb.State]
-
-	pdClock pdutil.Clock
 }
 
 func NewSpanReplication(cfID common.ChangeFeedID,
 	id common.DispatcherID,
-	pdClock pdutil.Clock,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
 ) *SpanReplication {
-	r := newSpanReplication(cfID, id, pdClock, SchemaID, span)
+	r := newSpanReplication(cfID, id, SchemaID, span)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
 		ID:           id.ToPB(),
 		CheckpointTs: checkpointTs,
@@ -77,13 +71,12 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 func NewWorkingSpanReplication(
 	cfID common.ChangeFeedID,
 	id common.DispatcherID,
-	pdClock pdutil.Clock,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	status *heartbeatpb.TableSpanStatus,
 	nodeID node.ID,
 ) *SpanReplication {
-	r := newSpanReplication(cfID, id, pdClock, SchemaID, span)
+	r := newSpanReplication(cfID, id, SchemaID, span)
 	// Must set Node ID when creating a working span replication
 	r.SetNodeID(nodeID)
 	r.initStatus(status)
@@ -101,10 +94,9 @@ func NewWorkingSpanReplication(
 	return r
 }
 
-func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, pdClock pdutil.Clock, SchemaID int64, span *heartbeatpb.TableSpan) *SpanReplication {
+func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, SchemaID int64, span *heartbeatpb.TableSpan) *SpanReplication {
 	r := &SpanReplication{
 		ID:           id,
-		pdClock:      pdClock,
 		schemaID:     SchemaID,
 		Span:         span,
 		ChangefeedID: cfID,
@@ -128,10 +120,10 @@ func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
 
 func (r *SpanReplication) initGroupID() {
 	r.groupID = replica.DefaultGroupID
-	span := tablepb.Span{TableID: r.Span.TableID, StartKey: r.Span.StartKey, EndKey: r.Span.EndKey}
+	span := heartbeatpb.TableSpan{TableID: r.Span.TableID, StartKey: r.Span.StartKey, EndKey: r.Span.EndKey}
 	// check if the table is split
-	totalSpan := spanz.TableIDToComparableSpan(span.TableID)
-	if !spanz.IsSubSpan(span, totalSpan) {
+	totalSpan := common.TableIDToComparableSpan(span.TableID)
+	if !common.IsSubSpan(span, totalSpan) {
 		log.Warn("invalid span range", zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("id", r.ID.String()), zap.Int64("tableID", span.TableID),
 			zap.String("totalSpan", totalSpan.String()),
@@ -184,10 +176,6 @@ func (r *SpanReplication) GetSchemaID() int64 {
 	return r.schemaID
 }
 
-func (r *SpanReplication) GetPDClock() pdutil.Clock {
-	return r.pdClock
-}
-
 func (r *SpanReplication) SetSchemaID(schemaID int64) {
 	r.schemaID = schemaID
 }
@@ -220,8 +208,6 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 }
 
 func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.TargetMessage, error) {
-	ts := r.pdClock.CurrentTS()
-
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
@@ -231,7 +217,6 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 				SchemaID:     r.schemaID,
 				Span:         r.Span,
 				StartTs:      r.status.Load().CheckpointTs,
-				CurrentPdTs:  ts,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		}), nil

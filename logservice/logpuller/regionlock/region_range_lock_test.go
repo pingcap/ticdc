@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -255,7 +255,7 @@ func TestCalculateMinResolvedTs(t *testing.T) {
 
 func Benchmark100KRegions(b *testing.B) {
 	ctx := context.Background()
-	startKey, endKey := spanz.GetTableRange(1)
+	startKey, endKey := common.GetTableRange(1)
 	l := NewRangeLock(1, startKey, endKey, 100)
 
 	for i := 1; i <= 100*1000; i++ {
@@ -284,4 +284,51 @@ func Benchmark100KRegions(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		l.ResolvedTs()
 	}
+}
+
+func TestRangeLockGetHeapMinTs(t *testing.T) {
+	t.Parallel()
+
+	updateLockedRangeResolvedTs := func(l *RangeLock, state *LockedRangeState, resolvedTs uint64) {
+		state.ResolvedTs.Store(resolvedTs)
+		l.UpdateLockedRangeStateHeap(state)
+	}
+
+	// Test case 1: empty heap
+	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	require.Equal(t, uint64(100), l.GetHeapMinTs())
+
+	// Test case 2: Lock a range and then unlock it
+	l = NewRangeLock(1, []byte("a"), []byte("z"), 50)
+	res := l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 101)
+	require.Equal(t, LockRangeStatusSuccess, res.Status)
+	require.Equal(t, uint64(50), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+	res = l.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 60)
+	require.Equal(t, LockRangeStatusSuccess, res.Status)
+	require.Equal(t, uint64(60), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+	l.UnlockRange([]byte("a"), []byte("m"), 1, 1, 100)
+	require.Equal(t, uint64(60), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+	l.UnlockRange([]byte("m"), []byte("z"), 2, 1, 100)
+	require.Equal(t, uint64(100), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+
+	l = NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	res = l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 101)
+	require.Equal(t, LockRangeStatusSuccess, res.Status)
+	res = l.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 102)
+	require.Equal(t, LockRangeStatusSuccess, res.Status)
+	require.Equal(t, uint64(101), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+
+	// Update the resolvedTs of the first range
+	updateLockedRangeResolvedTs(l, res.LockedRangeState, 50)
+	require.Equal(t, uint64(50), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 }
