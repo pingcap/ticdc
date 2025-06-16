@@ -607,7 +607,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		// If it's closed successfully, we could clean it up.
 		// TODO: we need to consider how to deal with the checkpointTs of the removed dispatcher if the message will be discarded.
 		if heartBeatInfo.IsRemoving {
-			watermark, ok := dispatcherItem.TryClose()
+			watermark, ok := dispatcherItem.TryClose(false)
 			if ok {
 				// it's ok to clean the dispatcher
 				message.Watermark.UpdateMin(watermark)
@@ -821,7 +821,7 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
 			}
 
-			watermark, ok := dispatcher.TryClose()
+			watermark, ok := dispatcher.TryClose(true)
 			if ok {
 				if watermark.CheckpointTs < minCheckpointTs {
 					minCheckpointTs = watermark.CheckpointTs
@@ -940,7 +940,7 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 			}
 		}
 
-		_, ok := dispatcher.TryClose()
+		_, ok := dispatcher.TryClose(false)
 		if !ok {
 			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcher)
 		} else {
@@ -957,7 +957,7 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 		ok := false
 		count := 0
 		for !ok {
-			_, ok = dispatcher.TryClose()
+			_, ok = dispatcher.TryClose(false)
 			time.Sleep(10 * time.Millisecond)
 			count += 1
 			if count%100 == 0 {
@@ -994,7 +994,7 @@ func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 		// We don't want to block the ds handle function, so we just try 10 times.
 		// If the dispatcher is not closed, we can wait for the next message to check it again
 		for !ok && count < 10 {
-			_, ok = dispatcherItem.TryClose()
+			_, ok = dispatcherItem.TryClose(false)
 			time.Sleep(10 * time.Millisecond)
 			count += 1
 			if count%5 == 0 {
