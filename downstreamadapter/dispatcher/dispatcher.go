@@ -276,7 +276,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 				zap.Int("length", len(dispatcherEvents)),
 				zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
-				zap.Uint64("redoGlobalTs", *d.redoGlobalTs),
+				zap.Uint64("redoGlobalTs", atomic.LoadUint64(d.redoGlobalTs)),
 			)
 		default:
 			log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents)))
