@@ -185,6 +185,11 @@ for ((i = 0; i <= 50; i++)); do
 	sleep 3
 done
 
+# for the next gen, we should create they keyspace info to replication worker
+if [ "$IS_NEXT_GEN" = "1" ]; then
+    curl -X POST "http://$TIKV_WORKER_HOST:$TIKV_WORKER_PORT/cdc/keyspace?keyspace_id=1" -H 'Content-Type: Application/json' -d "{\"pd_url\": \"http://$UP_PD_HOST_1:$UP_PD_PORT_1\", \"cdc_addr\": \"$addr_url\"}"
+fi
+
 set +x
 
 cd $pwd
