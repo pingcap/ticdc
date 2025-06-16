@@ -147,9 +147,9 @@ func NewEventDispatcherManager(
 		ForceReplicate: cfConfig.ForceReplicate,
 		FilterConfig:   toFilterConfigPB(cfConfig.Filter),
 	}
-	integrityCfg := &eventpb.IntegrityConfig{
-		IntegrityCheckLevel:   cfConfig.SinkConfig.Integrity.IntegrityCheckLevel,
-		CorruptionHandleLevel: cfConfig.SinkConfig.Integrity.CorruptionHandleLevel,
+	var integrityCfg *eventpb.IntegrityConfig
+	if cfConfig.SinkConfig.Integrity != nil {
+		integrityCfg = cfConfig.SinkConfig.Integrity.ToPB()
 	}
 	log.Info("New EventDispatcherManager",
 		zap.Stringer("changefeedID", changefeedID),

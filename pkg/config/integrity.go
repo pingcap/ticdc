@@ -15,6 +15,7 @@ package config
 
 import (
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/eventpb"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
@@ -68,4 +69,11 @@ func (c *IntegrityConfig) Enabled() bool {
 // ErrorHandle returns true if the corruption handle level is error.
 func (c *IntegrityConfig) ErrorHandle() bool {
 	return c.CorruptionHandleLevel == CorruptionHandleLevelError
+}
+
+func (c *IntegrityConfig) ToPB() *eventpb.IntegrityConfig {
+	return &eventpb.IntegrityConfig{
+		IntegrityCheckLevel:   c.IntegrityCheckLevel,
+		CorruptionHandleLevel: c.CorruptionHandleLevel,
+	}
 }
