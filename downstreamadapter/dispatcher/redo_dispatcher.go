@@ -553,7 +553,7 @@ func (rd *RedoDispatcher) GetFilterConfig() *eventpb.FilterConfig {
 
 func (rd *RedoDispatcher) Remove() {
 	if rd.isRemoving.CompareAndSwap(false, true) {
-		log.Info("Remove dispatcher",
+		log.Info("remove dispatcher",
 			zap.Stringer("dispatcher", rd.id),
 			zap.Stringer("changefeedID", rd.changefeedID),
 			zap.String("table", common.FormatTableSpan(rd.tableSpan)))

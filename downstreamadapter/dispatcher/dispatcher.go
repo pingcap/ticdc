@@ -461,7 +461,7 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 // it also remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *Dispatcher) Remove() {
 	if d.isRemoving.CompareAndSwap(false, true) {
-		log.Info("Remove dispatcher",
+		log.Info("remove dispatcher",
 			zap.Stringer("dispatcher", d.id),
 			zap.Stringer("changefeedID", d.changefeedID),
 			zap.String("table", common.FormatTableSpan(d.tableSpan)))
