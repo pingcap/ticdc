@@ -129,10 +129,12 @@ func (c *Controller) GetTaskSizeByNodeID(id node.ID) int {
 }
 
 func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {
-	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *replica.SpanReplication) bool {
-		c.replicationDB.AddReplicatingSpan(stm)
-		return true
-	})
+	if tableMap != nil {
+		tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *replica.SpanReplication) bool {
+			c.replicationDB.AddReplicatingSpan(stm)
+			return true
+		})
+	}
 }
 
 func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
