@@ -110,17 +110,17 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	}
 
 	// Remove this after testing.
-	if testCounter.Add(1)%10 == 0 && as.settings.Load().algorithm == MemoryControlForEventCollector {
-		log.Info("fizz drop event", zap.Any("event", event.event))
-		dropEvent := handler.OnDrop(event.event)
-		if dropEvent != nil {
-			event.eventType = handler.GetType(dropEvent.(T))
-			event.event = dropEvent.(T)
-			path.pendingQueue.PushBack(event)
-			path.dead.Store(true)
-			return true
-		}
-	}
+	// if testCounter.Add(1)%10 == 0 && as.settings.Load().algorithm == MemoryControlForEventCollector {
+	// 	log.Info("fizz drop event", zap.Any("event", event.event))
+	// 	dropEvent := handler.OnDrop(event.event)
+	// 	if dropEvent != nil {
+	// 		event.eventType = handler.GetType(dropEvent.(T))
+	// 		event.event = dropEvent.(T)
+	// 		path.pendingQueue.PushBack(event)
+	// 		path.dead.Store(true)
+	// 		return true
+	// 	}
+	// }
 
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
