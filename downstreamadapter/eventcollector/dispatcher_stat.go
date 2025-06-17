@@ -162,7 +162,7 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 }
 
 func (d *dispatcherStat) reset(serverID node.ID) {
-	resetTs := d.lastEventCommitTs.Load() - 1
+	resetTs := d.getResetTs()
 	d.handshaked.Store(false)
 	// reset the dispatcher's path in the dynamic stream
 	d.eventCollector.ds.RemovePath(d.getDispatcherID())
@@ -176,6 +176,11 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 		zap.Stringer("dispatcher", d.target.GetId()),
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("resetTs", resetTs))
+}
+
+func (d *dispatcherStat) getResetTs() uint64 {
+	// resetTs must be larger than the startTs, otherwise it will cause panic in eventStore.
+	return max(d.lastEventCommitTs.Load()-1, d.target.GetStartTs())
 }
 
 func (d *dispatcherStat) remove() {
@@ -332,22 +337,6 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 	}
 
 	return true
-}
-
-// preCheckEvent checks if an event should be pushed into the dynamic stream (DS).
-// It performs a preliminary validation before processing the event:
-//  1. For HandshakeEvent, ReadyEvent, and NotReusableEvent, it always returns true
-//     as these are control events that should always be processed.
-//  2. For all other event types, it checks if the dispatcher has received a handshake event.
-//     This ensures that data events are only processed after proper initialization.
-func (d *dispatcherStat) preCheckEvent(event dispatcher.DispatcherEvent) bool {
-	switch event.GetType() {
-	case commonEvent.TypeHandshakeEvent,
-		commonEvent.TypeReadyEvent,
-		commonEvent.TypeNotReusableEvent:
-		return true
-	}
-	return d.handshaked.Load()
 }
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
