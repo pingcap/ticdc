@@ -24,8 +24,8 @@ Options:
   --cse-ctl.binpath PATH        Path to cse-ctl binary (default: ./bin/cse-ctl)
   --tikv-worker.binpath PATH    Path to tikv-worker binary (default: ./bin/tikv-worker)
   --keyspace-name NAME          Keyspace name (default: tenant-1)
-  --upstream-port-offset NUM    Upstream port offset (default: 10000)
-  --cdc-pd-port-offset NUM      CDC PD port offset (default: 20000)
+  --upstream-port-offset NUM    Upstream port offset (default: 0)
+  --cdc-pd-port NUM             CDC PD port (default: 22379)
   -h, --help                    Show this help message and exit
 
 Environment Variables:
@@ -50,10 +50,8 @@ PD_BINPATH=$PD_BINPATH
 CSE_CTL_BINPATH=$CSE_CTL_BINPATH
 TIKV_WORKER_BINPATH=$TIKV_WORKER_BINPATH
 UPSTREAM_PORT_OFFSET=$UPSTREAM_PORT_OFFSET
-CDC_PD_PORT_OFFSET=$CDC_PD_PORT_OFFSET
 PD_PORT=$PD_PORT
 CDC_PD_PORT=$CDC_PD_PORT
-CDC_PORT=$CDC_PORT
 MINIO_CONTAINER_NAME=$MINIO_CONTAINER_NAME
 MINIO_ROOT_USER=$MINIO_ROOT_USER
 MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
@@ -117,9 +115,9 @@ while [[ $# -gt 0 ]]; do
             UPSTREAM_PORT_OFFSET="$2"
             shift 2
             ;;
-        --cdc-pd-port-offset)
+        --cdc-pd-port)
             # this port is for pd which is used by cdc only
-            CDC_PD_PORT_OFFSET="$2"
+            CDC_PD_PORT=$2
             shift 2
             ;;
         *)
@@ -156,13 +154,11 @@ fi
 
 : "${KEYSPACE_NAME:=tenant-1}"
 
-: "${UPSTREAM_PORT_OFFSET:=10000}"
-: "${CDC_PD_PORT_OFFSET:=20000}"
+: "${UPSTREAM_PORT_OFFSET:=0}"
 
 PD_PORT=$((2379 + UPSTREAM_PORT_OFFSET))
 TIDB_PORT=$((4000 + UPSTREAM_PORT_OFFSET))
-CDC_PD_PORT=$((2379 + CDC_PD_PORT_OFFSET))
-CDC_PORT=$((8300 + CDC_PD_PORT_OFFSET))
+: "${CDC_PD_PORT:=22379}"
 
 check_bin "$DB_BINPATH" || exit 1
 check_bin "$KV_BINPATH" || exit 1
@@ -254,7 +250,7 @@ EOF
 
 echo "Start CDC PD cluster and wait for it to be ready"
 nohup tiup playground "$TIDB_VERSION" --tag "$TIDB_PLAYGROUND_TAG_CDC_PD" \
-     --port-offset "$CDC_PD_PORT_OFFSET" \
+     --pd.port "$CDC_PD_PORT" \
      --pd 1 \
      --kv 0 \
      --db 0 &
@@ -284,7 +280,10 @@ dump_variables
 
 
 # Start a downstream TiDB
-nohup tiup playground "$TIDB_VERSION" --tag "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" --pd.host "$DOWN_PD_HOST" --pd.port "$DOWN_PD_PORT" --kv.host "$DOWN_TIKV_HOST" --kv.port "$DOWN_TIKV_PORT" --db.host "$DOWN_TIDB_HOST" --pd.port "$DOWN_TIDB_PORT" &
+nohup tiup playground "$TIDB_VERSION" --tag "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" \
+    --pd.host "$DOWN_PD_HOST" --pd.port "$DOWN_PD_PORT" \
+    --kv.host "$DOWN_TIKV_HOST" --kv.port "$DOWN_TIKV_PORT" \
+    --db.host "$DOWN_TIDB_HOST" --db.port "$DOWN_TIDB_PORT" &
 DOWNSTREAM_TIUP_PID=$!
 echo "downstream tiup pid: $CDC_PD_TIUP_PID"
 check_port_available "$DOWN_TIDB_PORT" "Wait for downstream to be available"
