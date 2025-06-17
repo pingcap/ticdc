@@ -15,7 +15,6 @@ package redo
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/redo/writer"
@@ -41,15 +41,17 @@ type Sink struct {
 	ddlWriter writer.RedoLogWriter
 	dmlWriter writer.RedoLogWriter
 
-	rwlock sync.RWMutex
-	// TODO: remove logBuffer and use writer directly after file logWriter is deprecated.
 	logBuffer chan writer.RedoEvent
 	closed    int32
 
-	// metricWriteLogDuration    prometheus.Observer
-	// metricFlushLogDuration    prometheus.Observer
-	// metricTotalRowsCount      prometheus.Counter
-	// metricRedoWorkerBusyRatio prometheus.Counter
+	statistics *metrics.Statistics
+}
+
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
+	if cfg == nil || !redo.IsConsistentEnabled(cfg.Level) {
+		return nil
+	}
+	return nil
 }
 
 // New creates a new redo sink.
@@ -71,15 +73,8 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: cfg.MaxLogSize * redo.Megabyte,
 		},
-		logBuffer: make(chan writer.RedoEvent, 32),
-		// metricWriteLogDuration: misc.RedoWriteLogDurationHistogram.
-		// 	WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "event"),
-		// metricFlushLogDuration: misc.RedoFlushLogDurationHistogram.
-		// 	WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "event"),
-		// metricTotalRowsCount: misc.RedoTotalRowsCountGauge.
-		// 	WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "event"),
-		// metricRedoWorkerBusyRatio: misc.RedoWorkerBusyRatio.
-		// 	WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "event"),
+		logBuffer:  make(chan writer.RedoEvent, 32),
+		statistics: metrics.NewStatistics(changefeedID, "redo"),
 	}
 	start := time.Now()
 	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
@@ -119,27 +114,33 @@ func (s *Sink) Run(ctx context.Context) error {
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		return s.ddlWriter.WriteEvents(s.ctx, e)
+		return s.statistics.RecordDDLExecution(func() error {
+			return s.ddlWriter.WriteEvents(s.ctx, e)
+		})
 	}
 	return nil
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	event.Rewind()
-	for {
-		row, ok := event.GetNextRow()
-		if !ok {
-			return
-		}
+	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+		event.Rewind()
+		for {
+			row, ok := event.GetNextRow()
+			if !ok {
+				break
+			}
 
-		s.logBuffer <- &commonEvent.RedoRowEvent{
-			StartTs:   event.StartTs,
-			CommitTs:  event.CommitTs,
-			Event:     row,
-			TableInfo: event.TableInfo,
-			Callback:  event.PostFlush,
+			s.logBuffer <- &commonEvent.RedoRowEvent{
+				StartTs:   event.StartTs,
+				CommitTs:  event.CommitTs,
+				Event:     row,
+				TableInfo: event.TableInfo,
+				Callback:  event.PostFlush,
+			}
 		}
-	}
+		// batchSize, batchWriteBytes, err
+		return int(event.Len()), event.GetRowsSize(), nil
+	})
 }
 
 func (s *Sink) IsNormal() bool {
@@ -176,6 +177,9 @@ func (s *Sink) Close(_ bool) {
 				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 				zap.Error(err))
 		}
+	}
+	if s.statistics != nil {
+		s.statistics.Close()
 	}
 	log.Info("redo manager closed",
 		zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),

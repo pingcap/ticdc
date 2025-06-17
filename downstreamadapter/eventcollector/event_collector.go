@@ -96,6 +96,9 @@ type EventCollector struct {
 	metricDispatcherReceivedKVEventCount         prometheus.Counter
 	metricDispatcherReceivedResolvedTsEventCount prometheus.Counter
 	metricReceiveEventLagDuration                prometheus.Observer
+
+	metricRedoDispatcherReceivedKVEventCount         prometheus.Counter
+	metricRedoDispatcherReceivedResolvedTsEventCount prometheus.Counter
 }
 
 func New(serverId node.ID) *EventCollector {
@@ -112,6 +115,9 @@ func New(serverId node.ID) *EventCollector {
 		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
 		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs"),
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
+
+		metricRedoDispatcherReceivedKVEventCount:         metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent", "redo"),
+		metricRedoDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "redo"),
 	}
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
 	eventCollector.ds = NewEventDynamicStream(eventCollector)
@@ -414,6 +420,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 			return context.Cause(ctx)
 		case targetMessage := <-inCh:
 			ds := c.getDynamicStream(targetMessage.Redo)
+			metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(targetMessage.Redo)
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
@@ -426,9 +433,9 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
 							resolvedTsCount += resolvedEvent.Len()
 						}
-						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
+						metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					default:
-						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					}
 				default:
@@ -477,4 +484,11 @@ func (c *EventCollector) getDynamicStream(redo bool) dynstream.DynamicStream[com
 		return c.redoDs
 	}
 	return c.ds
+}
+
+func (c *EventCollector) getMetric(redo bool) (prometheus.Counter, prometheus.Counter) {
+	if redo {
+		return c.metricRedoDispatcherReceivedKVEventCount, c.metricRedoDispatcherReceivedResolvedTsEventCount
+	}
+	return c.metricDispatcherReceivedKVEventCount, c.metricDispatcherReceivedResolvedTsEventCount
 }

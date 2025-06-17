@@ -138,6 +138,10 @@ type EventDispatcherManager struct {
 	metricCheckpointTsLag                  prometheus.Gauge
 	metricResolvedTs                       prometheus.Gauge
 	metricResolvedTsLag                    prometheus.Gauge
+
+	metricRedoTableTriggerEventDispatcherCount prometheus.Gauge
+	metricRedoEventDispatcherCount             prometheus.Gauge
+	metricRedoCreateDispatcherDuration         prometheus.Observer
 }
 
 // return actual startTs of the table trigger event dispatcher
@@ -194,6 +198,10 @@ func NewEventDispatcherManager(
 		metricCheckpointTsLag:                  metrics.EventDispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTs:                       metrics.EventDispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTsLag:                    metrics.EventDispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+		// redo
+		metricRedoTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
+		metricRedoEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
+		metricRedoCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
 	}
 
 	// Set the epoch and maintainerID of the event dispatcher manager
@@ -644,12 +652,19 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 		redoSeq := e.redoDispatcherMap.Set(rd.GetId(), rd)
 		rd.SetSeq(redoSeq)
 
+		if rd.IsTableTriggerEventDispatcher() {
+			e.metricRedoTableTriggerEventDispatcherCount.Inc()
+		} else {
+			e.metricRedoEventDispatcherCount.Inc()
+		}
+
 		log.Info("new redo dispatcher created",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
 			zap.Int64("startTs", newStartTsList[idx]))
 	}
+	e.metricRedoCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new redo dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Int("count", len(dispatcherIds)),
@@ -1213,7 +1228,7 @@ func (e *EventDispatcherManager) MergeRedoDispatcher(dispatcherIDs []common.Disp
 	seq := e.redoDispatcherMap.Set(mergedDispatcherID, mergedDispatcher)
 	mergedDispatcher.SetSeq(seq)
 	e.redoSchemaIDToDispatchers.Set(mergedDispatcher.GetSchemaID(), mergedDispatcherID)
-	// e.metricEventDispatcherCount.Inc()
+	e.metricRedoEventDispatcherCount.Inc()
 
 	for _, id := range dispatcherIDs {
 		dispatcher, ok := e.redoDispatcherMap.Get(id)
@@ -1353,6 +1368,10 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
 
 	e.closed.Store(true)
 	log.Info("event dispatcher manager closed",
@@ -1567,6 +1586,9 @@ func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, sch
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
 	if e.redoTableTriggerEventDispatcher != nil && e.redoTableTriggerEventDispatcher.GetId() == id {
 		e.redoTableTriggerEventDispatcher = nil
+		e.metricRedoTableTriggerEventDispatcherCount.Dec()
+	} else {
+		e.metricRedoEventDispatcherCount.Dec()
 	}
 	log.Info("redo table event dispatcher completely stopped, and delete it from event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID),
@@ -1603,6 +1625,10 @@ func (e *EventDispatcherManager) cleanMetrics() {
 	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
 }
 
 // ==== remove and clean related functions END ====

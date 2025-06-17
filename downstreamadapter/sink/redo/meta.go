@@ -453,8 +453,6 @@ func (m *RedoMeta) cleanup(logType string) {
 // only owner should call this method.
 func (m *RedoMeta) Cleanup(ctx context.Context) error {
 	m.cleanup(redo.RedoMetaFileType)
-	m.cleanup(redo.RedoRowLogFileType)
-	m.cleanup(redo.RedoDDLLogFileType)
 	return m.deleteAllLogs(ctx)
 }
 
