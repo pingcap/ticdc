@@ -43,7 +43,6 @@ func TestLoadFromCheckPoint(t *testing.T) {
 	useCheckpoint, err = loadFromCheckPoint(context.Background(), db, "test", "test", "123")
 	require.NoError(t, err)
 	require.True(t, useCheckpoint)
-
 }
 
 func TestInitChunks(t *testing.T) {
