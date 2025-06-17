@@ -253,8 +253,6 @@ func (oc *Controller) pollQueueingOperator() (
 		delete(oc.operators, opID)
 		switch op.Type() {
 		case "occupy", "merge", "split":
-		case "move":
-			atomic.AddInt64(&oc.ops, -2)
 		default:
 			atomic.AddInt64(&oc.ops, -1)
 		}
