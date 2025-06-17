@@ -15,12 +15,13 @@ package config
 
 import (
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/eventpb"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
-// Config represents integrity check config for a changefeed.
-type Config struct {
+// IntegrityConfig represents integrity check config for a changefeed.
+type IntegrityConfig struct {
 	IntegrityCheckLevel   string `toml:"integrity-check-level" json:"integrity-check-level"`
 	CorruptionHandleLevel string `toml:"corruption-handle-level" json:"corruption-handle-level"`
 }
@@ -41,7 +42,7 @@ const (
 )
 
 // Validate the integrity config.
-func (c *Config) Validate() error {
+func (c *IntegrityConfig) Validate() error {
 	if c.IntegrityCheckLevel != CheckLevelNone &&
 		c.IntegrityCheckLevel != CheckLevelCorrectness {
 		return cerror.ErrInvalidReplicaConfig.GenWithStackByArgs()
@@ -61,11 +62,18 @@ func (c *Config) Validate() error {
 }
 
 // Enabled returns true if the integrity check is enabled.
-func (c *Config) Enabled() bool {
+func (c *IntegrityConfig) Enabled() bool {
 	return c.IntegrityCheckLevel == CheckLevelCorrectness
 }
 
 // ErrorHandle returns true if the corruption handle level is error.
-func (c *Config) ErrorHandle() bool {
+func (c *IntegrityConfig) ErrorHandle() bool {
 	return c.CorruptionHandleLevel == CorruptionHandleLevelError
+}
+
+func (c *IntegrityConfig) ToPB() *eventpb.IntegrityConfig {
+	return &eventpb.IntegrityConfig{
+		IntegrityCheckLevel:   c.IntegrityCheckLevel,
+		CorruptionHandleLevel: c.CorruptionHandleLevel,
+	}
 }

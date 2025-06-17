@@ -85,6 +85,14 @@ func (m *mockEventDispatcher) GetBDRMode() bool {
 	return false
 }
 
+func (m *mockEventDispatcher) GetTimezone() string {
+	return "system"
+}
+
+func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
+	return nil
+}
+
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id
@@ -102,7 +110,7 @@ func TestProcessMessage(t *testing.T) {
 	did := common.NewDispatcherID()
 	ch := make(chan *messaging.TargetMessage, receiveChanSize)
 	go func() {
-		c.runProcessMessage(ctx, ch)
+		c.runDispatchMessage(ctx, ch)
 	}()
 
 	var seq atomic.Uint64

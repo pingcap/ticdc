@@ -30,7 +30,7 @@ import (
 // return error when calculate the checksum.
 // return false if the checksum is not matched
 func (m *mounter) verifyChecksum(
-	tableInfo *common.TableInfo, row chunk.Row, key kv.Key, handle kv.Handle, decoder *rowcodec.ChunkDecoder,
+	tableInfo *common.TableInfo, row chunk.Row, key kv.Key, handle kv.Handle, decoder *rowcodec.ChunkDecoder, isPreRow bool,
 ) (uint32, bool, error) {
 	if !m.integrity.Enabled() {
 		return 0, true, nil
@@ -42,9 +42,8 @@ func (m *mounter) verifyChecksum(
 		// skip old value checksum verification for the checksum v1, since it cannot handle
 		// Update / Delete event correctly, after Add Column / Drop column DDL,
 		// since the table schema does not contain complete column information.
-		return m.verifyColumnChecksum(columnInfos, row, decoder)
+		return m.verifyColumnChecksum(columnInfos, row, decoder, isPreRow)
 	case 1, 2:
-
 		expected, matched, err := verifyRawBytesChecksum(columnInfos, row, decoder, key, handle, m.tz)
 		if err != nil {
 			log.Error("calculate raw checksum failed",
@@ -70,7 +69,7 @@ func (m *mounter) verifyChecksum(
 
 func (m *mounter) verifyColumnChecksum(
 	columnInfos []*model.ColumnInfo, row chunk.Row,
-	decoder *rowcodec.ChunkDecoder,
+	decoder *rowcodec.ChunkDecoder, skipFail bool,
 ) (uint32, bool, error) {
 	// if the checksum cannot be found, which means the upstream TiDB checksum is not enabled,
 	// so return matched as true to skip check the event.
@@ -96,6 +95,13 @@ func (m *mounter) verifyColumnChecksum(
 		return checksum, true, nil
 	}
 
+	if !skipFail {
+		log.Error("cannot found the extra checksum, the first checksum mismatched",
+			zap.Uint32("checksum", checksum), zap.Uint32("first", first), zap.Uint32("extra", extra),
+			zap.Any("columnInfos", columnInfos), zap.Any("tz", m.tz))
+		return checksum, false, nil
+	}
+
 	if time.Since(m.lastSkipOldValueTime) > time.Minute {
 		log.Warn("checksum mismatch on the old value, "+
 			"this may caused by Add Column / Drop Column executed, skip verification",
@@ -118,10 +124,6 @@ func calculateColumnChecksum(
 		}
 		columns = append(columns, column)
 	}
-	// FIXME: why need sort?
-	// sort.Slice(columns, func(i, j int) bool {
-	// 	return columns[i].ID < columns[j].ID
-	// })
 
 	calculator := rowcodec.RowData{
 		Cols: columns,
