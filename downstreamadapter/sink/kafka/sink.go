@@ -528,7 +528,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					}
 				}
 			}
-
+			log.Info("send watermark ts to kafka", zap.Uint64("watermark", ts))
 			checkpointTsMessageCount.Inc()
 			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
 		}
