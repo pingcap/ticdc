@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -17,7 +16,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test")
@@ -1115,11 +1113,10 @@ func TestHandleSingleDataEvents(t *testing.T) {
 }
 
 func TestHandleBatchDMLEvent(t *testing.T) {
-	// t.Parallel()
 
-	// normalHandleEvents := func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
-	// 	return true
-	// }
+	normalHandleEvents := func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
 
 	tests := []struct {
 		name         string
@@ -1180,21 +1177,24 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-		//mockDisp.handleEvents = normalHandleEvents
-		stat := newDispatcherStat(mockDisp, nil, nil, 0)
-		stat.lastEventCommitTs.Store(tt.lastCommitTs)
-		log.Info("fizz test", zap.Any("event", tt.event.Event), zap.String("test name", tt.name), zap.Stringer("dispatcher", stat.target.GetId()), zap.Stringer("from", tt.from), zap.Uint64("lastCommitTs", tt.lastCommitTs), zap.Uint64("eventCommitTs", tt.event.Event.GetCommitTs()))
-		if tt.tableInfo != nil {
-			stat.tableInfo.Store(tt.tableInfo)
-		}
-		if stat.tableInfo.Load() == nil {
-			require.Panics(t, func() {
-				stat.handleBatchDMLEvent(tt.event, tt.from)
-			})
-			return
-		}
-		got := stat.handleBatchDMLEvent(tt.event, tt.from)
-		require.Equal(t, tt.want, got)
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+			mockDisp.handleEvents = normalHandleEvents
+			stat := newDispatcherStat(mockDisp, nil, nil, 0)
+			stat.lastEventCommitTs.Store(tt.lastCommitTs)
+			if tt.tableInfo != nil {
+				stat.tableInfo.Store(tt.tableInfo)
+			}
+			if stat.tableInfo.Load() == nil {
+				require.Panics(t, func() {
+					stat.handleBatchDMLEvent(tt.event, tt.from)
+				})
+			} else {
+				got := stat.handleBatchDMLEvent(tt.event, tt.from)
+				require.Equal(t, tt.want, got)
+			}
+		})
 	}
 }
