@@ -39,8 +39,9 @@ type MoveDispatcherOperator struct {
 
 	noPostFinishNeed bool
 
-	lck  sync.Mutex
-	redo bool
+	lck    sync.Mutex
+	redo   bool
+	repeat bool
 }
 
 func NewMoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication, origin, dest node.ID, redo bool) *MoveDispatcherOperator {
@@ -201,4 +202,12 @@ func (m *MoveDispatcherOperator) String() string {
 
 func (m *MoveDispatcherOperator) Type() string {
 	return "move"
+}
+
+func (m *MoveDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *MoveDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

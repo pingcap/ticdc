@@ -135,7 +135,7 @@ func (cm *ControllerManager) HandleStatus(from node.ID, statusList []*heartbeatp
 	var stm *replica.SpanReplication
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		operatorController := cm.getOC(status.Redo)
+		operatorController := cm.getOperatorController(status.Redo)
 		controller := cm.getController(status.Redo)
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm = controller.GetTask(dispatcherID)
@@ -465,7 +465,7 @@ func (cm *ControllerManager) prepareSchemaInfoResponse(
 
 // RemoveTasksByTableIDs remove all tasks by table id
 func (cm *ControllerManager) RemoveTasksByTableIDs(redo bool, tables ...int64) {
-	operatorController := cm.getOC(redo)
+	operatorController := cm.getOperatorController(redo)
 	operatorController.RemoveTasksByTableIDs(tables...)
 }
 
@@ -504,20 +504,26 @@ func (cm *ControllerManager) Stop() {
 // only for test
 // moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
 // moveTable only works for the complete table, not for the table splited.
-func (cm *ControllerManager) moveTable(tableId int64, targetNode node.ID) error {
-	if err := cm.controller.checkParams(tableId, targetNode); err != nil {
+func (cm *ControllerManager) moveTable(tableId int64, targetNode node.ID, redo bool) error {
+	if redo && cm.redoController == nil {
+		return nil
+	}
+	controller := cm.getController(redo)
+	operatorController := cm.getOperatorController(redo)
+
+	if err := controller.checkParams(tableId, targetNode); err != nil {
 		return err
 	}
 
-	replications := cm.controller.replicationDB.GetTasksByTableID(tableId)
+	replications := controller.replicationDB.GetTasksByTableID(tableId)
 	if len(replications) != 1 {
-		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s, redo %v", tableId, len(replications), redo)
 	}
 
 	replication := replications[0]
 
-	op := cm.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-	cm.operatorController.AddOperator(op)
+	op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
+	operatorController.AddOperator(op)
 
 	// check the op is finished or not
 	count := 0
@@ -529,7 +535,7 @@ func (cm *ControllerManager) moveTable(tableId int64, targetNode node.ID) error 
 	}
 
 	if !op.IsFinished() {
-		return apperror.ErrTimeout.GenWithStackByArgs("move table operator is timeout")
+		return apperror.ErrTimeout.GenWithStackByArgs("move table operator is timeout", zap.Any("redo", redo))
 	}
 
 	return nil
@@ -537,20 +543,26 @@ func (cm *ControllerManager) moveTable(tableId int64, targetNode node.ID) error 
 
 // only for test
 // moveSplitTable is used for inner api(which just for make test cases convience) to force move the dispatchers in a split table to a target node.
-func (cm *ControllerManager) moveSplitTable(tableId int64, targetNode node.ID) error {
-	if err := cm.controller.checkParams(tableId, targetNode); err != nil {
+func (cm *ControllerManager) moveSplitTable(tableId int64, targetNode node.ID, redo bool) error {
+	if redo && cm.redoController == nil {
+		return nil
+	}
+	controller := cm.getController(redo)
+	operatorController := cm.getOperatorController(redo)
+
+	if err := controller.checkParams(tableId, targetNode); err != nil {
 		return err
 	}
 
-	replications := cm.controller.replicationDB.GetTasksByTableID(tableId)
+	replications := controller.replicationDB.GetTasksByTableID(tableId)
 	opList := make([]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(replications))
 	finishList := make([]bool, len(replications))
 	for _, replication := range replications {
 		if replication.GetNodeID() == targetNode {
 			continue
 		}
-		op := cm.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-		cm.operatorController.AddOperator(op)
+		op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
+		operatorController.AddOperator(op)
 		opList = append(opList, op)
 	}
 
@@ -580,23 +592,29 @@ func (cm *ControllerManager) moveSplitTable(tableId int64, targetNode node.ID) e
 		log.Info("wait for move split table operator finished", zap.Int("count", count))
 	}
 
-	return apperror.ErrTimeout.GenWithStackByArgs("move split table operator is timeout")
+	return apperror.ErrTimeout.GenWithStackByArgs("move split table operator is timeout", zap.Any("redo", redo))
 }
 
 // only for test
 // splitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
-func (cm *ControllerManager) splitTableByRegionCount(tableID int64) error {
-	if !cm.controller.replicationDB.IsTableExists(tableID) {
+func (cm *ControllerManager) splitTableByRegionCount(tableID int64, redo bool) error {
+	if redo && cm.redoController == nil {
+		return nil
+	}
+	controller := cm.getController(redo)
+	operatorController := cm.getOperatorController(redo)
+
+	if !controller.replicationDB.IsTableExists(tableID) {
 		// the table is not exist in this node
-		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID, "redo", redo)
 	}
 
 	if tableID == 0 {
-		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
+		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID, "redo", redo)
 	}
 
-	replications := cm.controller.replicationDB.GetTasksByTableID(tableID)
+	replications := controller.replicationDB.GetTasksByTableID(tableID)
 
 	span := common.TableIDToComparableSpan(tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
@@ -607,21 +625,21 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64) error {
 	splitTableSpans := cm.splitter.SplitSpansByRegion(context.Background(), wholeSpan)
 
 	if len(splitTableSpans) == len(replications) {
-		log.Info("Split Table is finished; There is no need to do split", zap.Any("tableID", tableID))
+		log.Info("Split Table is finished; There is no need to do split", zap.Any("tableID", tableID), zap.Any("redo", redo))
 		return nil
 	}
 
 	randomIdx := rand.Intn(len(replications))
 	primaryID := replications[randomIdx].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil, false)
+	primaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil, redo)
 	for _, replicaSet := range replications {
 		var op *operator.MergeSplitDispatcherOperator
 		if replicaSet.ID == primaryID {
 			op = primaryOp
 		} else {
-			op = operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished(), false)
+			op = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished(), redo)
 		}
-		cm.operatorController.AddOperator(op)
+		operatorController.AddOperator(op)
 	}
 
 	count := 0
@@ -636,26 +654,32 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64) error {
 		log.Info("wait for split table operator finished", zap.Int("count", count))
 	}
 
-	return apperror.ErrTimeout.GenWithStackByArgs("split table operator is timeout")
+	return apperror.ErrTimeout.GenWithStackByArgs("split table operator is timeout", zap.Any("redo", redo))
 }
 
 // only for test
 // mergeTable merge two nearby dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
-func (cm *ControllerManager) mergeTable(tableID int64) error {
-	if !cm.controller.replicationDB.IsTableExists(tableID) {
+func (cm *ControllerManager) mergeTable(tableID int64, redo bool) error {
+	if redo && cm.redoController == nil {
+		return nil
+	}
+	controller := cm.getController(redo)
+	operatorController := cm.getOperatorController(redo)
+
+	if !controller.replicationDB.IsTableExists(tableID) {
 		// the table is not exist in this node
-		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID, "redo", redo)
 	}
 
 	if tableID == 0 {
-		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
+		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID, "redo", redo)
 	}
 
-	replications := cm.controller.replicationDB.GetTasksByTableID(tableID)
+	replications := controller.replicationDB.GetTasksByTableID(tableID)
 
 	if len(replications) == 1 {
-		log.Info("Merge Table is finished; There is only one replication for this table, so no need to do merge", zap.Any("tableID", tableID))
+		log.Info("Merge Table is finished; There is only one replication for this table, so no need to do merge", zap.Any("tableID", tableID), zap.Any("redo", redo))
 		return nil
 	}
 
@@ -674,10 +698,10 @@ func (cm *ControllerManager) mergeTable(tableID int64) error {
 	mergeReplication := replications[:2]
 
 	primaryID := replications[0].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil, false)
-	secondaryOp := operator.NewMergeSplitDispatcherOperator(cm.controller.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished(), false)
-	cm.operatorController.AddOperator(primaryOp)
-	cm.operatorController.AddOperator(secondaryOp)
+	primaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil, redo)
+	secondaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished(), redo)
+	operatorController.AddOperator(primaryOp)
+	operatorController.AddOperator(secondaryOp)
 
 	count := 0
 	maxTry := 30
@@ -691,10 +715,10 @@ func (cm *ControllerManager) mergeTable(tableID int64) error {
 		log.Info("wait for merge table table operator finished", zap.Int("count", count))
 	}
 
-	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
+	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout", zap.Any("redo", redo))
 }
 
-func (cm *ControllerManager) getOC(redo bool) *operator.Controller {
+func (cm *ControllerManager) getOperatorController(redo bool) *operator.Controller {
 	if redo {
 		return cm.redoOperatorController
 	}

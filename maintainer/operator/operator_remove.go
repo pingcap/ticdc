@@ -33,6 +33,7 @@ type removeDispatcherOperator struct {
 	finished   atomic.Bool
 	db         *replica.ReplicationDB
 	redo       bool
+	repeat     bool
 }
 
 func newRemoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication, redo bool) *removeDispatcherOperator {
@@ -100,4 +101,12 @@ func (m *removeDispatcherOperator) String() string {
 
 func (m *removeDispatcherOperator) Type() string {
 	return "remove"
+}
+
+func (m *removeDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *removeDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

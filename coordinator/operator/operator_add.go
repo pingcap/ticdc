@@ -108,3 +108,10 @@ func (m *AddMaintainerOperator) String() string {
 func (m *AddMaintainerOperator) Type() string {
 	return "add"
 }
+
+func (m *AddMaintainerOperator) IsRepeat() bool {
+	return false
+}
+
+func (m *AddMaintainerOperator) SetRepeat(repeat bool) {
+}

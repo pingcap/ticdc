@@ -482,9 +482,13 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 // - CheckpointTs: All events with Commit-Ts less than or equal to this value have been written to the downstream system.
 // - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
 func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessage) {
+	if !m.bootstrapped.Load() {
+		log.Warn("can not advance redoTs since not bootstrapped",
+			zap.String("changefeed", m.id.Name()))
+		return
+	}
 	m.redoTs.mu.Lock()
 	defer m.redoTs.mu.Unlock()
-	// need check when node changed?
 	m.redoTsMap[id] = msg
 	var (
 		checkpointTs uint64 = math.MaxUint64
@@ -494,7 +498,9 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
 		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
 	}
-	if m.redoTs.CheckpointTs < checkpointTs || m.redoTs.ResolvedTs < resolvedTs {
+	redoOps := m.controllerManager.redoOperatorController.GetOps()
+	ops := m.controllerManager.operatorController.GetOps()
+	if (m.redoTs.CheckpointTs < checkpointTs && ops <= 0) || (m.redoTs.ResolvedTs < resolvedTs && redoOps <= 0) {
 		m.redoTs.CheckpointTs = checkpointTs
 		m.redoTs.ResolvedTs = resolvedTs
 		redoTsMessage := &heartbeatpb.RedoTsMessage{
@@ -1041,27 +1047,43 @@ func (m *Maintainer) GetDispatcherCount() int {
 
 // MoveTable moves a table to a specific node.
 func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
-	return m.controllerManager.moveTable(tableId, targetNode)
+	err := m.controllerManager.moveTable(tableId, targetNode, true)
+	if err != nil {
+		return err
+	}
+	return m.controllerManager.moveTable(tableId, targetNode, false)
 }
 
 // MoveSplitTable moves all the dispatchers in a split table to a specific node.
 func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
-	return m.controllerManager.moveSplitTable(tableId, targetNode)
+	err := m.controllerManager.moveSplitTable(tableId, targetNode, true)
+	if err != nil {
+		return err
+	}
+	return m.controllerManager.moveSplitTable(tableId, targetNode, false)
 }
 
 // GetTables returns all tables.
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.controllerManager.controller.replicationDB.GetAllTasks()
+	return m.controllerManager.controller.GetAllTasks()
 }
 
 // SplitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
 func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
-	return m.controllerManager.splitTableByRegionCount(tableId)
+	err := m.controllerManager.splitTableByRegionCount(tableId, true)
+	if err != nil {
+		return err
+	}
+	return m.controllerManager.splitTableByRegionCount(tableId, false)
 }
 
 // MergeTable merge two dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
 func (m *Maintainer) MergeTable(tableId int64) error {
-	return m.controllerManager.mergeTable(tableId)
+	err := m.controllerManager.mergeTable(tableId, true)
+	if err != nil {
+		return err
+	}
+	return m.controllerManager.mergeTable(tableId, false)
 }

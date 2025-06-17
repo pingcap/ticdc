@@ -32,6 +32,7 @@ type OccupyDispatcherOperator struct {
 	finished   atomic.Bool
 	removed    atomic.Bool
 	db         *replica.ReplicationDB
+	repeat     bool
 }
 
 func NewOccupyDispatcherOperator(
@@ -94,4 +95,12 @@ func (m *OccupyDispatcherOperator) String() string {
 
 func (m *OccupyDispatcherOperator) Type() string {
 	return "occupy"
+}
+
+func (m *OccupyDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *OccupyDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

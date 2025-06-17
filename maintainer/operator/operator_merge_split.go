@@ -48,6 +48,7 @@ type MergeSplitDispatcherOperator struct {
 	splitSpans          []*heartbeatpb.TableSpan
 	splitSpanInfo       string
 	redo                bool
+	repeat              bool
 }
 
 // NewMergeSplitDispatcherOperator creates a new MergeSplitDispatcherOperator
@@ -196,4 +197,12 @@ func (m *MergeSplitDispatcherOperator) Type() string {
 
 func (m *MergeSplitDispatcherOperator) GetOnFinished() func() {
 	return m.onFinished
+}
+
+func (m *MergeSplitDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *MergeSplitDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

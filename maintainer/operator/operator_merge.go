@@ -46,6 +46,7 @@ type MergeDispatcherOperator struct {
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	redo            bool
+	repeat          bool
 }
 
 func NewMergeDispatcherOperator(
@@ -223,4 +224,12 @@ func (m *MergeDispatcherOperator) String() string {
 
 func (m *MergeDispatcherOperator) Type() string {
 	return "merge"
+}
+
+func (m *MergeDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *MergeDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }
