@@ -404,8 +404,11 @@ func initColumnFlags(tableInfo *commonType.TableInfo) map[string]uint64 {
 			if len(idxInfo.Columns) > 1 {
 				flag |= multipleKeyFlag
 			}
-			colID := tableInfo.ForceGetColumnIDByName(idxCol.Name.O)
-			if tableInfo.IsHandleKey(colID) {
+			colInfo := tableInfo.GetColumns()[idxCol.Offset]
+			if colInfo.IsGenerated() {
+				continue
+			}
+			if tableInfo.IsHandleKey(colInfo.ID) {
 				flag |= handleKeyFlag
 			}
 			result[idxCol.Name.O] = flag
