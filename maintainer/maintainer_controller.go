@@ -750,12 +750,14 @@ func (c *Controller) mergeTable(tableID int64) error {
 		return bytes.Compare(replications[i].Span.StartKey, replications[j].Span.StartKey) < 0
 	})
 
+	log.Debug("sorted replications in mergeTable", zap.Any("replications", replications))
+
 	// try to select two consecutive spans in the same node to merge
 	// if we can't find, we just move one span to make it satisfied.
 	idx := 0
 	mergeSpanFound := false
 	for idx+1 < len(replications) {
-		if replications[idx].GetNodeID() == replications[idx+1].GetNodeID() {
+		if replications[idx].GetNodeID() == replications[idx+1].GetNodeID() && common.IsTableSpanConsecutive(replications[idx].Span, replications[idx+1].Span) {
 			mergeSpanFound = true
 			break
 		} else {
