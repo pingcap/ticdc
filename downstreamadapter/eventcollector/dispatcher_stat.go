@@ -358,7 +358,12 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 			}
 			validEvents = events[invalidEventCount:]
 		}
-		return d.target.HandleEvents(validEvents, func() { d.wake() })
+		return d.target.HandleEvents(validEvents, func() {
+			d.wake()
+			log.Debug("wake dispatcher",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcher", d.target.GetId()))
+		})
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeHandshakeEvent,
