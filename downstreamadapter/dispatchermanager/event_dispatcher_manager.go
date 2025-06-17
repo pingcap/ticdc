@@ -808,6 +808,11 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 }
 
 func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
+	log.Info("do merge",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Any("dispatcherIDs", t.dispatcherIDs),
+		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+	)
 	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
 	minCheckpointTs := uint64(math.MaxUint64)
 	closedList := make([]bool, len(t.dispatcherIDs)) // record whether the dispatcher is closed successfully

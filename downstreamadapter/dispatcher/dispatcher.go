@@ -200,8 +200,6 @@ func NewDispatcher(
 		BootstrapState:        BootstrapFinished,
 	}
 
-	dispatcher.addToStatusDynamicStream()
-
 	return dispatcher
 }
 
@@ -551,7 +549,12 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	return true
 }
 
+// TODO:change a better name
 func (d *Dispatcher) updateComponentStatusToWorking() {
+	// only when we receive the first event, we can regard the dispatcher begin syncing data
+	// then add it to status dynamic stream to receive dispatcher status from maintainer
+	d.addToStatusDynamicStream()
+	// set the dispatcher to working status
 	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
 	d.statusesChan <- TableSpanStatusWithSeq{
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
