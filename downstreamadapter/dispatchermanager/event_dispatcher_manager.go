@@ -798,6 +798,11 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		e.config.MemoryQuota,
 		func() {
 			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
+			log.Info("merge dispatcher is ready",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Stringer("dispatcherID", mergedDispatcher.GetId()),
+				zap.Any("tableSpan", common.FormatTableSpan(mergedDispatcher.GetTableSpan())),
+			)
 		})
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
