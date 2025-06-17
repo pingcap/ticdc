@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -14,7 +15,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test")
@@ -25,6 +28,8 @@ type mockDispatcher struct {
 	startTs      uint64
 	id           common.DispatcherID
 	changefeedID common.ChangeFeedID
+	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	events       []dispatcher.DispatcherEvent
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -78,7 +83,11 @@ func (m *mockDispatcher) GetResolvedTs() uint64 {
 }
 
 func (m *mockDispatcher) HandleEvents(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
-	return false
+	if m.handleEvents == nil {
+		return false
+	}
+	m.events = append(m.events, events...)
+	return m.handleEvents(m.events, wakeCallback)
 }
 
 // mockEvent implements the Event interface for testing
@@ -653,5 +662,539 @@ func TestHandleDropEvent(t *testing.T) {
 			// Verify results
 			require.Equal(t, tt.expectedCommitTs, stat.lastEventCommitTs.Load())
 		})
+	}
+}
+
+func TestHandleDataEvents(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+
+	normalHandleEvents := func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+
+	tests := []struct {
+		name           string
+		events         []dispatcher.DispatcherEvent
+		initialState   func(*dispatcherStat)
+		handleEvents   func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+		expectedResult bool
+		expectedEvents []dispatcher.DispatcherEvent
+	}{
+		{
+			name: "return false when dispatcher is not handshaked",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &mockEvent{
+						eventType: commonEvent.TypeDMLEvent,
+						seq:       1,
+						commitTs:  100,
+					},
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setEventServiceID(remoteServerID)
+				stat.handshaked.Store(false)
+			},
+			handleEvents:   normalHandleEvents,
+			expectedResult: false,
+			expectedEvents: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &mockEvent{
+						eventType: commonEvent.TypeDMLEvent,
+						seq:       1,
+						commitTs:  100,
+					},
+				},
+			},
+		},
+		{
+			name: "handle DML events normally",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &mockEvent{
+						eventType: commonEvent.TypeDMLEvent,
+						seq:       1,
+						commitTs:  100,
+					},
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setEventServiceID(remoteServerID)
+				stat.handshaked.Store(true)
+				stat.lastEventSeq.Store(0)
+				stat.lastEventCommitTs.Store(50)
+			},
+			handleEvents:   normalHandleEvents,
+			expectedResult: true,
+			expectedEvents: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &mockEvent{
+						eventType: commonEvent.TypeDMLEvent,
+						seq:       1,
+						commitTs:  100,
+					},
+				},
+			},
+		},
+		{
+			name: "return false when event sequence is discontinuous",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &mockEvent{
+						eventType: commonEvent.TypeDMLEvent,
+						seq:       3,
+						commitTs:  100,
+					},
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setEventServiceID(remoteServerID)
+				stat.handshaked.Store(true)
+				stat.lastEventSeq.Store(1)
+				stat.lastEventCommitTs.Store(50)
+			},
+			handleEvents:   normalHandleEvents,
+			expectedResult: false,
+			expectedEvents: nil,
+		},
+		{
+			name: "handle DDL event normally",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &commonEvent.DDLEvent{
+						Version:    commonEvent.DDLEventVersion,
+						FinishedTs: 100,
+						Seq:        1,
+						TableInfo:  &common.TableInfo{},
+					},
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setEventServiceID(remoteServerID)
+				stat.handshaked.Store(true)
+				stat.lastEventSeq.Store(0)
+				stat.lastEventCommitTs.Store(50)
+			},
+			handleEvents:   normalHandleEvents,
+			expectedResult: true,
+			expectedEvents: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &commonEvent.DDLEvent{
+						Version:    commonEvent.DDLEventVersion,
+						FinishedTs: 100,
+						Seq:        1,
+						TableInfo:  &common.TableInfo{},
+					},
+				},
+			},
+		},
+		{
+			name: "handle BatchDML event normally",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &commonEvent.BatchDMLEvent{
+						Rows:    chunk.NewEmptyChunk(nil),
+						RawRows: []byte("test batchDML event"),
+						DMLEvents: []*commonEvent.DMLEvent{
+							{
+								Seq:      1,
+								CommitTs: 100,
+							},
+							{
+								Seq:      2,
+								CommitTs: 100,
+							},
+						},
+					},
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setEventServiceID(remoteServerID)
+				stat.handshaked.Store(true)
+				stat.lastEventSeq.Store(0)
+				stat.lastEventCommitTs.Store(50)
+				stat.tableInfo.Store(&common.TableInfo{})
+			},
+			handleEvents:   normalHandleEvents,
+			expectedResult: true,
+			expectedEvents: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &commonEvent.BatchDMLEvent{
+						Rows:    chunk.NewEmptyChunk(nil),
+						RawRows: []byte("test batchDML event"),
+						DMLEvents: []*commonEvent.DMLEvent{
+							{
+								Seq:      1,
+								CommitTs: 100,
+							},
+							{
+								Seq:      2,
+								CommitTs: 100,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "handle Resolved event normally",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &mockEvent{
+						eventType: commonEvent.TypeResolvedEvent,
+						commitTs:  100,
+					},
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setEventServiceID(remoteServerID)
+				stat.handshaked.Store(true)
+				stat.lastEventSeq.Store(0)
+				stat.lastEventCommitTs.Store(50)
+			},
+			handleEvents:   normalHandleEvents,
+			expectedResult: true,
+			expectedEvents: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &mockEvent{
+						eventType: commonEvent.TypeResolvedEvent,
+						commitTs:  100,
+					},
+				},
+			},
+		},
+		{
+			name: "ignore events from stale event service",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From: &localServerID,
+					Event: &mockEvent{
+						eventType: commonEvent.TypeDMLEvent,
+						seq:       1,
+						commitTs:  100,
+					},
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setEventServiceID(remoteServerID)
+				stat.handshaked.Store(true)
+				stat.lastEventSeq.Store(0)
+				stat.lastEventCommitTs.Store(50)
+			},
+			handleEvents:   normalHandleEvents,
+			expectedResult: false,
+			expectedEvents: nil,
+		},
+		{
+			name: "ignore events with commit ts less than last commit ts",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From: &remoteServerID,
+					Event: &mockEvent{
+						eventType: commonEvent.TypeDMLEvent,
+						seq:       1,
+						commitTs:  40,
+					},
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setEventServiceID(remoteServerID)
+				stat.handshaked.Store(true)
+				stat.lastEventSeq.Store(0)
+				stat.lastEventCommitTs.Store(50)
+			},
+			handleEvents:   normalHandleEvents,
+			expectedResult: false,
+			expectedEvents: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stat := &dispatcherStat{
+				target:         newMockDispatcher(common.NewDispatcherID(), 0),
+				eventCollector: newTestEventCollector(localServerID),
+			}
+			stat.target.(*mockDispatcher).handleEvents = tt.handleEvents
+
+			if tt.initialState != nil {
+				tt.initialState(stat)
+			}
+
+			result := stat.handleDataEvents(tt.events...)
+			require.Equal(t, tt.expectedResult, result)
+		})
+	}
+}
+
+func createNodeID(id string) *node.ID {
+	nid := node.ID(id)
+	return &nid
+}
+
+func TestHandleBatchDataEvents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		events         []dispatcher.DispatcherEvent
+		currentService node.ID
+		lastSeq        uint64
+		lastCommitTs   uint64
+		handshaked     bool
+		want           bool
+	}{
+		{
+			name:           "not handshaked",
+			events:         []dispatcher.DispatcherEvent{},
+			currentService: node.ID("service1"),
+			handshaked:     false,
+			want:           false,
+		},
+		{
+			name: "valid events from current service",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From:  createNodeID("service1"),
+					Event: &commonEvent.DMLEvent{Seq: 1, CommitTs: 100},
+				},
+				{
+					From:  createNodeID("service1"),
+					Event: &commonEvent.DMLEvent{Seq: 2, CommitTs: 101},
+				},
+			},
+			currentService: node.ID("service1"),
+			lastSeq:        0,
+			lastCommitTs:   99,
+			handshaked:     true,
+			want:           true,
+		},
+		{
+			name: "invalid sequence",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From:  createNodeID("service1"),
+					Event: &commonEvent.DMLEvent{Seq: 2, CommitTs: 100},
+				},
+			},
+			currentService: node.ID("service1"),
+			lastSeq:        0,
+			lastCommitTs:   99,
+			handshaked:     true,
+			want:           false,
+		},
+		{
+			name: "stale events mixed with valid events",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From:  createNodeID("service2"),
+					Event: &commonEvent.DMLEvent{Seq: 1, CommitTs: 100},
+				},
+				{
+					From:  createNodeID("service1"),
+					Event: &commonEvent.DMLEvent{Seq: 2, CommitTs: 101},
+				},
+			},
+			currentService: node.ID("service1"),
+			lastSeq:        1,
+			lastCommitTs:   99,
+			handshaked:     true,
+			want:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+			stat := newDispatcherStat(mockDisp, nil, nil, 0)
+			stat.handshaked.Store(tt.handshaked)
+			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.lastEventCommitTs.Store(tt.lastCommitTs)
+			stat.connState.setEventServiceID(tt.currentService)
+			stat.connState.readyEventReceived.Store(true)
+
+			got := stat.handleBatchDataEvents(tt.events)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestHandleSingleDataEvents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		events         []dispatcher.DispatcherEvent
+		currentService node.ID
+		lastSeq        uint64
+		lastCommitTs   uint64
+		handshaked     bool
+		want           bool
+	}{
+		{
+			name: "multiple events",
+			events: []dispatcher.DispatcherEvent{
+				{Event: &commonEvent.DDLEvent{}},
+				{Event: &commonEvent.DDLEvent{}},
+			},
+			currentService: node.ID("service1"),
+			handshaked:     true,
+			want:           false,
+		},
+		{
+			name: "stale service",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From:  createNodeID("service2"),
+					Event: &commonEvent.DDLEvent{Seq: 1},
+				},
+			},
+			currentService: node.ID("service1"),
+			handshaked:     true,
+			want:           false,
+		},
+		{
+			name: "invalid sequence",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From:  createNodeID("service1"),
+					Event: &commonEvent.DDLEvent{Seq: 2},
+				},
+			},
+			currentService: node.ID("service1"),
+			lastSeq:        0,
+			handshaked:     true,
+			want:           false,
+		},
+		{
+			name: "valid DDL event",
+			events: []dispatcher.DispatcherEvent{
+				{
+					From:  createNodeID("service1"),
+					Event: &commonEvent.DDLEvent{Seq: 1},
+				},
+			},
+			currentService: node.ID("service1"),
+			lastSeq:        0,
+			lastCommitTs:   99,
+			handshaked:     true,
+			want:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+			stat := newDispatcherStat(mockDisp, nil, nil, 0)
+			stat.handshaked.Store(tt.handshaked)
+			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.lastEventCommitTs.Store(tt.lastCommitTs)
+			stat.connState.setEventServiceID(tt.currentService)
+			stat.connState.readyEventReceived.Store(true)
+
+			got := stat.handleSingleDataEvents(tt.events)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestHandleBatchDMLEvent(t *testing.T) {
+	// t.Parallel()
+
+	// normalHandleEvents := func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+	// 	return true
+	// }
+
+	tests := []struct {
+		name         string
+		event        dispatcher.DispatcherEvent
+		from         *node.ID
+		tableInfo    *common.TableInfo
+		lastCommitTs uint64
+		want         bool
+	}{
+		{
+			name: "valid batch DML",
+			event: dispatcher.DispatcherEvent{
+				Event: &commonEvent.BatchDMLEvent{
+					Rows:    chunk.NewEmptyChunk(nil),
+					RawRows: []byte("test batch DML event"),
+					DMLEvents: []*commonEvent.DMLEvent{
+						{Seq: 1, CommitTs: 100},
+						{Seq: 2, CommitTs: 100},
+					},
+				},
+			},
+			from:         createNodeID("service1"),
+			tableInfo:    &common.TableInfo{},
+			lastCommitTs: 96,
+			want:         true,
+		},
+		{
+			name: "nil table info",
+			event: dispatcher.DispatcherEvent{
+				Event: &commonEvent.BatchDMLEvent{
+					Rows:    chunk.NewEmptyChunk(nil),
+					RawRows: []byte("test batch DML event"),
+					DMLEvents: []*commonEvent.DMLEvent{
+						{Seq: 1, CommitTs: 100},
+						{Seq: 2, CommitTs: 100},
+					},
+				},
+			},
+			from: createNodeID("service1"),
+			want: false,
+		},
+		{
+			name: "stale commit ts",
+			event: dispatcher.DispatcherEvent{
+				Event: &commonEvent.BatchDMLEvent{
+					Rows:    chunk.NewEmptyChunk(nil),
+					RawRows: []byte("test batch DML event"),
+					DMLEvents: []*commonEvent.DMLEvent{
+						{CommitTs: 98},
+					},
+				},
+			},
+			from:         createNodeID("service1"),
+			tableInfo:    &common.TableInfo{},
+			lastCommitTs: 99,
+			want:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		//mockDisp.handleEvents = normalHandleEvents
+		stat := newDispatcherStat(mockDisp, nil, nil, 0)
+		stat.lastEventCommitTs.Store(tt.lastCommitTs)
+		log.Info("fizz test", zap.Any("event", tt.event.Event), zap.String("test name", tt.name), zap.Stringer("dispatcher", stat.target.GetId()), zap.Stringer("from", tt.from), zap.Uint64("lastCommitTs", tt.lastCommitTs), zap.Uint64("eventCommitTs", tt.event.Event.GetCommitTs()))
+		if tt.tableInfo != nil {
+			stat.tableInfo.Store(tt.tableInfo)
+		}
+		if stat.tableInfo.Load() == nil {
+			require.Panics(t, func() {
+				stat.handleBatchDMLEvent(tt.event, tt.from)
+			})
+			return
+		}
+		got := stat.handleBatchDMLEvent(tt.event, tt.from)
+		require.Equal(t, tt.want, got)
 	}
 }
