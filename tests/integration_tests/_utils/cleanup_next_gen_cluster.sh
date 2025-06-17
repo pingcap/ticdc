@@ -16,6 +16,7 @@ source "$OUT_DIR/next_gen.env"
 
 [ -n "$TIDB_PLAYGROUND_TAG" ] && tiup clean "$TIDB_PLAYGROUND_TAG" 2>/dev/null
 [ -n "$TIDB_PLAYGROUND_TAG_CDC_PD" ] && tiup clean "$TIDB_PLAYGROUND_TAG_CDC_PD" 2>/dev/null
+[ -n "$TIDB_PLAYGROUND_TAG_CDC_PD" ] && tiup clean "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" 2>/dev/null
 [ -n "$MINIO_CONTAINER_NAME" ] && docker rm -f "$MINIO_CONTAINER_NAME"
 [ -n "$UPSTREAM_TIUP_PID" ] && kill "$UPSTREAM_TIUP_PID" 2>/dev/null
 [ -n "$CDC_PD_TIUP_PID" ] && kill "$CDC_PD_TIUP_PID" 2>/dev/null
