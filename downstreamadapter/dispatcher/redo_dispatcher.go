@@ -61,6 +61,9 @@ type RedoDispatcher struct {
 	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
 	schemaIDToDispatchers *SchemaIDToDispatchers
 
+	timezone        string
+	integrityConfig *eventpb.IntegrityConfig
+
 	// the max resolvedTs received by the dispatcher
 	resolvedTs uint64
 
@@ -98,6 +101,8 @@ func NewRedoDispatcher(
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
+	timezone string,
+	integrityConfig *eventpb.IntegrityConfig,
 	filterConfig *eventpb.FilterConfig,
 	errCh chan error,
 	bdrMode bool,
@@ -111,6 +116,8 @@ func NewRedoDispatcher(
 		startTsIsSyncpoint:    false,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
+		timezone:              timezone,
+		integrityConfig:       integrityConfig,
 		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
 		resolvedTs:            startTs,
 		filterConfig:          filterConfig,
@@ -548,6 +555,14 @@ func (rd *RedoDispatcher) GetChangefeedID() common.ChangeFeedID {
 
 func (rd *RedoDispatcher) GetSchemaID() int64 {
 	return rd.schemaID
+}
+
+func (rd *RedoDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
+	return rd.integrityConfig
+}
+
+func (rd *RedoDispatcher) GetTimezone() string {
+	return rd.timezone
 }
 
 func (rd *RedoDispatcher) GetFilterConfig() *eventpb.FilterConfig {

@@ -94,6 +94,12 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 		return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches))
 	}
 	node.OnNotified = func(callback func()) {
+		// TODO:find a better way to handle the panic
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warn("failed to send notification, channel might be closed", zap.Any("error", r))
+			}
+		}()
 		d.notifiedNodes.In() <- callback
 	}
 	d.slots.Add(node)

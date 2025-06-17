@@ -146,6 +146,14 @@ func (m *mockEventDispatcher) SetCurrentPDTs(uint64) {
 func (m *mockEventDispatcher) SetStartTs(uint64) {
 }
 
+func (m *mockEventDispatcher) GetTimezone() string {
+	return "system"
+}
+
+func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
+	return nil
+}
+
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id

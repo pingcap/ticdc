@@ -74,8 +74,9 @@ type EventDispatcherManager struct {
 
 	pdClock pdutil.Clock
 
-	config       *config.ChangefeedConfig
-	filterConfig *eventpb.FilterConfig
+	config          *config.ChangefeedConfig
+	integrityConfig *eventpb.IntegrityConfig
+	filterConfig    *eventpb.FilterConfig
 	// only not nil when enable sync point
 	// TODO: changefeed update config
 	syncPointConfig *syncpoint.SyncPointConfig
@@ -159,6 +160,10 @@ func NewEventDispatcherManager(
 		ForceReplicate: cfConfig.ForceReplicate,
 		FilterConfig:   toFilterConfigPB(cfConfig.Filter),
 	}
+	var integrityCfg *eventpb.IntegrityConfig
+	if cfConfig.SinkConfig.Integrity != nil {
+		integrityCfg = cfConfig.SinkConfig.Integrity.ToPB()
+	}
 	log.Info("New EventDispatcherManager",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.String("config", cfConfig.String()),
@@ -174,6 +179,7 @@ func NewEventDispatcherManager(
 		errCh:                                  make(chan error, 1),
 		cancel:                                 cancel,
 		config:                                 cfConfig,
+		integrityConfig:                        integrityCfg,
 		filterConfig:                           filterCfg,
 		redoSink:                               redo.New(ctx, changefeedID, startTs, cfConfig.Consistent),
 		redoMeta:                               redo.NewRedoMeta(changefeedID, startTs, cfConfig.Consistent),
@@ -517,6 +523,8 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.blockStatusesChan,
 			schemaIds[idx],
 			e.schemaIDToDispatchers,
+			e.config.TimeZone,
+			e.integrityConfig,
 			e.syncPointConfig,
 			startTsIsSyncpointList[idx],
 			e.filterConfig,
@@ -617,6 +625,8 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 			e.blockStatusesChan,
 			schemaIds[idx],
 			e.redoSchemaIDToDispatchers,
+			e.config.TimeZone,
+			e.integrityConfig,
 			e.filterConfig,
 			e.errCh,
 			e.config.BDRMode)
@@ -1055,6 +1065,8 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		e.blockStatusesChan,
 		schemaID,
 		e.schemaIDToDispatchers,
+		e.config.TimeZone,
+		e.integrityConfig,
 		e.syncPointConfig,
 		false,
 		e.filterConfig,
@@ -1185,6 +1197,8 @@ func (e *EventDispatcherManager) MergeRedoDispatcher(dispatcherIDs []common.Disp
 		e.blockStatusesChan,
 		schemaID,
 		e.redoSchemaIDToDispatchers,
+		e.config.TimeZone,
+		e.integrityConfig,
 		e.filterConfig,
 		e.errCh,
 		e.config.BDRMode,

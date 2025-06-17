@@ -526,6 +526,8 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 			OnlyReuse:         onlyReuse,
 			BdrMode:           d.target.GetBDRMode(),
 			Redo:              dispatcher.IsRedoDispatcher(d.target),
+			Timezone:          d.target.GetTimezone(),
+			Integrity:         d.target.GetIntegrityConfig(),
 		},
 	}
 }
