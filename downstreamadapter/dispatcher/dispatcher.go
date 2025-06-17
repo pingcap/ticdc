@@ -401,10 +401,19 @@ func (d *Dispatcher) TryClose(waitDDL bool) (w heartbeatpb.Watermark, ok bool) {
 	if waitDDL {
 		if d.blockEventStatus.isNil() && d.tableProgress.Empty() {
 			closeOk = true
+		} else {
+			log.Info("dispatcher is not ready to close",
+				zap.Stringer("dispatcher", d.id),
+				zap.Any("blockEventStatusNil", d.blockEventStatus.isNil()),
+				zap.Any("tableProgressEmpty", d.tableProgress.Empty()))
 		}
 	} else {
 		if d.tableProgress.Empty() {
 			closeOk = true
+		} else {
+			log.Info("dispatcher is not ready to close",
+				zap.Stringer("dispatcher", d.id),
+				zap.Any("tableProgressEmpty", d.tableProgress.Empty()))
 		}
 	}
 	if !d.sink.IsNormal() {

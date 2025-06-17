@@ -804,7 +804,7 @@ func (c *Controller) mergeTable(tableID int64) error {
 
 		time.Sleep(1 * time.Second)
 		count += 1
-		log.Info("wait for merge table table operator finished", zap.Int("count", count))
+		log.Info("wait for merge table table operator finished", zap.Int("count", count), zap.Any("operator", operator.String()))
 	}
 
 	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")

@@ -831,7 +831,7 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
 			}
 
-			watermark, ok := dispatcher.TryClose(true)
+			watermark, ok := dispatcher.TryClose(false)
 			if ok {
 				if watermark.CheckpointTs < minCheckpointTs {
 					minCheckpointTs = watermark.CheckpointTs
@@ -848,6 +848,7 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 			zap.Int("closedCount", closedCount),
 			zap.Int("total", len(t.dispatcherIDs)),
 			zap.Int("count", count),
+			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
 		)
 	}
 
@@ -856,7 +857,29 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 	//        change the component status of the merged dispatcher to Initializing
 	//        set dispatcher into dispatcherMap and related field
 	//        notify eventCollector to update the merged dispatcher startTs
-	t.mergedDispatcher.SetStartTs(minCheckpointTs)
+	// TODO: add comments
+	if e.sink.SinkType() == common.MysqlSinkType {
+		newStartTsList, startTsIsSyncpointList, err := e.sink.(*mysql.Sink).GetStartTsList([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
+		if err != nil {
+			log.Error("calculate real startTs for dispatchers failed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err),
+			)
+			// return errors.Trace(err)
+			// TODO:
+		}
+		log.Info("calculate real startTs for Merge Dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("receiveStartTs", minCheckpointTs),
+			zap.Any("realStartTs", newStartTsList),
+			zap.Any("startTsIsSyncpointList", startTsIsSyncpointList),
+		)
+		t.mergedDispatcher.SetStartTs(uint64(newStartTsList[0]))
+		t.mergedDispatcher.SetStartTsIsSyncpoint(startTsIsSyncpointList[0])
+	} else {
+		t.mergedDispatcher.SetStartTs(minCheckpointTs)
+	}
+
 	t.mergedDispatcher.SetCurrentPDTs(e.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, minCheckpointTs)
