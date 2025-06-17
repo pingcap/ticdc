@@ -360,9 +360,9 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 		}
 		return d.target.HandleEvents(validEvents, func() {
 			d.wake()
-			log.Info("wake dispatcher",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
-				zap.Stringer("dispatcher", d.target.GetId()))
+			// log.Info("wake dispatcher",
+			// 	zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			// 	zap.Stringer("dispatcher", d.target.GetId()))
 		})
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent,
