@@ -354,7 +354,7 @@ func (db *ReplicationDB) addAbsentReplicaSetWithoutLock(spans ...*SpanReplicatio
 
 func (db *ReplicationDB) addSchedulingReplicaSetWithoutLock(span *SpanReplication, targetNodeID node.ID) {
 	db.allTasks[span.ID] = span
-	db.BindReplicaToNodeWithoutLock("", targetNodeID, span)
+	db.AddSchedulingReplicaWithoutLock(span, targetNodeID)
 	db.addToSchemaAndTableMap(span)
 }
 

@@ -117,6 +117,20 @@ func (g *replicationGroup[T, R]) MarkReplicaReplicating(replica R) {
 	g.replicating.Set(replica.GetID(), replica)
 }
 
+func (g *replicationGroup[T, R]) AddSchedulingReplica(replica R, targetNodeID node.ID) {
+	g.mustVerifyGroupID(replica.GetGroupID())
+	log.Info("scheduler: add scheduling replica",
+		zap.String("schedulerID", g.id),
+		zap.String("group", g.groupName),
+		zap.String("replica", replica.GetID().String()))
+	replica.SetNodeID(targetNodeID)
+	g.absent.Delete(replica.GetID())
+	g.replicating.Delete(replica.GetID())
+	g.scheduling.Set(replica.GetID(), replica)
+	g.updateNodeMap("", targetNodeID, replica)
+	g.checker.AddReplica(replica)
+}
+
 func (g *replicationGroup[T, R]) BindReplicaToNode(old, new node.ID, replica R) {
 	g.mustVerifyGroupID(replica.GetGroupID())
 	log.Info("scheduler: bind replica to node",
