@@ -275,6 +275,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		MemoryQuota:        info.Config.MemoryQuota,
 		Epoch:              info.Epoch,
 		BDRMode:            util.GetOrZero(info.Config.BDRMode),
+		TimeZone:           GetGlobalServerConfig().TZ,
 		// other fields are not necessary for dispatcherManager
 	}
 }

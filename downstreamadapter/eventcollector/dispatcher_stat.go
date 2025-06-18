@@ -358,7 +358,12 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 			}
 			validEvents = events[invalidEventCount:]
 		}
-		return d.target.HandleEvents(validEvents, func() { d.wake() })
+		return d.target.HandleEvents(validEvents, func() {
+			d.wake()
+			log.Debug("wake dispatcher",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcher", d.target.GetId()))
+		})
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeHandshakeEvent,
@@ -521,6 +526,8 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			OnlyReuse:         onlyReuse,
 			BdrMode:           d.target.GetBDRMode(),
+			Timezone:          d.target.GetTimezone(),
+			Integrity:         d.target.GetIntegrityConfig(),
 		},
 	}
 }

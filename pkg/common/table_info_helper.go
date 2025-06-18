@@ -457,13 +457,15 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 				colSchema.IndexColumns = append(colSchema.IndexColumns, []int64{col.ID})
 				colSchema.PKIndex = []int64{col.ID}
 			} else if tableInfo.IsCommonHandle {
-				colSchema.HandleKeyIDs[col.ID] = struct{}{}
+				clear(colSchema.HandleKeyIDs)
 				colSchema.HandleColID = colSchema.HandleColID[:0]
 				pkIdx := tables.FindPrimaryIndex(tableInfo)
 				for _, pkCol := range pkIdx.Columns {
 					id := tableInfo.Columns[pkCol.Offset].ID
+					colSchema.HandleKeyIDs[id] = struct{}{}
 					colSchema.HandleColID = append(colSchema.HandleColID, id)
 				}
+
 			}
 		} else {
 			colSchema.VirtualColumnCount += 1

@@ -97,7 +97,6 @@ func calculateChecksum(row chunk.Row, columnInfo []*model.ColumnInfo) (uint32, e
 		if len(buf) > 0 {
 			buf = buf[:0]
 		}
-		// buf = row.GetRaw(idx)
 		buf, err = buildChecksumBytes(buf, row, idx, col)
 		if err != nil {
 			return 0, errors.Trace(err)

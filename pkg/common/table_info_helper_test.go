@@ -229,3 +229,29 @@ func TestColumnsByNames(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []int{1, 0, 2}, offsets)
 }
+
+func TestHandleKey(t *testing.T) {
+	tableInfo := &model.TableInfo{
+		Columns: []*model.ColumnInfo{
+			{ID: 1, Name: pmodel.NewCIStr("id"), Offset: 0},
+			{ID: 2, Name: pmodel.NewCIStr("name"), Offset: 1},
+		},
+		Indices: []*model.IndexInfo{
+			{
+				ID: 1,
+				Columns: []*model.IndexColumn{
+					{Name: pmodel.NewCIStr("id"), Offset: 0},
+					{Name: pmodel.NewCIStr("name"), Offset: 1},
+				},
+				Primary: true,
+			},
+		},
+		IsCommonHandle: true,
+	}
+	columnSchema := newColumnSchema(tableInfo, Digest{})
+	for _, colId := range columnSchema.HandleColID {
+		_, ok := columnSchema.HandleKeyIDs[colId]
+		require.True(t, ok)
+	}
+	require.Equal(t, len(columnSchema.HandleColID), len(columnSchema.HandleKeyIDs))
+}

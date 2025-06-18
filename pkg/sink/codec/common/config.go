@@ -92,6 +92,8 @@ type Config struct {
 	DebeziumDisableSchema bool
 	// Debezium only. Whether before value should be included in the output.
 	DebeziumOutputOldValue bool
+	// CSV only. Whether header should be included in the output.
+	CSVOutputFieldHeader bool
 }
 
 // EncodingFormatType is the type of encoding format
@@ -132,6 +134,7 @@ func NewConfig(protocol config.Protocol) *Config {
 		DebeziumOutputOldValue: true,
 		OpenOutputOldValue:     true,
 		DebeziumDisableSchema:  false,
+		CSVOutputFieldHeader:   false,
 	}
 }
 
@@ -236,6 +239,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 			c.BinaryEncodingMethod = sinkConfig.CSVConfig.BinaryEncodingMethod
 			c.OutputOldValue = sinkConfig.CSVConfig.OutputOldValue
 			c.OutputHandleKey = sinkConfig.CSVConfig.OutputHandleKey
+			c.CSVOutputFieldHeader = sinkConfig.CSVConfig.OutputFieldHeader
 		}
 		if sinkConfig.KafkaConfig != nil && sinkConfig.KafkaConfig.LargeMessageHandle != nil {
 			c.LargeMessageHandle = sinkConfig.KafkaConfig.LargeMessageHandle
