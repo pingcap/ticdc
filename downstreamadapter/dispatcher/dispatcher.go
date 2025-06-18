@@ -381,46 +381,10 @@ func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 // TryClose should be called before Remove(), because the dispatcher may still wait the dispatcher status from maintainer.
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
 // EventDispatcherManager will clean the dispatcher info after Remove() is called.
-//
-// If waitDDL is true, dispatcher can't wait ddl event to be flushed or pass, which means, dispatcher's blockEventStatus should be nil
-//
-// We only use waitDDL = true when before we want to merge dispatcher.
-// We need to ensure the final startTs of merge dispatcher should not be less than a flushed ddl event in the dispatchers to be merged.
-// For example, there a 5 dispatchers of a split-table, and deal with a ts=t1 ddl.
-// Now the ddl is flushed in one dispatcher, but not passed in other dispatchers.
-// If we don't wait ddl event finish deal with, the final startTs of merge dispatcher will be t1-x,
-// which will lead to the new dispatcher receive the previous dml, which is not match the new schema,
-// leading to writing downstream failed.
-func (d *Dispatcher) TryClose(waitDDL bool) (w heartbeatpb.Watermark, ok bool) {
-	// If sink is normal(not meet error),
-	//        if waitDDL = true, we need to wait all the events in sink to flushed downstream successfully, and no ddl waiting flushing or passing
-	//        if waitDDL = false, we just need to wait all the events in sink to flushed downstream successfully
+func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
-
-	closeOk := false
-	if waitDDL {
-		if d.blockEventStatus.isNil() && d.tableProgress.Empty() {
-			closeOk = true
-		} else {
-			log.Info("dispatcher is not ready to close",
-				zap.Stringer("dispatcher", d.id),
-				zap.Any("blockEventStatusNil", d.blockEventStatus.isNil()),
-				zap.Any("tableProgressEmpty", d.tableProgress.Empty()))
-		}
-	} else {
-		if d.tableProgress.Empty() {
-			closeOk = true
-		} else {
-			log.Info("dispatcher is not ready to close",
-				zap.Stringer("dispatcher", d.id),
-				zap.Any("tableProgressEmpty", d.tableProgress.Empty()))
-		}
-	}
-	if !d.sink.IsNormal() {
-		closeOk = true
-	}
-
-	if closeOk {
+	if !d.sink.IsNormal() || d.tableProgress.Empty() {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
@@ -437,6 +401,10 @@ func (d *Dispatcher) TryClose(waitDDL bool) (w heartbeatpb.Watermark, ok bool) {
 		)
 		return w, true
 	}
+	log.Info("dispatcher is not ready to close",
+		zap.Stringer("dispatcher", d.id),
+		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
+		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()))
 	return w, false
 }
 

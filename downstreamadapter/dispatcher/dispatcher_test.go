@@ -614,13 +614,13 @@ func TestDispatcherClose(t *testing.T) {
 		nodeID := node.NewID()
 		dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, callback)
 
-		_, ok := dispatcher.TryClose(false)
+		_, ok := dispatcher.TryClose()
 		require.Equal(t, false, ok)
 
 		// flush
 		sink.FlushDMLs()
 
-		watermark, ok := dispatcher.TryClose(false)
+		watermark, ok := dispatcher.TryClose()
 		require.Equal(t, true, ok)
 		require.Equal(t, uint64(1), watermark.CheckpointTs)
 		require.Equal(t, uint64(0), watermark.ResolvedTs)
@@ -635,12 +635,12 @@ func TestDispatcherClose(t *testing.T) {
 		nodeID := node.NewID()
 		dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, callback)
 
-		_, ok := dispatcher.TryClose(false)
+		_, ok := dispatcher.TryClose()
 		require.Equal(t, false, ok)
 
 		sink.SetIsNormal(false)
 
-		watermark, ok := dispatcher.TryClose(false)
+		watermark, ok := dispatcher.TryClose()
 		require.Equal(t, true, ok)
 		require.Equal(t, uint64(1), watermark.CheckpointTs)
 		require.Equal(t, uint64(0), watermark.ResolvedTs)
