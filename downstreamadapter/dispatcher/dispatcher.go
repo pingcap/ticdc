@@ -298,14 +298,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			// so we need report the error to maintainer.
 			err := ddl.GetError()
 			if err != nil {
-				select {
-				case d.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", d.changefeedID),
-						zap.Stringer("dispatcherID", d.id),
-						zap.Error(err))
-				}
+				d.HandleError(err)
 				return
 			}
 			log.Info("dispatcher receive ddl event",
@@ -514,7 +507,7 @@ func (d *Dispatcher) EmitBootstrap() bool {
 				zap.Int("emitted", idx+1),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
-			d.errCh <- errors.ErrExecDDLFailed.GenWithStackByArgs()
+			d.HandleError(errors.ErrExecDDLFailed.GenWithStackByArgs())
 			return true
 		}
 	}
@@ -540,5 +533,16 @@ func (d *Dispatcher) updateComponentStatusToWorking() {
 			CheckpointTs:    d.GetCheckpointTs(),
 		},
 		Seq: d.seq,
+	}
+}
+
+func (d *Dispatcher) HandleError(err error) {
+	select {
+	case d.errCh <- err:
+	default:
+		log.Error("error channel is full, discard error",
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.Stringer("dispatcherID", d.id),
+			zap.Error(err))
 	}
 }

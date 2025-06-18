@@ -110,8 +110,7 @@ func NewMergeDispatcherOperator(
 		mergeTableSpan,
 		1) // use a fake checkpointTs here.
 
-	db.AddAbsentReplicaSet(newReplicaSet)
-	db.BindReplicaToNodeWithoutLock("", nodeID, newReplicaSet)
+	db.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 
 	op := &MergeDispatcherOperator{
 		db:                  db,

@@ -347,7 +347,7 @@ func (oc *Controller) AddMergeOperator(
 		)
 		return nil
 	}
-	oc.pushOperator(mergeOperator)
+	oc.AddOperator(mergeOperator)
 
 	log.Info("add merge operator",
 		zap.String("role", oc.role),

@@ -793,7 +793,6 @@ func (c *Controller) mergeTable(tableID int64) error {
 	if operator == nil {
 		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge operator")
 	}
-	c.operatorController.AddOperator(operator)
 
 	count := 0
 	maxTry := 30
