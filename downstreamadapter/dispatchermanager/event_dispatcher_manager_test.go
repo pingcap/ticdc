@@ -41,7 +41,8 @@ func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id comm
 		StartKey: startKey,
 		EndKey:   endKey,
 	}
-	var redoTs uint64 = math.MaxUint64
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
 	d := dispatcher.NewDispatcher(
 		manager.changefeedID,
 		id,

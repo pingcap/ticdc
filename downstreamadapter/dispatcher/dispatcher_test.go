@@ -15,6 +15,7 @@ package dispatcher
 
 import (
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,7 +49,8 @@ func getUncompleteTableSpan() *heartbeatpb.TableSpan {
 }
 
 func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dispatcher {
-	var redoTs common.Ts = math.MaxUint64
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
 	return NewDispatcher(
 		common.NewChangefeedID(),
 		common.NewDispatcherID(),

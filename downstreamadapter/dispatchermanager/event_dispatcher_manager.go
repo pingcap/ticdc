@@ -115,7 +115,7 @@ type EventDispatcherManager struct {
 	sink sink.Sink
 	// redo related
 	redoSink     *redo.Sink
-	redoGlobalTs common.Ts
+	redoGlobalTs atomic.Uint64
 	redoMeta     *redo.RedoMeta
 
 	latestWatermark Watermark
@@ -189,7 +189,6 @@ func NewEventDispatcherManager(
 		filterConfig:                           filterCfg,
 		redoSink:                               redo.New(ctx, changefeedID, startTs, cfConfig.Consistent),
 		redoMeta:                               redo.NewRedoMeta(changefeedID, startTs, cfConfig.Consistent),
-		redoGlobalTs:                           math.MaxUint64,
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		redoSchemaIDToDispatchers:              dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(0),
@@ -205,6 +204,7 @@ func NewEventDispatcherManager(
 		metricRedoEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
 		metricRedoCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
 	}
+	manager.redoGlobalTs.Store(math.MaxUint64)
 
 	// Set the epoch and maintainerID of the event dispatcher manager
 	manager.meta.maintainerEpoch = cfConfig.Epoch
@@ -810,12 +810,8 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
 				continue
 			}
-			if previousCheckpointTs < checkpointTs {
-				previousCheckpointTs = checkpointTs
-			}
-			if previousResolvedTs < resolvedTs {
-				previousResolvedTs = resolvedTs
-			}
+			previousCheckpointTs = max(previousCheckpointTs, checkpointTs)
+			previousResolvedTs = max(previousResolvedTs, resolvedTs)
 			message := new(heartbeatpb.RedoTsMessage)
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.CheckpointTs = checkpointTs
@@ -1622,7 +1618,7 @@ func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64
 		log.Info("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs), zap.Any("node", e.GetMaintainerID()))
 		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
-	return atomic.CompareAndSwapUint64(&e.redoGlobalTs, e.redoGlobalTs, resolvedTs)
+	return util.CompareAndIncrease(&e.redoGlobalTs, resolvedTs)
 }
 
 func (e *EventDispatcherManager) cleanMetrics() {

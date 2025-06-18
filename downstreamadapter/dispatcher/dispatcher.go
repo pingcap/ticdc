@@ -171,7 +171,7 @@ type Dispatcher struct {
 	BootstrapState bootstrapState
 
 	redo         bool
-	redoGlobalTs *common.Ts
+	redoGlobalTs *atomic.Uint64
 	cacheEvents  chan cacheEvents
 }
 
@@ -194,7 +194,7 @@ func NewDispatcher(
 	errCh chan error,
 	bdrMode bool,
 	redo bool,
-	redoGlobalTs *common.Ts,
+	redoGlobalTs *atomic.Uint64,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
 		changefeedID:          changefeedID,
@@ -275,7 +275,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		return true
 	}
 	// redo check
-	if d.redo && len(dispatcherEvents) > 0 && atomic.LoadUint64(d.redoGlobalTs) < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
+	if d.redo && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
 		// cache here
 		cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
 		select {
@@ -285,7 +285,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 				zap.Int("length", len(dispatcherEvents)),
 				zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
-				zap.Uint64("redoGlobalTs", atomic.LoadUint64(d.redoGlobalTs)),
+				zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
 			)
 		default:
 			log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents)))
