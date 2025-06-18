@@ -487,6 +487,55 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 			zap.String("changefeed", m.id.Name()))
 		return
 	}
+	redoOP := false
+	op := false
+	operatorLock := m.controllerManager.redoOperatorController.GetLock()
+	barrierLock := m.controllerManager.redoBarrier.GetLock()
+	defer func() {
+		m.controllerManager.redoOperatorController.ReleaseLock(operatorLock)
+		m.controllerManager.redoBarrier.ReleaseLock(barrierLock)
+	}()
+
+	if !m.controllerManager.RedoScheduleFinished() {
+		log.Warn("can not advance redoTs since redo schedule is not finished",
+			zap.String("changefeed", m.id.Name()),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
+		)
+		redoOP = true
+	}
+	if m.controllerManager.redoBarrier.ShouldBlockCheckpointTs() {
+		log.Warn("can not advance redoTs since redo barrier is blocking",
+			zap.String("changefeed", m.id.Name()),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
+		)
+		redoOP = true
+	}
+	operatorLock = m.controllerManager.operatorController.GetLock()
+	barrierLock = m.controllerManager.barrier.GetLock()
+	defer func() {
+		m.controllerManager.operatorController.ReleaseLock(operatorLock)
+		m.controllerManager.barrier.ReleaseLock(barrierLock)
+	}()
+
+	if !m.controllerManager.ScheduleFinished() {
+		log.Warn("can not advance redoTs since schedule is not finished",
+			zap.String("changefeed", m.id.Name()),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
+		)
+		op = true
+	}
+	if m.controllerManager.barrier.ShouldBlockCheckpointTs() {
+		log.Warn("can not advance redoTs since barrier is blocking",
+			zap.String("changefeed", m.id.Name()),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
+		)
+		op = true
+	}
+
 	m.redoTs.mu.Lock()
 	defer m.redoTs.mu.Unlock()
 	m.redoTsMap[id] = msg
@@ -498,10 +547,7 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
 		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
 	}
-	redoOps := m.controllerManager.redoOperatorController.GetOps()
-	ops := m.controllerManager.operatorController.GetOps()
-	log.Error("received redo ts update message", zap.Any("ops", ops), zap.Any("redoOps", redoOps), zap.Any("message", msg), zap.Any("redoTs", m.redoTs.RedoTsMessage))
-	if (m.redoTs.CheckpointTs < checkpointTs && ops <= 0) || (m.redoTs.ResolvedTs < resolvedTs && redoOps <= 0) {
+	if (m.redoTs.CheckpointTs < checkpointTs && !op) || (m.redoTs.ResolvedTs < resolvedTs && !redoOP) {
 		if m.redoTs.CheckpointTs < checkpointTs {
 			m.redoTs.CheckpointTs = checkpointTs
 		}
@@ -519,6 +565,27 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 			})
 		}
 	}
+	// redoOps := m.controllerManager.redoOperatorController.GetOps()
+	// ops := m.controllerManager.operatorController.GetOps()
+	// log.Error("received redo ts update message", zap.Any("ops", ops), zap.Any("redoOps", redoOps), zap.Any("message", msg), zap.Any("redoTs", m.redoTs.RedoTsMessage))
+	// if (m.redoTs.CheckpointTs < checkpointTs && ops <= 0) || (m.redoTs.ResolvedTs < resolvedTs && redoOps <= 0) {
+	// 	if m.redoTs.CheckpointTs < checkpointTs {
+	// 		m.redoTs.CheckpointTs = checkpointTs
+	// 	}
+	// 	if m.redoTs.ResolvedTs < resolvedTs {
+	// 		m.redoTs.ResolvedTs = resolvedTs
+	// 	}
+	// 	redoTsMessage := &heartbeatpb.RedoTsMessage{
+	// 		ChangefeedID: m.redoTs.ChangefeedID,
+	// 		CheckpointTs: m.redoTs.CheckpointTs,
+	// 		ResolvedTs:   m.redoTs.ResolvedTs,
+	// 	}
+	// 	for id := range m.redoTsMap {
+	// 		m.sendMessages([]*messaging.TargetMessage{
+	// 			messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, redoTsMessage),
+	// 		})
+	// 	}
+	// }
 }
 
 func (m *Maintainer) onNodeChanged() {

@@ -62,6 +62,7 @@ Architecture:
 - Each EventDispatcherManager has exactly one backend sink
 */
 type EventDispatcherManager struct {
+	ctx          context.Context
 	changefeedID common.ChangeFeedID
 
 	// meta is used to store the meta info of the event dispatcher manager
@@ -174,6 +175,7 @@ func NewEventDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	manager := &EventDispatcherManager{
+		ctx:                                    ctx,
 		dispatcherMap:                          newDispatcherMap[*dispatcher.Dispatcher](),
 		redoDispatcherMap:                      newDispatcherMap[*dispatcher.RedoDispatcher](),
 		changefeedID:                           changefeedID,
@@ -249,38 +251,10 @@ func NewEventDispatcherManager(
 	if manager.redoSink.Enabled() {
 		// every node
 		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoTsMessageDs(manager)
-		manager.wg.Add(3)
-		go func() {
-			defer manager.wg.Done()
-			err := manager.redoMeta.PreStart(ctx)
-			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-				select {
-				case <-ctx.Done():
-					return
-				case manager.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", changefeedID),
-						zap.Error(err),
-					)
-				}
-			}
-			meta := manager.redoMeta.GetFlushedMeta()
-			manager.SetGlobalRedoTs(meta.CheckpointTs, meta.ResolvedTs)
-			err = manager.redoMeta.Run(ctx)
-			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-				select {
-				case <-ctx.Done():
-					return
-				case manager.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", changefeedID),
-						zap.Error(err),
-					)
-				}
-			}
-		}()
+		manager.wg.Add(2)
+		if manager.tableTriggerEventDispatcher != nil {
+			manager.setRedoMeta()
+		}
 		go func() {
 			defer manager.wg.Done()
 			err := manager.redoSink.Run(ctx)
@@ -405,6 +379,9 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 			},
 		}, newChangefeed)
 		tableTriggerEventDispatcher = e.tableTriggerEventDispatcher
+		if e.tableTriggerEventDispatcher != nil {
+			e.setRedoMeta()
+		}
 	}
 	if err != nil {
 		return 0, errors.Trace(err)
@@ -1606,9 +1583,45 @@ func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, sch
 	)
 }
 
+func (e *EventDispatcherManager) setRedoMeta() {
+	if e.redoMeta.Running() {
+		return
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		err := e.redoMeta.PreStart(e.ctx)
+		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+			select {
+			case <-e.ctx.Done():
+				return
+			case e.errCh <- err:
+			default:
+				log.Error("error channel is full, discard error",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Error(err),
+				)
+			}
+		}
+		err = e.redoMeta.Run(e.ctx)
+		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+			select {
+			case <-e.ctx.Done():
+				return
+			case e.errCh <- err:
+			default:
+				log.Error("error channel is full, discard error",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Error(err),
+				)
+			}
+		}
+	}()
+}
+
 func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
 	// only update meta on the one node
-	if e.tableTriggerEventDispatcher != nil {
+	if e.tableTriggerEventDispatcher != nil && e.redoMeta.Running() {
 		log.Info("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs), zap.Any("node", e.GetMaintainerID()))
 		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
