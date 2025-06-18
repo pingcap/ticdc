@@ -119,12 +119,6 @@ func (b *BlockEventStatus) getEvent() commonEvent.BlockEvent {
 	return b.blockPendingEvent
 }
 
-func (b *BlockEventStatus) isNil() bool {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	return b.blockPendingEvent == nil
-}
-
 func (b *BlockEventStatus) getEventAndStage() (commonEvent.BlockEvent, heartbeatpb.BlockStage) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()

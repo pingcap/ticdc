@@ -268,10 +268,9 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			continue
 		}
 
-		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
 		if d.isFirstEvent(event) {
-			d.updateComponentStatusToWorking()
+			d.updateDispatcherStatusToWorking()
 		}
 
 		switch event.GetType() {
@@ -528,8 +527,8 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	return true
 }
 
-// TODO:change a better name
-func (d *Dispatcher) updateComponentStatusToWorking() {
+// updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
+func (d *Dispatcher) updateDispatcherStatusToWorking() {
 	// only when we receive the first event, we can regard the dispatcher begin syncing data
 	// then add it to status dynamic stream to receive dispatcher status from maintainer
 	d.addToStatusDynamicStream()
