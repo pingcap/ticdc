@@ -172,21 +172,33 @@ CLEANUP_SCRIPT="$(dirname "$0")/cleanup_next_gen_cluster.sh"
 [ -x "$CLEANUP_SCRIPT" ] && "$CLEANUP_SCRIPT"
 
 
-echo "Deploy minio"
-docker run -d \
-  --name "$MINIO_CONTAINER_NAME" \
-  -p "$MINIO_API_PORT:9000" \
-  -p "$MINIO_CONSOLE_PORT:9001" \
-  -e MINIO_ROOT_USER="$MINIO_ROOT_USER" \
-  -e MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
-  --restart unless-stopped \
-  minio/minio:RELEASE.2025-05-24T17-08-30Z \
-  server /data --console-address ":9001"
+echo "Check minio container"
+if ! docker ps -a --filter "name=$MINIO_CONTAINER_NAME" | grep -q "$MINIO_CONTAINER_NAME"; then
+    echo "Deploy minio"
+    docker run -d \
+      --name "$MINIO_CONTAINER_NAME" \
+      -p "$MINIO_API_PORT:9000" \
+      -p "$MINIO_CONSOLE_PORT:9001" \
+      -e MINIO_ROOT_USER="$MINIO_ROOT_USER" \
+      -e MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
+      --restart unless-stopped \
+      minio/minio:RELEASE.2025-05-24T17-08-30Z \
+      server /data --console-address ":9001"
+else
+    echo "MinIO container already exists, skipping creation"
+    # Ensure container is running
+    docker start "$MINIO_CONTAINER_NAME" || true
+fi
+
 check_port_available "$MINIO_API_PORT" "Wait for minio to be available"
 
 echo "Create bucket"
-mc alias set "$MINIO_MC_ALIAS" "http://localhost:$MINIO_API_PORT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-mc mb "$MINIO_MC_ALIAS"/cse
+mc alias set "$MINIO_MC_ALIAS" "http://localhost:$MINIO_API_PORT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>&1
+if ! mc ls "$MINIO_MC_ALIAS"/cse &>/dev/null; then
+    mc mb "$MINIO_MC_ALIAS"/cse
+else
+    echo "Bucket cse already exists, skipping creation"
+fi
 
 cat > "$WORK_DIR/pd.toml" <<EOF
 [keyspace]
