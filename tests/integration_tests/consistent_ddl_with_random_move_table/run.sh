@@ -135,7 +135,6 @@ main() {
 	ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://root@127.0.0.1:3306/"
 
-
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
 	cleanup_process $CDC_BINARY
