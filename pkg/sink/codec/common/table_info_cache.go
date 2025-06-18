@@ -19,6 +19,10 @@ import (
 	"go.uber.org/zap"
 )
 
+type blockedTableProvider interface {
+	GetBlockedTables(schema, table string) []int64
+}
+
 type accessKey struct {
 	schema string
 	table  string
@@ -85,20 +89,20 @@ func (a *tableInfoAccessor) Clean() {
 	clear(a.blockedTableIDs)
 }
 
-// FakeTableIDAllocator is a fake table id allocator
-type FakeTableIDAllocator struct {
+// tableIDAllocator is a fake table id allocator
+type tableIDAllocator struct {
 	tableIDs       map[accessKey]int64
 	currentTableID int64
 }
 
-// NewFakeTableIDAllocator creates a new FakeTableIDAllocator
-func NewFakeTableIDAllocator() *FakeTableIDAllocator {
-	return &FakeTableIDAllocator{
+// NewTableIDAllocator creates a new tableIDAllocator
+func NewTableIDAllocator() *tableIDAllocator {
+	return &tableIDAllocator{
 		tableIDs: make(map[accessKey]int64),
 	}
 }
 
-func (g *FakeTableIDAllocator) allocateByKey(key accessKey) int64 {
+func (g *tableIDAllocator) allocateByKey(key accessKey) int64 {
 	if tableID, ok := g.tableIDs[key]; ok {
 		return tableID
 	}
@@ -107,13 +111,13 @@ func (g *FakeTableIDAllocator) allocateByKey(key accessKey) int64 {
 	return g.currentTableID
 }
 
-// AllocateTableID allocates a table id
-func (g *FakeTableIDAllocator) AllocateTableID(schema, table string) int64 {
+// Allocate allocates a table id
+func (g *tableIDAllocator) Allocate(schema, table string) int64 {
 	key := accessKey{schema, table}
 	return g.allocateByKey(key)
 }
 
-func (g *FakeTableIDAllocator) Clean() {
+func (g *tableIDAllocator) Clean() {
 	g.currentTableID = 0
 	clear(g.tableIDs)
 }

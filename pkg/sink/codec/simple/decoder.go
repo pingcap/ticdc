@@ -31,8 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -518,7 +516,7 @@ func (m *blockedTablesMemo) add(schema, table string, tableID int64) {
 	}
 }
 
-func (m *blockedTablesMemo) blockedTables(schema, table string) []int64 {
+func (m *blockedTablesMemo) GetBlockedTables(schema, table string) []int64 {
 	key := accessKey{schema, table}
 	blocked := m.memo[key]
 	result := make([]int64, 0, len(blocked))
@@ -558,25 +556,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-
-	schemaName := result.SchemaName
-	tableName := result.TableName
-	if actionType == timodel.ActionRenameTable {
-		schemaName = result.ExtraSchemaName
-		tableName = result.ExtraTableName
-	}
-	physicalTableIDs := d.blockedTablesMemo.blockedTables(schemaName, tableName)
-	if actionType == timodel.ActionExchangeTablePartition {
-		stmt, err := parser.New().ParseOneStmt(result.Query, "", "")
-		if err != nil {
-			log.Panic("parse DDL failed", zap.String("DDL", result.Query), zap.Error(err))
-		}
-		exchangedTableName := stmt.(*ast.AlterTableStmt).Specs[0].NewTable.Name.O
-		// assuming it's the same database.
-		exchangedTableID := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), exchangedTableName)
-		physicalTableIDs = append(physicalTableIDs, exchangedTableID...)
-	}
-	result.BlockedTables = common.GetInfluenceTables(result.Query, actionType, physicalTableIDs)
+	result.BlockedTables = common.GetBlockedTables(d.blockedTablesMemo, result)
 	return result
 }
 

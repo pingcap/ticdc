@@ -28,8 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -38,7 +36,7 @@ import (
 )
 
 var (
-	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableIDAllocator  = common.NewTableIDAllocator()
 	tableInfoAccessor = common.NewTableInfoAccessor()
 )
 
@@ -181,32 +179,18 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
 
-	if result.Type == byte(timodel.ActionRenameTable) {
-		stmt, err := parser.New().ParseOneStmt(m.Query, "", "")
-		if err != nil {
-			log.Panic("parse statement failed", zap.Any("DDL", m.Query), zap.Error(err))
-		}
-		result.ExtraSchemaName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
-		result.ExtraTableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
-	}
-
 	// only the DDL comes from the first partition will be processed.
 	// since tableInfoAccessor is global, we need to make sure the table info
 	// is not removed by other partitions' decoder.
 	if b.idx == 0 {
-		tableName := result.TableName
+		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
 		schemaName := result.SchemaName
+		tableName := result.TableName
 		if result.Type == byte(timodel.ActionRenameTable) {
-			tableName = result.ExtraTableName
 			schemaName = result.ExtraSchemaName
+			tableName = result.ExtraTableName
 		}
-		physicalTableIDs := tableInfoAccessor.GetBlockedTables(schemaName, tableName)
-		result.BlockedTables = common.GetInfluenceTables(result.Query, m.Type, physicalTableIDs)
-		log.Debug("set blocked tables for the DDL event",
-			zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-			zap.String("extraSchema", result.ExtraSchemaName), zap.String("extraTable", result.ExtraTableName),
-			zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
-		tableInfoAccessor.Remove(result.SchemaName, tableName)
+		tableInfoAccessor.Remove(schemaName, tableName)
 	}
 	b.nextKey = nil
 	b.valueBytes = nil
@@ -363,7 +347,7 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	if key.Partition == nil {
-		physicalTableID := tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+		physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
 		key.Partition = &physicalTableID
 	}
 	tableInfo := new(timodel.TableInfo)

@@ -19,6 +19,8 @@ import (
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -149,7 +151,42 @@ func GetDDLActionType(query string) timodel.ActionType {
 	return timodel.ActionNone
 }
 
-func GetInfluenceTables(ddl string, action timodel.ActionType, physicalTableID []int64) *commonEvent.InfluencedTables {
+func GetBlockedTables(
+	accessor blockedTableProvider,
+	ddl *commonEvent.DDLEvent,
+) *commonEvent.InfluencedTables {
+	var (
+		schemaName = ddl.SchemaName
+		tableName  = ddl.TableName
+		action     = timodel.ActionType(ddl.Type)
+	)
+	if action == timodel.ActionRenameTable {
+		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
+		if err != nil {
+			log.Panic("parse statement failed", zap.Any("DDL", ddl), zap.Error(err))
+		}
+		schemaName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
+		tableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
+
+		ddl.ExtraSchemaName = schemaName
+		ddl.ExtraTableName = tableName
+	}
+
+	blockedTableIDs := accessor.GetBlockedTables(schemaName, tableName)
+	if action == timodel.ActionExchangeTablePartition {
+		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
+		if err != nil {
+			log.Panic("parse statement failed", zap.Any("DDL", ddl), zap.Error(err))
+		}
+		exchangedSchemaName := stmt.(*ast.AlterTableStmt).Specs[0].NewTable.Schema.O
+		if exchangedSchemaName == "" {
+			exchangedSchemaName = schemaName
+		}
+		exchangedTableName := stmt.(*ast.AlterTableStmt).Specs[0].NewTable.Name.O
+		exchangedTableID := accessor.GetBlockedTables(exchangedSchemaName, exchangedTableName)
+		blockedTableIDs = append(blockedTableIDs, exchangedTableID...)
+	}
+
 	switch action {
 	// create schema means the database not exist yet, so should not block tables.
 	case timodel.ActionCreateSchema, timodel.ActionCreateTable:
@@ -175,7 +212,7 @@ func GetInfluenceTables(ddl string, action timodel.ActionType, physicalTableID [
 		timodel.ActionRebaseAutoID, timodel.ActionMultiSchemaChange:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      physicalTableID,
+			TableIDs:      blockedTableIDs,
 		}
 	case timodel.ActionAddTablePartition, timodel.ActionDropTablePartition,
 		timodel.ActionTruncateTablePartition, timodel.ActionReorganizePartition,
@@ -183,10 +220,10 @@ func GetInfluenceTables(ddl string, action timodel.ActionType, physicalTableID [
 		timodel.ActionExchangeTablePartition:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      physicalTableID,
+			TableIDs:      blockedTableIDs,
 		}
 	default:
-		log.Panic("unsupported DDL action", zap.String("DDL", ddl), zap.String("action", action.String()))
+		log.Panic("unsupported DDL action", zap.String("DDL", ddl.Query), zap.String("action", action.String()))
 	}
 	return nil
 }
