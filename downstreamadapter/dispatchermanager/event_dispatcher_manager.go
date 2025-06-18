@@ -245,6 +245,8 @@ func NewEventDispatcherManager(
 		if err != nil {
 			return nil, 0, errors.Trace(err)
 		}
+		// redo meta
+		manager.setRedoMeta()
 	}
 
 	// redo manager
@@ -252,9 +254,6 @@ func NewEventDispatcherManager(
 		// every node
 		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoTsMessageDs(manager)
 		manager.wg.Add(2)
-		if manager.tableTriggerEventDispatcher != nil {
-			manager.setRedoMeta()
-		}
 		go func() {
 			defer manager.wg.Done()
 			err := manager.redoSink.Run(ctx)
@@ -379,9 +378,7 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 			},
 		}, newChangefeed)
 		tableTriggerEventDispatcher = e.tableTriggerEventDispatcher
-		if e.tableTriggerEventDispatcher != nil {
-			e.setRedoMeta()
-		}
+		e.setRedoMeta()
 	}
 	if err != nil {
 		return 0, errors.Trace(err)
@@ -1584,7 +1581,7 @@ func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, sch
 }
 
 func (e *EventDispatcherManager) setRedoMeta() {
-	if e.redoMeta.Running() {
+	if !e.redoMeta.Enabled() || e.redoMeta.Running() {
 		return
 	}
 	e.wg.Add(1)
