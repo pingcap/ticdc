@@ -513,7 +513,9 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 				messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, redoTsMessage),
 			})
 		}
+		return
 	}
+	log.Debug("ignore redo ts update", zap.Any("ops", ops), zap.Any("redoOps", redoOps))
 }
 
 func (m *Maintainer) onNodeChanged() {

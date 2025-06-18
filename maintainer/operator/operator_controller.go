@@ -103,6 +103,7 @@ func (oc *Controller) Execute() time.Time {
 			default:
 				atomic.AddInt64(&oc.ops, 1)
 			}
+			op.SetRepeat(true)
 		}
 
 		msg := op.Schedule()
@@ -251,10 +252,13 @@ func (oc *Controller) pollQueueingOperator() (
 		op.PostFinish()
 		item.IsRemoved = true
 		delete(oc.operators, opID)
-		switch op.Type() {
-		case "occupy", "merge", "split":
-		default:
-			atomic.AddInt64(&oc.ops, -1)
+		// avoid op not being executed
+		if op.IsRepeat() {
+			switch op.Type() {
+			case "occupy", "merge", "split":
+			default:
+				atomic.AddInt64(&oc.ops, -1)
+			}
 		}
 		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
@@ -272,9 +276,6 @@ func (oc *Controller) pollQueueingOperator() (
 	}
 	// pushes with new notify time.
 	item.NotifyAt = time.Now().Add(time.Millisecond * 500)
-	if !op.IsRepeat() {
-		op.SetRepeat(true)
-	}
 	heap.Push(&oc.runningQueue, item)
 	return op, true
 }

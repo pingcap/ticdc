@@ -29,9 +29,9 @@ function prepare() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
 
-	TOPIC_NAME="ticdc-ddl-random-move-table-$RANDOM"
+	TOPIC_NAME="ticdc-consistent-ddl-random-move-table-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
 }
 
 function create_tables() {
@@ -128,6 +128,13 @@ main() {
 	# wait for all dml threads to finish
 
 	sleep 10
+	changefeed_id="test"
+	storage_path="file://$WORK_DIR/redo"
+	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://root@127.0.0.1:3306/"
+
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
