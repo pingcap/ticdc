@@ -243,11 +243,20 @@ func (oc *Controller) pollQueueingOperator() (
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
-	if item.IsRemoved {
-		return nil, true
-	}
 	op := item.OP
 	opID := op.ID()
+	if item.IsRemoved {
+		// avoid op not being executed
+		if op.IsRepeat() {
+			switch op.Type() {
+			case "occupy", "merge", "split", "remove":
+			default:
+				atomic.AddInt64(&oc.ops, -1)
+				log.Error("excute op done", zap.Any("op", op.Type()), zap.Any("id", op.ID()), zap.Any("ops", atomic.LoadInt64(&oc.ops)), zap.Any("redo", oc.redo))
+			}
+		}
+		return nil, true
+	}
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
@@ -293,15 +302,6 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.OP.PostFinish()
 		old.IsRemoved = true
 		delete(oc.operators, op.ID())
-		// avoid op not being executed
-		if op.IsRepeat() {
-			switch op.Type() {
-			case "occupy", "merge", "split", "remove":
-			default:
-				atomic.AddInt64(&oc.ops, -1)
-				log.Error("excute op done", zap.Any("op", op.Type()), zap.Any("id", op.ID()), zap.Any("ops", atomic.LoadInt64(&oc.ops)), zap.Any("redo", oc.redo))
-			}
-		}
 	}
 	oc.pushOperator(op)
 }
