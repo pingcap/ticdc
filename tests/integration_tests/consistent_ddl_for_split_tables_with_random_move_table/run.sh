@@ -110,7 +110,7 @@ main() {
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
 
-	sleep 10
+	sleep 180
 
 	changefeed_id="test"
 	storage_path="file://$WORK_DIR/redo"

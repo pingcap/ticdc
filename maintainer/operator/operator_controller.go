@@ -99,9 +99,10 @@ func (oc *Controller) Execute() time.Time {
 
 		if !op.IsRepeat() {
 			switch op.Type() {
-			case "occupy", "merge", "split":
+			case "occupy", "merge", "split", "remove":
 			default:
 				atomic.AddInt64(&oc.ops, 1)
+				log.Error("excute op", zap.Any("op", op.Type()), zap.Any("id", op.ID()), zap.Any("ops", atomic.LoadInt64(&oc.ops)), zap.Any("redo", oc.redo))
 			}
 			op.SetRepeat(true)
 		}
@@ -255,9 +256,10 @@ func (oc *Controller) pollQueueingOperator() (
 		// avoid op not being executed
 		if op.IsRepeat() {
 			switch op.Type() {
-			case "occupy", "merge", "split":
+			case "occupy", "merge", "split", "remove":
 			default:
 				atomic.AddInt64(&oc.ops, -1)
+				log.Error("excute op done", zap.Any("op", op.Type()), zap.Any("id", op.ID()), zap.Any("ops", atomic.LoadInt64(&oc.ops)), zap.Any("redo", oc.redo))
 			}
 		}
 		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()

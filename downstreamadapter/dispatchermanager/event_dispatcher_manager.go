@@ -827,11 +827,21 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
+			if e.dispatcherMap.Len() == 0 {
+				checkpointTs = 0
+			}
+			if e.redoDispatcherMap.Len() == 0 {
+				resolvedTs = 0
+			}
 			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
 				continue
 			}
-			previousCheckpointTs = checkpointTs
-			previousResolvedTs = resolvedTs
+			if previousCheckpointTs < checkpointTs {
+				previousCheckpointTs = checkpointTs
+			}
+			if previousResolvedTs < resolvedTs {
+				previousResolvedTs = resolvedTs
+			}
 			message := new(heartbeatpb.RedoTsMessage)
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.CheckpointTs = checkpointTs

@@ -222,7 +222,7 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 				zap.Int64("schema", be.dropDispatchers.SchemaID))
 		case heartbeatpb.InfluenceType_Normal:
 			be.operatorController.RemoveTasksByTableIDs(be.dropDispatchers.TableIDs...)
-			log.Info(" remove table",
+			log.Info("remove table",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Int64s("table", be.dropDispatchers.TableIDs))

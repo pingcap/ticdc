@@ -500,9 +500,14 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 	}
 	redoOps := m.controllerManager.redoOperatorController.GetOps()
 	ops := m.controllerManager.operatorController.GetOps()
+	log.Error("received redo ts update message", zap.Any("ops", ops), zap.Any("redoOps", redoOps), zap.Any("message", msg), zap.Any("redoTs", m.redoTs.RedoTsMessage))
 	if (m.redoTs.CheckpointTs < checkpointTs && ops <= 0) || (m.redoTs.ResolvedTs < resolvedTs && redoOps <= 0) {
-		m.redoTs.CheckpointTs = checkpointTs
-		m.redoTs.ResolvedTs = resolvedTs
+		if m.redoTs.CheckpointTs < checkpointTs {
+			m.redoTs.CheckpointTs = checkpointTs
+		}
+		if m.redoTs.ResolvedTs < resolvedTs {
+			m.redoTs.ResolvedTs = resolvedTs
+		}
 		redoTsMessage := &heartbeatpb.RedoTsMessage{
 			ChangefeedID: m.redoTs.ChangefeedID,
 			CheckpointTs: m.redoTs.CheckpointTs,
@@ -513,9 +518,7 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 				messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, redoTsMessage),
 			})
 		}
-		return
 	}
-	log.Debug("ignore redo ts update", zap.Any("ops", ops), zap.Any("redoOps", redoOps))
 }
 
 func (m *Maintainer) onNodeChanged() {
