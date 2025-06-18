@@ -631,6 +631,8 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			OnlyReuse:         onlyReuse,
 			BdrMode:           d.target.GetBDRMode(),
+			Timezone:          d.target.GetTimezone(),
+			Integrity:         d.target.GetIntegrityConfig(),
 		},
 	}
 }

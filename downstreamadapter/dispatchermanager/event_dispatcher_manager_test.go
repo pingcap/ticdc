@@ -50,6 +50,8 @@ func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id comm
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
 		0,
 		dispatcher.NewSchemaIDToDispatchers(),
+		"system",
+		nil,
 		nil,
 		false,
 		nil,

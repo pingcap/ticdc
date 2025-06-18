@@ -43,6 +43,14 @@ func (d *Dispatcher) EnableSyncPoint() bool {
 	return d.syncPointConfig != nil
 }
 
+func (d *Dispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
+	return d.integrityConfig
+}
+
+func (d *Dispatcher) GetTimezone() string {
+	return d.timezone
+}
+
 func (d *Dispatcher) GetFilterConfig() *eventpb.FilterConfig {
 	return d.filterConfig
 }

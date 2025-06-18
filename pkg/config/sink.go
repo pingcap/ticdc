@@ -204,8 +204,8 @@ type SinkConfig struct {
 
 	CaseSensitive bool `toml:"case-sensitive" json:"case-sensitive"`
 	// Integrity is only available when the downstream is MQ.
-	Integrity      *Config `toml:"integrity" json:"integrity"`
-	ForceReplicate bool    `toml:"force-replicate" json:"force-replicate"`
+	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
+	ForceReplicate bool             `toml:"force-replicate" json:"force-replicate"`
 }
 
 // MaskSensitiveData masks sensitive data in SinkConfig
@@ -263,6 +263,8 @@ type CSVConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
 	// output handle key
 	OutputHandleKey bool `toml:"output-handle-key" json:"output-handle-key"`
+	// output field header
+	OutputFieldHeader bool `toml:"output-field-header" json:"output-field-header"`
 }
 
 func (c *CSVConfig) validateAndAdjust() error {
