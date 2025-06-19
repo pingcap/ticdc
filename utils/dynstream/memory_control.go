@@ -80,10 +80,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	event eventWrap[A, P, T, D, H],
 	handler H,
 ) bool {
-	// if path.dead.Load() {
-	// 	return false
-	// }
-
 	defer as.updatePathPauseState(path)
 	defer as.updateAreaPauseState(path)
 
@@ -104,7 +100,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			event.eventType = handler.GetType(dropEvent.(T))
 			event.event = dropEvent.(T)
 			path.pendingQueue.PushBack(event)
-			path.dead.Store(true)
 			return true
 		}
 	}
@@ -116,7 +111,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
 				path.pendingQueue.PushBack(event)
-				path.dead.Store(true)
 				failpoint.Return(true)
 			}
 		}
@@ -130,7 +124,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	// 		event.eventType = handler.GetType(dropEvent.(T))
 	// 		event.event = dropEvent.(T)
 	// 		path.pendingQueue.PushBack(event)
-	// 		path.dead.Store(true)
 	// 		return true
 	// 	}
 	// }
