@@ -1013,12 +1013,18 @@ func TestHandleBatchDataEvents(t *testing.T) {
 		},
 	}
 
+	normalHandleEvents := func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-			stat := newDispatcherStat(mockDisp, nil, nil, 0)
+			mockDisp.handleEvents = normalHandleEvents
+			mockEventCollector := newTestEventCollector(tt.currentService)
+			stat := newDispatcherStat(mockDisp, mockEventCollector, nil, 0)
 			stat.handshaked.Store(tt.handshaked)
 			stat.lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
@@ -1083,7 +1089,7 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			events: []dispatcher.DispatcherEvent{
 				{
 					From:  createNodeID("service1"),
-					Event: &commonEvent.DDLEvent{Seq: 1},
+					Event: &commonEvent.DDLEvent{Seq: 1, FinishedTs: 100},
 				},
 			},
 			currentService: node.ID("service1"),
@@ -1094,20 +1100,33 @@ func TestHandleSingleDataEvents(t *testing.T) {
 		},
 	}
 
+	normalHandleEvents := func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-			stat := newDispatcherStat(mockDisp, nil, nil, 0)
+			mockDisp.handleEvents = normalHandleEvents
+			mockEventCollector := newTestEventCollector(tt.currentService)
+			stat := newDispatcherStat(mockDisp, mockEventCollector, nil, 0)
 			stat.handshaked.Store(tt.handshaked)
 			stat.lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			stat.connState.setEventServiceID(tt.currentService)
 			stat.connState.readyEventReceived.Store(true)
 
-			got := stat.handleSingleDataEvents(tt.events)
-			require.Equal(t, tt.want, got)
+			// Special handling for multiple events test case - it should panic
+			if tt.name == "multiple events" {
+				require.Panics(t, func() {
+					stat.handleSingleDataEvents(tt.events)
+				})
+			} else {
+				got := stat.handleSingleDataEvents(tt.events)
+				require.Equal(t, tt.want, got)
+			}
 		})
 	}
 }
