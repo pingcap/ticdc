@@ -171,16 +171,23 @@ func GetBlockedTables(
 		ddl.ExtraSchemaName = schemaName
 		ddl.ExtraTableName = tableName
 	}
-
 	blockedTableIDs := accessor.GetBlockedTables(schemaName, tableName)
+
 	if action == timodel.ActionExchangeTablePartition {
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
 			log.Panic("parse statement failed", zap.Any("DDL", ddl), zap.Error(err))
 		}
+		sourceSchemaName := stmt.(*ast.AlterTableStmt).Table.Schema.O
+		if sourceSchemaName == "" {
+			sourceSchemaName = ddl.SchemaName
+		}
+		sourceTableName := stmt.(*ast.AlterTableStmt).Table.Name.O
+		blockedTableIDs = accessor.GetBlockedTables(sourceSchemaName, sourceTableName)
+
 		exchangedSchemaName := stmt.(*ast.AlterTableStmt).Specs[0].NewTable.Schema.O
 		if exchangedSchemaName == "" {
-			exchangedSchemaName = schemaName
+			exchangedSchemaName = sourceTableName
 		}
 		exchangedTableName := stmt.(*ast.AlterTableStmt).Specs[0].NewTable.Name.O
 		exchangedTableID := accessor.GetBlockedTables(exchangedSchemaName, exchangedTableName)

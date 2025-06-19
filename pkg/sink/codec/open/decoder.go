@@ -192,6 +192,7 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		}
 		tableInfoAccessor.Remove(schemaName, tableName)
 	}
+
 	b.nextKey = nil
 	b.valueBytes = nil
 	return result

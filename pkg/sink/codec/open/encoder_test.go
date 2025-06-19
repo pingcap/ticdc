@@ -1063,6 +1063,69 @@ func TestE2EPartitionTable(t *testing.T) {
 
 		require.Contains(t, tableInfoAccessor.GetBlockedTables("test", "t"), e.GetTableID())
 	}
+
+	createTable2DDL := helper.DDL2Event(`create table t2 (a int primary key, b int)`)
+	m, err = enc.EncodeDDLEvent(createTable2DDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	tp, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+
+	decodedDDL = dec.NextDDLEvent()
+	require.Empty(t, decodedDDL.GetBlockedTables().TableIDs)
+
+	exchangePartitionDDL := helper.DDL2Event(`alter table t exchange partition p1 with table t2`)
+	m, err = enc.EncodeDDLEvent(exchangePartitionDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	tp, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+
+	decodedDDL = dec.NextDDLEvent()
+	require.NotEmpty(t, decodedDDL.GetBlockedTables().TableIDs)
+
+	expected := tableInfoAccessor.GetBlockedTables("test", "t")
+	actual := decodedDDL.GetBlockedTables().TableIDs
+	for _, id := range expected {
+		require.Contains(t, actual, id)
+	}
+
+	_ = helper.DDL2Event(`create database db2`)
+
+	createTableDB2Table2DDL := helper.DDL2Event(`create table db2.t2 (a int primary key, b int)`)
+	m, err = enc.EncodeDDLEvent(createTableDB2Table2DDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+
+	tp, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+
+	decodedDDL = dec.NextDDLEvent()
+	require.Empty(t, decodedDDL.GetBlockedTables().TableIDs)
+
+	// Exchange partition with table in another database
+	exchangePartitionCrossDBDDL := helper.DDL2Event(`alter table t exchange partition p2 with table db2.t2`)
+	m, err = enc.EncodeDDLEvent(exchangePartitionCrossDBDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+
+	tp, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+
+	decodedDDL = dec.NextDDLEvent()
+	require.NotEmpty(t, decodedDDL.GetBlockedTables().TableIDs)
 }
 
 // Including insert / update / delete
