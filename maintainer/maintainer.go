@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
@@ -487,23 +488,10 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 			zap.String("changefeed", m.id.Name()))
 		return
 	}
-
 	m.redoTs.mu.Lock()
 	defer m.redoTs.mu.Unlock()
-	redoOps := m.controllerManager.redoOperatorController.GetOps()
-	ops := m.controllerManager.operatorController.GetOps()
-	// 1. update redoTsMap
-	redoTs, ok := m.redoTsMap[id]
-	if !ok {
-		m.redoTsMap[id] = msg
-	} else {
-		if ops == 0 {
-			redoTs.CheckpointTs = max(redoTs.CheckpointTs, msg.CheckpointTs)
-		}
-		if redoOps == 0 {
-			redoTs.ResolvedTs = max(redoTs.ResolvedTs, msg.ResolvedTs)
-		}
-	}
+
+	m.redoTsMap[id] = msg
 	var (
 		checkpointTs uint64 = math.MaxUint64
 		resolvedTs   uint64 = math.MaxUint64
@@ -512,14 +500,24 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
 		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
 	}
-	log.Error("received redo ts update message", zap.Any("ops", ops), zap.Any("redoOps", redoOps),
+
+	// 2. update global redoTs
+	sf := scheduleFinished(m.controllerManager.controller, m.controllerManager.operatorController)
+	rsf := scheduleFinished(m.controllerManager.redoController, m.controllerManager.redoOperatorController)
+	needUpdate := false
+	if m.redoTs.CheckpointTs < checkpointTs && sf {
+		m.redoTs.CheckpointTs = checkpointTs
+		needUpdate = true
+	}
+	if m.redoTs.ResolvedTs < resolvedTs && rsf {
+		m.redoTs.ResolvedTs = resolvedTs
+		needUpdate = true
+	}
+	log.Error("received redo ts update message", zap.Any("sf", sf), zap.Any("rsf", rsf), zap.Any("needUpdate", needUpdate),
 		zap.Any("message", msg), zap.Any("redoTs", m.redoTs.RedoTsMessage),
 		zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs),
 	)
-	// 2. update global redoTs
-	if m.redoTs.CheckpointTs < checkpointTs || m.redoTs.ResolvedTs < resolvedTs {
-		m.redoTs.CheckpointTs = max(m.redoTs.CheckpointTs, checkpointTs)
-		m.redoTs.ResolvedTs = max(m.redoTs.ResolvedTs, resolvedTs)
+	if needUpdate {
 		msgs := make([]*messaging.TargetMessage, 0, len(m.redoTsMap))
 		for id := range m.redoTsMap {
 			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoTsMessage{
@@ -684,14 +682,14 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 		}
 	}
 	if len(req.Statuses) > 0 {
-		m.controllerManager.HandleStatus(msg.From, req.Statuses)
-		if req.Err != nil {
-			log.Warn("dispatcher report an error",
-				zap.Stringer("changefeed", m.id),
-				zap.Stringer("sourceNode", msg.From),
-				zap.String("error", req.Err.Message))
-			m.onError(msg.From, req.Err)
+		withRedoLock := func() {
+			if m.redoDDLSpan != nil {
+				m.redoTs.mu.Lock()
+				defer m.redoTs.mu.Unlock()
+			}
+			m.controllerManager.HandleStatus(msg.From, req.Statuses)
 		}
+		withRedoLock()
 	}
 	if req.Err != nil {
 		log.Warn("dispatcher report an error",
@@ -1102,4 +1100,8 @@ func (m *Maintainer) MergeTable(tableId int64) error {
 		return err
 	}
 	return m.controllerManager.mergeTable(tableId, false)
+}
+
+func scheduleFinished(controller *Controller, operatorController *operator.Controller) bool {
+	return operatorController.GetOps() == 0 && controller.replicationDB.GetAbsentSize() == 0
 }

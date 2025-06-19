@@ -284,6 +284,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Stringer("dispatcher", d.id),
 				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 				zap.Int("length", len(dispatcherEvents)),
+				zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()),
 				zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
 				zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
 			)

@@ -482,10 +482,6 @@ func (cm *ControllerManager) ScheduleFinished() bool {
 	return cm.operatorController.OperatorSizeWithLock() == 0 && cm.controller.replicationDB.GetAbsentSize() == 0
 }
 
-func (cm *ControllerManager) RedoScheduleFinished() bool {
-	return cm.redoOperatorController.OperatorSizeWithLock() == 0 && cm.redoController.replicationDB.GetAbsentSize() == 0
-}
-
 func (cm *ControllerManager) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 	// Use a empty timezone because table filter does not need it.
 	f, err := filter.NewFilter(cm.cfConfig.Filter, "", cm.cfConfig.CaseSensitive, cm.cfConfig.ForceReplicate)

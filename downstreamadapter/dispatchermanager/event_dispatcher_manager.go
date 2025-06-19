@@ -204,7 +204,6 @@ func NewEventDispatcherManager(
 		metricRedoEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
 		metricRedoCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
 	}
-	manager.redoGlobalTs.Store(math.MaxUint64)
 
 	// Set the epoch and maintainerID of the event dispatcher manager
 	manager.meta.maintainerEpoch = cfConfig.Epoch

@@ -51,10 +51,6 @@ function run() {
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
 	export GO_FAILPOINTS=''
 
-	rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
-	sed "s/<placeholder>/$rts/g" $CUR/conf/diff_config.toml >$WORK_DIR/diff_config.toml
-
-	cat $WORK_DIR/diff_config.toml
 	cdc redo apply --tmp-dir="$tmp_download_path/apply" \
 		--storage="$storage_path" \
 		--sink-uri="mysql://normal:123456@127.0.0.1:3306/"
