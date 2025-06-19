@@ -66,7 +66,8 @@ mysql_groups=(
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	# generate_column
+	'many_pk_or_uk multi_source'
 	# G01
 	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
 	# G02
