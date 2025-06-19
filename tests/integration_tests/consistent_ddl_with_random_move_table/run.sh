@@ -125,7 +125,6 @@ main() {
 	sleep 500
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
-	# wait for all dml threads to finish
 
 	sleep 10
 	changefeed_id="test"

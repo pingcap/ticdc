@@ -360,7 +360,10 @@ func (cm *ControllerManager) processTablesAndBuildSchemaInfo(
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
 		// Process table spans
-		cm.processTableSpans(table, workingTaskMap, redoWorkingTaskMap)
+		if cm.redoController != nil {
+			cm.processTableSpans(table, redoWorkingTaskMap, true)
+		}
+		cm.processTableSpans(table, workingTaskMap, false)
 	}
 
 	return schemaInfos
@@ -368,14 +371,11 @@ func (cm *ControllerManager) processTablesAndBuildSchemaInfo(
 
 func (cm *ControllerManager) processTableSpans(
 	table commonEvent.Table,
-	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	redo bool,
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
-	redoTableSpans, reodIsTableWorking := redoWorkingTaskMap[table.TableID]
-	if cm.redoController != nil && isTableWorking != reodIsTableWorking {
-		log.Error("found different table status when processing table spans",
-			zap.Any("isTableWorking", isTableWorking), zap.Any("reodIsTableWorking", reodIsTableWorking))
-	}
+	controller := cm.getController(redo)
 
 	// Add new table if not working
 	if isTableWorking {
@@ -390,41 +390,28 @@ func (cm *ControllerManager) processTableSpans(
 			zap.Stringer("changefeed", cm.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
-		if cm.redoController != nil {
-			cm.redoController.addWorkingSpans(redoTableSpans)
-		}
-		cm.controller.addWorkingSpans(tableSpans)
+		controller.addWorkingSpans(tableSpans)
 
 		if cm.enableTableAcrossNodes {
-			cm.handleTableHoles(table, tableSpans, redoTableSpans, tableSpan)
+			cm.handleTableHoles(controller, table, tableSpans, tableSpan)
 		}
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
-		if reodIsTableWorking {
-			delete(redoWorkingTaskMap, table.TableID)
-		}
 	} else {
-		if cm.redoController != nil {
-			cm.redoController.AddNewTable(table, cm.startCheckpointTs)
-		}
-		cm.controller.AddNewTable(table, cm.startCheckpointTs)
+		controller.AddNewTable(table, cm.startCheckpointTs)
 	}
 }
 
 func (cm *ControllerManager) handleTableHoles(
+	controller *Controller,
 	table commonEvent.Table,
-	tableSpans, redoTableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	tableSpan *heartbeatpb.TableSpan,
 ) {
-	// redo
-	if cm.redoController != nil {
-		holes := split.FindHoles(redoTableSpans, tableSpan)
-		cm.redoController.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
-	}
 	holes := split.FindHoles(tableSpans, tableSpan)
 	// Todo: split the hole
 	// Add holes to the replicationDB
-	cm.controller.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
+	controller.addNewSpans(table.SchemaID, holes, cm.startCheckpointTs)
 }
 
 func (cm *ControllerManager) handleRemainingWorkingTasks(
