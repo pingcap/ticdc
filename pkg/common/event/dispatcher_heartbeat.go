@@ -210,19 +210,20 @@ func (d *DispatcherState) encodeV0() ([]byte, error) {
 }
 
 type DispatcherHeartbeatResponse struct {
-	Version          byte
-	ClusterID        uint64
+	Version   byte
+	ClusterID uint64
+	// DispatcherCount is use for decoding of the response.
 	DispatcherCount  uint32
 	DispatcherStates []DispatcherState
 }
 
-func NewDispatcherHeartbeatResponse(dispatcherCount int) *DispatcherHeartbeatResponse {
+func NewDispatcherHeartbeatResponse() *DispatcherHeartbeatResponse {
 	return &DispatcherHeartbeatResponse{
 		Version: DispatcherHeartbeatVersion,
 		// TODO: Pass a real clusterID when we support 1 TiCDC cluster subscribe multiple TiDB clusters
 		ClusterID:        0,
-		DispatcherCount:  uint32(dispatcherCount),
-		DispatcherStates: make([]DispatcherState, 0, dispatcherCount),
+		DispatcherCount:  0,
+		DispatcherStates: make([]DispatcherState, 0, 32),
 	}
 }
 
@@ -262,7 +263,7 @@ func (d *DispatcherHeartbeatResponse) decodeV0(data []byte) error {
 	for range d.DispatcherCount {
 		var ds DispatcherState
 		dsData := buf.Next(ds.GetSize())
-		if err := ds.Unmarshal(dsData); err != nil {
+		if err = ds.Unmarshal(dsData); err != nil {
 			return err
 		}
 		d.DispatcherStates = append(d.DispatcherStates, ds)

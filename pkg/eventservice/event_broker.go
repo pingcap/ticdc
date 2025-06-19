@@ -972,7 +972,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		if !ok {
 			response, ok := responseMap[heartbeat.serverID]
 			if !ok {
-				response = event.NewDispatcherHeartbeatResponse(32)
+				response = event.NewDispatcherHeartbeatResponse()
 				responseMap[heartbeat.serverID] = response
 			}
 			response.Append(event.NewDispatcherState(dp.DispatcherID, event.DSStateRemoved))
