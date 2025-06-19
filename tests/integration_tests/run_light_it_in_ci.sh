@@ -112,7 +112,8 @@ pulsar_groups=(
 	# G00
 	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
+	# foreign_key
+	'common_1 changefeed_pause_resume fail_over_ddl_B'
 	# G02
 	'new_ci_collation savepoint fail_over_ddl_C'
 	# G03
@@ -151,7 +152,8 @@ storage_groups=(
 	# G00
 	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
+	# foreign_key
+	'common_1 changefeed_pause_resume fail_over_ddl_B'
 	# G02
 	'new_ci_collation savepoint fail_over_ddl_C'
 	# G03
