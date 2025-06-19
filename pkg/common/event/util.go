@@ -202,8 +202,8 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 	return &DDLEvent{
 		SchemaID:   job.SchemaID,
 		TableID:    info.TableName.TableID,
-		SchemaName: info.GetSchemaName(),
-		TableName:  info.GetTableName(),
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
 		Query:      job.Query,
 		Type:       byte(job.Type),
 		TableInfo:  info,

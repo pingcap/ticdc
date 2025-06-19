@@ -1125,7 +1125,11 @@ func TestE2EPartitionTable(t *testing.T) {
 	require.Equal(t, common.MessageTypeDDL, tp)
 
 	decodedDDL = dec.NextDDLEvent()
-	require.NotEmpty(t, decodedDDL.GetBlockedTables().TableIDs)
+	expected = tableInfoAccessor.GetBlockedTables("test", "t")
+	actual = decodedDDL.GetBlockedTables().TableIDs
+	for _, id := range expected {
+		require.Contains(t, actual, id)
+	}
 }
 
 // Including insert / update / delete
