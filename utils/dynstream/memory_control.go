@@ -94,7 +94,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		}
 	}
 
-	if as.memoryUsageRatio() > 1 && as.settings.Load().algorithm == MemoryControlForEventCollector {
+	if as.memoryUsageRatio() > 1 && as.settings.Load().algorithm == MemoryControlForEventCollector && event.eventType.Droppable {
 		dropEvent := handler.OnDrop(event.event)
 		if dropEvent != nil {
 			event.eventType = handler.GetType(dropEvent.(T))
