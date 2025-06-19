@@ -154,6 +154,12 @@ func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 	return nil
 }
 
+func (m *mockEventDispatcher) HandleError(_ error) {
+}
+
+func (m *mockEventDispatcher) SetStartTsIsSyncpoint(_ bool) {
+}
+
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id

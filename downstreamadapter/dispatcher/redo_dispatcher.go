@@ -132,7 +132,6 @@ func NewRedoDispatcher(
 		BootstrapState:        BootstrapFinished,
 	}
 
-	addToStatusDynamicStream(dispatcher)
 	return dispatcher
 }
 
@@ -295,14 +294,7 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			// so we need report the error to maintainer.
 			err := ddl.GetError()
 			if err != nil {
-				select {
-				case rd.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", rd.changefeedID),
-						zap.Stringer("dispatcherID", rd.id),
-						zap.Error(err))
-				}
+				rd.HandleError(err)
 				return
 			}
 			log.Info("redo dispatcher receive ddl event",
@@ -484,6 +476,10 @@ func (rd *RedoDispatcher) isFirstEvent(event commonEvent.Event) bool {
 }
 
 func (rd *RedoDispatcher) updateComponentStatusToWorking() {
+	// only when we receive the first event, we can regard the dispatcher begin syncing data
+	// then add it to status dynamic stream to receive dispatcher status from maintainer
+	addToStatusDynamicStream(rd)
+
 	rd.componentStatus.Set(heartbeatpb.ComponentState_Working)
 	rd.statusesChan <- TableSpanStatusWithSeq{
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
@@ -599,7 +595,22 @@ func (rd *RedoDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		rd.componentStatus.Set(heartbeatpb.ComponentState_Stopped)
 		return w, true
 	}
+	log.Info("redo dispatcher is not ready to close",
+		zap.Stringer("dispatcher", rd.id),
+		zap.Bool("sinkIsNormal", rd.redoSink.IsNormal()),
+		zap.Bool("tableProgressEmpty", rd.tableProgress.Empty()))
 	return w, false
+}
+
+func (rd *RedoDispatcher) HandleError(err error) {
+	select {
+	case rd.errCh <- err:
+	default:
+		log.Error("error channel is full, discard error",
+			zap.Stringer("changefeedID", rd.changefeedID),
+			zap.Stringer("dispatcherID", rd.id),
+			zap.Error(err))
+	}
 }
 
 func (rd *RedoDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
@@ -636,6 +647,9 @@ func (rd *RedoDispatcher) GetBDRMode() bool {
 
 func (rd *RedoDispatcher) EnableSyncPoint() bool {
 	return false
+}
+
+func (rd *RedoDispatcher) SetStartTsIsSyncpoint(bool) {
 }
 
 func (rd *RedoDispatcher) GetStartTsIsSyncpoint() bool {

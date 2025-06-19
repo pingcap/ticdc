@@ -99,7 +99,6 @@ func (m mockOperator) IsRepeat() bool {
 }
 
 func (m mockOperator) SetRepeat(repeat bool) {
-
 }
 
 func TestOperatorQueue(t *testing.T) {

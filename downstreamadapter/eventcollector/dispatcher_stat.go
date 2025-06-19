@@ -418,7 +418,12 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 			if tableInfo != nil {
 				d.tableInfo.Store(tableInfo)
 			}
-			return d.target.HandleEvents(events, func() { d.wake(dispatcher.IsRedoDispatcher(d.target)) })
+			return d.target.HandleEvents(events, func() {
+				d.wake(dispatcher.IsRedoDispatcher(d.target))
+				log.Debug("wake dispatcher",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+					zap.Stringer("dispatcher", d.target.GetId()))
+			})
 		} else {
 			// SyncPointEvent
 			if !d.filterAndUpdateEventByCommitTs(events[0]) {
