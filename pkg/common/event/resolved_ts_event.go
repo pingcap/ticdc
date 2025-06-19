@@ -100,7 +100,7 @@ func (b *BatchResolvedEvent) IsPaused() bool {
 }
 
 const (
-	ResolvedEventVersion = 0
+	ResolvedEventVersion = 1
 )
 
 var _ Event = &ResolvedEvent{}
@@ -159,7 +159,8 @@ func (e *ResolvedEvent) Unmarshal(data []byte) error {
 
 func (e ResolvedEvent) encode() ([]byte, error) {
 	if e.Version != ResolvedEventVersion {
-		log.Panic("ResolvedEvent: invalid version, expect 0, got ", zap.Uint8("version", e.Version))
+		log.Panic("ResolvedEvent: invalid version",
+			zap.Uint64("expected", ResolvedEventVersion), zap.Uint8("received", e.Version))
 	}
 	return e.encodeV0()
 }
@@ -170,7 +171,7 @@ func (e *ResolvedEvent) decode(data []byte) error {
 	}
 	e.Version = data[0]
 	if e.Version != ResolvedEventVersion {
-		return fmt.Errorf("ResolvedEvent: invalid version, expect 0, got %d", e.Version)
+		return fmt.Errorf("ResolvedEvent: invalid version, expect %d, got %d", ResolvedEventVersion, e.Version)
 	}
 	return e.decodeV0(data)
 }

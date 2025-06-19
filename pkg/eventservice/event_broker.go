@@ -594,10 +594,12 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 					d, ok := c.getDispatcher(m.getDispatcherID())
 					if !ok {
 						log.Warn("Get dispatcher failed", zap.Any("dispatcherID", m.getDispatcherID()))
+						m.reset()
 						continue
 					}
 					if d.isHandshaked.Load() {
 						log.Info("Ignore handshake event since the dispatcher already handshaked", zap.Any("dispatcherID", m.getDispatcherID()))
+						m.reset()
 						continue
 					}
 				}
