@@ -80,9 +80,9 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	event eventWrap[A, P, T, D, H],
 	handler H,
 ) bool {
-	if path.dead.Load() {
-		return false
-	}
+	// if path.dead.Load() {
+	// 	return false
+	// }
 
 	defer as.updatePathPauseState(path)
 	defer as.updateAreaPauseState(path)

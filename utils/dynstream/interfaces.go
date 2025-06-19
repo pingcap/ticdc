@@ -44,6 +44,8 @@ type EventType struct {
 	// Events with different groups will not be processed in a group by the handler.
 	DataGroup int
 	Property  Property
+	// If the event is droppable, it means the event can be dropped by the memory control.
+	Droppable bool
 }
 
 func (t EventType) String() string {

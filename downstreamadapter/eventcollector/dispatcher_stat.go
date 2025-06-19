@@ -169,9 +169,15 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 	resetTs := d.getResetTs()
 	d.handshaked.Store(false)
 	// reset the dispatcher's path in the dynamic stream
-	d.eventCollector.ds.RemovePath(d.getDispatcherID())
+	err := d.eventCollector.ds.RemovePath(d.getDispatcherID())
+	if err != nil {
+		log.Error("failed to remove dispatcher from dynamic stream", zap.Error(err))
+	}
 	setting := dynstream.NewAreaSettingsWithMaxPendingSize(d.memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
-	d.eventCollector.ds.AddPath(d.getDispatcherID(), d, setting)
+	err = d.eventCollector.ds.AddPath(d.getDispatcherID(), d, setting)
+	if err != nil {
+		log.Error("failed to add dispatcher to dynamic stream", zap.Error(err))
+	}
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
 	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherResetRequest(resetTs))
@@ -571,7 +577,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event))
 	}
-	log.Info("received a dropEvent, need to reset the dispatcher to the dropEvent's commitTs - 1",
+	log.Info("received a dropEvent, need to reset the dispatcher",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Uint64("commitTs", dropEvent.GetCommitTs()),

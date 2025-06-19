@@ -121,24 +121,24 @@ const (
 func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.EventType {
 	switch event.GetType() {
 	case commonEvent.TypeResolvedEvent:
-		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.PeriodicSignal}
+		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.PeriodicSignal, Droppable: true}
 	case commonEvent.TypeDMLEvent:
-		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.BatchableData}
+		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.BatchableData, Droppable: true}
 	case commonEvent.TypeDDLEvent:
-		return dynstream.EventType{DataGroup: DataGroupDDL, Property: dynstream.NonBatchable}
+		return dynstream.EventType{DataGroup: DataGroupDDL, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeSyncPointEvent:
-		return dynstream.EventType{DataGroup: DataGroupSyncPoint, Property: dynstream.NonBatchable}
+		return dynstream.EventType{DataGroup: DataGroupSyncPoint, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeHandshakeEvent:
-		return dynstream.EventType{DataGroup: DataGroupHandshake, Property: dynstream.NonBatchable}
+		return dynstream.EventType{DataGroup: DataGroupHandshake, Property: dynstream.NonBatchable, Droppable: false}
 	case commonEvent.TypeReadyEvent:
-		return dynstream.EventType{DataGroup: DataGroupReady, Property: dynstream.NonBatchable}
+		return dynstream.EventType{DataGroup: DataGroupReady, Property: dynstream.NonBatchable, Droppable: false}
 	case commonEvent.TypeNotReusableEvent:
-		return dynstream.EventType{DataGroup: DataGroupNotReusable, Property: dynstream.NonBatchable}
+		return dynstream.EventType{DataGroup: DataGroupNotReusable, Property: dynstream.NonBatchable, Droppable: false}
 	case commonEvent.TypeBatchDMLEvent:
 		// Note: set TypeBatchDMLEvent to NonBatchable for simplicity.
-		return dynstream.EventType{DataGroup: DataGroupBatchDML, Property: dynstream.NonBatchable}
+		return dynstream.EventType{DataGroup: DataGroupBatchDML, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeDropEvent:
-		return dynstream.EventType{DataGroup: DataGroupDrop, Property: dynstream.NonBatchable}
+		return dynstream.EventType{DataGroup: DataGroupDrop, Property: dynstream.NonBatchable, Droppable: false}
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(event.GetType())))
 	}
