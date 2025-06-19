@@ -26,7 +26,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// add enum for state: nodeRemoved; taskRemoved
 const (
 	None = iota
 	NodeRemoved
@@ -104,7 +103,6 @@ func (m *AddMaintainerOperator) PostFinish() {
 		m.db.MarkMaintainerReplicating(m.cf)
 		m.cf.SetIsNew(false)
 	} else if m.canceled == NodeRemoved {
-		// } else {
 		m.db.MarkMaintainerAbsent(m.cf)
 	}
 	// TaskRemoved only happen when the changefeed is removed, so we don't need to do anything
