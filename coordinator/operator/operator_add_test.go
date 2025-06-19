@@ -23,11 +23,11 @@ import (
 func TestAddMaintainerOperator_OnNodeRemove(t *testing.T) {
 	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
 	op.OnNodeRemove("n2")
-	require.False(t, op.canceled.Load())
+	require.Equal(t, op.canceled, None)
 	require.False(t, op.finished.Load())
 
 	op.OnNodeRemove("n1")
-	require.True(t, op.canceled.Load())
+	require.Equal(t, op.canceled, NodeRemoved)
 	require.True(t, op.finished.Load())
 
 	require.Nil(t, op.Schedule())
@@ -37,7 +37,7 @@ func TestAddMaintainerOperator_OnTaskRemoved(t *testing.T) {
 	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
 
 	op.OnTaskRemoved()
-	require.True(t, op.canceled.Load())
+	require.Equal(t, op.canceled, TaskRemoved)
 	require.True(t, op.finished.Load())
 
 	require.Nil(t, op.Schedule())

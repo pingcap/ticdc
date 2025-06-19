@@ -214,6 +214,7 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 }
 
 func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
+	log.Info("received add maintainer request", zap.Any("request", req))
 	cfID := common.NewChangefeedIDFromPB(req.Id)
 	_, ok := m.maintainers.Load(cfID)
 	if ok {
