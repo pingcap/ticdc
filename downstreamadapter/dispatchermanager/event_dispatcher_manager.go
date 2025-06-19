@@ -947,7 +947,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 	defer e.closing.Store(false)
 	e.closeAllDispatchers()
 
-	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
+	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e.changefeedID)
 	if err != nil {
 		log.Error("remove event dispatcher manager from heartbeat collector failed",
 			zap.Stringer("changefeedID", e.changefeedID),
