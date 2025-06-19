@@ -169,7 +169,8 @@ storage_groups=(
 	# G10
 	'changefeed_error batch_add_table fail_over_ddl_K'
 	# G11
-	'multi_tables_ddl ddl_attributes fail_over_ddl_L'
+	# ddl_attributes
+	'multi_tables_ddl fail_over_ddl_L'
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13
