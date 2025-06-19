@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	ReadyEventVersion = 0
+	ReadyEventVersion = 1
 )
 
 var _ Event = &ReadyEvent{}

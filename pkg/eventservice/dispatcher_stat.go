@@ -94,7 +94,6 @@ type dispatcherStat struct {
 	// taskScanning is used to indicate whether the scan task is running.
 	// If so, we should wait until it is done before we send next resolvedTs event of
 	// this dispatcher.
-
 	isTaskScanning atomic.Bool
 
 	// isRemoved is used to indicate whether the dispatcher is removed.
