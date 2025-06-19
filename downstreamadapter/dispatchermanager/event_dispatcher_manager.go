@@ -242,8 +242,6 @@ func NewEventDispatcherManager(
 		if err != nil {
 			return nil, 0, errors.Trace(err)
 		}
-		// redo meta
-		manager.setRedoMeta()
 	}
 
 	// redo manager
