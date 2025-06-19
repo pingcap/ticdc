@@ -109,6 +109,19 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		}
 	}
 
+	failpoint.Inject("InjectDropEvent", func() {
+		if as.settings.Load().algorithm == MemoryControlForEventCollector {
+			dropEvent := handler.OnDrop(event.event)
+			if dropEvent != nil {
+				event.eventType = handler.GetType(dropEvent.(T))
+				event.event = dropEvent.(T)
+				path.pendingQueue.PushBack(event)
+				path.dead.Store(true)
+				failpoint.Return(true)
+			}
+		}
+	})
+
 	// Remove this after testing.
 	// if testCounter.Add(1)%10 == 0 && as.settings.Load().algorithm == MemoryControlForEventCollector {
 	// 	log.Info("fizz drop event", zap.Any("event", event.event))
