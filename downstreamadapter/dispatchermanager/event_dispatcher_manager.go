@@ -808,11 +808,21 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		e.config.MemoryQuota,
 		func() {
 			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
+			log.Info("merge dispatcher is ready",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Stringer("dispatcherID", mergedDispatcher.GetId()),
+				zap.Any("tableSpan", common.FormatTableSpan(mergedDispatcher.GetTableSpan())),
+			)
 		})
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 
 func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
+	log.Info("do merge",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Any("dispatcherIDs", t.dispatcherIDs),
+		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+	)
 	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
 	minCheckpointTs := uint64(math.MaxUint64)
 	closedList := make([]bool, len(t.dispatcherIDs)) // record whether the dispatcher is closed successfully
@@ -848,6 +858,7 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 			zap.Int("closedCount", closedCount),
 			zap.Int("total", len(t.dispatcherIDs)),
 			zap.Int("count", count),
+			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
 		)
 	}
 
@@ -856,10 +867,47 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 	//        change the component status of the merged dispatcher to Initializing
 	//        set dispatcher into dispatcherMap and related field
 	//        notify eventCollector to update the merged dispatcher startTs
-	t.mergedDispatcher.SetStartTs(minCheckpointTs)
+	//
+	// if the sink is mysql, we need to calculate the real startTs of the merged dispatcher based on minCheckpointTs
+	// Here is a example to show why we need to calculate the real startTs:
+	// 1. we have 5 dispatchers of a split-table, and deal with a ts=t1 ddl.
+	// 2. the ddl is flushed in one dispatcher, but not finish passing in other dispatchers.
+	// 3. if we don't calculate the real startTs, the final startTs of the merged dispatcher will be t1-x,
+	//    which will lead to the new dispatcher receive the previous dml and ddl, which is not match the new schema,
+	//    leading to writing downstream failed.
+	// 4. so we need to calculate the real startTs of the merged dispatcher by the tableID based on ddl_ts.
+	if e.sink.SinkType() == common.MysqlSinkType {
+		newStartTsList, startTsIsSyncpointList, err := e.sink.(*mysql.Sink).GetStartTsList([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
+		if err != nil {
+			log.Error("calculate real startTs for merge dispatcher failed",
+				zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err),
+			)
+			t.mergedDispatcher.HandleError(err)
+			return
+		}
+		log.Info("calculate real startTs for Merge Dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("receiveStartTs", minCheckpointTs),
+			zap.Any("realStartTs", newStartTsList),
+			zap.Any("startTsIsSyncpointList", startTsIsSyncpointList),
+		)
+		t.mergedDispatcher.SetStartTs(uint64(newStartTsList[0]))
+		t.mergedDispatcher.SetStartTsIsSyncpoint(startTsIsSyncpointList[0])
+	} else {
+		t.mergedDispatcher.SetStartTs(minCheckpointTs)
+	}
+
 	t.mergedDispatcher.SetCurrentPDTs(e.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, minCheckpointTs)
+	log.Info("merge dispatcher commit add dispatcher",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
+		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
+		zap.Uint64("startTs", minCheckpointTs),
+	)
 
 	// Step3: cancel the merge task
 	t.Cancel()

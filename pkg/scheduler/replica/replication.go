@@ -92,6 +92,7 @@ type ReplicationDB[T ReplicationID, R Replication[T]] interface {
 
 	BindReplicaToNodeWithoutLock(old, new node.ID, task R)
 	RemoveReplicaWithoutLock(task R)
+	AddSchedulingReplicaWithoutLock(replica R, targetNodeID node.ID)
 }
 
 func NewReplicationDB[T ReplicationID, R Replication[T]](
@@ -478,4 +479,9 @@ func (db *replicationDB[T, R]) RemoveReplicaWithoutLock(replica R) {
 	g := db.mustGetGroup(replica.GetGroupID())
 	g.RemoveReplica(replica)
 	db.maybeRemoveGroup(g)
+}
+
+func (db *replicationDB[T, R]) AddSchedulingReplicaWithoutLock(replica R, targetNodeID node.ID) {
+	g := db.mustGetGroup(replica.GetGroupID())
+	g.AddSchedulingReplica(replica, targetNodeID)
 }
