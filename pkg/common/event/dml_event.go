@@ -49,8 +49,8 @@ type BatchDMLEvent struct {
 }
 
 func (b *BatchDMLEvent) String() string {
-	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %v, RawRows: %v, TableInfo: %v, Len: %d}",
-		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo, b.Len())
+	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %v, RawRows: %v, Table: %v, Len: %d}",
+		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo.TableName, b.Len())
 }
 
 // NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
