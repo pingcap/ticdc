@@ -19,16 +19,16 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
-	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/ticdc/redo/writer/blackhole"
-	"github.com/pingcap/ticdc/redo/writer/file"
-	"github.com/pingcap/ticdc/redo/writer/memory"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/redo/writer/blackhole"
+	"github.com/pingcap/ticdc/pkg/redo/writer/file"
+	"github.com/pingcap/ticdc/pkg/redo/writer/memory"
 	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
 // NewRedoLogWriter creates a new RedoLogWriter.
 func NewRedoLogWriter(
-	ctx context.Context, lwCfg *writer.LogWriterConfig,
+	ctx context.Context, lwCfg *writer.LogWriterConfig, fileType string,
 ) (writer.RedoLogWriter, error) {
 	uri, err := storage.ParseRawURL(lwCfg.Storage)
 	if err != nil {
@@ -48,7 +48,7 @@ func NewRedoLogWriter(
 	}
 
 	if lwCfg.UseFileBackend {
-		return file.NewLogWriter(ctx, lwCfg)
+		return file.NewLogWriter(ctx, lwCfg, fileType)
 	}
-	return memory.NewLogWriter(ctx, lwCfg)
+	return memory.NewLogWriter(ctx, lwCfg, fileType)
 }

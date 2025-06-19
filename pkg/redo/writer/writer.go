@@ -25,23 +25,22 @@ import (
 )
 
 var (
-	_ RedoEvent = (*pevent.DMLEvent)(nil)
+	_ RedoEvent = (*pevent.RedoRowEvent)(nil)
 	_ RedoEvent = (*pevent.DDLEvent)(nil)
 )
 
 // RedoEvent is the interface for redo event.
 type RedoEvent interface {
+	PostFlush()
 	ToRedoLog() *pevent.RedoLog
 }
 
 // RedoLogWriter defines the interfaces used to write redo log, all operations are thread-safe.
 type RedoLogWriter interface {
-	// WriteEvents writes DDL or DML events to the redo log.
+	// WriteEvents writes DDL/DML events to the redo log.
 	WriteEvents(ctx context.Context, events ...RedoEvent) error
 
-	// FlushLog flushes all events written by `WriteEvents` into redo storage.
-	FlushLog(ctx context.Context) error
-
+	Run(ctx context.Context) error
 	// Close is used to close the writer.
 	Close() error
 }
@@ -49,8 +48,6 @@ type RedoLogWriter interface {
 // LogWriterConfig is the config for redo log writer.
 type LogWriterConfig struct {
 	config.ConsistentConfig
-	// FIXME
-	LogType      string
 	CaptureID    config.CaptureID
 	ChangeFeedID common.ChangeFeedID
 

@@ -35,9 +35,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/compression"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
-	"github.com/pingcap/ticdc/redo/codec"
-	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/ticdc/redo/writer/file"
+	"github.com/pingcap/ticdc/pkg/redo/codec"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -247,7 +247,7 @@ func sortAndWriteFile(
 		Dir:               cfg.dir,
 		MaxLogSizeInBytes: math.MaxInt32,
 	}
-	w, err := file.NewFileWriter(egCtx, writerCfg, writer.WithLogFileName(func() string {
+	w, err := file.NewFileWriter(egCtx, writerCfg, cfg.fileType, writer.WithLogFileName(func() string {
 		return sortedName
 	}))
 	if err != nil {
