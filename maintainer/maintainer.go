@@ -488,28 +488,26 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 			zap.String("changefeed", m.id.Name()))
 		return
 	}
-	m.redoTs.mu.Lock()
-	defer m.redoTs.mu.Unlock()
-
-	m.redoTsMap[id] = msg
 	var (
 		checkpointTs uint64 = math.MaxUint64
 		resolvedTs   uint64 = math.MaxUint64
 	)
+	m.redoTs.mu.Lock()
+	defer m.redoTs.mu.Unlock()
+	m.redoTsMap[id] = msg
 	for _, redoTs := range m.redoTsMap {
 		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
 		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
 	}
-
-	// 2. update global redoTs
 	sf := scheduleFinished(m.controllerManager.controller, m.controllerManager.operatorController)
 	rsf := scheduleFinished(m.controllerManager.redoController, m.controllerManager.redoOperatorController)
 	needUpdate := false
-	if m.redoTs.CheckpointTs < checkpointTs && sf {
+	// need to consider if all dispatcher are removed
+	if m.redoTs.CheckpointTs < checkpointTs && checkpointTs != math.MaxUint64 && sf {
 		m.redoTs.CheckpointTs = checkpointTs
 		needUpdate = true
 	}
-	if m.redoTs.ResolvedTs < resolvedTs && rsf {
+	if m.redoTs.ResolvedTs < resolvedTs && resolvedTs != math.MaxUint64 && rsf {
 		m.redoTs.ResolvedTs = resolvedTs
 		needUpdate = true
 	}

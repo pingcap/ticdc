@@ -135,7 +135,7 @@ main() {
 	kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 120
+	sleep 10
 	changefeed_id="test"
 	storage_path="file://$WORK_DIR/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id

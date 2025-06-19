@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
@@ -155,7 +154,6 @@ func NewEventDispatcherManager(
 	maintainerID node.ID,
 	newChangefeed bool,
 ) (*EventDispatcherManager, uint64, error) {
-	failpoint.Inject("NewEventDispatcherManagerDelay", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
@@ -800,17 +798,16 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
-			if e.dispatcherMap.Len() == 0 {
-				checkpointTs = 0
-			}
-			if e.redoDispatcherMap.Len() == 0 {
-				resolvedTs = 0
-			}
+			// Avoid invalid message
 			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
 				continue
 			}
-			previousCheckpointTs = max(previousCheckpointTs, checkpointTs)
-			previousResolvedTs = max(previousResolvedTs, resolvedTs)
+			if e.dispatcherMap.Len() != 0 {
+				previousCheckpointTs = max(previousCheckpointTs, checkpointTs)
+			}
+			if e.redoDispatcherMap.Len() != 0 {
+				previousResolvedTs = max(previousResolvedTs, resolvedTs)
+			}
 			message := new(heartbeatpb.RedoTsMessage)
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.CheckpointTs = checkpointTs

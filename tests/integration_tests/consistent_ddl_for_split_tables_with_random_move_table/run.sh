@@ -111,12 +111,11 @@ main() {
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
 
 	sleep 10
-
 	changefeed_id="test"
 	storage_path="file://$WORK_DIR/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
 	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
-	ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+	ensure 50 check_redo_checkpoint_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 

@@ -126,8 +126,7 @@ main() {
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $KILL_SERVER_PID
 
-	sleep 180
-
+	sleep 10
 	changefeed_id="test"
 	storage_path="file://$WORK_DIR/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
