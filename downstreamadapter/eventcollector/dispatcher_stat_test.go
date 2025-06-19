@@ -1132,7 +1132,6 @@ func TestHandleSingleDataEvents(t *testing.T) {
 }
 
 func TestHandleBatchDMLEvent(t *testing.T) {
-
 	normalHandleEvents := func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 		return len(events) > 0
 	}

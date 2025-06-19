@@ -334,6 +334,7 @@ func (h *HeartBeatResponseHandler) GetTimestamp(event HeartBeatResponse) dynstre
 func (h *HeartBeatResponseHandler) GetType(event HeartBeatResponse) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
+
 func (h *HeartBeatResponseHandler) OnDrop(event HeartBeatResponse) interface{} {
 	return nil
 }
@@ -390,6 +391,7 @@ func (h *CheckpointTsMessageHandler) GetTimestamp(event CheckpointTsMessage) dyn
 func (h *CheckpointTsMessageHandler) GetType(event CheckpointTsMessage) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
+
 func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface{} {
 	return nil
 }

@@ -69,7 +69,7 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	return res
 }
 
-var testCounter atomic.Int64
+// var testCounter atomic.Int64
 
 // appendEvent try to append an event to the path's pending queue.
 // It returns true if the event is appended successfully.

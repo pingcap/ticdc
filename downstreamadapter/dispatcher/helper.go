@@ -372,6 +372,7 @@ func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dyn
 func (h *DispatcherStatusHandler) GetType(event DispatcherStatusWithID) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
+
 func (h *DispatcherStatusHandler) OnDrop(event DispatcherStatusWithID) interface{} {
 	return nil
 }
