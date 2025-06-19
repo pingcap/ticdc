@@ -144,6 +144,8 @@ func (c *EventCollector) Run(ctx context.Context) {
 	g.Go(func() error {
 		return c.updateMetrics(ctx)
 	})
+
+	log.Info("event collector is running")
 }
 
 func (c *EventCollector) Close() {

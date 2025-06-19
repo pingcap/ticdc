@@ -293,8 +293,8 @@ type DMLEvent struct {
 }
 
 func (t *DMLEvent) String() string {
-	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, TableInfo: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
-		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo, t.Checksum, t.Length, t.ApproximateSize)
+	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
+		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName, t.Checksum, t.Length, t.ApproximateSize)
 }
 
 // NewDMLEvent creates a new DMLEvent with the given parameters
