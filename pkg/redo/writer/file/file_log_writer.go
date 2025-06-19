@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 )
 
@@ -27,6 +28,7 @@ var _ writer.RedoLogWriter = &logWriter{}
 type logWriter struct {
 	cfg           *writer.LogWriterConfig
 	backendWriter fileWriter
+	fileType      string
 }
 
 // NewLogWriter create a new logWriter.
@@ -50,7 +52,7 @@ func NewLogWriter(
 		cfg.Dir = cfg.URI.Path
 	}
 
-	l = &logWriter{cfg: cfg}
+	l = &logWriter{cfg: cfg, fileType: fileType}
 	if l.backendWriter, err = NewFileWriter(ctx, cfg, fileType, opts...); err != nil {
 		return nil, err
 	}
@@ -62,6 +64,13 @@ func (l *logWriter) Run(ctx context.Context) error {
 }
 
 func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
+	if l.fileType == redo.RedoDDLLogFileType {
+		return l.writeEvents(ctx, events...)
+	}
+	return l.asyncWriteEvents(ctx, events...)
+}
+
+func (l *logWriter) writeEvents(ctx context.Context, events ...writer.RedoEvent) error {
 	select {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
@@ -79,7 +88,7 @@ func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent)
 	return nil
 }
 
-func (l *logWriter) AsyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
+func (l *logWriter) asyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
 	for _, event := range events {
 		select {
 		case <-ctx.Done():

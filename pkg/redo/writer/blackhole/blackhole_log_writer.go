@@ -56,14 +56,6 @@ func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoE
 	return
 }
 
-func (bs *blackHoleWriter) AsyncWriteEvents(_ context.Context, events ...writer.RedoEvent) error {
-	if bs.invalid {
-		return errors.New("[WriteLog] invalid black hole writer")
-	}
-	bs.WriteEvents(nil, events...)
-	return nil
-}
-
 func (bs *blackHoleWriter) Close() error {
 	return nil
 }

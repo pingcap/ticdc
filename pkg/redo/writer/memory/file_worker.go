@@ -221,7 +221,7 @@ func (f *fileWorkerGroup) bgWriteLogs(
 	batchSize := 1000
 	cacheEventPostFlush := make([]func(), 0, batchSize)
 	flush := func() error {
-		err = f.flushAll(egCtx)
+		err := f.flushAll(egCtx)
 		if err != nil {
 			return err
 		}

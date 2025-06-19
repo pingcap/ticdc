@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/fsutil"
@@ -37,7 +36,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/atomic"
 	pioutil "go.etcd.io/etcd/pkg/v3/ioutil"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -147,11 +145,9 @@ func NewFileWriter(
 
 func (w *Writer) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
-	for i := 0; i < w.cfg.EncodingWorkerNum; i++ {
-		eg.Go(func() error {
-			return w.encode(ctx)
-		})
-	}
+	eg.Go(func() error {
+		return w.encode(ctx)
+	})
 	return eg.Wait()
 }
 
@@ -251,7 +247,7 @@ func (w *Writer) GetInputCh() chan writer.RedoEvent {
 	return w.inputCh
 }
 
-func (w *Writer) SyncWrite(event writer.RedoEvent) error {
+func (w *Writer) write(event writer.RedoEvent) error {
 	rl := event.ToRedoLog()
 	data, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
@@ -259,6 +255,14 @@ func (w *Writer) SyncWrite(event writer.RedoEvent) error {
 	}
 	w.AdvanceTs(rl.GetCommitTs())
 	_, err = w.Write(data)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *Writer) SyncWrite(event writer.RedoEvent) error {
+	err := w.write(event)
 	if err != nil {
 		return err
 	}
@@ -271,13 +275,45 @@ func (w *Writer) SyncWrite(event writer.RedoEvent) error {
 }
 
 func (w *Writer) encode(ctx context.Context) error {
+	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
+	num := 0
+	batchSize := 1000
+	cacheEventPostFlush := make([]func(), 0, batchSize)
+	flush := func() error {
+		err := w.Flush()
+		if err != nil {
+			return err
+		}
+		for _, fn := range cacheEventPostFlush {
+			fn()
+		}
+		num = 0
+		cacheEventPostFlush = cacheEventPostFlush[:0]
+		return nil
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case e := <-w.inputCh:
-		err := w.SyncWrite(e)
+	case <-ticker.C:
+		err := flush()
 		if err != nil {
-			log.Error("write dml event failed", zap.Error(err), zap.Any("events", e))
+			return errors.Trace(err)
+		}
+	case e := <-w.inputCh:
+		err := w.write(e)
+		if err != nil {
+			return err
+		}
+		num++
+		if num > batchSize {
+			err := flush()
+			if err != nil {
+				return errors.Trace(err)
+			}
+			e.PostFlush()
+		} else {
+			cacheEventPostFlush = append(cacheEventPostFlush, e.PostFlush)
 		}
 	}
 	return nil

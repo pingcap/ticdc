@@ -28,6 +28,7 @@ var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
 type memoryLogWriter struct {
 	cfg         *writer.LogWriterConfig
 	fileWorkers *fileWorkerGroup
+	fileType    string
 
 	cancel context.CancelFunc
 }
@@ -53,7 +54,8 @@ func NewLogWriter(
 	}
 
 	lw := &memoryLogWriter{
-		cfg: cfg,
+		cfg:      cfg,
+		fileType: fileType,
 	}
 	lw.fileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, fileType, extStorage, opts...)
 
@@ -67,6 +69,13 @@ func (l *memoryLogWriter) Run(ctx context.Context) error {
 }
 
 func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
+	if l.fileType == redo.RedoDDLLogFileType {
+		return l.writeEvents(ctx, events...)
+	}
+	return l.asyncWriteEvents(ctx, events...)
+}
+
+func (l *memoryLogWriter) writeEvents(ctx context.Context, events ...writer.RedoEvent) error {
 	for _, e := range events {
 		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
@@ -82,7 +91,7 @@ func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.Redo
 	return nil
 }
 
-func (l *memoryLogWriter) AsyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
+func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
 	for _, e := range events {
 		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
