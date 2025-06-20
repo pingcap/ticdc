@@ -847,7 +847,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	startTime := time.Now()
 	err := iter.innerIter.Close()
 	iter.innerIter = nil
-	metricEventStoreCloseReadDurationHistogram.Observe(float64(time.Since(startTime).Seconds()))
+	metricEventStoreCloseReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	return iter.rowCount, err
 }
 

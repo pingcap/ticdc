@@ -126,7 +126,7 @@ func (s *eventScanner) scan(
 		return nil, false, err
 	}
 	if iter == nil {
-		return s.handleEmptyIterator(ddlEvents, sess)
+		return s.handleEmptyIterator(ddlEvents, sess), false, nil
 	}
 	defer s.closeIterator(iter)
 
@@ -160,10 +160,10 @@ func (s *eventScanner) getEventIterator(session *session) (eventstore.EventItera
 }
 
 // handleEmptyIterator handles the case when there are no DML events
-func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, session *session) ([]event.Event, bool, error) {
+func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, session *session) []event.Event {
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id)
 	events := merger.appendRemainingDDLs(session.dataRange.EndTs)
-	return events, false, nil
+	return events
 }
 
 // closeIterator closes the event iterator and records metrics
@@ -188,7 +188,6 @@ func (s *eventScanner) scanAndMergeEvents(
 	errorHandler := newErrorHandler(session.dispatcherStat.id)
 
 	tableID := session.dataRange.Span.TableID
-
 	for {
 		shouldStop, err := s.checkScanConditions(session)
 		if err != nil {
@@ -237,8 +236,8 @@ func (s *eventScanner) scanAndMergeEvents(
 // return true if the scan should be stopped, false otherwise
 func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 	if session.isContextDone() {
-		log.Warn("scan exits since context done", zap.Error(session.ctx.Err()), zap.Stringer("dispatcherID", session.dispatcherStat.id))
-		return true, session.ctx.Err()
+		log.Warn("scan exits since context done", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Error(context.Cause(session.ctx)))
+		return true, context.Cause(session.ctx)
 	}
 
 	if !session.dispatcherStat.isRunning.Load() {
