@@ -719,6 +719,13 @@ func (cm *ControllerManager) getController(redo bool) *Controller {
 	return cm.controller
 }
 
+func (cm *ControllerManager) checkAdvance(redo bool) bool {
+	if redo {
+		return cm.redoOperatorController.GetOps() == 0 && cm.redoController.replicationDB.GetAbsentSize() == 0 && !cm.redoBarrier.ShouldBlockCheckpointTs()
+	}
+	return cm.operatorController.GetOps() == 0 && cm.controller.replicationDB.GetAbsentSize() == 0 && !cm.barrier.ShouldBlockCheckpointTs()
+}
+
 func addToWorkingTaskMap(
 	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	span *heartbeatpb.TableSpan,

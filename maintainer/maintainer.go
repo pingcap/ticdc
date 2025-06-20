@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
@@ -499,8 +498,8 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
 		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
 	}
-	advance := checkAdvance(m.controllerManager.controller, m.controllerManager.operatorController, m.controllerManager.barrier)
-	redoAdvance := checkAdvance(m.controllerManager.redoController, m.controllerManager.redoOperatorController, m.controllerManager.redoBarrier)
+	advance := m.controllerManager.checkAdvance(false)
+	redoAdvance := m.controllerManager.checkAdvance(true)
 	needUpdate := false
 	// need to consider if all dispatcher are removed
 	// this leads resolvedTs is math.MaxUint64
@@ -1099,8 +1098,4 @@ func (m *Maintainer) MergeTable(tableId int64) error {
 		return err
 	}
 	return m.controllerManager.mergeTable(tableId, false)
-}
-
-func checkAdvance(controller *Controller, operatorController *operator.Controller, barrier *Barrier) bool {
-	return operatorController.GetOps() == 0 && controller.replicationDB.GetAbsentSize() == 0 && !barrier.ShouldBlockCheckpointTs()
 }
