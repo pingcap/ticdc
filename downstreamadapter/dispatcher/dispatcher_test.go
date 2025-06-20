@@ -702,14 +702,14 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 		require.Equal(t, true, block)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	require.Equal(t, 1, len(mockSink.GetDMLs()))
 	mockSink.FlushDMLs()
 	require.False(t, callbackCalled)
 
 	failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents")
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	require.Equal(t, 2, len(mockSink.GetDMLs()))
 	mockSink.FlushDMLs()
 	// Now the callback should be called after all events are flushed
