@@ -892,7 +892,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat.(*dispatcherStat).isRunning.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
 	// todo: how to handle this error?
-	// FIXME:redo
 	_ = c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
 
