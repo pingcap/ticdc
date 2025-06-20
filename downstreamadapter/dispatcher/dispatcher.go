@@ -360,8 +360,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 }
 
 func (d *Dispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
-	// for one batch events, we need to add all them in table progress first,
-	// then add them to sink
+	// for one batch events, we need to add all them in table progress first, then add them to sink
 	// because we need to ensure the wakeCallback only will be called when
 	// all these events are flushed to downstream successfully
 	for _, event := range events {
@@ -372,15 +371,6 @@ func (d *Dispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 		failpoint.Inject("BlockAddDMLEvents", nil)
 	}
 }
-
-// func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
-// 	// for one batch events, we need to add all them in table progress first,
-// 	// then add them to sink
-// 	// because we need to ensure the wakeCallback only will be called when
-// 	// all these events are flushed to downstream successfully
-// 	d.tableProgress.Add(event)
-// 	d.sink.AddDMLEvent(event)
-// }
 
 func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 	d.tableProgress.Add(event)
