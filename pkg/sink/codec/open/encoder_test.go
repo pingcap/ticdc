@@ -1132,6 +1132,78 @@ func TestE2EPartitionTable(t *testing.T) {
 	}
 }
 
+func TestGenerateColumn(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	_ = helper.DDL2Event(`create table test.t(a int, b int as (a + 1) virtual not null, c int not null, unique index idx1(b), unique index idx2(c))`)
+	insertEvent := helper.DML2Event("test", "t", `insert into test.t (a, c) values (1, 2)`)
+	require.NotNil(t, insertEvent)
+	insertRow, ok := insertEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      insertEvent.TableInfo,
+		CommitTs:       insertEvent.CommitTs,
+		Event:          insertRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	dec, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	message := encoder.Build()[0]
+	dec.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, messageType, common.MessageTypeRow)
+
+	decoded := dec.NextDMLEvent()
+	require.NoError(t, err)
+	require.NotNil(t, decoded)
+	require.Equal(t, decoded.Rows.NumCols(), 2)
+
+	_ = helper.DDL2Event(`create table test.t1(a int primary key, b int as (a + 1) stored)`)
+	insertEvent = helper.DML2Event("test", "t1", `insert into test.t1 (a) values (1)`)
+	require.NotNil(t, insertEvent)
+	insertRow, ok = insertEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent = &commonEvent.RowEvent{
+		TableInfo:      insertEvent.TableInfo,
+		CommitTs:       insertEvent.CommitTs,
+		Event:          insertRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	message = encoder.Build()[0]
+	dec.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, messageType, common.MessageTypeRow)
+
+	decoded = dec.NextDMLEvent()
+	require.NoError(t, err)
+	require.NotNil(t, decoded)
+	require.Equal(t, decoded.Rows.NumCols(), 2)
+}
+
 // Including insert / update / delete
 func TestDMLEvent(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)

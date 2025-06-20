@@ -247,13 +247,16 @@ func writeColumnFieldValues(
 	colInfo := tableInfo.GetColumns()
 	for idx, col := range colInfo {
 		if selector.Select(col) {
-			isHandle := tableInfo.IsHandleKey(col.ID)
-			if onlyHandleKeyColumns && !isHandle {
+			if col.IsVirtualGenerated() {
+				continue
+			}
+			handle := tableInfo.IsHandleKey(col.ID)
+			if onlyHandleKeyColumns && !handle {
 				continue
 			}
 			encoded = true
 			jWriter.WriteObjectField(col.Name.O, func() {
-				writeColumnFieldValue(jWriter, col, row, idx, isHandle, columnFlags[col.Name.O])
+				writeColumnFieldValue(jWriter, col, row, idx, handle, columnFlags[col.Name.O])
 			})
 		}
 	}
