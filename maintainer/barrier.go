@@ -108,7 +108,6 @@ func NewBarrier(controller *Controller,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
-
 }
 
 func (b *Barrier) GetLock() *sync.Mutex {
