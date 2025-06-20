@@ -131,7 +131,7 @@ if [[ "$restart" == "true" ]]; then
 			$tls \
 			$certcn \
 			$addr \
-			$pd_addr &>>$workdir/stdout$logsuffix.log
+			$pd_addr >>$workdir/stdout$logsuffix.log 2>&1
 		if [ $? -eq 143 ]; then
 			break
 		fi
@@ -147,7 +147,7 @@ else
 		$tls \
 		$certcn \
 		$addr \
-		$pd_addr &>>$workdir/stdout$logsuffix.log &
+		$pd_addr >>$workdir/stdout$logsuffix.log 2>&1 &
 fi
 
 # Make sure cdc is ready to serve
@@ -184,6 +184,11 @@ for ((i = 0; i <= 50; i++)); do
 	fi
 	sleep 3
 done
+
+# for the next gen, we should create they keyspace info to replication worker
+if [ "$IS_NEXT_GEN" = "1" ]; then
+    curl -X POST "http://$TIKV_WORKER_HOST:$TIKV_WORKER_PORT/cdc/keyspace?keyspace_id=1" -H 'Content-Type: Application/json' -d "{\"pd_url\": \"http://$UP_PD_HOST_1:$UP_PD_PORT_1\", \"cdc_addr\": \"$addr_url\"}"
+fi
 
 set +x
 
