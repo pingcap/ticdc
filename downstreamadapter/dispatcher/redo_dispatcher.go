@@ -228,6 +228,7 @@ func (rd *RedoDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 // When we handle events, we don't have any previous events still in sink.
 func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	if rd.isRemoving.Load() {
+		log.Warn("redo dispatcher has removed", zap.Any("id", rd.id))
 		return true
 	}
 	// Only return false when all events are resolvedTs Event.

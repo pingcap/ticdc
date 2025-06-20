@@ -575,6 +575,8 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 		return nil
 	}
 
+	// we have to keep start-ts same as the dispatcher by query start-ts from mysql-sink
+	// because redo dispatcher checkpointTs always greater than or equal to dispatcher checkpointTs
 	var newStartTsList []int64
 	var err error
 	if e.sink.SinkType() == common.MysqlSinkType {
@@ -1656,7 +1658,7 @@ func (e *EventDispatcherManager) setRedoMeta() {
 func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
 	// only update meta on the one node
 	if e.tableTriggerEventDispatcher != nil && e.redoMeta.Running() {
-		log.Info("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs), zap.Any("node", e.GetMaintainerID()))
+		log.Info("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs), zap.Any("redoGlobalTs", e.redoGlobalTs.Load()))
 		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
 	return util.CompareAndIncrease(&e.redoGlobalTs, resolvedTs)

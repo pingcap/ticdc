@@ -172,6 +172,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID:       request.ChangefeedID,
 			DispatcherStatuses: dispatcherStatus,
+			Redo:               redo,
 		})
 }
 

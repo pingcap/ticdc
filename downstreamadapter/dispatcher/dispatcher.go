@@ -273,6 +273,7 @@ func (d *Dispatcher) HandleCacheEvents() {
 // When we handle events, we don't have any previous events still in sink.
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	if d.isRemoving.Load() {
+		log.Warn("dispatcher has removed", zap.Any("id", d.id))
 		return true
 	}
 	// redo check
