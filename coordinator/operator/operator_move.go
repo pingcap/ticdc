@@ -85,7 +85,7 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 		}
 		return m.changefeed.NewAddMaintainerMessage(m.dest)
 	}
-	return m.changefeed.NewRemoveMaintainerMessage(m.origin, false, false)
+	return m.changefeed.NewRemoveMaintainerMessage(m.origin, false)
 }
 
 func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {

@@ -249,9 +249,9 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	return msgs
 }
 
-// ShouldBlockCheckpointTs returns ture there is a block event need block the checkpoint ts forwarding
+// ShouldBlockCheckpointTs returns ture if there is a block event need block the checkpoint ts forwarding
 // currently, when the block event is a create table event, we should block the checkpoint ts forwarding
-// because on the
+// because on the complete checkpointTs calculation should consider the new dispatcher.
 func (b *Barrier) ShouldBlockCheckpointTs() bool {
 	flag := false
 	b.blockedEvents.RangeWoLock(func(key eventKey, barrierEvent *BarrierEvent) bool {

@@ -235,8 +235,8 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 		})
 }
 
-func (c *Changefeed) NewRemoveMaintainerMessage(server node.ID, caseCade, removed bool) *messaging.TargetMessage {
-	return RemoveMaintainerMessage(c.ID, server, caseCade, removed)
+func (c *Changefeed) NewRemoveMaintainerMessage(server node.ID, removed bool) *messaging.TargetMessage {
+	return RemoveMaintainerMessage(c.ID, server, removed)
 }
 
 func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage {
@@ -248,13 +248,11 @@ func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage 
 		})
 }
 
-func RemoveMaintainerMessage(id common.ChangeFeedID, server node.ID, caseCade bool, removed bool) *messaging.TargetMessage {
-	caseCade = caseCade || removed
+func RemoveMaintainerMessage(id common.ChangeFeedID, server node.ID, removed bool) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.RemoveMaintainerRequest{
 			Id:      id.ToPB(),
-			Cascade: caseCade,
 			Removed: removed,
 		})
 }
