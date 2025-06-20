@@ -37,7 +37,7 @@ const (
 )
 
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
-// start a Manager when the watcher is startup. It responsible for:
+// start a Manager when the ticdc server is startup. It responsible for:
 // 1. Handle bootstrap command from coordinator and report all changefeed maintainer status.
 // 2. Handle other commands from coordinator: like add or remove changefeed maintainer
 // 3. Manage maintainers lifetime
@@ -243,14 +243,20 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 	cfID := common.NewChangefeedIDFromPB(req.GetId())
 	cf, ok := m.maintainers.Load(cfID)
 	if !ok {
-		log.Warn("ignore remove maintainer request, "+
-			"since the maintainer not found",
-			zap.Stringer("changefeed", cfID),
-			zap.Any("request", req))
-		return &heartbeatpb.MaintainerStatus{
-			ChangefeedID: req.GetId(),
-			State:        heartbeatpb.ComponentState_Stopped,
+		if !req.Cascade {
+			log.Warn("ignore remove maintainer request, "+
+				"since the maintainer not found",
+				zap.Stringer("changefeed", cfID),
+				zap.Any("request", req))
+			return &heartbeatpb.MaintainerStatus{
+				ChangefeedID: req.GetId(),
+				State:        heartbeatpb.ComponentState_Stopped,
+			}
 		}
+		// it's cascade remove, we should remove the dispatcher from all node
+		// here we create a maintainer to run the remove the dispatcher logic
+		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler, m.pdAPI, m.regionCache)
+		m.maintainers.Store(cfID, cf)
 	}
 	cf.(*Maintainer).pushEvent(&Event{
 		changefeedID: cfID,

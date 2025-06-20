@@ -119,7 +119,8 @@ message AddMaintainerRequest  {
 
 message RemoveMaintainerRequest  {
     ChangefeedID id = 1;
-    bool removed = 2;
+    bool cascade = 2;
+    bool removed = 3;
 }
 
 message MaintainerBootstrapRequest {

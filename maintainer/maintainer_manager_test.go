@@ -231,7 +231,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	// Case 6: Remove maintainer
 	err = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID, messaging.MaintainerManagerTopic,
-		&heartbeatpb.RemoveMaintainerRequest{Id: cfID.ToPB()}))
+		&heartbeatpb.RemoveMaintainerRequest{Id: cfID.ToPB(), Cascade: true}))
 	require.NoError(t, err)
 	time.Sleep(5 * time.Second)
 
@@ -417,6 +417,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	_ = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID, messaging.MaintainerManagerTopic, &heartbeatpb.RemoveMaintainerRequest{
 		Id:      cfID.ToPB(),
+		Cascade: true,
 		Removed: true,
 	}))
 
