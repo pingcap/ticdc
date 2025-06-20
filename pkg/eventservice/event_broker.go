@@ -489,8 +489,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
 	sl := scanLimit{
-		maxBytes: task.getCurrentScanLimitInBytes(),
-		timeout:  time.Millisecond * 1000, // 1 Second
+		maxScannedBytes: task.getCurrentScanLimitInBytes(),
+		timeout:         time.Millisecond * 1000, // 1 Second
 	}
 
 	events, isBroken, err := scanner.scan(ctx, task, dataRange, sl)
