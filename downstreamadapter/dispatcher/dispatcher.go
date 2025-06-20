@@ -244,6 +244,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	dmlWakeOnce := &sync.Once{}
+	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
@@ -291,7 +292,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 					dmlWakeOnce.Do(wakeCallback)
 				}
 			})
-			d.AddDMLEventToSink(dml)
+			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled",
@@ -349,12 +350,23 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Uint64("commitTs", event.GetCommitTs()))
 		}
 	}
+	if len(dmlEvents) > 0 {
+		d.AddDMLEventsToSink(dmlEvents)
+	}
 	return block
 }
 
-func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
-	d.tableProgress.Add(event)
-	d.sink.AddDMLEvent(event)
+func (d *Dispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
+	// for one batch events, we need to add all them in table progress first,
+	// then add them to sink
+	// because we need to ensure the wakeCallback only will be called when
+	// all these events are flushed to downstream successfully
+	for _, event := range events {
+		d.tableProgress.Add(event)
+	}
+	for _, event := range events {
+		d.sink.AddDMLEvent(event)
+	}
 }
 
 func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
