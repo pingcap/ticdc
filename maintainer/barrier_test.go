@@ -45,7 +45,7 @@ func TestOneBlockEvent(t *testing.T) {
 	controllerManager.controller.replicationDB.BindSpanToNode("", "node1", stm)
 	controllerManager.controller.replicationDB.MarkSpanReplicating(stm)
 
-	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false)
+	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false, nil, false)
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -181,7 +181,7 @@ func TestNormalBlock(t *testing.T) {
 	controllerManager.controller.replicationDB.BindSpanToNode("node1", "node2", selectedRep)
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
-	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false)
+	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false, nil, false)
 
 	// first node block request
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -342,7 +342,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	}
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
-	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false)
+	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false, nil, false)
 
 	// first node block request
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -492,7 +492,7 @@ func TestSchemaBlock(t *testing.T) {
 	}
 
 	newTable := &heartbeatpb.Table{TableID: 10, SchemaID: 2}
-	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, true)
+	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, true, nil, false)
 
 	// first dispatcher  block request
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -666,7 +666,7 @@ func TestSyncPointBlock(t *testing.T) {
 	selectedRep := controllerManager.controller.GetTask(selectDispatcherID)
 	controllerManager.controller.replicationDB.BindSpanToNode("node1", "node2", selectedRep)
 
-	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, true)
+	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, true, nil, false)
 	// first dispatcher  block request
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -812,7 +812,7 @@ func TestNonBlocked(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	controllerManager := NewControllerManager(cfID, 1, nil, nil, nil, nil, ddlSpan, nil, 1000, 0)
-	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false)
+	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false, nil, false)
 
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
@@ -861,7 +861,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 		}, "node1")
 	controllerManager := NewControllerManager(cfID, 1, nil, nil, nil, nil, ddlSpan, nil, 1000, 0)
 
-	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false)
+	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false, nil, false)
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -925,8 +925,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	}
 
 	// two waiting dispatcher
-	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false)
-	barrier.HandleBootstrapResponse(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"nod1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -964,8 +963,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	require.True(t, event.allDispatcherReported())
 
 	// one waiting dispatcher, and one writing
-	barrier = NewBarrier(controllerManager.operatorController, controllerManager.controller, false)
-	barrier.HandleBootstrapResponse(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	barrier = NewBarrier(controllerManager.operatorController, controllerManager.controller, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"nod1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -1002,8 +1000,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// two done dispatchers
-	barrier = NewBarrier(controllerManager.operatorController, controllerManager.controller, false)
-	barrier.HandleBootstrapResponse(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	barrier = NewBarrier(controllerManager.operatorController, controllerManager.controller, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"nod1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -1040,8 +1037,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	require.True(t, event.writerDispatcherAdvanced)
 
 	// nil, none stage
-	barrier = NewBarrier(controllerManager.operatorController, controllerManager.controller, false)
-	barrier.HandleBootstrapResponse(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	barrier = NewBarrier(controllerManager.operatorController, controllerManager.controller, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"nod1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -1079,7 +1075,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	controllerManager := NewControllerManager(cfID, 1, nil, nil, nil, nil, ddlSpan, nil, 1000, 0)
-	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, true)
+	barrier := NewBarrier(controllerManager.operatorController, controllerManager.controller, true, nil, false)
 	for id := 1; id < 1000; id++ {
 		controllerManager.controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 1)
 	}

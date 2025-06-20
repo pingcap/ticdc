@@ -243,8 +243,7 @@ func (cm *ControllerManager) FinishBootstrap(
 	cm.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
 	// Step 6: Initialize and start sub components
-	cm.initializeComponents()
-	cm.newBarrier(allNodesResp)
+	cm.initializeComponents(allNodesResp)
 
 	// Step 7: Prepare response
 	initSchemaInfos := cm.prepareSchemaInfoResponse(schemaInfos)
@@ -257,16 +256,6 @@ func (cm *ControllerManager) FinishBootstrap(
 		TableTriggerEventDispatcherId: cm.controller.ddlDispatcherID.ToPB(),
 		Schemas:                       initSchemaInfos,
 	}, nil
-}
-
-func (cm *ControllerManager) newBarrier(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
-	// Initialize barrier
-	if cm.redoController != nil {
-		cm.redoBarrier = NewBarrier(cm.redoOperatorController, cm.redoController, cm.cfConfig.Scheduler.EnableTableAcrossNodes)
-		cm.redoBarrier.HandleBootstrapResponse(allNodesResp, true)
-	}
-	cm.barrier = NewBarrier(cm.operatorController, cm.controller, cm.cfConfig.Scheduler.EnableTableAcrossNodes)
-	cm.barrier.HandleBootstrapResponse(allNodesResp, false)
 }
 
 func (cm *ControllerManager) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) uint64 {
@@ -429,7 +418,13 @@ func (cm *ControllerManager) handleRemainingWorkingTasks(
 	}
 }
 
-func (cm *ControllerManager) initializeComponents() {
+func (cm *ControllerManager) initializeComponents(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
+	// Initialize barrier
+	if cm.redoController != nil {
+		cm.redoBarrier = NewBarrier(cm.redoOperatorController, cm.redoController, cm.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, true)
+	}
+	cm.barrier = NewBarrier(cm.operatorController, cm.controller, cm.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, false)
+
 	// Start scheduler
 	cm.taskHandles = append(cm.taskHandles, cm.schedulerController.Start(cm.taskPool)...)
 	// redo

@@ -99,13 +99,21 @@ type eventKey struct {
 }
 
 // NewBarrier create a new barrier for the changefeed
-func NewBarrier(operatorController *operator.Controller, controller *Controller, splitTableEnabled bool) *Barrier {
-	return &Barrier{
+func NewBarrier(
+	operatorController *operator.Controller,
+	controller *Controller,
+	splitTableEnabled bool,
+	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	redo bool,
+) *Barrier {
+	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
 		operatorController: operatorController,
 		controller:         controller,
 		splitTableEnabled:  splitTableEnabled,
 	}
+	barrier.handleBootstrapResponse(bootstrapRespMap, redo)
+	return &barrier
 }
 
 func (b *Barrier) GetLock() *sync.Mutex {
@@ -176,8 +184,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 		})
 }
 
-// HandleBootstrapResponse rebuild the block event from the bootstrap response
-func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse, redo bool) {
+// handleBootstrapResponse rebuild the block event from the bootstrap response
+func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse, redo bool) {
 	for _, resp := range bootstrapRespMap {
 		for _, span := range resp.Spans {
 			if redo != span.Redo {
@@ -258,9 +266,9 @@ func (b *Barrier) Resend(redo bool) []*messaging.TargetMessage {
 	return msgs
 }
 
-// ShouldBlockCheckpointTs returns ture there is a block event need block the checkpoint ts forwarding
+// ShouldBlockCheckpointTs returns ture if there is a block event need block the checkpoint ts forwarding
 // currently, when the block event is a create table event, we should block the checkpoint ts forwarding
-// because on the
+// because on the complete checkpointTs calculation should consider the new dispatcher.
 func (b *Barrier) ShouldBlockCheckpointTs() bool {
 	flag := false
 	b.blockedEvents.RangeWoLock(func(key eventKey, barrierEvent *BarrierEvent) bool {
