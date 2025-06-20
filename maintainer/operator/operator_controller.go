@@ -102,7 +102,6 @@ func (oc *Controller) Execute() time.Time {
 			case "occupy", "merge", "split", "remove":
 			default:
 				atomic.AddInt64(&oc.ops, 1)
-				log.Error("excute op", zap.Any("op", op.Type()), zap.Any("id", op.ID()), zap.Any("ops", atomic.LoadInt64(&oc.ops)), zap.Any("redo", oc.redo))
 			}
 			op.SetRepeat(true)
 		}
@@ -252,7 +251,6 @@ func (oc *Controller) pollQueueingOperator() (
 			case "occupy", "merge", "split", "remove":
 			default:
 				atomic.AddInt64(&oc.ops, -1)
-				log.Error("excute op done", zap.Any("op", op.Type()), zap.Any("id", op.ID()), zap.Any("ops", atomic.LoadInt64(&oc.ops)), zap.Any("redo", oc.redo))
 			}
 		}
 		return nil, true
@@ -268,7 +266,6 @@ func (oc *Controller) pollQueueingOperator() (
 			case "occupy", "merge", "split", "remove":
 			default:
 				atomic.AddInt64(&oc.ops, -1)
-				log.Error("excute op done", zap.Any("op", op.Type()), zap.Any("id", op.ID()), zap.Any("ops", atomic.LoadInt64(&oc.ops)), zap.Any("redo", oc.redo))
 			}
 		}
 		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()

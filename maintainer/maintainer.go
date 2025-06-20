@@ -499,19 +499,20 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
 		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
 	}
-	sf := scheduleFinished(m.controllerManager.controller, m.controllerManager.operatorController)
-	rsf := scheduleFinished(m.controllerManager.redoController, m.controllerManager.redoOperatorController)
+	advance := checkAdvance(m.controllerManager.controller, m.controllerManager.operatorController, m.controllerManager.barrier)
+	redoAdvance := checkAdvance(m.controllerManager.redoController, m.controllerManager.redoOperatorController, m.controllerManager.redoBarrier)
 	needUpdate := false
 	// need to consider if all dispatcher are removed
-	if m.redoTs.CheckpointTs < checkpointTs && checkpointTs != math.MaxUint64 && sf {
+	// this leads resolvedTs is math.MaxUint64
+	if m.redoTs.CheckpointTs < checkpointTs && checkpointTs != math.MaxUint64 && advance {
 		m.redoTs.CheckpointTs = checkpointTs
 		needUpdate = true
 	}
-	if m.redoTs.ResolvedTs < resolvedTs && resolvedTs != math.MaxUint64 && rsf {
+	if m.redoTs.ResolvedTs < resolvedTs && resolvedTs != math.MaxUint64 && redoAdvance {
 		m.redoTs.ResolvedTs = resolvedTs
 		needUpdate = true
 	}
-	log.Error("received redo ts update message", zap.Any("sf", sf), zap.Any("rsf", rsf), zap.Any("needUpdate", needUpdate),
+	log.Error("received redo ts update message", zap.Any("sf", advance), zap.Any("rsf", redoAdvance), zap.Any("needUpdate", needUpdate),
 		zap.Any("message", msg), zap.Any("redoTs", m.redoTs.RedoTsMessage),
 		zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs),
 	)
@@ -1100,6 +1101,6 @@ func (m *Maintainer) MergeTable(tableId int64) error {
 	return m.controllerManager.mergeTable(tableId, false)
 }
 
-func scheduleFinished(controller *Controller, operatorController *operator.Controller) bool {
-	return operatorController.GetOps() == 0 && controller.replicationDB.GetAbsentSize() == 0
+func checkAdvance(controller *Controller, operatorController *operator.Controller, barrier *Barrier) bool {
+	return operatorController.GetOps() == 0 && controller.replicationDB.GetAbsentSize() == 0 && !barrier.ShouldBlockCheckpointTs()
 }
