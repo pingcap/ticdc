@@ -175,6 +175,9 @@ type Dispatcher struct {
 	redo         bool
 	redoGlobalTs *atomic.Uint64
 	cacheEvents  chan cacheEvents
+
+	// hack
+	mu sync.Mutex
 }
 
 func NewDispatcher(
@@ -276,6 +279,8 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		log.Warn("dispatcher has removed", zap.Any("id", d.id))
 		return true
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	// redo check
 	if d.redo && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
 		// cache here

@@ -481,7 +481,10 @@ func (h *RedoTsMessageHandler) GetTimestamp(event RedoTsMessage) dynstream.Times
 func (h *RedoTsMessageHandler) GetType(event RedoTsMessage) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
-func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) {}
+
+func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) interface{} {
+	return nil
+}
 
 func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *EventDispatcherManager, *MergeDispatcherRequestHandler] {
 	ds := dynstream.NewParallelDynamicStream(
