@@ -345,8 +345,9 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 		log.Info("DDL event received",
 			zap.Int32("partition", partition), zap.Any("offset", offset),
+			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
 			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
-			zap.Any("blockedTables", ddl.GetBlockedTables()), zap.Any("DDL", ddl))
+			zap.Any("blockedTables", ddl.GetBlockedTables()))
 
 		err := w.flushDDLEvent(ctx, ddl)
 		if err != nil {

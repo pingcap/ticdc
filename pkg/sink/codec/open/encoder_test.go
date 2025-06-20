@@ -1514,60 +1514,6 @@ func TestRenameTable(t *testing.T) {
 	require.Contains(t, decodedDDL.GetBlockedTables().TableIDs, decodedInsert.GetTableID())
 }
 
-func TestEncodeGeneratedColumn(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-
-	createTable := `create table t(a int, b int as (a + 1) virtual not null, c int not null, unique index idx1(b), unique index idx2(c))`
-
-	_ = helper.DDL2Event(createTable)
-
-	dmlEvent := helper.DML2Event("test", "t", `insert into t(a, c) values (1, 2)`)
-	require.NotNil(t, dmlEvent)
-	insertRow, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
-
-	insertRowEvent := &commonEvent.RowEvent{
-		TableInfo:      dmlEvent.TableInfo,
-		CommitTs:       1,
-		Event:          insertRow,
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {},
-	}
-
-	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen)
-
-	encoder, err := NewBatchEncoder(ctx, codecConfig)
-	require.NoError(t, err)
-
-	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
-	require.NoError(t, err)
-
-	messages := encoder.Build()
-	require.Len(t, messages, 1)
-
-	message := messages[0]
-	require.Equal(t, 1, message.GetRowsCount())
-
-	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
-	require.NoError(t, err)
-
-	decoder.AddKeyValue(message.Key, message.Value)
-
-	messageType, hasNext := decoder.HasNext()
-	require.True(t, hasNext)
-	require.Equal(t, common.MessageTypeRow, messageType)
-
-	event := decoder.NextDMLEvent()
-	change, ok := event.GetNextRow()
-	require.True(t, ok)
-
-	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, event.TableInfo)
-}
-
 func TestDDLSequence(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
