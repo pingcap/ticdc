@@ -1174,46 +1174,6 @@ func TestErrorHandler(t *testing.T) {
 		})
 	})
 
-	// Test handleIteratorError method
-	t.Run("HandleIteratorError", func(t *testing.T) {
-		errorHandler := newErrorHandler(dispatcherID)
-
-		// Test case 1: Normal iterator error
-		t.Run("NormalIteratorError", func(t *testing.T) {
-			originalErr := errors.New("iterator read failed")
-			returnedErr := errorHandler.handleIteratorError(originalErr)
-
-			// Should return the original error unchanged
-			require.Equal(t, originalErr, returnedErr)
-		})
-
-		// Test case 2: Context canceled error
-		t.Run("ContextCanceledError", func(t *testing.T) {
-			canceledErr := context.Canceled
-			returnedErr := errorHandler.handleIteratorError(canceledErr)
-
-			// Should return the original error unchanged
-			require.Equal(t, canceledErr, returnedErr)
-		})
-
-		// Test case 3: Wrapped error
-		t.Run("WrappedIteratorError", func(t *testing.T) {
-			wrappedErr := fmt.Errorf("wrapped: %w", errors.New("underlying iterator error"))
-			returnedErr := errorHandler.handleIteratorError(wrappedErr)
-
-			// Should return the original error unchanged
-			require.Equal(t, wrappedErr, returnedErr)
-		})
-
-		// Test case 4: Nil error (edge case)
-		t.Run("NilIteratorError", func(t *testing.T) {
-			returnedErr := errorHandler.handleIteratorError(nil)
-
-			// Should return nil unchanged
-			require.Nil(t, returnedErr)
-		})
-	})
-
 	// Test different error types and dispatcher states
 	t.Run("ErrorTypesAndDispatcherStates", func(t *testing.T) {
 		errorHandler := newErrorHandler(dispatcherID)
@@ -1284,7 +1244,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 		schemaGetter: mockSchemaGetter,
 	}
 
-	// Create scan session
+	// Create scan sess
 	ctx := context.Background()
 	dispatcherStat := &dispatcherStat{
 		id:        dispatcherID,
@@ -1306,7 +1266,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 		timeout:         10 * time.Second,
 	}
 
-	session := &session{
+	sess := &session{
 		ctx:            ctx,
 		dispatcherStat: dispatcherStat,
 		dataRange:      dataRange,
@@ -1316,7 +1276,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	}
 
 	// Execute scanAndMergeEvents
-	events, isBroken, err := scanner.scanAndMergeEvents(session, []pevent.DDLEvent{}, mockIter)
+	events, isBroken, err := scanner.scanAndMergeEvents(sess, []pevent.DDLEvent{}, mockIter)
 
 	// Verify results
 	require.NoError(t, err)
@@ -1355,8 +1315,8 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	require.Equal(t, dispatcherID, resolvedEvent.DispatcherID)
 	require.Equal(t, dataRange.EndTs, resolvedEvent.ResolvedTs)
 
-	// Verify session state was updated correctly
-	require.Equal(t, updateEvent.CRTs, session.lastCommitTs)
-	require.Equal(t, 1, session.dmlCount)
-	require.True(t, session.scannedBytes > 0) // Some bytes were processed
+	// Verify sess state was updated correctly
+	require.Equal(t, updateEvent.CRTs, sess.lastCommitTs)
+	require.Equal(t, 1, sess.dmlCount)
+	require.True(t, sess.scannedBytes > 0) // Some bytes were processed
 }

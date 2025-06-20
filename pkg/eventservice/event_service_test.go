@@ -339,9 +339,9 @@ type mockEventIterator struct {
 	rowCount     int
 }
 
-func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool, error) {
+func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool) {
 	if len(iter.events) == 0 {
-		return nil, false, nil
+		return nil, false
 	}
 
 	row := iter.events[0]
@@ -353,7 +353,7 @@ func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool, error) {
 	iter.prevStartTS = row.StartTs
 	iter.prevCommitTS = row.CRTs
 	iter.rowCount++
-	return row, isNewTxn, nil
+	return row, isNewTxn
 }
 
 func (m *mockEventIterator) Close() (int64, error) {

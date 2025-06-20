@@ -185,7 +185,6 @@ func (s *eventScanner) scanAndMergeEvents(
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id)
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
 	checker := newLimitChecker(session.limit.maxScannedBytes, session.limit.timeout, session.startTime)
-	errorHandler := newErrorHandler(session.dispatcherStat.id)
 
 	tableID := session.dataRange.Span.TableID
 	for {
@@ -197,17 +196,14 @@ func (s *eventScanner) scanAndMergeEvents(
 			return nil, false, nil
 		}
 
-		rawEvent, isNewTxn, err := iter.Next()
-		if err != nil {
-			return nil, false, errorHandler.handleIteratorError(err)
-		}
-
+		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			return s.finalizeScan(session, merger, processor)
+			events, err := s.finalizeScan(session, merger, processor)
+			return events, false, err
 		}
 
 		session.addBytes(rawEvent.ApproximateDataSize())
-		session.entryCount++
+		session.scannedEntryCount++
 		if isNewTxn && checker.checkLimits(session.scannedBytes) {
 			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
 				return s.interruptScan(session, merger, processor)
@@ -215,13 +211,13 @@ func (s *eventScanner) scanAndMergeEvents(
 		}
 
 		if isNewTxn {
-			if err := s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
+			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
 				return nil, false, err
 			}
 			continue
 		}
 
-		if err := processor.appendRow(rawEvent); err != nil {
+		if err = processor.appendRow(rawEvent); err != nil {
 			log.Error("append row failed", zap.Error(err),
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
@@ -286,7 +282,7 @@ func (s *eventScanner) handleNewTransaction(
 	}
 
 	// Process new transaction
-	if err := processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id); err != nil {
+	if err = processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id); err != nil {
 		return err
 	}
 
@@ -300,9 +296,9 @@ func (s *eventScanner) finalizeScan(
 	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
-) ([]event.Event, bool, error) {
+) ([]event.Event, error) {
 	if err := processor.clearCache(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	// Append final batch
 	events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
@@ -312,7 +308,7 @@ func (s *eventScanner) finalizeScan(
 	remainingEvents := merger.appendRemainingDDLs(session.dataRange.EndTs)
 	session.events = append(session.events, remainingEvents...)
 
-	return session.events, false, nil
+	return session.events, nil
 }
 
 // interruptScan handles scan interruption due to limits
@@ -343,11 +339,12 @@ type session struct {
 	limit          scanLimit
 
 	// State tracking
-	startTime    time.Time
-	scannedBytes int64
-	lastCommitTs uint64
-	entryCount   int
-	dmlCount     int
+	startTime         time.Time
+	scannedBytes      int64
+	lastCommitTs      uint64
+	scannedEntryCount int
+	// dmlCount is the count of transactions.
+	dmlCount int
 
 	// Result collection
 	events []event.Event
@@ -631,10 +628,4 @@ func (h *errorHandler) handleSchemaError(err error, dispatcherStat *dispatcherSt
 	}
 
 	return true, err
-}
-
-// handleIteratorError handles iterator-related errors
-func (h *errorHandler) handleIteratorError(err error) error {
-	log.Error("read events from eventStore failed", zap.Error(err), zap.Stringer("dispatcherID", h.dispatcherID))
-	return err
 }
