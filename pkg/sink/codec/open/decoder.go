@@ -395,6 +395,10 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		if isNullable(raw.Flag) {
 			col.AddFlag(mysql.NotNullFlag)
 		}
+		if isGenerated(raw.Flag) {
+			col.AddFlag(mysql.GeneratedColumnFlag)
+			col.GeneratedExprString = "holder" // just to make it not empty
+		}
 
 		switch col.GetType() {
 		case mysql.TypeVarchar, mysql.TypeString,

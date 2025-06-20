@@ -354,6 +354,10 @@ func isUnsigned(flag uint64) bool {
 	return flag&unsignedFlag != 0
 }
 
+func isGenerated(flag uint64) bool {
+	return flag&generatedColumnFlag != 0
+}
+
 func initColumnFlags(tableInfo *commonType.TableInfo) map[string]uint64 {
 	result := make(map[string]uint64, len(tableInfo.GetColumns()))
 	for _, col := range tableInfo.GetColumns() {
