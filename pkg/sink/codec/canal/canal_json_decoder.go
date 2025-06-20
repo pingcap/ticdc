@@ -86,7 +86,7 @@ type decoder struct {
 }
 
 var (
-	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableIDAllocator  = common.NewTableIDAllocator()
 	tableInfoAccessor = common.NewTableInfoAccessor()
 )
 
@@ -351,13 +351,14 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
-	physicalTableID := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
-	result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableID)
-	log.Debug("set blocked tables for the DDL event",
-		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
-
-	tableInfoAccessor.Remove(result.SchemaName, result.TableName)
+	result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
+	schemaName := result.SchemaName
+	tableName := result.TableName
+	if result.Type == byte(timodel.ActionRenameTable) {
+		schemaName = result.ExtraSchemaName
+		tableName = result.ExtraTableName
+	}
+	tableInfoAccessor.Remove(schemaName, tableName)
 	return result
 }
 
@@ -528,7 +529,7 @@ func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
+	tableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
 	tableInfo.Name = pmodel.NewCIStr(tableName)
 
 	columns := newTiColumns(msg)

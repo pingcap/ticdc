@@ -38,7 +38,7 @@ if ! [[ "$delay_seconds" =~ ^[0-9]+$ ]]; then
 	exit 1
 fi
 
-command_to_run="$@"
+command_to_run=("$@")
 attempt=1
 
 # Main retry loop
@@ -46,7 +46,7 @@ while [ $attempt -le $max_attempts ]; do
 	echo "Attempt $attempt of $max_attempts: $command_to_run"
 
 	# Execute the command and capture its exit code
-	eval "$command_to_run"
+	"${command_to_run[@]}"
 	exit_code=$?
 
 	# If command succeeded, exit with success

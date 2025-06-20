@@ -33,7 +33,6 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -43,14 +42,14 @@ type partitionProgress struct {
 	watermark       uint64
 	watermarkOffset kafka.Offset
 
-	eventGroups map[model.TableID]*eventsGroup
+	eventGroups map[int64]*eventsGroup
 	decoder     common.Decoder
 }
 
 func newPartitionProgress(partition int32, decoder common.Decoder) *partitionProgress {
 	return &partitionProgress{
 		partition:   partition,
-		eventGroups: make(map[model.TableID]*eventsGroup),
+		eventGroups: make(map[int64]*eventsGroup),
 		decoder:     decoder,
 	}
 }
@@ -147,9 +146,9 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	// so we can make assumption that the all DMLs received before the DDL event.
 	// since one table's events may be produced to the different partitions, so we have to flush all partitions.
 	// if block the whole database, flush all tables, otherwise flush the blocked tables.
-	tableIDs := make(map[model.TableID]struct{})
+	tableIDs := make(map[int64]struct{})
 	switch ddl.GetBlockedTables().InfluenceType {
-	case commonEvent.InfluenceTypeDB:
+	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
 		for _, progress := range w.progresses {
 			for tableID := range progress.eventGroups {
 				tableIDs[tableID] = struct{}{}
@@ -346,8 +345,9 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 		log.Info("DDL event received",
 			zap.Int32("partition", partition), zap.Any("offset", offset),
+			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
 			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
-			zap.Any("blockedTables", ddl.GetBlockedTables()), zap.Any("DDL", ddl))
+			zap.Any("blockedTables", ddl.GetBlockedTables()))
 
 		err := w.flushDDLEvent(ctx, ddl)
 		if err != nil {

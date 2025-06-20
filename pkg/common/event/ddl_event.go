@@ -168,21 +168,29 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		if len(queries) != len(d.MultipleTableInfos) {
 			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
-		if len(d.TableNameChange.DropName) > 0 && len(d.TableNameChange.DropName) != len(d.MultipleTableInfos) {
-			log.Panic("drop name length should be equal to multipleTableInfos length", zap.Any("query", d.TableNameChange.DropName), zap.Any("multipleTableInfos", d.MultipleTableInfos))
+
+		t := model.ActionCreateTable
+		if model.ActionType(d.Type) == model.ActionRenameTables {
+			t = model.ActionRenameTable
+			if len(d.TableNameChange.DropName) != len(d.MultipleTableInfos) {
+				log.Panic("drop name length should be equal to multipleTableInfos length", zap.Any("query", d.TableNameChange.DropName), zap.Any("multipleTableInfos", d.MultipleTableInfos))
+			}
 		}
 		for i, info := range d.MultipleTableInfos {
-			events = append(events, &DDLEvent{
-				Version:         d.Version,
-				Type:            d.Type,
-				SchemaName:      info.GetSchemaName(),
-				TableName:       info.GetTableName(),
-				ExtraSchemaName: d.TableNameChange.DropName[i].SchemaName,
-				ExtraTableName:  d.TableNameChange.DropName[i].TableName,
-				TableInfo:       info,
-				Query:           queries[i],
-				FinishedTs:      d.FinishedTs,
-			})
+			event := &DDLEvent{
+				Version:    d.Version,
+				Type:       byte(t),
+				SchemaName: info.GetSchemaName(),
+				TableName:  info.GetTableName(),
+				TableInfo:  info,
+				Query:      queries[i],
+				FinishedTs: d.FinishedTs,
+			}
+			if model.ActionType(d.Type) == model.ActionRenameTables {
+				event.ExtraSchemaName = d.TableNameChange.DropName[i].SchemaName
+				event.ExtraTableName = d.TableNameChange.DropName[i].TableName
+			}
+			events = append(events, event)
 		}
 		return events
 	default:

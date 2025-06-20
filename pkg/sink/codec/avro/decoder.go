@@ -37,7 +37,7 @@ import (
 )
 
 var (
-	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableIDAllocator  = common.NewTableIDAllocator()
 	tableInfoAccessor = common.NewTableInfoAccessor()
 )
 
@@ -295,7 +295,7 @@ func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo,
 
 func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
+	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
 	tidbTableInfo.Name = pmodel.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)
@@ -469,11 +469,14 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.Type = byte(actionType)
 
 	if d.idx == 0 {
-		physicalTableIDs := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
-		result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
-		log.Debug("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-			zap.Any("actionType", actionType.String()), zap.Any("tableID", physicalTableIDs))
-		tableInfoAccessor.Remove(result.SchemaName, result.TableName)
+		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
+		schemaName := result.SchemaName
+		tableName := result.TableName
+		if result.Type == byte(timodel.ActionRenameTable) {
+			schemaName = result.ExtraSchemaName
+			tableName = result.ExtraTableName
+		}
+		tableInfoAccessor.Remove(schemaName, tableName)
 	}
 	return result
 }

@@ -19,7 +19,7 @@ import (
 
 	"github.com/klauspost/compress/snappy"
 	"github.com/pierrec/lz4/v4"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -67,16 +67,16 @@ func Encode(cc string, data []byte) ([]byte, error) {
 		var buf bytes.Buffer
 		writer := lz4.NewWriter(&buf)
 		if _, err := writer.Write(data); err != nil {
-			return nil, cerror.WrapError(cerror.ErrCompressionFailed, err)
+			return nil, errors.WrapError(errors.ErrCompressionFailed, err)
 		}
 		if err := writer.Close(); err != nil {
-			return nil, cerror.WrapError(cerror.ErrCompressionFailed, err)
+			return nil, errors.WrapError(errors.ErrCompressionFailed, err)
 		}
 		return buf.Bytes(), nil
 	default:
 	}
 
-	return nil, cerror.ErrCompressionFailed.GenWithStack("Unsupported compression %s", cc)
+	return nil, errors.ErrCompressionFailed.GenWithStack("Unsupported compression %s", cc)
 }
 
 // Decode the given data by the given compression codec.
@@ -107,5 +107,5 @@ func Decode(cc string, data []byte) ([]byte, error) {
 	default:
 	}
 
-	return nil, cerror.ErrCompressionFailed.GenWithStack("Unsupported compression %s", cc)
+	return nil, errors.ErrCompressionFailed.GenWithStack("Unsupported compression %s", cc)
 }

@@ -36,7 +36,7 @@ import (
 )
 
 var (
-	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableIDAllocator  = common.NewTableIDAllocator()
 	tableInfoAccessor = common.NewTableInfoAccessor()
 )
 
@@ -183,13 +183,16 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	// since tableInfoAccessor is global, we need to make sure the table info
 	// is not removed by other partitions' decoder.
 	if b.idx == 0 {
-		physicalTableIDs := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
-		result.BlockedTables = common.GetInfluenceTables(m.Type, physicalTableIDs)
-		log.Debug("set blocked tables for the DDL event",
-			zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-			zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
-		tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
+		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
+		schemaName := result.SchemaName
+		tableName := result.TableName
+		if result.Type == byte(timodel.ActionRenameTable) {
+			schemaName = result.ExtraSchemaName
+			tableName = result.ExtraTableName
+		}
+		tableInfoAccessor.Remove(schemaName, tableName)
 	}
+
 	b.nextKey = nil
 	b.valueBytes = nil
 	return result
@@ -345,7 +348,7 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	if key.Partition == nil {
-		physicalTableID := tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+		physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
 		key.Partition = &physicalTableID
 	}
 	tableInfo := new(timodel.TableInfo)
@@ -361,6 +364,9 @@ func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.T
 	columns := newTiColumns(rawColumns)
 	tableInfo.Columns = columns
 	tableInfo.Indices = newTiIndices(columns)
+	if len(tableInfo.Indices) != 0 {
+		tableInfo.PKIsHandle = true
+	}
 	return commonType.NewTableInfo4Decoder(key.Schema, tableInfo)
 }
 
@@ -373,7 +379,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		col.Name = pmodel.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
 
-		if isPrimary(raw.Flag) {
+		if isPrimary(raw.Flag) || isHandle(raw.Flag) {
 			col.AddFlag(mysql.PriKeyFlag)
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
@@ -388,6 +394,10 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		}
 		if isNullable(raw.Flag) {
 			col.AddFlag(mysql.NotNullFlag)
+		}
+		if isGenerated(raw.Flag) {
+			col.AddFlag(mysql.GeneratedColumnFlag)
+			col.GeneratedExprString = "holder" // just to make it not empty
 		}
 
 		switch col.GetType() {
@@ -424,10 +434,10 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 		}
 	}
 
-	result := make([]*timodel.IndexInfo, 0, 1)
 	if len(indexColumns) == 0 {
-		return result
+		return nil
 	}
+	result := make([]*timodel.IndexInfo, 0, 1)
 	indexInfo := &timodel.IndexInfo{
 		ID:      1,
 		Name:    pmodel.NewCIStr("primary"),

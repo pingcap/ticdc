@@ -100,6 +100,10 @@ func newTableSchemaMap(tableInfo *commonType.TableInfo) interface{} {
 			mysqlType["zerofill"] = map[string]interface{}{
 				"boolean": mysql.HasZerofillFlag(col.GetFlag()),
 			}
+		case mysql.TypeTimestamp:
+			mysqlType["decimal"] = map[string]interface{}{
+				"int": col.GetDecimal(),
+			}
 		default:
 		}
 

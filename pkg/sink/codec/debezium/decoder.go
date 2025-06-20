@@ -38,7 +38,7 @@ import (
 )
 
 var (
-	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableIDAllocator  = common.NewTableIDAllocator()
 	tableInfoAccessor = common.NewTableInfoAccessor()
 )
 
@@ -142,11 +142,11 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	event.Type = byte(actionType)
 
 	if d.idx == 0 {
-		physicalTableIDs := tableInfoAccessor.GetBlockedTables(schemaName, tableName)
-		event.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
-		log.Debug("set blocked tables for the DDL event",
-			zap.String("schema", schemaName), zap.String("table", tableName),
-			zap.String("query", event.Query), zap.Any("blocked", event.BlockedTables))
+		event.BlockedTables = common.GetBlockedTables(tableInfoAccessor, event)
+		if event.Type == byte(timodel.ActionRenameTable) {
+			schemaName = event.ExtraSchemaName
+			tableName = event.ExtraTableName
+		}
 		tableInfoAccessor.Remove(schemaName, tableName)
 	}
 	return event
@@ -236,7 +236,7 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 	}
 
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
+	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
 	tidbTableInfo.Name = pmodel.NewCIStr(tableName)
 
 	fields := d.valueSchema["fields"].([]interface{})
