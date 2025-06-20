@@ -45,7 +45,7 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	settings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
-		algorithm:        MemoryControlAlgorithmV1,
+		algorithm:        MemoryControlForPuller,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 
@@ -65,7 +65,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	settings := AreaSettings{
 		maxPendingSize:   15,
 		feedbackInterval: time.Millisecond * 10,
-		algorithm:        MemoryControlAlgorithmV1,
+		algorithm:        MemoryControlForPuller,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 	mc.addPathToArea(path1, settings, feedbackChan)
@@ -142,7 +142,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	newSettings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Millisecond * 10,
-		algorithm:        MemoryControlAlgorithmV1,
+		algorithm:        MemoryControlForPuller,
 	}
 	mc.setAreaSettings(path1.area, newSettings)
 	require.Equal(t, uint64(1000), path1.areaMemStat.settings.Load().maxPendingSize)
@@ -171,100 +171,13 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	require.False(t, path1.areaMemStat.paused.Load())
 }
 
-func TestShouldPausePathV1(t *testing.T) {
-	mc, path := setupTestComponents()
-	settings := AreaSettings{
-		maxPendingSize:   100,
-		feedbackInterval: time.Millisecond * 10,
-		algorithm:        MemoryControlAlgorithmV1,
-	}
-
-	areaMemStat := newAreaMemStat(path.area, mc, settings, nil)
-	path.areaMemStat = areaMemStat
-
-	path.pendingSize.Store(int64(10))
-	pause, resume, _ := shouldPausePath(path.paused.Load(), path.pendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-	require.False(t, resume)
-
-	path.pendingSize.Store(int64(15))
-	pause, resume, _ = shouldPausePath(path.paused.Load(), path.pendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-	require.False(t, resume)
-
-	path.pendingSize.Store(int64(20))
-	pause, resume, _ = shouldPausePath(path.paused.Load(), path.pendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.True(t, pause)
-	path.paused.Store(true)
-	require.False(t, resume)
-
-	path.pendingSize.Store(int64(15))
-	pause, resume, _ = shouldPausePath(path.paused.Load(), path.pendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-	require.False(t, resume)
-
-	path.pendingSize.Store(int64(9))
-	pause, resume, _ = shouldPausePath(path.paused.Load(), path.pendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-
-	require.True(t, resume)
-	path.paused.Store(false)
-
-	path.pendingSize.Store(int64(15))
-	pause, resume, _ = shouldPausePath(path.paused.Load(), path.pendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-	require.False(t, resume)
-}
-
-func TestShouldPauseAreaV1(t *testing.T) {
-	mc, path := setupTestComponents()
-	settings := AreaSettings{
-		maxPendingSize:   100,
-		feedbackInterval: time.Millisecond * 10,
-		algorithm:        MemoryControlAlgorithmV1,
-	}
-	areaMemStat := newAreaMemStat(path.area, mc, settings, nil)
-
-	areaMemStat.totalPendingSize.Store(int64(10))
-	pause, resume, _ := shouldPauseArea(areaMemStat.paused.Load(), areaMemStat.totalPendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-	require.False(t, resume)
-
-	areaMemStat.totalPendingSize.Store(int64(60))
-	pause, resume, _ = shouldPauseArea(areaMemStat.paused.Load(), areaMemStat.totalPendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-	require.False(t, resume)
-
-	areaMemStat.totalPendingSize.Store(int64(80))
-	pause, resume, _ = shouldPauseArea(areaMemStat.paused.Load(), areaMemStat.totalPendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.True(t, pause)
-	areaMemStat.paused.Store(true)
-	require.False(t, resume)
-
-	areaMemStat.totalPendingSize.Store(int64(60))
-	pause, resume, _ = shouldPauseArea(areaMemStat.paused.Load(), areaMemStat.totalPendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-	require.False(t, resume)
-
-	areaMemStat.totalPendingSize.Store(int64(49))
-	pause, resume, _ = shouldPauseArea(areaMemStat.paused.Load(), areaMemStat.totalPendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-	require.True(t, resume)
-	areaMemStat.paused.Store(false)
-
-	areaMemStat.totalPendingSize.Store(int64(60))
-	pause, resume, _ = shouldPauseArea(areaMemStat.paused.Load(), areaMemStat.totalPendingSize.Load(), areaMemStat.settings.Load().maxPendingSize)
-	require.False(t, pause)
-	require.False(t, resume)
-}
-
 func TestSetAreaSettings(t *testing.T) {
 	mc, path := setupTestComponents()
 	// Case 1: Set the initial settings.
 	initialSettings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
-		algorithm:        MemoryControlAlgorithmV1,
+		algorithm:        MemoryControlForPuller,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 	mc.addPathToArea(path, initialSettings, feedbackChan)
@@ -274,7 +187,7 @@ func TestSetAreaSettings(t *testing.T) {
 	newSettings := AreaSettings{
 		maxPendingSize:   2000,
 		feedbackInterval: 2 * time.Second,
-		algorithm:        MemoryControlAlgorithmV1,
+		algorithm:        MemoryControlForPuller,
 	}
 	mc.setAreaSettings(path.area, newSettings)
 	require.Equal(t, newSettings, *path.areaMemStat.settings.Load())
@@ -283,7 +196,7 @@ func TestSetAreaSettings(t *testing.T) {
 	invalidSettings := AreaSettings{
 		maxPendingSize:   0,
 		feedbackInterval: 0,
-		algorithm:        MemoryControlAlgorithmV2,
+		algorithm:        MemoryControlForEventCollector,
 	}
 	mc.setAreaSettings(path.area, invalidSettings)
 	require.NotEqual(t, invalidSettings, *path.areaMemStat.settings.Load())
@@ -398,278 +311,5 @@ func TestUpdatePathPauseState(t *testing.T) {
 		require.Fail(t, "feedback should not be received")
 	case <-timer:
 		// Pass
-	}
-}
-
-func TestShouldPausePathV2(t *testing.T) {
-	tests := []struct {
-		name            string
-		paused          bool
-		pathPendingSize int64
-		areaPendingSize int64
-		maxPendingSize  uint64
-		wantPause       bool
-		wantResume      bool
-		wantRatio       float64
-		pathCount       int64
-	}{
-		{
-			name:            "area usage <= 50%, not paused, should pause",
-			paused:          false,
-			pathPendingSize: 25, // 25% usage
-			areaPendingSize: 40, // 40% usage
-			maxPendingSize:  100,
-			wantPause:       true,
-			wantResume:      false,
-			wantRatio:       0.25,
-			pathCount:       10,
-		},
-		{
-			name:            "area usage <= 50%, not paused, should not pause",
-			paused:          false,
-			pathPendingSize: 15, // 15% usage
-			areaPendingSize: 40, // 40% usage
-			maxPendingSize:  100,
-			wantPause:       false,
-			wantResume:      false,
-			wantRatio:       0.15,
-			pathCount:       10,
-		},
-		{
-			name:            "area usage <= 50%, paused, should resume",
-			paused:          true,
-			pathPendingSize: 5,  // 5% usage
-			areaPendingSize: 40, // 40% usage
-			maxPendingSize:  100,
-			wantPause:       false,
-			wantResume:      true,
-			wantRatio:       0.05,
-			pathCount:       10,
-		},
-		{
-			name:            "area usage > 80%, not paused, should pause",
-			paused:          false,
-			pathPendingSize: 6,  // 6% usage
-			areaPendingSize: 85, // 85% usage
-			maxPendingSize:  100,
-			wantPause:       true,
-			wantResume:      false,
-			wantRatio:       0.06,
-			pathCount:       10,
-		},
-		{
-			name:            "area usage > 120%, not paused, should pause",
-			paused:          false,
-			pathPendingSize: 2,   // 2% usage
-			areaPendingSize: 125, // 125% usage
-			maxPendingSize:  100,
-			wantPause:       true,
-			wantResume:      false,
-			wantRatio:       0.02,
-			pathCount:       10,
-		},
-		{
-			name:            "area usage > 120%, paused, should not resume",
-			paused:          true,
-			pathPendingSize: 2,   // 2% usage
-			areaPendingSize: 125, // 125% usage
-			maxPendingSize:  100,
-			wantPause:       false,
-			wantResume:      false,
-			wantRatio:       0.02,
-			pathCount:       10,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotPause, gotResume, gotRatio := shouldPausePathV2(
-				tt.paused,
-				tt.pathPendingSize,
-				tt.areaPendingSize,
-				tt.maxPendingSize,
-				tt.pathCount,
-			)
-
-			require.Equal(t, tt.wantPause, gotPause, tt.name)
-			require.Equal(t, tt.wantResume, gotResume, tt.name)
-			require.Equal(t, tt.wantRatio, gotRatio, tt.name)
-		})
-	}
-}
-
-func TestShouldPauseAreaV2(t *testing.T) {
-	tests := []struct {
-		name           string
-		paused         bool
-		pendingSize    int64
-		maxPendingSize uint64
-		wantPause      bool
-		wantResume     bool
-		wantRatio      float64
-	}{
-		{
-			name:           "low memory usage",
-			paused:         false,
-			pendingSize:    30,
-			maxPendingSize: 100,
-			wantPause:      false,
-			wantResume:     false,
-			wantRatio:      0.3,
-		},
-		{
-			name:           "high memory usage",
-			paused:         false,
-			pendingSize:    90,
-			maxPendingSize: 100,
-			wantPause:      false,
-			wantResume:     false,
-			wantRatio:      0.9,
-		},
-		{
-			name:           "already paused",
-			paused:         true,
-			pendingSize:    50,
-			maxPendingSize: 100,
-			wantPause:      false,
-			wantResume:     false,
-			wantRatio:      0.5,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotPause, gotResume, gotRatio := shouldPauseAreaV2(
-				tt.paused,
-				tt.pendingSize,
-				tt.maxPendingSize,
-			)
-
-			require.Equal(t, tt.wantPause, gotPause, tt.name)
-			require.Equal(t, tt.wantResume, gotResume, tt.name)
-			require.Equal(t, tt.wantRatio, gotRatio, tt.name)
-		})
-	}
-}
-
-func TestCalculateThresholds(t *testing.T) {
-	tests := []struct {
-		name               string
-		pathCount          int64
-		areaMemoryRatio    float64
-		expectedPauseLimit float64
-		expectedResume     float64
-		delta              float64
-	}{
-		// Special path count cases
-		{
-			name:               "path count 0 should be treated as 1",
-			pathCount:          0,
-			areaMemoryRatio:    0.3,
-			expectedPauseLimit: 0.8,
-			expectedResume:     0.4,
-			delta:              0,
-		},
-		{
-			name:               "single path",
-			pathCount:          1,
-			areaMemoryRatio:    0.3,
-			expectedPauseLimit: 0.8,
-			expectedResume:     0.4,
-			delta:              0,
-		},
-		{
-			name:               "two paths",
-			pathCount:          2,
-			areaMemoryRatio:    0.3,
-			expectedPauseLimit: 0.5,
-			expectedResume:     0.25,
-			delta:              0,
-		},
-		{
-			name:               "four paths",
-			pathCount:          4,
-			areaMemoryRatio:    0.3,
-			expectedPauseLimit: 0.22,
-			expectedResume:     0.11,
-			delta:              0.01,
-		},
-		// Area memory usage threshold boundaries
-		{
-			name:               "area usage exactly 0.5",
-			pathCount:          10,
-			areaMemoryRatio:    0.5,
-			expectedPauseLimit: 0.2,
-			expectedResume:     0.1,
-			delta:              0.05,
-		},
-		{
-			name:               "area usage exactly 0.8",
-			pathCount:          10,
-			areaMemoryRatio:    0.8,
-			expectedPauseLimit: 0.1,
-			expectedResume:     0.05,
-			delta:              0.05,
-		},
-		{
-			name:               "area usage exactly 1.0",
-			pathCount:          10,
-			areaMemoryRatio:    1.0,
-			expectedPauseLimit: 0.05,
-			expectedResume:     0.01,
-			delta:              0.05,
-		},
-		{
-			name:               "area usage > 1.0",
-			pathCount:          10,
-			areaMemoryRatio:    1.1,
-			expectedPauseLimit: 0.01,
-			expectedResume:     0.005,
-			delta:              0.05,
-		},
-
-		// Large number of paths
-		{
-			name:               "100 paths with low area usage",
-			pathCount:          100,
-			areaMemoryRatio:    0.3,
-			expectedPauseLimit: 0.2,
-			expectedResume:     0.1,
-			delta:              0.05,
-		},
-		{
-			name:               "1000 paths with high area usage",
-			pathCount:          1000,
-			areaMemoryRatio:    0.9,
-			expectedPauseLimit: 0.05,
-			expectedResume:     0.01,
-			delta:              0.05,
-		},
-
-		// Minimum threshold tests
-		{
-			name:               "very large path count should respect minimum threshold",
-			pathCount:          10000,
-			areaMemoryRatio:    1.2,
-			expectedPauseLimit: 0.01, // minimum threshold
-			expectedResume:     0.005,
-			delta:              0.05,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pauseLimit, resumeLimit := calculateThresholds(tt.pathCount, tt.areaMemoryRatio)
-
-			require.InDelta(t, tt.expectedPauseLimit, pauseLimit, tt.delta, tt.name)
-			require.InDelta(t, tt.expectedResume, resumeLimit, tt.delta, tt.name)
-
-			// Invariant checks
-			require.Less(t, resumeLimit, pauseLimit, tt.name)
-			require.Greater(t, resumeLimit, 0.0, tt.name)
-			require.Greater(t, pauseLimit, 0.0, tt.name)
-			require.Less(t, pauseLimit, 1.0, tt.name)
-			require.Less(t, resumeLimit, 1.0, tt.name)
-		})
 	}
 }
