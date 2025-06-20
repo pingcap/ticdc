@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -647,4 +648,73 @@ func TestDispatcherClose(t *testing.T) {
 		require.Equal(t, uint64(1), watermark.CheckpointTs)
 		require.Equal(t, uint64(0), watermark.ResolvedTs)
 	}
+}
+
+// TestBatchDMLEventsPartialFlush tests that wakeCallback is called correctly
+// when DML events are flushed partially in multiple batches.
+func TestBatchDMLEventsPartialFlush(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	ddlJob := helper.DDL2Job("create table t(id int primary key, v int)")
+	require.NotNil(t, ddlJob)
+
+	// Create multiple DML events with different commit timestamps
+	dmlEvent1 := helper.DML2Event("test", "t", "insert into t values(1, 1)")
+	require.NotNil(t, dmlEvent1)
+	dmlEvent1.CommitTs = 10
+	dmlEvent1.Length = 1
+
+	dmlEvent2 := helper.DML2Event("test", "t", "insert into t values(2, 2)")
+	require.NotNil(t, dmlEvent2)
+	dmlEvent2.CommitTs = 11
+	dmlEvent2.Length = 1
+
+	dmlEvent3 := helper.DML2Event("test", "t", "insert into t values(3, 3)")
+	require.NotNil(t, dmlEvent3)
+	dmlEvent3.CommitTs = 12
+	dmlEvent3.Length = 1
+
+	mockSink := sink.NewMockSink(common.MysqlSinkType)
+	tableSpan := getCompleteTableSpan()
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+
+	// Create a callback that records when it's called
+	var callbackCalled bool
+	wakeCallback := func() {
+		callbackCalled = true
+	}
+
+	nodeID := node.NewID()
+
+	// Create dispatcher events for all three DML events
+	dispatcherEvents := []DispatcherEvent{
+		NewDispatcherEvent(&nodeID, dmlEvent1),
+		NewDispatcherEvent(&nodeID, dmlEvent2),
+		NewDispatcherEvent(&nodeID, dmlEvent3),
+	}
+
+	failpoint.Enable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents", `pause`)
+
+	go func() {
+		block := dispatcher.HandleEvents(dispatcherEvents, wakeCallback)
+		require.Equal(t, true, block)
+	}()
+
+	time.Sleep(1 * time.Second)
+	require.Equal(t, 1, len(mockSink.GetDMLs()))
+	mockSink.FlushDMLs()
+	require.False(t, callbackCalled)
+
+	failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents")
+
+	time.Sleep(1 * time.Second)
+	require.Equal(t, 2, len(mockSink.GetDMLs()))
+	mockSink.FlushDMLs()
+	// Now the callback should be called after all events are flushed
+	require.True(t, callbackCalled)
+
+	// Verify that all events were actually flushed
+	require.Equal(t, 0, len(mockSink.GetDMLs()))
 }

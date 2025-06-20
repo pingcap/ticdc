@@ -15,6 +15,7 @@ package sink
 
 import (
 	"context"
+	"sync"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -22,12 +23,15 @@ import (
 )
 
 type mockSink struct {
+	mu       sync.Mutex
 	dmls     []*commonEvent.DMLEvent
 	isNormal bool
 	sinkType common.SinkType
 }
 
 func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.dmls = append(s.dmls, event)
 }
 
@@ -61,6 +65,8 @@ func (s *mockSink) SetIsNormal(isNormal bool) {
 }
 
 func (s *mockSink) FlushDMLs() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, dml := range s.dmls {
 		dml.PostFlush()
 	}
@@ -68,6 +74,8 @@ func (s *mockSink) FlushDMLs() {
 }
 
 func (s *mockSink) GetDMLs() []*commonEvent.DMLEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.dmls
 }
 
