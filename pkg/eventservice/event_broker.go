@@ -462,9 +462,9 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
-	var isBroken bool
+	var interrupted bool
 	defer func() {
-		if isBroken {
+		if interrupted {
 			c.pushTask(task, false)
 		} else {
 			task.isTaskScanning.Store(false)
@@ -493,19 +493,19 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		timeout:         time.Millisecond * 1000, // 1 Second
 	}
 
-	events, isBroken, err := scanner.scan(ctx, task, dataRange, sl)
+	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
 
-	// If the task is not running, we don't send the events to the dispatcher.
-	if !task.isRunning.Load() {
-		return
-	}
-
 	for _, e := range events {
 		if task.isRemoved.Load() {
+			return
+		}
+
+		// If the task is not running, we don't send the events to the dispatcher.
+		if !task.isRunning.Load() {
 			return
 		}
 
