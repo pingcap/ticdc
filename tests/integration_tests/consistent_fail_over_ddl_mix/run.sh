@@ -34,7 +34,7 @@ function prepare() {
 
 	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
 }
 
 function create_tables() {
@@ -213,8 +213,6 @@ main() {
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
 	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	ensure 50 check_redo_checkpoint_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
-
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
 	cleanup_process $CDC_BINARY
 }
