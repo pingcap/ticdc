@@ -604,6 +604,7 @@ func (d *Dispatcher) updateDispatcherStatusToWorking() {
 			ID:              d.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    d.GetCheckpointTs(),
+			Redo:            false,
 		},
 		ResolvedTs: d.GetResolvedTs(),
 		Seq:        d.seq,

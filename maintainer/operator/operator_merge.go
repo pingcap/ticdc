@@ -45,7 +45,6 @@ type MergeDispatcherOperator struct {
 	checkpointTs        uint64
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
-	redo            bool
 	repeat          bool
 }
 
@@ -53,7 +52,6 @@ func NewMergeDispatcherOperator(
 	db *replica.ReplicationDB,
 	toMergedReplicaSets []*replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
-	redo bool,
 ) *MergeDispatcherOperator {
 	// Step1: ensure toMergedSpans and affectedReplicaSets belong to the same table with consecutive ranges in a same node
 	if len(toMergedReplicaSets) < 2 {
@@ -111,7 +109,8 @@ func NewMergeDispatcherOperator(
 		newDispatcherID,
 		toMergedReplicaSets[0].GetSchemaID(),
 		mergeTableSpan,
-		1) // use a fake checkpointTs here.
+		1, // use a fake checkpointTs here.
+		toMergedReplicaSets[0].GetRedo())
 
 	db.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 
@@ -125,7 +124,6 @@ func NewMergeDispatcherOperator(
 		mergedSpanInfo:      spansInfo,
 		occupyOperators:     occupyOperators,
 		newReplicaSet:       newReplicaSet,
-		redo:                redo,
 	}
 	return op
 }
@@ -184,7 +182,7 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
 		})
-	msg.Redo = m.redo
+	msg.Redo = m.toMergedReplicaSets[0].GetRedo()
 	return msg
 }
 

@@ -50,11 +50,13 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
+	redo bool,
 ) *SpanReplication {
 	r := newSpanReplication(cfID, id, SchemaID, span)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
 		ID:           id.ToPB(),
 		CheckpointTs: checkpointTs,
+		Redo:         redo,
 	})
 	log.Info("new span replication created",
 		zap.String("changefeedID", cfID.Name()),
@@ -139,6 +141,10 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 	return r.status.Load()
 }
 
+func (r *SpanReplication) GetRedo() bool {
+	return r.status.Load().Redo
+}
+
 // UpdateStatus updates the replication status with the following rules:
 //  1. If there is a block state in WAITING stage and its blockTs is less than or equal to
 //     the new status's checkpointTs, the update is **skipped** to prevent checkpoint advancement
@@ -207,7 +213,7 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 	return r.groupID
 }
 
-func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, redo bool) (*messaging.TargetMessage, error) {
+func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.TargetMessage, error) {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
@@ -217,14 +223,14 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, redo bool) (*m
 				SchemaID:     r.schemaID,
 				Span:         r.Span,
 				StartTs:      r.status.Load().CheckpointTs,
-				Redo:         redo,
+				Redo:         r.GetRedo(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		}), nil
 }
 
-func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID, redo bool) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), redo)
+func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.GetRedo())
 }
 
 func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, redo bool) *messaging.TargetMessage {

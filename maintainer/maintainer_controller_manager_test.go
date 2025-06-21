@@ -77,7 +77,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 		totalSpan := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		spanReplica.SetNodeID(nodeID)
 		s.controller.replicationDB.AddReplicatingSpan(spanReplica)
 	}
@@ -146,7 +146,7 @@ func TestBalanceGlobalUneven(t *testing.T) {
 		totalSpan := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		if i < 50 {
 			spanReplica.SetNodeID("node1")
 		} else {
@@ -219,7 +219,7 @@ func TestBalance(t *testing.T) {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		spanReplica.SetNodeID("node1")
 		s.controller.replicationDB.AddReplicatingSpan(spanReplica)
 	}
@@ -285,7 +285,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		spanReplica.SetNodeID("node1")
 		s.controller.replicationDB.AddReplicatingSpan(spanReplica)
 	}
@@ -398,7 +398,7 @@ func TestBalanceUnEvenTask(t *testing.T) {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		s.controller.replicationDB.AddAbsentReplicaSet(spanReplica)
 	}
 	for _, s := range s.schedulerController.GetSchedulers() {

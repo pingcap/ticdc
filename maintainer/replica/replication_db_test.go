@@ -35,7 +35,7 @@ func TestBasicFunction(t *testing.T) {
 	t.Parallel()
 
 	db := newDBWithCheckerForTest(t)
-	absent := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), 1, getTableSpanByID(4), 1)
+	absent := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), 1, getTableSpanByID(4), 1, false)
 	db.AddAbsentReplicaSet(absent)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -175,7 +175,7 @@ func TestGetAbsents(t *testing.T) {
 
 	db := newDBWithCheckerForTest(t)
 	for i := 0; i < 10; i++ {
-		absent := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), 1, getTableSpanByID(int64(i+1)), 1)
+		absent := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), 1, getTableSpanByID(int64(i+1)), 1, false)
 		db.AddAbsentReplicaSet(absent)
 	}
 	require.Len(t, db.GetAbsentForTest(nil, 5), 5)
@@ -201,10 +201,10 @@ func TestRemoveAllTables(t *testing.T) {
 		}, "node1")
 	db.AddReplicatingSpan(replicaSpan)
 
-	absent := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), 1, getTableSpanByID(4), 1)
+	absent := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), 1, getTableSpanByID(4), 1, false)
 	db.AddAbsentReplicaSet(absent)
 
-	scheduling := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), 1, getTableSpanByID(4), 1)
+	scheduling := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), 1, getTableSpanByID(4), 1, false)
 	db.AddAbsentReplicaSet(scheduling)
 	db.MarkSpanScheduling(scheduling)
 

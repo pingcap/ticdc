@@ -33,7 +33,6 @@ type AddDispatcherOperator struct {
 	finished   atomic.Bool
 	removed    atomic.Bool
 	db         *replica.ReplicationDB
-	redo       bool
 	repeat     bool
 }
 
@@ -41,13 +40,11 @@ func NewAddDispatcherOperator(
 	db *replica.ReplicationDB,
 	replicaSet *replica.SpanReplication,
 	dest node.ID,
-	redo bool,
 ) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
 		replicaSet: replicaSet,
 		dest:       dest,
 		db:         db,
-		redo:       redo,
 	}
 }
 
@@ -77,7 +74,7 @@ func (m *AddDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.removed.Load() {
 		return nil
 	}
-	msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest, m.redo)
+	msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
 	if err != nil {
 		log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))
 		return nil
@@ -126,7 +123,7 @@ func (m *AddDispatcherOperator) PostFinish() {
 
 func (m *AddDispatcherOperator) String() string {
 	return fmt.Sprintf("add dispatcher operator: %s, dest:%s, redo:%v",
-		m.replicaSet.ID, m.dest, m.redo)
+		m.replicaSet.ID, m.dest)
 }
 
 func (m *AddDispatcherOperator) Type() string {

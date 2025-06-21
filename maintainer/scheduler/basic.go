@@ -122,7 +122,7 @@ func (s *basicScheduler) schedule(groupID pkgReplica.GroupID, availableSize int)
 	absentReplications := s.replicationDB.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, scheduleNodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
-		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.replicationDB, replication, id, s.redo))
+		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.replicationDB, replication, id))
 	})
 
 	scheduled = len(absentReplications)

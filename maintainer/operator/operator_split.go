@@ -41,7 +41,6 @@ type SplitDispatcherOperator struct {
 	finished atomic.Bool
 
 	lck    sync.Mutex
-	redo   bool
 	repeat bool
 }
 
@@ -50,7 +49,6 @@ func NewSplitDispatcherOperator(db *replica.ReplicationDB,
 	replicaSet *replica.SpanReplication,
 	originNode node.ID,
 	splitSpans []*heartbeatpb.TableSpan,
-	redo bool,
 ) *SplitDispatcherOperator {
 	spansInfo := ""
 	for _, span := range splitSpans {
@@ -64,7 +62,6 @@ func NewSplitDispatcherOperator(db *replica.ReplicationDB,
 		checkpointTs:  replicaSet.GetStatus().GetCheckpointTs(),
 		db:            db,
 		splitSpanInfo: spansInfo,
-		redo:          redo,
 	}
 	return op
 }
@@ -116,7 +113,7 @@ func (m *SplitDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableS
 }
 
 func (m *SplitDispatcherOperator) Schedule() *messaging.TargetMessage {
-	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode, m.redo)
+	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode)
 }
 
 // OnTaskRemoved is called when the task is removed by ddl
@@ -137,8 +134,8 @@ func (m *SplitDispatcherOperator) PostFinish() {
 }
 
 func (m *SplitDispatcherOperator) String() string {
-	return fmt.Sprintf("split dispatcher operator: %s, splitSpans: %s redo: %v",
-		m.replicaSet.ID, m.splitSpanInfo, m.redo)
+	return fmt.Sprintf("split dispatcher operator: %s, splitSpans: %s",
+		m.replicaSet.ID, m.splitSpanInfo)
 }
 
 func (m *SplitDispatcherOperator) Type() string {

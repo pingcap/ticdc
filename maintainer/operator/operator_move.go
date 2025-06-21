@@ -40,7 +40,6 @@ type MoveDispatcherOperator struct {
 	noPostFinishNeed bool
 
 	lck    sync.Mutex
-	redo   bool
 	repeat bool
 }
 
@@ -50,7 +49,6 @@ func NewMoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.Sp
 		origin:     origin,
 		dest:       dest,
 		db:         db,
-		redo:       redo,
 	}
 }
 
@@ -90,14 +88,14 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 			m.db.BindSpanToNode(m.origin, m.dest, m.replicaSet)
 			m.bind = true
 		}
-		msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest, m.redo)
+		msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
 		if err != nil {
 			log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))
 			return nil
 		}
 		return msg
 	}
-	return m.replicaSet.NewRemoveDispatcherMessage(m.origin, m.redo)
+	return m.replicaSet.NewRemoveDispatcherMessage(m.origin)
 }
 
 func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
@@ -197,7 +195,7 @@ func (m *MoveDispatcherOperator) String() string {
 	defer m.lck.Unlock()
 
 	return fmt.Sprintf("move dispatcher operator: %s, origin: %s, dest: %s, redo: %v",
-		m.replicaSet.ID, m.origin, m.dest, m.redo)
+		m.replicaSet.ID, m.origin, m.dest)
 }
 
 func (m *MoveDispatcherOperator) Type() string {

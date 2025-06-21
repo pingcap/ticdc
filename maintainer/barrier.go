@@ -132,7 +132,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 ) *messaging.TargetMessage {
 	log.Info("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
-		zap.Any("detail", request))
+		zap.Any("detail", request), zap.Bool("redo", redo))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := []*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
@@ -293,6 +293,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 			ID:              status.ID,
 			CheckpointTs:    status.State.BlockTs - 1,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
+			Redo:            status.Redo,
 		})
 		if status.State != nil {
 			span.UpdateBlockState(*status.State)

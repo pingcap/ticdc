@@ -90,7 +90,7 @@ func NewControllerManager(changefeedID common.ChangeFeedID,
 		splitter = split.NewSplitter(changefeedID, pdAPIClient, regionCache, cfConfig.Scheduler)
 	}
 
-	controller := NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes)
+	controller := NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes, false)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	var (
@@ -99,11 +99,11 @@ func NewControllerManager(changefeedID common.ChangeFeedID,
 		redoOC         *operator.Controller
 	)
 	if redoDDLSpan != nil {
-		redoController = NewController(changefeedID, redoDDLSpan, splitter, enableTableAcrossNodes)
+		redoController = NewController(changefeedID, redoDDLSpan, splitter, enableTableAcrossNodes, true)
 		redoDB = redoController.replicationDB
-		redoOC = operator.NewOperatorController(changefeedID, mc, redoDB, nodeManager, batchSize, true)
+		redoOC = operator.NewOperatorController(changefeedID, mc, redoDB, nodeManager, batchSize)
 	}
-	oc := operator.NewOperatorController(changefeedID, mc, controller.replicationDB, nodeManager, batchSize, false)
+	oc := operator.NewOperatorController(changefeedID, mc, controller.replicationDB, nodeManager, batchSize)
 
 	var schedulerCfg *config.ChangefeedSchedulerConfig
 	if cfConfig != nil {
@@ -613,13 +613,13 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64, redo bool) e
 
 	randomIdx := rand.Intn(len(replications))
 	primaryID := replications[randomIdx].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil, redo)
+	primaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
 	for _, replicaSet := range replications {
 		var op *operator.MergeSplitDispatcherOperator
 		if replicaSet.ID == primaryID {
 			op = primaryOp
 		} else {
-			op = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished(), redo)
+			op = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
 		}
 		operatorController.AddOperator(op)
 	}
@@ -680,8 +680,8 @@ func (cm *ControllerManager) mergeTable(tableID int64, redo bool) error {
 	mergeReplication := replications[:2]
 
 	primaryID := replications[0].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil, redo)
-	secondaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished(), redo)
+	primaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil)
+	secondaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished())
 	operatorController.AddOperator(primaryOp)
 	operatorController.AddOperator(secondaryOp)
 

@@ -224,7 +224,8 @@ func (db *ReplicationDB) ReplaceReplicaSet(
 			old.ChangefeedID,
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
-			span, checkpointTs)
+			span, checkpointTs,
+			old.GetRedo())
 		news = append(news, new)
 	}
 

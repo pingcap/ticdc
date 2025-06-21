@@ -41,10 +41,11 @@ type Controller struct {
 	ddlDispatcherID        common.DispatcherID
 
 	changefeedID common.ChangeFeedID
+	redo         bool
 }
 
 func NewController(changefeedID common.ChangeFeedID,
-	ddlSpan *replica.SpanReplication, splitter *split.Splitter, enableTableAcrossNodes bool,
+	ddlSpan *replica.SpanReplication, splitter *split.Splitter, enableTableAcrossNodes bool, redo bool,
 ) *Controller {
 	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -56,6 +57,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		nodeManager:            nodeManager,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
+		redo:                   redo,
 	}
 }
 
@@ -140,7 +142,7 @@ func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.redo)
 		c.replicationDB.AddAbsentReplicaSet(replicaSet)
 	}
 }

@@ -189,6 +189,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 				ID:              redoTableTriggerEventDispatcherID.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Working,
 				CheckpointTs:    checkpointTs,
+				Redo:            true,
 			}, selfNode.ID)
 	}
 	m := &Maintainer{
