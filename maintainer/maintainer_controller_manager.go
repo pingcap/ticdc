@@ -670,34 +670,63 @@ func (cm *ControllerManager) mergeTable(tableID int64, redo bool) error {
 		return bytes.Compare(replications[i].Span.StartKey, replications[j].Span.StartKey) < 0
 	})
 
-	// choose the first two replication to merge a new replication
-	newSpan := &heartbeatpb.TableSpan{
-		TableID:  replications[0].Span.TableID,
-		StartKey: replications[0].Span.StartKey,
-		EndKey:   replications[1].Span.EndKey,
+	log.Debug("sorted replications in mergeTable", zap.Any("replications", replications))
+
+	// try to select two consecutive spans in the same node to merge
+	// if we can't find, we just move one span to make it satisfied.
+	idx := 0
+	mergeSpanFound := false
+	for idx+1 < len(replications) {
+		if replications[idx].GetNodeID() == replications[idx+1].GetNodeID() && common.IsTableSpanConsecutive(replications[idx].Span, replications[idx+1].Span) {
+			mergeSpanFound = true
+			break
+		} else {
+			idx++
+		}
 	}
 
-	mergeReplication := replications[:2]
+	if !mergeSpanFound {
+		idx = 0
+		// try to move the second span to the first span's node
+		moveOp := operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
+		operatorController.AddOperator(moveOp)
 
-	primaryID := replications[0].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil)
-	secondaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished())
-	operatorController.AddOperator(primaryOp)
-	operatorController.AddOperator(secondaryOp)
+		count := 0
+		maxTry := 30
+		flag := false
+		for count < maxTry {
+			if moveOp.IsFinished() {
+				flag = true
+				break
+			}
+			time.Sleep(1 * time.Second)
+			count += 1
+			log.Info("wait for move table table operator finished", zap.Int("count", count))
+		}
+
+		if !flag {
+			return apperror.ErrTimeout.GenWithStackByArgs("move table operator before merge table is timeout")
+		}
+	}
+
+	operator := operatorController.AddMergeOperator(replications[idx : idx+2])
+	if operator == nil {
+		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge operator")
+	}
 
 	count := 0
 	maxTry := 30
 	for count < maxTry {
-		if primaryOp.IsFinished() {
+		if operator.IsFinished() {
 			return nil
 		}
 
 		time.Sleep(1 * time.Second)
 		count += 1
-		log.Info("wait for merge table table operator finished", zap.Int("count", count))
+		log.Info("wait for merge table table operator finished", zap.Int("count", count), zap.Any("operator", operator.String()))
 	}
 
-	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout", zap.Any("redo", redo))
+	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
 }
 
 func (cm *ControllerManager) getOperatorController(redo bool) *operator.Controller {
