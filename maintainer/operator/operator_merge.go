@@ -178,11 +178,11 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 	msg := messaging.NewSingleTargetMessage(m.node,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.MergeDispatcherRequest{
-			ChangefeedID:       m.toMergedReplicaSets[0].ChangefeedID.ToPB(),
+			ChangefeedID:       m.newReplicaSet.ChangefeedID.ToPB(),
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
+			Redo:               m.newReplicaSet.GetRedo(),
 		})
-	msg.Redo = m.toMergedReplicaSets[0].GetRedo()
 	return msg
 }
 

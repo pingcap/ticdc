@@ -496,11 +496,10 @@ func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, commo
 
 type MergeDispatcherRequest struct {
 	*heartbeatpb.MergeDispatcherRequest
-	redo bool
 }
 
-func NewMergeDispatcherRequest(req *heartbeatpb.MergeDispatcherRequest, redo bool) MergeDispatcherRequest {
-	return MergeDispatcherRequest{req, redo}
+func NewMergeDispatcherRequest(req *heartbeatpb.MergeDispatcherRequest) MergeDispatcherRequest {
+	return MergeDispatcherRequest{req}
 }
 
 type MergeDispatcherRequestHandler struct{}
@@ -519,7 +518,7 @@ func (h *MergeDispatcherRequestHandler) Handle(eventDispatcherManager *EventDisp
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))
 	}
-	if mergeDispatcherRequest.redo {
+	if mergeDispatcherRequest.Redo {
 		eventDispatcherManager.MergeRedoDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID))
 	} else {
 		eventDispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID))
