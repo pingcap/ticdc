@@ -118,7 +118,11 @@ func (t *MergeCheckTask) Execute() time.Time {
 		return time.Now().Add(time.Second * 1)
 	}
 
-	t.manager.DoMerge(t)
+	if dispatcher.IsRedoDispatcher(t.mergedDispatcher) {
+		t.manager.RedoDoMerge(t)
+	} else {
+		t.manager.DoMerge(t)
+	}
 	return time.Now().Add(time.Second * 1)
 }
 

@@ -1088,7 +1088,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 	// Step 3: register mergeDispatcher into event collector, and generate a task to check the merged dispatcher status
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).PrepareAddDispatcher(
 		mergedDispatcher,
-		e.config.MemoryQuota,
+		e.sinkQuota,
 		func() {
 			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
 			log.Info("merge dispatcher is ready",
@@ -1220,7 +1220,7 @@ func (e *EventDispatcherManager) MergeRedoDispatcher(dispatcherIDs []common.Disp
 	// Step 3: register mergeDispatcher into event collector, and generate a task to check the merged dispatcher status
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).PrepareAddDispatcher(
 		mergedDispatcher,
-		e.config.MemoryQuota,
+		e.redoQuota,
 		func() {
 			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
 		})
@@ -1328,6 +1328,98 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 	// to avoid the fallback of the checkpointTs
 	for _, id := range t.dispatcherIDs {
 		dispatcher, ok := e.dispatcherMap.Get(id)
+		if !ok {
+			log.Panic("dispatcher not found when do merge", zap.Stringer("dispatcherID", id))
+		}
+		dispatcher.Remove()
+	}
+}
+
+func (e *EventDispatcherManager) RedoDoMerge(t *MergeCheckTask) {
+	log.Info("do merge",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Any("dispatcherIDs", t.dispatcherIDs),
+		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+	)
+	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
+	minCheckpointTs := uint64(math.MaxUint64)
+	closedList := make([]bool, len(t.dispatcherIDs)) // record whether the dispatcher is closed successfully
+	closedCount := 0
+	count := 0
+	for closedCount < len(t.dispatcherIDs) {
+		for idx, id := range t.dispatcherIDs {
+			if closedList[idx] {
+				continue
+			}
+			dispatcher, ok := e.redoDispatcherMap.Get(id)
+			if !ok {
+				log.Panic("dispatcher not found when do merge", zap.Stringer("dispatcherID", id))
+			}
+			if count == 0 {
+				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
+			}
+
+			watermark, ok := dispatcher.TryClose()
+			if ok {
+				if watermark.CheckpointTs < minCheckpointTs {
+					minCheckpointTs = watermark.CheckpointTs
+				}
+				closedList[idx] = true
+				closedCount++
+			} else {
+				log.Info("dispatcher is still not closed", zap.Stringer("dispatcherID", id))
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		count += 1
+		log.Info("event dispatcher manager is doing merge, waiting for dispatchers to be closed",
+			zap.Int("closedCount", closedCount),
+			zap.Int("total", len(t.dispatcherIDs)),
+			zap.Int("count", count),
+			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+		)
+	}
+
+	if e.sink.SinkType() == common.MysqlSinkType {
+		newStartTsList, _, err := e.sink.(*mysql.Sink).GetStartTsList([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
+		if err != nil {
+			log.Error("calculate real startTs for merge dispatcher failed",
+				zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err),
+			)
+			t.mergedDispatcher.HandleError(err)
+			return
+		}
+		log.Info("calculate real startTs for Merge Dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("receiveStartTs", minCheckpointTs),
+			zap.Any("realStartTs", newStartTsList),
+		)
+		t.mergedDispatcher.SetStartTs(uint64(newStartTsList[0]))
+	} else {
+		t.mergedDispatcher.SetStartTs(minCheckpointTs)
+	}
+
+	t.mergedDispatcher.SetCurrentPDTs(e.pdClock.CurrentTS())
+	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, minCheckpointTs)
+	log.Info("merge dispatcher commit add dispatcher",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
+		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
+		zap.Uint64("startTs", minCheckpointTs),
+	)
+
+	// Step3: cancel the merge task
+	t.Cancel()
+
+	// Step4: remove all the dispatchers to be merged
+	// we set dispatcher removing status to true after we set the merged dispatcher into dispatcherMap and change its status to Initializing.
+	// so that we can ensure the calculate of checkpointTs of the event dispatcher manager will include the merged dispatcher of the dispatchers to be merged
+	// to avoid the fallback of the checkpointTs
+	for _, id := range t.dispatcherIDs {
+		dispatcher, ok := e.redoDispatcherMap.Get(id)
 		if !ok {
 			log.Panic("dispatcher not found when do merge", zap.Stringer("dispatcherID", id))
 		}

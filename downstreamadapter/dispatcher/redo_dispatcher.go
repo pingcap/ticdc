@@ -188,14 +188,7 @@ func (rd *RedoDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 				err := rd.AddBlockEventToSink(pendingEvent)
 				if err != nil {
-					select {
-					case rd.errCh <- err:
-					default:
-						log.Error("error channel is full, discard error",
-							zap.Stringer("changefeedID", rd.changefeedID),
-							zap.Stringer("dispatcherID", rd.id),
-							zap.Error(err))
-					}
+					rd.HandleError(err)
 					return
 				}
 				failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
