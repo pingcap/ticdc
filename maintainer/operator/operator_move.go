@@ -194,7 +194,7 @@ func (m *MoveDispatcherOperator) String() string {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	return fmt.Sprintf("move dispatcher operator: %s, origin: %s, dest: %s, redo: %v",
+	return fmt.Sprintf("move dispatcher operator: %s, origin: %s, dest: %s",
 		m.replicaSet.ID, m.origin, m.dest)
 }
 

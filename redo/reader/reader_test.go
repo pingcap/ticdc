@@ -52,7 +52,7 @@ func genLogFile(
 	if logType == redo.RedoRowLogFileType {
 		// generate unsorted logs
 		for ts := maxCommitTs; ts >= minCommitTs; ts-- {
-			event := &pevent.DMLEvent{
+			event := &pevent.RedoRowEvent{
 				CommitTs: ts,
 				TableInfo: &common.TableInfo{
 					TableName: common.TableName{

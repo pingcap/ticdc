@@ -93,7 +93,7 @@ func (m *removeDispatcherOperator) PostFinish() {
 }
 
 func (m *removeDispatcherOperator) String() string {
-	return fmt.Sprintf("remove dispatcher operator: %s, dest: %s, redo: %v",
+	return fmt.Sprintf("remove dispatcher operator: %s, dest: %s",
 		m.replicaSet.ID, m.replicaSet.GetNodeID())
 }
 
