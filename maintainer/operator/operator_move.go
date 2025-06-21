@@ -39,10 +39,11 @@ type MoveDispatcherOperator struct {
 
 	noPostFinishNeed bool
 
-	lck sync.Mutex
+	lck    sync.Mutex
+	repeat bool
 }
 
-func NewMoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {
+func NewMoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication, origin, dest node.ID, redo bool) *MoveDispatcherOperator {
 	return &MoveDispatcherOperator{
 		replicaSet: replicaSet,
 		origin:     origin,
@@ -193,10 +194,18 @@ func (m *MoveDispatcherOperator) String() string {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	return fmt.Sprintf("move dispatcher operator: %s, origin:%s, dest:%s",
+	return fmt.Sprintf("move dispatcher operator: %s, origin: %s, dest: %s",
 		m.replicaSet.ID, m.origin, m.dest)
 }
 
 func (m *MoveDispatcherOperator) Type() string {
 	return "move"
+}
+
+func (m *MoveDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *MoveDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

@@ -28,7 +28,7 @@ import (
 
 // NewRedoLogWriter creates a new RedoLogWriter.
 func NewRedoLogWriter(
-	ctx context.Context, lwCfg *writer.LogWriterConfig,
+	ctx context.Context, lwCfg *writer.LogWriterConfig, fileType string,
 ) (writer.RedoLogWriter, error) {
 	uri, err := storage.ParseRawURL(lwCfg.Storage)
 	if err != nil {
@@ -48,7 +48,7 @@ func NewRedoLogWriter(
 	}
 
 	if lwCfg.UseFileBackend {
-		return file.NewLogWriter(ctx, lwCfg)
+		return file.NewLogWriter(ctx, lwCfg, fileType)
 	}
-	return memory.NewLogWriter(ctx, lwCfg)
+	return memory.NewLogWriter(ctx, lwCfg, fileType)
 }

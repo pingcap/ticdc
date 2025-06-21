@@ -80,10 +80,13 @@ func TestInitAndWriteMeta(t *testing.T) {
 		EncodingWorkerNum:     redo.DefaultEncodingWorkerNum,
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 	}
-	m := NewMetaManager(changefeedID, cfg, startTs)
+	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
 	eg.Go(func() error {
+		if err := m.PreStart(ctx); err != nil {
+			return err
+		}
 		return m.Run(ctx)
 	})
 
@@ -161,10 +164,13 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 		EncodingWorkerNum:     redo.DefaultEncodingWorkerNum,
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 	}
-	m := NewMetaManager(changefeedID, cfg, startTs)
+	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
 	eg.Go(func() error {
+		if err := m.PreStart(ctx); err != nil {
+			return err
+		}
 		return m.Run(ctx)
 	})
 
@@ -187,7 +193,7 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
 }
 
-func testWriteMeta(ctx context.Context, t *testing.T, m *metaManager) {
+func testWriteMeta(ctx context.Context, t *testing.T, m *RedoMeta) {
 	checkMeta := func(targetCheckpointTs, targetResolvedTs uint64) {
 		var checkpointTs, resolvedTs uint64
 		var metas []*misc.LogMeta
@@ -296,7 +302,7 @@ func TestGCAndCleanup(t *testing.T) {
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 	}
 
-	m := NewMetaManager(changefeedID, cfg, startTs)
+	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
 	eg.Go(func() error {

@@ -17,6 +17,7 @@ import (
 	"container/heap"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -54,6 +55,8 @@ type Controller struct {
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+
+	ops int64
 }
 
 func NewOperatorController(
@@ -72,6 +75,7 @@ func NewOperatorController(
 		batchSize:     batchSize,
 		replicationDB: db,
 		nodeManager:   nodeManager,
+		ops:           0,
 	}
 	return oc
 }
@@ -87,6 +91,15 @@ func (oc *Controller) Execute() time.Time {
 		}
 		if op == nil {
 			continue
+		}
+
+		if !op.IsRepeat() {
+			switch op.Type() {
+			case "occupy", "merge", "split", "remove":
+			default:
+				atomic.AddInt64(&oc.ops, 1)
+			}
+			op.SetRepeat(true)
 		}
 
 		msg := op.Schedule()
@@ -225,16 +238,32 @@ func (oc *Controller) pollQueueingOperator() (
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
-	if item.IsRemoved {
-		return nil, true
-	}
 	op := item.OP
 	opID := op.ID()
+	if item.IsRemoved {
+		// avoid op not being executed
+		if op.IsRepeat() {
+			switch op.Type() {
+			case "occupy", "merge", "split", "remove":
+			default:
+				atomic.AddInt64(&oc.ops, -1)
+			}
+		}
+		return nil, true
+	}
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
 		item.IsRemoved = true
 		delete(oc.operators, opID)
+		// avoid op not being executed
+		if op.IsRepeat() {
+			switch op.Type() {
+			case "occupy", "merge", "split", "remove":
+			default:
+				atomic.AddInt64(&oc.ops, -1)
+			}
+		}
 		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
@@ -408,6 +437,10 @@ func (oc *Controller) AddMergeSplitOperator(
 		zap.Int("newSpans", len(splitSpans)),
 	)
 	return true
+}
+
+func (oc *Controller) GetOps() int64 {
+	return atomic.LoadInt64(&oc.ops)
 }
 
 func (oc *Controller) GetLock() *sync.RWMutex {

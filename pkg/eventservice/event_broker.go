@@ -173,7 +173,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
-			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState(), d.info.GetRedo())
 			metricEventServiceSendKvCount.Add(float64(e.Len()))
 		}
 	}
@@ -210,8 +210,9 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 		zap.String("query", e.Query),
 		zap.Int64("eventTableID", e.TableID),
 		zap.Uint64("commitTs", e.FinishedTs),
-		zap.Uint64("seq", e.Seq))
-	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
+		zap.Uint64("seq", e.Seq),
+		zap.Bool("redo", d.info.GetRedo()))
+	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState(), d.info.GetRedo())
 	select {
 	case <-ctx.Done():
 		return
@@ -231,7 +232,7 @@ func (c *eventBroker) sendResolvedTs(
 		server,
 		re,
 		d.getEventSenderState(),
-	)
+		d.info.GetRedo())
 	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	metricEventServiceSendResolvedTsCount.Inc()
@@ -242,7 +243,7 @@ func (c *eventBroker) sendReadyEvent(
 	d *dispatcherStat,
 ) {
 	event := pevent.NewReadyEvent(d.info.GetID())
-	wrapEvent := newWrapReadyEvent(server, event)
+	wrapEvent := newWrapReadyEvent(server, event, d.info.GetRedo())
 	c.getMessageCh(d.messageWorkerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
 }
@@ -252,7 +253,7 @@ func (c *eventBroker) sendNotReusableEvent(
 	d *dispatcherStat,
 ) {
 	event := pevent.NewNotReusableEvent(d.info.GetID())
-	wrapEvent := newWrapNotReusableEvent(server, event)
+	wrapEvent := newWrapNotReusableEvent(server, event, d.info.GetRedo())
 
 	// must success unless we can do retry later
 	c.getMessageCh(d.messageWorkerIndex) <- wrapEvent
@@ -431,6 +432,7 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 			log.Info("checkAndSendHandshake", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Bool("isHandshaked", task.isHandshaked.Load()))
 			task.isHandshaked.Store(true)
 		},
+		redo: task.info.GetRedo(),
 	}
 	c.getMessageCh(task.messageWorkerIndex) <- wrapE
 	metricEventServiceSendCommandCount.Inc()
@@ -465,7 +467,8 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 				DispatcherID: d.id,
 				CommitTsList: newCommitTsList,
 			},
-			d.getEventSenderState())
+			d.getEventSenderState(),
+			d.info.GetRedo())
 		c.getMessageCh(d.messageWorkerIndex) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
@@ -563,6 +566,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 	defer flushResolvedTsTicker.Stop()
 
 	resolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
+	redoResolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
 	messageCh := c.messageCh[workerIndex]
 	batchM := make([]*wrapEvent, 0, defaultMaxBatchSize)
 	for {
@@ -587,7 +591,11 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 
 			for _, m = range batchM {
 				if m.msgType == pevent.TypeResolvedEvent {
-					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
+					cacheMap := resolvedTsCacheMap
+					if m.redo {
+						cacheMap = redoResolvedTsCacheMap
+					}
+					c.handleResolvedTs(ctx, cacheMap, m, workerIndex)
 					continue
 				}
 				// Check if the dispatcher is initialized, if so, ignore the handshake event.
@@ -611,15 +619,22 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				)
 				// Note: we need to flush the resolvedTs cache before sending the message
 				// to keep the order of the resolvedTs and the message.
-				c.flushResolvedTs(ctx, resolvedTsCacheMap[m.serverID], m.serverID, workerIndex)
-				c.sendMsg(ctx, tMsg, m.postSendFunc)
+				cacheMap := resolvedTsCacheMap
+				if m.redo {
+					cacheMap = redoResolvedTsCacheMap
+				}
+				c.flushResolvedTs(ctx, cacheMap[m.serverID], m.serverID, workerIndex, m.redo)
+				c.sendMsg(ctx, tMsg, m.postSendFunc, m.redo)
 				m.reset()
 			}
 			batchM = batchM[:0]
 
 		case <-flushResolvedTsTicker.C:
+			for serverID, cache := range redoResolvedTsCacheMap {
+				c.flushResolvedTs(ctx, cache, serverID, workerIndex, true)
+			}
 			for serverID, cache := range resolvedTsCacheMap {
-				c.flushResolvedTs(ctx, cache, serverID, workerIndex)
+				c.flushResolvedTs(ctx, cache, serverID, workerIndex, false)
 			}
 		}
 	}
@@ -634,11 +649,11 @@ func (c *eventBroker) handleResolvedTs(ctx context.Context, cacheMap map[node.ID
 	}
 	cache.add(m.resolvedTsEvent)
 	if cache.isFull() {
-		c.flushResolvedTs(ctx, cache, m.serverID, workerIndex)
+		c.flushResolvedTs(ctx, cache, m.serverID, workerIndex, m.redo)
 	}
 }
 
-func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCache, serverID node.ID, workerIndex int) {
+func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCache, serverID node.ID, workerIndex int, redo bool) {
 	if cache == nil || cache.len == 0 {
 		return
 	}
@@ -650,10 +665,10 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 		msg,
 		uint64(workerIndex),
 	)
-	c.sendMsg(ctx, tMsg, nil)
+	c.sendMsg(ctx, tMsg, nil, redo)
 }
 
-func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage, postSendMsg func()) {
+func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage, postSendMsg func(), redo bool) {
 	start := time.Now()
 	congestedRetryInterval := time.Millisecond * 10
 	// Send the message to messageCenter. Retry if to send failed.
@@ -664,6 +679,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		default:
 		}
 		// Send the message to the dispatcher.
+		tMsg.Redo = redo
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
 			_, ok := err.(apperror.AppError)
@@ -843,6 +859,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
+		zap.Bool("redo", info.GetRedo()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", startTs),
 		zap.Duration("duration", time.Since(start)))

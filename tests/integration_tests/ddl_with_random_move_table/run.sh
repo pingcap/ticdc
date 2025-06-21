@@ -29,7 +29,7 @@ function prepare() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
 
-	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
+	TOPIC_NAME="ticdc-ddl-random-move-table-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
 	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
 }

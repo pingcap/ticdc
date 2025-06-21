@@ -45,14 +45,14 @@ func genLogFile(
 	}
 	fileName := fmt.Sprintf(redo.RedoLogFileFormatV2, "capture", "default",
 		"changefeed", logType, maxCommitTs, uuid.NewString(), redo.LogEXT)
-	w, err := file.NewFileWriter(ctx, cfg, writer.WithLogFileName(func() string {
+	w, err := file.NewFileWriter(ctx, cfg, logType, writer.WithLogFileName(func() string {
 		return fileName
 	}))
 	require.Nil(t, err)
 	if logType == redo.RedoRowLogFileType {
 		// generate unsorted logs
 		for ts := maxCommitTs; ts >= minCommitTs; ts-- {
-			event := &pevent.DMLEvent{
+			event := &pevent.RedoRowEvent{
 				CommitTs: ts,
 				TableInfo: &common.TableInfo{
 					TableName: common.TableName{

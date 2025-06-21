@@ -53,7 +53,7 @@ import (
 )
 
 const (
-	closeServiceTimeout  = 15 * time.Second
+	closeServiceTimeout  = 30 * time.Second
 	cleanMetaDuration    = 10 * time.Second
 	oldArchCheckInterval = 100 * time.Millisecond
 )

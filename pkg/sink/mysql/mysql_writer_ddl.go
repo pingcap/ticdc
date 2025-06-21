@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -60,6 +61,15 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 			event.Query = newQuery
 		}
 	}
+
+	failpoint.Inject("MySQLSinkExecDDLDelay", func() {
+		select {
+		case <-ctx.Done():
+			failpoint.Return(ctx.Err())
+		case <-time.After(time.Hour):
+		}
+		failpoint.Return(nil)
+	})
 
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {

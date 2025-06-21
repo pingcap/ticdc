@@ -94,12 +94,19 @@ func (m mockOperator) String() string {
 	return m.id.String()
 }
 
+func (m mockOperator) IsRepeat() bool {
+	return false
+}
+
+func (m mockOperator) SetRepeat(repeat bool) {
+}
+
 func TestOperatorQueue(t *testing.T) {
 	queue := make(OperatorQueue[mockReplicationID, mockReplicationStatus], 0)
 
 	// Create test operators with different execution times
 	now := time.Now()
-	op1 := NewOperatorWithTime[mockReplicationID, mockReplicationStatus](
+	op1 := NewOperatorWithTime(
 		mockOperator{
 			id:       mockReplicationID{"op1"},
 			status:   mockReplicationStatus{"status1"},
