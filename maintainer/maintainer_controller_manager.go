@@ -613,15 +613,15 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64, redo bool) e
 
 	randomIdx := rand.Intn(len(replications))
 	primaryID := replications[randomIdx].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
-	for _, replicaSet := range replications {
-		var op *operator.MergeSplitDispatcherOperator
-		if replicaSet.ID == primaryID {
-			op = primaryOp
+	var primaryOp *operator.MergeSplitDispatcherOperator
+	for idx, replicaSet := range replications {
+		if idx == randomIdx {
+			primaryOp = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, replications, splitTableSpans, nil)
+			operatorController.AddOperator(primaryOp)
 		} else {
-			op = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
+			op := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
+			operatorController.AddOperator(op)
 		}
-		operatorController.AddOperator(op)
 	}
 
 	count := 0
@@ -689,7 +689,10 @@ func (cm *ControllerManager) mergeTable(tableID int64, redo bool) error {
 		idx = 0
 		// try to move the second span to the first span's node
 		moveOp := operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
-		operatorController.AddOperator(moveOp)
+		ok := operatorController.AddOperator(moveOp)
+		if !ok {
+			return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add move table operator failed")
+		}
 
 		count := 0
 		maxTry := 30
