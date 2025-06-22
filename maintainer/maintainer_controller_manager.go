@@ -507,7 +507,7 @@ func (cm *ControllerManager) moveTable(tableId int64, targetNode node.ID, redo b
 	op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
 	success := operatorController.AddOperator(op)
 	if !success {
-		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add move table operator failed", zap.Any("redo", redo))
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add move table operator failed", redo)
 	}
 
 	// check the op is finished or not
@@ -549,7 +549,7 @@ func (cm *ControllerManager) moveSplitTable(tableId int64, targetNode node.ID, r
 		op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
 		success := operatorController.AddOperator(op)
 		if !success {
-			return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add move split table operator failed", zap.Any("redo", redo))
+			break
 		}
 		opList = append(opList, op)
 	}
@@ -625,14 +625,11 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64, redo bool) e
 			primaryOp = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, replications, splitTableSpans, nil)
 			success := operatorController.AddOperator(primaryOp)
 			if !success {
-				return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add split table operator failed", zap.Any("redo", redo))
+				return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add split table operator failed", redo)
 			}
 		} else {
 			op := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
-			success := operatorController.AddOperator(op)
-			if !success {
-				return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add split table operator failed", zap.Any("redo", redo))
-			}
+			operatorController.AddOperator(op)
 		}
 	}
 
@@ -703,7 +700,7 @@ func (cm *ControllerManager) mergeTable(tableID int64, redo bool) error {
 		moveOp := operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
 		success := operatorController.AddOperator(moveOp)
 		if !success {
-			return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add move table operator failed")
+			return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add move table operator failed", redo)
 		}
 
 		count := 0
