@@ -56,11 +56,11 @@ type ReplicationDB struct {
 	// newGroupChecker creates a GroupChecker for validating span groups
 	newGroupChecker func(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication]
 
-	// 来自 SpanStateManager 的额外字段
+	// Additional fields from SpanStateManager
 	nodeManager *watcher.NodeManager
-	// 操作符状态更新回调
+	// Operator status update callback
 	operatorStatusUpdater func(dispatcherID common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus)
-	// 消息发送回调
+	// Message sending callback
 	messageSender func(msg *messaging.TargetMessage) error
 }
 
@@ -91,22 +91,22 @@ func NewReplicaSetDBWithNodeManager(
 	return db
 }
 
-// SetOperatorStatusUpdater 设置操作符状态更新回调
+// SetOperatorStatusUpdater sets the operator status update callback
 func (db *ReplicationDB) SetOperatorStatusUpdater(updater func(dispatcherID common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus)) {
 	db.operatorStatusUpdater = updater
 }
 
-// SetMessageSender 设置消息发送回调
+// SetMessageSender sets the message sending callback
 func (db *ReplicationDB) SetMessageSender(sender func(msg *messaging.TargetMessage) error) {
 	db.messageSender = sender
 }
 
-// HandleStatus 处理来自节点的状态报告
+// HandleStatus handles status reports from nodes
 func (db *ReplicationDB) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 
-		// 更新操作符状态
+		// Update operator status
 		if db.operatorStatusUpdater != nil {
 			db.operatorStatusUpdater(dispatcherID, from, status)
 		}
@@ -116,14 +116,14 @@ func (db *ReplicationDB) HandleStatus(from node.ID, statusList []*heartbeatpb.Ta
 			if status.ComponentStatus != heartbeatpb.ComponentState_Working {
 				continue
 			}
-			// 如果 span 未找到且状态为 working，需要移除
+			// If span not found and status is working, need to remove it
 			log.Warn("no span found, remove it",
 				zap.String("changefeed", db.changefeedID.Name()),
 				zap.String("from", from.String()),
 				zap.Any("status", status),
 				zap.String("dispatcherID", dispatcherID.String()))
 
-			// 发送移除消息
+			// Send remove message
 			if db.messageSender != nil {
 				msg := NewRemoveDispatcherMessage(from, db.changefeedID, status.ID)
 				_ = db.messageSender(msg)
@@ -142,7 +142,7 @@ func (db *ReplicationDB) HandleStatus(from node.ID, statusList []*heartbeatpb.Ta
 	}
 }
 
-// GetAllNodes 获取所有活跃节点
+// GetAllNodes gets all alive nodes
 func (db *ReplicationDB) GetAllNodes() []node.ID {
 	if db.nodeManager == nil {
 		return nil
@@ -155,7 +155,7 @@ func (db *ReplicationDB) GetAllNodes() []node.ID {
 	return nodes
 }
 
-// AddNewSpans 添加新的 spans
+// AddNewSpans adds new spans
 func (db *ReplicationDB) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
@@ -164,7 +164,7 @@ func (db *ReplicationDB) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.T
 	}
 }
 
-// AddWorkingSpans 添加工作中的 spans
+// AddWorkingSpans adds working spans
 func (db *ReplicationDB) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *SpanReplication]) {
 	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *SpanReplication) bool {
 		db.AddReplicatingSpan(stm)
@@ -172,82 +172,82 @@ func (db *ReplicationDB) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSp
 	})
 }
 
-// GetTask 根据 dispatcherID 获取任务
+// GetTask gets task by dispatcherID
 func (db *ReplicationDB) GetTask(dispatcherID common.DispatcherID) *SpanReplication {
 	return db.GetTaskByID(dispatcherID)
 }
 
-// GetReplicationDB 获取底层的 ReplicationDB 实例
+// GetReplicationDB gets the underlying ReplicationDB instance
 func (db *ReplicationDB) GetReplicationDB() *ReplicationDB {
 	return db
 }
 
-// GetGroups 获取所有分组
+// GetGroups gets all groups
 func (db *ReplicationDB) GetGroups() []replica.GroupID {
 	return db.ReplicationDB.GetGroups()
 }
 
-// GetScheduleTaskSizePerNodeByGroup 根据分组获取每个节点的调度任务数量
+// GetScheduleTaskSizePerNodeByGroup gets scheduling task count per node by group
 func (db *ReplicationDB) GetScheduleTaskSizePerNodeByGroup(groupID replica.GroupID) map[node.ID]int {
 	return db.ReplicationDB.GetScheduleTaskSizePerNodeByGroup(groupID)
 }
 
-// GetAbsentByGroup 根据分组获取 absent 状态的任务
+// GetAbsentByGroup gets absent state tasks by group
 func (db *ReplicationDB) GetAbsentByGroup(groupID replica.GroupID, maxSize int) []*SpanReplication {
 	return db.ReplicationDB.GetAbsentByGroup(groupID, maxSize)
 }
 
-// GetReplicatingByGroup 根据分组获取 replicating 状态的任务
+// GetReplicatingByGroup gets replicating state tasks by group
 func (db *ReplicationDB) GetReplicatingByGroup(groupID replica.GroupID) []*SpanReplication {
 	return db.ReplicationDB.GetReplicatingByGroup(groupID)
 }
 
-// GetTaskSizePerNodeByGroup 根据分组获取每个节点的任务数量
+// GetTaskSizePerNodeByGroup gets task count per node by group
 func (db *ReplicationDB) GetTaskSizePerNodeByGroup(groupID replica.GroupID) map[node.ID]int {
 	return db.ReplicationDB.GetTaskSizePerNodeByGroup(groupID)
 }
 
-// GetTaskSizePerNode 获取每个节点的任务数量
+// GetTaskSizePerNode gets task count per node
 func (db *ReplicationDB) GetTaskSizePerNode() map[node.ID]int {
 	return db.ReplicationDB.GetTaskSizePerNode()
 }
 
-// GetImbalanceGroupNodeTask 获取不平衡的分组节点任务
+// GetImbalanceGroupNodeTask gets imbalanced group node tasks
 func (db *ReplicationDB) GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (map[replica.GroupID]map[node.ID]*SpanReplication, bool) {
 	return db.ReplicationDB.GetImbalanceGroupNodeTask(nodes)
 }
 
-// GetCheckerStat 获取检查器统计信息
+// GetCheckerStat gets checker statistics
 func (db *ReplicationDB) GetCheckerStat() string {
 	return db.ReplicationDB.GetCheckerStat()
 }
 
-// GetGroupStat 获取分组统计信息
+// GetGroupStat gets group statistics
 func (db *ReplicationDB) GetGroupStat() string {
 	return db.ReplicationDB.GetGroupStat()
 }
 
-// GetGroupChecker 获取分组检查器
+// GetGroupChecker gets group checker
 func (db *ReplicationDB) GetGroupChecker(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
 	return db.ReplicationDB.GetGroupChecker(groupID)
 }
 
-// RemoveAllTasks 移除所有任务（兼容性方法）
+// RemoveAllTasks removes all tasks (compatibility method)
 func (db *ReplicationDB) RemoveAllTasks() []*SpanReplication {
 	return db.RemoveAll()
 }
 
-// RemoveTasksBySchemaID 根据 schemaID 移除任务（兼容性方法）
+// RemoveTasksBySchemaID removes tasks by schemaID (compatibility method)
 func (db *ReplicationDB) RemoveTasksBySchemaID(schemaID int64) []*SpanReplication {
 	return db.RemoveBySchemaID(schemaID)
 }
 
-// RemoveTasksByTableIDs 根据 tableIDs 移除任务（兼容性方法）
+// RemoveTasksByTableIDs removes tasks by tableIDs (compatibility method)
 func (db *ReplicationDB) RemoveTasksByTableIDs(tables ...int64) []*SpanReplication {
 	return db.RemoveByTableIDs(tables...)
 }
 
-// AddAbsentReplicaSetSingle 添加单个 absent replica set（兼容性方法）
+// AddAbsentReplicaSetSingle adds a single absent replica set (compatibility method)
 func (db *ReplicationDB) AddAbsentReplicaSetSingle(span *SpanReplication) {
 	db.AddAbsentReplicaSet(span)
 }
@@ -273,7 +273,7 @@ func (db *ReplicationDB) TaskSize() int {
 	return len(db.allTasks)
 }
 
-// RemoveAll reset the db and return all the replicating and scheduling tasks
+// RemoveAll resets the db and returns all the replicating and scheduling tasks
 func (db *ReplicationDB) RemoveAll() []*SpanReplication {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -286,7 +286,7 @@ func (db *ReplicationDB) RemoveAll() []*SpanReplication {
 	return tasks
 }
 
-// RemoveTasksByTableIDs removes the tasks by the table ids and return the scheduled tasks
+// RemoveTasksByTableIDs removes the tasks by the table ids and returns the scheduled tasks
 func (db *ReplicationDB) RemoveByTableIDs(tableIDs ...int64) []*SpanReplication {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -303,7 +303,7 @@ func (db *ReplicationDB) RemoveByTableIDs(tableIDs ...int64) []*SpanReplication 
 	return tasks
 }
 
-// RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
+// RemoveBySchemaID removes the tasks by the schema id and returns the scheduled tasks
 func (db *ReplicationDB) RemoveBySchemaID(schemaID int64) []*SpanReplication {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -440,28 +440,28 @@ func (db *ReplicationDB) AddSchedulingReplicaSet(span *SpanReplication, targetNo
 	db.addSchedulingReplicaSetWithoutLock(span, targetNodeID)
 }
 
-// MarkSpanAbsent move the span to the absent status
+// MarkSpanAbsent moves the span to the absent status
 func (db *ReplicationDB) MarkSpanAbsent(span *SpanReplication) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.MarkAbsentWithoutLock(span)
 }
 
-// MarkSpanScheduling move the span to the scheduling map
+// MarkSpanScheduling moves the span to the scheduling map
 func (db *ReplicationDB) MarkSpanScheduling(span *SpanReplication) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.MarkSchedulingWithoutLock(span)
 }
 
-// MarkSpanReplicating move the span to the replicating map
+// MarkSpanReplicating moves the span to the replicating map
 func (db *ReplicationDB) MarkSpanReplicating(span *SpanReplication) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.MarkReplicatingWithoutLock(span)
 }
 
-// ForceRemove remove the span from the db
+// ForceRemove removes the span from the db
 func (db *ReplicationDB) ForceRemove(id common.DispatcherID) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -481,7 +481,7 @@ func (db *ReplicationDB) ForceRemove(id common.DispatcherID) {
 	db.removeSpanWithoutLock(span)
 }
 
-// UpdateSchemaID will update the schema id of the table, and move the task to the new schema map.
+// UpdateSchemaID updates the schema id of the table, and moves the task to the new schema map.
 // It is called when a DDL like `ALTER TABLE old_schema.old_tbl RENAME TO new_schema.new_tbl` is executed.
 func (db *ReplicationDB) UpdateSchemaID(tableID, newSchemaID int64) {
 	db.mu.Lock()

@@ -235,80 +235,80 @@ func newDBWithCheckerForTest(t *testing.T) *ReplicationDB {
 }
 
 func TestReplicationDB_BasicOperations(t *testing.T) {
-	// 创建测试数据
+	// Create test data
 	changefeedID := common.NewChangefeedID()
 	ddlSpan := NewSpanReplication(changefeedID, common.NewDispatcherID(), common.DDLSpanSchemaID, common.DDLSpan, 1000)
 	mockNodeManager := &watcher.NodeManager{}
 
-	// 创建统一的 ReplicationDB
+	// Create unified ReplicationDB
 	db := NewReplicaSetDBWithNodeManager(changefeedID, ddlSpan, false, mockNodeManager)
 
-	// 测试基本操作
+	// Test basic operations
 	require.NotNil(t, db)
-	require.Equal(t, 1, db.TaskSize()) // 包含 DDL span
+	require.Equal(t, 1, db.TaskSize()) // Contains DDL span
 	require.Equal(t, 0, db.GetAbsentSize())
-	require.Equal(t, 0, db.GetReplicatingSize()) // DDL span 初始状态不是 replicating
+	require.Equal(t, 0, db.GetReplicatingSize()) // DDL span initial state is not replicating
 	require.Equal(t, 0, db.GetSchedulingSize())
 
-	// 测试 DDL dispatcher
+	// Test DDL dispatcher
 	ddlDispatcher := db.GetDDLDispatcher()
 	require.NotNil(t, ddlDispatcher)
 	require.True(t, ddlDispatcher.Span.Equal(common.DDLSpan))
 }
 
 func TestReplicationDB_AddAndRemoveTasks(t *testing.T) {
-	// 创建测试数据
+	// Create test data
 	changefeedID := common.NewChangefeedID()
 	ddlSpan := NewSpanReplication(changefeedID, common.NewDispatcherID(), common.DDLSpanSchemaID, common.DDLSpan, 1000)
 	mockNodeManager := &watcher.NodeManager{}
 
-	// 创建统一的 ReplicationDB
+	// Create unified ReplicationDB
 	db := NewReplicaSetDBWithNodeManager(changefeedID, ddlSpan, false, mockNodeManager)
 
-	// 测试添加和移除任务 - 使用有效的 span 范围
+	// Test adding and removing tasks - use valid span range
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  1,
-		StartKey: []byte{0x01, 0x02, 0x03}, // 有效的 StartKey
-		EndKey:   []byte{0x04, 0x05, 0x06}, // 有效的 EndKey，确保 StartKey < EndKey
+		StartKey: []byte{0x01, 0x02, 0x03}, // Valid StartKey
+		EndKey:   []byte{0x04, 0x05, 0x06}, // Valid EndKey, ensure StartKey < EndKey
 	}
 
 	db.AddNewSpans(1, []*heartbeatpb.TableSpan{tableSpan}, 1000)
 	require.Equal(t, 1, db.GetAbsentSize())
 
-	// 测试移除任务
+	// Test removing tasks
 	removed := db.RemoveByTableIDs(1)
-	require.Len(t, removed, 0) // 新添加的 span 还没有被调度，所以移除时返回空
+	require.Len(t, removed, 0) // Newly added span hasn't been scheduled yet, so removal returns empty
 	require.Equal(t, 0, db.GetAbsentSize())
 }
 
 func TestReplicationDB_StatusManagement(t *testing.T) {
-	// 创建测试数据
+	// Create test data
 	changefeedID := common.NewChangefeedID()
 	ddlSpan := NewSpanReplication(changefeedID, common.NewDispatcherID(), common.DDLSpanSchemaID, common.DDLSpan, 1000)
 	mockNodeManager := &watcher.NodeManager{}
 
-	// 创建统一的 ReplicationDB
+	// Create unified ReplicationDB
 	db := NewReplicaSetDBWithNodeManager(changefeedID, ddlSpan, false, mockNodeManager)
 
-	// 创建测试 span - 使用有效的 span 范围
+	// Create test span - use valid span range
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  1,
-		StartKey: []byte{0x01, 0x02, 0x03}, // 有效的 StartKey
-		EndKey:   []byte{0x04, 0x05, 0x06}, // 有效的 EndKey，确保 StartKey < EndKey
+		StartKey: []byte{0x01, 0x02, 0x03}, // Valid StartKey
+		EndKey:   []byte{0x04, 0x05, 0x06}, // Valid EndKey, ensure StartKey < EndKey
 	}
 	span := NewSpanReplication(changefeedID, common.NewDispatcherID(), 1, tableSpan, 1000)
 
-	// 测试状态转换
+	// Test status conversion
 	db.AddAbsentReplicaSet(span)
 	require.Equal(t, 1, db.GetAbsentSize())
 	require.Equal(t, 0, db.GetSchedulingSize())
 	require.Equal(t, 0, db.GetReplicatingSize())
 
-	// 测试绑定到节点
+	// Test binding to node
 	db.BindSpanToNode("", "node1", span)
 	require.Equal(t, "node1", span.GetNodeID().String())
 
-	// 测试状态转换
+	// Test status conversion
 	db.MarkSpanScheduling(span)
 	require.Equal(t, 0, db.GetAbsentSize())
 	require.Equal(t, 1, db.GetSchedulingSize())
@@ -319,7 +319,7 @@ func TestReplicationDB_StatusManagement(t *testing.T) {
 	require.Equal(t, 0, db.GetSchedulingSize())
 	require.Equal(t, 1, db.GetReplicatingSize())
 
-	// 测试状态更新
+	// Test status update
 	status := &heartbeatpb.TableSpanStatus{
 		ID:              span.ID.ToPB(),
 		ComponentStatus: heartbeatpb.ComponentState_Working,
@@ -330,29 +330,29 @@ func TestReplicationDB_StatusManagement(t *testing.T) {
 }
 
 func TestReplicationDB_QueryOperations(t *testing.T) {
-	// 创建测试数据
+	// Create test data
 	changefeedID := common.NewChangefeedID()
 	ddlSpan := NewSpanReplication(changefeedID, common.NewDispatcherID(), common.DDLSpanSchemaID, common.DDLSpan, 1000)
 	mockNodeManager := &watcher.NodeManager{}
 
-	// 创建统一的 ReplicationDB
+	// Create unified ReplicationDB
 	db := NewReplicaSetDBWithNodeManager(changefeedID, ddlSpan, false, mockNodeManager)
 
-	// 添加测试数据 - 使用有效的 span 范围
+	// Add test data - use valid span range
 	tableSpan1 := &heartbeatpb.TableSpan{
 		TableID:  1,
-		StartKey: []byte{0x01, 0x02, 0x03}, // 有效的 StartKey
-		EndKey:   []byte{0x04, 0x05, 0x06}, // 有效的 EndKey
+		StartKey: []byte{0x01, 0x02, 0x03}, // Valid StartKey
+		EndKey:   []byte{0x04, 0x05, 0x06}, // Valid EndKey
 	}
 	tableSpan2 := &heartbeatpb.TableSpan{
 		TableID:  2,
-		StartKey: []byte{0x07, 0x08, 0x09}, // 有效的 StartKey
-		EndKey:   []byte{0x0a, 0x0b, 0x0c}, // 有效的 EndKey
+		StartKey: []byte{0x07, 0x08, 0x09}, // Valid StartKey
+		EndKey:   []byte{0x0a, 0x0b, 0x0c}, // Valid EndKey
 	}
 
 	db.AddNewSpans(1, []*heartbeatpb.TableSpan{tableSpan1, tableSpan2}, 1000)
 
-	// 测试查询操作
+	// Test query operations
 	require.Equal(t, 2, db.GetAbsentSize())
 	require.Equal(t, 2, db.GetTaskSizeBySchemaID(1))
 	tasksByTable1 := db.GetTasksByTableID(1)
@@ -369,25 +369,25 @@ func TestReplicationDB_QueryOperations(t *testing.T) {
 	allTasks := db.GetAllTasks()
 	require.Len(t, allTasks, 3) // 2 table spans + 1 DDL span
 
-	// 测试表存在性检查
+	// Test table existence check
 	require.True(t, db.IsTableExists(1))
 	require.True(t, db.IsTableExists(2))
 	require.False(t, db.IsTableExists(999))
 }
 
 func TestReplicationDB_NodeManagement(t *testing.T) {
-	// 创建测试数据
+	// Create test data
 	changefeedID := common.NewChangefeedID()
 	ddlSpan := NewSpanReplication(changefeedID, common.NewDispatcherID(), common.DDLSpanSchemaID, common.DDLSpan, 1000)
 
-	// 创建统一的 ReplicationDB，不使用 NodeManager
+	// Create unified ReplicationDB, not using NodeManager
 	db := NewReplicaSetDB(changefeedID, ddlSpan, false)
 
-	// 测试任务绑定到节点
+	// Test task binding to node
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  1,
-		StartKey: []byte{0x01, 0x02, 0x03}, // 有效的 StartKey
-		EndKey:   []byte{0x04, 0x05, 0x06}, // 有效的 EndKey
+		StartKey: []byte{0x01, 0x02, 0x03}, // Valid StartKey
+		EndKey:   []byte{0x04, 0x05, 0x06}, // Valid EndKey
 	}
 	span := NewSpanReplication(changefeedID, common.NewDispatcherID(), 1, tableSpan, 1000)
 
@@ -404,25 +404,25 @@ func TestReplicationDB_NodeManagement(t *testing.T) {
 }
 
 func TestReplicationDB_CallbackFunctions(t *testing.T) {
-	// 创建测试数据
+	// Create test data
 	changefeedID := common.NewChangefeedID()
 	ddlSpan := NewSpanReplication(changefeedID, common.NewDispatcherID(), common.DDLSpanSchemaID, common.DDLSpan, 1000)
 	mockNodeManager := &watcher.NodeManager{}
 
-	// 创建统一的 ReplicationDB
+	// Create unified ReplicationDB
 	db := NewReplicaSetDBWithNodeManager(changefeedID, ddlSpan, false, mockNodeManager)
 
-	// 测试回调函数设置
+	// Test callback function setting
 	db.SetOperatorStatusUpdater(func(dispatcherID common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
-		// 回调函数被调用时的处理逻辑
+		// Callback function processing logic when called
 	})
 
 	db.SetMessageSender(func(msg *messaging.TargetMessage) error {
-		// 消息发送回调
+		// Message sending callback
 		return nil
 	})
 
-	// 测试 HandleStatus
+	// Test HandleStatus
 	status := &heartbeatpb.TableSpanStatus{
 		ID:              ddlSpan.ID.ToPB(),
 		ComponentStatus: heartbeatpb.ComponentState_Working,
@@ -430,12 +430,12 @@ func TestReplicationDB_CallbackFunctions(t *testing.T) {
 	}
 	db.HandleStatus("node1", []*heartbeatpb.TableSpanStatus{status})
 
-	// 注意：由于 DDL span 的特殊处理，可能不会触发回调
-	// 这里主要是测试方法调用不会出错
+	// Note: Due to special processing of DDL span, callback may not be triggered
+	// Here mainly tests method call does not fail
 	require.NotNil(t, db)
 }
 
-// Mock 组件用于测试
+// Mock component for testing
 type mockNodeManager struct {
 	aliveNodes map[node.ID]*node.Info
 }

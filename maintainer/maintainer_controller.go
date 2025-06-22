@@ -78,15 +78,14 @@ func NewController(changefeedID common.ChangeFeedID,
 		splitter = split.NewSplitter(changefeedID, pdAPIClient, regionCache, cfConfig.Scheduler)
 	}
 
-	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
-	// 创建统一的 SpanManager
+	// Create unified SpanManager
 	spanManager := replica.NewReplicaSetDBWithNodeManager(changefeedID, ddlSpan, enableTableAcrossNodes, nodeManager)
 
-	oc := operator.NewOperatorController(changefeedID, mc, replicaSetDB, nodeManager, batchSize)
+	oc := operator.NewOperatorController(changefeedID, mc, spanManager, nodeManager, batchSize)
 
-	// 设置 SpanManager 的回调函数
+	// Set SpanManager callback functions
 	spanManager.SetOperatorStatusUpdater(func(dispatcherID common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
 		oc.UpdateOperatorStatus(dispatcherID, from, status)
 	})
@@ -123,12 +122,12 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	c.spanManager.HandleStatus(from, statusList)
 }
 
-// GetTasksBySchemaID 根据 schemaID 获取任务列表
+// GetTasksBySchemaID gets task list by schemaID
 func (c *Controller) GetTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
 	return c.spanManager.GetReplicationDB().GetTasksBySchemaID(schemaID)
 }
 
-// GetTaskSizeBySchemaID 根据 schemaID 获取任务数量
+// GetTaskSizeBySchemaID gets task count by schemaID
 func (c *Controller) GetTaskSizeBySchemaID(schemaID int64) int {
 	return c.spanManager.GetReplicationDB().GetTaskSizeBySchemaID(schemaID)
 }
@@ -159,7 +158,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	c.spanManager.AddNewSpans(table.SchemaID, tableSpans, startTs)
 }
 
-// GetTask 根据 dispatcherID 查询任务
+// GetTask queries task by dispatcherID
 func (c *Controller) GetTask(dispatcherID common.DispatcherID) *replica.SpanReplication {
 	return c.spanManager.GetReplicationDB().GetTaskByID(dispatcherID)
 }
@@ -179,17 +178,17 @@ func (c *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	c.operatorController.RemoveTasksByTableIDs(tables...)
 }
 
-// GetTasksByTableID 根据 tableID 获取任务列表
+// GetTasksByTableID gets task list by tableID
 func (c *Controller) GetTasksByTableID(tableID int64) []*replica.SpanReplication {
 	return c.spanManager.GetReplicationDB().GetTasksByTableID(tableID)
 }
 
-// GetAllTasks 获取所有任务
+// GetAllTasks gets all tasks
 func (c *Controller) GetAllTasks() []*replica.SpanReplication {
 	return c.spanManager.GetReplicationDB().GetAllTasks()
 }
 
-// UpdateSchemaID 更新表的 schema ID
+// UpdateSchemaID updates table's schema ID
 func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
 	c.spanManager.GetReplicationDB().UpdateSchemaID(tableID, newSchemaID)
 }
@@ -204,32 +203,32 @@ func (c *Controller) ScheduleFinished() bool {
 	return c.operatorController.OperatorSizeWithLock() == 0 && c.spanManager.GetReplicationDB().GetAbsentSize() == 0
 }
 
-// TaskSize 获取总任务数量
+// TaskSize gets total task count
 func (c *Controller) TaskSize() int {
 	return c.spanManager.GetReplicationDB().TaskSize()
 }
 
-// GetTaskSizeByNodeID 根据节点ID获取任务数量
+// GetTaskSizeByNodeID gets task count by node ID
 func (c *Controller) GetTaskSizeByNodeID(id node.ID) int {
 	return c.spanManager.GetReplicationDB().GetTaskSizeByNodeID(id)
 }
 
-// GetSchedulingSize 获取 scheduling 状态的任务数量
+// GetSchedulingSize gets count of tasks in scheduling state
 func (c *Controller) GetSchedulingSize() int {
 	return c.spanManager.GetReplicationDB().GetSchedulingSize()
 }
 
-// GetReplicatingSize 获取 replicating 状态的任务数量
+// GetReplicatingSize gets count of tasks in replicating state
 func (c *Controller) GetReplicatingSize() int {
 	return c.spanManager.GetReplicationDB().GetReplicatingSize()
 }
 
-// GetAbsentSize 获取 absent 状态的任务数量
+// GetAbsentSize gets count of tasks in absent state
 func (c *Controller) GetAbsentSize() int {
 	return c.spanManager.GetReplicationDB().GetAbsentSize()
 }
 
-// IsTableExists 检查表是否存在
+// IsTableExists checks if table exists
 func (c *Controller) IsTableExists(tableID int64) bool {
 	return c.spanManager.GetReplicationDB().IsTableExists(tableID)
 }
