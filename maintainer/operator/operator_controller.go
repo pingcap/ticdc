@@ -105,20 +105,18 @@ func (oc *Controller) Execute() time.Time {
 	}
 }
 
-// RemoveAllTasks remove all tasks, and notify all operators to stop.
-// it is only called by the barrier when the changefeed is stopped.
-func (oc *Controller) RemoveAllTasks() {
+// RemoveAll remove all tasks, and notify all operators to stop.
+func (oc *Controller) RemoveAll() {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
-
 	for _, replicaSet := range oc.replicationDB.RemoveAll() {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
 	}
 }
 
-// RemoveTasksBySchemaID remove all tasks by schema id.
-// it is only by the barrier when the schema is dropped by ddl
-func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
+// RemoveBySchemaID remove all tasks by schema id.
+// it is only called by the barrier when the schema is dropped by ddl
+func (oc *Controller) RemoveBySchemaID(schemaID int64) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 	for _, replicaSet := range oc.replicationDB.RemoveBySchemaID(schemaID) {
@@ -126,9 +124,9 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	}
 }
 
-// RemoveTasksByTableIDs remove all tasks by table ids.
+// RemoveByTableIDs remove all tasks by table ids.
 // it is only called by the barrier when the table is dropped by ddl
-func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
+func (oc *Controller) RemoveByTableIDs(tables ...int64) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 	for _, replicaSet := range oc.replicationDB.RemoveByTableIDs(tables...) {

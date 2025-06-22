@@ -21,8 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
-	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
-	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	pkgschedreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 )
 
@@ -37,14 +36,14 @@ type basicScheduler struct {
 	schedulingTaskCountPerNode int
 
 	operatorController *operator.Controller
-	replicationDB      *replica.ReplicationDB
+	spanManager        *replica.ReplicationDB
 	nodeManager        *watcher.NodeManager
 }
 
 func NewBasicScheduler(
 	id string, batchSize int,
 	oc *operator.Controller,
-	replicationDB *replica.ReplicationDB,
+	spanManager *replica.ReplicationDB,
 	nodeManager *watcher.NodeManager,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) *basicScheduler {
@@ -52,7 +51,7 @@ func NewBasicScheduler(
 		id:                         id,
 		batchSize:                  batchSize,
 		operatorController:         oc,
-		replicationDB:              replicationDB,
+		spanManager:                spanManager,
 		nodeManager:                nodeManager,
 		schedulingTaskCountPerNode: 1,
 	}
@@ -71,7 +70,7 @@ func (s *basicScheduler) Execute() time.Time {
 	// we can assign new dispatcher for the nodes.
 	// Thus, we can balance the resource of incremental scan.
 	availableSize := s.batchSize - s.operatorController.OperatorSize()
-	totalAbsentSize := s.replicationDB.GetAbsentSize()
+	totalAbsentSize := s.spanManager.GetAbsentSize()
 
 	if totalAbsentSize <= 0 || availableSize <= 0 {
 		// can not schedule more operators, skip
@@ -82,7 +81,7 @@ func (s *basicScheduler) Execute() time.Time {
 		return time.Now().Add(time.Millisecond * 100)
 	}
 
-	for _, id := range s.replicationDB.GetGroups() {
+	for _, id := range s.spanManager.GetGroups() {
 		availableSize -= s.schedule(id, availableSize)
 		if availableSize <= 0 {
 			break
@@ -92,8 +91,8 @@ func (s *basicScheduler) Execute() time.Time {
 	return time.Now().Add(time.Millisecond * 500)
 }
 
-func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int) (scheduled int) {
-	scheduleNodeSize := s.replicationDB.GetScheduleTaskSizePerNodeByGroup(groupID)
+func (s *basicScheduler) schedule(groupID pkgschedreplica.GroupID, availableSize int) (scheduled int) {
+	scheduleNodeSize := s.spanManager.GetScheduleTaskSizePerNodeByGroup(groupID)
 
 	// calculate the space based on schedule count
 	size := 0
@@ -101,7 +100,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 		if _, ok := scheduleNodeSize[id]; !ok {
 			scheduleNodeSize[id] = 0
 		}
-		if groupID == pkgReplica.DefaultGroupID {
+		if groupID == pkgschedreplica.DefaultGroupID {
 			// for default group, each node can support more task
 			size += s.schedulingTaskCountPerNode*10 - scheduleNodeSize[id]
 		} else {
@@ -116,10 +115,10 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	}
 	availableSize = min(availableSize, size)
 
-	absentReplications := s.replicationDB.GetAbsentByGroup(groupID, availableSize)
+	absentReplications := s.spanManager.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, scheduleNodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
-		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.replicationDB, replication, id))
+		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanManager.GetReplicationDB(), replication, id))
 	})
 	scheduled = len(absentReplications)
 	return

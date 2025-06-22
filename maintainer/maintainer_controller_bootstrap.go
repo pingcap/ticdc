@@ -129,9 +129,9 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 			zap.Int("spanCount", len(resp.Spans)))
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
-			status := c.replicationDB.GetDDLDispatcher().GetStatus()
+			status := c.spanManager.GetDDLDispatcher().GetStatus()
 			status.CheckpointTs = startTs
-			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
+			c.spanManager.UpdateStatus(c.spanManager.GetDDLDispatcher(), status)
 		}
 	}
 	if startTs == 0 {
@@ -253,7 +253,7 @@ func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 ) *Barrier {
 	// Initialize barrier
-	barrier := NewBarrier(c, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp)
+	barrier := NewBarrier(c.spanManager, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp)
 
 	// Start scheduler
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
