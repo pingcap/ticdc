@@ -229,27 +229,7 @@ func (db *ReplicationDB) GetGroupStat() string {
 
 // GetGroupChecker gets group checker
 func (db *ReplicationDB) GetGroupChecker(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
-	return db.ReplicationDB.GetGroupChecker(groupID)
-}
-
-// RemoveAllTasks removes all tasks (compatibility method)
-func (db *ReplicationDB) RemoveAllTasks() []*SpanReplication {
-	return db.RemoveAll()
-}
-
-// RemoveTasksBySchemaID removes tasks by schemaID (compatibility method)
-func (db *ReplicationDB) RemoveTasksBySchemaID(schemaID int64) []*SpanReplication {
-	return db.RemoveBySchemaID(schemaID)
-}
-
-// RemoveTasksByTableIDs removes tasks by tableIDs (compatibility method)
-func (db *ReplicationDB) RemoveTasksByTableIDs(tables ...int64) []*SpanReplication {
-	return db.RemoveByTableIDs(tables...)
-}
-
-// AddAbsentReplicaSetSingle adds a single absent replica set (compatibility method)
-func (db *ReplicationDB) AddAbsentReplicaSetSingle(span *SpanReplication) {
-	db.AddAbsentReplicaSet(span)
+	return db.newGroupChecker(groupID)
 }
 
 func (db *ReplicationDB) GetDDLDispatcher() *SpanReplication {
@@ -286,7 +266,7 @@ func (db *ReplicationDB) RemoveAll() []*SpanReplication {
 	return tasks
 }
 
-// RemoveTasksByTableIDs removes the tasks by the table ids and returns the scheduled tasks
+// RemoveByTableIDs removes the tasks by the table ids and returns the scheduled tasks
 func (db *ReplicationDB) RemoveByTableIDs(tableIDs ...int64) []*SpanReplication {
 	db.mu.Lock()
 	defer db.mu.Unlock()

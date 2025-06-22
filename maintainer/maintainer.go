@@ -464,7 +464,7 @@ func (m *Maintainer) onNodeChanged() {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
 			delete(m.checkpointTsByCapture, id)
-			m.controller.RemoveNode(id)
+			m.controller.operatorController.OnNodeRemoved(id)
 		}
 	}
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),
@@ -479,56 +479,14 @@ func (m *Maintainer) onNodeChanged() {
 }
 
 func (m *Maintainer) calCheckpointTs() {
-	defer m.updateMetrics()
 	if !m.bootstrapped.Load() {
-		log.Warn("can not advance checkpointTs since not bootstrapped",
-			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
-		m.bootstrapper.PrintBootstrapStatus()
-		return
-	}
-	// make sure there is no task running
-	// the dispatcher changing come from:
-	// 1. node change
-	// 2. ddl
-	// 3. interval scheduling, like balance, split
-
-	// Thus, to ensure the whole process atomic, we first obtain the lock of operator and barrier
-	// then do the basic check.
-	// We ensure only the operator and barrier can generate absent replica, so we don't need to obtain the lock of replicationDB
-	// If all check is successfully, we begin to do the checkpointTs calculation,
-	// otherwise, we just return.
-	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
-	operatorLock := m.controller.operatorController.GetLock()
-	barrierLock := m.barrier.GetLock()
-
-	defer func() {
-		m.controller.operatorController.ReleaseLock(operatorLock)
-		m.barrier.ReleaseLock(barrierLock)
-	}()
-
-	if !m.controller.ScheduleFinished() {
-		log.Warn("can not advance checkpointTs since schedule is not finished",
-			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
-		)
-		return
-	}
-	if m.barrier.ShouldBlockCheckpointTs() {
-		log.Warn("can not advance checkpointTs since barrier is blocking",
-			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
-		)
 		return
 	}
 	newWatermark := heartbeatpb.NewMaxWatermark()
 	// if there is no tables, there must be a table trigger dispatcher
 	for id := range m.bootstrapper.GetAllNodes() {
 		// maintainer node has the table trigger dispatcher
-		if id != m.selfNode.ID && m.controller.GetTaskSizeByNodeID(id) <= 0 {
+		if id != m.selfNode.ID && m.controller.spanManager.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
 		// node level watermark reported, ignore this round
@@ -743,7 +701,7 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 		m.statusChanged.Store(true)
 	}
 	if !m.cascadeRemoving {
-		m.controller.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
+		m.controller.spanManager.RemoveByTableIDs(m.ddlSpan.Span.TableID)
 		return !m.ddlSpan.IsWorking()
 	}
 	return m.trySendMaintainerCloseRequestToAllNode()
@@ -856,10 +814,10 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
-		total := m.controller.TaskSize() - 1
-		scheduling := m.controller.GetSchedulingSize()
-		working := m.controller.GetReplicatingSize()
-		absent := m.controller.GetAbsentSize()
+		total := m.controller.spanManager.TaskSize() - 1
+		scheduling := m.controller.spanManager.GetSchedulingSize()
+		working := m.controller.spanManager.GetReplicatingSize()
+		absent := m.controller.spanManager.GetAbsentSize()
 
 		m.tableCountGauge.Set(float64(total))
 		m.scheduledTaskGauge.Set(float64(scheduling))
@@ -933,7 +891,7 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 
 // GetDispatcherCount returns the number of dispatchers.
 func (m *Maintainer) GetDispatcherCount() int {
-	return len(m.controller.GetAllTasks())
+	return len(m.controller.spanManager.GetAllTasks())
 }
 
 // MoveTable moves a table to a specific node.
@@ -948,7 +906,7 @@ func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
 
 // GetTables returns all tables.
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.controller.GetAllTasks()
+	return m.controller.spanManager.GetAllTasks()
 }
 
 // SplitTableByRegionCount split table based on region count

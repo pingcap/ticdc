@@ -122,20 +122,6 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	c.spanManager.HandleStatus(from, statusList)
 }
 
-// GetTasksBySchemaID gets task list by schemaID
-func (c *Controller) GetTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
-	return c.spanManager.GetReplicationDB().GetTasksBySchemaID(schemaID)
-}
-
-// GetTaskSizeBySchemaID gets task count by schemaID
-func (c *Controller) GetTaskSizeBySchemaID(schemaID int64) int {
-	return c.spanManager.GetReplicationDB().GetTaskSizeBySchemaID(schemaID)
-}
-
-func (c *Controller) GetAllNodes() []node.ID {
-	return c.spanManager.GetAllNodes()
-}
-
 func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	if c.spanManager.GetReplicationDB().IsTableExists(table.TableID) {
 		log.Warn("table already add, ignore",
@@ -156,81 +142,6 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan)
 	}
 	c.spanManager.AddNewSpans(table.SchemaID, tableSpans, startTs)
-}
-
-// GetTask queries task by dispatcherID
-func (c *Controller) GetTask(dispatcherID common.DispatcherID) *replica.SpanReplication {
-	return c.spanManager.GetReplicationDB().GetTaskByID(dispatcherID)
-}
-
-// RemoveAllTasks remove all tasks
-func (c *Controller) RemoveAllTasks() {
-	c.operatorController.RemoveAllTasks()
-}
-
-// RemoveTasksBySchemaID remove all tasks by schema id
-func (c *Controller) RemoveTasksBySchemaID(schemaID int64) {
-	c.operatorController.RemoveTasksBySchemaID(schemaID)
-}
-
-// RemoveTasksByTableIDs remove all tasks by table id
-func (c *Controller) RemoveTasksByTableIDs(tables ...int64) {
-	c.operatorController.RemoveTasksByTableIDs(tables...)
-}
-
-// GetTasksByTableID gets task list by tableID
-func (c *Controller) GetTasksByTableID(tableID int64) []*replica.SpanReplication {
-	return c.spanManager.GetReplicationDB().GetTasksByTableID(tableID)
-}
-
-// GetAllTasks gets all tasks
-func (c *Controller) GetAllTasks() []*replica.SpanReplication {
-	return c.spanManager.GetReplicationDB().GetAllTasks()
-}
-
-// UpdateSchemaID updates table's schema ID
-func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
-	c.spanManager.GetReplicationDB().UpdateSchemaID(tableID, newSchemaID)
-}
-
-// RemoveNode is called when a node is removed
-func (c *Controller) RemoveNode(id node.ID) {
-	c.operatorController.OnNodeRemoved(id)
-}
-
-// ScheduleFinished return false if not all task are running in working state
-func (c *Controller) ScheduleFinished() bool {
-	return c.operatorController.OperatorSizeWithLock() == 0 && c.spanManager.GetReplicationDB().GetAbsentSize() == 0
-}
-
-// TaskSize gets total task count
-func (c *Controller) TaskSize() int {
-	return c.spanManager.GetReplicationDB().TaskSize()
-}
-
-// GetTaskSizeByNodeID gets task count by node ID
-func (c *Controller) GetTaskSizeByNodeID(id node.ID) int {
-	return c.spanManager.GetReplicationDB().GetTaskSizeByNodeID(id)
-}
-
-// GetSchedulingSize gets count of tasks in scheduling state
-func (c *Controller) GetSchedulingSize() int {
-	return c.spanManager.GetReplicationDB().GetSchedulingSize()
-}
-
-// GetReplicatingSize gets count of tasks in replicating state
-func (c *Controller) GetReplicatingSize() int {
-	return c.spanManager.GetReplicationDB().GetReplicatingSize()
-}
-
-// GetAbsentSize gets count of tasks in absent state
-func (c *Controller) GetAbsentSize() int {
-	return c.spanManager.GetReplicationDB().GetAbsentSize()
-}
-
-// IsTableExists checks if table exists
-func (c *Controller) IsTableExists(tableID int64) bool {
-	return c.spanManager.GetReplicationDB().IsTableExists(tableID)
 }
 
 func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {

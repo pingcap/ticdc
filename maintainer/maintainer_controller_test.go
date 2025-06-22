@@ -67,9 +67,9 @@ func TestSchedule(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, controller.spanManager.GetAbsentSize())
-	require.Equal(t, 3, controller.GetTaskSizeByNodeID("node1"))
-	require.Equal(t, 3, controller.GetTaskSizeByNodeID("node2"))
-	require.Equal(t, 3, controller.GetTaskSizeByNodeID("node3"))
+	require.Equal(t, 3, controller.spanManager.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 3, controller.spanManager.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 3, controller.spanManager.GetTaskSizeByNodeID("node3"))
 }
 
 func TestRemoveAbsentTask(t *testing.T) {
@@ -89,7 +89,7 @@ func TestRemoveAbsentTask(t *testing.T) {
 		TableID:  int64(1),
 	}, 1)
 	require.Equal(t, 1, controller.spanManager.GetAbsentSize())
-	controller.RemoveAllTasks()
+	controller.operatorController.RemoveAll()
 	require.Equal(t, 0, controller.spanManager.GetAbsentSize())
 }
 
@@ -140,7 +140,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 
 	// remove the node2
 	delete(nodeManager.GetAliveNodes(), "node2")
-	s.RemoveNode("node2")
+	s.operatorController.OnNodeRemoved(nodeID)
 	for _, span := range s.spanManager.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
 			msg := op.Schedule()
@@ -214,7 +214,7 @@ func TestBalanceGlobalUneven(t *testing.T) {
 
 	// remove the node3
 	delete(nodeManager.GetAliveNodes(), "node3")
-	s.RemoveNode("node3")
+	s.operatorController.OnNodeRemoved(node.ID("node3"))
 	for _, span := range s.spanManager.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
 			msg := op.Schedule()
@@ -282,7 +282,7 @@ func TestBalance(t *testing.T) {
 
 	// remove the node2
 	delete(nodeManager.GetAliveNodes(), "node2")
-	s.RemoveNode("node2")
+	s.operatorController.OnNodeRemoved(node.ID("node2"))
 	for _, span := range s.spanManager.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
 			msg := op.Schedule()
@@ -337,8 +337,8 @@ func TestStoppedWhenMoving(t *testing.T) {
 	require.Equal(t, 2, s.spanManager.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 0, s.spanManager.GetTaskSizeByNodeID("node2"))
 
-	s.RemoveNode("node2")
-	s.RemoveNode("node1")
+	s.operatorController.OnNodeRemoved(node.ID("node2"))
+	s.operatorController.OnNodeRemoved(node.ID("node1"))
 	require.Equal(t, 0, s.spanManager.GetSchedulingSize())
 	// changed to absent status
 	require.Equal(t, 2, s.spanManager.GetAbsentSize())
@@ -467,9 +467,9 @@ func TestBalanceUnEvenTask(t *testing.T) {
 	require.Equal(t, 3, s.spanManager.GetReplicatingSize())
 	require.Equal(t, 1, s.operatorController.OperatorSize())
 	// still on the primary node
-	require.Equal(t, 2, s.GetTaskSizeByNodeID("node1"))
-	require.Equal(t, 2, s.GetTaskSizeByNodeID("node2"))
-	require.Equal(t, 0, s.GetTaskSizeByNodeID("node3"))
+	require.Equal(t, 2, s.spanManager.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 2, s.spanManager.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 0, s.spanManager.GetTaskSizeByNodeID("node3"))
 
 	for _, span := range s.spanManager.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
@@ -494,7 +494,7 @@ func TestBalanceUnEvenTask(t *testing.T) {
 			op.PostFinish()
 		}
 	}
-	require.Equal(t, 1, s.GetTaskSizeByNodeID("node3"))
+	require.Equal(t, 1, s.spanManager.GetTaskSizeByNodeID("node3"))
 }
 
 /*
