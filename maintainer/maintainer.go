@@ -512,8 +512,9 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		m.redoTs.ResolvedTs = resolvedTs
 		needUpdate = true
 	}
-	log.Error("received redo ts update message", zap.Any("sf", advance), zap.Any("rsf", redoAdvance), zap.Any("needUpdate", needUpdate),
-		zap.Any("message", msg), zap.Any("redoTs", m.redoTs.RedoTsMessage),
+	log.Debug("received redo ts message", zap.Bool("advance", advance), zap.Bool("redoAdvance", redoAdvance),
+		zap.Any("needUpdate", needUpdate),
+		zap.Any("message", msg), zap.Any("globalRedoTs", m.redoTs.RedoTsMessage),
 		zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs),
 	)
 	if needUpdate {

@@ -75,7 +75,6 @@ func NewOperatorController(
 		batchSize:     batchSize,
 		replicationDB: db,
 		nodeManager:   nodeManager,
-		ops:           0,
 	}
 	return oc
 }
@@ -241,7 +240,6 @@ func (oc *Controller) pollQueueingOperator() (
 	op := item.OP
 	opID := op.ID()
 	if item.IsRemoved {
-		delete(oc.operators, opID)
 		// avoid op not being executed
 		if op.IsRepeat() {
 			switch op.Type() {
@@ -287,7 +285,7 @@ func (oc *Controller) pollQueueingOperator() (
 
 func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 	if old, ok := oc.operators[op.ID()]; ok {
-		log.Info("replica set is removed , replace the old one",
+		log.Info("replica set is removed, replace the old one",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("replicaSet", old.OP.ID().String()),

@@ -1753,7 +1753,7 @@ func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64
 		log.Info("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs), zap.Any("redoGlobalTs", e.redoGlobalTs.Load()))
 		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
-	return util.CompareAndIncrease(&e.redoGlobalTs, resolvedTs)
+	return util.CompareAndMonotonicIncrease(&e.redoGlobalTs, resolvedTs)
 }
 
 func (e *EventDispatcherManager) cleanMetrics() {

@@ -505,7 +505,10 @@ func (cm *ControllerManager) moveTable(tableId int64, targetNode node.ID, redo b
 	replication := replications[0]
 
 	op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-	operatorController.AddOperator(op)
+	success := operatorController.AddOperator(op)
+	if !success {
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add move table operator failed", zap.Any("redo", redo))
+	}
 
 	// check the op is finished or not
 	count := 0
@@ -544,7 +547,10 @@ func (cm *ControllerManager) moveSplitTable(tableId int64, targetNode node.ID, r
 			continue
 		}
 		op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-		operatorController.AddOperator(op)
+		success := operatorController.AddOperator(op)
+		if !success {
+			return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add move split table operator failed", zap.Any("redo", redo))
+		}
 		opList = append(opList, op)
 	}
 
@@ -617,10 +623,16 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64, redo bool) e
 	for idx, replicaSet := range replications {
 		if idx == randomIdx {
 			primaryOp = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, replications, splitTableSpans, nil)
-			operatorController.AddOperator(primaryOp)
+			success := operatorController.AddOperator(primaryOp)
+			if !success {
+				return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add split table operator failed", zap.Any("redo", redo))
+			}
 		} else {
 			op := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
-			operatorController.AddOperator(op)
+			success := operatorController.AddOperator(op)
+			if !success {
+				return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add split table operator failed", zap.Any("redo", redo))
+			}
 		}
 	}
 
@@ -689,8 +701,8 @@ func (cm *ControllerManager) mergeTable(tableID int64, redo bool) error {
 		idx = 0
 		// try to move the second span to the first span's node
 		moveOp := operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
-		ok := operatorController.AddOperator(moveOp)
-		if !ok {
+		success := operatorController.AddOperator(moveOp)
+		if !success {
 			return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add move table operator failed")
 		}
 
@@ -746,11 +758,24 @@ func (cm *ControllerManager) getController(redo bool) *Controller {
 	return cm.controller
 }
 
-func (cm *ControllerManager) checkAdvance(redo bool) bool {
+func (cm *ControllerManager) getBarrier(redo bool) *Barrier {
 	if redo {
-		return cm.redoOperatorController.GetOps() == 0 && cm.redoController.replicationDB.GetAbsentSize() == 0 && !cm.redoBarrier.ShouldBlockCheckpointTs()
+		return cm.redoBarrier
 	}
-	return cm.operatorController.GetOps() == 0 && cm.controller.replicationDB.GetAbsentSize() == 0 && !cm.barrier.ShouldBlockCheckpointTs()
+	return cm.barrier
+}
+
+func (cm *ControllerManager) checkAdvance(redo bool) bool {
+	controller := cm.getController(redo)
+	operatorController := cm.getOperatorController(redo)
+	barrier := cm.getBarrier(redo)
+	operatorLock := operatorController.GetLock()
+	barrierLock := barrier.GetLock()
+	defer func() {
+		operatorController.ReleaseLock(operatorLock)
+		barrier.ReleaseLock(barrierLock)
+	}()
+	return operatorController.GetOps() == 0 && controller.replicationDB.GetAbsentSize() == 0 && !barrier.ShouldBlockCheckpointTs()
 }
 
 func addToWorkingTaskMap(
