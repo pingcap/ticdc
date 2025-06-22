@@ -241,6 +241,7 @@ func (oc *Controller) pollQueueingOperator() (
 	op := item.OP
 	opID := op.ID()
 	if item.IsRemoved {
+		delete(oc.operators, opID)
 		// avoid op not being executed
 		if op.IsRepeat() {
 			switch op.Type() {
