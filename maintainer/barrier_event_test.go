@@ -52,7 +52,7 @@ func TestScheduleEvent(t *testing.T) {
 	}, true)
 	event.scheduleBlockEvent()
 	// drop table will be executed first
-	require.Equal(t, 2, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 2, controller.GetAbsentSize())
 
 	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
 		IsBlocked: true,
@@ -65,7 +65,7 @@ func TestScheduleEvent(t *testing.T) {
 	}, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, controller.GetAbsentSize())
 
 	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
 		IsBlocked: true,
@@ -78,7 +78,7 @@ func TestScheduleEvent(t *testing.T) {
 	}, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, controller.GetAbsentSize())
 }
 
 func TestResendAction(t *testing.T) {
@@ -97,10 +97,10 @@ func TestResendAction(t *testing.T) {
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	var dispatcherIDs []common.DispatcherID
-	absents := controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
+	absents := controller.spanManager.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
 	for _, stm := range absents {
-		controller.replicationDB.BindSpanToNode("", "node1", stm)
-		controller.replicationDB.MarkSpanReplicating(stm)
+		controller.spanManager.BindSpanToNode("", "node1", stm)
+		controller.spanManager.MarkSpanReplicating(stm)
 		dispatcherIDs = append(dispatcherIDs, stm.ID)
 	}
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
@@ -199,7 +199,7 @@ func TestUpdateSchemaID(t *testing.T) {
 		}, "node1")
 	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, controller.GetAbsentSize())
 	require.Len(t, controller.GetTasksBySchemaID(1), 1)
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
 		IsBlocked: true,
@@ -216,7 +216,7 @@ func TestUpdateSchemaID(t *testing.T) {
 		},
 	}, true)
 	event.scheduleBlockEvent()
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, controller.GetAbsentSize())
 	// check the schema id and map is updated
 	require.Len(t, controller.GetTasksBySchemaID(1), 0)
 	require.Len(t, controller.GetTasksBySchemaID(2), 1)

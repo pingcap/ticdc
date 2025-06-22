@@ -857,9 +857,9 @@ func (m *Maintainer) collectMetrics() {
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
 		total := m.controller.TaskSize() - 1
-		scheduling := m.controller.replicationDB.GetSchedulingSize()
-		working := m.controller.replicationDB.GetReplicatingSize()
-		absent := m.controller.replicationDB.GetAbsentSize()
+		scheduling := m.controller.GetSchedulingSize()
+		working := m.controller.GetReplicatingSize()
+		absent := m.controller.GetAbsentSize()
 
 		m.tableCountGauge.Set(float64(total))
 		m.scheduledTaskGauge.Set(float64(scheduling))
@@ -948,7 +948,7 @@ func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
 
 // GetTables returns all tables.
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.controller.replicationDB.GetAllTasks()
+	return m.controller.GetAllTasks()
 }
 
 // SplitTableByRegionCount split table based on region count

@@ -42,8 +42,8 @@ func TestOneBlockEvent(t *testing.T) {
 	startTs := uint64(10)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
 	stm := controller.GetTasksByTableID(1)[0]
-	controller.replicationDB.BindSpanToNode("", "node1", stm)
-	controller.replicationDB.MarkSpanReplicating(stm)
+	controller.spanManager.BindSpanToNode("", "node1", stm)
+	controller.spanManager.MarkSpanReplicating(stm)
 
 	barrier := NewBarrier(controller, false, nil)
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -171,14 +171,14 @@ func TestNormalBlock(t *testing.T) {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
 		stm := controller.GetTasksByTableID(int64(id))[0]
 		blockedDispatcherIDS = append(blockedDispatcherIDS, stm.ID.ToPB())
-		controller.replicationDB.BindSpanToNode("", "node1", stm)
-		controller.replicationDB.MarkSpanReplicating(stm)
+		controller.spanManager.BindSpanToNode("", "node1", stm)
+		controller.spanManager.MarkSpanReplicating(stm)
 	}
 
 	// the last one is the writer
 	selectDispatcherID := common.NewDispatcherIDFromPB(blockedDispatcherIDS[2])
 	selectedRep := controller.GetTask(selectDispatcherID)
-	controller.replicationDB.BindSpanToNode("node1", "node2", selectedRep)
+	controller.spanManager.BindSpanToNode("node1", "node2", selectedRep)
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
 	barrier := NewBarrier(controller, false, nil)
@@ -337,8 +337,8 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
 		stm := controller.GetTasksByTableID(int64(id))[0]
 		blockedDispatcherIDS = append(blockedDispatcherIDS, stm.ID.ToPB())
-		controller.replicationDB.BindSpanToNode("", "node1", stm)
-		controller.replicationDB.MarkSpanReplicating(stm)
+		controller.spanManager.BindSpanToNode("", "node1", stm)
+		controller.spanManager.MarkSpanReplicating(stm)
 	}
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
@@ -482,13 +482,13 @@ func TestSchemaBlock(t *testing.T) {
 	controller.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
 	var dispatcherIDs []*heartbeatpb.DispatcherID
 	dropTables := []int64{1, 2}
-	absents := controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
+	absents := controller.spanManager.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
 	for _, stm := range absents {
 		if stm.GetSchemaID() == 1 {
 			dispatcherIDs = append(dispatcherIDs, stm.ID.ToPB())
 		}
-		controller.replicationDB.BindSpanToNode("", "node1", stm)
-		controller.replicationDB.MarkSpanReplicating(stm)
+		controller.spanManager.BindSpanToNode("", "node1", stm)
+		controller.spanManager.MarkSpanReplicating(stm)
 	}
 
 	newTable := &heartbeatpb.Table{TableID: 10, SchemaID: 2}
@@ -621,17 +621,17 @@ func TestSchemaBlock(t *testing.T) {
 	require.Len(t, msgs, 0)
 	require.Len(t, barrier.blockedEvents.m, 0)
 
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, controller.spanManager.GetAbsentSize())
 	require.Equal(t, 2, controller.operatorController.OperatorSize())
 	// two dispatcher and moved to operator queue, operator will be removed after ack
-	require.Equal(t, 1, controller.replicationDB.GetReplicatingSize())
-	for _, task := range controller.replicationDB.GetReplicating() {
+	require.Equal(t, 1, controller.spanManager.GetReplicatingSize())
+	for _, task := range controller.spanManager.GetReplicating() {
 		op := controller.operatorController.GetOperator(task.ID)
 		if op != nil {
 			op.PostFinish()
 		}
 	}
-	require.Equal(t, 1, controller.replicationDB.GetReplicatingSize())
+	require.Equal(t, 1, controller.spanManager.GetReplicatingSize())
 }
 
 func TestSyncPointBlock(t *testing.T) {
@@ -656,15 +656,15 @@ func TestSyncPointBlock(t *testing.T) {
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
 	var dispatcherIDs []*heartbeatpb.DispatcherID
-	absents := controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 10000)
+	absents := controller.spanManager.GetAbsentForTest(make([]*replica.SpanReplication, 0), 10000)
 	for _, stm := range absents {
 		dispatcherIDs = append(dispatcherIDs, stm.ID.ToPB())
-		controller.replicationDB.BindSpanToNode("", "node1", stm)
-		controller.replicationDB.MarkSpanReplicating(stm)
+		controller.spanManager.BindSpanToNode("", "node1", stm)
+		controller.spanManager.MarkSpanReplicating(stm)
 	}
 	selectDispatcherID := common.NewDispatcherIDFromPB(dispatcherIDs[2])
 	selectedRep := controller.GetTask(selectDispatcherID)
-	controller.replicationDB.BindSpanToNode("node1", "node2", selectedRep)
+	controller.spanManager.BindSpanToNode("node1", "node2", selectedRep)
 
 	barrier := NewBarrier(controller, true, nil)
 	// first dispatcher  block request
@@ -845,7 +845,7 @@ func TestNonBlocked(t *testing.T) {
 	require.True(t, heartbeatpb.InfluenceType_Normal == resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType)
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs[0], blockedDispatcherIDS[0])
 	require.Len(t, barrier.blockedEvents.m, 0)
-	require.Equal(t, 2, barrier.controller.replicationDB.GetAbsentSize(), 2)
+	require.Equal(t, 2, barrier.controller.spanManager.GetAbsentSize(), 2)
 }
 
 func TestUpdateCheckpointTs(t *testing.T) {
@@ -920,8 +920,8 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 2)
 		stm := controller.GetTasksByTableID(int64(id))[0]
 		dispatcherIDs = append(dispatcherIDs, stm.ID.ToPB())
-		controller.replicationDB.BindSpanToNode("", "node1", stm)
-		controller.replicationDB.MarkSpanReplicating(stm)
+		controller.spanManager.BindSpanToNode("", "node1", stm)
+		controller.spanManager.MarkSpanReplicating(stm)
 	}
 
 	// two waiting dispatcher
@@ -1080,10 +1080,10 @@ func TestSyncPointBlockPerf(t *testing.T) {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 1)
 	}
 	var dispatcherIDs []*heartbeatpb.DispatcherID
-	absent := controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 10000)
+	absent := controller.spanManager.GetAbsentForTest(make([]*replica.SpanReplication, 0), 10000)
 	for _, stm := range absent {
-		controller.replicationDB.BindSpanToNode("", "node1", stm)
-		controller.replicationDB.MarkSpanReplicating(stm)
+		controller.spanManager.BindSpanToNode("", "node1", stm)
+		controller.spanManager.MarkSpanReplicating(stm)
 		dispatcherIDs = append(dispatcherIDs, stm.ID.ToPB())
 	}
 	var blockStatus []*heartbeatpb.TableSpanBlockStatus

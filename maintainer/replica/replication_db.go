@@ -19,8 +19,11 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
 )
 
@@ -30,6 +33,8 @@ var _ replica.ReplicationDB[common.DispatcherID, *SpanReplication] = &Replicatio
 // between dispatchers and spans, organizing them by schema and table IDs for efficient access.
 // The struct provides thread-safe operations for managing span replication states (absent,
 // scheduling, replicating) and handles DDL span separately.
+//
+// This is a unified component that combines the functionality of both ReplicationDB and SpanStateManager.
 type ReplicationDB struct {
 	// changefeedID uniquely identifies the changefeed this ReplicationDB belongs to
 	changefeedID common.ChangeFeedID
@@ -50,6 +55,13 @@ type ReplicationDB struct {
 
 	// newGroupChecker creates a GroupChecker for validating span groups
 	newGroupChecker func(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication]
+
+	// 来自 SpanStateManager 的额外字段
+	nodeManager *watcher.NodeManager
+	// 操作符状态更新回调
+	operatorStatusUpdater func(dispatcherID common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus)
+	// 消息发送回调
+	messageSender func(msg *messaging.TargetMessage) error
 }
 
 // NewReplicaSetDB creates a new ReplicationDB and initializes the maps
@@ -64,6 +76,180 @@ func NewReplicaSetDB(
 
 	db.reset(db.ddlSpan)
 	return db
+}
+
+// NewReplicaSetDBWithNodeManager creates a new ReplicationDB with node manager support
+// This is the recommended constructor for most use cases
+func NewReplicaSetDBWithNodeManager(
+	changefeedID common.ChangeFeedID,
+	ddlSpan *SpanReplication,
+	enableTableAcrossNodes bool,
+	nodeManager *watcher.NodeManager,
+) *ReplicationDB {
+	db := NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
+	db.nodeManager = nodeManager
+	return db
+}
+
+// SetOperatorStatusUpdater 设置操作符状态更新回调
+func (db *ReplicationDB) SetOperatorStatusUpdater(updater func(dispatcherID common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus)) {
+	db.operatorStatusUpdater = updater
+}
+
+// SetMessageSender 设置消息发送回调
+func (db *ReplicationDB) SetMessageSender(sender func(msg *messaging.TargetMessage) error) {
+	db.messageSender = sender
+}
+
+// HandleStatus 处理来自节点的状态报告
+func (db *ReplicationDB) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
+	for _, status := range statusList {
+		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
+
+		// 更新操作符状态
+		if db.operatorStatusUpdater != nil {
+			db.operatorStatusUpdater(dispatcherID, from, status)
+		}
+
+		stm := db.GetTask(dispatcherID)
+		if stm == nil {
+			if status.ComponentStatus != heartbeatpb.ComponentState_Working {
+				continue
+			}
+			// 如果 span 未找到且状态为 working，需要移除
+			log.Warn("no span found, remove it",
+				zap.String("changefeed", db.changefeedID.Name()),
+				zap.String("from", from.String()),
+				zap.Any("status", status),
+				zap.String("dispatcherID", dispatcherID.String()))
+
+			// 发送移除消息
+			if db.messageSender != nil {
+				msg := NewRemoveDispatcherMessage(from, db.changefeedID, status.ID)
+				_ = db.messageSender(msg)
+			}
+			continue
+		}
+		nodeID := stm.GetNodeID()
+		if nodeID != from {
+			log.Warn("node id not match",
+				zap.String("changefeed", db.changefeedID.Name()),
+				zap.Any("from", from),
+				zap.Stringer("node", nodeID))
+			continue
+		}
+		db.UpdateStatus(stm, status)
+	}
+}
+
+// GetAllNodes 获取所有活跃节点
+func (db *ReplicationDB) GetAllNodes() []node.ID {
+	if db.nodeManager == nil {
+		return nil
+	}
+	aliveNodes := db.nodeManager.GetAliveNodes()
+	nodes := make([]node.ID, 0, len(aliveNodes))
+	for id := range aliveNodes {
+		nodes = append(nodes, id)
+	}
+	return nodes
+}
+
+// AddNewSpans 添加新的 spans
+func (db *ReplicationDB) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
+	for _, span := range tableSpans {
+		dispatcherID := common.NewDispatcherID()
+		replicaSet := NewSpanReplication(db.changefeedID, dispatcherID, schemaID, span, startTs)
+		db.AddAbsentReplicaSet(replicaSet)
+	}
+}
+
+// AddWorkingSpans 添加工作中的 spans
+func (db *ReplicationDB) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *SpanReplication]) {
+	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *SpanReplication) bool {
+		db.AddReplicatingSpan(stm)
+		return true
+	})
+}
+
+// GetTask 根据 dispatcherID 获取任务
+func (db *ReplicationDB) GetTask(dispatcherID common.DispatcherID) *SpanReplication {
+	return db.GetTaskByID(dispatcherID)
+}
+
+// GetReplicationDB 获取底层的 ReplicationDB 实例
+func (db *ReplicationDB) GetReplicationDB() *ReplicationDB {
+	return db
+}
+
+// GetGroups 获取所有分组
+func (db *ReplicationDB) GetGroups() []replica.GroupID {
+	return db.ReplicationDB.GetGroups()
+}
+
+// GetScheduleTaskSizePerNodeByGroup 根据分组获取每个节点的调度任务数量
+func (db *ReplicationDB) GetScheduleTaskSizePerNodeByGroup(groupID replica.GroupID) map[node.ID]int {
+	return db.ReplicationDB.GetScheduleTaskSizePerNodeByGroup(groupID)
+}
+
+// GetAbsentByGroup 根据分组获取 absent 状态的任务
+func (db *ReplicationDB) GetAbsentByGroup(groupID replica.GroupID, maxSize int) []*SpanReplication {
+	return db.ReplicationDB.GetAbsentByGroup(groupID, maxSize)
+}
+
+// GetReplicatingByGroup 根据分组获取 replicating 状态的任务
+func (db *ReplicationDB) GetReplicatingByGroup(groupID replica.GroupID) []*SpanReplication {
+	return db.ReplicationDB.GetReplicatingByGroup(groupID)
+}
+
+// GetTaskSizePerNodeByGroup 根据分组获取每个节点的任务数量
+func (db *ReplicationDB) GetTaskSizePerNodeByGroup(groupID replica.GroupID) map[node.ID]int {
+	return db.ReplicationDB.GetTaskSizePerNodeByGroup(groupID)
+}
+
+// GetTaskSizePerNode 获取每个节点的任务数量
+func (db *ReplicationDB) GetTaskSizePerNode() map[node.ID]int {
+	return db.ReplicationDB.GetTaskSizePerNode()
+}
+
+// GetImbalanceGroupNodeTask 获取不平衡的分组节点任务
+func (db *ReplicationDB) GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (map[replica.GroupID]map[node.ID]*SpanReplication, bool) {
+	return db.ReplicationDB.GetImbalanceGroupNodeTask(nodes)
+}
+
+// GetCheckerStat 获取检查器统计信息
+func (db *ReplicationDB) GetCheckerStat() string {
+	return db.ReplicationDB.GetCheckerStat()
+}
+
+// GetGroupStat 获取分组统计信息
+func (db *ReplicationDB) GetGroupStat() string {
+	return db.ReplicationDB.GetGroupStat()
+}
+
+// GetGroupChecker 获取分组检查器
+func (db *ReplicationDB) GetGroupChecker(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
+	return db.ReplicationDB.GetGroupChecker(groupID)
+}
+
+// RemoveAllTasks 移除所有任务（兼容性方法）
+func (db *ReplicationDB) RemoveAllTasks() []*SpanReplication {
+	return db.RemoveAll()
+}
+
+// RemoveTasksBySchemaID 根据 schemaID 移除任务（兼容性方法）
+func (db *ReplicationDB) RemoveTasksBySchemaID(schemaID int64) []*SpanReplication {
+	return db.RemoveBySchemaID(schemaID)
+}
+
+// RemoveTasksByTableIDs 根据 tableIDs 移除任务（兼容性方法）
+func (db *ReplicationDB) RemoveTasksByTableIDs(tables ...int64) []*SpanReplication {
+	return db.RemoveByTableIDs(tables...)
+}
+
+// AddAbsentReplicaSetSingle 添加单个 absent replica set（兼容性方法）
+func (db *ReplicationDB) AddAbsentReplicaSetSingle(span *SpanReplication) {
+	db.AddAbsentReplicaSet(span)
 }
 
 func (db *ReplicationDB) GetDDLDispatcher() *SpanReplication {

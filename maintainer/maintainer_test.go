@@ -353,7 +353,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	}, time.Second*2, time.Millisecond*100)
 
 	require.Eventually(t, func() bool {
-		return maintainer.controller.replicationDB.GetReplicatingSize() == tableSize
+		return maintainer.controller.GetReplicatingSize() == tableSize
 	}, time.Second*2, time.Millisecond*100)
 
 	require.Eventually(t, func() bool {

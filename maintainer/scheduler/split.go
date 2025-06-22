@@ -37,7 +37,7 @@ type splitScheduler struct {
 
 	splitter     *split.Splitter
 	opController *operator.Controller
-	db           *replica.ReplicationDB
+	spanManager  *replica.ReplicationDB
 	nodeManager  *watcher.NodeManager
 
 	maxCheckTime  time.Duration
@@ -49,14 +49,14 @@ type splitScheduler struct {
 
 func NewSplitScheduler(
 	changefeedID common.ChangeFeedID, batchSize int, splitter *split.Splitter,
-	oc *operator.Controller, db *replica.ReplicationDB, nodeManager *watcher.NodeManager,
+	oc *operator.Controller, spanManager *replica.ReplicationDB, nodeManager *watcher.NodeManager,
 	checkInterval time.Duration,
 ) *splitScheduler {
 	return &splitScheduler{
 		changefeedID:  changefeedID,
 		splitter:      splitter,
 		opController:  oc,
-		db:            db,
+		spanManager:   spanManager,
 		nodeManager:   nodeManager,
 		batchSize:     batchSize,
 		maxCheckTime:  time.Second * 500,
@@ -77,16 +77,16 @@ func (s *splitScheduler) Execute() time.Time {
 	}
 
 	log.Info("check split status", zap.String("changefeed", s.changefeedID.Name()),
-		zap.String("hotSpans", s.db.GetCheckerStat()), zap.String("groupDistribution", s.db.GetGroupStat()))
+		zap.String("hotSpans", s.spanManager.GetCheckerStat()), zap.String("groupDistribution", s.spanManager.GetGroupStat()))
 
 	checked, batch, start := 0, s.batchSize, time.Now()
 	needBreak := false
-	for _, group := range s.db.GetGroups() {
+	for _, group := range s.spanManager.GetGroups() {
 		if needBreak || batch <= 0 {
 			break
 		}
 
-		checkResults := s.db.CheckByGroup(group, s.batchSize)
+		checkResults := s.spanManager.CheckByGroup(group, s.batchSize)
 		checked, needBreak = s.doCheck(checkResults, start)
 		batch -= checked
 		s.lastCheckTime = time.Now()

@@ -395,7 +395,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 	switch be.blockedDispatchers.InfluenceType {
 	case heartbeatpb.InfluenceType_Normal:
 		for _, tableId := range be.blockedDispatchers.TableIDs {
-			replications := be.controller.replicationDB.GetTasksByTableID(tableId)
+			replications := be.controller.GetTasksByTableID(tableId)
 			for _, replication := range replications {
 				if replication.GetStatus().CheckpointTs >= be.commitTs {
 					// one related table has forward checkpointTs, means the block event can be advanced
@@ -407,7 +407,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		}
 	case heartbeatpb.InfluenceType_DB:
 		schemaID := be.blockedDispatchers.SchemaID
-		replications := be.controller.replicationDB.GetTasksBySchemaID(schemaID)
+		replications := be.controller.GetTasksBySchemaID(schemaID)
 		for _, replication := range replications {
 			if replication.GetStatus().CheckpointTs >= be.commitTs {
 				// one related table has forward checkpointTs, means the block event can be advanced
@@ -417,7 +417,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			}
 		}
 	case heartbeatpb.InfluenceType_All:
-		replications := be.controller.replicationDB.GetAllTasks()
+		replications := be.controller.GetAllTasks()
 		for _, replication := range replications {
 			if replication.GetStatus().CheckpointTs >= be.commitTs {
 				// one related table has forward checkpointTs, means the block event can be advanced
@@ -501,7 +501,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 			}
 
 			tableID := be.blockedDispatchers.TableIDs[0]
-			replications := be.controller.replicationDB.GetTasksByTableID(tableID)
+			replications := be.controller.GetTasksByTableID(tableID)
 
 			if len(replications) == 0 {
 				log.Panic("replications for this block event should not be empty",

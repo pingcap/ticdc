@@ -35,7 +35,7 @@ type balanceScheduler struct {
 	batchSize    int
 
 	operatorController *operator.Controller
-	replicationDB      *replica.ReplicationDB
+	spanManager        *replica.ReplicationDB
 	nodeManager        *watcher.NodeManager
 
 	random               *rand.Rand
@@ -52,7 +52,7 @@ type balanceScheduler struct {
 
 func NewBalanceScheduler(
 	changefeedID common.ChangeFeedID, batchSize int,
-	oc *operator.Controller, replicationDB *replica.ReplicationDB,
+	oc *operator.Controller, spanManager *replica.ReplicationDB,
 	nodeManager *watcher.NodeManager, balanceInterval time.Duration,
 ) *balanceScheduler {
 	return &balanceScheduler{
@@ -60,7 +60,7 @@ func NewBalanceScheduler(
 		batchSize:            batchSize,
 		random:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		operatorController:   oc,
-		replicationDB:        replicationDB,
+		spanManager:          spanManager,
 		nodeManager:          nodeManager,
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),
@@ -78,7 +78,7 @@ func (s *balanceScheduler) Execute() time.Time {
 	})
 
 	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule
-	if s.operatorController.OperatorSize() > 0 || s.replicationDB.GetAbsentSize() > 0 {
+	if s.operatorController.OperatorSize() > 0 || s.spanManager.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
 		return now.Add(s.checkBalanceInterval)
 	}
@@ -102,14 +102,14 @@ func (s *balanceScheduler) Name() string {
 
 func (s *balanceScheduler) schedulerGroup(nodes map[node.ID]*node.Info) int {
 	batch, moved := s.batchSize, 0
-	for _, group := range s.replicationDB.GetGroups() {
+	for _, group := range s.spanManager.GetGroups() {
 		// fast path, check the balance status
-		moveSize := pkgScheduler.CheckBalanceStatus(s.replicationDB.GetTaskSizePerNodeByGroup(group), nodes)
+		moveSize := pkgScheduler.CheckBalanceStatus(s.spanManager.GetTaskSizePerNodeByGroup(group), nodes)
 		if moveSize <= 0 {
 			// no need to do the balance, skip
 			continue
 		}
-		replicas := s.replicationDB.GetReplicatingByGroup(group)
+		replicas := s.spanManager.GetReplicatingByGroup(group)
 		moved += pkgScheduler.Balance(batch, s.random, nodes, replicas, s.doMove)
 		if moved >= batch {
 			break
@@ -121,12 +121,12 @@ func (s *balanceScheduler) schedulerGroup(nodes map[node.ID]*node.Info) int {
 // TODO: refactor and simplify the implementation and limit max group size
 func (s *balanceScheduler) schedulerGlobal(nodes map[node.ID]*node.Info) int {
 	// fast path, check the balance status
-	moveSize := pkgScheduler.CheckBalanceStatus(s.replicationDB.GetTaskSizePerNode(), nodes)
+	moveSize := pkgScheduler.CheckBalanceStatus(s.spanManager.GetTaskSizePerNode(), nodes)
 	if moveSize <= 0 {
 		// no need to do the balance, skip
 		return 0
 	}
-	groupNodetasks, valid := s.replicationDB.GetImbalanceGroupNodeTask(nodes)
+	groupNodetasks, valid := s.spanManager.GetImbalanceGroupNodeTask(nodes)
 	if !valid {
 		// no need to do the balance, skip
 		return 0
@@ -184,6 +184,6 @@ func (s *balanceScheduler) schedulerGlobal(nodes map[node.ID]*node.Info) int {
 }
 
 func (s *balanceScheduler) doMove(replication *replica.SpanReplication, id node.ID) bool {
-	op := operator.NewMoveDispatcherOperator(s.replicationDB, replication, replication.GetNodeID(), id)
+	op := operator.NewMoveDispatcherOperator(s.spanManager.GetReplicationDB(), replication, replication.GetNodeID(), id)
 	return s.operatorController.AddOperator(op)
 }

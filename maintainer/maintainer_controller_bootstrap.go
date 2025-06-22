@@ -129,9 +129,9 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 			zap.Int("spanCount", len(resp.Spans)))
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
-			status := c.replicationDB.GetDDLDispatcher().GetStatus()
+			status := c.spanManager.GetDDLDispatcher().GetStatus()
 			status.CheckpointTs = startTs
-			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
+			c.spanManager.UpdateStatus(c.spanManager.GetDDLDispatcher(), status)
 		}
 	}
 	if startTs == 0 {
