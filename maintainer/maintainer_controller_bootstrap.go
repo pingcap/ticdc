@@ -129,9 +129,9 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 			zap.Int("spanCount", len(resp.Spans)))
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
-			status := c.replicationDB.GetDDLDispatcher().GetStatus()
+			status := c.spanController.GetDDLDispatcher().GetStatus()
 			status.CheckpointTs = startTs
-			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
+			c.spanController.UpdateStatus(c.spanController.GetDDLDispatcher(), status)
 		}
 	}
 	if startTs == 0 {
@@ -253,7 +253,7 @@ func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 ) *Barrier {
 	// Initialize barrier
-	barrier := NewBarrier(c, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp)
+	barrier := NewBarrier(c.spanController, c.operatorController, c.enableTableAcrossNodes, allNodesResp)
 
 	// Start scheduler
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
@@ -323,5 +323,5 @@ func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heart
 }
 
 func (c *Controller) isDDLDispatcher(dispatcherID common.DispatcherID) bool {
-	return dispatcherID == c.ddlDispatcherID
+	return c.spanController.IsDDLDispatcher(dispatcherID)
 }

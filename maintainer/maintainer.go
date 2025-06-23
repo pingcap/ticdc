@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -62,11 +63,12 @@ const (
 // 4. checker controller, handled in threadpool, it runs the checkers to dynamically adjust the schedule
 // all threads are read/write information from/to the ReplicationDB
 type Maintainer struct {
-	id         common.ChangeFeedID
-	config     *config.ChangeFeedInfo
-	selfNode   *node.Info
-	controller *Controller
-	barrier    *Barrier
+	id             common.ChangeFeedID
+	config         *config.ChangeFeedInfo
+	selfNode       *node.Info
+	controller     *Controller
+	spanController *span.Controller
+	barrier        *Barrier
 
 	pdClock pdutil.Clock
 
@@ -227,6 +229,16 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
+
+	// Set spanController from controller
+	m.spanController = m.controller.spanController
+
+	// Create barrier with spanController
+	enableTableAcrossNodes := false
+	if cfg.Config != nil && cfg.Config.Scheduler.EnableTableAcrossNodes {
+		enableTableAcrossNodes = true
+	}
+	m.barrier = NewBarrier(m.spanController, m.controller.operatorController, enableTableAcrossNodes, nil)
 
 	return m
 }
@@ -857,9 +869,9 @@ func (m *Maintainer) collectMetrics() {
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
 		total := m.controller.TaskSize() - 1
-		scheduling := m.controller.replicationDB.GetSchedulingSize()
-		working := m.controller.replicationDB.GetReplicatingSize()
-		absent := m.controller.replicationDB.GetAbsentSize()
+		scheduling := m.spanController.GetSchedulingSize()
+		working := m.spanController.GetReplicatingSize()
+		absent := m.spanController.GetAbsentSize()
 
 		m.tableCountGauge.Set(float64(total))
 		m.scheduledTaskGauge.Set(float64(scheduling))
@@ -948,7 +960,7 @@ func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
 
 // GetTables returns all tables.
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.controller.replicationDB.GetAllTasks()
+	return m.spanController.GetAllTasks()
 }
 
 // SplitTableByRegionCount split table based on region count

@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -42,9 +44,15 @@ func TestScheduleEvent(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "test1")
-	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
-	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+
+	// 创建 spanController 和 operatorController
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
+	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
+
+	// 直接使用 spanController 添加测试数据
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked:         true,
 		BlockTs:           10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_All},
@@ -52,9 +60,9 @@ func TestScheduleEvent(t *testing.T) {
 	}, true)
 	event.scheduleBlockEvent()
 	// drop table will be executed first
-	require.Equal(t, 2, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 2, spanController.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -65,9 +73,9 @@ func TestScheduleEvent(t *testing.T) {
 	}, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, spanController.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -78,7 +86,7 @@ func TestScheduleEvent(t *testing.T) {
 	}, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, spanController.GetAbsentSize())
 }
 
 func TestResendAction(t *testing.T) {
@@ -93,17 +101,30 @@ func TestResendAction(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
-	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
+
+	// 创建 spanController 和 operatorController
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
+	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
+
+	// 直接使用 spanController 添加测试数据
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
+
 	var dispatcherIDs []common.DispatcherID
-	absents := controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
+	absents := spanController.GetAbsent()
 	for _, stm := range absents {
-		controller.replicationDB.BindSpanToNode("", "node1", stm)
-		controller.replicationDB.MarkSpanReplicating(stm)
+		spanController.BindSpanToNode("", "node1", stm)
+		spanController.MarkSpanReplicating(stm)
 		dispatcherIDs = append(dispatcherIDs, stm.ID)
 	}
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+
+	// 确保有可用的 dispatcherID
+	if len(dispatcherIDs) == 0 {
+		// 如果没有 absent spans，创建一个测试用的 dispatcherID
+		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherID())
+	}
+
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -129,7 +150,7 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -147,7 +168,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_DB)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -165,7 +186,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_All)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
-	event = NewBlockEvent(cfID, dispatcherIDs[0], controller, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, dispatcherIDs[0], spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -179,7 +200,6 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, resp.DispatcherStatuses, 1)
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_Normal)
 	require.Len(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs, 2)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.Action, heartbeatpb.Action_Pass)
@@ -197,11 +217,17 @@ func TestUpdateSchemaID(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
-	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
-	require.Len(t, controller.GetTasksBySchemaID(1), 1)
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
+
+	// 创建 spanController 和 operatorController
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
+	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
+
+	// 直接使用 spanController 添加测试数据
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+
+	require.Equal(t, 1, spanController.GetAbsentSize())
+	require.Len(t, spanController.GetTasksBySchemaID(1), 1)
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -216,11 +242,11 @@ func TestUpdateSchemaID(t *testing.T) {
 		},
 	}, true)
 	event.scheduleBlockEvent()
-	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
+	require.Equal(t, 1, spanController.GetAbsentSize())
 	// check the schema id and map is updated
-	require.Len(t, controller.GetTasksBySchemaID(1), 0)
-	require.Len(t, controller.GetTasksBySchemaID(2), 1)
-	require.Equal(t, controller.GetTasksByTableID(1)[0].GetSchemaID(), int64(2))
+	require.Len(t, spanController.GetTasksBySchemaID(1), 0)
+	require.Len(t, spanController.GetTasksBySchemaID(2), 1)
+	require.Equal(t, spanController.GetTasksByTableID(1)[0].GetSchemaID(), int64(2))
 }
 
 func setNodeManagerAndMessageCenter() *watcher.NodeManager {

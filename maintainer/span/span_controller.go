@@ -23,8 +23,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/utils"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
 )
 
@@ -35,6 +35,7 @@ type Controller struct {
 	nodeManager            *watcher.NodeManager
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
+	ddlDispatcherID        common.DispatcherID
 }
 
 // NewController creates a new span controller
@@ -44,6 +45,7 @@ func NewController(
 	nodeManager *watcher.NodeManager,
 	splitter *split.Splitter,
 	enableTableAcrossNodes bool,
+	ddlDispatcherID common.DispatcherID,
 ) *Controller {
 	return &Controller{
 		replicationDB:          replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes),
@@ -51,6 +53,7 @@ func NewController(
 		nodeManager:            nodeManager,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
+		ddlDispatcherID:        ddlDispatcherID,
 	}
 }
 
@@ -75,12 +78,20 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		// split the whole table span base on region count if table region count is exceed the limit
 		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan)
 	}
-	c.addNewSpans(table.SchemaID, tableSpans, startTs)
+	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
 }
 
-// addNewSpans creates new spans for the given schema and table spans
+// AddWorkingSpans adds working spans
+func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {
+	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *replica.SpanReplication) bool {
+		c.AddReplicatingSpan(stm)
+		return true
+	})
+}
+
+// AddNewSpans creates new spans for the given schema and table spans
 // This is a complex business logic method that handles span creation
-func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
+func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
 		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
@@ -183,12 +194,7 @@ func (c *Controller) RemoveReplicatingSpan(span *replica.SpanReplication) {
 	c.replicationDB.RemoveReplicatingSpan(span)
 }
 
-// ForceRemove forces to remove a span
-func (c *Controller) ForceRemove(id common.DispatcherID) {
-	c.replicationDB.ForceRemove(id)
-}
-
-// ReplaceReplicaSet replaces replica set
+// ReplaceReplicaSet replaces replica sets
 func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplication, newSpans []*heartbeatpb.TableSpan, checkpointTs uint64) {
 	c.replicationDB.ReplaceReplicaSet(oldReplications, newSpans, checkpointTs)
 }
@@ -225,10 +231,43 @@ func (c *Controller) GetReplicating() []*replica.SpanReplication {
 	return c.replicationDB.GetReplicating()
 }
 
-// addWorkingSpans adds working spans
-func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {
-	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *replica.SpanReplication) bool {
-		c.AddReplicatingSpan(stm)
-		return true
-	})
+// GetReplicationDB returns the internal replicationDB
+// This is a temporary method for backward compatibility during refactoring
+func (c *Controller) GetReplicationDB() *replica.ReplicationDB {
+	return c.replicationDB
+}
+
+// IsDDLDispatcher checks if the dispatcher is a DDL dispatcher
+func (c *Controller) IsDDLDispatcher(dispatcherID common.DispatcherID) bool {
+	return dispatcherID == c.ddlDispatcherID
+}
+
+// GetDDLDispatcherID returns the DDL dispatcher ID
+func (c *Controller) GetDDLDispatcherID() common.DispatcherID {
+	return c.ddlDispatcherID
+}
+
+// GetDDLDispatcher returns the DDL dispatcher
+func (c *Controller) GetDDLDispatcher() *replica.SpanReplication {
+	return c.replicationDB.GetTaskByID(c.ddlDispatcherID)
+}
+
+// GetAllNodes returns all alive nodes
+func (c *Controller) GetAllNodes() []node.ID {
+	aliveNodes := c.nodeManager.GetAliveNodes()
+	nodes := make([]node.ID, 0, len(aliveNodes))
+	for id := range aliveNodes {
+		nodes = append(nodes, id)
+	}
+	return nodes
+}
+
+// GetSplitter returns the splitter
+func (c *Controller) GetSplitter() *split.Splitter {
+	return c.splitter
+}
+
+// GetAbsentForTest returns absent spans for testing
+func (c *Controller) GetAbsentForTest(existing []*replica.SpanReplication, limit int) []*replica.SpanReplication {
+	return c.replicationDB.GetAbsentForTest(existing, limit)
 }

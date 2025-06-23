@@ -14,13 +14,13 @@
 package maintainer
 
 import (
-	"context"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -37,20 +37,18 @@ import (
 )
 
 // Controller schedules and balance tables
-// there are 3 main components in the controller, scheduler, ReplicationDB and operator controller
+// there are 3 main components in the controller, scheduler, span controller and operator controller
 type Controller struct {
 	bootstrapped bool
 
 	schedulerController *pkgscheduler.Controller
 	operatorController  *operator.Controller
-	replicationDB       *replica.ReplicationDB
+	spanController      *span.Controller
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
 
-	splitter               *split.Splitter
-	enableTableAcrossNodes bool
-	startCheckpointTs      uint64
-	ddlDispatcherID        common.DispatcherID
+	startCheckpointTs uint64
+	ddlDispatcherID   common.DispatcherID
 
 	cfConfig     *config.ReplicaConfig
 	changefeedID common.ChangeFeedID
@@ -59,6 +57,8 @@ type Controller struct {
 
 	// Store the task handles, it's used to stop the task handlers when the controller is stopped.
 	taskHandles []*threadpool.TaskHandle
+
+	enableTableAcrossNodes bool
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -79,9 +79,20 @@ func NewController(changefeedID common.ChangeFeedID,
 		splitter = split.NewSplitter(changefeedID, pdAPIClient, regionCache, cfConfig.Scheduler)
 	}
 
-	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
+	// Create span controller
+	spanController := span.NewController(
+		changefeedID,
+		ddlSpan,
+		nodeManager,
+		splitter,
+		enableTableAcrossNodes,
+		ddlSpan.ID,
+	)
+
+	// Create operator controller using replicationDB from spanController
+	replicaSetDB := spanController.GetReplicationDB()
 	oc := operator.NewOperatorController(changefeedID, mc, replicaSetDB, nodeManager, batchSize)
 
 	var schedulerCfg *config.ChangefeedSchedulerConfig
@@ -99,12 +110,11 @@ func NewController(changefeedID common.ChangeFeedID,
 		ddlDispatcherID:        ddlSpan.ID,
 		schedulerController:    sc,
 		operatorController:     oc,
+		spanController:         spanController,
 		messageCenter:          mc,
-		replicationDB:          replicaSetDB,
 		nodeManager:            nodeManager,
 		taskPool:               taskPool,
 		cfConfig:               cfConfig,
-		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
 }
@@ -141,16 +151,8 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				zap.Stringer("node", nodeID))
 			continue
 		}
-		c.replicationDB.UpdateStatus(stm, status)
+		c.spanController.UpdateStatus(stm, status)
 	}
-}
-
-func (c *Controller) GetTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
-	return c.replicationDB.GetTasksBySchemaID(schemaID)
-}
-
-func (c *Controller) GetTaskSizeBySchemaID(schemaID int64) int {
-	return c.replicationDB.GetTaskSizeBySchemaID(schemaID)
 }
 
 func (c *Controller) GetAllNodes() []node.ID {
@@ -162,31 +164,9 @@ func (c *Controller) GetAllNodes() []node.ID {
 	return nodes
 }
 
-func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
-	if c.replicationDB.IsTableExists(table.TableID) {
-		log.Warn("table already add, ignore",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.Int64("schema", table.SchemaID),
-			zap.Int64("table", table.TableID))
-		return
-	}
-	span := common.TableIDToComparableSpan(table.TableID)
-	tableSpan := &heartbeatpb.TableSpan{
-		TableID:  table.TableID,
-		StartKey: span.StartKey,
-		EndKey:   span.EndKey,
-	}
-	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
-	if c.enableTableAcrossNodes && len(c.nodeManager.GetAliveNodes()) > 1 {
-		// split the whole table span base on region count if table region count is exceed the limit
-		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan)
-	}
-	c.addNewSpans(table.SchemaID, tableSpans, startTs)
-}
-
 // GetTask queries a task by dispatcherID, return nil if not found
 func (c *Controller) GetTask(dispatcherID common.DispatcherID) *replica.SpanReplication {
-	return c.replicationDB.GetTaskByID(dispatcherID)
+	return c.spanController.GetTaskByID(dispatcherID)
 }
 
 // RemoveAllTasks remove all tasks
@@ -204,22 +184,6 @@ func (c *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	c.operatorController.RemoveTasksByTableIDs(tables...)
 }
 
-// GetTasksByTableID get all tasks by table id
-func (c *Controller) GetTasksByTableID(tableID int64) []*replica.SpanReplication {
-	return c.replicationDB.GetTasksByTableID(tableID)
-}
-
-// GetAllTasks get all tasks
-func (c *Controller) GetAllTasks() []*replica.SpanReplication {
-	return c.replicationDB.GetAllTasks()
-}
-
-// UpdateSchemaID will update the schema id of the table, and move the task to the new schema map
-// it called when rename a table to another schema
-func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
-	c.replicationDB.UpdateSchemaID(tableID, newSchemaID)
-}
-
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
@@ -227,30 +191,61 @@ func (c *Controller) RemoveNode(id node.ID) {
 
 // ScheduleFinished return false if not all task are running in working state
 func (c *Controller) ScheduleFinished() bool {
-	return c.operatorController.OperatorSizeWithLock() == 0 && c.replicationDB.GetAbsentSize() == 0
+	return c.operatorController.OperatorSizeWithLock() == 0 && c.spanController.GetAbsentSize() == 0
 }
 
+// AddNewTable adds a new table to the span controller
+func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
+	c.spanController.AddNewTable(table, startTs)
+}
+
+// GetTasksBySchemaID get all tasks by schema id
+func (c *Controller) GetTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
+	return c.spanController.GetTasksBySchemaID(schemaID)
+}
+
+// GetTasksByTableID get all tasks by table id
+func (c *Controller) GetTasksByTableID(tableID int64) []*replica.SpanReplication {
+	return c.spanController.GetTasksByTableID(tableID)
+}
+
+// GetAllTasks get all tasks
+func (c *Controller) GetAllTasks() []*replica.SpanReplication {
+	return c.spanController.GetAllTasks()
+}
+
+// UpdateSchemaID will update the schema id of the table, and move the task to the new schema map
+// it called when rename a table to another schema
+func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
+	c.spanController.UpdateSchemaID(tableID, newSchemaID)
+}
+
+// TaskSize get total task size
 func (c *Controller) TaskSize() int {
-	return c.replicationDB.TaskSize()
+	return c.spanController.TaskSize()
 }
 
+// GetTaskSizeBySchemaID get task size by schema id
+func (c *Controller) GetTaskSizeBySchemaID(schemaID int64) int {
+	return c.spanController.GetTaskSizeBySchemaID(schemaID)
+}
+
+// GetTaskSizeByNodeID get task size by node id
 func (c *Controller) GetTaskSizeByNodeID(id node.ID) int {
-	return c.replicationDB.GetTaskSizeByNodeID(id)
+	return c.spanController.GetTaskSizeByNodeID(id)
+}
+
+// GetReplicationDB returns the replicationDB from spanController for backward compatibility
+func (c *Controller) GetReplicationDB() *replica.ReplicationDB {
+	return c.spanController.GetReplicationDB()
 }
 
 func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {
-	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *replica.SpanReplication) bool {
-		c.replicationDB.AddReplicatingSpan(stm)
-		return true
-	})
+	c.spanController.AddWorkingSpans(tableMap)
 }
 
 func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
-	for _, span := range tableSpans {
-		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
-		c.replicationDB.AddAbsentReplicaSet(replicaSet)
-	}
+	c.spanController.AddNewSpans(schemaID, tableSpans, startTs)
 }
 
 func (c *Controller) Stop() {

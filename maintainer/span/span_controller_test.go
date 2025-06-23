@@ -37,9 +37,10 @@ func TestNewController(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil,             // nodeManager
+		nil,             // splitter
+		false,           // enableTableAcrossNodes
+		ddlDispatcherID, // ddlDispatcherID
 	)
 
 	require.NotNil(t, controller)
@@ -61,9 +62,10 @@ func TestController_AddNewTable(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil,             // nodeManager
+		nil,             // splitter
+		false,           // enableTableAcrossNodes
+		ddlDispatcherID, // ddlDispatcherID
 	)
 
 	table := commonEvent.Table{
@@ -97,9 +99,10 @@ func TestController_GetTaskByID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil,             // nodeManager
+		nil,             // splitter
+		false,           // enableTableAcrossNodes
+		ddlDispatcherID, // ddlDispatcherID
 	)
 
 	// Add a table first
@@ -150,9 +153,10 @@ func TestController_GetTasksByTableID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil,             // nodeManager
+		nil,             // splitter
+		false,           // enableTableAcrossNodes
+		ddlDispatcherID, // ddlDispatcherID
 	)
 
 	// Add a table
@@ -186,9 +190,10 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil,             // nodeManager
+		nil,             // splitter
+		false,           // enableTableAcrossNodes
+		ddlDispatcherID, // ddlDispatcherID
 	)
 
 	// Add tables from the same schema
@@ -226,9 +231,10 @@ func TestController_UpdateSchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil,             // nodeManager
+		nil,             // splitter
+		false,           // enableTableAcrossNodes
+		ddlDispatcherID, // ddlDispatcherID
 	)
 
 	// Add a table
@@ -267,16 +273,17 @@ func TestController_Statistics(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil,             // nodeManager
+		nil,             // splitter
+		false,           // enableTableAcrossNodes
+		ddlDispatcherID, // ddlDispatcherID
 	)
 
 	// Initially should have only DDL span
 	require.Equal(t, 1, controller.TaskSize()) // DDL span
 	require.Equal(t, 0, controller.GetAbsentSize())
 	require.Equal(t, 0, controller.GetSchedulingSize())
-	require.Equal(t, 1, controller.GetReplicatingSize()) // DDL span is replicating
+	require.Equal(t, 0, controller.GetReplicatingSize()) // DDL span is replicating
 
 	// Add a table
 	table := commonEvent.Table{
@@ -289,5 +296,5 @@ func TestController_Statistics(t *testing.T) {
 	require.Equal(t, 2, controller.TaskSize())
 	require.Equal(t, 1, controller.GetAbsentSize())
 	require.Equal(t, 0, controller.GetSchedulingSize())
-	require.Equal(t, 1, controller.GetReplicatingSize()) // Only DDL span is replicating
+	require.Equal(t, 0, controller.GetReplicatingSize()) // Only DDL span is replicating
 }
