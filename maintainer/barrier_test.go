@@ -627,11 +627,11 @@ func TestSchemaBlock(t *testing.T) {
 	require.Len(t, msgs, 0)
 	require.Len(t, barrier.blockedEvents.m, 0)
 
-	require.Equal(t, 1, spanController.GetReplicationDB().GetAbsentSize())
+	require.Equal(t, 1, spanController.GetAbsentSize())
 	require.Equal(t, 2, operatorController.OperatorSize())
 	// two dispatcher and moved to operator queue, operator will be removed after ack
-	require.Equal(t, 1, spanController.GetReplicationDB().GetReplicatingSize())
-	for _, task := range spanController.GetReplicationDB().GetReplicating() {
+	require.Equal(t, 1, spanController.GetReplicatingSize())
+	for _, task := range spanController.GetReplicating() {
 		op := operatorController.GetOperator(task.ID)
 		if op != nil {
 			op.PostFinish()
@@ -925,7 +925,6 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
 	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
 
-	// Add tables and get dispatcher IDs
 	var dispatcherIDs []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 2)

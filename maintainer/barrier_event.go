@@ -358,7 +358,7 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 		}
 	case heartbeatpb.InfluenceType_All:
 		// all type will not have drop-type ddl.
-		for _, n := range be.GetAllNodes() {
+		for _, n := range getAllNodes(be.nodeManager) {
 			msgMap[n] = be.newPassActionMessage(n)
 		}
 	case heartbeatpb.InfluenceType_Normal:
@@ -582,8 +582,8 @@ func (be *BarrierEvent) action(action heartbeatpb.Action) *heartbeatpb.Dispatche
 }
 
 // GetAllNodes returns all alive nodes
-func (be *BarrierEvent) GetAllNodes() []node.ID {
-	aliveNodes := be.nodeManager.GetAliveNodes()
+func getAllNodes(nodeManager *watcher.NodeManager) []node.ID {
+	aliveNodes := nodeManager.GetAliveNodes()
 	nodes := make([]node.ID, 0, len(aliveNodes))
 	for id := range aliveNodes {
 		nodes = append(nodes, id)

@@ -283,7 +283,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 	span := b.spanController.GetTaskByID(dispatcherID)
 	if span != nil {
 		span.UpdateStatus(&heartbeatpb.TableSpanStatus{
-			ID:              dispatcherID.ToPB(),
+			ID:              status.ID,
 			CheckpointTs:    status.State.BlockTs - 1,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 		})

@@ -80,12 +80,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	// Create span controller
-	spanController := span.NewController(
-		changefeedID,
-		ddlSpan,
-		splitter,
-		enableTableAcrossNodes,
-	)
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes)
 
 	// Create operator controller using replicationDB from spanController
 	oc := operator.NewOperatorController(changefeedID, spanController.GetReplicationDB(), batchSize)
