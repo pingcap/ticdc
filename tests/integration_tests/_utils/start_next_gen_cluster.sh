@@ -2,6 +2,8 @@
 # dependencies: docker, mc(minio client)
 # You should compile pd-cse, tidb-cse, replication-worker first
 
+source "$CUR/../_utils/test_prepare"
+
 check_bin() {
     if [ ! -f "$1" ]; then
         echo "Error: $1 is not a file" >&2
@@ -133,32 +135,8 @@ if [ -z "$WORK_DIR" ]; then
 fi
 
 
-# assign default value if unset
-: "${MINIO_CONTAINER_NAME:=minio}"
-: "${MINIO_ROOT_USER:=minioadmin}"
-: "${MINIO_ROOT_PASSWORD:=minioadmin}"
-: "${MINIO_MC_ALIAS:=localminio}"
-: "${MINIO_API_PORT:=9000}"
-: "${MINIO_CONSOLE_PORT:=9001}"
-
-: "${DB_BINPATH:=./bin/tidb-server}"
-: "${KV_BINPATH:=./bin/tikv-server}"
-: "${PD_BINPATH:=./bin/pd-server}"
-: "${CSE_CTL_BINPATH:=./bin/cse-ctl}"
-: "${TIKV_WORKER_BINPATH:=./bin/tikv-worker}"
-
-: "${TIDB_VERSION:=v7.5.6}"
-: "${TIDB_PLAYGROUND_TAG:=serverless-cdc}"
-: "${TIDB_PLAYGROUND_TAG_CDC_PD:=serverless-cdc-pd}"
-: "${TIDB_PLAYGROUND_TAG_DOWNSTREAM:=downstream}"
-
-: "${KEYSPACE_NAME:=tenant-1}"
-
-: "${UPSTREAM_PORT_OFFSET:=0}"
-
 PD_PORT=$((2379 + UPSTREAM_PORT_OFFSET))
 TIDB_PORT=$((4000 + UPSTREAM_PORT_OFFSET))
-: "${CDC_PD_PORT:=22379}"
 
 check_bin "$DB_BINPATH" || exit 1
 check_bin "$KV_BINPATH" || exit 1
