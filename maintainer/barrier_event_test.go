@@ -46,13 +46,13 @@ func TestScheduleEvent(t *testing.T) {
 		}, "test1")
 
 	// Create spanController and operatorController
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, false)
 	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
 
 	// Add test data directly using spanController
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nil, &heartbeatpb.State{
 		IsBlocked:         true,
 		BlockTs:           10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_All},
@@ -62,7 +62,7 @@ func TestScheduleEvent(t *testing.T) {
 	// drop table will be executed first
 	require.Equal(t, 2, spanController.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nil, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -75,7 +75,7 @@ func TestScheduleEvent(t *testing.T) {
 	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, spanController.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nil, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -103,8 +103,8 @@ func TestResendAction(t *testing.T) {
 		}, "node1")
 
 	// Create spanController and operatorController
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
-	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, false)
+	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nodeManager, 1)
 
 	// Add test data directly using spanController
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
@@ -124,7 +124,7 @@ func TestResendAction(t *testing.T) {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherID())
 	}
 
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nodeManager, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -150,7 +150,7 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nodeManager, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -168,7 +168,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_DB)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nodeManager, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -186,7 +186,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_All)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
-	event = NewBlockEvent(cfID, dispatcherIDs[0], spanController, operatorController, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, dispatcherIDs[0], spanController, operatorController, nodeManager, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -219,7 +219,7 @@ func TestUpdateSchemaID(t *testing.T) {
 		}, "node1")
 
 	// Create spanController and operatorController
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, false)
 	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
 
 	// Add test data directly using spanController
@@ -227,7 +227,7 @@ func TestUpdateSchemaID(t *testing.T) {
 
 	require.Equal(t, 1, spanController.GetAbsentSize())
 	require.Len(t, spanController.GetTasksBySchemaID(1), 1)
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nil, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{

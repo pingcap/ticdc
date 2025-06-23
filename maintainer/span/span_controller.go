@@ -45,7 +45,6 @@ func NewController(
 	nodeManager *watcher.NodeManager,
 	splitter *split.Splitter,
 	enableTableAcrossNodes bool,
-	ddlDispatcherID common.DispatcherID,
 ) *Controller {
 	return &Controller{
 		replicationDB:          replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes),
@@ -53,7 +52,7 @@ func NewController(
 		nodeManager:            nodeManager,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
-		ddlDispatcherID:        ddlDispatcherID,
+		ddlDispatcherID:        ddlSpan.ID,
 	}
 }
 
@@ -99,8 +98,6 @@ func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 	}
 }
 
-// Simple query methods (direct delegation to replicationDB)
-
 // GetTaskByID queries a task by dispatcherID, return nil if not found
 func (c *Controller) GetTaskByID(dispatcherID common.DispatcherID) *replica.SpanReplication {
 	return c.replicationDB.GetTaskByID(dispatcherID)
@@ -140,8 +137,6 @@ func (c *Controller) GetTaskSizeByNodeID(id node.ID) int {
 func (c *Controller) IsTableExists(tableID int64) bool {
 	return c.replicationDB.IsTableExists(tableID)
 }
-
-// State management methods (direct delegation to replicationDB)
 
 // UpdateSchemaID will update the schema id of the table, and move the task to the new schema map
 // it called when rename a table to another schema

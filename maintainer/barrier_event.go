@@ -25,6 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -36,6 +37,7 @@ type BarrierEvent struct {
 	commitTs           uint64
 	spanController     *span.Controller
 	operatorController *operator.Controller
+	nodeManager        *watcher.NodeManager
 	selected           atomic.Bool
 	hasNewTable        bool
 	// table trigger event dispatcher reported the block event, we should use it as the writer
@@ -70,6 +72,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	spanController *span.Controller,
 	operatorController *operator.Controller,
+	nodeManager *watcher.NodeManager,
 	status *heartbeatpb.State,
 	dynamicSplitEnabled bool,
 ) *BarrierEvent {
@@ -78,6 +81,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		commitTs:           status.BlockTs,
 		spanController:     spanController,
 		operatorController: operatorController,
+		nodeManager:        nodeManager,
 		selected:           atomic.Bool{},
 		hasNewTable:        len(status.NeedAddedTables) > 0,
 
@@ -90,9 +94,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		dynamicSplitEnabled: dynamicSplitEnabled,
 
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
-		// rangeChecker is used to check if all the dispatchers reported the block events
-		rangeChecker:   nil,
-		lastResendTime: time.Time{},
+		lastResendTime:      time.Time{},
 
 		lastWarningLogTime: time.Now(),
 	}
@@ -356,7 +358,7 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 		}
 	case heartbeatpb.InfluenceType_All:
 		// all type will not have drop-type ddl.
-		for _, n := range be.operatorController.GetAllNodes() {
+		for _, n := range be.GetAllNodes() {
 			msgMap[n] = be.newPassActionMessage(n)
 		}
 	case heartbeatpb.InfluenceType_Normal:
@@ -577,4 +579,14 @@ func (be *BarrierEvent) action(action heartbeatpb.Action) *heartbeatpb.Dispatche
 		CommitTs:    be.commitTs,
 		IsSyncPoint: be.isSyncPoint,
 	}
+}
+
+// GetAllNodes returns all alive nodes
+func (be *BarrierEvent) GetAllNodes() []node.ID {
+	aliveNodes := be.nodeManager.GetAliveNodes()
+	nodes := make([]node.ID, 0, len(aliveNodes))
+	for id := range aliveNodes {
+		nodes = append(nodes, id)
+	}
+	return nodes
 }

@@ -37,10 +37,9 @@ func TestNewController(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,             // nodeManager
-		nil,             // splitter
-		false,           // enableTableAcrossNodes
-		ddlDispatcherID, // ddlDispatcherID
+		nil,   // nodeManager
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	require.NotNil(t, controller)
@@ -62,10 +61,9 @@ func TestController_AddNewTable(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,             // nodeManager
-		nil,             // splitter
-		false,           // enableTableAcrossNodes
-		ddlDispatcherID, // ddlDispatcherID
+		nil,   // nodeManager
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	table := commonEvent.Table{
@@ -99,10 +97,9 @@ func TestController_GetTaskByID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,             // nodeManager
-		nil,             // splitter
-		false,           // enableTableAcrossNodes
-		ddlDispatcherID, // ddlDispatcherID
+		nil,   // nodeManager
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Add a table first
@@ -153,10 +150,9 @@ func TestController_GetTasksByTableID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,             // nodeManager
-		nil,             // splitter
-		false,           // enableTableAcrossNodes
-		ddlDispatcherID, // ddlDispatcherID
+		nil,   // nodeManager
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Add a table
@@ -190,10 +186,9 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,             // nodeManager
-		nil,             // splitter
-		false,           // enableTableAcrossNodes
-		ddlDispatcherID, // ddlDispatcherID
+		nil,   // nodeManager
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Add tables from the same schema
@@ -231,10 +226,9 @@ func TestController_UpdateSchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,             // nodeManager
-		nil,             // splitter
-		false,           // enableTableAcrossNodes
-		ddlDispatcherID, // ddlDispatcherID
+		nil,   // nodeManager
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Add a table
@@ -273,10 +267,9 @@ func TestController_Statistics(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,             // nodeManager
-		nil,             // splitter
-		false,           // enableTableAcrossNodes
-		ddlDispatcherID, // ddlDispatcherID
+		nil,   // nodeManager
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Initially should have only DDL span
