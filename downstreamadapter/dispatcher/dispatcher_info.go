@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/ticdc/eventpb"
@@ -114,8 +115,8 @@ func (d *Dispatcher) GetType() int {
 
 // SetStartTs only be called after the dispatcher is created
 func (d *Dispatcher) SetStartTs(startTs uint64) {
-	d.startTs = startTs
-	d.resolvedTs = startTs
+	atomic.StoreUint64(&d.startTs, startTs)
+	atomic.StoreUint64(&d.resolvedTs, startTs)
 }
 
 func (d *Dispatcher) SetCurrentPDTs(currentPDTs uint64) {
