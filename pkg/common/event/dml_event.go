@@ -28,7 +28,7 @@ const (
 	// defaultRowCount is the start row count of a transaction.
 	defaultRowCount = 1
 	// DMLEventVersion is the version of the DMLEvent struct.
-	DMLEventVersion = 0
+	DMLEventVersion = 1
 )
 
 var _ Event = &BatchDMLEvent{}
