@@ -498,14 +498,17 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
+	if interrupted {
+		return
+	}
+
+	// If the task is not running, we don't send the events to the dispatcher.
+	if !task.isRunning.Load() {
+		return
+	}
 
 	for _, e := range events {
 		if task.isRemoved.Load() {
-			return
-		}
-
-		// If the task is not running, we don't send the events to the dispatcher.
-		if !task.isRunning.Load() {
 			return
 		}
 
