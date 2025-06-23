@@ -80,10 +80,6 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		operatorController: operatorController,
 		selected:           atomic.Bool{},
 		hasNewTable:        len(status.NeedAddedTables) > 0,
-		// table trigger event dispatcher reported the block event, we should use it as the writer
-		tableTriggerDispatcherRelated: false,
-		writerDispatcher:              common.DispatcherID{},
-		writerDispatcherAdvanced:      false,
 
 		blockedDispatchers: status.BlockTables,
 		dropDispatchers:    status.NeedDroppedTables,
@@ -93,13 +89,6 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		// if the split table is enable for this changefeeed, if not we can use table id to check coverage
 		dynamicSplitEnabled: dynamicSplitEnabled,
 
-		// used to store report waiting status dispatchers before rangeChecker is created
-		// when BlockTables.InfluenceType is not Normal, we should store reported dispatchers first
-		// and wait get the reported from table trigger event dispatcher(all/db type must have table trigger event dispatcher)
-		// then create the rangeChecker and update the reported dispatchers.
-		// Why we need to wait table trigger event dispatcher?
-		// because we need to consider the add/drop tables in the other ddls.
-		// so only we use table trigger to create rangeChecker can ensure the coverage is correct.
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		// rangeChecker is used to check if all the dispatchers reported the block events
 		rangeChecker:   nil,
@@ -367,7 +356,7 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 		}
 	case heartbeatpb.InfluenceType_All:
 		// all type will not have drop-type ddl.
-		for _, n := range be.spanController.GetAllNodes() {
+		for _, n := range be.operatorController.GetAllNodes() {
 			msgMap[n] = be.newPassActionMessage(n)
 		}
 	case heartbeatpb.InfluenceType_Normal:

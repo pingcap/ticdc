@@ -252,16 +252,6 @@ func (c *Controller) GetDDLDispatcher() *replica.SpanReplication {
 	return c.replicationDB.GetTaskByID(c.ddlDispatcherID)
 }
 
-// GetAllNodes returns all alive nodes
-func (c *Controller) GetAllNodes() []node.ID {
-	aliveNodes := c.nodeManager.GetAliveNodes()
-	nodes := make([]node.ID, 0, len(aliveNodes))
-	for id := range aliveNodes {
-		nodes = append(nodes, id)
-	}
-	return nodes
-}
-
 // GetSplitter returns the splitter
 func (c *Controller) GetSplitter() *split.Splitter {
 	return c.splitter

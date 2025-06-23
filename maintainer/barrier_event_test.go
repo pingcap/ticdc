@@ -45,11 +45,11 @@ func TestScheduleEvent(t *testing.T) {
 			CheckpointTs:    1,
 		}, "test1")
 
-	// 创建 spanController 和 operatorController
+	// Create spanController and operatorController
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
 	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
 
-	// 直接使用 spanController 添加测试数据
+	// Add test data directly using spanController
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
@@ -102,11 +102,11 @@ func TestResendAction(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 
-	// 创建 spanController 和 operatorController
+	// Create spanController and operatorController
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
 	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
 
-	// 直接使用 spanController 添加测试数据
+	// Add test data directly using spanController
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 
@@ -118,9 +118,9 @@ func TestResendAction(t *testing.T) {
 		dispatcherIDs = append(dispatcherIDs, stm.ID)
 	}
 
-	// 确保有可用的 dispatcherID
+	// Ensure there is a usable dispatcherID
 	if len(dispatcherIDs) == 0 {
-		// 如果没有 absent spans，创建一个测试用的 dispatcherID
+		// If there are no absent spans, create a test dispatcherID
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherID())
 	}
 
@@ -218,11 +218,11 @@ func TestUpdateSchemaID(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 
-	// 创建 spanController 和 operatorController
+	// Create spanController and operatorController
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
 	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
 
-	// 直接使用 spanController 添加测试数据
+	// Add test data directly using spanController
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 
 	require.Equal(t, 1, spanController.GetAbsentSize())

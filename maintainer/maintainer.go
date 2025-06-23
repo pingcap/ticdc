@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -63,12 +62,11 @@ const (
 // 4. checker controller, handled in threadpool, it runs the checkers to dynamically adjust the schedule
 // all threads are read/write information from/to the ReplicationDB
 type Maintainer struct {
-	id             common.ChangeFeedID
-	config         *config.ChangeFeedInfo
-	selfNode       *node.Info
-	controller     *Controller
-	spanController *span.Controller
-	barrier        *Barrier
+	id         common.ChangeFeedID
+	config     *config.ChangeFeedInfo
+	selfNode   *node.Info
+	controller *Controller
+	barrier    *Barrier
 
 	pdClock pdutil.Clock
 
@@ -229,16 +227,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
-
-	// Set spanController from controller
-	m.spanController = m.controller.spanController
-
-	// Create barrier with spanController
-	enableTableAcrossNodes := false
-	if cfg.Config != nil && cfg.Config.Scheduler.EnableTableAcrossNodes {
-		enableTableAcrossNodes = true
-	}
-	m.barrier = NewBarrier(m.spanController, m.controller.operatorController, enableTableAcrossNodes, nil)
 
 	return m
 }
@@ -476,7 +464,7 @@ func (m *Maintainer) onNodeChanged() {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
 			delete(m.checkpointTsByCapture, id)
-			m.controller.RemoveNode(id)
+			m.controller.operatorController.OnNodeRemoved(id)
 		}
 	}
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),
@@ -540,7 +528,7 @@ func (m *Maintainer) calCheckpointTs() {
 	// if there is no tables, there must be a table trigger dispatcher
 	for id := range m.bootstrapper.GetAllNodes() {
 		// maintainer node has the table trigger dispatcher
-		if id != m.selfNode.ID && m.controller.GetTaskSizeByNodeID(id) <= 0 {
+		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
 		// node level watermark reported, ignore this round
@@ -755,7 +743,7 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 		m.statusChanged.Store(true)
 	}
 	if !m.cascadeRemoving {
-		m.controller.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
+		m.controller.operatorController.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
 		return !m.ddlSpan.IsWorking()
 	}
 	return m.trySendMaintainerCloseRequestToAllNode()
@@ -868,10 +856,10 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
-		total := m.controller.TaskSize() - 1
-		scheduling := m.spanController.GetSchedulingSize()
-		working := m.spanController.GetReplicatingSize()
-		absent := m.spanController.GetAbsentSize()
+		total := m.controller.spanController.TaskSize() - 1
+		scheduling := m.controller.spanController.GetSchedulingSize()
+		working := m.controller.spanController.GetReplicatingSize()
+		absent := m.controller.spanController.GetAbsentSize()
 
 		m.tableCountGauge.Set(float64(total))
 		m.scheduledTaskGauge.Set(float64(scheduling))
@@ -945,7 +933,7 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 
 // GetDispatcherCount returns the number of dispatchers.
 func (m *Maintainer) GetDispatcherCount() int {
-	return len(m.controller.GetAllTasks())
+	return len(m.controller.spanController.GetAllTasks())
 }
 
 // MoveTable moves a table to a specific node.
@@ -960,7 +948,7 @@ func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
 
 // GetTables returns all tables.
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.spanController.GetAllTasks()
+	return m.controller.spanController.GetAllTasks()
 }
 
 // SplitTableByRegionCount split table based on region count

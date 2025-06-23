@@ -24,14 +24,12 @@ import (
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
 )
@@ -48,7 +46,6 @@ type Controller struct {
 	nodeManager         *watcher.NodeManager
 
 	startCheckpointTs uint64
-	ddlDispatcherID   common.DispatcherID
 
 	cfConfig     *config.ReplicaConfig
 	changefeedID common.ChangeFeedID
@@ -107,7 +104,6 @@ func NewController(changefeedID common.ChangeFeedID,
 		startCheckpointTs:      checkpointTs,
 		changefeedID:           changefeedID,
 		bootstrapped:           false,
-		ddlDispatcherID:        ddlSpan.ID,
 		schedulerController:    sc,
 		operatorController:     oc,
 		spanController:         spanController,
@@ -124,7 +120,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		c.operatorController.UpdateOperatorStatus(dispatcherID, from, status)
-		stm := c.GetTask(dispatcherID)
+		stm := c.spanController.GetTaskByID(dispatcherID)
 		if stm == nil {
 			if status.ComponentStatus != heartbeatpb.ComponentState_Working {
 				continue
@@ -164,88 +160,9 @@ func (c *Controller) GetAllNodes() []node.ID {
 	return nodes
 }
 
-// GetTask queries a task by dispatcherID, return nil if not found
-func (c *Controller) GetTask(dispatcherID common.DispatcherID) *replica.SpanReplication {
-	return c.spanController.GetTaskByID(dispatcherID)
-}
-
-// RemoveAllTasks remove all tasks
-func (c *Controller) RemoveAllTasks() {
-	c.operatorController.RemoveAllTasks()
-}
-
-// RemoveTasksBySchemaID remove all tasks by schema id
-func (c *Controller) RemoveTasksBySchemaID(schemaID int64) {
-	c.operatorController.RemoveTasksBySchemaID(schemaID)
-}
-
-// RemoveTasksByTableIDs remove all tasks by table id
-func (c *Controller) RemoveTasksByTableIDs(tables ...int64) {
-	c.operatorController.RemoveTasksByTableIDs(tables...)
-}
-
-// RemoveNode is called when a node is removed
-func (c *Controller) RemoveNode(id node.ID) {
-	c.operatorController.OnNodeRemoved(id)
-}
-
 // ScheduleFinished return false if not all task are running in working state
 func (c *Controller) ScheduleFinished() bool {
 	return c.operatorController.OperatorSizeWithLock() == 0 && c.spanController.GetAbsentSize() == 0
-}
-
-// AddNewTable adds a new table to the span controller
-func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
-	c.spanController.AddNewTable(table, startTs)
-}
-
-// GetTasksBySchemaID get all tasks by schema id
-func (c *Controller) GetTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
-	return c.spanController.GetTasksBySchemaID(schemaID)
-}
-
-// GetTasksByTableID get all tasks by table id
-func (c *Controller) GetTasksByTableID(tableID int64) []*replica.SpanReplication {
-	return c.spanController.GetTasksByTableID(tableID)
-}
-
-// GetAllTasks get all tasks
-func (c *Controller) GetAllTasks() []*replica.SpanReplication {
-	return c.spanController.GetAllTasks()
-}
-
-// UpdateSchemaID will update the schema id of the table, and move the task to the new schema map
-// it called when rename a table to another schema
-func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
-	c.spanController.UpdateSchemaID(tableID, newSchemaID)
-}
-
-// TaskSize get total task size
-func (c *Controller) TaskSize() int {
-	return c.spanController.TaskSize()
-}
-
-// GetTaskSizeBySchemaID get task size by schema id
-func (c *Controller) GetTaskSizeBySchemaID(schemaID int64) int {
-	return c.spanController.GetTaskSizeBySchemaID(schemaID)
-}
-
-// GetTaskSizeByNodeID get task size by node id
-func (c *Controller) GetTaskSizeByNodeID(id node.ID) int {
-	return c.spanController.GetTaskSizeByNodeID(id)
-}
-
-// GetReplicationDB returns the replicationDB from spanController for backward compatibility
-func (c *Controller) GetReplicationDB() *replica.ReplicationDB {
-	return c.spanController.GetReplicationDB()
-}
-
-func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {
-	c.spanController.AddWorkingSpans(tableMap)
-}
-
-func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
-	c.spanController.AddNewSpans(schemaID, tableSpans, startTs)
 }
 
 func (c *Controller) Stop() {

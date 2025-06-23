@@ -337,6 +337,15 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, false, tableTriggerEventDispatcherID)
 	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
+	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
+
+	for id := 1; id < 3; id++ {
+		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
+		stm := spanController.GetTasksByTableID(int64(id))[0]
+		blockedDispatcherIDS = append(blockedDispatcherIDS, stm.ID.ToPB())
+		spanController.BindSpanToNode("", "node1", stm)
+		spanController.MarkSpanReplicating(stm)
+	}
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
 	barrier := NewBarrier(spanController, operatorController, false, nil)

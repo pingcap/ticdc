@@ -284,9 +284,12 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 	if span != nil {
 		span.UpdateStatus(&heartbeatpb.TableSpanStatus{
 			ID:              dispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    status.State.BlockTs - 1,
+			ComponentStatus: heartbeatpb.ComponentState_Working,
 		})
+		if status.State != nil {
+			span.UpdateBlockState(*status.State)
+		}
 	}
 	if status.State.Stage == heartbeatpb.BlockStage_DONE {
 		return b.handleEventDone(cfID, dispatcherID, status), nil
