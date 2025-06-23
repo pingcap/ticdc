@@ -225,6 +225,8 @@ func (oc *Controller) pollQueueingOperator() (
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
+	op := item.OP
+	opID := op.ID()
 	if item.IsRemoved {
 		o, ok := oc.operators[opID]
 		if ok {
@@ -232,8 +234,6 @@ func (oc *Controller) pollQueueingOperator() (
 		}
 		return nil, true
 	}
-	op := item.OP
-	opID := op.ID()
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
