@@ -101,15 +101,12 @@ func genKeyList(
 		if !ok || info == nil || info.IsGenerated() {
 			return nil
 		}
-		i, ok1 := tableInfo.GetRowColumnsOffset()[colID]
-		if !ok1 {
+		offset, ok := tableInfo.GetRowColumnsOffset()[colID]
+		if !ok {
 			log.Warn("can't find column offset", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
 			return nil
 		}
-		log.Info("try to extract value", zap.Int64("colID", colID),
-			zap.Int("offset", i),
-			zap.String("colName", info.Name.O), zap.Any("tableInfo", tableInfo))
-		value := common.ExtractColVal(row, info, i)
+		value := common.ExtractColVal(row, info, offset)
 		// if a column value is null, we can ignore this index
 		if value == nil {
 			return nil
