@@ -270,6 +270,9 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.OP.PostFinish()
 		old.IsRemoved = true
 		delete(oc.operators, op.ID())
+		if op.ID() != old.OP.ID() {
+			log.Panic("unexpected DispatcherID", zap.Any("id", op.ID()), zap.Any("oldId", old.OP.ID()))
+		}
 	}
 	oc.pushOperator(op)
 }
