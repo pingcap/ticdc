@@ -19,7 +19,11 @@ function prepare() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+    if [ "$IS_NEXT_GEN" = "1" ]; then
+        run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd "http://${UP_PD_HOST_1}:${CDC_PD_PORT}"
+    else
+	    run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+    fi
 
 	TOPIC_NAME="ticdc-default-value-test-$RANDOM"
 	case $SINK_TYPE in
@@ -31,9 +35,18 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	#run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
-	SINK_PARA="{\"replica_config\":{\"force_replicate\":true}, \"changefeed_id\":\"tidb-mysql-test\", \"sink_uri\":\"$SINK_URI\", \"start_ts\":$start_ts}"
-	curl -X POST -H "'Content-type':'application/json'" http://127.0.0.1:8300/api/v2/changefeeds -d "$SINK_PARA"
+	# run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	# SINK_PARA="{\"replica_config\":{\"force_replicate\":true}, \"changefeed_id\":\"tidb-mysql-test\", \"sink_uri\":\"$SINK_URI\", \"start_ts\":$start_ts}"
+
+    if [ "$IS_NEXT_GEN" = 1 ]; then
+	    start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${CDC_PD_PORT})
+	    SINK_PARA="{\"changefeed_id\":\"tidb-mysql-test\", \"sink_uri\":\"$SINK_URI\", \"start_ts\":$start_ts}"
+        curl -X POST -H "Content-type: appliction/json" http://127.0.0.1:19000/cdc/api/v2/changefeeds?keyspace_id=1 -d "$SINK_PARA"
+    else
+	    SINK_PARA="{\"replica_config\":{\"force_replicate\":true}, \"changefeed_id\":\"tidb-mysql-test\", \"sink_uri\":\"$SINK_URI\", \"start_ts\":$start_ts}"
+	    curl -X POST -H "'Content-type':'application/json'" http://127.0.0.1:8300/api/v2/changefeeds -d "$SINK_PARA"
+    fi
+
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
