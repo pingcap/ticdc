@@ -39,7 +39,7 @@ func TestScheduleEvent(t *testing.T) {
 			CheckpointTs:    1,
 		}, "test1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked:         true,
@@ -91,14 +91,14 @@ func TestResendAction(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	var dispatcherIDs []common.DispatcherID
 	absents := spanController.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
 	for _, stm := range absents {
-		spanController.GetReplicationDB().BindSpanToNode("", "node1", stm)
-		spanController.GetReplicationDB().MarkSpanReplicating(stm)
+		spanController.BindSpanToNode("", "node1", stm)
+		spanController.MarkSpanReplicating(stm)
 		dispatcherIDs = append(dispatcherIDs, stm.ID)
 	}
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
@@ -196,7 +196,7 @@ func TestUpdateSchemaID(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	require.Equal(t, 1, spanController.GetAbsentSize())
 	require.Len(t, spanController.GetTasksBySchemaID(1), 1)

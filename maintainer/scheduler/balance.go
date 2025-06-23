@@ -22,7 +22,9 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -35,7 +37,7 @@ type balanceScheduler struct {
 	batchSize    int
 
 	operatorController *operator.Controller
-	replicationDB      *replica.ReplicationDB
+	spanController     *span.Controller
 	nodeManager        *watcher.NodeManager
 
 	random               *rand.Rand
@@ -52,16 +54,16 @@ type balanceScheduler struct {
 
 func NewBalanceScheduler(
 	changefeedID common.ChangeFeedID, batchSize int,
-	oc *operator.Controller, replicationDB *replica.ReplicationDB,
-	nodeManager *watcher.NodeManager, balanceInterval time.Duration,
+	oc *operator.Controller, sc *span.Controller,
+	balanceInterval time.Duration,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:         changefeedID,
 		batchSize:            batchSize,
 		random:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		operatorController:   oc,
-		replicationDB:        replicationDB,
-		nodeManager:          nodeManager,
+		spanController:       sc,
+		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),
 	}
@@ -78,7 +80,7 @@ func (s *balanceScheduler) Execute() time.Time {
 	})
 
 	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule
-	if s.operatorController.OperatorSize() > 0 || s.replicationDB.GetAbsentSize() > 0 {
+	if s.operatorController.OperatorSize() > 0 || s.spanController.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
 		return now.Add(s.checkBalanceInterval)
 	}
@@ -102,14 +104,14 @@ func (s *balanceScheduler) Name() string {
 
 func (s *balanceScheduler) schedulerGroup(nodes map[node.ID]*node.Info) int {
 	batch, moved := s.batchSize, 0
-	for _, group := range s.replicationDB.GetGroups() {
+	for _, group := range s.spanController.GetGroups() {
 		// fast path, check the balance status
-		moveSize := pkgScheduler.CheckBalanceStatus(s.replicationDB.GetTaskSizePerNodeByGroup(group), nodes)
+		moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNodeByGroup(group), nodes)
 		if moveSize <= 0 {
 			// no need to do the balance, skip
 			continue
 		}
-		replicas := s.replicationDB.GetReplicatingByGroup(group)
+		replicas := s.spanController.GetReplicatingByGroup(group)
 		moved += pkgScheduler.Balance(batch, s.random, nodes, replicas, s.doMove)
 		if moved >= batch {
 			break
@@ -121,12 +123,12 @@ func (s *balanceScheduler) schedulerGroup(nodes map[node.ID]*node.Info) int {
 // TODO: refactor and simplify the implementation and limit max group size
 func (s *balanceScheduler) schedulerGlobal(nodes map[node.ID]*node.Info) int {
 	// fast path, check the balance status
-	moveSize := pkgScheduler.CheckBalanceStatus(s.replicationDB.GetTaskSizePerNode(), nodes)
+	moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNode(), nodes)
 	if moveSize <= 0 {
 		// no need to do the balance, skip
 		return 0
 	}
-	groupNodetasks, valid := s.replicationDB.GetImbalanceGroupNodeTask(nodes)
+	groupNodetasks, valid := s.spanController.GetImbalanceGroupNodeTask(nodes)
 	if !valid {
 		// no need to do the balance, skip
 		return 0
@@ -184,6 +186,6 @@ func (s *balanceScheduler) schedulerGlobal(nodes map[node.ID]*node.Info) int {
 }
 
 func (s *balanceScheduler) doMove(replication *replica.SpanReplication, id node.ID) bool {
-	op := operator.NewMoveDispatcherOperator(s.replicationDB, replication, replication.GetNodeID(), id)
+	op := operator.NewMoveDispatcherOperator(s.spanController, replication, replication.GetNodeID(), id)
 	return s.operatorController.AddOperator(op)
 }

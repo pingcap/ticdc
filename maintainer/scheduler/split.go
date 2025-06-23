@@ -22,8 +22,10 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -35,10 +37,10 @@ import (
 type splitScheduler struct {
 	changefeedID common.ChangeFeedID
 
-	splitter     *split.Splitter
-	opController *operator.Controller
-	db           *replica.ReplicationDB
-	nodeManager  *watcher.NodeManager
+	splitter       *split.Splitter
+	opController   *operator.Controller
+	spanController *span.Controller
+	nodeManager    *watcher.NodeManager
 
 	maxCheckTime  time.Duration
 	checkInterval time.Duration
@@ -49,18 +51,18 @@ type splitScheduler struct {
 
 func NewSplitScheduler(
 	changefeedID common.ChangeFeedID, batchSize int, splitter *split.Splitter,
-	oc *operator.Controller, db *replica.ReplicationDB, nodeManager *watcher.NodeManager,
+	oc *operator.Controller, sc *span.Controller,
 	checkInterval time.Duration,
 ) *splitScheduler {
 	return &splitScheduler{
-		changefeedID:  changefeedID,
-		splitter:      splitter,
-		opController:  oc,
-		db:            db,
-		nodeManager:   nodeManager,
-		batchSize:     batchSize,
-		maxCheckTime:  time.Second * 500,
-		checkInterval: checkInterval,
+		changefeedID:   changefeedID,
+		splitter:       splitter,
+		opController:   oc,
+		spanController: sc,
+		nodeManager:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		batchSize:      batchSize,
+		maxCheckTime:   time.Second * 500,
+		checkInterval:  checkInterval,
 	}
 }
 
@@ -77,16 +79,16 @@ func (s *splitScheduler) Execute() time.Time {
 	}
 
 	log.Info("check split status", zap.String("changefeed", s.changefeedID.Name()),
-		zap.String("hotSpans", s.db.GetCheckerStat()), zap.String("groupDistribution", s.db.GetGroupStat()))
+		zap.String("hotSpans", s.spanController.GetCheckerStat()), zap.String("groupDistribution", s.spanController.GetGroupStat()))
 
 	checked, batch, start := 0, s.batchSize, time.Now()
 	needBreak := false
-	for _, group := range s.db.GetGroups() {
+	for _, group := range s.spanController.GetGroups() {
 		if needBreak || batch <= 0 {
 			break
 		}
 
-		checkResults := s.db.CheckByGroup(group, s.batchSize)
+		checkResults := s.spanController.CheckByGroup(group, s.batchSize)
 		checked, needBreak = s.doCheck(checkResults, start)
 		batch -= checked
 		s.lastCheckTime = time.Now()

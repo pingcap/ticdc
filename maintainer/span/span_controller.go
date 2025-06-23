@@ -24,6 +24,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
+	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -232,6 +233,46 @@ func (c *Controller) GetReplicationDB() *replica.ReplicationDB {
 	return c.replicationDB
 }
 
+// GetGroups returns all group IDs
+func (c *Controller) GetGroups() []pkgreplica.GroupID {
+	return c.replicationDB.GetGroups()
+}
+
+// GetScheduleTaskSizePerNodeByGroup returns the schedule task size per node by group
+func (c *Controller) GetScheduleTaskSizePerNodeByGroup(groupID pkgreplica.GroupID) map[node.ID]int {
+	return c.replicationDB.GetScheduleTaskSizePerNodeByGroup(groupID)
+}
+
+// GetAbsentByGroup returns absent spans by group
+func (c *Controller) GetAbsentByGroup(groupID pkgreplica.GroupID, batch int) []*replica.SpanReplication {
+	return c.replicationDB.GetAbsentByGroup(groupID, batch)
+}
+
+// GetAliveNodes returns alive nodes from node manager
+func (c *Controller) GetAliveNodes() map[node.ID]*node.Info {
+	return c.nodeManager.GetAliveNodes()
+}
+
+// GetTaskSizePerNodeByGroup returns the task size per node by group
+func (c *Controller) GetTaskSizePerNodeByGroup(groupID pkgreplica.GroupID) map[node.ID]int {
+	return c.replicationDB.GetTaskSizePerNodeByGroup(groupID)
+}
+
+// GetReplicatingByGroup returns replicating spans by group
+func (c *Controller) GetReplicatingByGroup(groupID pkgreplica.GroupID) []*replica.SpanReplication {
+	return c.replicationDB.GetReplicatingByGroup(groupID)
+}
+
+// GetTaskSizePerNode returns the task size per node
+func (c *Controller) GetTaskSizePerNode() map[node.ID]int {
+	return c.replicationDB.GetTaskSizePerNode()
+}
+
+// GetImbalanceGroupNodeTask returns imbalance group node task
+func (c *Controller) GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (map[pkgreplica.GroupID]map[node.ID]*replica.SpanReplication, bool) {
+	return c.replicationDB.GetImbalanceGroupNodeTask(nodes)
+}
+
 // IsDDLDispatcher checks if the dispatcher is a DDL dispatcher
 func (c *Controller) IsDDLDispatcher(dispatcherID common.DispatcherID) bool {
 	return dispatcherID == c.ddlDispatcherID
@@ -255,4 +296,39 @@ func (c *Controller) GetSplitter() *split.Splitter {
 // GetAbsentForTest returns absent spans for testing
 func (c *Controller) GetAbsentForTest(existing []*replica.SpanReplication, limit int) []*replica.SpanReplication {
 	return c.replicationDB.GetAbsentForTest(existing, limit)
+}
+
+// GetCheckerStat returns checker stat
+func (c *Controller) GetCheckerStat() string {
+	return c.replicationDB.GetCheckerStat()
+}
+
+// GetGroupStat returns group stat
+func (c *Controller) GetGroupStat() string {
+	return c.replicationDB.GetGroupStat()
+}
+
+// CheckByGroup checks by group
+func (c *Controller) CheckByGroup(groupID pkgreplica.GroupID, batch int) pkgreplica.GroupCheckResult {
+	return c.replicationDB.CheckByGroup(groupID, batch)
+}
+
+// RemoveAll reset the db and return all the replicating and scheduling tasks
+func (c *Controller) RemoveAll() []*replica.SpanReplication {
+	return c.replicationDB.RemoveAll()
+}
+
+// RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
+func (c *Controller) RemoveBySchemaID(schemaID int64) []*replica.SpanReplication {
+	return c.replicationDB.RemoveBySchemaID(schemaID)
+}
+
+// RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks
+func (c *Controller) RemoveByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
+	return c.replicationDB.RemoveByTableIDs(tableIDs...)
+}
+
+// GetTaskByNodeID returns the spans by the node id
+func (c *Controller) GetTaskByNodeID(id node.ID) []*replica.SpanReplication {
+	return c.replicationDB.GetTaskByNodeID(id)
 }

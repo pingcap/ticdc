@@ -82,15 +82,15 @@ func NewController(changefeedID common.ChangeFeedID,
 	// Create span controller
 	spanController := span.NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes)
 
-	// Create operator controller using replicationDB from spanController
-	oc := operator.NewOperatorController(changefeedID, spanController.GetReplicationDB(), batchSize)
+	// Create operator controller using spanController
+	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
 
 	var schedulerCfg *config.ChangefeedSchedulerConfig
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
 	sc := NewScheduleController(
-		changefeedID, batchSize, oc, spanController.GetReplicationDB(), nodeManager, balanceInterval, splitter, schedulerCfg,
+		changefeedID, batchSize, oc, spanController, balanceInterval, splitter, schedulerCfg,
 	)
 
 	return &Controller{

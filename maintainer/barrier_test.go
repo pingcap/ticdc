@@ -41,7 +41,7 @@ func TestOneBlockEvent(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	startTs := uint64(10)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
 	stm := spanController.GetTasksByTableID(1)[0]
@@ -169,7 +169,7 @@ func TestNormalBlock(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
@@ -336,7 +336,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 3; id++ {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
@@ -481,7 +481,7 @@ func TestSchemaBlock(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -658,7 +658,7 @@ func TestSyncPointBlock(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
@@ -819,7 +819,7 @@ func TestNonBlocked(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	barrier := NewBarrier(spanController, operatorController, false, nil)
 
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
@@ -853,7 +853,7 @@ func TestNonBlocked(t *testing.T) {
 	require.True(t, heartbeatpb.InfluenceType_Normal == resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType)
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs[0], blockedDispatcherIDS[0])
 	require.Len(t, barrier.blockedEvents.m, 0)
-	require.Equal(t, 2, spanController.GetReplicationDB().GetAbsentSize(), 2)
+	require.Equal(t, 2, spanController.GetAbsentSize(), 2)
 }
 
 func TestUpdateCheckpointTs(t *testing.T) {
@@ -868,7 +868,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	barrier := NewBarrier(spanController, operatorController, false, nil)
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -923,7 +923,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	var dispatcherIDs []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
@@ -1084,7 +1084,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	barrier := NewBarrier(spanController, operatorController, true, nil)
 	for id := 1; id < 1000; id++ {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 1)

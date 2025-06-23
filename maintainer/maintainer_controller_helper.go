@@ -144,13 +144,13 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 
 	randomIdx := rand.Intn(len(replications))
 	primaryID := replications[randomIdx].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(c.spanController.GetReplicationDB(), primaryID, replications[randomIdx], replications, splitTableSpans, nil)
+	primaryOp := operator.NewMergeSplitDispatcherOperator(c.spanController, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
 	for _, replicaSet := range replications {
 		var op *operator.MergeSplitDispatcherOperator
 		if replicaSet.ID == primaryID {
 			op = primaryOp
 		} else {
-			op = operator.NewMergeSplitDispatcherOperator(c.spanController.GetReplicationDB(), primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
+			op = operator.NewMergeSplitDispatcherOperator(c.spanController, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
 		}
 		c.operatorController.AddOperator(op)
 	}
