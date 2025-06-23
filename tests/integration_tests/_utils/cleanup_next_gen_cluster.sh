@@ -14,13 +14,13 @@ if [ -f "$OUT_DIR/next_gen.env" ]; then
     # exit 0
     source "$OUT_DIR/next_gen.env"
 
-    [ -n "$TIDB_PLAYGROUND_TAG" ] && tiup clean "$TIDB_PLAYGROUND_TAG" 2>/dev/null
-    [ -n "$TIDB_PLAYGROUND_TAG_CDC_PD" ] && tiup clean "$TIDB_PLAYGROUND_TAG_CDC_PD" 2>/dev/null
-    [ -n "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" ] && tiup clean "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" 2>/dev/null
-    [ -n "$MINIO_CONTAINER_NAME" ] && docker rm -f "$MINIO_CONTAINER_NAME"
-    [ -n "$UPSTREAM_TIUP_PID" ] && kill "$UPSTREAM_TIUP_PID" 2>/dev/null
-    [ -n "$CDC_PD_TIUP_PID" ] && kill "$CDC_PD_TIUP_PID" 2>/dev/null
-    [ -n "$DOWNSTREAM_TIUP_PID" ] && kill "$DOWNSTREAM_TIUP_PID" 2>/dev/null
+    [ -n "$TIDB_PLAYGROUND_TAG" ] && tiup clean "$TIDB_PLAYGROUND_TAG" 2>/dev/null || true
+    [ -n "$TIDB_PLAYGROUND_TAG_CDC_PD" ] && tiup clean "$TIDB_PLAYGROUND_TAG_CDC_PD" 2>/dev/null || true
+    [ -n "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" ] && tiup clean "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" 2>/dev/null || true
+    [ -n "$MINIO_CONTAINER_NAME" ] && docker rm -f "$MINIO_CONTAINER_NAME" 2>/dev/null || true
+    [ -n "$UPSTREAM_TIUP_PID" ] && kill "$UPSTREAM_TIUP_PID" 2>/dev/null || true
+    [ -n "$CDC_PD_TIUP_PID" ] && kill "$CDC_PD_TIUP_PID" 2>/dev/null || true
+    [ -n "$DOWNSTREAM_TIUP_PID" ] && kill "$DOWNSTREAM_TIUP_PID" 2>/dev/null || true
 fi
 
-rm -f $OUT_DIR/next_gen.env
+rm -f $OUT_DIR/next_gen.env || true
