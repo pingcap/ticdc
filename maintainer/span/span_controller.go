@@ -195,8 +195,6 @@ func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplicatio
 	c.replicationDB.ReplaceReplicaSet(oldReplications, newSpans, checkpointTs)
 }
 
-// Statistics methods (direct delegation to replicationDB)
-
 // GetAbsentSize get absent size
 func (c *Controller) GetAbsentSize() int {
 	return c.replicationDB.GetAbsentSize()
@@ -228,7 +226,6 @@ func (c *Controller) GetReplicating() []*replica.SpanReplication {
 }
 
 // GetReplicationDB returns the internal replicationDB
-// This is a temporary method for backward compatibility during refactoring
 func (c *Controller) GetReplicationDB() *replica.ReplicationDB {
 	return c.replicationDB
 }
@@ -246,11 +243,6 @@ func (c *Controller) GetScheduleTaskSizePerNodeByGroup(groupID pkgreplica.GroupI
 // GetAbsentByGroup returns absent spans by group
 func (c *Controller) GetAbsentByGroup(groupID pkgreplica.GroupID, batch int) []*replica.SpanReplication {
 	return c.replicationDB.GetAbsentByGroup(groupID, batch)
-}
-
-// GetAliveNodes returns alive nodes from node manager
-func (c *Controller) GetAliveNodes() map[node.ID]*node.Info {
-	return c.nodeManager.GetAliveNodes()
 }
 
 // GetTaskSizePerNodeByGroup returns the task size per node by group
@@ -293,11 +285,6 @@ func (c *Controller) GetSplitter() *split.Splitter {
 	return c.splitter
 }
 
-// GetAbsentForTest returns absent spans for testing
-func (c *Controller) GetAbsentForTest(existing []*replica.SpanReplication, limit int) []*replica.SpanReplication {
-	return c.replicationDB.GetAbsentForTest(existing, limit)
-}
-
 // GetCheckerStat returns checker stat
 func (c *Controller) GetCheckerStat() string {
 	return c.replicationDB.GetCheckerStat()
@@ -331,4 +318,9 @@ func (c *Controller) RemoveByTableIDs(tableIDs ...int64) []*replica.SpanReplicat
 // GetTaskByNodeID returns the spans by the node id
 func (c *Controller) GetTaskByNodeID(id node.ID) []*replica.SpanReplication {
 	return c.replicationDB.GetTaskByNodeID(id)
+}
+
+// GetAbsentForTest returns absent spans for testing
+func (c *Controller) GetAbsentForTest(existing []*replica.SpanReplication, limit int) []*replica.SpanReplication {
+	return c.replicationDB.GetAbsentForTest(existing, limit)
 }
