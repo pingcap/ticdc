@@ -400,6 +400,9 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 			col.GeneratedExprString = "holder" // just to make it not empty
 			col.GeneratedStored = true
 		}
+		if isUnique(raw.Flag) {
+			col.AddFlag(mysql.UniqueKeyFlag)
+		}
 
 		switch col.GetType() {
 		case mysql.TypeVarchar, mysql.TypeString,
@@ -425,29 +428,52 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 }
 
 func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
-	indexColumns := make([]*timodel.IndexColumn, 0)
+	indices := make([]*timodel.IndexInfo, 0, 1)
+	multiColumns := make([]*timodel.IndexColumn, 0, 2)
 	for idx, col := range columns {
 		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			indexColumns := make([]*timodel.IndexColumn, 0)
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
+				Name:   col.Name,
+				Offset: idx,
+			})
+			indices = append(indices, &timodel.IndexInfo{
+				ID:      1,
+				Name:    pmodel.NewCIStr("primary"),
+				Columns: indexColumns,
+				Primary: true,
+				Unique:  true,
+			})
+		} else if mysql.HasUniKeyFlag(col.GetFlag()) {
+			indexColumns := make([]*timodel.IndexColumn, 0)
+			indexColumns = append(indexColumns, &timodel.IndexColumn{
+				Name:   col.Name,
+				Offset: idx,
+			})
+			indices = append(indices, &timodel.IndexInfo{
+				ID:      1 + int64(len(indices)),
+				Name:    pmodel.NewCIStr(col.Name.O + "_idx"),
+				Columns: indexColumns,
+				Unique:  true,
+			})
+		}
+		if mysql.HasMultipleKeyFlag(col.GetFlag()) {
+			multiColumns = append(multiColumns, &timodel.IndexColumn{
 				Name:   col.Name,
 				Offset: idx,
 			})
 		}
 	}
-
-	if len(indexColumns) == 0 {
-		return nil
+	// if there are multiple multi-column indices, consider as one.
+	if len(multiColumns) != 0 {
+		indices = append(indices, &timodel.IndexInfo{
+			ID:      1 + int64(len(indices)),
+			Name:    pmodel.NewCIStr("multi_idx"),
+			Columns: multiColumns,
+			Unique:  false,
+		})
 	}
-	result := make([]*timodel.IndexInfo, 0, 1)
-	indexInfo := &timodel.IndexInfo{
-		ID:      1,
-		Name:    pmodel.NewCIStr("primary"),
-		Columns: indexColumns,
-		Primary: true,
-		Unique:  true,
-	}
-	result = append(result, indexInfo)
-	return result
+	return indices
 }
 
 func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
