@@ -56,7 +56,6 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			javaType = common.JavaSQLTypeCLOB
 		}
 		if string(bytesValue) == "" {
-			value = "null"
 			break
 		}
 
