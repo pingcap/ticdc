@@ -418,3 +418,13 @@ func (oc *Controller) GetLock() *sync.RWMutex {
 func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
 	mutex.Unlock()
 }
+
+// GetAllNodes returns all alive nodes
+func (oc *Controller) GetAllNodes() []node.ID {
+	aliveNodes := oc.nodeManager.GetAliveNodes()
+	nodes := make([]node.ID, 0, len(aliveNodes))
+	for id := range aliveNodes {
+		nodes = append(nodes, id)
+	}
+	return nodes
+}
