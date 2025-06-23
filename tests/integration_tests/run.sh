@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# This file is used to run integration tests for developers(self-test).
+# set -x            # Enable tracing
+# export SHELLOPTS  # Make tracing apply to subshells
 
+# This file is used to run integration tests for developers(self-test).
 set -eu
 
 OUT_DIR=/tmp/tidb_cdc_test
