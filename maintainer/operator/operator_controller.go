@@ -226,6 +226,10 @@ func (oc *Controller) pollQueueingOperator() (
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
 	if item.IsRemoved {
+		o, ok := oc.operators[opID]
+		if ok {
+			log.Panic("get unexpected operator", zap.Any("opID", opID), zap.Any("op", o.OP))
+		}
 		return nil, true
 	}
 	op := item.OP
