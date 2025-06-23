@@ -49,7 +49,6 @@ func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoE
 	current := rl.GetCommitTs()
 	log.Debug("write redo events", zap.Int("count", len(events)),
 		zap.Uint64("current", current))
-	// FIXME: post flush after writing?
 	for _, rl := range events {
 		rl.PostFlush()
 	}

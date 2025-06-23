@@ -103,6 +103,8 @@ type fileWorkerGroup struct {
 	metricFlushAllDuration prometheus.Observer
 }
 
+// newFileWorkerGroup create a fileWorkerGroup
+// fileWorkerGroup received RedoEvents and wrote them to the cache. It also utilizes background goroutines for flushing.
 func newFileWorkerGroup(
 	cfg *writer.LogWriterConfig, workerNum int,
 	logType string,
@@ -134,7 +136,7 @@ func newFileWorkerGroup(
 				return &buf
 			},
 		},
-		flushCh: make(chan *fileCache),
+		flushCh: make(chan *fileCache, 32),
 		metricWriteBytes: misc.RedoWriteBytesGauge.
 			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
