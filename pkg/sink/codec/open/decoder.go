@@ -367,6 +367,7 @@ func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.T
 	if len(tableInfo.Indices) != 0 {
 		tableInfo.PKIsHandle = true
 	}
+	log.Info("build columns", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Any("columns", columns))
 	return commonType.NewTableInfo4Decoder(key.Schema, tableInfo)
 }
 

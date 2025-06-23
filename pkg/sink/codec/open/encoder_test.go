@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -1202,6 +1203,36 @@ func TestGenerateColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decoded)
 	require.Equal(t, decoded.Rows.NumCols(), 2)
+
+	createTableDDL := "CREATE TABLE test.gen_contacts (id INT AUTO_INCREMENT PRIMARY KEY, first_name VARCHAR(50) NOT NULL, last_name VARCHAR(50) NOT NULL, other VARCHAR(101), fullname VARCHAR(101) GENERATED ALWAYS AS(CONCAT(first_name, _UTF8MB4' ', last_name)) VIRTUAL, initial VARCHAR(101) GENERATED ALWAYS AS(CONCAT(LEFT(first_name, 1), _UTF8MB4' ', LEFT(last_name, 1))) STORED)"
+	_ = helper.DDL2Event(createTableDDL)
+
+	insertEvent = helper.DML2Event("test", "gen_contacts", `insert into test.gen_contacts (first_name, last_name) values ('John', 'Doe')`)
+	insertRow, ok = insertEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent = &commonEvent.RowEvent{
+		TableInfo:      insertEvent.TableInfo,
+		CommitTs:       insertEvent.CommitTs,
+		Event:          insertRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	message = encoder.Build()[0]
+
+	dec.AddKeyValue(message.Key, message.Value)
+	messageType, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, messageType, common.MessageTypeRow)
+
+	decoded = dec.NextDMLEvent()
+
+	hashKey := causality.ConflictKeys(decoded)
+	require.NotNil(t, hashKey)
 }
 
 // Including insert / update / delete
