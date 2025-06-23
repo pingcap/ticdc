@@ -142,7 +142,7 @@ func (d *dispatcherStat) run() {
 }
 
 func (d *dispatcherStat) registerTo(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherRegisterRequest(false))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(false))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -152,7 +152,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("startTs", d.sentCommitTs.Load()))
 	d.lastEventSeq.Store(0)
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherResetRequest())
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -171,7 +171,7 @@ func (d *dispatcherStat) removeFrom(serverID node.ID) {
 	log.Info("Send remove dispatcher request to event service",
 		zap.Stringer("dispatcher", d.target.GetId()),
 		zap.Stringer("eventServiceID", serverID))
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherRemoveRequest())
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRemoveRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -185,7 +185,7 @@ func (d *dispatcherStat) pause() {
 		return
 	}
 	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, eventServiceTopic, d.newDispatcherPauseRequest())
+	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherPauseRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -199,7 +199,7 @@ func (d *dispatcherStat) resume() {
 		return
 	}
 	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, eventServiceTopic, d.newDispatcherResumeRequest())
+	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherResumeRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
