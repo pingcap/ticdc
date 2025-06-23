@@ -14,7 +14,6 @@
 package maintainer
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -23,13 +22,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,15 +37,10 @@ func TestScheduleEvent(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "test1")
-
-	// Create spanController and operatorController
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, nil, ddlSpan, nil, false, 1)
-
-	// Add test data directly using spanController
+	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nil, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked:         true,
 		BlockTs:           10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_All},
@@ -62,7 +50,7 @@ func TestScheduleEvent(t *testing.T) {
 	// drop table will be executed first
 	require.Equal(t, 2, spanController.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nil, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -75,7 +63,7 @@ func TestScheduleEvent(t *testing.T) {
 	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, spanController.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nil, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -90,8 +78,7 @@ func TestScheduleEvent(t *testing.T) {
 }
 
 func TestResendAction(t *testing.T) {
-	nodeManager := setNodeManagerAndMessageCenter()
-	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -101,30 +88,18 @@ func TestResendAction(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-
-	// Create spanController and operatorController
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, nil, ddlSpan, nil, false, 1)
-
-	// Add test data directly using spanController
+	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
-
 	var dispatcherIDs []common.DispatcherID
-	absents := spanController.GetAbsent()
+	absents := spanController.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
 	for _, stm := range absents {
-		spanController.BindSpanToNode("", "node1", stm)
-		spanController.MarkSpanReplicating(stm)
+		spanController.GetReplicationDB().BindSpanToNode("", "node1", stm)
+		spanController.GetReplicationDB().MarkSpanReplicating(stm)
 		dispatcherIDs = append(dispatcherIDs, stm.ID)
 	}
-
-	// Ensure there is a usable dispatcherID
-	if len(dispatcherIDs) == 0 {
-		// If there are no absent spans, create a test dispatcherID
-		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherID())
-	}
-
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nodeManager, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -150,7 +125,7 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nodeManager, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -168,7 +143,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_DB)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
-	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nodeManager, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -186,7 +161,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_All)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
-	event = NewBlockEvent(cfID, dispatcherIDs[0], spanController, operatorController, nodeManager, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, dispatcherIDs[0], spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -200,6 +175,7 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 1)
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_Normal)
 	require.Len(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs, 2)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.Action, heartbeatpb.Action_Pass)
@@ -217,17 +193,12 @@ func TestUpdateSchemaID(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-
-	// Create spanController and operatorController
 	spanController := span.NewController(cfID, ddlSpan, nil, false)
-	operatorController := operator.NewOperatorController(cfID, nil, ddlSpan, nil, false, 1)
-
-	// Add test data directly using spanController
+	operatorController := operator.NewOperatorController(cfID, spanController.GetReplicationDB(), 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-
 	require.Equal(t, 1, spanController.GetAbsentSize())
 	require.Len(t, spanController.GetTasksBySchemaID(1), 1)
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, nil, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -247,18 +218,4 @@ func TestUpdateSchemaID(t *testing.T) {
 	require.Len(t, spanController.GetTasksBySchemaID(1), 0)
 	require.Len(t, spanController.GetTasksBySchemaID(2), 1)
 	require.Equal(t, spanController.GetTasksByTableID(1)[0].GetSchemaID(), int64(2))
-}
-
-func setNodeManagerAndMessageCenter() *watcher.NodeManager {
-	n := node.NewInfo("", "")
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-	mc := messaging.NewMessageCenter(context.Background(), n.ID, config.NewDefaultMessageCenterConfig(n.AdvertiseAddr), nil)
-	mc.Run(context.Background())
-	defer mc.Close()
-	appcontext.SetService(appcontext.MessageCenter, mc)
-
-	nodeManager := watcher.NewNodeManager(nil, nil)
-	appcontext.SetService(watcher.NodeManagerName, nodeManager)
-	return nodeManager
 }

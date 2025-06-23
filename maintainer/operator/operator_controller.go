@@ -62,23 +62,17 @@ type Controller struct {
 // NewOperatorController creates a new operator controller
 func NewOperatorController(
 	changefeedID common.ChangeFeedID,
-	mc messaging.MessageCenter,
-	ddlSpan *replica.SpanReplication,
-	splitter *split.Splitter,
-	enableTableAcrossNodes bool,
+	db *replica.ReplicationDB,
 	batchSize int,
 ) *Controller {
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	return &Controller{
-		replicationDB: replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes),
 		changefeedID:  changefeedID,
-		nodeManager:   nodeManager,
-		splitter:      splitter,
 		operators:     make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
 		runningQueue:  make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
 		role:          "maintainer",
-		batchSize:     batchSize,
-		messageCenter: mc,
+		replicationDB: db,
+		nodeManager:   appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		messageCenter: appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 	}
 }
 

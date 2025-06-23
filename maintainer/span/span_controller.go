@@ -46,11 +46,10 @@ func NewController(
 	splitter *split.Splitter,
 	enableTableAcrossNodes bool,
 ) *Controller {
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	return &Controller{
 		replicationDB:          replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes),
 		changefeedID:           changefeedID,
-		nodeManager:            nodeManager,
+		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		ddlDispatcherID:        ddlSpan.ID,

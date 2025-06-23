@@ -88,15 +88,14 @@ func NewController(changefeedID common.ChangeFeedID,
 	)
 
 	// Create operator controller using replicationDB from spanController
-	replicaSetDB := spanController.GetReplicationDB()
-	oc := operator.NewOperatorController(changefeedID, mc, ddlSpan, splitter, enableTableAcrossNodes, batchSize)
+	oc := operator.NewOperatorController(changefeedID, spanController.GetReplicationDB(), batchSize)
 
 	var schedulerCfg *config.ChangefeedSchedulerConfig
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
 	sc := NewScheduleController(
-		changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, splitter, schedulerCfg,
+		changefeedID, batchSize, oc, spanController.GetReplicationDB(), nodeManager, balanceInterval, splitter, schedulerCfg,
 	)
 
 	return &Controller{
@@ -160,19 +159,4 @@ func (c *Controller) Stop() {
 	for _, handler := range c.taskHandles {
 		handler.Cancel()
 	}
-}
-
-func (mc *Controller) createBarrier(changefeedID common.ChangeFeedID) *Barrier {
-	ddlSpan := mc.spanController.GetDDLDispatcher()
-	splitter := mc.spanController.GetSplitter()
-	enableTableAcrossNodes := mc.enableTableAcrossNodes
-
-	return NewBarrier(
-		changefeedID,
-		ddlSpan,
-		splitter,
-		enableTableAcrossNodes,
-		mc.messageCenter,
-		mc.batchSize,
-	)
 }

@@ -39,7 +39,7 @@ func TestNewController(t *testing.T) {
 	controller := NewController(cfID, ddlSpan, nil, false)
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
-	require.Equal(t, ddlSpan, controller.replicationDB.GetDDLDispatcher())
+	require.False(t, controller.enableTableAcrossNodes)
 }
 
 func TestController_AddNewTable(t *testing.T) {

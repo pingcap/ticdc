@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/range_checker"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -72,7 +73,6 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	spanController *span.Controller,
 	operatorController *operator.Controller,
-	nodeManager *watcher.NodeManager,
 	status *heartbeatpb.State,
 	dynamicSplitEnabled bool,
 ) *BarrierEvent {
@@ -81,7 +81,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		commitTs:           status.BlockTs,
 		spanController:     spanController,
 		operatorController: operatorController,
-		nodeManager:        nodeManager,
+		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		selected:           atomic.Bool{},
 		hasNewTable:        len(status.NeedAddedTables) > 0,
 
