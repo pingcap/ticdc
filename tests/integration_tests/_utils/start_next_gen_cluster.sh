@@ -191,6 +191,8 @@ else
 fi
 
 check_port_available "$MINIO_API_PORT" "Wait for minio to be available"
+# sleep 1 second while minio becomes available
+sleep 1
 
 echo "Create bucket"
 mc alias set "$MINIO_MC_ALIAS" "http://localhost:$MINIO_API_PORT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>&1
@@ -260,15 +262,19 @@ s3-region = "local"
 EOF
 "$CSE_CTL_BINPATH"  backup --pd "127.0.0.1:$PD_PORT" --config "$WORK_DIR/tikv_worker.toml"  --lightweight --interval 0
 
+set -x
 echo "Start CDC PD cluster and wait for it to be ready"
 nohup tiup playground "$TIDB_VERSION" --tag "$TIDB_PLAYGROUND_TAG_CDC_PD" \
      --pd.port "$CDC_PD_PORT" \
      --pd 1 \
      --kv 0 \
-     --db 0 &
+     --db 0 \
+     --tiflash 0 &
 CDC_PD_TIUP_PID=$!
 echo "cdc pd tiup pid: $CDC_PD_TIUP_PID"
+sleep 10
 check_port_available "$CDC_PD_PORT" "Wait for CDC PD to be available"
+set +x
 
 echo "deploy replication-worker"
 cat > "$WORK_DIR/replication_config.toml" << EOF
@@ -288,9 +294,6 @@ s3-region = "local"
 EOF
 nohup "$TIKV_WORKER_BINPATH" --config "$WORK_DIR/replication_config.toml"  --pd-endpoints "127.0.0.1:$PD_PORT" &
 
-dump_variables
-
-
 # Start a downstream TiDB
 nohup tiup playground "$TIDB_VERSION" --tag "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" \
     --pd.host "$DOWN_PD_HOST" --pd.port "$DOWN_PD_PORT" \
@@ -299,3 +302,5 @@ nohup tiup playground "$TIDB_VERSION" --tag "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" \
 DOWNSTREAM_TIUP_PID=$!
 echo "downstream tiup pid: $CDC_PD_TIUP_PID"
 check_port_available "$DOWN_TIDB_PORT" "Wait for downstream to be available"
+
+dump_variables
