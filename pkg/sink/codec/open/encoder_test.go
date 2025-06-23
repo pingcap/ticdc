@@ -1144,11 +1144,12 @@ func TestGenerateColumn(t *testing.T) {
 	require.True(t, ok)
 
 	insertRowEvent := &commonEvent.RowEvent{
-		TableInfo:      insertEvent.TableInfo,
-		CommitTs:       insertEvent.CommitTs,
-		Event:          insertRow,
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {},
+		TableInfo:       insertEvent.TableInfo,
+		PhysicalTableID: insertEvent.GetTableID(),
+		CommitTs:        insertEvent.CommitTs,
+		Event:           insertRow,
+		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+		Callback:        func() {},
 	}
 
 	ctx := context.Background()
@@ -1182,11 +1183,12 @@ func TestGenerateColumn(t *testing.T) {
 	require.True(t, ok)
 
 	insertRowEvent = &commonEvent.RowEvent{
-		TableInfo:      insertEvent.TableInfo,
-		CommitTs:       insertEvent.CommitTs,
-		Event:          insertRow,
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {},
+		TableInfo:       insertEvent.TableInfo,
+		PhysicalTableID: insertEvent.GetTableID(),
+		CommitTs:        insertEvent.CommitTs,
+		Event:           insertRow,
+		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+		Callback:        func() {},
 	}
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
@@ -1212,11 +1214,12 @@ func TestGenerateColumn(t *testing.T) {
 	require.True(t, ok)
 
 	insertRowEvent = &commonEvent.RowEvent{
-		TableInfo:      insertEvent.TableInfo,
-		CommitTs:       insertEvent.CommitTs,
-		Event:          insertRow,
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {},
+		TableInfo:       insertEvent.TableInfo,
+		PhysicalTableID: insertEvent.GetTableID(),
+		CommitTs:        insertEvent.CommitTs,
+		Event:           insertRow,
+		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+		Callback:        func() {},
 	}
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)

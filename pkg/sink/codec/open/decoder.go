@@ -367,7 +367,6 @@ func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.T
 	if len(tableInfo.Indices) != 0 {
 		tableInfo.PKIsHandle = true
 	}
-	log.Info("build columns", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Any("columns", columns))
 	return commonType.NewTableInfo4Decoder(key.Schema, tableInfo)
 }
 
@@ -399,6 +398,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		if isGenerated(raw.Flag) {
 			col.AddFlag(mysql.GeneratedColumnFlag)
 			col.GeneratedExprString = "holder" // just to make it not empty
+			col.GeneratedStored = true
 		}
 
 		switch col.GetType() {
