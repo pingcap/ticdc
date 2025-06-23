@@ -20,8 +20,11 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -44,6 +47,7 @@ type Barrier struct {
 	operatorController *operator.Controller
 	nodeManager        *watcher.NodeManager
 	splitTableEnabled  bool
+	mu                 sync.RWMutex
 }
 
 type BlockedEventMap struct {
@@ -102,21 +106,31 @@ type eventKey struct {
 }
 
 // NewBarrier create a new barrier for the changefeed
-func NewBarrier(spanController *span.Controller,
-	operatorController *operator.Controller,
-	splitTableEnabled bool,
-	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-	nodeManager *watcher.NodeManager,
+func NewBarrier(
+	changefeedID common.ChangeFeedID,
+	ddlSpan *replica.SpanReplication,
+	splitter *split.Splitter,
+	enableTableAcrossNodes bool,
+	mc messaging.MessageCenter,
+	batchSize int,
 ) *Barrier {
-	barrier := Barrier{
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes)
+	operatorController := operator.NewOperatorController(
+		changefeedID,
+		mc,
+		ddlSpan,
+		splitter,
+		enableTableAcrossNodes,
+		batchSize,
+	)
+
+	return &Barrier{
 		blockedEvents:      NewBlockEventMap(),
 		spanController:     spanController,
 		operatorController: operatorController,
 		nodeManager:        nodeManager,
-		splitTableEnabled:  splitTableEnabled,
 	}
-	barrier.handleBootstrapResponse(bootstrapRespMap)
-	return &barrier
 }
 
 func (b *Barrier) GetLock() *sync.Mutex {

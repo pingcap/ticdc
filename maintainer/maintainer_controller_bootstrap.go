@@ -253,7 +253,14 @@ func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 ) *Barrier {
 	// Initialize barrier
-	barrier := NewBarrier(c.spanController, c.operatorController, c.enableTableAcrossNodes, allNodesResp, c.nodeManager)
+	barrier := NewBarrier(
+		c.changefeedID,
+		c.spanController.GetDDLDispatcher(),
+		c.spanController.GetSplitter(),
+		c.enableTableAcrossNodes,
+		c.messageCenter,
+		c.batchSize,
+	)
 
 	// Start scheduler
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)

@@ -19,32 +19,27 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewController(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test")
 	ddlDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-
-	controller := NewController(
-		changefeedID,
-		ddlSpan,
-		nil,   // nodeManager
-		nil,   // splitter
-		false, // enableTableAcrossNodes
-	)
-
+	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
+	controller := NewController(cfID, ddlSpan, nil, false)
 	require.NotNil(t, controller)
-	require.Equal(t, changefeedID, controller.changefeedID)
-	require.False(t, controller.enableTableAcrossNodes)
+	require.Equal(t, cfID, controller.changefeedID)
+	require.Equal(t, ddlSpan, controller.replicationDB.GetDDLDispatcher())
 }
 
 func TestController_AddNewTable(t *testing.T) {
@@ -61,7 +56,6 @@ func TestController_AddNewTable(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
 		nil,   // splitter
 		false, // enableTableAcrossNodes
 	)
@@ -97,7 +91,6 @@ func TestController_GetTaskByID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
 		nil,   // splitter
 		false, // enableTableAcrossNodes
 	)
@@ -150,7 +143,6 @@ func TestController_GetTasksByTableID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
 		nil,   // splitter
 		false, // enableTableAcrossNodes
 	)
@@ -186,7 +178,6 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
 		nil,   // splitter
 		false, // enableTableAcrossNodes
 	)
@@ -226,7 +217,6 @@ func TestController_UpdateSchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
 		nil,   // splitter
 		false, // enableTableAcrossNodes
 	)
@@ -267,7 +257,6 @@ func TestController_Statistics(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // nodeManager
 		nil,   // splitter
 		false, // enableTableAcrossNodes
 	)

@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -42,10 +43,10 @@ type Controller struct {
 func NewController(
 	changefeedID common.ChangeFeedID,
 	ddlSpan *replica.SpanReplication,
-	nodeManager *watcher.NodeManager,
 	splitter *split.Splitter,
 	enableTableAcrossNodes bool,
 ) *Controller {
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	return &Controller{
 		replicationDB:          replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes),
 		changefeedID:           changefeedID,

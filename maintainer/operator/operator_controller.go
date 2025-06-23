@@ -22,7 +22,9 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -50,30 +52,34 @@ type Controller struct {
 	messageCenter messaging.MessageCenter
 	replicationDB *replica.ReplicationDB
 	nodeManager   *watcher.NodeManager
+	splitter      *split.Splitter
 
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 }
 
+// NewOperatorController creates a new operator controller
 func NewOperatorController(
 	changefeedID common.ChangeFeedID,
 	mc messaging.MessageCenter,
-	db *replica.ReplicationDB,
-	nodeManager *watcher.NodeManager,
+	ddlSpan *replica.SpanReplication,
+	splitter *split.Splitter,
+	enableTableAcrossNodes bool,
 	batchSize int,
 ) *Controller {
-	oc := &Controller{
-		role:          "maintainer",
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	return &Controller{
+		replicationDB: replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes),
 		changefeedID:  changefeedID,
+		nodeManager:   nodeManager,
+		splitter:      splitter,
 		operators:     make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
 		runningQueue:  make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
-		messageCenter: mc,
+		role:          "maintainer",
 		batchSize:     batchSize,
-		replicationDB: db,
-		nodeManager:   nodeManager,
+		messageCenter: mc,
 	}
-	return oc
 }
 
 // Execute poll the operator from the queue and execute it

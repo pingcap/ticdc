@@ -46,8 +46,8 @@ func TestScheduleEvent(t *testing.T) {
 		}, "test1")
 
 	// Create spanController and operatorController
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, false)
-	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
+	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	operatorController := operator.NewOperatorController(cfID, nil, ddlSpan, nil, false, 1)
 
 	// Add test data directly using spanController
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
@@ -103,8 +103,8 @@ func TestResendAction(t *testing.T) {
 		}, "node1")
 
 	// Create spanController and operatorController
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, false)
-	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nodeManager, 1)
+	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	operatorController := operator.NewOperatorController(cfID, nil, ddlSpan, nil, false, 1)
 
 	// Add test data directly using spanController
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
@@ -219,8 +219,8 @@ func TestUpdateSchemaID(t *testing.T) {
 		}, "node1")
 
 	// Create spanController and operatorController
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, false)
-	operatorController := operator.NewOperatorController(cfID, nil, spanController.GetReplicationDB(), nil, 1)
+	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	operatorController := operator.NewOperatorController(cfID, nil, ddlSpan, nil, false, 1)
 
 	// Add test data directly using spanController
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
