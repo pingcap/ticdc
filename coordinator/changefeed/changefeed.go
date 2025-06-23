@@ -240,7 +240,7 @@ func (c *Changefeed) NewRemoveMaintainerMessage(server node.ID, casCade, removed
 }
 
 func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage {
-	return messaging.NewSingleTargetMessage(c.nodeID,
+	return messaging.NewSingleTargetMessage(c.GetNodeID(),
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CheckpointTsMessage{
 			ChangefeedID: c.ID.ToPB(),
