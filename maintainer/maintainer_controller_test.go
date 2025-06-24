@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -38,7 +39,7 @@ import (
 )
 
 func TestSchedule(t *testing.T) {
-	setNodeManagerAndMessageCenter()
+	testutil.SetNodeManagerAndMessageCenter()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -73,7 +74,7 @@ func TestSchedule(t *testing.T) {
 }
 
 func TestRemoveAbsentTask(t *testing.T) {
-	setNodeManagerAndMessageCenter()
+	testutil.SetNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -94,7 +95,7 @@ func TestRemoveAbsentTask(t *testing.T) {
 }
 
 func TestBalanceGlobalEven(t *testing.T) {
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -164,7 +165,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 }
 
 func TestBalanceGlobalUneven(t *testing.T) {
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -239,7 +240,7 @@ func TestBalanceGlobalUneven(t *testing.T) {
 }
 
 func TestBalance(t *testing.T) {
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -306,7 +307,7 @@ func TestBalance(t *testing.T) {
 }
 
 func TestStoppedWhenMoving(t *testing.T) {
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -347,7 +348,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 }
 
 func TestFinishBootstrap(t *testing.T) {
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -416,7 +417,7 @@ func TestFinishBootstrap(t *testing.T) {
 
 // 4 tasks and 2 servers, then add one server, no re-balance will be triggered
 func TestBalanceUnEvenTask(t *testing.T) {
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -502,7 +503,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
 	}
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -586,7 +587,7 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
 	}
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -673,7 +674,7 @@ func TestDynamicMergeAndSplitTable(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
 	}
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -765,7 +766,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 		regions: make(map[int64][]pdutil.RegionInfo),
 	}
 
-	nodeManager := setNodeManagerAndMessageCenter()
+	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()

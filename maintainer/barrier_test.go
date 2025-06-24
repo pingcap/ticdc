@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -30,7 +31,7 @@ import (
 )
 
 func TestOneBlockEvent(t *testing.T) {
-	setNodeManagerAndMessageCenter()
+	testutil.SetNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -158,7 +159,7 @@ func TestOneBlockEvent(t *testing.T) {
 }
 
 func TestNormalBlock(t *testing.T) {
-	setNodeManagerAndMessageCenter()
+	testutil.SetNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -325,7 +326,7 @@ func TestNormalBlock(t *testing.T) {
 }
 
 func TestNormalBlockWithTableTrigger(t *testing.T) {
-	setNodeManagerAndMessageCenter()
+	testutil.SetNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -464,7 +465,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 }
 
 func TestSchemaBlock(t *testing.T) {
-	nm := setNodeManagerAndMessageCenter()
+	nm := testutil.SetNodeManagerAndMessageCenter()
 	nmap := nm.GetAliveNodes()
 	for key := range nmap {
 		delete(nmap, key)
@@ -641,7 +642,7 @@ func TestSchemaBlock(t *testing.T) {
 }
 
 func TestSyncPointBlock(t *testing.T) {
-	nm := setNodeManagerAndMessageCenter()
+	nm := testutil.SetNodeManagerAndMessageCenter()
 	nmap := nm.GetAliveNodes()
 	for key := range nmap {
 		delete(nmap, key)
@@ -808,7 +809,7 @@ func TestSyncPointBlock(t *testing.T) {
 }
 
 func TestNonBlocked(t *testing.T) {
-	setNodeManagerAndMessageCenter()
+	testutil.SetNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -857,7 +858,7 @@ func TestNonBlocked(t *testing.T) {
 }
 
 func TestUpdateCheckpointTs(t *testing.T) {
-	setNodeManagerAndMessageCenter()
+	testutil.SetNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -912,7 +913,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 
 // TODO:Add more cases here
 func TestHandleBlockBootstrapResponse(t *testing.T) {
-	setNodeManagerAndMessageCenter()
+	testutil.SetNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -1073,7 +1074,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 }
 
 func TestSyncPointBlockPerf(t *testing.T) {
-	setNodeManagerAndMessageCenter()
+	testutil.SetNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,

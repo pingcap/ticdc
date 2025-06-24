@@ -195,7 +195,7 @@ func (m *MergeDispatcherOperator) PostFinish() {
 	if m.removed.Load() {
 		// if removed, we set the toMergedReplicaSet to be absent, to ignore the merge operation
 		for _, replicaSet := range m.toMergedReplicaSets {
-			m.spanController.GetReplicationDB().MarkAbsentWithoutLock(replicaSet)
+			m.spanController.MarkSpanAbsent(replicaSet)
 		}
 		m.spanController.RemoveReplicatingSpan(m.newReplicaSet)
 		log.Info("merge dispatcher operator finished due to removed", zap.String("id", m.id.String()))
@@ -206,7 +206,7 @@ func (m *MergeDispatcherOperator) PostFinish() {
 		m.spanController.RemoveReplicatingSpan(replicaSet)
 	}
 
-	m.spanController.GetReplicationDB().MarkReplicatingWithoutLock(m.newReplicaSet)
+	m.spanController.MarkSpanReplicating(m.newReplicaSet)
 	log.Info("merge dispatcher operator finished", zap.String("id", m.id.String()))
 }
 
