@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	misc "github.com/pingcap/ticdc/redo/common"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/redo"

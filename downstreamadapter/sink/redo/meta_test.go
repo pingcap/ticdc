@@ -24,9 +24,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	misc "github.com/pingcap/ticdc/redo/common"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )

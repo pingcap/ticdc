@@ -25,9 +25,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/ticdc/redo/writer/factory"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -192,7 +192,7 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case e := <-s.logBuffer:
-			err := s.dmlWriter.AsyncWriteEvents(ctx, e)
+			err := s.dmlWriter.WriteEvents(ctx, e)
 			if err != nil {
 				return err
 			}
