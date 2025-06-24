@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/fsutil"
@@ -39,6 +38,10 @@ import (
 	pioutil "go.etcd.io/etcd/pkg/v3/ioutil"
 	"golang.org/x/sync/errgroup"
 )
+
+//go:generate mockery --name=fileWriter --inpackage --quiet
+type fileWriter interface {
+	Run(ctx context.Context) error
 	IsRunning() bool
 	SyncWrite(event writer.RedoEvent) error
 	GetInputCh() chan writer.RedoEvent
