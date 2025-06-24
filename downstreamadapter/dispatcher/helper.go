@@ -372,7 +372,10 @@ func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dyn
 func (h *DispatcherStatusHandler) GetType(event DispatcherStatusWithID) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
-func (h *DispatcherStatusHandler) OnDrop(event DispatcherStatusWithID) {}
+
+func (h *DispatcherStatusHandler) OnDrop(event DispatcherStatusWithID) interface{} {
+	return nil
+}
 
 // dispatcherStatusDS is the dynamic stream for dispatcher status.
 // It's a server level singleton, so we use a sync.Once to ensure the instance is created only once.

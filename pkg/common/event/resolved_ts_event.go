@@ -201,7 +201,7 @@ func (e *ResolvedEvent) decodeV0(data []byte) error {
 }
 
 func (e ResolvedEvent) String() string {
-	return fmt.Sprintf("ResolvedEvent{DispatcherID: %s, ResolvedTs: %d}", e.DispatcherID, e.ResolvedTs)
+	return fmt.Sprintf("ResolvedEvent{DispatcherID: %s, ResolvedTs: %d}", e.DispatcherID.String(), e.ResolvedTs)
 }
 
 // Update GetSize method to reflect the new structure

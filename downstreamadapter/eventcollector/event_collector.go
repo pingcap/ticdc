@@ -43,6 +43,7 @@ var (
 	metricsHandleEventDuration = metrics.EventCollectorHandleEventDuration
 	metricsDSInputChanLen      = metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector")
 	metricsDSPendingQueueLen   = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector")
+	metricsDroppedEventCount   = metrics.EventCollectorDroppedEventCount
 )
 
 const (
@@ -133,7 +134,7 @@ func (c *EventCollector) Run(ctx context.Context) {
 	})
 
 	g.Go(func() error {
-		return c.processFeedback(ctx)
+		return c.processDSFeedback(ctx)
 	})
 
 	g.Go(func() error {
@@ -143,6 +144,8 @@ func (c *EventCollector) Run(ctx context.Context) {
 	g.Go(func() error {
 		return c.updateMetrics(ctx)
 	})
+
+	log.Info("event collector is running")
 }
 
 func (c *EventCollector) Close() {
@@ -187,11 +190,11 @@ func (c *EventCollector) PrepareAddDispatcher(
 	}()
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
-	stat := newDispatcherStat(target, c, readyCallback)
+	stat := newDispatcherStat(target, c, readyCallback, memoryQuota)
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
@@ -210,7 +213,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 		return
 	}
 	stat := value.(*dispatcherStat)
-	stat.reset(c.getLocalServerID())
+	stat.commitReady(c.getLocalServerID())
 }
 
 func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
@@ -290,7 +293,7 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 	return groupedHeartbeats
 }
 
-func (c *EventCollector) processFeedback(ctx context.Context) error {
+func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 	log.Info("Start process feedback from dynamic stream")
 	defer log.Info("Stop process feedback from dynamic stream")
 	for {
@@ -409,8 +412,10 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					default:
+						// log.Info("fizz forward event to dynamic stream", zap.Any("event", e))
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						dispatcherEvent := dispatcher.NewDispatcherEvent(&targetMessage.From, e)
+						c.ds.Push(e.GetDispatcherID(), dispatcherEvent)
 					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))

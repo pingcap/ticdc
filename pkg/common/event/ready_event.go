@@ -14,6 +14,8 @@
 package event
 
 import (
+	"fmt"
+
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"go.uber.org/zap"
@@ -35,6 +37,10 @@ func NewReadyEvent(dispatcherID common.DispatcherID) ReadyEvent {
 		Version:      ReadyEventVersion,
 		DispatcherID: dispatcherID,
 	}
+}
+
+func (e *ReadyEvent) String() string {
+	return fmt.Sprintf("ReadyEvent{Version: %d, DispatcherID: %s}", e.Version, e.DispatcherID)
 }
 
 // GetType returns the event type

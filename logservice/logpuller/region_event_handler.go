@@ -163,13 +163,14 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
 
-func (h *regionEventHandler) OnDrop(event regionEvent) {
-	log.Warn("drop region event",
+func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
+	log.Panic("drop region event, it should not happen",
 		zap.Uint64("regionID", event.state.getRegionID()),
 		zap.Uint64("requestID", event.state.requestID),
 		zap.Uint64("workerID", event.worker.workerID),
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Bool("stateIsStale", event.state.isStale()))
+	return nil
 }
 
 func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *regionRequestWorker) {
