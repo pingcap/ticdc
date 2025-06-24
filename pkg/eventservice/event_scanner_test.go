@@ -1244,7 +1244,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 		schemaGetter: mockSchemaGetter,
 	}
 
-	// Create scan sess
+	// Create scan session
 	ctx := context.Background()
 	dispatcherStat := &dispatcherStat{
 		id:        dispatcherID,
