@@ -17,27 +17,25 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/redo/writer"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/redo"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
 
 type memoryLogWriter struct {
-	cfg           *writer.LogWriterConfig
-	encodeWorkers *encodingWorkerGroup
-	fileWorkers   *fileWorkerGroup
+	cfg         *writer.LogWriterConfig
+	fileWorkers *fileWorkerGroup
+	fileType    string
 
-	eg     *errgroup.Group
 	cancel context.CancelFunc
 }
 
 // NewLogWriter creates a new memoryLogWriter.
 func NewLogWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, opts ...writer.Option,
+	ctx context.Context, cfg *writer.LogWriterConfig, fileType string, opts ...writer.Option,
 ) (*memoryLogWriter, error) {
 	if cfg == nil {
 		return nil, errors.WrapError(errors.ErrRedoConfigInvalid,
@@ -55,53 +53,63 @@ func NewLogWriter(
 		return nil, err
 	}
 
-	eg, ctx := errgroup.WithContext(ctx)
-	lwCtx, lwCancel := context.WithCancel(ctx)
 	lw := &memoryLogWriter{
-		cfg:           cfg,
-		encodeWorkers: newEncodingWorkerGroup(cfg),
-		fileWorkers:   newFileWorkerGroup(cfg, cfg.FlushWorkerNum, extStorage, opts...),
-		eg:            eg,
-		cancel:        lwCancel,
+		cfg:      cfg,
+		fileType: fileType,
 	}
+	lw.fileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, fileType, extStorage, opts...)
 
-	eg.Go(func() error {
-		return lw.encodeWorkers.Run(lwCtx)
-	})
-	eg.Go(func() error {
-		return lw.fileWorkers.Run(lwCtx, lw.encodeWorkers.outputCh)
-	})
 	return lw, nil
 }
 
-// WriteEvents implements RedoLogWriter.WriteEvents
+func (l *memoryLogWriter) Run(ctx context.Context) error {
+	newCtx, cancel := context.WithCancel(ctx)
+	l.cancel = cancel
+	return l.fileWorkers.Run(newCtx)
+}
+
 func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
-	for _, event := range events {
-		if event == nil {
+	if l.fileType == redo.RedoDDLLogFileType {
+		return l.writeEvents(ctx, events...)
+	}
+	return l.asyncWriteEvents(ctx, events...)
+}
+
+func (l *memoryLogWriter) writeEvents(ctx context.Context, events ...writer.RedoEvent) error {
+	for _, e := range events {
+		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
 				zap.String("namespace", l.cfg.ChangeFeedID.Namespace()),
 				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
 				zap.String("capture", l.cfg.CaptureID))
 			continue
 		}
-		if err := l.encodeWorkers.AddEvent(ctx, event); err != nil {
+		if err := l.fileWorkers.syncWrite(ctx, e); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// FlushLog implement FlushLog api
-func (l *memoryLogWriter) FlushLog(ctx context.Context) error {
-	return l.encodeWorkers.FlushAll(ctx)
+func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
+	for _, e := range events {
+		if e == nil {
+			log.Warn("writing nil event to redo log, ignore this",
+				zap.String("namespace", l.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
+				zap.String("capture", l.cfg.CaptureID))
+			continue
+		}
+		if err := l.fileWorkers.input(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// Close implements RedoLogWriter.Close
 func (l *memoryLogWriter) Close() error {
 	if l.cancel != nil {
 		l.cancel()
-	} else {
-		log.Panic("redo writer close without init")
 	}
-	return l.eg.Wait()
+	return nil
 }

@@ -72,8 +72,9 @@ type EventDispatcherManager struct {
 
 	pdClock pdutil.Clock
 
-	config       *config.ChangefeedConfig
-	filterConfig *eventpb.FilterConfig
+	config          *config.ChangefeedConfig
+	integrityConfig *eventpb.IntegrityConfig
+	filterConfig    *eventpb.FilterConfig
 	// only not nil when enable sync point
 	// TODO: changefeed update config
 	syncPointConfig *syncpoint.SyncPointConfig
@@ -146,6 +147,10 @@ func NewEventDispatcherManager(
 		ForceReplicate: cfConfig.ForceReplicate,
 		FilterConfig:   toFilterConfigPB(cfConfig.Filter),
 	}
+	var integrityCfg *eventpb.IntegrityConfig
+	if cfConfig.SinkConfig.Integrity != nil {
+		integrityCfg = cfConfig.SinkConfig.Integrity.ToPB()
+	}
 	log.Info("New EventDispatcherManager",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.String("config", cfConfig.String()),
@@ -160,6 +165,7 @@ func NewEventDispatcherManager(
 		errCh:                                  make(chan error, 1),
 		cancel:                                 cancel,
 		config:                                 cfConfig,
+		integrityConfig:                        integrityCfg,
 		filterConfig:                           filterCfg,
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(0),
@@ -384,6 +390,8 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.blockStatusesChan,
 			schemaIds[idx],
 			e.schemaIDToDispatchers,
+			e.config.TimeZone,
+			e.integrityConfig,
 			e.syncPointConfig,
 			startTsIsSyncpointList[idx],
 			e.filterConfig,
@@ -592,14 +600,11 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	toCleanDispatcherIDs := make([]common.DispatcherID, 0)
 	cleanDispatcherSchemaIDs := make([]int64, 0)
 	heartBeatInfo := &dispatcher.HeartBeatInfo{}
-
-	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
-		Version:              event.DispatcherHeartbeatVersion,
-		DispatcherCount:      0,
-		DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
-	}
+	dispatcherCount := 0
 
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
+		dispatcherCount++
+
 		// the merged dispatcher in preparing state, don't need to join the calculation of the heartbeat
 		// the dispatcher still not know the startTs of it, and the dispatchers to be merged are still in the calculation of the checkpointTs
 		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Preparing || dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_MergeReady {
@@ -633,7 +638,6 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 				CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			})
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, heartBeatInfo.Watermark.CheckpointTs))
 		}
 	})
 	message.Watermark.Seq = seq
@@ -652,8 +656,16 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			// add tableTriggerEventDispatcher heartbeat
 			heartBeatInfo := &dispatcher.HeartBeatInfo{}
 			e.tableTriggerEventDispatcher.GetHeartBeatInfo(heartBeatInfo)
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(e.tableTriggerEventDispatcher.GetId(), heartBeatInfo.Watermark.CheckpointTs))
 		}
+
+		eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
+			Version:              event.DispatcherHeartbeatVersion,
+			DispatcherCount:      0,
+			DispatcherProgresses: make([]event.DispatcherProgress, 0, dispatcherCount),
+		}
+		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
@@ -762,6 +774,8 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		e.blockStatusesChan,
 		schemaID,
 		e.schemaIDToDispatchers,
+		e.config.TimeZone,
+		e.integrityConfig,
 		e.syncPointConfig,
 		false,
 		e.filterConfig,
@@ -794,11 +808,21 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		e.config.MemoryQuota,
 		func() {
 			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
+			log.Info("merge dispatcher is ready",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Stringer("dispatcherID", mergedDispatcher.GetId()),
+				zap.Any("tableSpan", common.FormatTableSpan(mergedDispatcher.GetTableSpan())),
+			)
 		})
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 
 func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
+	log.Info("do merge",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Any("dispatcherIDs", t.dispatcherIDs),
+		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+	)
 	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
 	minCheckpointTs := uint64(math.MaxUint64)
 	closedList := make([]bool, len(t.dispatcherIDs)) // record whether the dispatcher is closed successfully
@@ -834,6 +858,7 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 			zap.Int("closedCount", closedCount),
 			zap.Int("total", len(t.dispatcherIDs)),
 			zap.Int("count", count),
+			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
 		)
 	}
 
@@ -842,10 +867,47 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 	//        change the component status of the merged dispatcher to Initializing
 	//        set dispatcher into dispatcherMap and related field
 	//        notify eventCollector to update the merged dispatcher startTs
-	t.mergedDispatcher.SetStartTs(minCheckpointTs)
+	//
+	// if the sink is mysql, we need to calculate the real startTs of the merged dispatcher based on minCheckpointTs
+	// Here is a example to show why we need to calculate the real startTs:
+	// 1. we have 5 dispatchers of a split-table, and deal with a ts=t1 ddl.
+	// 2. the ddl is flushed in one dispatcher, but not finish passing in other dispatchers.
+	// 3. if we don't calculate the real startTs, the final startTs of the merged dispatcher will be t1-x,
+	//    which will lead to the new dispatcher receive the previous dml and ddl, which is not match the new schema,
+	//    leading to writing downstream failed.
+	// 4. so we need to calculate the real startTs of the merged dispatcher by the tableID based on ddl_ts.
+	if e.sink.SinkType() == common.MysqlSinkType {
+		newStartTsList, startTsIsSyncpointList, err := e.sink.(*mysql.Sink).GetStartTsList([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
+		if err != nil {
+			log.Error("calculate real startTs for merge dispatcher failed",
+				zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err),
+			)
+			t.mergedDispatcher.HandleError(err)
+			return
+		}
+		log.Info("calculate real startTs for Merge Dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("receiveStartTs", minCheckpointTs),
+			zap.Any("realStartTs", newStartTsList),
+			zap.Any("startTsIsSyncpointList", startTsIsSyncpointList),
+		)
+		t.mergedDispatcher.SetStartTs(uint64(newStartTsList[0]))
+		t.mergedDispatcher.SetStartTsIsSyncpoint(startTsIsSyncpointList[0])
+	} else {
+		t.mergedDispatcher.SetStartTs(minCheckpointTs)
+	}
+
 	t.mergedDispatcher.SetCurrentPDTs(e.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, minCheckpointTs)
+	log.Info("merge dispatcher commit add dispatcher",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
+		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
+		zap.Uint64("startTs", minCheckpointTs),
+	)
 
 	// Step3: cancel the merge task
 	t.Cancel()
@@ -885,7 +947,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 	defer e.closing.Store(false)
 	e.closeAllDispatchers()
 
-	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
+	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e.changefeedID)
 	if err != nil {
 		log.Error("remove event dispatcher manager from heartbeat collector failed",
 			zap.Stringer("changefeedID", e.changefeedID),

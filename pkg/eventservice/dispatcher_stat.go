@@ -94,7 +94,6 @@ type dispatcherStat struct {
 	// taskScanning is used to indicate whether the scan task is running.
 	// If so, we should wait until it is done before we send next resolvedTs event of
 	// this dispatcher.
-
 	isTaskScanning atomic.Bool
 
 	// isRemoved is used to indicate whether the dispatcher is removed.
@@ -140,13 +139,12 @@ func newDispatcherStat(
 	dispStat.checkpointTs.Store(startTs)
 	dispStat.sentResolvedTs.Store(startTs)
 	dispStat.isRunning.Store(true)
-	dispStat.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
-
 	dispStat.resetScanLimit()
-	dispStat.maxScanLimitInBytes.Store(maxScanLimitInBytes)
 
-	dispStat.lastReceivedResolvedTsTime.Store(time.Now())
-	dispStat.lastSentResolvedTsTime.Store(time.Now())
+	now := time.Now()
+	dispStat.lastReceivedResolvedTsTime.Store(now)
+	dispStat.lastSentResolvedTsTime.Store(now)
+	dispStat.lastReceivedHeartbeatTime.Store(now.UnixNano())
 	return dispStat
 }
 
@@ -201,18 +199,21 @@ func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
 	return util.CompareAndMonotonicIncrease(&a.latestCommitTs, latestCommitTs)
 }
 
-// getDataRange returns the the data range that the dispatcher needs to scan.
+// getDataRange returns the data range that the dispatcher needs to scan.
 func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	startTs := a.sentResolvedTs.Load()
-	if startTs < a.resetTs.Load() {
-		log.Warn("resetTs is greater than sentResolvedTs, reset startTs",
-			zap.Uint64("resetTs", a.resetTs.Load()),
-			zap.Uint64("sentResolvedTs", startTs),
+	resetTs := a.resetTs.Load()
+	if startTs < resetTs {
+		log.Warn("resetTs is greater than startTs, set startTs as the resetTs",
+			zap.Uint64("resetTs", resetTs),
+			zap.Uint64("startTs", startTs),
 			zap.Stringer("dispatcherID", a.id))
-		startTs = a.resetTs.Load()
+		startTs = resetTs
 	}
 
-	if startTs >= a.eventStoreResolvedTs.Load() {
+	// the data not received by the event store yet, so just skip it.
+	resolvedTs := a.eventStoreResolvedTs.Load()
+	if startTs >= resolvedTs {
 		return common.DataRange{}, false
 	}
 	// Range: (startTs, EndTs],
@@ -220,7 +221,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	r := common.DataRange{
 		Span:    a.info.GetTableSpan(),
 		StartTs: startTs,
-		EndTs:   a.eventStoreResolvedTs.Load(),
+		EndTs:   resolvedTs,
 	}
 	return r, true
 }
@@ -251,6 +252,7 @@ func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 
 func (a *dispatcherStat) resetScanLimit() {
 	a.currentScanLimitInBytes.Store(minScanLimitInBytes)
+	a.maxScanLimitInBytes.Store(maxScanLimitInBytes)
 	a.lastUpdateScanLimitTime.Store(time.Now())
 }
 

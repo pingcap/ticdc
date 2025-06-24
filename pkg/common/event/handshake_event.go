@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -40,11 +41,16 @@ type HandshakeEvent struct {
 func NewHandshakeEvent(dispatcherID common.DispatcherID, resolvedTs common.Ts, seq uint64, tableInfo *common.TableInfo) *HandshakeEvent {
 	return &HandshakeEvent{
 		Version:      HandshakeEventVersion,
-		ResolvedTs:   uint64(resolvedTs),
+		ResolvedTs:   resolvedTs,
 		Seq:          seq,
 		DispatcherID: dispatcherID,
 		TableInfo:    tableInfo,
 	}
+}
+
+func (e *HandshakeEvent) String() string {
+	return fmt.Sprintf("HandshakeEvent{Version: %d, ResolvedTs: %d, Seq: %d, State: %s, DispatcherID: %s, TableInfo: %v}",
+		e.Version, e.ResolvedTs, e.Seq, e.State, e.DispatcherID, e.TableInfo)
 }
 
 // GetType returns the event type

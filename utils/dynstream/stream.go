@@ -86,17 +86,15 @@ func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
 func (s *stream[A, P, T, D, H]) getPendingSize() int {
 	if s.option.UseBuffer {
 		return len(s.inChan) + int(s.bufferCount.Load()) + len(s.outChan) + int(s.eventQueue.totalPendingLength.Load())
-	} else {
-		return len(s.eventChan) + int(s.eventQueue.totalPendingLength.Load())
 	}
+	return len(s.eventChan) + int(s.eventQueue.totalPendingLength.Load())
 }
 
 func (s *stream[A, P, T, D, H]) in() chan eventWrap[A, P, T, D, H] {
 	if s.option.UseBuffer {
 		return s.inChan
-	} else {
-		return s.eventChan
 	}
+	return s.eventChan
 }
 
 // Start the stream.

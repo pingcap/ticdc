@@ -251,7 +251,9 @@ func (h *SchedulerDispatcherRequestHandler) GetType(event SchedulerDispatcherReq
 	return dynstream.DefaultEventType
 }
 
-func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequest) {}
+func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequest) interface{} {
+	return nil
+}
 
 func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
 	ds := dynstream.NewParallelDynamicStream(
@@ -332,7 +334,10 @@ func (h *HeartBeatResponseHandler) GetTimestamp(event HeartBeatResponse) dynstre
 func (h *HeartBeatResponseHandler) GetType(event HeartBeatResponse) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
-func (h *HeartBeatResponseHandler) OnDrop(event HeartBeatResponse) {}
+
+func (h *HeartBeatResponseHandler) OnDrop(event HeartBeatResponse) interface{} {
+	return nil
+}
 
 // checkpointTsMessageDynamicStream is responsible for push checkpointTsMessage to the corresponding table trigger event dispatcher.
 func newCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler] {
@@ -386,7 +391,10 @@ func (h *CheckpointTsMessageHandler) GetTimestamp(event CheckpointTsMessage) dyn
 func (h *CheckpointTsMessageHandler) GetType(event CheckpointTsMessage) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
-func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) {}
+
+func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface{} {
+	return nil
+}
 
 func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *EventDispatcherManager, *MergeDispatcherRequestHandler] {
 	ds := dynstream.NewParallelDynamicStream(
@@ -438,4 +446,6 @@ func (h *MergeDispatcherRequestHandler) GetType(event MergeDispatcherRequest) dy
 	return dynstream.DefaultEventType
 }
 
-func (h *MergeDispatcherRequestHandler) OnDrop(event MergeDispatcherRequest) {}
+func (h *MergeDispatcherRequestHandler) OnDrop(event MergeDispatcherRequest) interface{} {
+	return nil
+}

@@ -14,6 +14,7 @@
 package csv
 
 import (
+	"strings"
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -23,6 +24,7 @@ import (
 
 func TestCSVBatchCodec(t *testing.T) {
 	s := commonEvent.NewEventTestHelper(t)
+	defer s.Close()
 	s.DDL2Job("create table test.table1(col1 int primary key)")
 	event1 := s.DML2Event("test", "table1", "insert into test.table1 values (1)")
 	event2 := s.DML2Event("test", "table1", "insert into test.table1 values (2)")
@@ -61,6 +63,7 @@ func TestCSVAppendRowChangedEventWithCallback(t *testing.T) {
 	count := 0
 
 	s := commonEvent.NewEventTestHelper(t)
+	defer s.Close()
 	s.DDL2Job("create table test.table1(col1 int primary key)")
 	txn := s.DML2Event("test", "table1", "insert into test.table1 values (1)")
 	callback := func() {
@@ -81,4 +84,47 @@ func TestCSVAppendRowChangedEventWithCallback(t *testing.T) {
 	require.Len(t, msgs, 1, "expected one message")
 	msgs[0].Callback()
 	require.Equal(t, 1, count, "expected all callbacks to be called")
+}
+
+func TestCSVBatchCodecWithHeader(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	ddl := helper.DDL2Event("create table test.table1(col1 int primary key)")
+	require.NotNil(t, ddl)
+	event := helper.DML2Event("test", "table1", "insert into test.table1 values (1)", "insert into test.table1 values (2)")
+
+	cfg := &common.Config{
+		Delimiter:            ",",
+		Quote:                "\"",
+		Terminator:           "\n",
+		NullString:           "\\N",
+		IncludeCommitTs:      true,
+		CSVOutputFieldHeader: true,
+	}
+	encoder := NewTxnEventEncoder(cfg)
+	err := encoder.AppendTxnEvent(event)
+	require.Nil(t, err)
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	header := strings.Split(string(messages[0].Key), cfg.Terminator)[0]
+	require.Equal(t, "ticdc-meta$operation,ticdc-meta$table,ticdc-meta$schema,ticdc-meta$commit-ts,col1", header)
+	require.Equal(t, int(event.Length), messages[0].GetRowsCount())
+
+	event.Rewind()
+	cfg.CSVOutputFieldHeader = false
+	encoder = NewTxnEventEncoder(cfg)
+	err = encoder.AppendTxnEvent(event)
+	require.Nil(t, err)
+	messages1 := encoder.Build()
+	require.Len(t, messages1, 1)
+	require.Equal(t, messages1[0].Value, messages[0].Value)
+	require.Equal(t, int(event.Length), messages1[0].GetRowsCount())
+
+	cfg.CSVOutputFieldHeader = true
+	encoder = NewTxnEventEncoder(cfg)
+	err = encoder.AppendTxnEvent(event)
+	require.Nil(t, err)
+	messages = encoder.Build()
+	require.Len(t, messages, 0)
 }

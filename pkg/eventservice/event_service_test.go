@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -95,8 +94,8 @@ func TestEventServiceBasic(t *testing.T) {
 	schemastore := esImpl.schemaStore.(*mockSchemaStore)
 	schemastore.AppendDDLEvent(dispatcherInfo.span.TableID, ddlEvent)
 
-	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-	mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents...)
+	resolvedTs := kvEvents[0].CRTs + 1
+	mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents[0])
 	// receive events from msg center
 	msgCnt := 0
 	dmlCount := 0
@@ -124,6 +123,8 @@ func TestEventServiceBasic(t *testing.T) {
 				require.Equal(t, dispatcherInfo.startTs, e.GetStartTs())
 				require.Equal(t, uint64(1), e.Seq)
 				log.Info("receive handshake event", zap.Any("event", e))
+				mockStore.AppendEvents(dispatcherInfo.id, kvEvents[1].CRTs+1, kvEvents[1])
+				mockStore.AppendEvents(dispatcherInfo.id, kvEvents[2].CRTs+1, kvEvents[2])
 			case *commonEvent.BatchDMLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
@@ -279,17 +280,14 @@ func (m *mockEventStore) Close(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, gcTS uint64) error {
-	return nil
+func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, gcTS uint64) {
 }
 
-func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
+func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
-	if !ok {
-		return errors.New("dispatcher not found")
+	if ok {
+		m.spansMap.Delete(span)
 	}
-	m.spansMap.Delete(span)
-	return nil
 }
 
 func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (eventstore.EventIterator, error) {
@@ -321,16 +319,16 @@ func (m *mockEventStore) RegisterDispatcher(
 	span *heartbeatpb.TableSpan,
 	startTS common.Ts,
 	notifier eventstore.ResolvedTsNotifier,
-	onlyReuse bool,
-	bdrMode bool,
+	_ bool,
+	_ bool,
 ) bool {
-	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", uint64(startTS)), zap.Any("dispatcherID", dispatcherID))
+	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", startTS), zap.Any("dispatcherID", dispatcherID))
 	spanStats := &mockSpanStats{
-		startTs:            uint64(startTS),
+		startTs:            startTS,
 		resolvedTsNotifier: notifier,
 		pendingEvents:      make([]*common.RawKVEntry, 0),
 	}
-	spanStats.resolvedTs = uint64(startTS)
+	spanStats.resolvedTs = startTS
 	m.spansMap.Store(span, spanStats)
 	m.dispatcherMap.Store(dispatcherID, span)
 	return true
@@ -343,9 +341,9 @@ type mockEventIterator struct {
 	rowCount     int
 }
 
-func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool, error) {
+func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool) {
 	if len(iter.events) == 0 {
-		return nil, false, nil
+		return nil, false
 	}
 
 	row := iter.events[0]
@@ -357,7 +355,7 @@ func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool, error) {
 	iter.prevStartTS = row.StartTs
 	iter.prevCommitTS = row.CRTs
 	iter.rowCount++
-	return row, isNewTxn, nil
+	return row, isNewTxn
 }
 
 func (m *mockEventIterator) Close() (int64, error) {
@@ -640,8 +638,7 @@ func TestMockEventIterator(t *testing.T) {
 	}
 
 	// Case 1: empty iterator
-	row, isNewTxn, err := iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn := iter.Next()
 	require.False(t, isNewTxn)
 	require.Nil(t, row)
 
@@ -659,24 +656,20 @@ func TestMockEventIterator(t *testing.T) {
 	iter.events = append(iter.events, row2, row2)
 
 	// txn-1, row-1
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.True(t, isNewTxn)
 	require.NotNil(t, row)
 	// txn-1, row-2
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.False(t, isNewTxn)
 	require.NotNil(t, row)
 
 	// txn-2, row1
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.True(t, isNewTxn)
 	require.NotNil(t, row)
 	// txn2, row2
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.False(t, isNewTxn)
 	require.NotNil(t, row)
 }

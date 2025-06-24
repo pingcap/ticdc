@@ -26,10 +26,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo"
-	"github.com/pingcap/ticdc/redo/codec"
-	misc "github.com/pingcap/ticdc/redo/common"
-	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/ticdc/redo/writer/file"
+	"github.com/pingcap/ticdc/pkg/redo/codec"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -45,14 +45,14 @@ func genLogFile(
 	}
 	fileName := fmt.Sprintf(redo.RedoLogFileFormatV2, "capture", "default",
 		"changefeed", logType, maxCommitTs, uuid.NewString(), redo.LogEXT)
-	w, err := file.NewFileWriter(ctx, cfg, writer.WithLogFileName(func() string {
+	w, err := file.NewFileWriter(ctx, cfg, logType, writer.WithLogFileName(func() string {
 		return fileName
 	}))
 	require.Nil(t, err)
 	if logType == redo.RedoRowLogFileType {
 		// generate unsorted logs
 		for ts := maxCommitTs; ts >= minCommitTs; ts-- {
-			event := &pevent.DMLEvent{
+			event := &pevent.RedoRowEvent{
 				CommitTs: ts,
 				TableInfo: &common.TableInfo{
 					TableName: common.TableName{

@@ -26,8 +26,8 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	misc "github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
@@ -190,6 +190,7 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 		return errors.Trace(err)
 	}
 
+	var previousDDLCommit uint64
 	for redoLogHeap.Len() != 0 {
 		item := heap.Pop(&redoLogHeap).(*logWithIdx)
 
@@ -207,11 +208,13 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 			}
 		case redo.RedoDDLLogFileType:
 			ddl := item.data.RedoDDL
-			if ddl.DDL.CommitTs > cfg.startTs && ddl.DDL.CommitTs <= cfg.endTs {
+			// There may exist dupilicate ddls
+			if previousDDLCommit != ddl.DDL.CommitTs && ddl.DDL.CommitTs > cfg.startTs && ddl.DDL.CommitTs <= cfg.endTs {
 				select {
 				case <-egCtx.Done():
 					return errors.Trace(egCtx.Err())
 				case l.ddlCh <- ddl:
+					previousDDLCommit = ddl.DDL.CommitTs
 				}
 			}
 		}

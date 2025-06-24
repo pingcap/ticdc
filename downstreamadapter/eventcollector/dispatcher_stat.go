@@ -19,79 +19,248 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )
 
-// dispatcherStat is a helper struct to manage the state of a dispatcher.
-type dispatcherStat struct {
-	dispatcherID common.DispatcherID
-	target       dispatcher.EventDispatcher
-
-	readyCallback func()
-
-	eventServiceInfo struct {
-		sync.RWMutex
-		// the server this dispatcher currently connects to(except local event service)
-		// if it is set to local event service id, ignore all messages from other event service
-		serverID node.ID
-		// whether has received ready signal from `serverID`
-		readyEventReceived bool
-		// the remote event services which may contain data this dispatcher needed
-		remoteCandidates []node.ID
-	}
-
-	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
-	// It is used to ensure the order of events.
-	lastEventSeq atomic.Uint64
-
-	// waitHandshake is used to indicate whether the dispatcher is waiting for a handshake event.
-	// Dispatcher will drop all data events before receiving a handshake event.
-	waitHandshake atomic.Bool
-
-	// The largest commit ts that has been sent to the dispatcher.
-	sentCommitTs atomic.Uint64
-
-	// tableInfo is the latest table info of the dispatcher's corresponding table.
-	tableInfo atomic.Value
+type dispatcherConnState struct {
+	sync.RWMutex
+	// 1) if eventServiceID is set to a remote event service,
+	//   it means the dispatcher is trying to register to the remote event service,
+	//   but eventServiceID may be changed if registration failed.
+	// 2) if eventServiceID is set to local event service,
+	//   it means the dispatcher has received ready signal from local event service,
+	//   and eventServiceID will never change.
+	eventServiceID node.ID
+	// whether has received ready signal from `serverID`
+	readyEventReceived atomic.Bool
+	// the remote event services which may contain data this dispatcher needed
+	remoteCandidates []string
 }
 
-func (d *dispatcherStat) reset() {
-	d.lastEventSeq.Store(0)
-	d.waitHandshake.Store(true)
+func (d *dispatcherConnState) setEventServiceID(serverID node.ID) {
+	d.Lock()
+	defer d.Unlock()
+	d.eventServiceID = serverID
 }
 
-// TODO: add epoch to event and use it to filter irrelevant events
-func (d *dispatcherStat) isEventFromCurrentEventService(event dispatcher.DispatcherEvent) bool {
-	d.eventServiceInfo.RLock()
-	defer d.eventServiceInfo.RUnlock()
-	if *event.From != d.eventServiceInfo.serverID {
-		log.Warn("Receive event from other event service, ignore it",
-			zap.Stringer("dispatcher", d.target.GetId()))
+func (d *dispatcherConnState) getEventServiceID() node.ID {
+	d.RLock()
+	defer d.RUnlock()
+	return d.eventServiceID
+}
+
+func (d *dispatcherConnState) isCurrentEventService(serverID node.ID) bool {
+	d.RLock()
+	defer d.RUnlock()
+	return d.eventServiceID == serverID
+}
+
+func (d *dispatcherConnState) isReceivingDataEvent() bool {
+	d.RLock()
+	defer d.RUnlock()
+	return d.eventServiceID != "" && d.readyEventReceived.Load()
+}
+
+func (d *dispatcherConnState) trySetRemoteCandidates(nodes []string) bool {
+	d.Lock()
+	defer d.Unlock()
+	// reading from a event service or checking remotes already, ignore
+	if d.eventServiceID != "" {
 		return false
 	}
-	// TODO: maybe we can remove this after add epoch?
-	if d.waitHandshake.Load() {
-		log.Warn("Receive event before handshake event, ignore it",
-			zap.Stringer("dispatcher", d.target.GetId()))
+	if len(nodes) == 0 {
 		return false
 	}
+	d.remoteCandidates = nodes
 	return true
 }
 
-// isEventSeqValid check whether there are any events being dropped
-func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool {
+func (d *dispatcherConnState) getNextRemoteCandidate() node.ID {
+	d.Lock()
+	defer d.Unlock()
+	if len(d.remoteCandidates) > 0 {
+		d.eventServiceID = node.ID(d.remoteCandidates[0])
+		d.remoteCandidates = d.remoteCandidates[1:]
+		return d.eventServiceID
+	}
+	return ""
+}
+
+func (d *dispatcherConnState) clearRemoteCandidates() {
+	d.Lock()
+	defer d.Unlock()
+	d.remoteCandidates = nil
+}
+
+// dispatcherStat is a helper struct to manage the state of a dispatcher.
+type dispatcherStat struct {
+	target         dispatcher.EventDispatcher
+	eventCollector *EventCollector
+	readyCallback  func()
+
+	connState dispatcherConnState
+
+	memoryQuota uint64
+	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
+	// It is used to ensure the order of events.
+	lastEventSeq atomic.Uint64
+	// lastEventCommitTs is the commitTs of the last received DDL/DML events.
+	lastEventCommitTs atomic.Uint64
+	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
+	gotDDLOnTs atomic.Bool
+	// gotSyncpointOnTS indicates whether a sync point was received at the sentCommitTs.
+	gotSyncpointOnTS atomic.Bool
+	// tableInfo is the latest table info of the dispatcher's corresponding table.
+	tableInfo atomic.Value
+	// handshaked indicates whether the dispatcher has received a handshake event.
+	handshaked atomic.Bool
+}
+
+func newDispatcherStat(
+	target dispatcher.EventDispatcher,
+	eventCollector *EventCollector,
+	readyCallback func(),
+	memoryQuota uint64,
+) *dispatcherStat {
+	stat := &dispatcherStat{
+		target:         target,
+		eventCollector: eventCollector,
+		readyCallback:  readyCallback,
+		memoryQuota:    memoryQuota,
+	}
+	stat.lastEventSeq.Store(0)
+	stat.lastEventCommitTs.Store(target.GetStartTs())
+	return stat
+}
+
+func (d *dispatcherStat) run() {
+	d.registerTo(d.eventCollector.getLocalServerID())
+}
+
+// registerTo register the dispatcher to the specified event service.
+func (d *dispatcherStat) registerTo(serverID node.ID) {
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(false))
+	d.eventCollector.enqueueMessageForSend(msg)
+}
+
+// commitReady is used to notify the event service to start sending events.
+func (d *dispatcherStat) commitReady(serverID node.ID) {
+	log.Info("Send reset dispatcher request to event service to notify the event service to start sending events",
+		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Stringer("eventServiceID", serverID),
+		zap.Uint64("startTs", d.target.GetStartTs()))
+	d.lastEventSeq.Store(0)
+	// remove the dispatcher from the dynamic stream
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.target.GetStartTs()))
+	d.eventCollector.enqueueMessageForSend(msg)
+}
+
+// reset is used to reset the dispatcher to the specified commitTs,
+// it will remove the dispatcher from the dynamic stream and add it back.
+func (d *dispatcherStat) reset(serverID node.ID) {
+	resetTs := d.getResetTs()
+	d.handshaked.Store(false)
+	// reset the dispatcher's path in the dynamic stream
+	err := d.eventCollector.ds.RemovePath(d.getDispatcherID())
+	if err != nil {
+		log.Error("failed to remove dispatcher from dynamic stream", zap.Error(err))
+	}
+	setting := dynstream.NewAreaSettingsWithMaxPendingSize(d.memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
+	err = d.eventCollector.ds.AddPath(d.getDispatcherID(), d, setting)
+	if err != nil {
+		log.Error("failed to add dispatcher to dynamic stream", zap.Error(err))
+	}
+	d.lastEventSeq.Store(0)
+	// remove the dispatcher from the dynamic stream
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs))
+	d.eventCollector.enqueueMessageForSend(msg)
+	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
+		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Stringer("eventServiceID", serverID),
+		zap.Uint64("resetTs", resetTs))
+}
+
+// getResetTs is used to get the resetTs of the dispatcher.
+// resetTs must be larger than the startTs, otherwise it will cause panic in eventStore.
+func (d *dispatcherStat) getResetTs() uint64 {
+	return max(d.lastEventCommitTs.Load()-1, d.target.GetStartTs())
+}
+
+// remove is used to remove the dispatcher from the event service.
+func (d *dispatcherStat) remove() {
+	// unregister from local event service
+	d.removeFrom(d.eventCollector.getLocalServerID())
+	// check if it is need to unregister from remote event service
+	eventServiceID := d.connState.getEventServiceID()
+	if eventServiceID != "" && eventServiceID != d.eventCollector.getLocalServerID() {
+		d.removeFrom(eventServiceID)
+	}
+}
+
+// removeFrom is used to remove the dispatcher from the specified event service.
+func (d *dispatcherStat) removeFrom(serverID node.ID) {
+	log.Info("Send remove dispatcher request to event service",
+		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Stringer("eventServiceID", serverID))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRemoveRequest())
+	d.eventCollector.enqueueMessageForSend(msg)
+}
+
+func (d *dispatcherStat) pause() {
+	// Just ignore the request if the dispatcher is not ready.
+	if !d.connState.isReceivingDataEvent() {
+		log.Info("ignore pause dispatcher request because the eventService is not ready",
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+		)
+		return
+	}
+	eventServiceID := d.connState.getEventServiceID()
+	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherPauseRequest())
+	d.eventCollector.enqueueMessageForSend(msg)
+}
+
+func (d *dispatcherStat) resume() {
+	// Just ignore the request if the dispatcher is not ready.
+	if !d.connState.isReceivingDataEvent() {
+		log.Info("ignore resume dispatcher request because the eventService is not ready",
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+		)
+		return
+	}
+	eventServiceID := d.connState.getEventServiceID()
+	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherResumeRequest())
+	d.eventCollector.enqueueMessageForSend(msg)
+}
+
+func (d *dispatcherStat) wake() {
+	d.eventCollector.ds.Wake(d.getDispatcherID())
+}
+
+func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
+	return d.target.GetId()
+}
+
+// verifyEventSequence verifies if the event's sequence number is continuous with previous events.
+// Returns false if sequence is discontinuous (indicating dropped events), which requires dispatcher reset.
+func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) bool {
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent:
 		log.Debug("check event sequence",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Stringer("dispatcher", d.target.GetId()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Int("eventType", event.GetType()),
 			zap.Uint64("receivedSeq", event.GetSeq()),
 			zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
@@ -100,269 +269,435 @@ func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool 
 		expectedSeq := d.lastEventSeq.Add(1)
 		if event.GetSeq() != expectedSeq {
 			log.Warn("Received an out-of-order event, reset the dispatcher",
-				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-				zap.Stringer("dispatcher", d.target.GetId()),
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.Int("eventType", event.GetType()),
+				zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
+				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
 				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("expectedSeq", expectedSeq),
 				zap.Uint64("commitTs", event.GetCommitTs()))
 			return false
 		}
+	case commonEvent.TypeBatchDMLEvent:
+		for _, e := range event.Event.(*commonEvent.BatchDMLEvent).DMLEvents {
+			log.Debug("check batch DML event sequence",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Uint64("receivedSeq", e.Seq),
+				zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
+				zap.Uint64("commitTs", e.CommitTs))
+
+			expectedSeq := d.lastEventSeq.Add(1)
+			if e.Seq != expectedSeq {
+				log.Warn("Received an out-of-order batch DML event, reset the dispatcher",
+					zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Int("eventType", event.GetType()),
+					zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
+					zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+					zap.Uint64("receivedSeq", e.Seq),
+					zap.Uint64("expectedSeq", expectedSeq),
+					zap.Uint64("commitTs", e.CommitTs))
+				return false
+			}
+		}
 	}
 	return true
 }
 
-func (d *dispatcherStat) isEventCommitTsValid(event dispatcher.DispatcherEvent) bool {
-	// Note: a commit ts may have multiple transactions.
-	// it is ok to send the same txn multiple times?
-	// (we just want to avoid send old dml after new ddl)
-	if event.GetCommitTs() < d.sentCommitTs.Load() {
+// filterAndUpdateEventByCommitTs verifies if the event's commit timestamp is valid.
+// Note: this function must be called on every event received.
+func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.DispatcherEvent) bool {
+	shouldIgnore := false
+	if event.GetCommitTs() < d.lastEventCommitTs.Load() {
+		shouldIgnore = true
+	} else if event.GetCommitTs() == d.lastEventCommitTs.Load() {
+		// Avoid send the same DDL event or SyncPoint event multiple times.
+		switch event.GetType() {
+		case commonEvent.TypeDDLEvent:
+			shouldIgnore = d.gotDDLOnTs.Load()
+		case commonEvent.TypeSyncPointEvent:
+			shouldIgnore = d.gotSyncpointOnTS.Load()
+		default:
+			// TODO: check whether it is ok for other types of events?
+			// a commit ts may have multiple transactions, it is ok to send the same txn multiple times?
+		}
+	}
+	if shouldIgnore {
 		log.Warn("Receive a event older than sendCommitTs, ignore it",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
-			zap.Stringer("dispatcher", d.target.GetId()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event.Event),
 			zap.Uint64("eventCommitTs", event.GetCommitTs()),
-			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
+			zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
 		return false
 	}
-	d.sentCommitTs.Store(event.GetCommitTs())
+	if event.GetCommitTs() > d.lastEventCommitTs.Load() {
+		// if the commit ts is larger than the last sent commit ts,
+		// we need to reset the DDL and SyncPoint flags.
+		d.gotDDLOnTs.Store(false)
+		d.gotSyncpointOnTS.Store(false)
+	}
+	switch event.GetType() {
+	case commonEvent.TypeDDLEvent:
+		d.gotDDLOnTs.Store(true)
+	case commonEvent.TypeSyncPointEvent:
+		d.gotSyncpointOnTS.Store(true)
+	}
+
+	switch event.GetType() {
+	case commonEvent.TypeDDLEvent,
+		commonEvent.TypeDMLEvent,
+		commonEvent.TypeBatchDMLEvent:
+		d.lastEventCommitTs.Store(event.GetCommitTs())
+	}
+
 	return true
 }
 
-func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
-	d.eventServiceInfo.Lock()
-	defer d.eventServiceInfo.Unlock()
-	if event.GetType() != commonEvent.TypeHandshakeEvent {
-		log.Panic("should not happen")
-	}
-	if d.eventServiceInfo.serverID == "" {
-		log.Panic("should not happen: server ID is not set")
-	}
-	if d.eventServiceInfo.serverID != *event.From {
-		// check invariant: if the handshake event is not from the current event service, we must be reading from local event service.
-		if d.eventServiceInfo.serverID != eventCollector.serverId {
-			log.Panic("receive handshake event from remote event service, but current event service is not local event service",
-				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-				zap.Stringer("dispatcher", d.target.GetId()),
-				zap.Stringer("from", event.From))
+// handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
+// 1. First pass: Check if there are any valid events from current event service and if any events are from stale services
+//   - Valid events must come from current event service and have valid sequence numbers
+//   - If any event has invalid sequence, reset dispatcher and return false
+//
+// 2. Second pass: Filter events based on whether there are stale events
+//   - If contains stale events: Only keep events from current service that pass commitTs check
+//   - If no stale events: Keep all events after the first valid event (events are sorted by commitTs)
+//
+// 3. Finally: Forward valid events to target with wake callback
+func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEvent) bool {
+	containsValidEvents := false
+	containsStaleEvents := false
+	for _, event := range events {
+		if d.connState.isCurrentEventService(*event.From) {
+			containsValidEvents = true
+			if !d.verifyEventSequence(event) {
+				d.reset(d.connState.getEventServiceID())
+				return false
+			}
+		} else {
+			containsStaleEvents = true
 		}
-		log.Info("receive handshake event from remote event service, but current event service is local event service, ignore it",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Stringer("dispatcher", d.target.GetId()),
-			zap.Stringer("from", event.From))
-		return
 	}
-	if !d.isEventSeqValid(event) {
-		eventCollector.resetDispatcher(d)
-		return
+	if !containsValidEvents {
+		return false
 	}
-	d.waitHandshake.Store(false)
+	var validEvents []dispatcher.DispatcherEvent
+	if containsStaleEvents {
+		for _, event := range events {
+			if d.connState.isCurrentEventService(*event.From) && d.filterAndUpdateEventByCommitTs(event) {
+				validEvents = append(validEvents, event)
+			}
+		}
+	} else {
+		invalidEventCount := 0
+		meetValidEvent := false
+		for _, event := range events {
+			if !d.filterAndUpdateEventByCommitTs(event) {
+				if meetValidEvent {
+					log.Panic("should not happen: invalid event after valid event",
+						zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+						zap.Stringer("dispatcherID", d.getDispatcherID()))
+				}
+				events[invalidEventCount] = event
+				invalidEventCount++
+			} else {
+				meetValidEvent = true
+			}
+		}
+		validEvents = events[invalidEventCount:]
+	}
+	return d.target.HandleEvents(validEvents, func() { d.wake() })
 }
 
-func (d *dispatcherStat) setTableInfo(tableInfo *common.TableInfo) {
+// handleSingleDataEvents processes single DDL, SyncPoint or BatchDML events with the following algorithm:
+// 1. Validate event count (must be exactly 1)
+// 2. Check if event comes from current event service
+// 3. Verify event sequence number
+// 4. Process event based on type:
+//   - BatchDML: Split into individual DML events
+//   - DDL: Update table info if present
+//   - SyncPoint: Forward directly
+//
+// 5. For all types: Filter by commitTs before forwarding
+func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEvent) bool {
+	if len(events) != 1 {
+		log.Panic("should not happen: only one event should be sent for DDL/SyncPoint/Handshake event")
+	}
+	from := events[0].From
+	if !d.connState.isCurrentEventService(*from) {
+		log.Info("receive DDL/SyncPoint/Handshake event from a stale event service, ignore it",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Any("event", events[0].Event),
+			zap.Stringer("staleEventService", *from),
+			zap.Stringer("currentEventService", d.connState.getEventServiceID()))
+		return false
+	}
+	if !d.verifyEventSequence(events[0]) {
+		d.reset(d.connState.getEventServiceID())
+		return false
+	}
+	if events[0].GetType() == commonEvent.TypeBatchDMLEvent {
+		return d.handleBatchDMLEvent(events[0], from)
+	} else if events[0].GetType() == commonEvent.TypeDDLEvent {
+		if !d.filterAndUpdateEventByCommitTs(events[0]) {
+			return false
+		}
+		tableInfo := events[0].Event.(*event.DDLEvent).TableInfo
+		if tableInfo != nil {
+			d.tableInfo.Store(tableInfo)
+		}
+		return d.target.HandleEvents(events, func() { d.wake() })
+	} else {
+		if !d.filterAndUpdateEventByCommitTs(events[0]) {
+			return false
+		}
+		return d.target.HandleEvents(events, func() { d.wake() })
+	}
+}
+
+// handleBatchDMLEvent processes a single BatchDML event with the following algorithm:
+// 1. Load and validate table info
+// 2. Assemble rows using table info
+// 3. Convert each DML in batch to individual DispatcherEvent
+// 4. Filter DML events by commitTs
+// 5. Forward valid DML events to target with wake callback
+func (d *dispatcherStat) handleBatchDMLEvent(event dispatcher.DispatcherEvent, from *node.ID) bool {
+	tableInfo := d.tableInfo.Load().(*common.TableInfo)
 	if tableInfo == nil {
-		return
+		log.Panic("should not happen: table info should be set before batch DML event",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()))
 	}
-	d.tableInfo.Store(tableInfo)
+	batchDML := event.Event.(*commonEvent.BatchDMLEvent)
+	batchDML.AssembleRows(tableInfo)
+	dmlEvents := make([]dispatcher.DispatcherEvent, 0, len(batchDML.DMLEvents))
+	for _, dml := range batchDML.DMLEvents {
+		dmlEvent := dispatcher.NewDispatcherEvent(from, dml)
+		if d.filterAndUpdateEventByCommitTs(dmlEvent) {
+			dmlEvents = append(dmlEvents, dmlEvent)
+		}
+	}
+	return d.target.HandleEvents(dmlEvents, func() { d.wake() })
 }
 
-func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
-	d.eventServiceInfo.Lock()
-	defer d.eventServiceInfo.Unlock()
+func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
+	if !d.handshaked.Load() {
+		return false
+	}
+	switch events[0].GetType() {
+	case commonEvent.TypeDMLEvent,
+		commonEvent.TypeResolvedEvent:
+		return d.handleBatchDataEvents(events)
+	case commonEvent.TypeDDLEvent,
+		commonEvent.TypeSyncPointEvent,
+		commonEvent.TypeBatchDMLEvent:
+		return d.handleSingleDataEvents(events)
+	default:
+		log.Panic("should not happen: unknown event type", zap.Int("eventType", events[0].GetType()))
+	}
+	return false
+}
 
-	if event.GetType() != commonEvent.TypeReadyEvent {
-		log.Panic("should not happen")
-	}
-	if d.eventServiceInfo.serverID == eventCollector.serverId {
-		// already received ready signal from local event service
-		return
-	}
-	// if a dispatcher's readyCallback is set, it will just register to local event service.
-	if d.readyCallback != nil {
-		d.eventServiceInfo.serverID = eventCollector.serverId
-		d.eventServiceInfo.readyEventReceived = true
-		d.readyCallback()
-		return
-	}
-	eventServiceID := *event.From
-	if d.eventServiceInfo.serverID == eventServiceID {
-		// case 1: already received ready signal from the same server
-		if d.eventServiceInfo.readyEventReceived {
-			log.Info("received ready signal from the same server again, ignore it",
-				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-				zap.Stringer("dispatcher", d.target.GetId()),
-				zap.Stringer("eventServiceID", eventServiceID))
+// "signalEvent" refers to the types of events that may modify the event service with which this dispatcher communicates.
+// "signalEvent" includes TypeReadyEvent/TypeNotReusableEvent
+func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
+	localServerID := d.eventCollector.getLocalServerID()
+
+	switch event.GetType() {
+	case commonEvent.TypeReadyEvent:
+		// if the dispatcher has received ready signal from local event service,
+		// ignore all types of signal events.
+		if d.connState.isCurrentEventService(localServerID) {
 			return
 		}
-		// case 2: first ready signal from the server
-		// (must be a remote candidate, because we won't set d.eventServiceInfo.serverID to local event service until we receive ready signal)
-		log.Info("received ready signal from remote event service, prepare to reset the dispatcher",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Stringer("dispatcher", d.target.GetId()),
-			zap.Stringer("eventServiceID", eventServiceID))
 
-		d.eventServiceInfo.serverID = eventServiceID
-		d.eventServiceInfo.readyEventReceived = true
-		eventCollector.addDispatcherRequestToSendingQueue(
-			eventServiceID,
-			messaging.EventServiceTopic,
-			DispatcherRequest{
-				Dispatcher: d.target,
-				StartTs:    d.sentCommitTs.Load(),
-				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
-			},
-		)
-	} else if eventServiceID == eventCollector.serverId {
-		// case 3: received first ready signal from local event service
-		if d.eventServiceInfo.serverID != "" {
-			eventCollector.addDispatcherRequestToSendingQueue(
-				d.eventServiceInfo.serverID,
-				messaging.EventServiceTopic,
-				DispatcherRequest{
-					Dispatcher: d.target,
-					ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-				},
-			)
+		// if the event is neither from local event service nor from the current event service, ignore it.
+		if *event.From != localServerID && !d.connState.isCurrentEventService(*event.From) {
+			return
 		}
-		log.Info("received ready signal from local event service, prepare to reset the dispatcher",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Stringer("dispatcher", d.target.GetId()),
-			zap.Stringer("eventServiceID", eventServiceID))
 
-		d.eventServiceInfo.serverID = eventServiceID
-		d.eventServiceInfo.readyEventReceived = true
-		d.eventServiceInfo.remoteCandidates = nil
-		eventCollector.addDispatcherRequestToSendingQueue(
-			eventServiceID,
-			messaging.EventServiceTopic,
-			DispatcherRequest{
-				Dispatcher: d.target,
-				StartTs:    d.sentCommitTs.Load(),
-				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
-			},
-		)
-	} else {
-		log.Panic("should not happen: we have received ready signal from other remote server",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Stringer("dispatcher", d.target.GetId()),
-			zap.Stringer("newRemoteEventService", eventServiceID),
-			zap.Stringer("oldRemoteEventService", d.eventServiceInfo.serverID))
-	}
-}
+		if *event.From == localServerID {
+			if d.readyCallback != nil {
+				d.connState.setEventServiceID(localServerID)
+				d.connState.readyEventReceived.Store(true)
+				d.readyCallback()
+				return
+			}
+			// note: this must be the first ready event from local event service
+			oldEventServiceID := d.connState.getEventServiceID()
+			if oldEventServiceID != "" {
+				d.removeFrom(oldEventServiceID)
+			}
+			log.Info("received ready signal from local event service, prepare to reset the dispatcher",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()))
 
-func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
-	d.eventServiceInfo.Lock()
-	defer d.eventServiceInfo.Unlock()
-	if event.GetType() != commonEvent.TypeNotReusableEvent {
-		log.Panic("should not happen")
-	}
-	if *event.From == d.eventServiceInfo.serverID {
-		if len(d.eventServiceInfo.remoteCandidates) > 0 {
-			eventCollector.addDispatcherRequestToSendingQueue(
-				d.eventServiceInfo.remoteCandidates[0],
-				messaging.EventServiceTopic,
-				DispatcherRequest{
-					Dispatcher: d.target,
-					StartTs:    d.target.GetStartTs(),
-					ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-					OnlyUse:    true,
-				},
-			)
-			d.eventServiceInfo.serverID = d.eventServiceInfo.remoteCandidates[0]
-			d.eventServiceInfo.remoteCandidates = d.eventServiceInfo.remoteCandidates[1:]
+			d.connState.setEventServiceID(localServerID)
+			d.connState.readyEventReceived.Store(true)
+			d.connState.clearRemoteCandidates()
+			d.commitReady(localServerID)
+		} else {
+			// note: this ready event must be from a remote event service which the dispatcher is trying to register to.
+			// TODO: if receive too much redudant ready events from remote service, we may need reset again?
+			if d.connState.readyEventReceived.Load() {
+				log.Info("received ready signal from the same server again, ignore it",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Stringer("eventServiceID", *event.From))
+				return
+			}
+			log.Info("received ready signal from remote event service, prepare to reset the dispatcher",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Stringer("eventServiceID", *event.From))
+			d.connState.readyEventReceived.Store(true)
+			d.commitReady(*event.From)
 		}
+	case commonEvent.TypeNotReusableEvent:
+		if *event.From == localServerID {
+			log.Panic("should not happen: local event service should not send not reusable event")
+		}
+		candidate := d.connState.getNextRemoteCandidate()
+		if candidate != "" {
+			d.registerTo(candidate)
+		}
+	default:
+		log.Panic("should not happen: unknown signal event type", zap.Int("eventType", event.GetType()))
 	}
 }
 
-func (d *dispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
-	d.eventServiceInfo.RLock()
-	defer d.eventServiceInfo.RUnlock()
-	// must unregister from local event service
-	eventCollector.mustSendDispatcherRequest(eventCollector.serverId, messaging.EventServiceTopic, DispatcherRequest{
-		Dispatcher: d.target,
-		ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-	})
-	// unregister from remote event service if have
-	if d.eventServiceInfo.serverID != "" && d.eventServiceInfo.serverID != eventCollector.serverId {
-		eventCollector.mustSendDispatcherRequest(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
-			Dispatcher: d.target,
-			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-		})
+func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
+	dropEvent, ok := event.Event.(*commonEvent.DropEvent)
+	if !ok {
+		log.Panic("drop event is not a drop event",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Any("event", event))
 	}
+	log.Info("received a dropEvent, need to reset the dispatcher",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Uint64("commitTs", dropEvent.GetCommitTs()),
+		zap.Uint64("sequence", dropEvent.GetSeq()),
+		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
+	d.lastEventCommitTs.Store(dropEvent.GetCommitTs())
+	d.reset(d.connState.getEventServiceID())
+	metrics.EventCollectorDroppedEventCount.Inc()
 }
 
-func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
-	d.eventServiceInfo.RLock()
-	defer d.eventServiceInfo.RUnlock()
+func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) {
+	log.Info("handle handshake event",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Any("event", event))
 
-	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Info("ignore pause dispatcher request because the eventService is not ready",
-			zap.Stringer("dispatcherID", d.dispatcherID),
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Any("eventServiceID", d.eventServiceInfo.serverID),
-			zap.Bool("readyEventReceived", d.eventServiceInfo.readyEventReceived),
-		)
-		// Just ignore the request if the dispatcher is not ready.
-		return
+	handshakeEvent, ok := event.Event.(*commonEvent.HandshakeEvent)
+	if !ok {
+		log.Panic("handshake event is not a handshake event", zap.Any("event", event))
 	}
-
-	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
-		Dispatcher: d.target,
-		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
-	})
+	tableInfo := handshakeEvent.TableInfo
+	if tableInfo != nil {
+		d.tableInfo.Store(tableInfo)
+	}
+	d.handshaked.Store(true)
+	d.lastEventSeq.Store(handshakeEvent.Seq)
 }
 
-func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
-	d.eventServiceInfo.RLock()
-	defer d.eventServiceInfo.RUnlock()
-
-	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Info("ignore resume dispatcher request because the eventService is not ready",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
-		// Just ignore the request if the dispatcher is not ready.
-		return
-	}
-
-	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
-		Dispatcher: d.target,
-		ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
-	})
-}
-
-// TODO: better name
-func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *EventCollector) {
+func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 	log.Info("set remote candidates",
 		zap.Strings("nodes", nodes),
-		zap.Stringer("dispatcherID", d.target.GetId()))
+		zap.Stringer("dispatcherID", d.getDispatcherID()))
 	if len(nodes) == 0 {
 		return
 	}
-	d.eventServiceInfo.RLock()
-	defer d.eventServiceInfo.RUnlock()
-	// reading from a event service or checking remotes already, ignore
-	if d.eventServiceInfo.serverID != "" {
-		return
+	if d.connState.trySetRemoteCandidates(nodes) {
+		candidate := d.connState.getNextRemoteCandidate()
+		d.registerTo(candidate)
 	}
-	d.eventServiceInfo.serverID = node.ID(nodes[0])
-	for i := 1; i < len(nodes); i++ {
-		d.eventServiceInfo.remoteCandidates = append(d.eventServiceInfo.remoteCandidates, node.ID(nodes[i]))
-	}
-	eventCollector.addDispatcherRequestToSendingQueue(
-		d.eventServiceInfo.serverID,
-		messaging.EventServiceTopic,
-		DispatcherRequest{
-			Dispatcher: d.target,
-			StartTs:    d.target.GetStartTs(),
-			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-			OnlyUse:    true,
-		},
-	)
 }
 
-func (d *dispatcherStat) getServerID() node.ID {
-	d.eventServiceInfo.RLock()
-	defer d.eventServiceInfo.RUnlock()
-	return d.eventServiceInfo.serverID
+func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging.DispatcherRequest {
+	startTs := d.target.GetStartTs()
+	syncPointInterval := d.target.GetSyncPointInterval()
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
+			StartTs:      startTs,
+			// ServerId is the id of the request sender.
+			ServerId:          d.eventCollector.getLocalServerID().String(),
+			ActionType:        eventpb.ActionType_ACTION_TYPE_REGISTER,
+			FilterConfig:      d.target.GetFilterConfig(),
+			EnableSyncPoint:   d.target.EnableSyncPoint(),
+			SyncPointInterval: uint64(syncPointInterval.Seconds()),
+			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
+			OnlyReuse:         onlyReuse,
+			BdrMode:           d.target.GetBDRMode(),
+			Timezone:          d.target.GetTimezone(),
+			Integrity:         d.target.GetIntegrityConfig(),
+		},
+	}
+}
+
+func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64) *messaging.DispatcherRequest {
+	syncPointInterval := d.target.GetSyncPointInterval()
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
+			StartTs:      resetTs,
+			// ServerId is the id of the request sender.
+			ServerId:          d.eventCollector.getLocalServerID().String(),
+			ActionType:        eventpb.ActionType_ACTION_TYPE_RESET,
+			FilterConfig:      d.target.GetFilterConfig(),
+			EnableSyncPoint:   d.target.EnableSyncPoint(),
+			SyncPointInterval: uint64(syncPointInterval.Seconds()),
+			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
+		},
+	}
+}
+
+func (d *dispatcherStat) newDispatcherRemoveRequest() *messaging.DispatcherRequest {
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
+			// ServerId is the id of the request sender.
+			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
+		},
+	}
+}
+
+func (d *dispatcherStat) newDispatcherPauseRequest() *messaging.DispatcherRequest {
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
+			// ServerId is the id of the request sender.
+			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
+		},
+	}
+}
+
+func (d *dispatcherStat) newDispatcherResumeRequest() *messaging.DispatcherRequest {
+	return &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
+			ChangefeedId: d.target.GetChangefeedID().ToPB(),
+			DispatcherId: d.target.GetId().ToPB(),
+			TableSpan:    d.target.GetTableSpan(),
+			// ServerId is the id of the request sender.
+			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
+		},
+	}
 }

@@ -80,8 +80,8 @@ func (mc *metricsCollector) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("metrics collector stopping")
-			return ctx.Err()
+			log.Info("metrics collector stopped")
+			return context.Cause(ctx)
 		case <-ticker.C:
 			snapshot := mc.collectMetrics()
 			mc.updateMetricsFromSnapshot(snapshot)
@@ -149,8 +149,8 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 
 // collectPendingTaskMetrics collects metrics about pending tasks
 func (mc *metricsCollector) collectPendingTaskMetrics(snapshot *metricsSnapshot) {
-	for i := 0; i < mc.broker.scanWorkerCount; i++ {
-		snapshot.pendingTaskCount += len(mc.broker.taskChan[i])
+	for _, ch := range mc.broker.taskChan {
+		snapshot.pendingTaskCount += len(ch)
 	}
 }
 

@@ -43,6 +43,14 @@ func (d *Dispatcher) EnableSyncPoint() bool {
 	return d.syncPointConfig != nil
 }
 
+func (d *Dispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
+	return d.integrityConfig
+}
+
+func (d *Dispatcher) GetTimezone() string {
+	return d.timezone
+}
+
 func (d *Dispatcher) GetFilterConfig() *eventpb.FilterConfig {
 	return d.filterConfig
 }
@@ -56,6 +64,10 @@ func (d *Dispatcher) GetSyncPointInterval() time.Duration {
 
 func (d *Dispatcher) GetStartTsIsSyncpoint() bool {
 	return d.startTsIsSyncpoint
+}
+
+func (d *Dispatcher) SetStartTsIsSyncpoint(startTsIsSyncpoint bool) {
+	d.startTsIsSyncpoint = startTsIsSyncpoint
 }
 
 func (d *Dispatcher) GetComponentStatus() heartbeatpb.ComponentState {

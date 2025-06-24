@@ -66,13 +66,9 @@ type eventBroker struct {
 	dispatchers sync.Map
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
+
 	// taskChan is used to send the scan tasks to the scan workers.
 	taskChan []chan scanTask
-
-	// sendMessageWorkerCount is the number of the send message workers to spawn.
-	sendMessageWorkerCount int
-	// scanWorkerCount is the number of the scan workers to spawn.
-	scanWorkerCount int
 
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
@@ -125,9 +121,7 @@ func newEventBroker(
 		dispatchers:             sync.Map{},
 		tableTriggerDispatchers: sync.Map{},
 		msgSender:               mc,
-		scanWorkerCount:         scanWorkerCount,
 		taskChan:                make([]chan scanTask, scanWorkerCount),
-		sendMessageWorkerCount:  sendMessageWorkerCount,
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		dmlEventsQuota:          atomic.NewUint64(0),
 		cancel:                  cancel,
@@ -136,44 +130,37 @@ func newEventBroker(
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
 
-	for i := 0; i < c.sendMessageWorkerCount; i++ {
+	for i := 0; i < sendMessageWorkerCount; i++ {
 		c.messageCh[i] = make(chan *wrapEvent, sendMessageQueueSize)
+		g.Go(func() error {
+			return c.runSendMessageWorker(ctx, i)
+		})
 	}
 
 	for i := 0; i < scanWorkerCount; i++ {
 		taskChan := make(chan scanTask, scanTaskQueueSize)
 		c.taskChan[i] = taskChan
 		g.Go(func() error {
-			c.runScanWorker(ctx, taskChan)
-			return nil
+			return c.runScanWorker(ctx, taskChan)
 		})
 	}
 
 	g.Go(func() error {
-		c.tickTableTriggerDispatchers(ctx)
-		return nil
+		return c.tickTableTriggerDispatchers(ctx)
 	})
 
 	g.Go(func() error {
-		c.logUnresetDispatchers(ctx)
-		return nil
+		return c.logUnresetDispatchers(ctx)
 	})
 
 	g.Go(func() error {
-		c.reportDispatcherStatToStore(ctx)
-		return nil
+		return c.reportDispatcherStatToStore(ctx)
 	})
 
 	g.Go(func() error {
 		return c.metricsCollector.Run(ctx)
 	})
 
-	for i := 0; i < c.sendMessageWorkerCount; i++ {
-		g.Go(func() error {
-			c.runSendMessageWorker(ctx, i)
-			return nil
-		})
-	}
 	log.Info("new event broker created", zap.Uint64("id", id))
 	return c
 }
@@ -229,15 +216,12 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	}
 }
 
-func (c *eventBroker) sendResolvedTs(
-	server node.ID,
-	d *dispatcherStat,
-	watermark uint64,
-) {
-	c.emitSyncPointEventIfNeeded(watermark, d, server)
+func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
+	remoteID := node.ID(d.info.GetServerID())
+	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
 	re := pevent.NewResolvedEvent(watermark, d.id)
 	resolvedEvent := newWrapResolvedEvent(
-		server,
+		remoteID,
 		re,
 		d.getEventSenderState(),
 	)
@@ -250,9 +234,9 @@ func (c *eventBroker) sendReadyEvent(
 	server node.ID,
 	d *dispatcherStat,
 ) {
-	event := pevent.NewReadyEvent(d.info.GetID())
-	wrapEvent := newWrapReadyEvent(server, event)
-	c.getMessageCh(d.messageWorkerIndex) <- wrapEvent
+	e := pevent.NewReadyEvent(d.info.GetID())
+	readyEvent := newWrapReadyEvent(server, e)
+	c.getMessageCh(d.messageWorkerIndex) <- readyEvent
 	metricEventServiceSendCommandCount.Inc()
 }
 
@@ -272,11 +256,11 @@ func (c *eventBroker) getMessageCh(workerIndex int) chan *wrapEvent {
 	return c.messageCh[workerIndex]
 }
 
-func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) {
+func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case task := <-taskChan:
 			c.doScan(ctx, task)
 		}
@@ -285,13 +269,13 @@ func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask)
 
 // TODO: maybe event driven model is better. It is coupled with the detail implementation of
 // the schemaStore, we will refactor it later.
-func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
+func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 	ticker := time.NewTicker(time.Millisecond * 50)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case <-ticker.C:
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcherStat := value.(*dispatcherStat)
@@ -315,7 +299,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 				}
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
-					c.sendResolvedTs(remoteID, dispatcherStat, endTs)
+					c.sendResolvedTs(dispatcherStat, endTs)
 				}
 				return true
 			})
@@ -323,13 +307,13 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 	}
 }
 
-func (c *eventBroker) logUnresetDispatchers(ctx context.Context) {
+func (c *eventBroker) logUnresetDispatchers(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case <-ticker.C:
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
@@ -349,37 +333,37 @@ func (c *eventBroker) logUnresetDispatchers(ctx context.Context) {
 	}
 }
 
-// checkNeedScan checks if the dispatcher needs to scan the event store.
+// scanReady checks if the dispatcher needs to scan the event store.
 // If the dispatcher needs to scan the event store, it returns true.
-// If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher
-func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common.DataRange) {
+// send resolvedTs to the dispatcher and returns false if the task belonged dispatcher is not running
+func (c *eventBroker) scanReady(task scanTask, mustCheck bool) (common.DataRange, bool) {
 	if !mustCheck && task.isTaskScanning.Load() {
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
 
 	// If the dispatcher is not ready, we don't need to scan the event store.
 	if !c.checkAndSendReady(task) {
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
 
-	c.checkAndSendHandshake(task)
+	if !c.checkAndSendHandshake(task) {
+		return common.DataRange{}, false
+	}
 
 	// Only check scan when the dispatcher is running.
 	if !task.IsRunning() {
 		// If the dispatcher is not running, we also need to send the watermark to the dispatcher.
 		// And the resolvedTs should be the last sent watermark.
 		resolvedTs := task.sentResolvedTs.Load()
-		remoteID := node.ID(task.info.GetServerID())
-
-		c.sendResolvedTs(remoteID, task, resolvedTs)
-		return false, common.DataRange{}
+		c.sendResolvedTs(task, resolvedTs)
+		return common.DataRange{}, false
 	}
 
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
 		metricEventServiceSkipResolvedTsCount.Inc()
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
 
 	// 2. Constrain the data range by the ddl state of the table.
@@ -388,14 +372,14 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 
 	if ddlState.ResolvedTs <= dataRange.StartTs {
 		metricEventServiceSkipResolvedTsCount.Inc()
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
 
 	// Note: Maybe we should still send a resolvedTs to downstream to tell that
 	// the dispatcher is alive?
 	if dataRange.EndTs <= dataRange.StartTs {
 		metricEventServiceSkipResolvedTsCount.Inc()
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
 
 	// target ts range: (dataRange.StartTs, dataRange.EndTs]
@@ -403,15 +387,15 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		dataRange.StartTs >= ddlState.MaxEventCommitTs {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
-		remoteID := node.ID(task.info.GetServerID())
-		c.sendResolvedTs(remoteID, task, dataRange.EndTs)
-		return false, common.DataRange{}
+		c.sendResolvedTs(task, dataRange.EndTs)
+		return common.DataRange{}, false
 	}
 
-	return true, dataRange
+	return dataRange, true
 }
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
+	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
 		remoteID := node.ID(task.info.GetServerID())
 		c.sendReadyEvent(remoteID, task)
@@ -426,7 +410,7 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 	}
 	// Always reset the seq of the dispatcher to 0 before sending a handshake event.
 	task.seq.Store(0)
-	wrapE := &wrapEvent{
+	handshake := &wrapEvent{
 		serverID: node.ID(task.info.GetServerID()),
 		e: pevent.NewHandshakeEvent(
 			task.id,
@@ -435,11 +419,11 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 			task.startTableInfo.Load()),
 		msgType: pevent.TypeHandshakeEvent,
 		postSendFunc: func() {
-			log.Info("checkAndSendHandshake", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Bool("isHandshaked", task.isHandshaked.Load()))
+			log.Info("checkAndSendHandshake", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Bool("handshaked", task.isHandshaked.Load()))
 			task.isHandshaked.Store(true)
 		},
 	}
-	c.getMessageCh(task.messageWorkerIndex) <- wrapE
+	c.getMessageCh(task.messageWorkerIndex) <- handshake
 	metricEventServiceSendCommandCount.Inc()
 	return false
 }
@@ -484,17 +468,16 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
-	remoteID := node.ID(task.info.GetServerID())
-
-	isBroken := false
+	var interrupted bool
 	defer func() {
-		if isBroken {
+		if interrupted {
 			c.pushTask(task, false)
 		} else {
 			task.isTaskScanning.Store(false)
 		}
 	}()
 
+	remoteID := node.ID(task.info.GetServerID())
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
@@ -514,21 +497,24 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	needScan, dataRange := c.checkNeedScan(task, true)
+	dataRange, needScan := c.scanReady(task, true)
 	if !needScan {
 		return
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
 	sl := scanLimit{
-		dmlEventQuota: c.dmlEventsQuota,
-		maxBytes:      task.getCurrentScanLimitInBytes(),
-		timeout:       time.Millisecond * 1000, // 1 Second
+		dmlEventQuota:   c.dmlEventsQuota,
+		maxScannedBytes: task.getCurrentScanLimitInBytes(),
+		timeout:         time.Millisecond * 1000, // 1 Second
 	}
 
-	events, isBroken, err := scanner.scan(ctx, task, dataRange, sl)
+	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
+		return
+	}
+	if interrupted {
 		return
 	}
 
@@ -566,7 +552,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			if !ok {
 				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
-			c.sendResolvedTs(remoteID, task, re.ResolvedTs)
+			c.sendResolvedTs(task, re.ResolvedTs)
 		default:
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
@@ -575,9 +561,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	metricEventBrokerScanTaskCount.Inc()
 }
 
-func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) {
-	flushResolvedTsTicker := time.NewTicker(defaultFlushResolvedTsInterval)
-	defer flushResolvedTsTicker.Stop()
+func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) error {
+	ticker := time.NewTicker(defaultFlushResolvedTsInterval)
+	defer ticker.Stop()
 
 	resolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
 	messageCh := c.messageCh[workerIndex]
@@ -585,7 +571,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case m := <-messageCh:
 			batchM = append(batchM, m)
 
@@ -613,10 +599,12 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 					d, ok := c.getDispatcher(m.getDispatcherID())
 					if !ok {
 						log.Warn("Get dispatcher failed", zap.Any("dispatcherID", m.getDispatcherID()))
+						m.reset()
 						continue
 					}
 					if d.isHandshaked.Load() {
 						log.Info("Ignore handshake event since the dispatcher already handshaked", zap.Any("dispatcherID", m.getDispatcherID()))
+						m.reset()
 						continue
 					}
 				}
@@ -634,7 +622,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 			}
 			batchM = batchM[:0]
 
-		case <-flushResolvedTsTicker.C:
+		case <-ticker.C:
 			for serverID, cache := range resolvedTsCacheMap {
 				c.flushResolvedTs(ctx, cache, serverID, workerIndex)
 			}
@@ -684,14 +672,14 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
 			_, ok := err.(apperror.AppError)
-			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
+			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Stringer("tMsg", tMsg), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
 				// Wait for a while and retry to avoid the dropped message flood.
 				time.Sleep(congestedRetryInterval)
 				continue
 			} else {
-				log.Info("send message failed, drop it", zap.Error(err), zap.Any("tMsg", tMsg))
+				log.Info("send message failed, drop it", zap.Error(err), zap.Stringer("tMsg", tMsg))
 				// Drop the message, and return.
 				// If the dispatcher finds the events are not continuous, it will send a reset message.
 				// And the broker will send the missed events to the dispatcher again.
@@ -706,13 +694,13 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	}
 }
 
-func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) {
+func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) error {
 	ticker := time.NewTicker(time.Second * 10)
 	log.Info("update dispatcher send ts goroutine is started")
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return context.Cause(ctx)
 		case <-ticker.C:
 			inActiveDispatchers := make([]*dispatcherStat, 0)
 			c.dispatchers.Range(func(key, value interface{}) bool {
@@ -753,7 +741,7 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 		d.lastReceivedResolvedTsTime.Store(time.Now())
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)
-		needScan, _ := c.checkNeedScan(d, false)
+		_, needScan := c.scanReady(d, false)
 		if needScan {
 			c.pushTask(d, true)
 		}
@@ -777,13 +765,14 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 
 func (c *eventBroker) getDispatcher(id common.DispatcherID) (*dispatcherStat, bool) {
 	stat, ok := c.dispatchers.Load(id)
-	if !ok {
-		stat, ok = c.tableTriggerDispatchers.Load(id)
+	if ok {
+		return stat.(*dispatcherStat), true
 	}
-	if !ok {
-		return nil, false
+	stat, ok = c.tableTriggerDispatchers.Load(id)
+	if ok {
+		return stat.(*dispatcherStat), true
 	}
-	return stat.(*dispatcherStat), true
+	return nil, false
 }
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
@@ -795,8 +784,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	span := info.GetTableSpan()
 	startTs := info.GetStartTs()
 	changefeedID := info.GetChangefeedID()
-	workerIndex := (common.GID)(id).Hash(uint64(c.sendMessageWorkerCount))
-	scanWorkerIndex := (common.GID)(id).Hash(uint64(c.scanWorkerCount))
+	workerIndex := (common.GID)(id).Hash(uint64(len(c.messageCh)))
+	scanWorkerIndex := (common.GID)(id).Hash(uint64(len(c.taskChan)))
 
 	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, c.getOrSetChangefeedStatus(changefeedID))
 	if span.Equal(common.DDLSpan) {
@@ -811,10 +800,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		)
 		return nil
 	}
-
-	brokerRegisterDuration := time.Since(start)
-
-	start = time.Now()
 
 	success := c.eventStore.RegisterDispatcher(
 		id,
@@ -857,18 +842,14 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return err
 	}
 	dispatcher.updateTableInfo(tableInfo)
-	eventStoreRegisterDuration := time.Since(start)
 	c.dispatchers.Store(id, dispatcher)
-
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", startTs),
-		zap.Duration("brokerRegisterDuration", brokerRegisterDuration),
-		zap.Duration("eventStoreRegisterDuration", eventStoreRegisterDuration),
-	)
+		zap.Duration("duration", time.Since(start)))
 	return nil
 }
 
@@ -897,7 +878,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat.(*dispatcherStat).isRemoved.Store(true)
 	stat.(*dispatcherStat).isRunning.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
-	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
+	// todo: how to handle this error?
+	_ = c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",
@@ -1002,7 +984,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		if !ok {
 			response, ok := responseMap[heartbeat.serverID]
 			if !ok {
-				response = event.NewDispatcherHeartbeatResponse(32)
+				response = event.NewDispatcherHeartbeatResponse()
 				responseMap[heartbeat.serverID] = response
 			}
 			response.Append(event.NewDispatcherState(dp.DispatcherID, event.DSStateRemoved))
@@ -1015,10 +997,10 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		// Update the last received heartbeat time to the current time.
 		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 	}
-	c.sendDispatcherHeartbeatResponse(responseMap)
+	c.sendDispatcherResponse(responseMap)
 }
 
-func (c *eventBroker) sendDispatcherHeartbeatResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {
+func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {
 	for serverID, response := range responseMap {
 		msg := messaging.NewSingleTargetMessage(node.ID(serverID), messaging.EventCollectorTopic, response)
 		c.msgSender.SendCommand(msg)

@@ -71,10 +71,10 @@ func TestEventScanner(t *testing.T) {
 	// [Resolved(ts=102)]
 	disp.eventStoreResolvedTs.Store(102)
 	sl := scanLimit{
-		maxBytes: 1000,
-		timeout:  10 * time.Second,
+		maxScannedBytes: 1000,
+		timeout:         10 * time.Second,
 	}
-	needScan, dataRange := broker.checkNeedScan(disp, true)
+	dataRange, needScan := broker.scanReady(disp, true)
 	require.True(t, needScan)
 	events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -97,12 +97,12 @@ func TestEventScanner(t *testing.T) {
 	mockSchemaStore.AppendDDLEvent(tableID, ddlEvent)
 
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	needScan, dataRange = broker.checkNeedScan(disp, true)
+	dataRange, needScan = broker.scanReady(disp, true)
 	require.True(t, needScan)
 
 	sl = scanLimit{
-		maxBytes: 1000,
-		timeout:  10 * time.Second,
+		maxScannedBytes: 1000,
+		timeout:         10 * time.Second,
 	}
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -124,11 +124,11 @@ func TestEventScanner(t *testing.T) {
 	err = mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
 	require.NoError(t, err)
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	needScan, dataRange = broker.checkNeedScan(disp, true)
+	dataRange, needScan = broker.scanReady(disp, true)
 	require.True(t, needScan)
 	sl = scanLimit{
-		maxBytes: 1000,
-		timeout:  10 * time.Second,
+		maxScannedBytes: 1000,
+		timeout:         10 * time.Second,
 	}
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -154,8 +154,8 @@ func TestEventScanner(t *testing.T) {
 	//               ▲
 	//               └── Scanning interrupted here
 	sl = scanLimit{
-		maxBytes: 1,
-		timeout:  10 * time.Second,
+		maxScannedBytes: 1,
+		timeout:         10 * time.Second,
 	}
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -186,8 +186,8 @@ func TestEventScanner(t *testing.T) {
 		kvEvents[i].CRTs = firstCommitTs
 	}
 	sl = scanLimit{
-		maxBytes: 1,
-		timeout:  10 * time.Second,
+		maxScannedBytes: 1,
+		timeout:         10 * time.Second,
 	}
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -220,8 +220,8 @@ func TestEventScanner(t *testing.T) {
 	//                               ▲
 	//                               └── Scanning interrupted due to timeout
 	sl = scanLimit{
-		maxBytes: 1000,
-		timeout:  0 * time.Millisecond,
+		maxScannedBytes: 1000,
+		timeout:         0 * time.Millisecond,
 	}
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -243,8 +243,8 @@ func TestEventScanner(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
 	sl = scanLimit{
-		maxBytes: 1000,
-		timeout:  10 * time.Second,
+		maxScannedBytes: 1000,
+		timeout:         10 * time.Second,
 	}
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -325,7 +325,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	needScan, dataRange := broker.checkNeedScan(disp, true)
+	dataRange, needScan := broker.scanReady(disp, true)
 	require.True(t, needScan)
 
 	eSize := len(kvEvents[0].Key) + len(kvEvents[0].Value) + len(kvEvents[0].OldValue)
@@ -339,8 +339,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//             ▲
 	//             └── Scanning interrupted at DML1
 	sl := scanLimit{
-		maxBytes: int64(1 * eSize),
-		timeout:  10 * time.Second,
+		maxScannedBytes: int64(1 * eSize),
+		timeout:         10 * time.Second,
 	}
 	events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -367,8 +367,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//                                               ▲
 	//                                               └── Events with same commitTs must be returned together
 	sl = scanLimit{
-		maxBytes: int64(2 * eSize),
-		timeout:  10 * time.Second,
+		maxScannedBytes: int64(2 * eSize),
+		timeout:         10 * time.Second,
 	}
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -404,8 +404,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	// Expected result:
 	// [..., fakeDDL2(x+5), fakeDDL3(x+6), Resolved(x+7)]
 	sl = scanLimit{
-		maxBytes: int64(100 * eSize),
-		timeout:  10 * time.Second,
+		maxScannedBytes: int64(100 * eSize),
+		timeout:         10 * time.Second,
 	}
 
 	// Add more fake DDL events
@@ -423,7 +423,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL3)
 	resolvedTs = resolvedTs + 3
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	needScan, dataRange = broker.checkNeedScan(disp, true)
+	dataRange, needScan = broker.scanReady(disp, true)
 	require.True(t, needScan)
 
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
@@ -770,29 +770,29 @@ func TestScanSession(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
 		dataRange := common.DataRange{}
-		limit := scanLimit{maxBytes: 1000, timeout: time.Second}
+		limit := scanLimit{maxScannedBytes: 1000, timeout: time.Second}
 
 		scanner := &eventScanner{}
-		session := scanner.newScanSession(ctx, dispStat, dataRange, limit)
+		session := scanner.newSession(ctx, dispStat, dataRange, limit)
 
-		// Test initial totalBytes is 0
-		require.Equal(t, int64(0), session.totalBytes)
+		// Test initial scannedBytes is 0
+		require.Equal(t, int64(0), session.scannedBytes)
 
 		// Test adding bytes
 		session.addBytes(100)
-		require.Equal(t, int64(100), session.totalBytes)
+		require.Equal(t, int64(100), session.scannedBytes)
 
 		// Test adding more bytes
 		session.addBytes(250)
-		require.Equal(t, int64(350), session.totalBytes)
+		require.Equal(t, int64(350), session.scannedBytes)
 
 		// Test adding negative bytes (edge case)
 		session.addBytes(-50)
-		require.Equal(t, int64(300), session.totalBytes)
+		require.Equal(t, int64(300), session.scannedBytes)
 
 		// Test adding zero bytes
 		session.addBytes(0)
-		require.Equal(t, int64(300), session.totalBytes)
+		require.Equal(t, int64(300), session.scannedBytes)
 	})
 
 	// Test isContextDone method
@@ -801,17 +801,17 @@ func TestScanSession(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
 		dataRange := common.DataRange{}
-		limit := scanLimit{maxBytes: 1000, timeout: time.Second}
+		limit := scanLimit{maxScannedBytes: 1000, timeout: time.Second}
 
 		scanner := &eventScanner{}
-		session := scanner.newScanSession(ctx, dispStat, dataRange, limit)
+		session := scanner.newSession(ctx, dispStat, dataRange, limit)
 
 		// Context should not be done initially
 		require.False(t, session.isContextDone())
 
 		// Test with cancelled context
 		cancelCtx, cancel := context.WithCancel(context.Background())
-		sessionWithCancelCtx := scanner.newScanSession(cancelCtx, dispStat, dataRange, limit)
+		sessionWithCancelCtx := scanner.newSession(cancelCtx, dispStat, dataRange, limit)
 
 		// Context should not be done before cancellation
 		require.False(t, sessionWithCancelCtx.isContextDone())
@@ -825,7 +825,7 @@ func TestScanSession(t *testing.T) {
 		// Test with timeout context
 		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 		defer timeoutCancel()
-		sessionWithTimeoutCtx := scanner.newScanSession(timeoutCtx, dispStat, dataRange, limit)
+		sessionWithTimeoutCtx := scanner.newSession(timeoutCtx, dispStat, dataRange, limit)
 
 		// Context should not be done initially
 		require.False(t, sessionWithTimeoutCtx.isContextDone())
@@ -837,7 +837,7 @@ func TestScanSession(t *testing.T) {
 		require.True(t, sessionWithTimeoutCtx.isContextDone())
 	})
 
-	// Test scanSession initialization
+	// Test session initialization
 	t.Run("TestSessionInitialization", func(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
@@ -846,17 +846,17 @@ func TestScanSession(t *testing.T) {
 			StartTs: 100,
 			EndTs:   200,
 		}
-		limit := scanLimit{maxBytes: 1000, timeout: time.Second}
+		limit := scanLimit{maxScannedBytes: 1000, timeout: time.Second}
 
 		scanner := &eventScanner{}
-		session := scanner.newScanSession(ctx, dispStat, dataRange, limit)
+		session := scanner.newSession(ctx, dispStat, dataRange, limit)
 
 		// Verify initialization
 		require.Equal(t, ctx, session.ctx)
 		require.Equal(t, dispStat, session.dispatcherStat)
 		require.Equal(t, dataRange, session.dataRange)
 		require.Equal(t, limit, session.limit)
-		require.Equal(t, int64(0), session.totalBytes)
+		require.Equal(t, int64(0), session.scannedBytes)
 		require.Equal(t, uint64(0), session.lastCommitTs)
 		require.Equal(t, 0, session.dmlCount)
 		require.NotNil(t, session.events)
@@ -869,10 +869,10 @@ func TestScanSession(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
 		dataRange := common.DataRange{}
-		limit := scanLimit{maxBytes: 1000, timeout: time.Second}
+		limit := scanLimit{maxScannedBytes: 1000, timeout: time.Second}
 
 		scanner := &eventScanner{}
-		session := scanner.newScanSession(ctx, dispStat, dataRange, limit)
+		session := scanner.newSession(ctx, dispStat, dataRange, limit)
 
 		// Test updating state fields
 		session.lastCommitTs = 150
@@ -1174,46 +1174,6 @@ func TestErrorHandler(t *testing.T) {
 		})
 	})
 
-	// Test handleIteratorError method
-	t.Run("HandleIteratorError", func(t *testing.T) {
-		errorHandler := newErrorHandler(dispatcherID)
-
-		// Test case 1: Normal iterator error
-		t.Run("NormalIteratorError", func(t *testing.T) {
-			originalErr := errors.New("iterator read failed")
-			returnedErr := errorHandler.handleIteratorError(originalErr)
-
-			// Should return the original error unchanged
-			require.Equal(t, originalErr, returnedErr)
-		})
-
-		// Test case 2: Context canceled error
-		t.Run("ContextCanceledError", func(t *testing.T) {
-			canceledErr := context.Canceled
-			returnedErr := errorHandler.handleIteratorError(canceledErr)
-
-			// Should return the original error unchanged
-			require.Equal(t, canceledErr, returnedErr)
-		})
-
-		// Test case 3: Wrapped error
-		t.Run("WrappedIteratorError", func(t *testing.T) {
-			wrappedErr := fmt.Errorf("wrapped: %w", errors.New("underlying iterator error"))
-			returnedErr := errorHandler.handleIteratorError(wrappedErr)
-
-			// Should return the original error unchanged
-			require.Equal(t, wrappedErr, returnedErr)
-		})
-
-		// Test case 4: Nil error (edge case)
-		t.Run("NilIteratorError", func(t *testing.T) {
-			returnedErr := errorHandler.handleIteratorError(nil)
-
-			// Should return nil unchanged
-			require.Nil(t, returnedErr)
-		})
-	})
-
 	// Test different error types and dispatcher states
 	t.Run("ErrorTypesAndDispatcherStates", func(t *testing.T) {
 		errorHandler := newErrorHandler(dispatcherID)
@@ -1302,11 +1262,11 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	}
 
 	limit := scanLimit{
-		maxBytes: 1000,
-		timeout:  10 * time.Second,
+		maxScannedBytes: 1000,
+		timeout:         10 * time.Second,
 	}
 
-	session := &scanSession{
+	sess := &session{
 		ctx:            ctx,
 		dispatcherStat: dispatcherStat,
 		dataRange:      dataRange,
@@ -1316,7 +1276,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	}
 
 	// Execute scanAndMergeEvents
-	events, isBroken, err := scanner.scanAndMergeEvents(session, []pevent.DDLEvent{}, mockIter)
+	events, isBroken, err := scanner.scanAndMergeEvents(sess, []pevent.DDLEvent{}, mockIter)
 
 	// Verify results
 	require.NoError(t, err)
@@ -1355,8 +1315,8 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	require.Equal(t, dispatcherID, resolvedEvent.DispatcherID)
 	require.Equal(t, dataRange.EndTs, resolvedEvent.ResolvedTs)
 
-	// Verify session state was updated correctly
-	require.Equal(t, updateEvent.CRTs, session.lastCommitTs)
-	require.Equal(t, 1, session.dmlCount)
-	require.True(t, session.totalBytes > 0) // Some bytes were processed
+	// Verify sess state was updated correctly
+	require.Equal(t, updateEvent.CRTs, sess.lastCommitTs)
+	require.Equal(t, 1, sess.dmlCount)
+	require.True(t, sess.scannedBytes > 0) // Some bytes were processed
 }

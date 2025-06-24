@@ -16,6 +16,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
@@ -24,12 +25,14 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/codec"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	misc "github.com/pingcap/ticdc/redo/common"
-	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -83,26 +86,12 @@ func (f *fileCache) markFlushed() {
 	}
 }
 
-func (f *fileCache) appendData(event *polymorphicRedoEvent) error {
-	_, err := f.writer.Write(event.data.Bytes())
-	if err != nil {
-		return err
-	}
-	f.fileSize += int64(event.data.Len())
-	if event.commitTs > f.maxCommitTs {
-		f.maxCommitTs = event.commitTs
-	}
-	if event.commitTs < f.minCommitTs {
-		f.minCommitTs = event.commitTs
-	}
-	return nil
-}
-
 type fileWorkerGroup struct {
-	cfg       *writer.LogWriterConfig
-	op        *writer.LogWriterOptions
-	workerNum int
-
+	cfg           *writer.LogWriterConfig
+	logType       string
+	op            *writer.LogWriterOptions
+	workerNum     int
+	inputCh       chan writer.RedoEvent
 	extStorage    storage.ExternalStorage
 	uuidGenerator uuid.Generator
 
@@ -114,8 +103,11 @@ type fileWorkerGroup struct {
 	metricFlushAllDuration prometheus.Observer
 }
 
+// newFileWorkerGroup create a fileWorkerGroup
+// fileWorkerGroup received RedoEvents and wrote them to the cache. It also utilizes background goroutines for flushing.
 func newFileWorkerGroup(
 	cfg *writer.LogWriterConfig, workerNum int,
+	logType string,
 	extStorage storage.ExternalStorage,
 	opts ...writer.Option,
 ) *fileWorkerGroup {
@@ -130,8 +122,10 @@ func newFileWorkerGroup(
 
 	return &fileWorkerGroup{
 		cfg:           cfg,
+		logType:       logType,
 		op:            op,
 		workerNum:     workerNum,
+		inputCh:       make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*workerNum),
 		extStorage:    extStorage,
 		uuidGenerator: uuid.NewGenerator(),
 		pool: sync.Pool{
@@ -142,16 +136,16 @@ func newFileWorkerGroup(
 				return &buf
 			},
 		},
-		flushCh: make(chan *fileCache),
+		flushCh: make(chan *fileCache, 32),
 		metricWriteBytes: misc.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 	}
 }
 
 func (f *fileWorkerGroup) Run(
-	ctx context.Context, inputCh <-chan *polymorphicRedoEvent,
+	ctx context.Context,
 ) (err error) {
 	defer func() {
 		f.close()
@@ -163,7 +157,7 @@ func (f *fileWorkerGroup) Run(
 
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
-		return f.bgWriteLogs(egCtx, inputCh)
+		return f.bgWriteLogs(egCtx, f.inputCh)
 	})
 	for i := 0; i < f.workerNum; i++ {
 		eg.Go(func() error {
@@ -179,9 +173,18 @@ func (f *fileWorkerGroup) Run(
 
 func (f *fileWorkerGroup) close() {
 	misc.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.cfg.LogType)
+		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
 	misc.RedoWriteBytesGauge.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.cfg.LogType)
+		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
+}
+
+func (f *fileWorkerGroup) input(ctx context.Context, event writer.RedoEvent) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case f.inputCh <- event:
+	}
+	return nil
 }
 
 func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
@@ -190,26 +193,10 @@ func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
 		case <-egCtx.Done():
 			return errors.Trace(egCtx.Err())
 		case file := <-f.flushCh:
-			start := time.Now()
-
-			if err := file.writer.Close(); err != nil {
-				return errors.Trace(err)
-			}
-			var err error
-			if f.cfg.FlushConcurrency <= 1 {
-				err = f.extStorage.WriteFile(egCtx, file.filename, file.writer.buf.Bytes())
-			} else {
-				err = f.multiPartUpload(egCtx, file)
-			}
-			f.metricFlushAllDuration.Observe(time.Since(start).Seconds())
+			err := f.syncWriteFile(egCtx, file)
 			if err != nil {
 				return errors.Trace(err)
 			}
-			file.markFlushed()
-
-			bufPtr := &file.data
-			file.data = nil
-			f.pool.Put(bufPtr)
 		}
 	}
 }
@@ -228,36 +215,94 @@ func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) 
 }
 
 func (f *fileWorkerGroup) bgWriteLogs(
-	egCtx context.Context, inputCh <-chan *polymorphicRedoEvent,
+	egCtx context.Context, inputCh <-chan writer.RedoEvent,
 ) (err error) {
+	ticker := time.NewTicker(redo.DefaultFlushIntervalInMs)
+	defer ticker.Stop()
+	num := 0
+	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)
+	flush := func() error {
+		err := f.flushAll(egCtx)
+		if err != nil {
+			return err
+		}
+		for _, fn := range cacheEventPostFlush {
+			fn()
+		}
+		num = 0
+		cacheEventPostFlush = cacheEventPostFlush[:0]
+		return nil
+	}
 	for {
 		select {
 		case <-egCtx.Done():
 			return errors.Trace(egCtx.Err())
+		case <-ticker.C:
+			err := flush()
+			if err != nil {
+				return errors.Trace(err)
+			}
 		case event := <-inputCh:
 			if event == nil {
 				log.Error("inputCh of redo file worker is closed unexpectedly")
 				return errors.ErrUnexpected.FastGenByArgs("inputCh of redo file worker is closed unexpectedly")
 			}
-
-			if event.data != nil {
-				err = f.writeToCache(egCtx, event)
-				event.reset()
-				eventPool.Put(event)
-			} else if event.flushCallback != nil {
-				err = f.flushAll(egCtx)
-				event.flushCallback()
-			}
-
+			err := f.writeToCache(egCtx, event)
 			if err != nil {
 				return errors.Trace(err)
+			}
+			num++
+			if num > redo.DefaultFlushBatchSize {
+				err := flush()
+				if err != nil {
+					return errors.Trace(err)
+				}
+				event.PostFlush()
+			} else {
+				cacheEventPostFlush = append(cacheEventPostFlush, event.PostFlush)
 			}
 		}
 	}
 }
 
+func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event writer.RedoEvent) error {
+	rl, data, err := f.encodeData(event)
+	if err != nil {
+		return err
+	}
+	file := f.newFileCache(data, rl.GetCommitTs())
+	f.syncWriteFile(egCtx, file)
+	// flush
+	event.PostFlush()
+	return nil
+}
+
+func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) error {
+	var err error
+	start := time.Now()
+	file.filename = f.getLogFileName(file.maxCommitTs)
+	if err = file.writer.Close(); err != nil {
+		return err
+	}
+	if f.cfg.FlushConcurrency <= 1 {
+		err = f.extStorage.WriteFile(egCtx, file.filename, file.writer.buf.Bytes())
+	} else {
+		err = f.multiPartUpload(egCtx, file)
+	}
+	f.metricFlushAllDuration.Observe(time.Since(start).Seconds())
+	if err != nil {
+		return err
+	}
+	file.markFlushed()
+
+	bufPtr := &file.data
+	file.data = nil
+	f.pool.Put(bufPtr)
+	return nil
+}
+
 // newFileCache write event to a new file cache.
-func (f *fileWorkerGroup) newFileCache(event *polymorphicRedoEvent) error {
+func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCache {
 	bufPtr := f.pool.Get().(*[]byte)
 	buf := *bufPtr
 	buf = buf[:0]
@@ -271,9 +316,10 @@ func (f *fileWorkerGroup) newFileCache(event *polymorphicRedoEvent) error {
 		wr = lz4.NewWriter(bufferWriter)
 		closer = wr.(io.Closer)
 	}
-	_, err := wr.Write(event.data.Bytes())
+	_, err := wr.Write(data)
 	if err != nil {
-		return errors.Trace(err)
+		log.Error("write to new file failed", zap.Error(err))
+		return nil
 	}
 
 	dw := &dataWriter{
@@ -281,22 +327,41 @@ func (f *fileWorkerGroup) newFileCache(event *polymorphicRedoEvent) error {
 		writer: wr,
 		closer: closer,
 	}
-	file := &fileCache{
+	return &fileCache{
 		data:        buf,
-		fileSize:    int64(len(event.data.Bytes())),
-		maxCommitTs: event.commitTs,
-		minCommitTs: event.commitTs,
+		fileSize:    int64(len(data)),
+		maxCommitTs: commitTs,
+		minCommitTs: commitTs,
 		flushed:     make(chan struct{}),
 		writer:      dw,
 	}
-	f.files = append(f.files, file)
-	return nil
 }
 
+func (f *fileWorkerGroup) encodeData(event writer.RedoEvent) (*event.RedoLog, []byte, error) {
+	rl := event.ToRedoLog()
+	rawData, err := codec.MarshalRedoLog(rl, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	uint64buf := make([]byte, 8)
+	lenField, padBytes := writer.EncodeFrameSize(len(rawData))
+	binary.LittleEndian.PutUint64(uint64buf, lenField)
+	data := append(uint64buf, rawData...)
+	if padBytes != 0 {
+		data = append(data, make([]byte, padBytes)...)
+	}
+	return rl, data, nil
+}
+
+// encoding format: lenField(8 bytes) + rawData + padding bytes(force 8 bytes alignment)
 func (f *fileWorkerGroup) writeToCache(
-	egCtx context.Context, event *polymorphicRedoEvent,
-) error {
-	writeLen := int64(event.data.Len())
+	egCtx context.Context, event writer.RedoEvent,
+) (err error) {
+	rl, data, err := f.encodeData(event)
+	if err != nil {
+		return err
+	}
+	writeLen := int64(len(data))
 	if writeLen > f.cfg.MaxLogSizeInBytes {
 		// TODO: maybe we need to deal with the oversized event.
 		return errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes)
@@ -304,22 +369,37 @@ func (f *fileWorkerGroup) writeToCache(
 	defer f.metricWriteBytes.Add(float64(writeLen))
 
 	if len(f.files) == 0 {
-		return f.newFileCache(event)
+		file := f.newFileCache(data, rl.GetCommitTs())
+		f.files = append(f.files, file)
+		return nil
 	}
 
 	file := f.files[len(f.files)-1]
 	if file.fileSize+writeLen > f.cfg.MaxLogSizeInBytes {
-		file.filename = f.getLogFileName(file.maxCommitTs)
 		select {
 		case <-egCtx.Done():
 			return errors.Trace(egCtx.Err())
 		case f.flushCh <- file:
 		}
-
-		return f.newFileCache(event)
+		file := f.newFileCache(data, rl.GetCommitTs())
+		f.files = append(f.files, file)
+		return
 	}
 
-	return file.appendData(event)
+	_, err = file.writer.Write(data)
+	if err != nil {
+		return err
+	}
+
+	file.fileSize += writeLen
+	commitTs := rl.GetCommitTs()
+	if commitTs > file.maxCommitTs {
+		file.maxCommitTs = commitTs
+	}
+	if commitTs < file.minCommitTs {
+		file.minCommitTs = commitTs
+	}
+	return nil
 }
 
 func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {
@@ -328,7 +408,6 @@ func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {
 	}
 
 	file := f.files[len(f.files)-1]
-	file.filename = f.getLogFileName(file.maxCommitTs)
 	select {
 	case <-egCtx.Done():
 		return errors.Trace(egCtx.Err())
@@ -353,10 +432,10 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 	uid := f.uuidGenerator.NewString()
 	if common.DefaultNamespace == f.cfg.ChangeFeedID.Namespace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
-			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.cfg.LogType,
+			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.logType,
 			maxCommitTS, uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
 		f.cfg.CaptureID, f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(),
-		f.cfg.LogType, maxCommitTS, uid, redo.LogEXT)
+		f.logType, maxCommitTS, uid, redo.LogEXT)
 }

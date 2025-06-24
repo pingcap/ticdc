@@ -45,6 +45,8 @@ type EventDispatcher interface {
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
 	GetTableSpan() *heartbeatpb.TableSpan
+	GetTimezone() string
+	GetIntegrityConfig() *eventpb.IntegrityConfig
 	GetFilterConfig() *eventpb.FilterConfig
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
@@ -123,6 +125,9 @@ type Dispatcher struct {
 	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
 	schemaIDToDispatchers *SchemaIDToDispatchers
 
+	timezone        string
+	integrityConfig *eventpb.IntegrityConfig
+
 	// if syncPointInfo is not nil, means enable Sync Point feature,
 	syncPointConfig *syncpoint.SyncPointConfig
 
@@ -168,6 +173,8 @@ func NewDispatcher(
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
+	timezone string,
+	integrityConfig *eventpb.IntegrityConfig,
 	syncPointConfig *syncpoint.SyncPointConfig,
 	startTsIsSyncpoint bool,
 	filterConfig *eventpb.FilterConfig,
@@ -184,6 +191,8 @@ func NewDispatcher(
 		startTsIsSyncpoint:    startTsIsSyncpoint,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
+		timezone:              timezone,
+		integrityConfig:       integrityConfig,
 		syncPointConfig:       syncPointConfig,
 		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
 		resolvedTs:            startTs,
@@ -199,8 +208,6 @@ func NewDispatcher(
 		bdrMode:               bdrMode,
 		BootstrapState:        BootstrapFinished,
 	}
-
-	dispatcher.addToStatusDynamicStream()
 
 	return dispatcher
 }
@@ -233,10 +240,14 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 // We ensure we only will receive one event when it's ddl event or sync point event
 // by setting them with different event types in DispatcherEventsHandler.GetType
 // When we handle events, we don't have any previous events still in sink.
+//
+// wakeCallback is used to wake the dynamic stream to handle the next batch events.
+// It will be called when all the events are flushed to downstream successfully.
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	dmlWakeOnce := &sync.Once{}
+	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
@@ -261,10 +272,9 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			continue
 		}
 
-		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
 		if d.isFirstEvent(event) {
-			d.updateComponentStatusToWorking()
+			d.updateDispatcherStatusToWorking()
 		}
 
 		switch event.GetType() {
@@ -285,7 +295,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 					dmlWakeOnce.Do(wakeCallback)
 				}
 			})
-			d.AddDMLEventToSink(dml)
+			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled",
@@ -300,14 +310,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			// so we need report the error to maintainer.
 			err := ddl.GetError()
 			if err != nil {
-				select {
-				case d.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", d.changefeedID),
-						zap.Stringer("dispatcherID", d.id),
-						zap.Error(err))
-				}
+				d.HandleError(err)
 				return
 			}
 			log.Info("dispatcher receive ddl event",
@@ -350,12 +353,23 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Uint64("commitTs", event.GetCommitTs()))
 		}
 	}
+	if len(dmlEvents) > 0 {
+		d.AddDMLEventsToSink(dmlEvents)
+	}
 	return block
 }
 
-func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
-	d.tableProgress.Add(event)
-	d.sink.AddDMLEvent(event)
+func (d *Dispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
+	// for one batch events, we need to add all them in table progress first, then add them to sink
+	// because we need to ensure the wakeCallback only will be called when
+	// all these events are flushed to downstream successfully
+	for _, event := range events {
+		d.tableProgress.Add(event)
+	}
+	for _, event := range events {
+		d.sink.AddDMLEvent(event)
+		failpoint.Inject("BlockAddDMLEvents", nil)
+	}
 }
 
 func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
@@ -384,7 +398,7 @@ func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
 // EventDispatcherManager will clean the dispatcher info after Remove() is called.
 func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
-	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully.
+	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
 	if !d.sink.IsNormal() || d.tableProgress.Empty() {
 		w.CheckpointTs = d.GetCheckpointTs()
@@ -403,6 +417,10 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		)
 		return w, true
 	}
+	log.Info("dispatcher is not ready to close",
+		zap.Stringer("dispatcher", d.id),
+		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
+		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()))
 	return w, false
 }
 
@@ -512,7 +530,7 @@ func (d *Dispatcher) EmitBootstrap() bool {
 				zap.Int("emitted", idx+1),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
-			d.errCh <- errors.ErrExecDDLFailed.GenWithStackByArgs()
+			d.HandleError(errors.ErrExecDDLFailed.GenWithStackByArgs())
 			return true
 		}
 	}
@@ -524,7 +542,12 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	return true
 }
 
-func (d *Dispatcher) updateComponentStatusToWorking() {
+// updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
+func (d *Dispatcher) updateDispatcherStatusToWorking() {
+	// only when we receive the first event, we can regard the dispatcher begin syncing data
+	// then add it to status dynamic stream to receive dispatcher status from maintainer
+	d.addToStatusDynamicStream()
+	// set the dispatcher to working status
 	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
 	d.statusesChan <- TableSpanStatusWithSeq{
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
@@ -533,5 +556,16 @@ func (d *Dispatcher) updateComponentStatusToWorking() {
 			CheckpointTs:    d.GetCheckpointTs(),
 		},
 		Seq: d.seq,
+	}
+}
+
+func (d *Dispatcher) HandleError(err error) {
+	select {
+	case d.errCh <- err:
+	default:
+		log.Error("error channel is full, discard error",
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.Stringer("dispatcherID", d.id),
+			zap.Error(err))
 	}
 }

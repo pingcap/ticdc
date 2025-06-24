@@ -70,10 +70,10 @@ type EventStore interface {
 		bdrMode bool,
 	) bool
 
-	UnregisterDispatcher(dispatcherID common.DispatcherID) error
+	UnregisterDispatcher(dispatcherID common.DispatcherID)
 
 	// TODO: Implement this after checkpointTs is correctly reported by the downstream dispatcher.
-	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64) error
+	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
 	GetDispatcherDMLEventState(dispatcherID common.DispatcherID) (bool, DMLEventState)
 
@@ -89,7 +89,7 @@ type DMLEventState struct {
 
 type EventIterator interface {
 	// Next returns the next event in the iterator and whether this event is from a new txn.
-	Next() (*common.RawKVEntry, bool, error)
+	Next() (*common.RawKVEntry, bool)
 
 	// Close closes the iterator.
 	// It returns the number of events that are read from the iterator.
@@ -102,7 +102,7 @@ type dispatcherStat struct {
 	tableSpan *heartbeatpb.TableSpan
 	// the max ts of events which is not needed by this dispatcher
 	checkpointTs uint64
-	// the subscription which this dipatcher depends on
+	// the subscription which this dispatcher depends on
 	subStat *subscriptionStat
 }
 
@@ -491,7 +491,7 @@ func (e *eventStore) RegisterDispatcher(
 	return true
 }
 
-func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
+func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
 	log.Info("unregister dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 	defer func() {
 		log.Info("unregister dispatcher done", zap.Stringer("dispatcherID", dispatcherID))
@@ -500,7 +500,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 	defer e.dispatcherMeta.Unlock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
-		return nil
+		return
 	}
 	subStat := stat.subStat
 	delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
@@ -511,61 +511,67 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 		subStat.idleTime.Store(time.Now().UnixMilli())
 	}
 	subStat.dispatchers.Unlock()
-	return nil
+	return
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(
 	dispatcherID common.DispatcherID,
 	checkpointTs uint64,
-) error {
+) {
 	e.dispatcherMeta.RLock()
 	defer e.dispatcherMeta.RUnlock()
-	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
-		stat.checkpointTs = checkpointTs
-		subStat := stat.subStat
-		// calculate the new checkpoint ts of the subscription
-		newCheckpointTs := uint64(0)
-		for dispatcherID := range subStat.dispatchers.notifiers {
-			dispatcherStat := e.dispatcherMeta.dispatcherStats[dispatcherID]
-			if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
-				newCheckpointTs = dispatcherStat.checkpointTs
-			}
-		}
-		if newCheckpointTs == 0 {
-			return nil
-		}
-		if newCheckpointTs < subStat.checkpointTs.Load() {
-			log.Panic("should not happen",
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
-		}
 
-		if subStat.checkpointTs.Load() < newCheckpointTs {
-			e.gcManager.addGCItem(
-				subStat.dbIndex,
-				uint64(subStat.subID),
-				stat.tableSpan.TableID,
-				subStat.checkpointTs.Load(),
-				newCheckpointTs,
-			)
-			e.subscriptionChangeCh.In() <- SubscriptionChange{
-				ChangeType:   SubscriptionChangeTypeUpdate,
-				SubID:        uint64(stat.subStat.subID),
-				Span:         stat.tableSpan,
-				CheckpointTs: newCheckpointTs,
-				ResolvedTs:   subStat.resolvedTs.Load(),
-			}
-			subStat.checkpointTs.CompareAndSwap(subStat.checkpointTs.Load(), newCheckpointTs)
-			if log.GetLevel() <= zap.DebugLevel {
-				log.Debug("update checkpoint ts",
-					zap.Any("dispatcherID", dispatcherID),
-					zap.Uint64("subID", uint64(subStat.subID)),
-					zap.Uint64("newCheckpointTs", newCheckpointTs),
-					zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
-			}
+	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
+	if !ok {
+		return
+	}
+
+	stat.checkpointTs = checkpointTs
+	subStat := stat.subStat
+	// calculate the new checkpoint ts of the subscription
+	var newCheckpointTs uint64
+	for id := range subStat.dispatchers.notifiers {
+		dispatcherStat := e.dispatcherMeta.dispatcherStats[id]
+		if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
+			newCheckpointTs = dispatcherStat.checkpointTs
 		}
 	}
-	return nil
+
+	if newCheckpointTs == 0 {
+		return
+	}
+
+	oldCheckpointTs := subStat.checkpointTs.Load()
+	if newCheckpointTs == oldCheckpointTs {
+		return
+	}
+	if newCheckpointTs < oldCheckpointTs {
+		log.Panic("should not happen",
+			zap.Uint64("newCheckpointTs", newCheckpointTs),
+			zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+	}
+	e.gcManager.addGCItem(
+		subStat.dbIndex,
+		uint64(subStat.subID),
+		stat.tableSpan.TableID,
+		subStat.checkpointTs.Load(),
+		newCheckpointTs,
+	)
+	e.subscriptionChangeCh.In() <- SubscriptionChange{
+		ChangeType:   SubscriptionChangeTypeUpdate,
+		SubID:        uint64(stat.subStat.subID),
+		Span:         stat.tableSpan,
+		CheckpointTs: newCheckpointTs,
+		ResolvedTs:   subStat.resolvedTs.Load(),
+	}
+	subStat.checkpointTs.CompareAndSwap(subStat.checkpointTs.Load(), newCheckpointTs)
+	if log.GetLevel() <= zap.DebugLevel {
+		log.Debug("update checkpoint ts",
+			zap.Any("dispatcherID", dispatcherID),
+			zap.Uint64("subID", uint64(subStat.subID)),
+			zap.Uint64("newCheckpointTs", newCheckpointTs),
+			zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
+	}
 }
 
 func (e *eventStore) GetDispatcherDMLEventState(dispatcherID common.DispatcherID) (bool, DMLEventState) {
@@ -789,11 +795,11 @@ type eventStoreIter struct {
 	rowCount int64
 }
 
-func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
+func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 	rawKV := &common.RawKVEntry{}
 	for {
 		if !iter.innerIter.Valid() {
-			return nil, false, nil
+			return nil, false
 		}
 		value := iter.innerIter.Value()
 		err := rawKV.Decode(value)
@@ -826,7 +832,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	startTime := time.Now()
 	iter.innerIter.Next()
 	metricEventStoreNextReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	return rawKV, isNewTxn, nil
+	return rawKV, isNewTxn
 }
 
 func (iter *eventStoreIter) Close() (int64, error) {
@@ -841,7 +847,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	startTime := time.Now()
 	err := iter.innerIter.Close()
 	iter.innerIter = nil
-	metricEventStoreCloseReadDurationHistogram.Observe(float64(time.Since(startTime).Seconds()))
+	metricEventStoreCloseReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	return iter.rowCount, err
 }
 

@@ -34,8 +34,9 @@ import (
 var _ dispatcher.EventDispatcher = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
-	id     common.DispatcherID
-	handle func(commonEvent.Event)
+	id        common.DispatcherID
+	tableSpan *heartbeatpb.TableSpan
+	handle    func(commonEvent.Event)
 }
 
 func (m *mockEventDispatcher) GetId() common.DispatcherID {
@@ -51,7 +52,7 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
-	return nil
+	return m.tableSpan
 }
 
 func (m *mockEventDispatcher) GetFilterConfig() *eventpb.FilterConfig {
@@ -85,6 +86,14 @@ func (m *mockEventDispatcher) GetBDRMode() bool {
 	return false
 }
 
+func (m *mockEventDispatcher) GetTimezone() string {
+	return "system"
+}
+
+func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
+	return nil
+}
+
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id
@@ -102,7 +111,7 @@ func TestProcessMessage(t *testing.T) {
 	did := common.NewDispatcherID()
 	ch := make(chan *messaging.TargetMessage, receiveChanSize)
 	go func() {
-		c.runProcessMessage(ctx, ch)
+		c.runDispatchMessage(ctx, ch)
 	}()
 
 	var seq atomic.Uint64
@@ -127,15 +136,16 @@ func TestProcessMessage(t *testing.T) {
 	handshakeEvent.Seq = seq.Add(1)
 	ddl.Seq = seq.Add(1)
 	events[ddl.Seq] = ddl
-	for _, dml := range dmls.DMLEvents {
+	for i, dml := range dmls.DMLEvents {
 		dml.DispatcherID = did
 		dml.Seq = seq.Add(1)
+		dml.CommitTs = ddl.FinishedTs + uint64(i)
 		events[dml.Seq] = dml
 	}
 
 	seq.Store(1)
 	done := make(chan struct{})
-	d := &mockEventDispatcher{id: did}
+	d := &mockEventDispatcher{id: did, tableSpan: &heartbeatpb.TableSpan{TableID: 1}}
 	d.handle = func(e commonEvent.Event) {
 		require.Equal(t, e.GetSeq(), seq.Add(1))
 		require.Equal(t, events[e.GetSeq()], e)

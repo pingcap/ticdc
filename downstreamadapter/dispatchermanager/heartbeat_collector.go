@@ -126,16 +126,16 @@ func (c *HeartBeatCollector) RegisterCheckpointTsMessageDs(m *EventDispatcherMan
 	return errors.Trace(err)
 }
 
-func (c *HeartBeatCollector) RemoveEventDispatcherManager(m *EventDispatcherManager) error {
-	err := c.heartBeatResponseDynamicStream.RemovePath(m.changefeedID.Id)
+func (c *HeartBeatCollector) RemoveEventDispatcherManager(id common.ChangeFeedID) error {
+	err := c.heartBeatResponseDynamicStream.RemovePath(id.Id)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	err = c.schedulerDispatcherRequestDynamicStream.RemovePath(m.changefeedID.Id)
+	err = c.schedulerDispatcherRequestDynamicStream.RemovePath(id.Id)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	err = c.mergeDispatcherRequestDynamicStream.RemovePath(m.changefeedID.Id)
+	err = c.mergeDispatcherRequestDynamicStream.RemovePath(id.Id)
 	if err != nil {
 		return errors.Trace(err)
 	}

@@ -92,8 +92,8 @@ func NewMergeDispatcherOperator(
 
 	spansInfo := ""
 	for _, span := range toMergedSpans {
-		spansInfo += fmt.Sprintf("[%s,%s]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
+		spansInfo += fmt.Sprintf("[%s,%s,%d]",
+			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID)
 	}
 
 	// bind the new replica set to the node.
@@ -110,7 +110,7 @@ func NewMergeDispatcherOperator(
 		mergeTableSpan,
 		1) // use a fake checkpointTs here.
 
-	db.AddAbsentReplicaSet(newReplicaSet)
+	db.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 
 	op := &MergeDispatcherOperator{
 		db:                  db,
@@ -201,14 +201,11 @@ func (m *MergeDispatcherOperator) PostFinish() {
 		return
 	}
 
-	nodeID := m.toMergedReplicaSets[0].GetNodeID()
 	for _, replicaSet := range m.toMergedReplicaSets {
 		m.db.RemoveReplicatingSpan(replicaSet)
 	}
 
-	m.db.BindReplicaToNodeWithoutLock("", nodeID, m.newReplicaSet)
 	m.db.MarkReplicatingWithoutLock(m.newReplicaSet)
-
 	log.Info("merge dispatcher operator finished", zap.String("id", m.id.String()))
 }
 
