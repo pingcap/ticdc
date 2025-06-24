@@ -88,9 +88,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Close() {
 	// clean pathMap, to avoid sending into a closed channel after close()
 	{
 		s.pathMap.Lock()
-		for k := range s.pathMap.m {
-			delete(s.pathMap.m, k)
-		}
+		clear(s.pathMap.m)
 		s.pathMap.Unlock()
 	}
 
@@ -100,18 +98,18 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Close() {
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
-	var pi *pathInfo[A, P, T, D, H]
-	var ok bool
+	var (
+		pi *pathInfo[A, P, T, D, H]
+		ok bool
+	)
 
-	{
-		s.pathMap.RLock()
-		if pi, ok = s.pathMap.m[path]; !ok {
-			s.handler.OnDrop(e)
-			s.pathMap.RUnlock()
-			return
-		}
+	s.pathMap.RLock()
+	if pi, ok = s.pathMap.m[path]; !ok {
+		s.handler.OnDrop(e)
 		s.pathMap.RUnlock()
+		return
 	}
+	s.pathMap.RUnlock()
 
 	ew := eventWrap[A, P, T, D, H]{
 		event:     e,
@@ -126,17 +124,16 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
-	var pi *pathInfo[A, P, T, D, H]
-	var ok bool
-	{
-		s.pathMap.RLock()
-		if pi, ok = s.pathMap.m[path]; !ok {
-			s.pathMap.RUnlock()
-			return
-		}
+	var (
+		pi *pathInfo[A, P, T, D, H]
+		ok bool
+	)
+	s.pathMap.RLock()
+	if pi, ok = s.pathMap.m[path]; !ok {
 		s.pathMap.RUnlock()
+		return
 	}
-
+	s.pathMap.RUnlock()
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{wake: true, pathInfo: pi}
 }
 
@@ -199,8 +196,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings 
 func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A] {
 	metrics := Metrics[A]{}
 	for _, ds := range s.streams {
-		size := ds.getPendingSize()
-		metrics.PendingQueueLen += size
+		metrics.PendingQueueLen += ds.getPendingSize()
 	}
 	metrics.AddPath = int(s._statAddPathCount.Load())
 	metrics.RemovePath = int(s._statRemovePathCount.Load())
