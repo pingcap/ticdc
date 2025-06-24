@@ -107,5 +107,5 @@ func Decode(cc string, data []byte) ([]byte, error) {
 	default:
 	}
 
-	return nil, cerror.ErrCompressionFailed.GenWithStack("Unsupported compression %s", cc)
+	return nil, errors.ErrCompressionFailed.GenWithStack("Unsupported compression %s", cc)
 }
