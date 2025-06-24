@@ -1223,6 +1223,11 @@ func (e *EventDispatcherManager) MergeRedoDispatcher(dispatcherIDs []common.Disp
 		e.redoQuota,
 		func() {
 			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
+			log.Info("merge redo dispatcher is ready",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Stringer("dispatcherID", mergedDispatcher.GetId()),
+				zap.Any("tableSpan", common.FormatTableSpan(mergedDispatcher.GetTableSpan())),
+			)
 		})
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
@@ -1380,26 +1385,6 @@ func (e *EventDispatcherManager) RedoDoMerge(t *MergeCheckTask) {
 		)
 	}
 
-	// if e.sink.SinkType() == common.MysqlSinkType {
-	// 	newStartTsList, _, err := e.sink.(*mysql.Sink).GetStartTsList([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
-	// 	if err != nil {
-	// 		log.Error("calculate real startTs for merge dispatcher failed",
-	// 			zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
-	// 			zap.Stringer("changefeedID", e.changefeedID),
-	// 			zap.Error(err),
-	// 		)
-	// 		t.mergedDispatcher.HandleError(err)
-	// 		return
-	// 	}
-	// 	log.Info("calculate real startTs for Merge Dispatcher",
-	// 		zap.Stringer("changefeedID", e.changefeedID),
-	// 		zap.Any("receiveStartTs", minCheckpointTs),
-	// 		zap.Any("realStartTs", newStartTsList),
-	// 	)
-	// 	t.mergedDispatcher.SetStartTs(uint64(newStartTsList[0]))
-	// } else {
-	// 	t.mergedDispatcher.SetStartTs(minCheckpointTs)
-	// }
 	t.mergedDispatcher.SetStartTs(minCheckpointTs)
 	t.mergedDispatcher.SetCurrentPDTs(e.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
