@@ -545,7 +545,6 @@ func (m *Maintainer) onNodeChanged() {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
 			delete(m.checkpointTsByCapture, id)
-			// m.controller.operatorController.OnNodeRemoved(id)
 			m.controller.RemoveNode(id)
 		}
 	}

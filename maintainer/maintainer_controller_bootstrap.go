@@ -303,6 +303,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		ComponentStatus: spanInfo.ComponentStatus,
 		ID:              spanInfo.ID,
 		CheckpointTs:    spanInfo.CheckpointTs,
+		Redo:            spanInfo.Redo,
 	}
 
 	return replica.NewWorkingSpanReplication(
