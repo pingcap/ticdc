@@ -72,7 +72,7 @@ func (c CheckResult) String() string {
 	return fmt.Sprintf("OpType: %s, ReplicationSize: %d", opStr, len(c.Replications))
 }
 
-func getNewGroupChecker(
+func GetNewGroupChecker(
 	cfID common.ChangeFeedID, enableTableAcrossNodes bool,
 ) func(replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
 	if !enableTableAcrossNodes {

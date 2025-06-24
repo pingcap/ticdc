@@ -18,7 +18,7 @@ import (
 	"errors"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/redo/writer"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"go.uber.org/zap"
 )
 
@@ -49,19 +49,10 @@ func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoE
 	current := rl.GetCommitTs()
 	log.Debug("write redo events", zap.Int("count", len(events)),
 		zap.Uint64("current", current))
-	// FIXME: post flush after writing?
 	for _, rl := range events {
 		rl.PostFlush()
 	}
 	return
-}
-
-func (bs *blackHoleWriter) AsyncWriteEvents(_ context.Context, events ...writer.RedoEvent) error {
-	if bs.invalid {
-		return errors.New("[WriteLog] invalid black hole writer")
-	}
-	bs.WriteEvents(nil, events...)
-	return nil
 }
 
 func (bs *blackHoleWriter) Close() error {

@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -31,10 +32,10 @@ import (
 // MergeDispatcherOperator is an operator to remove multiple spans belonging to the same table with consecutive ranges in a same node
 // and create a new span to the replication db to the same node.
 type MergeDispatcherOperator struct {
-	db            *replica.ReplicationDB
-	node          node.ID
-	id            common.DispatcherID
-	dispatcherIDs []*heartbeatpb.DispatcherID
+	spanController *span.Controller
+	node           node.ID
+	id             common.DispatcherID
+	dispatcherIDs  []*heartbeatpb.DispatcherID
 
 	removed  atomic.Bool
 	finished atomic.Bool
@@ -49,7 +50,7 @@ type MergeDispatcherOperator struct {
 }
 
 func NewMergeDispatcherOperator(
-	db *replica.ReplicationDB,
+	spanController *span.Controller,
 	toMergedReplicaSets []*replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
 ) *MergeDispatcherOperator {
@@ -112,10 +113,10 @@ func NewMergeDispatcherOperator(
 		1, // use a fake checkpointTs here.
 		toMergedReplicaSets[0].GetRedo())
 
-	db.AddSchedulingReplicaSet(newReplicaSet, nodeID)
+	spanController.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 
 	op := &MergeDispatcherOperator{
-		db:                  db,
+		spanController:      spanController,
 		node:                nodeID,
 		id:                  newDispatcherID,
 		dispatcherIDs:       dispatcherIDs,
@@ -136,7 +137,7 @@ func setOccupyOperatorsFinished(occupyOperators []operator.Operator[common.Dispa
 
 func (m *MergeDispatcherOperator) Start() {
 	for _, replicaSet := range m.toMergedReplicaSets {
-		m.db.MarkSpanScheduling(replicaSet)
+		m.spanController.MarkSpanScheduling(replicaSet)
 	}
 }
 
@@ -198,18 +199,18 @@ func (m *MergeDispatcherOperator) PostFinish() {
 	if m.removed.Load() {
 		// if removed, we set the toMergedReplicaSet to be absent, to ignore the merge operation
 		for _, replicaSet := range m.toMergedReplicaSets {
-			m.db.MarkAbsentWithoutLock(replicaSet)
+			m.spanController.MarkSpanAbsent(replicaSet)
 		}
-		m.db.RemoveReplicatingSpan(m.newReplicaSet)
+		m.spanController.RemoveReplicatingSpan(m.newReplicaSet)
 		log.Info("merge dispatcher operator finished due to removed", zap.String("id", m.id.String()))
 		return
 	}
 
 	for _, replicaSet := range m.toMergedReplicaSets {
-		m.db.RemoveReplicatingSpan(replicaSet)
+		m.spanController.RemoveReplicatingSpan(replicaSet)
 	}
 
-	m.db.MarkReplicatingWithoutLock(m.newReplicaSet)
+	m.spanController.MarkSpanReplicating(m.newReplicaSet)
 	log.Info("merge dispatcher operator finished", zap.String("id", m.id.String()))
 }
 

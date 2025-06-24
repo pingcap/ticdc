@@ -55,3 +55,13 @@ func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 	require.Equal(t, replicaSet.ID.ToPB(), req.Config.DispatcherID)
 	require.Equal(t, replicaSet.schemaID, req.Config.SchemaID)
 }
+
+// getTableSpanByID returns a mock TableSpan for testing
+func getTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
+	totalSpan := common.TableIDToComparableSpan(id)
+	return &heartbeatpb.TableSpan{
+		TableID:  totalSpan.TableID,
+		StartKey: totalSpan.StartKey,
+		EndKey:   totalSpan.EndKey,
+	}
+}

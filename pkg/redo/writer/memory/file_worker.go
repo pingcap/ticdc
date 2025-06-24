@@ -29,10 +29,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/codec"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/ticdc/redo/codec"
-	misc "github.com/pingcap/ticdc/redo/common"
-	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -103,6 +103,8 @@ type fileWorkerGroup struct {
 	metricFlushAllDuration prometheus.Observer
 }
 
+// newFileWorkerGroup create a fileWorkerGroup
+// fileWorkerGroup received RedoEvents and wrote them to the cache. It also utilizes background goroutines for flushing.
 func newFileWorkerGroup(
 	cfg *writer.LogWriterConfig, workerNum int,
 	logType string,
@@ -134,7 +136,7 @@ func newFileWorkerGroup(
 				return &buf
 			},
 		},
-		flushCh: make(chan *fileCache),
+		flushCh: make(chan *fileCache, 32),
 		metricWriteBytes: misc.RedoWriteBytesGauge.
 			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
@@ -215,16 +217,12 @@ func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) 
 func (f *fileWorkerGroup) bgWriteLogs(
 	egCtx context.Context, inputCh <-chan writer.RedoEvent,
 ) (err error) {
-	ticker := time.NewTicker(time.Second * 1)
+	ticker := time.NewTicker(redo.DefaultFlushIntervalInMs)
 	defer ticker.Stop()
 	num := 0
-	batchSize := 1000
-	cacheEventPostFlush := make([]func(), 0, batchSize)
+	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)
 	flush := func() error {
-		if len(f.files) == 0 {
-			return nil
-		}
-		err = f.flushAll(egCtx)
+		err := f.flushAll(egCtx)
 		if err != nil {
 			return err
 		}
@@ -254,7 +252,7 @@ func (f *fileWorkerGroup) bgWriteLogs(
 				return errors.Trace(err)
 			}
 			num++
-			if num > batchSize {
+			if num > redo.DefaultFlushBatchSize {
 				err := flush()
 				if err != nil {
 					return errors.Trace(err)

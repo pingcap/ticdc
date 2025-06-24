@@ -63,10 +63,10 @@ const (
 // 4. checker controller, handled in threadpool, it runs the checkers to dynamically adjust the schedule
 // all threads are read/write information from/to the ReplicationDB
 type Maintainer struct {
-	id                common.ChangeFeedID
-	config            *config.ChangeFeedInfo
-	selfNode          *node.Info
-	controllerManager *ControllerManager
+	id         common.ChangeFeedID
+	config     *config.ChangeFeedInfo
+	selfNode   *node.Info
+	controller *Controller
 
 	pdClock pdutil.Clock
 
@@ -198,7 +198,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		redoTsMap:         make(map[node.ID]*heartbeatpb.RedoTsMessage),
-		controllerManager: NewControllerManager(cfID, checkpointTs, pdAPI, regionCache, taskScheduler,
+		controller: NewController(cfID, checkpointTs, pdAPI, regionCache, taskScheduler,
 			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
@@ -328,7 +328,7 @@ func (m *Maintainer) checkNodeChanged() {
 func (m *Maintainer) Close() {
 	m.cancelUpdateMetrics()
 	m.cleanupMetrics()
-	m.controllerManager.Stop()
+	m.controller.Stop()
 	log.Info("changefeed maintainer closed",
 		zap.String("changefeed", m.id.String()),
 		zap.Bool("removed", m.removed.Load()),
@@ -499,8 +499,8 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
 		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
 	}
-	advance := m.controllerManager.checkAdvance(false)
-	redoAdvance := m.controllerManager.checkAdvance(true)
+	advance := m.controller.checkAdvance(false)
+	redoAdvance := m.controller.checkAdvance(true)
 	needUpdate := false
 	// need to consider if all dispatcher are removed
 	// this leads resolvedTs is math.MaxUint64
@@ -545,8 +545,8 @@ func (m *Maintainer) onNodeChanged() {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
 			delete(m.checkpointTsByCapture, id)
-			m.controllerManager.RemoveNode(id)
-
+			// m.controller.operatorController.OnNodeRemoved(id)
+			m.controller.RemoveNode(id)
 		}
 	}
 	// redo
@@ -592,9 +592,8 @@ func (m *Maintainer) calCheckpointTs() {
 	// If all check is successfully, we begin to do the checkpointTs calculation,
 	// otherwise, we just return.
 	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
-	operatorController := m.controllerManager.operatorController
-	barrier := m.controllerManager.barrier
-	controller := m.controllerManager.controller
+	operatorController := m.controller.operatorController
+	barrier := m.controller.barrier
 	operatorLock := operatorController.GetLock()
 	barrierLock := barrier.GetLock()
 
@@ -603,7 +602,7 @@ func (m *Maintainer) calCheckpointTs() {
 		barrier.ReleaseLock(barrierLock)
 	}()
 
-	if !m.controllerManager.ScheduleFinished() {
+	if !m.controller.ScheduleFinished() {
 		log.Warn("can not advance checkpointTs since schedule is not finished",
 			zap.String("changefeed", m.id.Name()),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
@@ -623,7 +622,7 @@ func (m *Maintainer) calCheckpointTs() {
 	// if there is no tables, there must be a table trigger dispatcher
 	for id := range m.bootstrapper.GetAllNodes() {
 		// maintainer node has the table trigger dispatcher
-		if id != m.selfNode.ID && controller.GetTaskSizeByNodeID(id) <= 0 {
+		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
 		// node level watermark reported, ignore this round
@@ -689,7 +688,7 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 				m.redoTs.mu.Lock()
 				defer m.redoTs.mu.Unlock()
 			}
-			m.controllerManager.HandleStatus(msg.From, req.Statuses)
+			m.controller.HandleStatus(msg.From, req.Statuses)
 		}
 		withRedoLock()
 	}
@@ -720,13 +719,13 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
 	if len(req.BlockStatuses) > 0 {
-		if m.controllerManager.redoBarrier != nil {
-			ackMsg := m.controllerManager.redoBarrier.HandleStatus(msg.From, req, true)
+		if m.controller.redoBarrier != nil {
+			ackMsg := m.controller.redoBarrier.HandleStatus(msg.From, req, true)
 			if ackMsg != nil {
 				m.sendMessages([]*messaging.TargetMessage{ackMsg})
 			}
 		}
-		ackMsg := m.controllerManager.barrier.HandleStatus(msg.From, req, false)
+		ackMsg := m.controller.barrier.HandleStatus(msg.From, req, false)
 		if ackMsg != nil {
 			m.sendMessages([]*messaging.TargetMessage{ackMsg})
 		}
@@ -799,7 +798,7 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 		m.handleError(err)
 		return
 	}
-	msg, err := m.controllerManager.FinishBootstrap(cachedResp, isMySQLCompatible)
+	msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLCompatible)
 	if err != nil {
 		m.handleError(err)
 		return
@@ -845,13 +844,13 @@ func (m *Maintainer) handleResendMessage() {
 	if m.postBootstrapMsg != nil {
 		m.sendPostBootstrapRequest()
 	}
-	if m.controllerManager.redoBarrier != nil {
+	if m.controller.redoBarrier != nil {
 		// resend redo barrier ack messages
-		m.sendMessages(m.controllerManager.redoBarrier.Resend(true))
+		m.sendMessages(m.controller.redoBarrier.Resend(true))
 	}
-	if m.controllerManager.barrier != nil {
+	if m.controller.barrier != nil {
 		// resend barrier ack messages
-		m.sendMessages(m.controllerManager.barrier.Resend(false))
+		m.sendMessages(m.controller.barrier.Resend(false))
 	}
 }
 
@@ -860,9 +859,9 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 		m.statusChanged.Store(true)
 	}
 	if !m.cascadeRemoving {
-		m.controllerManager.RemoveTasksByTableIDs(false, m.ddlSpan.Span.TableID)
-		if m.redoDDLSpan != nil {
-			m.controllerManager.RemoveTasksByTableIDs(true, m.redoDDLSpan.Span.TableID)
+		m.controller.operatorController.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
+		if m.controller.redoOperatorController != nil {
+			m.controller.redoOperatorController.RemoveTasksByTableIDs(m.redoDDLSpan.Span.TableID)
 			return !m.ddlSpan.IsWorking() && !m.redoDDLSpan.IsWorking()
 		}
 		return !m.ddlSpan.IsWorking()
@@ -981,10 +980,10 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
-		total := m.controllerManager.controller.TaskSize() - 1
-		scheduling := m.controllerManager.controller.replicationDB.GetSchedulingSize()
-		working := m.controllerManager.controller.replicationDB.GetReplicatingSize()
-		absent := m.controllerManager.controller.replicationDB.GetAbsentSize()
+		total := m.controller.spanController.TaskSize() - 1
+		scheduling := m.controller.spanController.GetSchedulingSize()
+		working := m.controller.spanController.GetReplicatingSize()
+		absent := m.controller.spanController.GetAbsentSize()
 
 		m.tableCountGauge.Set(float64(total))
 		m.scheduledTaskGauge.Set(float64(scheduling))
@@ -1058,48 +1057,48 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 
 // GetDispatcherCount returns the number of dispatchers.
 func (m *Maintainer) GetDispatcherCount() int {
-	return len(m.controllerManager.controller.GetAllTasks())
+	return len(m.controller.spanController.GetAllTasks())
 }
 
 // MoveTable moves a table to a specific node.
 func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
-	err := m.controllerManager.moveTable(tableId, targetNode, true)
+	err := m.controller.moveTable(tableId, targetNode, true)
 	if err != nil {
 		return err
 	}
-	return m.controllerManager.moveTable(tableId, targetNode, false)
+	return m.controller.moveTable(tableId, targetNode, false)
 }
 
 // MoveSplitTable moves all the dispatchers in a split table to a specific node.
 func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
-	err := m.controllerManager.moveSplitTable(tableId, targetNode, true)
+	err := m.controller.moveSplitTable(tableId, targetNode, true)
 	if err != nil {
 		return err
 	}
-	return m.controllerManager.moveSplitTable(tableId, targetNode, false)
+	return m.controller.moveSplitTable(tableId, targetNode, false)
 }
 
 // GetTables returns all tables.
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.controllerManager.controller.GetAllTasks()
+	return m.controller.spanController.GetAllTasks()
 }
 
 // SplitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
 func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
-	err := m.controllerManager.splitTableByRegionCount(tableId, true)
+	err := m.controller.splitTableByRegionCount(tableId, true)
 	if err != nil {
 		return err
 	}
-	return m.controllerManager.splitTableByRegionCount(tableId, false)
+	return m.controller.splitTableByRegionCount(tableId, false)
 }
 
 // MergeTable merge two dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
 func (m *Maintainer) MergeTable(tableId int64) error {
-	err := m.controllerManager.mergeTable(tableId, true)
+	err := m.controller.mergeTable(tableId, true)
 	if err != nil {
 		return err
 	}
-	return m.controllerManager.mergeTable(tableId, false)
+	return m.controller.mergeTable(tableId, false)
 }

@@ -5,7 +5,7 @@ package file
 import (
 	context "context"
 
-	writer "github.com/pingcap/ticdc/redo/writer"
+	writer "github.com/pingcap/ticdc/pkg/redo/writer"
 	mock "github.com/stretchr/testify/mock"
 )
 

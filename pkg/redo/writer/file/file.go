@@ -29,21 +29,16 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/codec"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/ticdc/redo/codec"
-	misc "github.com/pingcap/ticdc/redo/common"
-	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/atomic"
 	pioutil "go.etcd.io/etcd/pkg/v3/ioutil"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
-
-//go:generate mockery --name=fileWriter --inpackage --quiet
-type fileWriter interface {
-	Run(ctx context.Context) error
 	IsRunning() bool
 	SyncWrite(event writer.RedoEvent) error
 	GetInputCh() chan writer.RedoEvent
@@ -147,11 +142,9 @@ func NewFileWriter(
 
 func (w *Writer) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
-	for i := 0; i < w.cfg.EncodingWorkerNum; i++ {
-		eg.Go(func() error {
-			return w.encode(ctx)
-		})
-	}
+	eg.Go(func() error {
+		return w.encode(ctx)
+	})
 	return eg.Wait()
 }
 
@@ -251,7 +244,7 @@ func (w *Writer) GetInputCh() chan writer.RedoEvent {
 	return w.inputCh
 }
 
-func (w *Writer) SyncWrite(event writer.RedoEvent) error {
+func (w *Writer) write(event writer.RedoEvent) error {
 	rl := event.ToRedoLog()
 	data, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
@@ -259,6 +252,14 @@ func (w *Writer) SyncWrite(event writer.RedoEvent) error {
 	}
 	w.AdvanceTs(rl.GetCommitTs())
 	_, err = w.Write(data)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *Writer) SyncWrite(event writer.RedoEvent) error {
+	err := w.write(event)
 	if err != nil {
 		return err
 	}
@@ -271,13 +272,44 @@ func (w *Writer) SyncWrite(event writer.RedoEvent) error {
 }
 
 func (w *Writer) encode(ctx context.Context) error {
+	ticker := time.NewTicker(redo.DefaultFlushIntervalInMs)
+	defer ticker.Stop()
+	num := 0
+	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)
+	flush := func() error {
+		err := w.Flush()
+		if err != nil {
+			return err
+		}
+		for _, fn := range cacheEventPostFlush {
+			fn()
+		}
+		num = 0
+		cacheEventPostFlush = cacheEventPostFlush[:0]
+		return nil
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case e := <-w.inputCh:
-		err := w.SyncWrite(e)
+	case <-ticker.C:
+		err := flush()
 		if err != nil {
-			log.Error("write dml event failed", zap.Error(err), zap.Any("events", e))
+			return errors.Trace(err)
+		}
+	case e := <-w.inputCh:
+		err := w.write(e)
+		if err != nil {
+			return err
+		}
+		num++
+		if num > redo.DefaultFlushBatchSize {
+			err := flush()
+			if err != nil {
+				return errors.Trace(err)
+			}
+			e.PostFlush()
+		} else {
+			cacheEventPostFlush = append(cacheEventPostFlush, e.PostFlush)
 		}
 	}
 	return nil

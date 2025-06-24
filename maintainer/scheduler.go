@@ -17,20 +17,18 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/maintainer/operator"
-	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/scheduler"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
-	"github.com/pingcap/ticdc/server/watcher"
 )
 
 func NewScheduleController(changefeedID common.ChangeFeedID,
 	batchSize int,
 	oc, redoOC *operator.Controller,
-	db, redoDB *replica.ReplicationDB,
-	nodeM *watcher.NodeManager,
+	spanController, redoSpanController *span.Controller,
 	balanceInterval time.Duration,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
@@ -40,8 +38,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			changefeedID,
 			batchSize,
 			oc,
-			db,
-			nodeM,
+			spanController,
 			schedulerCfg,
 			false,
 		),
@@ -49,8 +46,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			changefeedID,
 			batchSize,
 			oc,
-			db,
-			nodeM,
+			spanController,
 			balanceInterval,
 			false,
 		),
@@ -61,19 +57,17 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			batchSize,
 			splitter,
 			oc,
-			db,
-			nodeM,
+			spanController,
 			balanceInterval,
 			false,
 		)
 	}
-	if redoDB != nil {
+	if redoOC != nil {
 		schedulers[pkgscheduler.RedoBasicScheduler] = scheduler.NewBasicScheduler(
 			changefeedID,
 			batchSize,
 			redoOC,
-			redoDB,
-			nodeM,
+			redoSpanController,
 			schedulerCfg,
 			true,
 		)
@@ -81,8 +75,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			changefeedID,
 			batchSize,
 			redoOC,
-			redoDB,
-			nodeM,
+			redoSpanController,
 			balanceInterval,
 			true,
 		)
@@ -92,8 +85,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 				batchSize,
 				splitter,
 				redoOC,
-				redoDB,
-				nodeM,
+				redoSpanController,
 				balanceInterval,
 				true,
 			)

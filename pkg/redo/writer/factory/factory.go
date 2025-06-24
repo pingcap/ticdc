@@ -19,10 +19,10 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
-	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/ticdc/redo/writer/blackhole"
-	"github.com/pingcap/ticdc/redo/writer/file"
-	"github.com/pingcap/ticdc/redo/writer/memory"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/redo/writer/blackhole"
+	"github.com/pingcap/ticdc/pkg/redo/writer/file"
+	"github.com/pingcap/ticdc/pkg/redo/writer/memory"
 	"github.com/pingcap/tidb/br/pkg/storage"
 )
 

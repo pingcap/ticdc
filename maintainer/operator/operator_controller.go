@@ -23,7 +23,10 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -45,12 +48,13 @@ var _ operator.Controller[common.DispatcherID, *heartbeatpb.TableSpanStatus] = &
 // Controller is the operator controller, it manages all operators.
 // And the Controller is responsible for the execution of the operator.
 type Controller struct {
-	role          string
-	changefeedID  common.ChangeFeedID
-	batchSize     int
-	messageCenter messaging.MessageCenter
-	replicationDB *replica.ReplicationDB
-	nodeManager   *watcher.NodeManager
+	role           string
+	changefeedID   common.ChangeFeedID
+	batchSize      int
+	messageCenter  messaging.MessageCenter
+	spanController *span.Controller
+	nodeManager    *watcher.NodeManager
+	splitter       *split.Splitter
 
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
@@ -59,24 +63,21 @@ type Controller struct {
 	ops int64
 }
 
+// NewOperatorController creates a new operator controller
 func NewOperatorController(
 	changefeedID common.ChangeFeedID,
-	mc messaging.MessageCenter,
-	db *replica.ReplicationDB,
-	nodeManager *watcher.NodeManager,
+	spanController *span.Controller,
 	batchSize int,
 ) *Controller {
-	oc := &Controller{
-		role:          "maintainer",
-		changefeedID:  changefeedID,
-		operators:     make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
-		runningQueue:  make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
-		messageCenter: mc,
-		batchSize:     batchSize,
-		replicationDB: db,
-		nodeManager:   nodeManager,
+	return &Controller{
+		changefeedID:   changefeedID,
+		operators:      make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
+		runningQueue:   make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
+		role:           "maintainer",
+		spanController: spanController,
+		nodeManager:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		messageCenter:  appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 	}
-	return oc
 }
 
 // Execute poll the operator from the queue and execute it
@@ -123,8 +124,8 @@ func (oc *Controller) RemoveAllTasks() {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
-	for _, replicaSet := range oc.replicationDB.RemoveAll() {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
+	for _, replicaSet := range oc.spanController.RemoveAll() {
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, replicaSet))
 	}
 }
 
@@ -133,8 +134,8 @@ func (oc *Controller) RemoveAllTasks() {
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
-	for _, replicaSet := range oc.replicationDB.RemoveBySchemaID(schemaID) {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
+	for _, replicaSet := range oc.spanController.RemoveBySchemaID(schemaID) {
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, replicaSet))
 	}
 }
 
@@ -143,8 +144,8 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
-	for _, replicaSet := range oc.replicationDB.RemoveByTableIDs(tables...) {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
+	for _, replicaSet := range oc.spanController.RemoveByTableIDs(tables...) {
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, replicaSet))
 	}
 }
 
@@ -160,7 +161,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 			zap.String("operator", op.String()))
 		return false
 	}
-	span := oc.replicationDB.GetTaskByID(op.ID())
+	span := oc.spanController.GetTaskByID(op.ID())
 	if span == nil {
 		log.Warn("add operator failed, span not found",
 			zap.String("role", oc.role),
@@ -189,10 +190,10 @@ func (oc *Controller) OnNodeRemoved(n node.ID) {
 	oc.mu.RLock()
 	defer oc.mu.RUnlock()
 
-	for _, span := range oc.replicationDB.GetTaskByNodeID(n) {
+	for _, span := range oc.spanController.GetTaskByNodeID(n) {
 		_, ok := oc.operators[span.ID]
 		if !ok {
-			oc.replicationDB.MarkSpanAbsent(span)
+			oc.spanController.MarkSpanAbsent(span)
 		}
 	}
 	for _, op := range oc.operators {
@@ -323,32 +324,32 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherI
 
 func (oc *Controller) NewAddOperator(replicaSet *replica.SpanReplication, id node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
 	return &AddDispatcherOperator{
-		replicaSet: replicaSet,
-		dest:       id,
-		db:         oc.replicationDB,
+		replicaSet:     replicaSet,
+		dest:           id,
+		spanController: oc.spanController,
 	}
 }
 
 func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origin, dest node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
 	return &MoveDispatcherOperator{
-		replicaSet: replicaSet,
-		origin:     origin,
-		dest:       dest,
-		db:         oc.replicationDB,
+		replicaSet:     replicaSet,
+		origin:         origin,
+		dest:           dest,
+		spanController: oc.spanController,
 	}
 }
 
 func (oc *Controller) NewRemoveOperator(replicaSet *replica.SpanReplication) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
 	return &removeDispatcherOperator{
-		replicaSet: replicaSet,
-		db:         oc.replicationDB,
+		replicaSet:     replicaSet,
+		spanController: oc.spanController,
 	}
 }
 
 func (oc *Controller) NewSplitOperator(
 	replicaSet *replica.SpanReplication, originNode node.ID, splitSpans []*heartbeatpb.TableSpan,
 ) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return NewSplitDispatcherOperator(oc.replicationDB, replicaSet, originNode, splitSpans)
+	return NewSplitDispatcherOperator(oc.spanController, replicaSet, originNode, splitSpans)
 }
 
 // AddMergeOperator creates a merge operator, which merge consecutive replica sets.
@@ -362,7 +363,7 @@ func (oc *Controller) AddMergeOperator(
 
 	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
 	for _, replicaSet := range affectedReplicaSets {
-		operator := NewOccupyDispatcherOperator(oc.replicationDB, replicaSet)
+		operator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
 		operators = append(operators, operator)
 
 		if _, ok := oc.operators[operator.ID()]; ok {
@@ -375,7 +376,7 @@ func (oc *Controller) AddMergeOperator(
 		oc.pushOperator(operator)
 	}
 
-	mergeOperator := NewMergeDispatcherOperator(oc.replicationDB, affectedReplicaSets, operators)
+	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators)
 	if mergeOperator == nil {
 		log.Error("failed to create merge operator",
 			zap.String("changefeed", oc.changefeedID.Name()),
@@ -421,7 +422,7 @@ func (oc *Controller) AddMergeSplitOperator(
 			)
 			return false
 		}
-		span := oc.replicationDB.GetTaskByID(replicaSet.ID)
+		span := oc.spanController.GetTaskByID(replicaSet.ID)
 		if span == nil {
 			log.Warn("add operator failed, span not found",
 				zap.String("role", oc.role),
@@ -432,13 +433,13 @@ func (oc *Controller) AddMergeSplitOperator(
 	}
 	randomIdx := rand.Intn(len(affectedReplicaSets))
 	primaryID := affectedReplicaSets[randomIdx].ID
-	primaryOp := NewMergeSplitDispatcherOperator(oc.replicationDB, primaryID, affectedReplicaSets[randomIdx], affectedReplicaSets, splitSpans, nil)
+	primaryOp := NewMergeSplitDispatcherOperator(oc.spanController, primaryID, affectedReplicaSets[randomIdx], affectedReplicaSets, splitSpans, nil)
 	for _, replicaSet := range affectedReplicaSets {
 		var op *MergeSplitDispatcherOperator
 		if replicaSet.ID == primaryID {
 			op = primaryOp
 		} else {
-			op = NewMergeSplitDispatcherOperator(oc.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.onFinished)
+			op = NewMergeSplitDispatcherOperator(oc.spanController, primaryID, replicaSet, nil, nil, primaryOp.onFinished)
 		}
 		oc.pushOperator(op)
 	}

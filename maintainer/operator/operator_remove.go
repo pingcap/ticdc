@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -29,16 +30,16 @@ import (
 // removeDispatcherOperator is an operator to remove a table span from a dispatcher
 // and remove it from the replication db
 type removeDispatcherOperator struct {
-	replicaSet *replica.SpanReplication
-	finished   atomic.Bool
-	db         *replica.ReplicationDB
-	repeat     bool
+	replicaSet     *replica.SpanReplication
+	finished       atomic.Bool
+	spanController *span.Controller
+	repeat         bool
 }
 
-func newRemoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
+func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
-		replicaSet: replicaSet,
-		db:         db,
+		replicaSet:     replicaSet,
+		spanController: spanController,
 	}
 }
 
