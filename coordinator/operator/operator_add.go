@@ -26,12 +26,18 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	None = iota
+	NodeRemoved
+	TaskRemoved
+)
+
 // AddMaintainerOperator is an operator to schedule a maintainer to a node
 type AddMaintainerOperator struct {
 	cf       *changefeed.Changefeed
 	dest     node.ID
 	finished atomic.Bool
-	canceled atomic.Bool
+	canceled int
 	db       *changefeed.ChangefeedDB
 }
 
@@ -41,9 +47,10 @@ func NewAddMaintainerOperator(
 	dest node.ID,
 ) *AddMaintainerOperator {
 	return &AddMaintainerOperator{
-		cf:   cf,
-		dest: dest,
-		db:   db,
+		cf:       cf,
+		dest:     dest,
+		db:       db,
+		canceled: None,
 	}
 }
 
@@ -56,7 +63,7 @@ func (m *AddMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintain
 }
 
 func (m *AddMaintainerOperator) Schedule() *messaging.TargetMessage {
-	if m.finished.Load() || m.canceled.Load() {
+	if m.finished.Load() || m.canceled != None {
 		return nil
 	}
 	return m.cf.NewAddMaintainerMessage(m.dest)
@@ -66,7 +73,7 @@ func (m *AddMaintainerOperator) Schedule() *messaging.TargetMessage {
 func (m *AddMaintainerOperator) OnNodeRemove(n node.ID) {
 	if n == m.dest {
 		m.finished.Store(true)
-		m.canceled.Store(true)
+		m.canceled = NodeRemoved
 	}
 }
 
@@ -84,7 +91,7 @@ func (m *AddMaintainerOperator) IsFinished() bool {
 
 func (m *AddMaintainerOperator) OnTaskRemoved() {
 	m.finished.Store(true)
-	m.canceled.Store(true)
+	m.canceled = TaskRemoved
 }
 
 func (m *AddMaintainerOperator) Start() {
@@ -92,12 +99,13 @@ func (m *AddMaintainerOperator) Start() {
 }
 
 func (m *AddMaintainerOperator) PostFinish() {
-	if !m.canceled.Load() {
+	if m.canceled == None {
 		m.db.MarkMaintainerReplicating(m.cf)
 		m.cf.SetIsNew(false)
-	} else {
+	} else if m.canceled == NodeRemoved {
 		m.db.MarkMaintainerAbsent(m.cf)
 	}
+	// TaskRemoved only happen when the changefeed is removed, so we don't need to do anything
 }
 
 func (m *AddMaintainerOperator) String() string {

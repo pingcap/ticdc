@@ -114,7 +114,7 @@ func (m *AddDispatcherOperator) PostFinish() {
 	if !m.removed.Load() {
 		m.db.MarkSpanReplicating(m.replicaSet)
 	} else {
-		if m.db.GetTaskByID(m.replicaSet.ID) != nil { // TODO:what that is ?
+		if m.db.GetTaskByID(m.replicaSet.ID) != nil {
 			m.db.MarkSpanAbsent(m.replicaSet)
 		}
 	}

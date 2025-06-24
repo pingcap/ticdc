@@ -66,6 +66,10 @@ func (d *Dispatcher) GetStartTsIsSyncpoint() bool {
 	return d.startTsIsSyncpoint
 }
 
+func (d *Dispatcher) SetStartTsIsSyncpoint(startTsIsSyncpoint bool) {
+	d.startTsIsSyncpoint = startTsIsSyncpoint
+}
+
 func (d *Dispatcher) GetComponentStatus() heartbeatpb.ComponentState {
 	return d.componentStatus.Get()
 }

@@ -34,8 +34,9 @@ import (
 var _ dispatcher.EventDispatcher = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
-	id     common.DispatcherID
-	handle func(commonEvent.Event)
+	id        common.DispatcherID
+	tableSpan *heartbeatpb.TableSpan
+	handle    func(commonEvent.Event)
 }
 
 func (m *mockEventDispatcher) GetId() common.DispatcherID {
@@ -51,7 +52,7 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
-	return nil
+	return m.tableSpan
 }
 
 func (m *mockEventDispatcher) GetFilterConfig() *eventpb.FilterConfig {
@@ -135,15 +136,16 @@ func TestProcessMessage(t *testing.T) {
 	handshakeEvent.Seq = seq.Add(1)
 	ddl.Seq = seq.Add(1)
 	events[ddl.Seq] = ddl
-	for _, dml := range dmls.DMLEvents {
+	for i, dml := range dmls.DMLEvents {
 		dml.DispatcherID = did
 		dml.Seq = seq.Add(1)
+		dml.CommitTs = ddl.FinishedTs + uint64(i)
 		events[dml.Seq] = dml
 	}
 
 	seq.Store(1)
 	done := make(chan struct{})
-	d := &mockEventDispatcher{id: did}
+	d := &mockEventDispatcher{id: did, tableSpan: &heartbeatpb.TableSpan{TableID: 1}}
 	d.handle = func(e commonEvent.Event) {
 		require.Equal(t, e.GetSeq(), seq.Add(1))
 		require.Equal(t, events[e.GetSeq()], e)

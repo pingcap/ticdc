@@ -275,11 +275,10 @@ func (w *Writer) SyncWrite(event writer.RedoEvent) error {
 }
 
 func (w *Writer) encode(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second * 1)
+	ticker := time.NewTicker(redo.DefaultFlushIntervalInMs)
 	defer ticker.Stop()
 	num := 0
-	batchSize := 1000
-	cacheEventPostFlush := make([]func(), 0, batchSize)
+	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)
 	flush := func() error {
 		err := w.Flush()
 		if err != nil {
@@ -306,7 +305,7 @@ func (w *Writer) encode(ctx context.Context) error {
 			return err
 		}
 		num++
-		if num > batchSize {
+		if num > redo.DefaultFlushBatchSize {
 			err := flush()
 			if err != nil {
 				return errors.Trace(err)

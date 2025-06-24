@@ -94,8 +94,8 @@ func TestEventServiceBasic(t *testing.T) {
 	schemastore := esImpl.schemaStore.(*mockSchemaStore)
 	schemastore.AppendDDLEvent(dispatcherInfo.span.TableID, ddlEvent)
 
-	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-	mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents...)
+	resolvedTs := kvEvents[0].CRTs + 1
+	mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents[0])
 	// receive events from msg center
 	msgCnt := 0
 	dmlCount := 0
@@ -123,6 +123,8 @@ func TestEventServiceBasic(t *testing.T) {
 				require.Equal(t, dispatcherInfo.startTs, e.GetStartTs())
 				require.Equal(t, uint64(1), e.Seq)
 				log.Info("receive handshake event", zap.Any("event", e))
+				mockStore.AppendEvents(dispatcherInfo.id, kvEvents[1].CRTs+1, kvEvents[1])
+				mockStore.AppendEvents(dispatcherInfo.id, kvEvents[2].CRTs+1, kvEvents[2])
 			case *commonEvent.BatchDMLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)

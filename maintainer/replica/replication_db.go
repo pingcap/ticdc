@@ -248,6 +248,12 @@ func (db *ReplicationDB) AddAbsentReplicaSet(spans ...*SpanReplication) {
 	db.addAbsentReplicaSetWithoutLock(spans...)
 }
 
+func (db *ReplicationDB) AddSchedulingReplicaSet(span *SpanReplication, targetNodeID node.ID) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.addSchedulingReplicaSetWithoutLock(span, targetNodeID)
+}
+
 // MarkSpanAbsent move the span to the absent status
 func (db *ReplicationDB) MarkSpanAbsent(span *SpanReplication) {
 	db.mu.Lock()
@@ -344,6 +350,12 @@ func (db *ReplicationDB) addAbsentReplicaSetWithoutLock(spans ...*SpanReplicatio
 		db.AddAbsentWithoutLock(span)
 		db.addToSchemaAndTableMap(span)
 	}
+}
+
+func (db *ReplicationDB) addSchedulingReplicaSetWithoutLock(span *SpanReplication, targetNodeID node.ID) {
+	db.allTasks[span.ID] = span
+	db.AddSchedulingReplicaWithoutLock(span, targetNodeID)
+	db.addToSchemaAndTableMap(span)
 }
 
 func (db *ReplicationDB) RemoveReplicatingSpan(span *SpanReplication) {
