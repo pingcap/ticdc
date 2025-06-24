@@ -623,6 +623,7 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64, redo bool) e
 		primaryOp *operator.MergeSplitDispatcherOperator
 		op        *operator.MergeSplitDispatcherOperator
 	)
+	operators := make([]*operator.MergeSplitDispatcherOperator, 0, len(replications))
 	for idx, replicaSet := range replications {
 		if idx == randomIdx {
 			op = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, replications, splitTableSpans, nil)
@@ -632,8 +633,13 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64, redo bool) e
 		}
 		success := operatorController.AddOperator(op)
 		if !success {
+			// this op is created failed, so we need to remove the previous operators. Otherwise, the previous operators will never finish.
+			for _, op := range operators {
+				op.OnTaskRemoved()
+			}
 			return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add split table operator failed", redo)
 		}
+		operators = append(operators, op)
 	}
 
 	count := 0

@@ -513,7 +513,7 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		needUpdate = true
 	}
 	log.Debug("received redo ts message", zap.Bool("advance", advance), zap.Bool("redoAdvance", redoAdvance),
-		zap.Any("needUpdate", needUpdate),
+		zap.Any("needUpdate", needUpdate), zap.Any("map", m.redoTsMap), zap.Any("nodeId", id),
 		zap.Any("message", msg), zap.Any("globalRedoTs", m.redoTs.RedoTsMessage),
 		zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs),
 	)
@@ -549,6 +549,16 @@ func (m *Maintainer) onNodeChanged() {
 
 		}
 	}
+	// redo
+	if m.redoDDLSpan != nil {
+		m.redoTs.mu.Lock()
+		defer m.redoTs.mu.Unlock()
+		for rid := range m.redoTsMap {
+			if _, ok := activeNodes[rid]; !ok {
+				delete(m.redoTsMap, rid)
+			}
+		}
+	}
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),
 		zap.Int("new", len(newNodes)),
 		zap.Int("removed", len(removedNodes)))
@@ -557,14 +567,6 @@ func (m *Maintainer) onNodeChanged() {
 	if cachedResponse != nil {
 		log.Info("bootstrap done after removed some nodes", zap.String("id", m.id.String()))
 		m.onBootstrapDone(cachedResponse)
-	}
-	// redo
-	if m.redoDDLSpan != nil {
-		m.redoTs.mu.Lock()
-		defer m.redoTs.mu.Unlock()
-		for _, id := range removedNodes {
-			delete(m.redoTsMap, id)
-		}
 	}
 }
 
