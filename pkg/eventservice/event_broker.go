@@ -343,7 +343,7 @@ func (c *eventBroker) scanReady(task scanTask, mustCheck bool) (common.DataRange
 	}
 
 	if !c.checkAndSendHandshake(task) {
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
 
 	// Only check scan when the dispatcher is running.

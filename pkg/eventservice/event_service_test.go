@@ -638,8 +638,7 @@ func TestMockEventIterator(t *testing.T) {
 	}
 
 	// Case 1: empty iterator
-	row, isNewTxn, err := iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn := iter.Next()
 	require.False(t, isNewTxn)
 	require.Nil(t, row)
 
@@ -657,24 +656,20 @@ func TestMockEventIterator(t *testing.T) {
 	iter.events = append(iter.events, row2, row2)
 
 	// txn-1, row-1
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.True(t, isNewTxn)
 	require.NotNil(t, row)
 	// txn-1, row-2
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.False(t, isNewTxn)
 	require.NotNil(t, row)
 
 	// txn-2, row1
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.True(t, isNewTxn)
 	require.NotNil(t, row)
 	// txn2, row2
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.False(t, isNewTxn)
 	require.NotNil(t, row)
 }
