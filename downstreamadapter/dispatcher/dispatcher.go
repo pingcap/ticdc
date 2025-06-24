@@ -175,9 +175,6 @@ type Dispatcher struct {
 	redo         bool
 	redoGlobalTs *atomic.Uint64
 	cacheEvents  chan cacheEvents
-
-	// hack
-	mu sync.Mutex
 }
 
 func NewDispatcher(
@@ -268,19 +265,11 @@ func (d *Dispatcher) HandleCacheEvents() {
 	}
 }
 
-// handleEvents can batch handle events about resolvedTs Event and DML Event.
-// While for DDLEvent and SyncPointEvent, they should be handled separately,
-// because they are block events.
-// We ensure we only will receive one event when it's ddl event or sync point event
-// by setting them with different event types in DispatcherEventsHandler.GetType
-// When we handle events, we don't have any previous events still in sink.
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	if d.isRemoving.Load() {
 		log.Warn("dispatcher has removed", zap.Any("id", d.id))
 		return true
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	// redo check
 	if d.redo && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
 		// cache here
@@ -303,10 +292,20 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	return d.handleEvents(dispatcherEvents, wakeCallback)
 }
 
+// handleEvents can batch handle events about resolvedTs Event and DML Event.
+// While for DDLEvent and SyncPointEvent, they should be handled separately,
+// because they are block events.
+// We ensure we only will receive one event when it's ddl event or sync point event
+// by setting them with different event types in DispatcherEventsHandler.GetType
+// When we handle events, we don't have any previous events still in sink.
+//
+// wakeCallback is used to wake the dynamic stream to handle the next batch events.
+// It will be called when all the events are flushed to downstream successfully.
 func (d *Dispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	dmlWakeOnce := &sync.Once{}
+	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
@@ -355,7 +354,7 @@ func (d *Dispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 					dmlWakeOnce.Do(wakeCallback)
 				}
 			})
-			d.AddDMLEventToSink(dml)
+			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled",
@@ -413,12 +412,23 @@ func (d *Dispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Uint64("commitTs", event.GetCommitTs()))
 		}
 	}
+	if len(dmlEvents) > 0 {
+		d.AddDMLEventsToSink(dmlEvents)
+	}
 	return block
 }
 
-func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
-	d.tableProgress.Add(event)
-	d.sink.AddDMLEvent(event)
+func (d *Dispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
+	// for one batch events, we need to add all them in table progress first, then add them to sink
+	// because we need to ensure the wakeCallback only will be called when
+	// all these events are flushed to downstream successfully
+	for _, event := range events {
+		d.tableProgress.Add(event)
+	}
+	for _, event := range events {
+		d.sink.AddDMLEvent(event)
+		failpoint.Inject("BlockAddDMLEvents", nil)
+	}
 }
 
 func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
