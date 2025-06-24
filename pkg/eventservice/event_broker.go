@@ -500,9 +500,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
-	if interrupted {
-		return
-	}
 
 	// If the task is not running, we don't send the events to the dispatcher.
 	if !task.isRunning.Load() {
@@ -585,12 +582,10 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 					d, ok := c.getDispatcher(m.getDispatcherID())
 					if !ok {
 						log.Warn("Get dispatcher failed", zap.Any("dispatcherID", m.getDispatcherID()))
-						m.reset()
 						continue
 					}
 					if d.isHandshaked.Load() {
 						log.Info("Ignore handshake event since the dispatcher already handshaked", zap.Any("dispatcherID", m.getDispatcherID()))
-						m.reset()
 						continue
 					}
 				}
