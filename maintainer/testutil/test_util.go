@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -36,4 +38,11 @@ func SetNodeManagerAndMessageCenter() *watcher.NodeManager {
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	return nodeManager
+}
+
+// GetAbsentForTest returns absent spans for testing
+func GetAbsentForTest(controller *span.Controller, limit int) []*replica.SpanReplication {
+	ret := controller.GetAbsent()
+	limit = min(limit, len(ret))
+	return ret[:limit]
 }

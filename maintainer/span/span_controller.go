@@ -34,7 +34,6 @@ import (
 var _ pkgreplica.ReplicationDB[common.DispatcherID, *replica.SpanReplication] = &Controller{}
 
 // Controller manages span lifecycle and replication state
-// It embeds the ReplicationDB functionality directly to provide a unified interface
 type Controller struct {
 	// changefeedID uniquely identifies the changefeed this Controller belongs to
 	changefeedID common.ChangeFeedID
@@ -224,11 +223,6 @@ func (c *Controller) TaskSize() int {
 	return len(c.allTasks)
 }
 
-// GetTaskSizeByNodeID get task size by node id
-func (c *Controller) GetTaskSizeByNodeID(id node.ID) int {
-	return c.ReplicationDB.GetTaskSizeByNodeID(id)
-}
-
 // IsTableExists checks if the table exists in the db
 func (c *Controller) IsTableExists(tableID int64) bool {
 	c.mu.RLock()
@@ -388,76 +382,6 @@ func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplicatio
 	c.addAbsentReplicaSetWithoutLock(news...)
 }
 
-// GetAbsentSize get absent size
-func (c *Controller) GetAbsentSize() int {
-	return c.ReplicationDB.GetAbsentSize()
-}
-
-// GetSchedulingSize get scheduling size
-func (c *Controller) GetSchedulingSize() int {
-	return c.ReplicationDB.GetSchedulingSize()
-}
-
-// GetReplicatingSize get replicating size
-func (c *Controller) GetReplicatingSize() int {
-	return c.ReplicationDB.GetReplicatingSize()
-}
-
-// GetAbsent get absent spans
-func (c *Controller) GetAbsent() []*replica.SpanReplication {
-	return c.ReplicationDB.GetAbsent()
-}
-
-// GetScheduling get scheduling spans
-func (c *Controller) GetScheduling() []*replica.SpanReplication {
-	return c.ReplicationDB.GetScheduling()
-}
-
-// GetReplicating get replicating spans
-func (c *Controller) GetReplicating() []*replica.SpanReplication {
-	return c.ReplicationDB.GetReplicating()
-}
-
-// GetReplicationDB returns the internal replicationDB
-func (c *Controller) GetReplicationDB() pkgreplica.ReplicationDB[common.DispatcherID, *replica.SpanReplication] {
-	return c.ReplicationDB
-}
-
-// GetGroups returns all group IDs
-func (c *Controller) GetGroups() []pkgreplica.GroupID {
-	return c.ReplicationDB.GetGroups()
-}
-
-// GetScheduleTaskSizePerNodeByGroup returns the schedule task size per node by group
-func (c *Controller) GetScheduleTaskSizePerNodeByGroup(groupID pkgreplica.GroupID) map[node.ID]int {
-	return c.ReplicationDB.GetScheduleTaskSizePerNodeByGroup(groupID)
-}
-
-// GetAbsentByGroup returns absent spans by group
-func (c *Controller) GetAbsentByGroup(groupID pkgreplica.GroupID, batch int) []*replica.SpanReplication {
-	return c.ReplicationDB.GetAbsentByGroup(groupID, batch)
-}
-
-// GetTaskSizePerNodeByGroup returns the task size per node by group
-func (c *Controller) GetTaskSizePerNodeByGroup(groupID pkgreplica.GroupID) map[node.ID]int {
-	return c.ReplicationDB.GetTaskSizePerNodeByGroup(groupID)
-}
-
-// GetReplicatingByGroup returns replicating spans by group
-func (c *Controller) GetReplicatingByGroup(groupID pkgreplica.GroupID) []*replica.SpanReplication {
-	return c.ReplicationDB.GetReplicatingByGroup(groupID)
-}
-
-// GetTaskSizePerNode returns the task size per node
-func (c *Controller) GetTaskSizePerNode() map[node.ID]int {
-	return c.ReplicationDB.GetTaskSizePerNode()
-}
-
-// GetImbalanceGroupNodeTask returns imbalance group node task
-func (c *Controller) GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (map[pkgreplica.GroupID]map[node.ID]*replica.SpanReplication, bool) {
-	return c.ReplicationDB.GetImbalanceGroupNodeTask(nodes)
-}
-
 // IsDDLDispatcher checks if the dispatcher is a DDL dispatcher
 func (c *Controller) IsDDLDispatcher(dispatcherID common.DispatcherID) bool {
 	return dispatcherID == c.ddlDispatcherID
@@ -476,16 +400,6 @@ func (c *Controller) GetDDLDispatcher() *replica.SpanReplication {
 // GetSplitter returns the splitter
 func (c *Controller) GetSplitter() *split.Splitter {
 	return c.splitter
-}
-
-// GetCheckerStat returns checker stat
-func (c *Controller) GetCheckerStat() string {
-	return c.ReplicationDB.GetCheckerStat()
-}
-
-// GetGroupStat returns group stat
-func (c *Controller) GetGroupStat() string {
-	return c.ReplicationDB.GetGroupStat()
 }
 
 // CheckByGroup checks by group
@@ -540,18 +454,6 @@ func (c *Controller) RemoveBySchemaID(schemaID int64) []*replica.SpanReplication
 		}
 	}
 	return tasks
-}
-
-// GetTaskByNodeID returns the spans by the node id
-func (c *Controller) GetTaskByNodeID(id node.ID) []*replica.SpanReplication {
-	return c.ReplicationDB.GetTaskByNodeID(id)
-}
-
-// GetAbsentForTest returns absent spans for testing
-func (c *Controller) GetAbsentForTest(existing []*replica.SpanReplication, limit int) []*replica.SpanReplication {
-	ret := c.GetAbsent()
-	limit = min(limit, len(ret))
-	return ret[:limit]
 }
 
 // removeSpanWithoutLock removes the spans from the db without lock

@@ -96,7 +96,7 @@ func TestResendAction(t *testing.T) {
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	var dispatcherIDs []common.DispatcherID
-	absents := spanController.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
+	absents := testutil.GetAbsentForTest(spanController, 100)
 	for _, stm := range absents {
 		spanController.BindSpanToNode("", "node1", stm)
 		spanController.MarkSpanReplicating(stm)

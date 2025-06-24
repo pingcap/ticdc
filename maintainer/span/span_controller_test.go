@@ -421,19 +421,6 @@ func TestForceRemove(t *testing.T) {
 	require.Len(t, controller.GetAllTasks(), 1)
 }
 
-// TestGetAbsents tests the GetAbsentForTest functionality
-func TestGetAbsents(t *testing.T) {
-	t.Parallel()
-
-	controller := newControllerWithCheckerForTest(t)
-	for i := 0; i < 10; i++ {
-		absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(int64(i+1)), 1)
-		controller.AddAbsentReplicaSet(absent)
-	}
-	require.Len(t, controller.GetAbsentForTest(nil, 5), 5)
-	require.Len(t, controller.GetAbsentForTest(nil, 15), 10)
-}
-
 // TestRemoveAllTables tests the RemoveAll functionality
 func TestRemoveAllTables(t *testing.T) {
 	t.Parallel()
