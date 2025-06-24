@@ -619,17 +619,20 @@ func (cm *ControllerManager) splitTableByRegionCount(tableID int64, redo bool) e
 
 	randomIdx := rand.Intn(len(replications))
 	primaryID := replications[randomIdx].ID
-	var primaryOp *operator.MergeSplitDispatcherOperator
+	var (
+		primaryOp *operator.MergeSplitDispatcherOperator
+		op        *operator.MergeSplitDispatcherOperator
+	)
 	for idx, replicaSet := range replications {
 		if idx == randomIdx {
-			primaryOp = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, replications, splitTableSpans, nil)
-			success := operatorController.AddOperator(primaryOp)
-			if !success {
-				return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add split table operator failed", redo)
-			}
+			op = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, replications, splitTableSpans, nil)
+			primaryOp = op
 		} else {
-			op := operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
-			operatorController.AddOperator(op)
+			op = operator.NewMergeSplitDispatcherOperator(controller.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
+		}
+		success := operatorController.AddOperator(op)
+		if !success {
+			return apperror.ErrTableIsNotFounded.GenWithStackByArgs("add split table operator failed", redo)
 		}
 	}
 
