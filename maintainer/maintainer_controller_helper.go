@@ -152,7 +152,10 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		} else {
 			op = operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
 		}
-		c.operatorController.AddOperator(op)
+		ret := c.operatorController.AddOperator(op)
+		if !ret {
+			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge split dispatcher operator")
+		}
 	}
 
 	count := 0
@@ -214,7 +217,10 @@ func (c *Controller) mergeTable(tableID int64) error {
 		idx = 0
 		// try to move the second span to the first span's node
 		moveOp := c.operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
-		c.operatorController.AddOperator(moveOp)
+		ret := c.operatorController.AddOperator(moveOp)
+		if !ret {
+			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+		}
 
 		count := 0
 		maxTry := 30
