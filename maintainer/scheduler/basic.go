@@ -27,14 +27,24 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 )
 
-// basicScheduler generates operators for the spans, and push them to the operator controller
-// it generates add operator for the absent spans, and move operator for the unbalanced replicating spans
-// currently, it only supports balance the spans by size
+// basicScheduler generates add operators for spans and pushes them to the operator controller.
+// It creates add operators for absent spans to initiate replication.
+//
+// Absent spans fall into two categories:
+// 1. Regular spans with groupID set to DefaultGroupID
+// 2. Split table spans where each table's split spans share the same groupID
+//
+// During the transition from absent to replicating state, spans undergo incremental scanning.
+// To maximize node utilization and balance incremental scan traffic across all nodes,
+// we use each node's current scheduling size per group to guide span allocation.
+//
+// When there are many absent spans, we prioritize scheduling split table spans first,
+// then allocate remaining capacity to regular spans.
+// We ensure the total number of operators never exceeds batchSize.
 type basicScheduler struct {
 	id        string
 	batchSize int
-	// the max scheduling task count for each group in each node.
-	// TODO: we need to select a good value
+	// the max scheduling task count for each non-default group in each node.
 	schedulingTaskCountPerNode int
 
 	operatorController *operator.Controller
@@ -82,47 +92,54 @@ func (s *basicScheduler) Execute() time.Time {
 		return time.Now().Add(time.Millisecond * 100)
 	}
 
+	// deal with the split table spans first
 	for _, id := range s.spanController.GetGroups() {
+		if id == pkgreplica.DefaultGroupID {
+			continue
+		}
 		availableSize -= s.schedule(id, availableSize)
 		if availableSize <= 0 {
 			break
 		}
 	}
 
+	if availableSize > 0 {
+		// still have available size, deal with the normal spans
+		s.schedule(pkgreplica.DefaultGroupID, availableSize)
+	}
 	return time.Now().Add(time.Millisecond * 500)
 }
 
-func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int) (scheduled int) {
+func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int) int {
 	scheduleNodeSize := s.spanController.GetScheduleTaskSizePerNodeByGroup(groupID)
-
-	// calculate the space based on schedule count
+	// for each group, we try to make each node have the same scheduling task count,
+	// to make the usage of each node as balanced as possible.
+	//
+	// for the split table spans, each time each node can at most have s.schedulingTaskCountPerNode scheduling tasks.
+	// for the normal spans, we don't have the upper limit.
 	size := 0
 	for id := range s.nodeManager.GetAliveNodes() {
 		if _, ok := scheduleNodeSize[id]; !ok {
 			scheduleNodeSize[id] = 0
 		}
-		if groupID == pkgreplica.DefaultGroupID {
-			// for default group, each node can support more task
-			size += s.schedulingTaskCountPerNode*10 - scheduleNodeSize[id]
-		} else {
+		if groupID != pkgreplica.DefaultGroupID {
 			size += s.schedulingTaskCountPerNode - scheduleNodeSize[id]
 		}
-
 	}
 
-	if size == 0 {
-		// no available slot for new replication task
-		return
+	if groupID != pkgreplica.DefaultGroupID {
+		if size == 0 {
+			return 0
+		}
+		availableSize = min(availableSize, size)
 	}
-	availableSize = min(availableSize, size)
 
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, scheduleNodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
 		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id))
 	})
-	scheduled = len(absentReplications)
-	return
+	return len(absentReplications)
 }
 
 func (s *basicScheduler) Name() string {
