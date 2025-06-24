@@ -489,7 +489,7 @@ func TestSchemaBlock(t *testing.T) {
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
 	var dispatcherIDs []*heartbeatpb.DispatcherID
 	dropTables := []int64{1, 2}
-	absents := testutil.GetAbsentForTest(spanController, 100)
+	absents := spanController.GetAbsentForTest(100)
 	for _, stm := range absents {
 		if stm.GetSchemaID() == 1 {
 			dispatcherIDs = append(dispatcherIDs, stm.ID.ToPB())
@@ -664,7 +664,7 @@ func TestSyncPointBlock(t *testing.T) {
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
 	var dispatcherIDs []*heartbeatpb.DispatcherID
-	absents := testutil.GetAbsentForTest(spanController, 10000)
+	absents := spanController.GetAbsentForTest(10000)
 	for _, stm := range absents {
 		dispatcherIDs = append(dispatcherIDs, stm.ID.ToPB())
 		spanController.BindSpanToNode("", "node1", stm)
@@ -1091,7 +1091,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 1)
 	}
 	var dispatcherIDs []*heartbeatpb.DispatcherID
-	absent := testutil.GetAbsentForTest(spanController, 10000)
+	absent := spanController.GetAbsentForTest(10000)
 	for _, stm := range absent {
 		spanController.BindSpanToNode("", "node1", stm)
 		spanController.MarkSpanReplicating(stm)

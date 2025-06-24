@@ -528,3 +528,10 @@ func (c *Controller) ForceRemove(id common.DispatcherID) {
 
 	c.removeSpanWithoutLock(span)
 }
+
+// GetAbsentForTest returns absent spans for testing
+func (c *Controller) GetAbsentForTest(limit int) []*replica.SpanReplication {
+	ret := c.GetAbsent()
+	limit = min(limit, len(ret))
+	return ret[:limit]
+}
