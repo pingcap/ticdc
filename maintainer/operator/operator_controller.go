@@ -336,6 +336,14 @@ func (oc *Controller) AddMergeOperator(
 	for _, replicaSet := range affectedReplicaSets {
 		operator := NewOccupyDispatcherOperator(oc.replicationDB, replicaSet)
 		operators = append(operators, operator)
+
+		if _, ok := oc.operators[operator.ID()]; ok {
+			log.Info("add operator failed, operator already exists",
+				zap.String("role", oc.role),
+				zap.String("changefeed", oc.changefeedID.Name()),
+				zap.String("operator", operator.String()))
+			return nil
+		}
 		oc.pushOperator(operator)
 	}
 
@@ -345,6 +353,13 @@ func (oc *Controller) AddMergeOperator(
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
 		)
+		return nil
+	}
+	if _, ok := oc.operators[mergeOperator.ID()]; ok {
+		log.Info("add operator failed, operator already exists",
+			zap.String("role", oc.role),
+			zap.String("changefeed", oc.changefeedID.Name()),
+			zap.String("operator", mergeOperator.String()))
 		return nil
 	}
 	oc.pushOperator(mergeOperator)
