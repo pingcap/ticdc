@@ -33,7 +33,20 @@ import (
 
 var _ pkgreplica.ReplicationDB[common.DispatcherID, *replica.SpanReplication] = &Controller{}
 
-// Controller manages span lifecycle and replication state
+// Controller manages the lifecycle and scheduling of data replication spans for a changefeed.
+// It serves as the central coordinator for span operations, including creation, scheduling,
+// status tracking, and cleanup. The controller maintains multiple indexing structures to
+// efficiently access spans by different dimensions (dispatcher ID, table ID, schema ID).
+//
+// Key responsibilities:
+// - Span lifecycle management (add, remove, update)
+// - Multi-dimensional indexing for efficient span lookup
+// - Replication status tracking and state transitions
+// - DDL operation handling and schema updates
+// - Table splitting for cross-node replication
+// - Concurrent access control and thread safety
+//
+// The controller also implements the ReplicationDB interface to provide standardized replication database functionality
 type Controller struct {
 	// changefeedID uniquely identifies the changefeed this Controller belongs to
 	changefeedID common.ChangeFeedID
