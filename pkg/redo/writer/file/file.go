@@ -28,29 +28,33 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/codec"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	misc "github.com/pingcap/ticdc/redo/common"
-	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/atomic"
 	pioutil "go.etcd.io/etcd/pkg/v3/ioutil"
+	"golang.org/x/sync/errgroup"
 )
 
 //go:generate mockery --name=fileWriter --inpackage --quiet
 type fileWriter interface {
-	io.WriteCloser
-	Flush() error
-	// AdvanceTs receive the commitTs in the event from caller
-	AdvanceTs(commitTs uint64)
-	// IsRunning check the fileWriter status
+	Run(ctx context.Context) error
 	IsRunning() bool
+	SyncWrite(event writer.RedoEvent) error
+	GetInputCh() chan writer.RedoEvent
+	Flush() error
+	Close() error
 }
 
-// Writer is a redo log event Writer which writes redo log events to a file.
+// fileWriter is a redo log event fileWriter which writes redo log events to a file.
 type Writer struct {
-	cfg *writer.LogWriterConfig
-	op  *writer.LogWriterOptions
+	cfg     *writer.LogWriterConfig
+	logType string
+	op      *writer.LogWriterOptions
+	inputCh chan writer.RedoEvent
 	// maxCommitTS is the max commitTS among the events in one log file
 	maxCommitTS atomic.Uint64
 	// the ts used in file name
@@ -76,7 +80,7 @@ type Writer struct {
 
 // NewFileWriter return a file rotated writer, TODO: extract to a common rotate Writer
 func NewFileWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, opts ...writer.Option,
+	ctx context.Context, cfg *writer.LogWriterConfig, logType string, opts ...writer.Option,
 ) (*Writer, error) {
 	if cfg == nil {
 		err := errors.New("FileWriterConfig can not be nil")
@@ -99,16 +103,18 @@ func NewFileWriter(
 
 	w := &Writer{
 		cfg:       cfg,
+		logType:   logType,
 		op:        op,
+		inputCh:   make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*cfg.FlushWorkerNum),
 		uint64buf: make([]byte, 8),
 		storage:   extStorage,
 
 		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 		metricWriteBytes: misc.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 	}
 	if w.op.GetUUIDGenerator != nil {
 		w.uuidGenerator = w.op.GetUUIDGenerator()
@@ -130,11 +136,19 @@ func NewFileWriter(
 	// pre-allocate files for us.
 	// TODO: test whether this improvement can also be applied to NFS.
 	if w.cfg.UseExternalStorage {
-		w.allocator = fsutil.NewFileAllocator(cfg.Dir, cfg.LogType, cfg.MaxLogSizeInBytes)
+		w.allocator = fsutil.NewFileAllocator(cfg.Dir, logType, cfg.MaxLogSizeInBytes)
 	}
 
 	w.running.Store(true)
 	return w, nil
+}
+
+func (w *Writer) Run(ctx context.Context) error {
+	eg, ctx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		return w.encode(ctx)
+	})
+	return eg.Wait()
 }
 
 // Write implement write interface
@@ -213,11 +227,11 @@ func (w *Writer) Close() error {
 	}
 
 	misc.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.cfg.LogType)
+		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
 	misc.RedoFsyncDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.cfg.LogType)
+		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
 	misc.RedoWriteBytesGauge.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.cfg.LogType)
+		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
 
 	ctx, cancel := context.WithTimeout(context.Background(), redo.CloseTimeout)
 	defer cancel()
@@ -227,6 +241,81 @@ func (w *Writer) Close() error {
 // IsRunning implement IsRunning interface
 func (w *Writer) IsRunning() bool {
 	return w.running.Load()
+}
+
+func (w *Writer) GetInputCh() chan writer.RedoEvent {
+	return w.inputCh
+}
+
+func (w *Writer) write(event writer.RedoEvent) error {
+	rl := event.ToRedoLog()
+	data, err := codec.MarshalRedoLog(rl, nil)
+	if err != nil {
+		return errors.WrapError(errors.ErrMarshalFailed, err)
+	}
+	w.AdvanceTs(rl.GetCommitTs())
+	_, err = w.Write(data)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *Writer) SyncWrite(event writer.RedoEvent) error {
+	err := w.write(event)
+	if err != nil {
+		return err
+	}
+	err = w.Flush()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	event.PostFlush()
+	return nil
+}
+
+func (w *Writer) encode(ctx context.Context) error {
+	ticker := time.NewTicker(redo.DefaultFlushIntervalInMs)
+	defer ticker.Stop()
+	num := 0
+	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)
+	flush := func() error {
+		err := w.Flush()
+		if err != nil {
+			return err
+		}
+		for _, fn := range cacheEventPostFlush {
+			fn()
+		}
+		num = 0
+		cacheEventPostFlush = cacheEventPostFlush[:0]
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ticker.C:
+		err := flush()
+		if err != nil {
+			return errors.Trace(err)
+		}
+	case e := <-w.inputCh:
+		err := w.write(e)
+		if err != nil {
+			return err
+		}
+		num++
+		if num > redo.DefaultFlushBatchSize {
+			err := flush()
+			if err != nil {
+				return errors.Trace(err)
+			}
+			e.PostFlush()
+		} else {
+			cacheEventPostFlush = append(cacheEventPostFlush, e.PostFlush)
+		}
+	}
+	return nil
 }
 
 func (w *Writer) close(ctx context.Context) error {
@@ -297,12 +386,12 @@ func (w *Writer) getLogFileName() string {
 	uid := w.uuidGenerator.NewString()
 	if common.DefaultNamespace == w.cfg.ChangeFeedID.Namespace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
-			w.cfg.CaptureID, w.cfg.ChangeFeedID.Name(), w.cfg.LogType,
+			w.cfg.CaptureID, w.cfg.ChangeFeedID.Name(), w.logType,
 			w.commitTS.Load(), uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
 		w.cfg.CaptureID, w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
-		w.cfg.LogType, w.commitTS.Load(), uid, redo.LogEXT)
+		w.logType, w.commitTS.Load(), uid, redo.LogEXT)
 }
 
 // filePath always creates a new, unique file path, note this function is not

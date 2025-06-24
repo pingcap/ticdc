@@ -119,6 +119,12 @@ var (
 			Name:      "handle_event_duration",
 			Help:      "The duration of handling events",
 		})
+	EventCollectorDroppedEventCount = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_collector",
+		Name:      "dropped_event_count",
+		Help:      "The number of events dropped by the event collector",
+	})
 )
 
 func InitDispatcherMetrics(registry *prometheus.Registry) {
@@ -135,4 +141,5 @@ func InitDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorHandleEventDuration)
+	registry.MustRegister(EventCollectorDroppedEventCount)
 }

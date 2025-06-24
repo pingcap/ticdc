@@ -97,7 +97,7 @@ func TestCheckNeedScan(t *testing.T) {
 	// And the broker will send a handshake event.
 	disp.resetTs.Store(100)
 	_, needScan = broker.scanReady(disp, false)
-	require.True(t, needScan)
+	require.False(t, needScan)
 	e = <-broker.messageCh[0]
 	require.Equal(t, event.TypeHandshakeEvent, e.msgType)
 	log.Info("Pass case 3")

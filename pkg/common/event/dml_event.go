@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -45,6 +46,11 @@ type BatchDMLEvent struct {
 	// The receiver needs to call DecodeRawRows function to decode the RawRows into Rows.
 	RawRows   []byte            `json:"raw_rows"`
 	TableInfo *common.TableInfo `json:"table_info"`
+}
+
+func (b *BatchDMLEvent) String() string {
+	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %v, RawRows: %v, Table: %v, Len: %d}",
+		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo.TableName, b.Len())
 }
 
 // NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
@@ -284,6 +290,11 @@ type DMLEvent struct {
 	// and TiCDC set the integrity check level to the correctness.
 	Checksum       []*integrity.Checksum `json:"-"`
 	checksumOffset int                   `json:"-"`
+}
+
+func (t *DMLEvent) String() string {
+	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
+		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName, t.Checksum, t.Length, t.ApproximateSize)
 }
 
 // NewDMLEvent creates a new DMLEvent with the given parameters

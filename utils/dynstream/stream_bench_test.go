@@ -50,7 +50,7 @@ func (h *incHandler) GetArea(path string, dest D) int   { return 0 }
 func (h *incHandler) GetTimestamp(event *inc) Timestamp { return 0 }
 func (h *incHandler) GetType(event *inc) EventType      { return DefaultEventType }
 func (h *incHandler) IsPaused(event *inc) bool          { return false }
-func (h *incHandler) OnDrop(event *inc)                 {}
+func (h *incHandler) OnDrop(event *inc) interface{}     { return nil }
 
 func runStream(eventCount int, times int) {
 	handler := &incHandler{}

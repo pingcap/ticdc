@@ -28,6 +28,7 @@ function run() {
 		go-ycsb load mysql -P $CUR/conf/workload1 -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=$db
 	done
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/InjectDropEvent=10%return(true)'
 	# start $CDC_COUNT cdc servers, and create a changefeed
 	for i in $(seq $CDC_COUNT); do
 		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "$i" --addr "127.0.0.1:830${i}"

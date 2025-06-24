@@ -36,8 +36,8 @@ const (
 	reportMaintainerStatusInterval = time.Millisecond * 1000
 )
 
-// Manager is the manager of all changefeed maintainer in a ticdc watcher, each ticdc watcher will
-// start a Manager when the watcher is startup. It responsible for:
+// Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
+// start a Manager when the ticdc server is startup. It responsible for:
 // 1. Handle bootstrap command from coordinator and report all changefeed maintainer status.
 // 2. Handle other commands from coordinator: like add or remove changefeed maintainer
 // 3. Manage maintainers lifetime

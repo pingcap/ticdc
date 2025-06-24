@@ -14,6 +14,8 @@
 package event
 
 import (
+	"fmt"
+
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"go.uber.org/zap"
@@ -35,6 +37,10 @@ func NewNotReusableEvent(dispatcherID common.DispatcherID) NotReusableEvent {
 		Version:      NotReusableEventVersion,
 		DispatcherID: dispatcherID,
 	}
+}
+
+func (e *NotReusableEvent) String() string {
+	return fmt.Sprintf("NotReusableEvent{Version: %d, DispatcherID: %s}", e.Version, e.DispatcherID)
 }
 
 // GetType returns the event type

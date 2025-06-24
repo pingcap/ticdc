@@ -88,7 +88,7 @@ function ddl_test() {
 
 	echo $restored_sql >${WORK_DIR}/ddl_temp.sql
 	ensure 10 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" true
-	ddl_finished_ts=$(grep "Execute DDL succeeded" ${WORK_DIR}/cdc.log | tail -n 1 | grep -oE '"finished_ts\\":[0-9]{18}' | awk -F: '{print $(NF)}')
+	ddl_finished_ts=$(grep "Execute DDL succeeded" ${WORK_DIR}/cdc.log | tail -n 1 | grep -oE 'FinishedTs: [0-9]+' | awk '{print $2}')
 	cdc cli changefeed pause --changefeed-id=${changefeedid}
 	cdc cli changefeed resume --no-confirm --changefeed-id=${changefeedid} --overwrite-checkpoint-ts=$((ddl_finished_ts - 1))
 	echo "resume changefeed ${changefeedid} from ${ddl_finished_ts}"
