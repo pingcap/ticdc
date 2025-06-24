@@ -260,7 +260,11 @@ data-dir = "$WORK_DIR/tiup-cluster/playground-serverless/br"
 
 [replication-worker]
 enabled = true
-grpc-addr = "127.0.0.1:5999"
+grpc-addr = "0.0.0.0:19160"
+advertise-addr = "127.0.0.1:19160"
+
+[replication-worker.merged-engine]
+merged-store-id = 1024
 
 [dfs]
 prefix = "serverless"
