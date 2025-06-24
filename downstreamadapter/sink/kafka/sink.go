@@ -459,7 +459,8 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	}
 	log.Info("kafka sink send DDL event",
 		zap.String("namespace", s.changefeedID.Namespace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()))
+		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
+		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -31,7 +32,7 @@ import (
 // MergeSplitDispatcherOperator is an operator to remove a table span from a dispatcher
 // and then added some new spans to the replication db
 type MergeSplitDispatcherOperator struct {
-	db               *replica.ReplicationDB
+	spanController   *span.Controller
 	originNode       node.ID
 	originReplicaSet *replica.SpanReplication
 
@@ -51,7 +52,7 @@ type MergeSplitDispatcherOperator struct {
 
 // NewMergeSplitDispatcherOperator creates a new MergeSplitDispatcherOperator
 func NewMergeSplitDispatcherOperator(
-	db *replica.ReplicationDB,
+	spanController *span.Controller,
 	primary common.DispatcherID,
 	originReplicaSet *replica.SpanReplication,
 	affectedReplicaSets []*replica.SpanReplication,
@@ -64,7 +65,7 @@ func NewMergeSplitDispatcherOperator(
 			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
 	}
 	op := &MergeSplitDispatcherOperator{
-		db:                  db,
+		spanController:      spanController,
 		originNode:          originReplicaSet.GetNodeID(),
 		originReplicaSet:    originReplicaSet,
 		checkpointTs:        originReplicaSet.GetStatus().GetCheckpointTs(),
@@ -88,7 +89,7 @@ func (m *MergeSplitDispatcherOperator) Start() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	m.db.MarkSpanScheduling(m.originReplicaSet)
+	m.spanController.MarkSpanScheduling(m.originReplicaSet)
 }
 
 func (m *MergeSplitDispatcherOperator) OnNodeRemove(n node.ID) {
@@ -173,7 +174,7 @@ func (m *MergeSplitDispatcherOperator) PostFinish() {
 
 	if m.originReplicaSet.ID == m.primary {
 		log.Info("merge-split dispatcher operator finished[primary]", zap.String("id", m.originReplicaSet.ID.String()))
-		m.db.ReplaceReplicaSet(m.affectedReplicaSets, m.splitSpans, m.checkpointTs)
+		m.spanController.ReplaceReplicaSet(m.affectedReplicaSets, m.splitSpans, m.checkpointTs)
 		return
 	}
 	log.Info("merge-split dispatcher operator finished[secondary]", zap.String("id", m.originReplicaSet.ID.String()))

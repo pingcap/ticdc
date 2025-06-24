@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -31,12 +32,12 @@ import (
 // SplitDispatcherOperator is an operator to remove a table span from a dispatcher
 // and then added some new spans to the replication db
 type SplitDispatcherOperator struct {
-	db            *replica.ReplicationDB
-	replicaSet    *replica.SpanReplication
-	originNode    node.ID
-	splitSpans    []*heartbeatpb.TableSpan
-	checkpointTs  uint64
-	splitSpanInfo string
+	spanController *span.Controller
+	replicaSet     *replica.SpanReplication
+	originNode     node.ID
+	splitSpans     []*heartbeatpb.TableSpan
+	checkpointTs   uint64
+	splitSpanInfo  string
 
 	finished atomic.Bool
 
@@ -44,7 +45,7 @@ type SplitDispatcherOperator struct {
 }
 
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator
-func NewSplitDispatcherOperator(db *replica.ReplicationDB,
+func NewSplitDispatcherOperator(spanController *span.Controller,
 	replicaSet *replica.SpanReplication,
 	originNode node.ID,
 	splitSpans []*heartbeatpb.TableSpan,
@@ -55,12 +56,12 @@ func NewSplitDispatcherOperator(db *replica.ReplicationDB,
 			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
 	}
 	op := &SplitDispatcherOperator{
-		replicaSet:    replicaSet,
-		originNode:    originNode,
-		splitSpans:    splitSpans,
-		checkpointTs:  replicaSet.GetStatus().GetCheckpointTs(),
-		db:            db,
-		splitSpanInfo: spansInfo,
+		replicaSet:     replicaSet,
+		originNode:     originNode,
+		splitSpans:     splitSpans,
+		checkpointTs:   replicaSet.GetStatus().GetCheckpointTs(),
+		spanController: spanController,
+		splitSpanInfo:  spansInfo,
 	}
 	return op
 }
@@ -69,7 +70,7 @@ func (m *SplitDispatcherOperator) Start() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	m.db.MarkSpanScheduling(m.replicaSet)
+	m.spanController.MarkSpanScheduling(m.replicaSet)
 }
 
 func (m *SplitDispatcherOperator) OnNodeRemove(n node.ID) {
@@ -129,7 +130,7 @@ func (m *SplitDispatcherOperator) PostFinish() {
 	defer m.lck.Unlock()
 
 	log.Info("split dispatcher operator finished", zap.String("id", m.replicaSet.ID.String()))
-	m.db.ReplaceReplicaSet([]*replica.SpanReplication{m.replicaSet}, m.splitSpans, m.checkpointTs)
+	m.spanController.ReplaceReplicaSet([]*replica.SpanReplication{m.replicaSet}, m.splitSpans, m.checkpointTs)
 }
 
 func (m *SplitDispatcherOperator) String() string {

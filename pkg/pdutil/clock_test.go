@@ -84,25 +84,25 @@ func TestCurrentTS(t *testing.T) {
 	defer clock.Close()
 	time.Sleep(1 * time.Second)
 
-	// 获取第一个时间戳
+	// Get the first timestamp
 	ts1 := clock.CurrentTS()
 	physical1 := oracle.ExtractPhysical(ts1)
 	logical1 := oracle.ExtractLogical(ts1)
 
-	// 等待 100ms
+	// Wait for 100ms
 	time.Sleep(100 * time.Millisecond)
 
-	// 获取第二个时间戳
+	// Get the second timestamp
 	ts2 := clock.CurrentTS()
 	physical2 := oracle.ExtractPhysical(ts2)
 	logical2 := oracle.ExtractLogical(ts2)
 
-	// 验证：
-	// 1. 逻辑时间戳应该保持不变
+	// Verify:
+	// 1. Logical timestamp should remain unchanged
 	require.Equal(t, logical1, logical2)
 
-	// 2. 第二个物理时间戳应该比第一个大约 100ms
-	// 允许有 10ms 的误差范围
+	// 2. The second physical timestamp should be approximately 100ms later than the first
+	// Allow 10ms error range
 	diff := physical2 - physical1
 	require.InDelta(t, 100, diff, 10)
 }

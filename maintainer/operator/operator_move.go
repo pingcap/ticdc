@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -28,10 +29,10 @@ import (
 
 // MoveDispatcherOperator is an operator to move a table span to the destination dispatcher
 type MoveDispatcherOperator struct {
-	replicaSet *replica.SpanReplication
-	db         *replica.ReplicationDB
-	origin     node.ID
-	dest       node.ID
+	replicaSet     *replica.SpanReplication
+	spanController *span.Controller
+	origin         node.ID
+	dest           node.ID
 
 	originNodeStopped bool
 	finished          bool
@@ -42,12 +43,12 @@ type MoveDispatcherOperator struct {
 	lck sync.Mutex
 }
 
-func NewMoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {
+func NewMoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {
 	return &MoveDispatcherOperator{
-		replicaSet: replicaSet,
-		origin:     origin,
-		dest:       dest,
-		db:         db,
+		replicaSet:     replicaSet,
+		origin:         origin,
+		dest:           dest,
+		spanController: spanController,
 	}
 }
 
@@ -84,7 +85,7 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.originNodeStopped {
 		if !m.bind {
 			// only bind the span to the dest node after the origin node is stopped.
-			m.db.BindSpanToNode(m.origin, m.dest, m.replicaSet)
+			m.spanController.BindSpanToNode(m.origin, m.dest, m.replicaSet)
 			m.bind = true
 		}
 		msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
@@ -115,7 +116,7 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 			log.Info("dest node is stopped, mark span absent",
 				zap.String("replicaSet", m.replicaSet.ID.String()),
 				zap.String("dest", m.dest.String()))
-			m.db.MarkSpanAbsent(m.replicaSet)
+			m.spanController.MarkSpanAbsent(m.replicaSet)
 			m.noPostFinishNeed = true
 			return
 		}
@@ -127,7 +128,7 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 		// here we translate the move to an add operation, so we need to swap the origin and dest
 		// we need to reset the origin node finished flag
 		m.dest = m.origin
-		m.db.BindSpanToNode(m.dest, m.origin, m.replicaSet)
+		m.spanController.BindSpanToNode(m.dest, m.origin, m.replicaSet)
 		m.bind = true
 		m.originNodeStopped = true
 	}
@@ -172,7 +173,7 @@ func (m *MoveDispatcherOperator) Start() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	m.db.MarkSpanScheduling(m.replicaSet)
+	m.spanController.MarkSpanScheduling(m.replicaSet)
 }
 
 func (m *MoveDispatcherOperator) PostFinish() {
@@ -186,7 +187,7 @@ func (m *MoveDispatcherOperator) PostFinish() {
 	log.Info("move dispatcher operator finished",
 		zap.String("span", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
-	m.db.MarkSpanReplicating(m.replicaSet)
+	m.spanController.MarkSpanReplicating(m.replicaSet)
 }
 
 func (m *MoveDispatcherOperator) String() string {

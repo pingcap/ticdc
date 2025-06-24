@@ -87,7 +87,7 @@ func (m mockOperator) AffectedNodes() []node.ID {
 }
 
 func (m mockOperator) OnTaskRemoved() {
-	// 测试用空实现
+	// Empty implementation for testing
 }
 
 func (m mockOperator) String() string {
