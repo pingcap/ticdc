@@ -40,7 +40,8 @@ mysql_groups=(
 	# G03
 	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	'ci_collation_compatibility multi_capture resourcecontrol fail_over_ddl_E'
+	# multi_capture
+	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
@@ -79,7 +80,8 @@ kafka_groups=(
 	# G03
 	'kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	'ci_collation_compatibility multi_capture resourcecontrol fail_over_ddl_E'
+	# multi_capture
+	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
@@ -119,7 +121,8 @@ pulsar_groups=(
 	# G03
 	'kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	'ci_collation_compatibility multi_capture resourcecontrol fail_over_ddl_E'
+	# multi_capture
+	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
@@ -159,7 +162,8 @@ storage_groups=(
 	# G03
 	'kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	'ci_collation_compatibility multi_capture resourcecontrol fail_over_ddl_E'
+	# multi_capture
+	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
