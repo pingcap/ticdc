@@ -47,8 +47,10 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 
 func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](hasher PathHasher[P], handler H, option Option) *parallelDynamicStream[A, P, T, D, H] {
 	option.fix()
-	eventExtraSize := 0
-	var zero T
+	var (
+		eventExtraSize int
+		zero           T
+	)
 	if reflect.TypeOf(zero).Kind() == reflect.Pointer {
 		eventExtraSize = int(unsafe.Sizeof(eventWrap[A, P, T, D, H]{}))
 	} else {
