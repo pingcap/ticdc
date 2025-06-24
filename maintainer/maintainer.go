@@ -95,10 +95,7 @@ type Maintainer struct {
 	startCheckpointTs uint64
 	redoTsMap         map[node.ID]*heartbeatpb.RedoTsMessage
 	// redoTs is global redoTs to forward
-	redoTs struct {
-		mu sync.RWMutex
-		*heartbeatpb.RedoTsMessage
-	}
+	redoTs      *heartbeatpb.RedoTsMessage
 	redoDDLSpan *replica.SpanReplication
 
 	// ddlSpan represents the table trigger event dispatcher that handles DDL events.
@@ -230,7 +227,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
-	m.redoTs.RedoTsMessage = &heartbeatpb.RedoTsMessage{
+	m.redoTs = &heartbeatpb.RedoTsMessage{
 		ChangefeedID: cfID.ToPB(),
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
@@ -492,8 +489,6 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		checkpointTs uint64 = math.MaxUint64
 		resolvedTs   uint64 = math.MaxUint64
 	)
-	m.redoTs.mu.Lock()
-	defer m.redoTs.mu.Unlock()
 	m.redoTsMap[id] = msg
 	for _, redoTs := range m.redoTsMap {
 		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
@@ -513,8 +508,8 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		needUpdate = true
 	}
 	log.Debug("received redo ts message", zap.Bool("advance", advance), zap.Bool("redoAdvance", redoAdvance),
-		zap.Any("needUpdate", needUpdate), zap.Any("map", m.redoTsMap), zap.Any("nodeId", id),
-		zap.Any("message", msg), zap.Any("globalRedoTs", m.redoTs.RedoTsMessage),
+		zap.Any("needUpdate", needUpdate), zap.Any("mapLength", len(m.redoTsMap)), zap.Any("nodeId", id),
+		zap.Any("message", msg), zap.Any("globalRedoTs", m.redoTs),
 		zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs),
 	)
 	if needUpdate {
@@ -550,8 +545,6 @@ func (m *Maintainer) onNodeChanged() {
 	}
 	// redo
 	if m.redoDDLSpan != nil {
-		m.redoTs.mu.Lock()
-		defer m.redoTs.mu.Unlock()
 		for rid := range m.redoTsMap {
 			if _, ok := activeNodes[rid]; !ok {
 				delete(m.redoTsMap, rid)
@@ -682,14 +675,7 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 		}
 	}
 	if len(req.Statuses) > 0 {
-		withRedoLock := func() {
-			if m.redoDDLSpan != nil {
-				m.redoTs.mu.Lock()
-				defer m.redoTs.mu.Unlock()
-			}
-			m.controller.HandleStatus(msg.From, req.Statuses)
-		}
-		withRedoLock()
+		m.controller.HandleStatus(msg.From, req.Statuses)
 	}
 	if req.Err != nil {
 		log.Warn("dispatcher report an error",

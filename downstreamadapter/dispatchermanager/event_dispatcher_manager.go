@@ -811,6 +811,7 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.CheckpointTs = checkpointTs
 			message.ResolvedTs = resolvedTs
+			log.Error("send redo command", zap.Any("msg", message))
 			err := mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
@@ -818,7 +819,7 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 					message,
 				))
 			if err != nil {
-				log.Error("failed to send checkpointTs request message", zap.Error(err))
+				log.Error("failed to send redoTs request message", zap.Error(err))
 			}
 		}
 	}
