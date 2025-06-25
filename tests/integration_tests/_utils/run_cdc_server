@@ -20,7 +20,12 @@ binary=
 logsuffix=
 addr=
 addr_url="127.0.0.1:8300"
-pd_addr=
+
+pd_addr="--pd http://$UP_PD_HOST_1:$UP_PD_PORT_1"
+if [ "$IS_NEXT_GEN" = "1" ]; then
+    pd_addr="--pd http://${UP_PD_HOST_1}:${CDC_PD_PORT}"
+fi
+
 pwd=$(pwd)
 log_level=debug
 restart=
