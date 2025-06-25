@@ -16,18 +16,10 @@ function prepare() {
 
 	cd $WORK_DIR
 
-    if [ "$IS_NEXT_GEN" = "1" ]; then
-        run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd "http://${UP_PD_HOST_1}:${CDC_PD_PORT}"
-    else
-	    run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-    fi
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	# record tso before we create tables to skip the system table DDLs
-    if [ "$IS_NEXT_GEN" = 1 ]; then
-	    start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${CDC_PD_PORT})
-    else
-	    start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-    fi
+	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	TOPIC_NAME="ticdc-default-value-test-$RANDOM"
 	case $SINK_TYPE in
