@@ -78,14 +78,14 @@ func TestCheckNeedScan(t *testing.T) {
 
 	// Case 1: Is scanning, and mustCheck is false, it should return false.
 	disp.isTaskScanning.Store(true)
-	_, needScan := broker.scanReady(disp, false)
+	needScan := broker.scanReady(disp)
 	require.False(t, needScan)
 	disp.isTaskScanning.Store(false)
 	log.Info("Pass case 1")
 
 	// Case 2: ResetTs is 0, it should return false.
 	// And the broker will send a ready event.
-	_, needScan = broker.scanReady(disp, false)
+	needScan = broker.scanReady(disp)
 	require.False(t, needScan)
 	e := <-broker.messageCh[0]
 	require.Equal(t, event.TypeReadyEvent, e.msgType)
@@ -96,15 +96,15 @@ func TestCheckNeedScan(t *testing.T) {
 	// And the task.scanning should be true.
 	// And the broker will send a handshake event.
 	disp.resetTs.Store(100)
-	_, needScan = broker.scanReady(disp, false)
-	require.False(t, needScan)
+	needScan = broker.scanReady(disp)
+	require.True(t, needScan)
 	e = <-broker.messageCh[0]
 	require.Equal(t, event.TypeHandshakeEvent, e.msgType)
 	log.Info("Pass case 3")
 
 	// Case 4: The task.isRunning is false, it should return false.
-	disp.isRunning.Store(false)
-	_, needScan = broker.scanReady(disp, false)
+	disp.isReadyRecevingData.Store(false)
+	needScan = broker.scanReady(disp)
 	require.False(t, needScan)
 	log.Info("Pass case 4")
 }
@@ -198,13 +198,13 @@ func TestCURDDispatcher(t *testing.T) {
 	broker.pauseDispatcher(dispInfo)
 	disp, ok = broker.getDispatcher(dispInfo.GetID())
 	require.True(t, ok)
-	require.False(t, disp.isRunning.Load())
+	require.False(t, disp.isReadyRecevingData.Load())
 
 	// Case 4: Resume a dispatcher.
 	broker.resumeDispatcher(dispInfo)
 	disp, ok = broker.getDispatcher(dispInfo.GetID())
 	require.True(t, ok)
-	require.True(t, disp.isRunning.Load())
+	require.True(t, disp.isReadyRecevingData.Load())
 
 	// Case 5: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
