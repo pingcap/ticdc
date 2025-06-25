@@ -61,7 +61,10 @@ type RedoMeta struct {
 	flushIntervalInMs int64
 }
 
-// NewRedoMeta creates a new meta Manager.
+// NewRedoMeta creates a new redo meta.
+// Redo meta records the CheckpointTs and ResolvedTs interval.
+// - CheckpointTs: All events with Commit-Ts less than or equal to this value have been written to the downstream system.
+// - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
 func NewRedoMeta(
 	changefeedID common.ChangeFeedID, checkpoint common.Ts, cfg *config.ConsistentConfig,
 ) *RedoMeta {
@@ -90,13 +93,13 @@ func NewRedoMeta(
 	return m
 }
 
-// Enabled returns whether this log manager is enabled
+// Enabled returns whether this meta is enabled
 func (m *RedoMeta) Enabled() bool {
 	return m.enabled
 }
 
-// Running return whether the meta manager is initialized,
-// which means the external storage is accessible to the meta manager.
+// Running return whether the meta is initialized,
+// which means the external storage is accessible to the meta.
 func (m *RedoMeta) Running() bool {
 	return m.running.Load()
 }
@@ -376,6 +379,8 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 	return nil
 }
 
+// PrepareForFlushMeta determines whether should advance.
+// If the unflushed ts exceeds the flushed ts, the redo meta will flush the persisted unflushed ts.
 func (m *RedoMeta) prepareForFlushMeta() (bool, misc.LogMeta) {
 	flushed := misc.LogMeta{}
 	flushed.CheckpointTs = m.metaCheckpointTs.getFlushed()
