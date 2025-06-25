@@ -86,25 +86,18 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Start() {
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Close() {
 	// clean pathMap, to avoid sending into a closed channel after close()
-	{
-		s.pathMap.Lock()
-		clear(s.pathMap.m)
-		s.pathMap.Unlock()
-	}
-
+	s.pathMap.Lock()
+	clear(s.pathMap.m)
+	s.pathMap.Unlock()
 	for _, ds := range s.streams {
 		ds.close()
 	}
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
-	var (
-		pi *pathInfo[A, P, T, D, H]
-		ok bool
-	)
-
 	s.pathMap.RLock()
-	if pi, ok = s.pathMap.m[path]; !ok {
+	pi, ok := s.pathMap.m[path]
+	if !ok {
 		s.handler.OnDrop(e)
 		s.pathMap.RUnlock()
 		return
@@ -124,12 +117,9 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
-	var (
-		pi *pathInfo[A, P, T, D, H]
-		ok bool
-	)
 	s.pathMap.RLock()
-	if pi, ok = s.pathMap.m[path]; !ok {
+	pi, ok := s.pathMap.m[path]
+	if !ok {
 		s.pathMap.RUnlock()
 		return
 	}
