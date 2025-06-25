@@ -41,7 +41,7 @@ type HandshakeEvent struct {
 func NewHandshakeEvent(dispatcherID common.DispatcherID, resolvedTs common.Ts, seq uint64, tableInfo *common.TableInfo) *HandshakeEvent {
 	return &HandshakeEvent{
 		Version:      HandshakeEventVersion,
-		ResolvedTs:   uint64(resolvedTs),
+		ResolvedTs:   resolvedTs,
 		Seq:          seq,
 		DispatcherID: dispatcherID,
 		TableInfo:    tableInfo,

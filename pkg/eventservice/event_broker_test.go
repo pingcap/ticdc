@@ -78,14 +78,14 @@ func TestCheckNeedScan(t *testing.T) {
 
 	// Case 1: Is scanning, and mustCheck is false, it should return false.
 	disp.isTaskScanning.Store(true)
-	needScan, _ := broker.checkNeedScan(disp, false)
+	_, needScan := broker.scanReady(disp, false)
 	require.False(t, needScan)
 	disp.isTaskScanning.Store(false)
 	log.Info("Pass case 1")
 
 	// Case 2: ResetTs is 0, it should return false.
 	// And the broker will send a ready event.
-	needScan, _ = broker.checkNeedScan(disp, false)
+	_, needScan = broker.scanReady(disp, false)
 	require.False(t, needScan)
 	e := <-broker.messageCh[0]
 	require.Equal(t, event.TypeReadyEvent, e.msgType)
@@ -96,7 +96,7 @@ func TestCheckNeedScan(t *testing.T) {
 	// And the task.scanning should be true.
 	// And the broker will send a handshake event.
 	disp.resetTs.Store(100)
-	needScan, _ = broker.checkNeedScan(disp, false)
+	_, needScan = broker.scanReady(disp, false)
 	require.False(t, needScan)
 	e = <-broker.messageCh[0]
 	require.Equal(t, event.TypeHandshakeEvent, e.msgType)
@@ -104,7 +104,7 @@ func TestCheckNeedScan(t *testing.T) {
 
 	// Case 4: The task.isRunning is false, it should return false.
 	disp.isRunning.Store(false)
-	needScan, _ = broker.checkNeedScan(disp, false)
+	_, needScan = broker.scanReady(disp, false)
 	require.False(t, needScan)
 	log.Info("Pass case 4")
 }

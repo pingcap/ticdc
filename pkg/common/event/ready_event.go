@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	ReadyEventVersion = 0
+	ReadyEventVersion = 1
 )
 
 var _ Event = &ReadyEvent{}
@@ -94,16 +94,16 @@ func (e *ReadyEvent) Unmarshal(data []byte) error {
 }
 
 func (e ReadyEvent) encode() ([]byte, error) {
-	if e.Version != 0 {
-		log.Panic("ReadyEvent: invalid version, expect 0, got ", zap.Uint8("version", e.Version))
+	if e.Version != ReadyEventVersion {
+		log.Panic("ReadyEvent: invalid version", zap.Uint8("expected", ReadyEventVersion), zap.Uint8("version", e.Version))
 	}
 	return e.encodeV0()
 }
 
 func (e *ReadyEvent) decode(data []byte) error {
 	version := data[0]
-	if version != 0 {
-		log.Panic("ReadyEvent: invalid version, expect 0, got ", zap.Uint8("version", version))
+	if version != ReadyEventVersion {
+		log.Panic("ReadyEvent: invalid version", zap.Uint8("expected", ReadyEventVersion), zap.Uint8("version", e.Version))
 	}
 	return e.decodeV0(data)
 }

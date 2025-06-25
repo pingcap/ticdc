@@ -81,7 +81,9 @@ func TestEncodeAndDecodeV0(t *testing.T) {
 	data, err := dmlEvent.encodeV0()
 	require.NoError(t, err)
 
-	reverseEvent := &DMLEvent{}
+	reverseEvent := &DMLEvent{
+		Version: DMLEventVersion,
+	}
 	// Set the TableInfo before decode, it is used in decode.
 	err = reverseEvent.decodeV0(data)
 	require.NoError(t, err)

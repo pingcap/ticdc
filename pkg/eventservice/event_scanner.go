@@ -43,9 +43,10 @@ type schemaGetter interface {
 }
 
 // ScanLimit defines the limits for a scan operation
+// todo: should consider the bytes of decoded events.
 type scanLimit struct {
-	// maxBytes is the maximum number of bytes to scan
-	maxBytes int64
+	// maxScannedBytes is the maximum number of bytes to scan
+	maxScannedBytes int64
 	// timeout is the maximum time to spend scanning
 	timeout time.Duration
 }
@@ -110,31 +111,31 @@ func (s *eventScanner) scan(
 	limit scanLimit,
 ) ([]event.Event, bool, error) {
 	// Initialize scan session
-	session := s.newScanSession(ctx, dispatcherStat, dataRange, limit)
-	defer session.recordMetrics()
+	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
+	defer sess.recordMetrics()
 
 	// Fetch DDL events
-	ddlEvents, err := s.fetchDDLEvents(session)
+	ddlEvents, err := s.fetchDDLEvents(sess)
 	if err != nil {
 		return nil, false, err
 	}
 
 	// Get event iterator
-	iter, err := s.getEventIterator(session)
+	iter, err := s.getEventIterator(sess)
 	if err != nil {
 		return nil, false, err
 	}
 	if iter == nil {
-		return s.handleEmptyIterator(ddlEvents, session)
+		return s.handleEmptyIterator(ddlEvents, sess), false, nil
 	}
 	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
-	return s.scanAndMergeEvents(session, ddlEvents, iter)
+	return s.scanAndMergeEvents(sess, ddlEvents, iter)
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
-func (s *eventScanner) fetchDDLEvents(session *scanSession) ([]pevent.DDLEvent, error) {
+func (s *eventScanner) fetchDDLEvents(session *session) ([]pevent.DDLEvent, error) {
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
 		session.dataRange.Span.TableID,
 		session.dispatcherStat.filter,
@@ -149,7 +150,7 @@ func (s *eventScanner) fetchDDLEvents(session *scanSession) ([]pevent.DDLEvent, 
 }
 
 // getEventIterator gets the event iterator for DML events
-func (s *eventScanner) getEventIterator(session *scanSession) (eventstore.EventIterator, error) {
+func (s *eventScanner) getEventIterator(session *session) (eventstore.EventIterator, error) {
 	iter, err := s.eventGetter.GetIterator(session.dispatcherStat.id, session.dataRange)
 	if err != nil {
 		log.Error("read events failed", zap.Error(err), zap.Stringer("dispatcherID", session.dispatcherStat.id))
@@ -159,10 +160,10 @@ func (s *eventScanner) getEventIterator(session *scanSession) (eventstore.EventI
 }
 
 // handleEmptyIterator handles the case when there are no DML events
-func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, session *scanSession) ([]event.Event, bool, error) {
+func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, session *session) []event.Event {
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id)
 	events := merger.appendRemainingDDLs(session.dataRange.EndTs)
-	return events, false, nil
+	return events
 }
 
 // closeIterator closes the event iterator and records metrics
@@ -177,17 +178,15 @@ func (s *eventScanner) closeIterator(iter eventstore.EventIterator) {
 
 // scanAndMergeEvents performs the main scanning and merging logic
 func (s *eventScanner) scanAndMergeEvents(
-	session *scanSession,
+	session *session,
 	ddlEvents []pevent.DDLEvent,
 	iter eventstore.EventIterator,
 ) ([]event.Event, bool, error) {
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id)
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
-	checker := newLimitChecker(session.limit.maxBytes, session.limit.timeout, session.startTime)
-	errorHandler := newErrorHandler(session.dispatcherStat.id)
+	checker := newLimitChecker(session.limit.maxScannedBytes, session.limit.timeout, session.startTime)
 
 	tableID := session.dataRange.Span.TableID
-
 	for {
 		shouldStop, err := s.checkScanConditions(session)
 		if err != nil {
@@ -197,31 +196,28 @@ func (s *eventScanner) scanAndMergeEvents(
 			return nil, false, nil
 		}
 
-		rawEvent, isNewTxn, err := iter.Next()
-		if err != nil {
-			return nil, false, errorHandler.handleIteratorError(err)
-		}
-
+		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			return s.finalizeScan(session, merger, processor)
+			events, err := s.finalizeScan(session, merger, processor)
+			return events, false, err
 		}
 
 		session.addBytes(rawEvent.ApproximateDataSize())
-		session.entryCount++
-		if isNewTxn && checker.checkLimits(session.totalBytes) {
+		session.scannedEntryCount++
+		if isNewTxn && checker.checkLimits(session.scannedBytes) {
 			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
 				return s.interruptScan(session, merger, processor)
 			}
 		}
 
 		if isNewTxn {
-			if err := s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
+			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
 				return nil, false, err
 			}
 			continue
 		}
 
-		if err := processor.appendRow(rawEvent); err != nil {
+		if err = processor.appendRow(rawEvent); err != nil {
 			log.Error("append row failed", zap.Error(err),
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
@@ -234,10 +230,10 @@ func (s *eventScanner) scanAndMergeEvents(
 
 // checkScanConditions checks context cancellation and dispatcher status
 // return true if the scan should be stopped, false otherwise
-func (s *eventScanner) checkScanConditions(session *scanSession) (bool, error) {
+func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 	if session.isContextDone() {
-		log.Warn("scan exits since context done", zap.Error(session.ctx.Err()), zap.Stringer("dispatcherID", session.dispatcherStat.id))
-		return true, session.ctx.Err()
+		log.Warn("scan exits since context done", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Error(context.Cause(session.ctx)))
+		return true, context.Cause(session.ctx)
 	}
 
 	if !session.dispatcherStat.isRunning.Load() {
@@ -249,7 +245,7 @@ func (s *eventScanner) checkScanConditions(session *scanSession) (bool, error) {
 
 // handleNewTransaction processes a new transaction event, and append the rawEvent to it.
 func (s *eventScanner) handleNewTransaction(
-	session *scanSession,
+	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
 	rawEvent *common.RawKVEntry,
@@ -286,7 +282,7 @@ func (s *eventScanner) handleNewTransaction(
 	}
 
 	// Process new transaction
-	if err := processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id); err != nil {
+	if err = processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id); err != nil {
 		return err
 	}
 
@@ -297,12 +293,12 @@ func (s *eventScanner) handleNewTransaction(
 
 // finalizeScan finalizes the scan when all events have been processed
 func (s *eventScanner) finalizeScan(
-	session *scanSession,
+	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
-) ([]event.Event, bool, error) {
+) ([]event.Event, error) {
 	if err := processor.clearCache(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	// Append final batch
 	events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
@@ -312,12 +308,12 @@ func (s *eventScanner) finalizeScan(
 	remainingEvents := merger.appendRemainingDDLs(session.dataRange.EndTs)
 	session.events = append(session.events, remainingEvents...)
 
-	return session.events, false, nil
+	return session.events, nil
 }
 
 // interruptScan handles scan interruption due to limits
 func (s *eventScanner) interruptScan(
-	session *scanSession,
+	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
 ) ([]event.Event, bool, error) {
@@ -335,32 +331,33 @@ func (s *eventScanner) interruptScan(
 	return session.events, true, nil
 }
 
-// scanSession manages the state and context of a scan operation
-type scanSession struct {
+// session manages the state and context of a scan operation
+type session struct {
 	ctx            context.Context
 	dispatcherStat *dispatcherStat
 	dataRange      common.DataRange
 	limit          scanLimit
 
 	// State tracking
-	startTime    time.Time
-	totalBytes   int64
-	lastCommitTs uint64
-	entryCount   int
-	dmlCount     int
+	startTime         time.Time
+	scannedBytes      int64
+	lastCommitTs      uint64
+	scannedEntryCount int
+	// dmlCount is the count of transactions.
+	dmlCount int
 
 	// Result collection
 	events []event.Event
 }
 
-// newScanSession creates a new scan session
-func (s *eventScanner) newScanSession(
+// newSession creates a new scan session
+func (s *eventScanner) newSession(
 	ctx context.Context,
 	dispatcherStat *dispatcherStat,
 	dataRange common.DataRange,
 	limit scanLimit,
-) *scanSession {
-	return &scanSession{
+) *session {
+	return &session{
 		ctx:            ctx,
 		dispatcherStat: dispatcherStat,
 		dataRange:      dataRange,
@@ -371,12 +368,12 @@ func (s *eventScanner) newScanSession(
 }
 
 // addBytes adds to the total bytes scanned
-func (s *scanSession) addBytes(size int64) {
-	s.totalBytes += size
+func (s *session) addBytes(size int64) {
+	s.scannedBytes += size
 }
 
 // isContextDone checks if the context is cancelled
-func (s *scanSession) isContextDone() bool {
+func (s *session) isContextDone() bool {
 	select {
 	case <-s.ctx.Done():
 		return true
@@ -386,9 +383,9 @@ func (s *scanSession) isContextDone() bool {
 }
 
 // recordMetrics records the scan duration metrics
-func (s *scanSession) recordMetrics() {
+func (s *session) recordMetrics() {
 	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
-	metrics.EventServiceScannedBytes.Observe(float64(s.totalBytes))
+	metrics.EventServiceScannedBytes.Observe(float64(s.scannedBytes))
 	metrics.EventServiceScannedCount.Observe(float64(s.dmlCount))
 }
 
@@ -631,10 +628,4 @@ func (h *errorHandler) handleSchemaError(err error, dispatcherStat *dispatcherSt
 	}
 
 	return true, err
-}
-
-// handleIteratorError handles iterator-related errors
-func (h *errorHandler) handleIteratorError(err error) error {
-	log.Error("read events from eventStore failed", zap.Error(err), zap.Stringer("dispatcherID", h.dispatcherID))
-	return err
 }
