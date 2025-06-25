@@ -246,9 +246,25 @@ func (c *EventCollector) getDispatcherStatByID(dispatcherID common.DispatcherID)
 	return value.(*dispatcherStat)
 }
 
+func (c *EventCollector) collectMemory() []event.AvailableMemory {
+	var result []event.AvailableMemory
+	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
+		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
+		if !ok {
+			continue
+		}
+		gid := changefeedID.(common.ChangeFeedID).ID()
+		available := quota.MaxMemory() - quota.MemoryUsage()
+		result = append(result, event.NewAvailableMemory(gid, uint64(available)))
+	}
+	return result
+}
+
 func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
 	groupedHeartbeats := c.groupHeartbeat(heartbeat)
+	available := c.collectMemory()
 	for serverID, hb := range groupedHeartbeats {
+		hb.AppendAvailableMemory(available)
 		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, hb)
 		c.enqueueMessageForSend(msg)
 		log.Info("event collector send dispatcher heartbeat", zap.Any("serverID", serverID), zap.Any("heartbeat", hb))

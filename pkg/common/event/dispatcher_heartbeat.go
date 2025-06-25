@@ -76,25 +76,32 @@ func (dp *DispatcherProgress) decodeV1(data []byte) error {
 	return nil
 }
 
-type changefeedAvailableMemory struct {
-	gid             common.GID // GID is the internal representation of ChangeFeedID
-	availableMemory uint64     // in bytes, used to report the available memory
+type AvailableMemory struct {
+	gid       common.GID // GID is the internal representation of ChangeFeedID
+	available uint64     // in bytes, used to report the available memory
 }
 
-func (m changefeedAvailableMemory) Marshal() []byte {
+func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
+	return AvailableMemory{
+		gid:       gid,
+		available: available,
+	}
+}
+
+func (m AvailableMemory) Marshal() []byte {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.Write(m.gid.Marshal())
-	binary.Write(buf, binary.BigEndian, m.availableMemory)
+	binary.Write(buf, binary.BigEndian, m.available)
 	return buf.Bytes()
 }
 
-func (m *changefeedAvailableMemory) Unmarshal(data []byte) {
+func (m *AvailableMemory) Unmarshal(data []byte) {
 	buf := bytes.NewBuffer(data)
 	m.gid.Unmarshal(buf.Next(m.gid.GetSize()))
-	m.availableMemory = binary.BigEndian.Uint64(buf.Next(8))
+	m.available = binary.BigEndian.Uint64(buf.Next(8))
 }
 
-func (m changefeedAvailableMemory) GetSize() int {
+func (m AvailableMemory) GetSize() int {
 	return m.gid.GetSize() + 8
 }
 
@@ -107,7 +114,7 @@ type DispatcherHeartbeat struct {
 	DispatcherProgresses []DispatcherProgress
 
 	changefeedCount uint32
-	availableMemory []changefeedAvailableMemory
+	availableMemory []AvailableMemory
 }
 
 func NewDispatcherHeartbeat() *DispatcherHeartbeat {
@@ -124,12 +131,9 @@ func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
 	d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
 }
 
-func (d *DispatcherHeartbeat) AppendAvailableMemory(gid common.GID, availableMemory uint64) {
-	d.changefeedCount++
-	d.availableMemory = append(d.availableMemory, changefeedAvailableMemory{
-		gid:             gid,
-		availableMemory: availableMemory,
-	})
+func (d *DispatcherHeartbeat) AppendAvailableMemory(available []AvailableMemory) {
+	d.changefeedCount += uint32(len(d.availableMemory))
+	d.availableMemory = available
 }
 
 func (d *DispatcherHeartbeat) GetSize() int {
@@ -198,9 +202,9 @@ func (d *DispatcherHeartbeat) decodeV1(data []byte) error {
 	}
 
 	d.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
-	d.availableMemory = make([]changefeedAvailableMemory, 0, d.changefeedCount)
+	d.availableMemory = make([]AvailableMemory, 0, d.changefeedCount)
 	for range d.changefeedCount {
-		var item changefeedAvailableMemory
+		var item AvailableMemory
 		item.Unmarshal(buf.Next(item.GetSize()))
 		d.availableMemory = append(d.availableMemory, item)
 	}

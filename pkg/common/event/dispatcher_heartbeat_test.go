@@ -69,11 +69,11 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	require.Len(t, heartbeat.DispatcherProgresses, 2)
 	require.Equal(t, progress2, heartbeat.DispatcherProgresses[1])
 
-	heartbeat.AppendAvailableMemory(common.NewGID(), 1024)
-	require.Equal(t, heartbeat.changefeedCount, uint32(1))
-	require.Len(t, heartbeat.availableMemory, 1)
+	available := make([]AvailableMemory, 0, 2)
+	available = append(available, AvailableMemory{gid: common.NewGID(), available: 1024})
+	available = append(available, AvailableMemory{gid: common.NewGID(), available: 2048})
 
-	heartbeat.AppendAvailableMemory(common.NewGID(), 2048)
+	heartbeat.AppendAvailableMemory(available)
 	require.Equal(t, heartbeat.changefeedCount, uint32(2))
 	require.Len(t, heartbeat.availableMemory, 2)
 
@@ -105,7 +105,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 
 	for i, entry := range heartbeat.availableMemory {
 		require.Equal(t, entry.gid, unmarshalledResponse.availableMemory[i].gid)
-		require.Equal(t, entry.availableMemory, unmarshalledResponse.availableMemory[i].availableMemory)
+		require.Equal(t, entry.available, unmarshalledResponse.availableMemory[i].available)
 	}
 
 	// Test with invalid progress version
