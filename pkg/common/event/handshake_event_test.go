@@ -37,5 +37,5 @@ func TestHandshakeEvent(t *testing.T) {
 	e2 := &HandshakeEvent{}
 	err = e2.Unmarshal(data)
 	require.NoError(t, err)
-	require.Equal(t, e, e2)
+	require.Equal(t, &e, e2)
 }

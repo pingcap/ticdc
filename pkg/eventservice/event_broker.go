@@ -358,6 +358,10 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// Note: target range is (dataRange.StartTs, dataRange.EndTs]
 	if dataRange.StartTs >= task.latestCommitTs.Load() &&
 		dataRange.StartTs >= ddlState.MaxEventCommitTs {
+		// The dispatcher has no new events. In such case, we don't need to scan the event store.
+		// We just send the watermark to the dispatcher.
+		remoteID := node.ID(task.info.GetServerID())
+		c.sendResolvedTs(remoteID, task, dataRange.EndTs)
 		return false, common.DataRange{}
 	}
 	return true, dataRange
@@ -382,28 +386,18 @@ func (c *eventBroker) checkNeedScan(task scanTask) bool {
 
 	c.sendHandshakeIfNeed(task)
 
-	doSendResolvedTs := func() {
-		resolvedTs := task.sentResolvedTs.Load()
-		remoteID := node.ID(task.info.GetServerID())
-		c.sendResolvedTs(remoteID, task, resolvedTs)
-	}
-
 	// Only check scan when the dispatcher is ready to receive data event.
 	if !task.IsReadyRecevingData() {
 		// If the dispatcher is not ready to receive data event,
 		// we still need to send the last resolvedTs to the dispatcher.
-		doSendResolvedTs()
+		resolvedTs := task.sentResolvedTs.Load()
+		remoteID := node.ID(task.info.GetServerID())
+		c.sendResolvedTs(remoteID, task, resolvedTs)
 		return false
 	}
 
 	ok, _ := c.getScanTaskDataRange(task)
-	if !ok {
-		// If there is no valid data range for scanning,
-		// we still need to send the last resolvedTs to the dispatcher.
-		doSendResolvedTs()
-		return false
-	}
-	return true
+	return ok
 }
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
