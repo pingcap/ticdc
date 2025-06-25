@@ -30,7 +30,6 @@ var (
 
 const (
 	ExitExecuteFailed = 255 - iota
-	ExitCodeNoFilePath
 	ExitCodeDecodeTomlFailed
 	ExitCodeMarshalJson
 )
@@ -41,7 +40,7 @@ const (
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "config2model -c [path]",
+		Use:   "config2model",
 		Short: "A tool to convert config from toml to json",
 		Run:   runConvert,
 	}
@@ -59,7 +58,6 @@ func runConvert(cmd *cobra.Command, args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "decode config file error: %v\n", err)
 		os.Exit(ExitCodeDecodeTomlFailed)
-		return
 	}
 
 	model := v2.ToAPIReplicaConfig(cfg)
@@ -68,7 +66,6 @@ func runConvert(cmd *cobra.Command, args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "marshal config error: %v\n", err)
 		os.Exit(ExitCodeMarshalJson)
-		return
 	}
 	fmt.Printf("%s\n", data)
 }
