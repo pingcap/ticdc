@@ -28,12 +28,7 @@ function run() {
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
 	SINK_PARA="{\"changefeed_id\":\"autorandom\", \"sink_uri\":\"$SINK_URI\"}"
-	# cdc cli changefeed create --sink-uri="$SINK_URI"
-    if [ "$IS_NEXT_GEN" = 1 ]; then
-        curl -X POST -H "Content-type: appliction/json" "http://$TIKV_WORKER_HOST:$TIKV_WORKER_PORT/cdc/api/v2/changefeeds?keyspace_id=1" -d "$SINK_PARA"
-    else
-	    curl -X POST -H "Content-type:application/json" "http://$CDC_DEFAULT_HOST:$CDC_DEFAULT_PORT/api/v2/changefeeds" -d "$SINK_PARA"
-    fi
+    create_changefeed -c "autorandom" --sink-uri="$SINK_URI"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
