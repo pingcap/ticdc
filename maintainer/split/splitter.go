@@ -67,14 +67,13 @@ type Splitter struct {
 func NewSplitter(
 	changefeedID common.ChangeFeedID,
 	pdapi pdutil.PDAPIClient,
-	regionCache RegionCache,
 	config *config.ChangefeedSchedulerConfig,
 ) *Splitter {
 	baseSpanNumberCoefficient = config.SplitNumberPerNode
 	log.Info("baseSpanNumberCoefficient", zap.Any("ChangefeedID", changefeedID.Name()), zap.Any("baseSpanNumberCoefficient", baseSpanNumberCoefficient))
 	return &Splitter{
 		changefeedID:          changefeedID,
-		regionCounterSplitter: newRegionCountSplitter(changefeedID, regionCache, config.RegionThreshold, config.RegionCountPerSpan),
+		regionCounterSplitter: newRegionCountSplitter(changefeedID, config.RegionThreshold, config.RegionCountPerSpan),
 		writeKeySplitter:      newWriteSplitter(changefeedID, pdapi, config.WriteKeyThreshold),
 	}
 }
