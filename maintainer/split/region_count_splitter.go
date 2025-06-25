@@ -38,9 +38,10 @@ type regionCountSplitter struct {
 func newRegionCountSplitter(
 	changefeedID common.ChangeFeedID, regionThreshold int, regionCountPerSpan int,
 ) *regionCountSplitter {
+	regionCache := appcontext.GetService[RegionCache](appcontext.RegionCache)
 	return &regionCountSplitter{
 		changefeedID:       changefeedID,
-		regionCache:        appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
+		regionCache:        regionCache,
 		regionThreshold:    regionThreshold,
 		regionCountPerSpan: regionCountPerSpan,
 	}
