@@ -29,9 +29,14 @@ var (
 )
 
 const (
-	ExitCodeNoFilePath = 255 - iota
+	ExitExecuteFailed = 255 - iota
+	ExitCodeNoFilePath
 	ExitCodeDecodeTomlFailed
 	ExitCodeMarshalJson
+)
+
+const (
+	FlagConfig = "config"
 )
 
 func main() {
@@ -40,10 +45,11 @@ func main() {
 		Short: "A tool to convert config from toml to json",
 		Run:   runConvert,
 	}
-	rootCmd.Flags().StringVarP(&cfgPath, "config", "c", "", "changefeed config file path")
+	rootCmd.Flags().StringVarP(&cfgPath, FlagConfig, "c", "", "changefeed config file path")
+	rootCmd.MarkFlagRequired(FlagConfig)
 
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		os.Exit(ExitExecuteFailed)
 	}
 }
 
@@ -64,7 +70,7 @@ func runConvert(cmd *cobra.Command, args []string) {
 
 	model := v2.ToAPIReplicaConfig(cfg)
 
-	data, err := json.Marshal(model)
+	data, err := json.MarshalIndent(model, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "marshal config error: %v\n", err)
 		os.Exit(ExitCodeMarshalJson)
