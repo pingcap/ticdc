@@ -771,7 +771,7 @@ func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
 	newColumnSchema := &columnSchema{
 		Digest:                        s.Digest,
-		Columns:                       s.Columns,
+		Columns:                       make([]*model.ColumnInfo, 0, len(s.Columns)),
 		Indices:                       s.Indices,
 		PKIsHandle:                    s.PKIsHandle,
 		IsCommonHandle:                s.IsCommonHandle,
@@ -789,10 +789,9 @@ func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
 		RowColInfosWithoutVirtualCols: s.RowColInfosWithoutVirtualCols,
 		PreSQLs:                       s.PreSQLs,
 	}
-	newColumnSchema.Columns = make([]*model.ColumnInfo, 0, len(s.Columns))
 	rowColumnsCurrentOffset := 0
 	columnsOffset := make(map[string]int, len(newColumnSchema.Columns))
-	for _, srcCol := range newColumnSchema.Columns {
+	for _, srcCol := range s.Columns {
 		if !IsColCDCVisible(srcCol) {
 			continue
 		}
