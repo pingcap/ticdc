@@ -17,10 +17,12 @@ import (
 	"context"
 	"path/filepath"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"go.uber.org/zap"
 )
 
 var _ writer.RedoLogWriter = &logWriter{}
@@ -81,6 +83,13 @@ func (l *logWriter) writeEvents(ctx context.Context, events ...writer.RedoEvent)
 		return errors.ErrRedoWriterStopped.GenWithStackByArgs()
 	}
 	for _, event := range events {
+		if event == nil {
+			log.Warn("writing nil event to redo log, ignore this",
+				zap.String("namespace", l.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
+				zap.String("capture", l.cfg.CaptureID))
+			continue
+		}
 		if err := l.backendWriter.SyncWrite(event); err != nil {
 			return errors.Trace(err)
 		}
@@ -90,6 +99,13 @@ func (l *logWriter) writeEvents(ctx context.Context, events ...writer.RedoEvent)
 
 func (l *logWriter) asyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
 	for _, event := range events {
+		if event == nil {
+			log.Warn("writing nil event to redo log, ignore this",
+				zap.String("namespace", l.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
+				zap.String("capture", l.cfg.CaptureID))
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
