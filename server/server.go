@@ -80,9 +80,8 @@ type server struct {
 
 	EtcdClient etcd.CDCEtcdClient
 
-	KVStorage   kv.Storage
-	RegionCache *tikv.RegionCache
-	PDClock     pdutil.Clock
+	KVStorage kv.Storage
+	PDClock   pdutil.Clock
 
 	tcpServer tcpserver.TCPServer
 
@@ -155,7 +154,7 @@ func (c *server) initialize(ctx context.Context) error {
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore: 8,
-		}, c.pdClient, c.RegionCache,
+		}, c.pdClient,
 		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), c.security,
 	)
 	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.KVStorage)
@@ -181,7 +180,7 @@ func (c *server) initialize(ctx context.Context) error {
 	c.subModules = []common.SubModule{
 		subscriptionClient,
 		schemaStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, c.pdAPIClient, c.RegionCache),
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, c.pdAPIClient),
 		eventStore,
 		eventService,
 	}
