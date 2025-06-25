@@ -24,11 +24,7 @@ func TestDispatcherProgress(t *testing.T) {
 	t.Parallel()
 	// Test GetSize function
 	dispatcherID := common.NewDispatcherID()
-	progress := DispatcherProgress{
-		Version:      0,
-		DispatcherID: dispatcherID,
-		CheckpointTs: 123456789,
-	}
+	progress := NewDispatcherProgress(dispatcherID, 123456789)
 	expectedSize := dispatcherID.GetSize() + 8 + 1 // dispatcherID size + checkpointTs size + version size
 	require.Equal(t, expectedSize, progress.GetSize())
 
@@ -47,7 +43,7 @@ func TestDispatcherProgress(t *testing.T) {
 
 	// Test invalid version
 	invalidProgress := DispatcherProgress{
-		Version:      1, // Invalid version
+		Version:      0, // Invalid version
 		DispatcherID: dispatcherID,
 		CheckpointTs: 123456789,
 	}
@@ -60,7 +56,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	t.Parallel()
 	// Test NewDispatcherHeartbeat
 	dispatcherCount := 3
-	heartbeat := NewDispatcherHeartbeat(dispatcherCount)
+	heartbeat := NewDispatcherHeartbeat()
 	require.Equal(t, byte(DispatcherHeartbeatVersion), heartbeat.Version)
 	require.Empty(t, heartbeat.DispatcherProgresses)
 	require.Equal(t, dispatcherCount, cap(heartbeat.DispatcherProgresses))
@@ -87,7 +83,8 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	require.Equal(t, progress2, heartbeat.DispatcherProgresses[1])
 
 	// Test GetSize
-	expectedSize := 1 + 4 + 8 + 8 + progress1.GetSize() + progress2.GetSize() // version(byte) + clusterID(uint64) + dispatcher count(uint32) + progress1 size + progress2 size
+	// version(byte) + clusterID(uint64) + dispatcher count(uint32) + progress1 size + progress2 size + changefeed count(uint32)
+	expectedSize := 1 + 4 + 8 + 8 + progress1.GetSize() + progress2.GetSize() + 4
 	require.Equal(t, expectedSize, heartbeat.GetSize())
 
 	// Test Marshal and Unmarshal
@@ -125,11 +122,7 @@ func TestDispatcherHeartbeatWithMultipleDispatchers(t *testing.T) {
 
 	// Add progress for each dispatcher
 	for i := 0; i < dispatcherCount; i++ {
-		progress := DispatcherProgress{
-			Version:      0,
-			DispatcherID: common.NewDispatcherID(),
-			CheckpointTs: uint64(i * 100),
-		}
+		progress := NewDispatcherProgress(common.NewDispatcherID(), uint64(i*100))
 		heartbeat.Append(progress)
 	}
 

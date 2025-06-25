@@ -16,7 +16,7 @@ package event
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
+	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/common"
 )
@@ -46,16 +46,16 @@ func (dp DispatcherProgress) GetSize() int {
 }
 
 func (dp DispatcherProgress) Marshal() ([]byte, error) {
-	return dp.encodeV0()
+	return dp.encodeV1()
 }
 
 func (dp *DispatcherProgress) Unmarshal(data []byte) error {
-	return dp.decodeV0(data)
+	return dp.decodeV1(data)
 }
 
-func (dp DispatcherProgress) encodeV0() ([]byte, error) {
-	if dp.Version != 0 {
-		return nil, errors.New("invalid version")
+func (dp DispatcherProgress) encodeV1() ([]byte, error) {
+	if dp.Version != DispatcherHeartbeatVersion {
+		return nil, fmt.Errorf("invalid version, expected %d, but got %d", DispatcherHeartbeatVersion, dp.Version)
 	}
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.WriteByte(dp.Version)
@@ -64,7 +64,7 @@ func (dp DispatcherProgress) encodeV0() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (dp *DispatcherProgress) decodeV0(data []byte) error {
+func (dp *DispatcherProgress) decodeV1(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	var err error
 	dp.Version, err = buf.ReadByte()
@@ -77,31 +77,59 @@ func (dp *DispatcherProgress) decodeV0(data []byte) error {
 }
 
 type changefeedAvailableMemory struct {
-	changefeedID    common.ChangeFeedID
-	availableMemory uint64 // in bytes, used to report the available memory
+	gid             common.GID // GID is the internal representation of ChangeFeedID
+	availableMemory uint64     // in bytes, used to report the available memory
+}
+
+func (m changefeedAvailableMemory) Marshal() []byte {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	buf.Write(m.gid.Marshal())
+	binary.Write(buf, binary.BigEndian, m.availableMemory)
+	return buf.Bytes()
+}
+
+func (m changefeedAvailableMemory) Unmarshal(data []byte) {
+	buf := bytes.NewBuffer(data)
+	m.gid.Unmarshal(buf.Next(m.gid.GetSize()))
+	m.availableMemory = binary.BigEndian.Uint64(buf.Next(8))
+}
+
+func (m changefeedAvailableMemory) GetSize() int {
+	return m.gid.GetSize() + 8
 }
 
 // DispatcherHeartbeat is used to report the progress of a dispatcher to the EventService
 type DispatcherHeartbeat struct {
-	Version              byte
-	ClusterID            uint64
+	Version   byte
+	ClusterID uint64
+
 	DispatcherCount      uint32
-	availableMemory      []changefeedAvailableMemory
 	DispatcherProgresses []DispatcherProgress
+
+	changefeedCount uint32
+	availableMemory []changefeedAvailableMemory
 }
 
-func NewDispatcherHeartbeat(dispatcherCount int) *DispatcherHeartbeat {
+func NewDispatcherHeartbeat() *DispatcherHeartbeat {
 	return &DispatcherHeartbeat{
 		Version: DispatcherHeartbeatVersion,
 		// TODO: Pass a real clusterID when we support 1 TiCDC cluster subscribe multiple TiDB clusters
 		ClusterID:            0,
-		DispatcherProgresses: make([]DispatcherProgress, 0, dispatcherCount),
+		DispatcherProgresses: make([]DispatcherProgress, 0, 32),
 	}
 }
 
 func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
 	d.DispatcherCount++
 	d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
+}
+
+func (d *DispatcherHeartbeat) AppendAvailableMemory(gid common.GID, availableMemory uint64) {
+	d.changefeedCount++
+	d.availableMemory = append(d.availableMemory, changefeedAvailableMemory{
+		gid:             gid,
+		availableMemory: availableMemory,
+	})
 }
 
 func (d *DispatcherHeartbeat) GetSize() int {
@@ -112,6 +140,12 @@ func (d *DispatcherHeartbeat) GetSize() int {
 	for _, dp := range d.DispatcherProgresses {
 		size += dp.GetSize()
 	}
+
+	size += 4 // changefeed count
+	for _, mem := range d.availableMemory {
+		size += mem.GetSize()
+	}
+
 	return size
 }
 
@@ -128,7 +162,6 @@ func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
 	buf.WriteByte(d.Version)
 	_ = binary.Write(buf, binary.BigEndian, d.ClusterID)
 	_ = binary.Write(buf, binary.BigEndian, d.DispatcherCount)
-	_ = binary.Write(buf, binary.BigEndian, d.AvailableMemory)
 	for _, dp := range d.DispatcherProgresses {
 		dpData, err := dp.Marshal()
 		if err != nil {
@@ -136,6 +169,13 @@ func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
 		}
 		buf.Write(dpData)
 	}
+
+	_ = binary.Write(buf, binary.BigEndian, d.changefeedCount)
+	for _, item := range d.availableMemory {
+		data := item.Marshal()
+		buf.Write(data)
+	}
+
 	return buf.Bytes(), nil
 }
 
@@ -148,7 +188,6 @@ func (d *DispatcherHeartbeat) decodeV0(data []byte) error {
 	}
 	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
-	d.AvailableMemory = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherProgresses = make([]DispatcherProgress, 0, d.DispatcherCount)
 	for range d.DispatcherCount {
 		var dp DispatcherProgress
@@ -157,6 +196,14 @@ func (d *DispatcherHeartbeat) decodeV0(data []byte) error {
 			return err
 		}
 		d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
+	}
+
+	d.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
+	d.availableMemory = make([]changefeedAvailableMemory, 0, d.changefeedCount)
+	for range d.changefeedCount {
+		var item changefeedAvailableMemory
+		item.Unmarshal(buf.Next(item.GetSize()))
+		d.availableMemory = append(d.availableMemory, item)
 	}
 	return nil
 }

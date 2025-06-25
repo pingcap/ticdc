@@ -262,7 +262,7 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 	group := func(target node.ID, dp event.DispatcherProgress) {
 		hb, ok := groupedHeartbeats[target]
 		if !ok {
-			hb = event.NewDispatcherHeartbeat(32)
+			hb = event.NewDispatcherHeartbeat()
 			groupedHeartbeats[target] = hb
 		}
 		hb.Append(dp)

@@ -658,7 +658,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			e.tableTriggerEventDispatcher.GetHeartBeatInfo(heartBeatInfo)
 		}
 
-		eventServiceDispatcherHeartbeat := event.NewDispatcherHeartbeat(0)
+		eventServiceDispatcherHeartbeat := event.NewDispatcherHeartbeat()
 		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
 			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 		})

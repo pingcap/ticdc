@@ -30,8 +30,6 @@ const (
 	DefaultNamespace = "default"
 )
 
-var DefaultEndian = binary.LittleEndian
-
 type (
 	Ts      = uint64
 	TableID = int64
@@ -68,7 +66,7 @@ func (d DispatcherID) String() string {
 }
 
 func (d *DispatcherID) GetSize() int {
-	return 16
+	return GID(*d).GetSize()
 }
 
 func (d DispatcherID) GetLow() uint64 {
@@ -136,15 +134,15 @@ func NewGID() GID {
 	}
 }
 
-func (g *GID) PString() string {
-	return g.String()
-}
-
 func (g GID) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(strconv.FormatUint(g.Low, 10))
 	buf.WriteString(strconv.FormatUint(g.High, 10))
 	return buf.String()
+}
+
+func (g GID) GetSize() int {
+	return 16
 }
 
 func NewGIDWithValue(Low uint64, High uint64) GID {
@@ -172,7 +170,7 @@ func (r ChangeFeedDisplayName) String() string {
 	return r.Namespace + "/" + r.Name
 }
 
-// ChangefeedID is the unique identifier of a changefeed.
+// ChangeFeedID is the unique identifier of a changefeed.
 // GID is the inner unique identifier of a changefeed.
 // we can use Id to represent the changefeedID in performance-critical scenarios.
 // DisplayName is the user-friendly expression of a changefeed.
