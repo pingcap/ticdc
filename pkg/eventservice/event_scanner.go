@@ -240,7 +240,7 @@ func (s *eventScanner) checkScanConditions(session *scanSession) (bool, error) {
 		return true, session.ctx.Err()
 	}
 
-	if !session.dispatcherStat.isRunning.Load() {
+	if !session.dispatcherStat.isReadyRecevingData.Load() {
 		return true, nil
 	}
 
