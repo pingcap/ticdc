@@ -29,7 +29,7 @@ var (
 )
 
 const (
-	ExitExecuteFailed = 255 - iota
+	ExitCodeExecuteFailed = 1 + iota
 	ExitCodeDecodeTomlFailed
 	ExitCodeMarshalJson
 )
@@ -48,7 +48,7 @@ func main() {
 	rootCmd.MarkFlagRequired(FlagConfig)
 
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(ExitExecuteFailed)
+		os.Exit(ExitCodeExecuteFailed)
 	}
 }
 
