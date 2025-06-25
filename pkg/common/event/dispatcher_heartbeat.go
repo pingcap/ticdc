@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	DispatcherHeartbeatVersion         = 0
-	DispatcherHeartbeatResponseVersion = 0
+	DispatcherHeartbeatVersion         = 1
+	DispatcherHeartbeatResponseVersion = 1
 )
 
 // DispatcherProgress is used to report the progress of a dispatcher to the EventService
@@ -76,12 +76,17 @@ func (dp *DispatcherProgress) decodeV0(data []byte) error {
 	return nil
 }
 
+type changefeedAvailableMemory struct {
+	changefeedID    common.ChangeFeedID
+	availableMemory uint64 // in bytes, used to report the available memory
+}
+
 // DispatcherHeartbeat is used to report the progress of a dispatcher to the EventService
 type DispatcherHeartbeat struct {
 	Version              byte
 	ClusterID            uint64
 	DispatcherCount      uint32
-	AvailableMemory      uint64 // in bytes, used to report the available memory
+	availableMemory      []changefeedAvailableMemory
 	DispatcherProgresses []DispatcherProgress
 }
 

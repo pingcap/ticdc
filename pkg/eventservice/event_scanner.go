@@ -315,13 +315,13 @@ func (s *eventScanner) finalizeScan(
 		approximateBytes += uint64(event.GetSize())
 	}
 
-	quota := session.limit.dmlEventQuota.Load()
-	if approximateBytes > quota {
-		log.Warn("scan exceeds DML event quota, report broken",
-			zap.Uint64("approximateBytes", approximateBytes), zap.Uint64("quota", quota))
-		return session.events, true, nil
-	}
-	session.limit.dmlEventQuota.Sub(approximateBytes)
+	//quota := session.limit.dmlEventQuota.Load()
+	//if approximateBytes > quota {
+	//	log.Warn("scan exceeds DML event quota, report interrupted",
+	//		zap.Uint64("approximateBytes", approximateBytes), zap.Uint64("quota", quota))
+	//	return session.events, true, nil
+	//}
+	//session.limit.dmlEventQuota.Sub(approximateBytes)
 
 	// Append remaining DDLs
 	remainingEvents := merger.appendRemainingDDLs(session.dataRange.EndTs)

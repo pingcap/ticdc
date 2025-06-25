@@ -94,12 +94,12 @@ func New(serverId node.ID) *EventCollector {
 		dispatcherMessageChan:                chann.NewAutoDrainChann[DispatcherMessage](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		receiveChannels:                      receiveChannels,
+		ds:                                   NewEventDynamicStream(),
 		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
 		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs"),
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 	}
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
-	eventCollector.ds = NewEventDynamicStream(eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)
 
 	return eventCollector
@@ -248,9 +248,10 @@ func (c *EventCollector) getDispatcherStatByID(dispatcherID common.DispatcherID)
 
 func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
 	groupedHeartbeats := c.groupHeartbeat(heartbeat)
-	for serverID, heartbeat := range groupedHeartbeats {
-		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, heartbeat)
+	for serverID, hb := range groupedHeartbeats {
+		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, hb)
 		c.enqueueMessageForSend(msg)
+		log.Info("event collector send dispatcher heartbeat", zap.Any("serverID", serverID), zap.Any("heartbeat", hb))
 	}
 }
 
@@ -259,15 +260,12 @@ func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHear
 func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) map[node.ID]*event.DispatcherHeartbeat {
 	groupedHeartbeats := make(map[node.ID]*event.DispatcherHeartbeat)
 	group := func(target node.ID, dp event.DispatcherProgress) {
-		heartbeat, ok := groupedHeartbeats[target]
+		hb, ok := groupedHeartbeats[target]
 		if !ok {
-			heartbeat = &event.DispatcherHeartbeat{
-				Version:              event.DispatcherHeartbeatVersion,
-				DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
-			}
-			groupedHeartbeats[target] = heartbeat
+			hb = event.NewDispatcherHeartbeat(32)
+			groupedHeartbeats[target] = hb
 		}
-		heartbeat.Append(dp)
+		hb.Append(dp)
 	}
 
 	for _, dp := range heartbeat.DispatcherProgresses {
