@@ -24,9 +24,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	cfgPath string
-)
+var cfgPath string
 
 const (
 	ExitCodeExecuteFailed = 1 + iota
