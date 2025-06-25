@@ -87,8 +87,6 @@ type RedoDispatcher struct {
 
 	bdrMode bool
 	seq     uint64
-
-	BootstrapState bootstrapState
 }
 
 func NewRedoDispatcher(
@@ -129,7 +127,6 @@ func NewRedoDispatcher(
 		resendTaskMap:         newResendTaskMap(),
 		errCh:                 errCh,
 		bdrMode:               bdrMode,
-		BootstrapState:        BootstrapFinished,
 	}
 
 	return dispatcher
@@ -227,6 +224,7 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	dmlWakeOnce := &sync.Once{}
+	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("redo dispatcher receive all event",
@@ -273,7 +271,7 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 					dmlWakeOnce.Do(wakeCallback)
 				}
 			})
-			rd.AddDMLEventToSink(dml)
+			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled",
@@ -312,6 +310,9 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				zap.Stringer("dispatcher", rd.id),
 				zap.Uint64("commitTs", event.GetCommitTs()))
 		}
+	}
+	if len(dmlEvents) > 0 {
+		rd.AddDMLEventsToSink(dmlEvents)
 	}
 	return block
 }
@@ -487,9 +488,17 @@ func (rd *RedoDispatcher) updateComponentStatusToWorking() {
 	}
 }
 
-func (rd *RedoDispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
-	rd.tableProgress.Add(event)
-	rd.redoSink.AddDMLEvent(event)
+func (rd *RedoDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
+	// for one batch events, we need to add all them in table progress first, then add them to sink
+	// because we need to ensure the wakeCallback only will be called when
+	// all these events are flushed to downstream successfully
+	for _, event := range events {
+		rd.tableProgress.Add(event)
+	}
+	for _, event := range events {
+		rd.redoSink.AddDMLEvent(event)
+		failpoint.Inject("BlockAddDMLEvents", nil)
+	}
 }
 
 func (rd *RedoDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
