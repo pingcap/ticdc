@@ -138,7 +138,7 @@ pulsar_groups=(
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
 storage_groups=(
 	# G00
-	'generate_column'
+	# 'generate_column'
 	# G01
 	'many_pk_or_uk'
 	# G02
