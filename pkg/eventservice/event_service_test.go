@@ -341,9 +341,9 @@ type mockEventIterator struct {
 	rowCount     int
 }
 
-func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool, error) {
+func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool) {
 	if len(iter.events) == 0 {
-		return nil, false, nil
+		return nil, false
 	}
 
 	row := iter.events[0]
@@ -355,7 +355,7 @@ func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool, error) {
 	iter.prevStartTS = row.StartTs
 	iter.prevCommitTS = row.CRTs
 	iter.rowCount++
-	return row, isNewTxn, nil
+	return row, isNewTxn
 }
 
 func (m *mockEventIterator) Close() (int64, error) {
@@ -638,8 +638,7 @@ func TestMockEventIterator(t *testing.T) {
 	}
 
 	// Case 1: empty iterator
-	row, isNewTxn, err := iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn := iter.Next()
 	require.False(t, isNewTxn)
 	require.Nil(t, row)
 
@@ -657,24 +656,20 @@ func TestMockEventIterator(t *testing.T) {
 	iter.events = append(iter.events, row2, row2)
 
 	// txn-1, row-1
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.True(t, isNewTxn)
 	require.NotNil(t, row)
 	// txn-1, row-2
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.False(t, isNewTxn)
 	require.NotNil(t, row)
 
 	// txn-2, row1
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.True(t, isNewTxn)
 	require.NotNil(t, row)
 	// txn2, row2
-	row, isNewTxn, err = iter.Next()
-	require.Nil(t, err)
+	row, isNewTxn = iter.Next()
 	require.False(t, isNewTxn)
 	require.NotNil(t, row)
 }

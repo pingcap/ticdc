@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
@@ -147,7 +148,7 @@ func (d *dispatcherStat) run() {
 
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherRegisterRequest(false))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(false))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -159,7 +160,7 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 		zap.Uint64("startTs", d.target.GetStartTs()))
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherResetRequest(d.target.GetStartTs()))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.target.GetStartTs()))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -180,7 +181,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 	}
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherResetRequest(resetTs))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs))
 	d.eventCollector.enqueueMessageForSend(msg)
 	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
 		zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -210,7 +211,7 @@ func (d *dispatcherStat) removeFrom(serverID node.ID) {
 	log.Info("Send remove dispatcher request to event service",
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID))
-	msg := messaging.NewSingleTargetMessage(serverID, eventServiceTopic, d.newDispatcherRemoveRequest())
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRemoveRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -224,7 +225,7 @@ func (d *dispatcherStat) pause() {
 		return
 	}
 	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, eventServiceTopic, d.newDispatcherPauseRequest())
+	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherPauseRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -238,7 +239,7 @@ func (d *dispatcherStat) resume() {
 		return
 	}
 	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, eventServiceTopic, d.newDispatcherResumeRequest())
+	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherResumeRequest())
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -585,7 +586,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
 	d.lastEventCommitTs.Store(dropEvent.GetCommitTs())
 	d.reset(d.connState.getEventServiceID())
-	metricsDroppedEventCount.Inc()
+	metrics.EventCollectorDroppedEventCount.Inc()
 }
 
 func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) {

@@ -351,7 +351,7 @@ func (s *schemaStore) waitResolvedTs(tableID int64, ts uint64, logInterval time.
 	start := time.Now()
 	lastLogTime := time.Now()
 	for {
-		if s.resolvedTs.Load() >= uint64(ts) {
+		if s.resolvedTs.Load() >= ts {
 			return
 		}
 		time.Sleep(time.Millisecond * 10)
