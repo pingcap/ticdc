@@ -20,7 +20,16 @@ function prepare() {
 	run_sql "CREATE DATABASE api_v2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	cdc cli changefeed create -c="cf-blackhole" --sink-uri="blackhole://"
+	# cdc cli changefeed create -c="cf-blackhole" --sink-uri="blackhole://"
+
+	SINK_PARA="{\"changefeed_id\":\"cf-blackhole\", \"sink_uri\":\"blackhole:\/\/\"}"
+	# cdc cli changefeed create --sink-uri="$SINK_URI"
+    if [ "$IS_NEXT_GEN" = 1 ]; then
+        curl -X POST -H "Content-type: appliction/json" "http://$TIKV_WORKER_HOST:$TIKV_WORKER_PORT/cdc/api/v2/changefeeds?keyspace_id=1" -d "$SINK_PARA"
+    else
+	    curl -X POST -H "Content-type:application/json" "http://$CDC_DEFAULT_HOST:$CDC_DEFAULT_PORT/api/v2/changefeeds" -d "$SINK_PARA"
+    fi
+
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "cf-blackhole" "normal" "null" ""
 }
 
