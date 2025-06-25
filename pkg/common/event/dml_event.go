@@ -29,7 +29,7 @@ const (
 	// defaultRowCount is the start row count of a transaction.
 	defaultRowCount = 1
 	// DMLEventVersion is the version of the DMLEvent struct.
-	DMLEventVersion = 0
+	DMLEventVersion = 1
 )
 
 var _ Event = &BatchDMLEvent{}
@@ -477,16 +477,16 @@ func (t *DMLEvent) IsPaused() bool {
 }
 
 func (t *DMLEvent) encode() ([]byte, error) {
-	if t.Version != 0 {
-		log.Panic("DMLEvent: Only version 0 is supported right now", zap.Uint8("version", t.Version))
+	if t.Version != DMLEventVersion {
+		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
 		return nil, nil
 	}
 	return t.encodeV0()
 }
 
 func (t *DMLEvent) encodeV0() ([]byte, error) {
-	if t.Version != 0 {
-		log.Panic("DMLEvent: invalid version, expect 0, got ", zap.Uint8("version", t.Version))
+	if t.Version != DMLEventVersion {
+		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
@@ -542,8 +542,8 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 
 func (t *DMLEvent) decode(data []byte) error {
 	t.Version = data[0]
-	if t.Version != 0 {
-		log.Panic("DMLEvent: Only version 0 is supported right now", zap.Uint8("version", t.Version))
+	if t.Version != DMLEventVersion {
+		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
 		return nil
 	}
 	return t.decodeV0(data)
@@ -553,8 +553,8 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	if len(data) < 1+16+8*5+4*3 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
-	if t.Version != 0 {
-		log.Panic("DMLEvent: invalid version, expect 0, got ", zap.Uint8("version", t.Version))
+	if t.Version != DMLEventVersion {
+		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
 		return nil
 	}
 	offset := 1

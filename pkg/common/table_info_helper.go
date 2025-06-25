@@ -751,18 +751,19 @@ func placeHolder(n int) string {
 func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 	var b strings.Builder
 	nonGeneratedColumnCount := 0
-	for i, col := range s.Columns {
+	for _, col := range s.Columns {
 		if col == nil || col.IsGenerated() {
 			continue
 		}
-		nonGeneratedColumnCount++
-		if i > 0 {
+		// the first column may be generated.
+		if nonGeneratedColumnCount > 0 {
 			b.WriteString(",")
 		}
 		b.WriteString(QuoteName(col.Name.O))
 		if isUpdate {
 			b.WriteString(" = ?")
 		}
+		nonGeneratedColumnCount++
 	}
 	return nonGeneratedColumnCount, b.String()
 }

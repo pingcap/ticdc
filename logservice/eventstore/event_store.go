@@ -89,7 +89,7 @@ type DMLEventState struct {
 
 type EventIterator interface {
 	// Next returns the next event in the iterator and whether this event is from a new txn.
-	Next() (*common.RawKVEntry, bool, error)
+	Next() (*common.RawKVEntry, bool)
 
 	// Close closes the iterator.
 	// It returns the number of events that are read from the iterator.
@@ -795,11 +795,11 @@ type eventStoreIter struct {
 	rowCount int64
 }
 
-func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
+func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 	rawKV := &common.RawKVEntry{}
 	for {
 		if !iter.innerIter.Valid() {
-			return nil, false, nil
+			return nil, false
 		}
 		value := iter.innerIter.Value()
 		err := rawKV.Decode(value)
@@ -832,7 +832,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	startTime := time.Now()
 	iter.innerIter.Next()
 	metricEventStoreNextReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	return rawKV, isNewTxn, nil
+	return rawKV, isNewTxn
 }
 
 func (iter *eventStoreIter) Close() (int64, error) {
@@ -847,7 +847,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	startTime := time.Now()
 	err := iter.innerIter.Close()
 	iter.innerIter = nil
-	metricEventStoreCloseReadDurationHistogram.Observe(float64(time.Since(startTime).Seconds()))
+	metricEventStoreCloseReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	return iter.rowCount, err
 }
 

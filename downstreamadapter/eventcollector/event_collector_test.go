@@ -223,7 +223,7 @@ func TestProcessMessage(t *testing.T) {
 	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota)
 
 	ch <- newMessage(node.ID, &readyEvent)
-	ch <- newMessage(node.ID, handshakeEvent)
+	ch <- newMessage(node.ID, &handshakeEvent)
 	ch <- newMessage(node.ID, ddl)
 	ch <- newMessage(node.ID, dmls)
 
