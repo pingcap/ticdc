@@ -35,9 +35,9 @@ function prepare() {
 	SINK_PARA="{\"replica_config\":{\"force_replicate\":true}, \"changefeed_id\":\"tidb-mysql-test\", \"sink_uri\":\"$SINK_URI\", \"start_ts\":$start_ts}"
 
     if [ "$IS_NEXT_GEN" = 1 ]; then
-        curl -X POST -H "Content-type: appliction/json" http://127.0.0.1:19000/cdc/api/v2/changefeeds?keyspace_id=1 -d "$SINK_PARA"
+        curl -X POST -H "Content-type: appliction/json" "http://$TIKV_WORKER_HOST:$TIKV_WORKER_PORT/cdc/api/v2/changefeeds?keyspace_id=1" -d "$SINK_PARA"
     else
-	    curl -X POST -H "Content-type:application/json" http://127.0.0.1:8300/api/v2/changefeeds -d "$SINK_PARA"
+	    curl -X POST -H "Content-type:application/json" "http://$CDC_DEFAULT_HOST:$CDC_DEFAULT_PORT/api/v2/changefeeds" -d "$SINK_PARA"
     fi
 
 	case $SINK_TYPE in
