@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/tikv"
 )
 
 func TestSchedule(t *testing.T) {
@@ -674,6 +675,8 @@ func TestDynamicMergeAndSplitTable(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
 	}
+	regionCache := newMockRegionCache()
+	appcontext.SetService(appcontext.RegionCache, regionCache)
 	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -765,7 +768,8 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
 	}
-
+	regionCache := newMockRegionCache()
+	appcontext.SetService(appcontext.RegionCache, regionCache)
 	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -927,4 +931,27 @@ func (m *mockThreadPool) Submit(_ threadpool.Task, _ time.Time) *threadpool.Task
 
 func (m *mockThreadPool) SubmitFunc(_ threadpool.FuncTask, _ time.Time) *threadpool.TaskHandle {
 	return nil
+}
+
+// mockCache mocks tikv.RegionCache.
+type mockCache struct {
+}
+
+// NewMockRegionCache returns a new MockCache.
+func newMockRegionCache() *mockCache {
+	return &mockCache{}
+}
+
+// ListRegionIDsInKeyRange lists ids of regions in [startKey,endKey].
+func (m *mockCache) ListRegionIDsInKeyRange(
+	bo *tikv.Backoffer, startKey, endKey []byte,
+) (regionIDs []uint64, err error) {
+	return
+}
+
+// LocateRegionByID searches for the region with ID.
+func (m *mockCache) LocateRegionByID(
+	bo *tikv.Backoffer, regionID uint64,
+) (loc *tikv.KeyLocation, err error) {
+	return
 }

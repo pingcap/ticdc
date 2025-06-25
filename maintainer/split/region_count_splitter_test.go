@@ -29,8 +29,6 @@ import (
 )
 
 func TestRegionCountSplitSpan(t *testing.T) {
-	t.Parallel()
-
 	cache := NewMockRegionCache(nil)
 	appcontext.SetService(appcontext.RegionCache, cache)
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
@@ -114,8 +112,6 @@ func TestRegionCountSplitSpan(t *testing.T) {
 }
 
 func TestRegionCountEvenlySplitSpan(t *testing.T) {
-	t.Parallel()
-
 	cache := NewMockRegionCache(nil)
 	appcontext.SetService(appcontext.RegionCache, cache)
 	totalRegion := 1000
@@ -198,8 +194,6 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 }
 
 func TestSplitSpanRegionOutOfOrder(t *testing.T) {
-	t.Parallel()
-
 	cache := NewMockRegionCache(nil)
 	appcontext.SetService(appcontext.RegionCache, cache)
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
