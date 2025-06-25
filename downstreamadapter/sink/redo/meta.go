@@ -194,7 +194,7 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 	}
 	var toRemoveMetaFiles []string
 	err := m.extStorage.WalkDir(ctx, nil, func(path string, size int64) error {
-		log.Info("redo: meta manager walk dir",
+		log.Debug("redo: meta manager walk dir",
 			zap.String("namespace", m.changeFeedID.Namespace()),
 			zap.String("changefeed", m.changeFeedID.Name()),
 			zap.String("path", path), zap.Int64("size", size))

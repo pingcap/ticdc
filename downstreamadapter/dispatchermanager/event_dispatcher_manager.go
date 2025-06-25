@@ -584,7 +584,7 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 		if err != nil {
 			return errors.Trace(err)
 		}
-		log.Info("calculate real startTs for dispatchers",
+		log.Info("calculate real startTs for redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Any("receiveStartTs", startTsList),
 			zap.Any("realStartTs", newStartTsList),
@@ -811,7 +811,6 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.CheckpointTs = checkpointTs
 			message.ResolvedTs = resolvedTs
-			log.Error("send redo command", zap.Any("msg", message))
 			err := mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
