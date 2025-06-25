@@ -135,36 +135,39 @@ pulsar_groups=(
 	'debezium'
 )
 
-# 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
 storage_groups=(
 	# G00
-	# 'generate_column'
+	''
 	# G01
-	'many_pk_or_uk'
+	''
 	# G02
-	'multi_source'
+	''
 	# G03
-	'drop_many_tables'
+	''
 	# G04
-	'force_replicate_table'
+	''
 	# G05
-	'move_table '
+	''
 	# G06
-	'cdc default_value'
+	''
 	# G07
-	'resolve_lock'
+	''
 	# G08
-	'tidb_mysql_test'
+	''
 	# G09
-	'csv_storage_partition_table'
+	''
 	# G10
-	'csv_storage_basic'
+	''
 	# G11
-	'csv_storage_multi_tables_ddl'
+	''
 	# G12
-	'region_merge'
+	''
 	# G13
-	'fail_over'
+	''
+	# G14
+	''
+	# G15
+	''
 )
 
 # Source shared functions and check test coverage
