@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+sink_uri=""
+changefeed=""
+server="http://$CDC_DEFAULT_HOST:$CDC_DEFAULT_PORT"
+
+while [ $# -ne 0 ]; do
+    case "$1" in
+        --sink-uri=*)
+            sink_uri="${1#*=}"
+            ;;
+        -c)
+            shift
+            changefeed="$1"
+            ;;
+        --server)
+            shift
+            server="$1"
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+if [ "$IS_NEXT_GEN" = 1 ]; then
+	SINK_PARA="{\"changefeed_id\":\"$changefeed\", \"sink_uri\":\"$sink_uri\"}"
+    curl -X POST -H "Content-type: appliction/json" "http://$TIKV_WORKER_HOST:$TIKV_WORKER_PORT/cdc/api/v2/changefeeds?keyspace_id=1" -d "$SINK_PARA"
+else
+    curl -X POST -H "Content-type:application/json" "$server/api/v2/changefeeds" -d "$SINK_PARA"
+fi
