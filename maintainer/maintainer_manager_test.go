@@ -117,10 +117,10 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	maintainer := value.(*Maintainer)
 
 	require.Eventually(t, func() bool {
-		return maintainer.controller.replicationDB.GetSchedulingSize() == 4
+		return maintainer.controller.spanController.GetSchedulingSize() == 4
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Equal(t, 4,
-		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
+		maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID))
 
 	log.Info("Pass case 1: Add new changefeed")
 
@@ -156,19 +156,19 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	time.Sleep(5 * time.Second)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+		return maintainer.controller.spanController.GetReplicatingSize() == 4
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 1
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 1
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(node2.ID) == 1
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 1
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(node3.ID) == 1
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(node3.ID) == 1
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(node4.ID) == 1
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(node4.ID) == 1
 	}, 20*time.Second, 200*time.Millisecond)
 
 	log.Info("Pass case 2: Add new nodes")
@@ -184,47 +184,47 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+		return maintainer.controller.spanController.GetReplicatingSize() == 4
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 2
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 2
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(node2.ID) == 2
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 2
 	}, 20*time.Second, 200*time.Millisecond)
 
 	log.Info("Pass case 3: Remove 2 nodes")
 
 	// Case 4: Remove 2 tables
-	maintainer.controller.RemoveTasksByTableIDs(2, 3)
+	maintainer.controller.operatorController.RemoveTasksByTableIDs(2, 3)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.replicationDB.GetReplicatingSize() == 2
+		return maintainer.controller.spanController.GetReplicatingSize() == 2
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 1
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 1
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(node2.ID) == 1
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 1
 	}, 20*time.Second, 200*time.Millisecond)
 	log.Info("Pass case 4: Remove 2 tables")
 
 	// Case 5: Add 2 tables
-	maintainer.controller.AddNewTable(commonEvent.Table{
+	maintainer.controller.spanController.AddNewTable(commonEvent.Table{
 		SchemaID: 1,
 		TableID:  5,
 	}, 3)
-	maintainer.controller.AddNewTable(commonEvent.Table{
+	maintainer.controller.spanController.AddNewTable(commonEvent.Table{
 		SchemaID: 1,
 		TableID:  6,
 	}, 3)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+		return maintainer.controller.spanController.GetReplicatingSize() == 4
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 2
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 2
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(node2.ID) == 2
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 2
 	}, 20*time.Second, 200*time.Millisecond)
 
 	log.Info("Pass case 5: Add 2 tables")
@@ -344,16 +344,16 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	maintainer := value.(*Maintainer)
 
 	require.Eventually(t, func() bool {
-		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+		return maintainer.controller.spanController.GetReplicatingSize() == 4
 	}, 20*time.Second, 200*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 4
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 4
 	}, 20*time.Second, 200*time.Millisecond)
 
 	require.Len(t, remotedIds, 2)
 	foundSize := 0
 	hasDDLDispatcher := false
-	for _, stm := range maintainer.controller.replicationDB.GetReplicating() {
+	for _, stm := range maintainer.controller.spanController.GetReplicating() {
 		if stm.Span.Equal(common.DDLSpan) {
 			hasDDLDispatcher = true
 		}

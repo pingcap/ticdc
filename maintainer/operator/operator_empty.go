@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -28,19 +29,19 @@ import (
 
 // OccupyDispatcherOperator is an operator to occupy a replica set not evolving.
 type OccupyDispatcherOperator struct {
-	replicaSet *replica.SpanReplication
-	finished   atomic.Bool
-	removed    atomic.Bool
-	db         *replica.ReplicationDB
+	replicaSet     *replica.SpanReplication
+	finished       atomic.Bool
+	removed        atomic.Bool
+	spanController *span.Controller
 }
 
 func NewOccupyDispatcherOperator(
-	db *replica.ReplicationDB,
+	spanController *span.Controller,
 	replicaSet *replica.SpanReplication,
 ) *OccupyDispatcherOperator {
 	return &OccupyDispatcherOperator{
-		replicaSet: replicaSet,
-		db:         db,
+		replicaSet:     replicaSet,
+		spanController: spanController,
 	}
 }
 

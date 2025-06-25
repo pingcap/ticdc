@@ -166,6 +166,10 @@ var (
 		"Codec invalid config",
 		errors.RFCCodeText("CDC:ErrCodecInvalidConfig"),
 	)
+	ErrCompressionFailed = errors.Normalize(
+		"Compression failed",
+		errors.RFCCodeText("CDC:ErrCompressionFailed"),
+	)
 	ErrSinkURIInvalid = errors.Normalize(
 		"sink uri invalid '%s'",
 		errors.RFCCodeText("CDC:ErrSinkURIInvalid"),
