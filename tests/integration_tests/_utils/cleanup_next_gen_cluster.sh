@@ -26,8 +26,10 @@ if [ -f "$OUT_DIR/next_gen.env" ]; then
     [ -n "$UPSTREAM_TIUP_PID" ] && kill_process_tree "$UPSTREAM_TIUP_PID"
     [ -n "$CDC_PD_TIUP_PID" ] && kill_process_tree "$CDC_PD_TIUP_PID"
     [ -n "$DOWNSTREAM_TIUP_PID" ] && kill_process_tree "$DOWNSTREAM_TIUP_PID"
+    ps -ef | grep tiup | grep "$TIDB_PLAYGROUND_TAG" | awk '{print $2}' | xargs -I{} kill -9 {} 2>/dev/null || true
+    ps -ef | grep tiup | grep "$TIDB_PLAYGROUND_TAG_CDC_PD" | awk '{print $2}' | xargs -I{} kill -9 {} 2>/dev/null || true
+    ps -ef | grep tiup | grep "$TIDB_PLAYGROUND_TAG_DOWNSTREAM" | awk '{print $2}' | xargs -I{} kill -9 {} 2>/dev/null || true
 fi
 
-ps -ef | grep tiup | awk '{print $2}' | xargs -I{} kill -9 {} 2>/dev/null || true
 
 rm -f $OUT_DIR/next_gen.env || true
