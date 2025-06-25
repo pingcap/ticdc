@@ -54,12 +54,6 @@ func main() {
 }
 
 func runConvert(cmd *cobra.Command, args []string) {
-	if cfgPath == "" {
-		fmt.Fprintln(os.Stderr, "please specify the config file path")
-		os.Exit(ExitCodeNoFilePath)
-		return
-	}
-
 	cfg := &config.ReplicaConfig{}
 	_, err := toml.DecodeFile(cfgPath, cfg)
 	if err != nil {
