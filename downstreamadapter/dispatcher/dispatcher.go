@@ -266,7 +266,7 @@ func (d *Dispatcher) HandleCacheEvents() {
 }
 
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
-	if d.isRemoving.Load() {
+	if d.GetRemovingStatus() {
 		log.Warn("dispatcher has removed", zap.Any("id", d.id))
 		return true
 	}
