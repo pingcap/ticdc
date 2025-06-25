@@ -88,7 +88,7 @@ func (m changefeedAvailableMemory) Marshal() []byte {
 	return buf.Bytes()
 }
 
-func (m changefeedAvailableMemory) Unmarshal(data []byte) {
+func (m *changefeedAvailableMemory) Unmarshal(data []byte) {
 	buf := bytes.NewBuffer(data)
 	m.gid.Unmarshal(buf.Next(m.gid.GetSize()))
 	m.availableMemory = binary.BigEndian.Uint64(buf.Next(8))
@@ -136,7 +136,6 @@ func (d *DispatcherHeartbeat) GetSize() int {
 	size := 1 // version
 	size += 8 // clusterID
 	size += 4 // dispatcher count
-	size += 8 // available memory
 	for _, dp := range d.DispatcherProgresses {
 		size += dp.GetSize()
 	}
@@ -150,14 +149,14 @@ func (d *DispatcherHeartbeat) GetSize() int {
 }
 
 func (d *DispatcherHeartbeat) Marshal() ([]byte, error) {
-	return d.encodeV0()
+	return d.encodeV1()
 }
 
 func (d *DispatcherHeartbeat) Unmarshal(data []byte) error {
-	return d.decodeV0(data)
+	return d.decodeV1(data)
 }
 
-func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
+func (d *DispatcherHeartbeat) encodeV1() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.WriteByte(d.Version)
 	_ = binary.Write(buf, binary.BigEndian, d.ClusterID)
@@ -179,7 +178,7 @@ func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (d *DispatcherHeartbeat) decodeV0(data []byte) error {
+func (d *DispatcherHeartbeat) decodeV1(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	var err error
 	d.Version, err = buf.ReadByte()
