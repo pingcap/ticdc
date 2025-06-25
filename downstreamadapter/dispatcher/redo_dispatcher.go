@@ -560,22 +560,21 @@ func (rd *RedoDispatcher) GetFilterConfig() *eventpb.FilterConfig {
 }
 
 func (rd *RedoDispatcher) Remove() {
-	if rd.isRemoving.CompareAndSwap(false, true) {
-		log.Info("remove dispatcher",
-			zap.Stringer("dispatcher", rd.id),
+	rd.isRemoving.Store(true)
+	log.Info("remove redo dispatcher",
+		zap.Stringer("dispatcher", rd.id),
+		zap.Stringer("changefeedID", rd.changefeedID),
+		zap.String("table", common.FormatTableSpan(rd.tableSpan)))
+	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	err := dispatcherStatusDS.RemovePath(rd.id)
+	if err != nil {
+		log.Error("remove redo dispatcher from dynamic stream failed",
 			zap.Stringer("changefeedID", rd.changefeedID),
-			zap.String("table", common.FormatTableSpan(rd.tableSpan)))
-		dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-		err := dispatcherStatusDS.RemovePath(rd.id)
-		if err != nil {
-			log.Error("remove dispatcher from dynamic stream failed",
-				zap.Stringer("changefeedID", rd.changefeedID),
-				zap.Stringer("dispatcher", rd.id),
-				zap.String("table", common.FormatTableSpan(rd.tableSpan)),
-				zap.Uint64("checkpointTs", rd.GetCheckpointTs()),
-				zap.Uint64("resolvedTs", rd.GetResolvedTs()),
-				zap.Error(err))
-		}
+			zap.Stringer("dispatcher", rd.id),
+			zap.String("table", common.FormatTableSpan(rd.tableSpan)),
+			zap.Uint64("checkpointTs", rd.GetCheckpointTs()),
+			zap.Uint64("resolvedTs", rd.GetResolvedTs()),
+			zap.Error(err))
 	}
 }
 

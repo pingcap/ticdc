@@ -1585,7 +1585,6 @@ func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 				log.Error("remove checkpointTs message ds failed", zap.Error(err))
 			}
 		}
-		dispatcherItem.Remove()
 
 		count := 0
 		ok := false
@@ -1625,14 +1624,6 @@ func (e *EventDispatcherManager) removeRedoDispatcher(id common.DispatcherID) {
 			return
 		}
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
-		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
-		if dispatcherItem.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
-			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
-			if err != nil {
-				log.Error("remove checkpointTs message ds failed", zap.Error(err))
-			}
-		}
-		dispatcherItem.Remove()
 
 		count := 0
 		ok := false
