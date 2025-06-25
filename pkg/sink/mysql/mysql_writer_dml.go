@@ -745,7 +745,7 @@ func (w *Writer) groupRowsByType(
 	for _, row := range rows {
 		switch row.RowType {
 		case commonEvent.RowTypeInsert:
-			args := getArgs(&row.Row, tableInfo, true)
+			args := getArgs(&row.Row, tableInfo)
 			newInsertRow := sqlmodel.NewRowChange(
 				&tableInfo.TableName,
 				nil,
@@ -760,8 +760,8 @@ func (w *Writer) groupRowsByType(
 				insertRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}
 		case commonEvent.RowTypeUpdate:
-			args := getArgs(&row.Row, tableInfo, true)
-			preArgs := getArgs(&row.PreRow, tableInfo, true)
+			args := getArgs(&row.Row, tableInfo)
+			preArgs := getArgs(&row.PreRow, tableInfo)
 			newUpdateRow := sqlmodel.NewRowChange(
 				&tableInfo.TableName,
 				nil,
@@ -775,7 +775,7 @@ func (w *Writer) groupRowsByType(
 				updateRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}
 		case commonEvent.RowTypeDelete:
-			preArgs := getArgs(&row.PreRow, tableInfo, true)
+			preArgs := getArgs(&row.PreRow, tableInfo)
 			newDeleteRow := sqlmodel.NewRowChange(
 				&tableInfo.TableName,
 				nil,
