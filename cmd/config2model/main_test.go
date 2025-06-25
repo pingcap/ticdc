@@ -100,7 +100,7 @@ case-sensitive = false
 			if tt.setup != nil {
 				tt.setup()
 				if tt.config != "" {
-					err := os.WriteFile(cfgPath, []byte(tt.config), 0644)
+					err := os.WriteFile(cfgPath, []byte(tt.config), 0o644)
 					if err != nil {
 						t.Fatal(err)
 					}
