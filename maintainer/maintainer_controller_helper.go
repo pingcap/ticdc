@@ -40,7 +40,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 		return err
 	}
 
-	replications := c.replicationDB.GetTasksByTableID(tableId)
+	replications := c.spanController.GetTasksByTableID(tableId)
 	if len(replications) != 1 {
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
 	}
@@ -73,7 +73,7 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 		return err
 	}
 
-	replications := c.replicationDB.GetTasksByTableID(tableId)
+	replications := c.spanController.GetTasksByTableID(tableId)
 	opList := make([]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(replications))
 	finishList := make([]bool, len(replications))
 	for _, replication := range replications {
@@ -118,7 +118,7 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 // splitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
 func (c *Controller) splitTableByRegionCount(tableID int64) error {
-	if !c.replicationDB.IsTableExists(tableID) {
+	if !c.spanController.IsTableExists(tableID) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
 	}
@@ -127,7 +127,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
 	}
 
-	replications := c.replicationDB.GetTasksByTableID(tableID)
+	replications := c.spanController.GetTasksByTableID(tableID)
 
 	span := common.TableIDToComparableSpan(tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
@@ -135,7 +135,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		StartKey: span.StartKey,
 		EndKey:   span.EndKey,
 	}
-	splitTableSpans := c.splitter.SplitSpansByRegion(context.Background(), wholeSpan)
+	splitTableSpans := c.spanController.GetSplitter().SplitSpansByRegion(context.Background(), wholeSpan)
 
 	if len(splitTableSpans) == len(replications) {
 		log.Info("Split Table is finished; There is no need to do split", zap.Any("tableID", tableID))
@@ -144,15 +144,18 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 
 	randomIdx := rand.Intn(len(replications))
 	primaryID := replications[randomIdx].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
+	primaryOp := operator.NewMergeSplitDispatcherOperator(c.spanController, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
 	for _, replicaSet := range replications {
 		var op *operator.MergeSplitDispatcherOperator
 		if replicaSet.ID == primaryID {
 			op = primaryOp
 		} else {
-			op = operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
+			op = operator.NewMergeSplitDispatcherOperator(c.spanController, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
 		}
-		c.operatorController.AddOperator(op)
+		ret := c.operatorController.AddOperator(op)
+		if !ret {
+			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge split dispatcher operator")
+		}
 	}
 
 	count := 0
@@ -174,7 +177,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 // mergeTable merge two nearby dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
 func (c *Controller) mergeTable(tableID int64) error {
-	if !c.replicationDB.IsTableExists(tableID) {
+	if !c.spanController.IsTableExists(tableID) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
 	}
@@ -183,7 +186,7 @@ func (c *Controller) mergeTable(tableID int64) error {
 		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
 	}
 
-	replications := c.replicationDB.GetTasksByTableID(tableID)
+	replications := c.spanController.GetTasksByTableID(tableID)
 
 	if len(replications) == 1 {
 		log.Info("Merge Table is finished; There is only one replication for this table, so no need to do merge", zap.Any("tableID", tableID))
@@ -214,7 +217,10 @@ func (c *Controller) mergeTable(tableID int64) error {
 		idx = 0
 		// try to move the second span to the first span's node
 		moveOp := c.operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
-		c.operatorController.AddOperator(moveOp)
+		ret := c.operatorController.AddOperator(moveOp)
+		if !ret {
+			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+		}
 
 		count := 0
 		maxTry := 30
@@ -255,7 +261,7 @@ func (c *Controller) mergeTable(tableID int64) error {
 }
 
 func (c *Controller) checkParams(tableId int64, targetNode node.ID) error {
-	if !c.replicationDB.IsTableExists(tableId) {
+	if !c.spanController.IsTableExists(tableId) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
 	}

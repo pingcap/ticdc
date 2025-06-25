@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/redo/writer"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -48,7 +48,7 @@ func TestLogWriterWriteLog(t *testing.T) {
 			args: arg{
 				ctx: context.Background(),
 				rows: []writer.RedoEvent{
-					&pevent.DMLEvent{CommitTs: 1, PhysicalTableID: 111, TableInfo: tableInfo},
+					&pevent.RedoRowEvent{CommitTs: 1, TableInfo: tableInfo},
 				},
 			},
 			isRunning: true,
@@ -60,7 +60,7 @@ func TestLogWriterWriteLog(t *testing.T) {
 				ctx: context.Background(),
 				rows: []writer.RedoEvent{
 					nil,
-					&pevent.DMLEvent{CommitTs: 1, PhysicalTableID: 11, TableInfo: tableInfo},
+					&pevent.RedoRowEvent{CommitTs: 1, TableInfo: tableInfo},
 				},
 			},
 			writerErr: errors.New("err"),
@@ -306,13 +306,12 @@ func TestLogWriterFlushLog(t *testing.T) {
 			cfg:           cfg,
 			backendWriter: mockWriter,
 		}
-
 		if tt.name == "context cancel" {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			tt.args.ctx = ctx
 		}
-		err := w.FlushLog(tt.args.ctx)
+		err := w.backendWriter.Flush()
 		if tt.wantErr != nil {
 			log.Info("log error",
 				zap.String("wantErr", tt.wantErr.Error()),

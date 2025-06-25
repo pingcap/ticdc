@@ -755,6 +755,7 @@ func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 		if col == nil || col.IsGenerated() {
 			continue
 		}
+		// the first column may be generated.
 		if nonGeneratedColumnCount > 0 {
 			b.WriteString(",")
 		}

@@ -18,7 +18,7 @@ import (
 	"errors"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/redo/writer"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"go.uber.org/zap"
 )
 
@@ -37,25 +37,22 @@ func NewLogWriter(invalid bool) *blackHoleWriter {
 	}
 }
 
+func (bs *blackHoleWriter) Run(_ context.Context) error {
+	return nil
+}
+
 func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoEvent) (err error) {
 	if bs.invalid {
 		return errors.New("[WriteLog] invalid black hole writer")
-	}
-	if len(events) == 0 {
-		return nil
 	}
 	rl := events[len(events)-1].ToRedoLog()
 	current := rl.GetCommitTs()
 	log.Debug("write redo events", zap.Int("count", len(events)),
 		zap.Uint64("current", current))
-	return
-}
-
-func (bs *blackHoleWriter) FlushLog(_ context.Context) error {
-	if bs.invalid {
-		return errors.New("[FlushLog] invalid black hole writer")
+	for _, rl := range events {
+		rl.PostFlush()
 	}
-	return nil
+	return
 }
 
 func (bs *blackHoleWriter) Close() error {
