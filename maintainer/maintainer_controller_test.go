@@ -934,8 +934,7 @@ func (m *mockThreadPool) SubmitFunc(_ threadpool.FuncTask, _ time.Time) *threadp
 }
 
 // mockCache mocks tikv.RegionCache.
-type mockCache struct {
-}
+type mockCache struct{}
 
 // NewMockRegionCache returns a new MockCache.
 func newMockRegionCache() *mockCache {
