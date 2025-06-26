@@ -171,7 +171,7 @@ func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) *hear
 		if be.rangeChecker != nil {
 			detail = be.rangeChecker.Detail()
 		}
-		log.Warn("not all dispatchers reported", zap.String("detail", detail))
+		log.Warn("not all dispatchers reported", zap.String("detail", detail), zap.Any("id", dispatcherID), zap.Any("be", be))
 		return nil
 	}
 	return be.onAllDispatcherReportedBlockEvent(dispatcherID)
@@ -325,6 +325,7 @@ func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID
 		}
 	} else {
 		be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
+		log.Error("markDispatcherEventDone", zap.Any("be", be), zap.Any("be.rangeChecker", be.rangeChecker.Detail()))
 	}
 }
 
