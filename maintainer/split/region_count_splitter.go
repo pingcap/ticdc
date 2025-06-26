@@ -26,7 +26,6 @@ import (
 )
 
 // regionCountSplitter is a splitter that splits spans by region count.
-// It is used to split spans when add new table when initialize the maintainer and enable enableTableAcrossNodes
 // regionCountSplitter will split a table span into multiple spans, each span contains at most regionCountPerSpan regions.
 type regionCountSplitter struct {
 	changefeedID       common.ChangeFeedID
@@ -47,8 +46,10 @@ func newRegionCountSplitter(
 	}
 }
 
+// If spansNum > 0, means we split the span to spansNum spans
+// If spansNum == 0, means we split the span to regionNum / regionCountPerSpan spans
 func (m *regionCountSplitter) split(
-	ctx context.Context, span *heartbeatpb.TableSpan,
+	ctx context.Context, span *heartbeatpb.TableSpan, spansNum int,
 ) []*heartbeatpb.TableSpan {
 	bo := tikv.NewBackoffer(ctx, 500)
 	// TODO: use BatchLocateKeyRanges instead of ListRegionIDsInKeyRange to speed up; make a performance test here.
@@ -70,7 +71,7 @@ func (m *regionCountSplitter) split(
 		return []*heartbeatpb.TableSpan{span}
 	}
 
-	stepper := newEvenlySplitStepper(len(regions), m.regionCountPerSpan)
+	stepper := newEvenlySplitStepper(len(regions), m.regionCountPerSpan, spansNum)
 
 	spans := make([]*heartbeatpb.TableSpan, 0, stepper.SpanCount())
 	start, end := 0, stepper.Step()
@@ -142,7 +143,16 @@ type evenlySplitStepper struct {
 	remain        int // the number of spans that have the regionPerSpan + 1 region count
 }
 
-func newEvenlySplitStepper(totalRegion int, maxRegionPerSpan int) evenlySplitStepper {
+func newEvenlySplitStepper(totalRegion int, maxRegionPerSpan int, spansNum int) evenlySplitStepper {
+	// split based on the spansNum
+	if spansNum > 0 {
+		return evenlySplitStepper{
+			regionPerSpan: totalRegion / spansNum,
+			spanCount:     spansNum,
+			remain:        totalRegion % spansNum,
+		}
+	}
+	// split based on the maxRegionPerSpan
 	if totalRegion%maxRegionPerSpan == 0 {
 		return evenlySplitStepper{
 			regionPerSpan: maxRegionPerSpan,

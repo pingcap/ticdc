@@ -29,6 +29,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// TODO: need a test
 // SplitDispatcherOperator is an operator to remove a table span from a dispatcher
 // and then added some new spans to the replication db
 type SplitDispatcherOperator struct {
@@ -47,7 +48,6 @@ type SplitDispatcherOperator struct {
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator
 func NewSplitDispatcherOperator(spanController *span.Controller,
 	replicaSet *replica.SpanReplication,
-	originNode node.ID,
 	splitSpans []*heartbeatpb.TableSpan,
 ) *SplitDispatcherOperator {
 	spansInfo := ""
@@ -57,7 +57,7 @@ func NewSplitDispatcherOperator(spanController *span.Controller,
 	}
 	op := &SplitDispatcherOperator{
 		replicaSet:     replicaSet,
-		originNode:     originNode,
+		originNode:     replicaSet.GetNodeID(),
 		splitSpans:     splitSpans,
 		checkpointTs:   replicaSet.GetStatus().GetCheckpointTs(),
 		spanController: spanController,

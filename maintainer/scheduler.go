@@ -44,6 +44,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,
 			batchSize,
+			splitter,
 			oc,
 			spanController,
 			balanceInterval,

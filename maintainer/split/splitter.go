@@ -42,6 +42,7 @@ var baseSpanNumberCoefficient = replica.MinSpanNumberCoefficient + 1
 
 // RegionCache is a simplified interface of tikv.RegionCache.
 // It is useful to restrict RegionCache usage and mocking in tests.
+// TODO: change the function to get regions faster
 type RegionCache interface {
 	// ListRegionIDsInKeyRange lists ids of regions in [startKey,endKey].
 	ListRegionIDsInKeyRange(
@@ -79,10 +80,10 @@ func NewSplitter(
 }
 
 func (s *Splitter) SplitSpansByRegion(ctx context.Context,
-	span *heartbeatpb.TableSpan,
+	span *heartbeatpb.TableSpan, spansNum int,
 ) []*heartbeatpb.TableSpan {
 	spans := []*heartbeatpb.TableSpan{span}
-	spans = s.regionCounterSplitter.split(ctx, span)
+	spans = s.regionCounterSplitter.split(ctx, span, spansNum)
 	if len(spans) > 1 {
 		return spans
 	}
@@ -91,10 +92,10 @@ func (s *Splitter) SplitSpansByRegion(ctx context.Context,
 
 func (s *Splitter) SplitSpansByWriteKey(ctx context.Context,
 	span *heartbeatpb.TableSpan,
-	totalCaptures int,
+	spansNum int,
 ) []*heartbeatpb.TableSpan {
 	spans := []*heartbeatpb.TableSpan{span}
-	spans = s.writeKeySplitter.split(ctx, span, totalCaptures)
+	spans = s.writeKeySplitter.split(ctx, span, spansNum)
 	if len(spans) > 1 {
 		return spans
 	}

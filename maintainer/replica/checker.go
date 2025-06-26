@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
@@ -73,16 +74,16 @@ func (c CheckResult) String() string {
 }
 
 func GetNewGroupChecker(
-	cfID common.ChangeFeedID, enableTableAcrossNodes bool,
+	cfID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig,
 ) func(replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
-	if !enableTableAcrossNodes {
+	if schedulerCfg == nil || !schedulerCfg.EnableTableAcrossNodes {
 		return replica.NewEmptyChecker[common.DispatcherID, *SpanReplication]
 	}
 	return func(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
 		groupType := replica.GetGroupType(groupID)
 		switch groupType {
 		case replica.GroupDefault:
-			return newHotSpanChecker(cfID)
+			return NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 		case replica.GroupTable:
 			return newImbalanceChecker(cfID)
 		}

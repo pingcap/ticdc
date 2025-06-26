@@ -135,7 +135,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		StartKey: span.StartKey,
 		EndKey:   span.EndKey,
 	}
-	splitTableSpans := c.spanController.GetSplitter().SplitSpansByRegion(context.Background(), wholeSpan)
+	splitTableSpans := c.spanController.GetSplitter().SplitSpansByRegion(context.Background(), wholeSpan, 0)
 
 	if len(splitTableSpans) == len(replications) {
 		log.Info("Split Table is finished; There is no need to do split", zap.Any("tableID", tableID))

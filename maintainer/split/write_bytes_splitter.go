@@ -54,9 +54,9 @@ func newWriteSplitter(
 func (m *writeSplitter) split(
 	ctx context.Context,
 	span *heartbeatpb.TableSpan,
-	captureNum int,
+	spansNum int,
 ) []*heartbeatpb.TableSpan {
-	if m.writeKeyThreshold == 0 {
+	if m.writeKeyThreshold == 0 || spansNum <= 1 {
 		return nil
 	}
 	regions, err := m.pdAPIClient.ScanRegions(ctx, heartbeatpb.TableSpan{
@@ -74,19 +74,6 @@ func (m *writeSplitter) split(
 		return []*heartbeatpb.TableSpan{span}
 	}
 
-	spansNum := getSpansNumber(len(regions), captureNum)
-	if spansNum <= 1 {
-		log.Warn("only one capture and the regions number less than"+
-			" the maxSpanRegionLimit, skip split span",
-			zap.String("namespace", m.changefeedID.Namespace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", span.String()),
-			zap.Int("captureNum", captureNum),
-			zap.Int("regionsLen", len(regions)),
-			zap.Error(err))
-		return []*heartbeatpb.TableSpan{span}
-	}
-
 	splitInfo := m.splitRegionsByWrittenKeysV1(span.TableID, regions, spansNum)
 	log.Info("split span by written keys",
 		zap.String("namespace", m.changefeedID.Namespace()),
@@ -95,10 +82,7 @@ func (m *writeSplitter) split(
 		zap.Ints("perSpanRegionCounts", splitInfo.RegionCounts),
 		zap.Uint64s("weights", splitInfo.Weights),
 		zap.Int("spans", len(splitInfo.Spans)),
-		zap.Int("totalCaptures", captureNum),
-		zap.Int("writeKeyThreshold", m.writeKeyThreshold),
-		zap.Int("spanRegionLimit", spanRegionLimit),
-		zap.Uint64("baseSpansNum", uint64(spansNum)))
+		zap.Int("writeKeyThreshold", m.writeKeyThreshold))
 
 	return splitInfo.Spans
 }

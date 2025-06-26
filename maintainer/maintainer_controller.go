@@ -79,15 +79,15 @@ func NewController(changefeedID common.ChangeFeedID,
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	// Create span controller
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes)
-
-	// Create operator controller using spanController
-	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
-
 	var schedulerCfg *config.ChangefeedSchedulerConfig
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg)
+
+	// Create operator controller using spanController
+	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
+
 	sc := NewScheduleController(
 		changefeedID, batchSize, oc, spanController, balanceInterval, splitter, schedulerCfg,
 	)
