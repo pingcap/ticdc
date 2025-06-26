@@ -215,8 +215,7 @@ func newJSONMessageForDML(
 		if !e.ColumnSelector.Select(col) {
 			continue
 		}
-		flag := col.GetFlag()
-		value, javaType := formatColumnValue(row, idx, col, flag)
+		value, javaType := formatColumnValue(row, idx, col)
 		valueMap[col.ID] = value
 		javaTypeMap[col.ID] = javaType
 	}
@@ -295,8 +294,7 @@ func newJSONMessageForDML(
 			if !e.ColumnSelector.Select(col) {
 				continue
 			}
-			flag := col.GetFlag()
-			value, _ := formatColumnValue(preRow, idx, col, flag)
+			value, _ := formatColumnValue(preRow, idx, col)
 			oldValueMap[col.ID] = value
 		}
 

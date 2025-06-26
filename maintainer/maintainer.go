@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -156,7 +155,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	regionCache split.RegionCache,
 	checkpointTs uint64,
 	newChangefeed bool,
 ) *Maintainer {
@@ -176,7 +174,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		controller: NewController(cfID, checkpointTs, pdAPI, regionCache, taskScheduler,
+		controller: NewController(cfID, checkpointTs, pdAPI, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
@@ -236,14 +234,13 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	regionCache split.RegionCache,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI, regionCache, 1, false)
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI, 1, false)
 	m.cascadeRemoving = true
 	return m
 }

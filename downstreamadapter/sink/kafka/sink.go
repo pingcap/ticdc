@@ -529,7 +529,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					}
 				}
 			}
-
 			checkpointTsMessageCount.Inc()
 			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
 		}
