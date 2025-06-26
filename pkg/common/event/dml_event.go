@@ -56,7 +56,7 @@ func (b *BatchDMLEvent) String() string {
 // NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
 func NewBatchDMLEvent() *BatchDMLEvent {
 	return &BatchDMLEvent{
-		Version:   0,
+		Version:   DMLEventVersion,
 		DMLEvents: make([]*DMLEvent, 0),
 	}
 }
@@ -113,8 +113,9 @@ func (b *BatchDMLEvent) decodeV0(data []byte) error {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
 	b.Version = data[0]
-	if b.Version != 0 {
-		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
+	if b.Version != DMLEventVersion {
+		log.Panic("BatchDMLEvent: unexpected dml version",
+			zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", b.Version))
 		return nil
 	}
 	offset := 1
@@ -141,8 +142,9 @@ func (b *BatchDMLEvent) Marshal() ([]byte, error) {
 }
 
 func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
-	if b.Version != 0 {
-		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
+	if b.Version != DMLEventVersion {
+		log.Panic("BatchDMLEvent: unexpected dml version",
+			zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", b.Version))
 		return nil, nil
 	}
 	size := 1 + 8 + (1+16+6*8+4*2+1)*len(b.DMLEvents) + int(b.Len())

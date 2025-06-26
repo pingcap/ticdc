@@ -464,6 +464,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
+// todo: how to set the scan limit?
 func calculateScanLimit(task scanTask, available uint64) scanLimit {
 	return scanLimit{
 		maxScannedBytes: task.getCurrentScanLimitInBytes(),
