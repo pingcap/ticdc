@@ -33,7 +33,9 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 )
 
-// balanceScheduler is used to check the balance status of all spans among all nodes
+// balanceScheduler mainly focus on two types of operations:
+// 1. Split operations: splits the one large span for the whole table into smaller ones.
+// 2. Move operations: distributes spans across nodes for balance the span count in each node.
 type balanceScheduler struct {
 	changefeedID common.ChangeFeedID
 	batchSize    int
@@ -44,34 +46,25 @@ type balanceScheduler struct {
 
 	splitter *split.Splitter
 
-	random               *rand.Rand
-	lastRebalanceTime    time.Time
-	checkBalanceInterval time.Duration
-	// forceBalance forces the scheduler to produce schedule tasks regardless of
-	// `checkBalanceInterval`.
-	// It is set to true when the last time `Schedule` produces some tasks,
-	// and it is likely there are more tasks will be produced in the next
-	// `Schedule`.
-	// It speeds up rebalance.
-	forceBalance bool
+	random *rand.Rand
 }
 
 func NewBalanceScheduler(
-	changefeedID common.ChangeFeedID, batchSize int,
+	changefeedID common.ChangeFeedID,
+	batchSize int,
 	splitter *split.Splitter,
-	oc *operator.Controller, sc *span.Controller,
-	balanceInterval time.Duration,
+	oc *operator.Controller,
+	sc *span.Controller,
+	_ time.Duration,
 ) *balanceScheduler {
 	return &balanceScheduler{
-		changefeedID:         changefeedID,
-		batchSize:            batchSize,
-		random:               rand.New(rand.NewSource(time.Now().UnixNano())),
-		operatorController:   oc,
-		spanController:       sc,
-		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		checkBalanceInterval: balanceInterval,
-		lastRebalanceTime:    time.Now(),
-		splitter:             splitter,
+		changefeedID:       changefeedID,
+		batchSize:          batchSize,
+		random:             rand.New(rand.NewSource(time.Now().UnixNano())),
+		operatorController: oc,
+		spanController:     sc,
+		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		splitter:           splitter,
 	}
 }
 
@@ -87,6 +80,7 @@ func (s *balanceScheduler) Execute() time.Time {
 	}
 
 	// 1. check whether we have spans in defaultGroupID need to be splitted.
+	//    we only consider the not splitted span here.
 	checkResults := s.spanController.CheckByGroup(pkgReplica.DefaultGroupID, s.batchSize)
 	count := s.doSplit(checkResults)
 
