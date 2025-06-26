@@ -257,7 +257,8 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
-		commonEvent.TypeHandshakeEvent:
+		commonEvent.TypeHandshakeEvent,
+		commonEvent.TypeSyncPointEvent:
 		log.Debug("check event sequence",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
