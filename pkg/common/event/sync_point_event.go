@@ -67,7 +67,6 @@ func (e SyncPointEvent) Marshal() ([]byte, error) {
 }
 
 func (e SyncPointEvent) GetSeq() uint64 {
-	// It's a fake seq.
 	return e.Seq
 }
 
