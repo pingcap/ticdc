@@ -40,16 +40,17 @@ function main() {
 	# ## insert some datas
 	run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
+	# to ensure row changed events have been replicated to TiCDC
 	sleep 10
-	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
-	sleep 120
 	changefeed_id="test"
 	storage_path="file://$WORK_DIR/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
-	ensure 100 check_redo_checkpoint_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
-
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 	cleanup_process $CDC_BINARY
+
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/"
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 }
 
 trap stop_tidb_cluster EXIT
