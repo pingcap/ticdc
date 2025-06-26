@@ -159,11 +159,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				zap.Stringer("node", nodeID))
 			continue
 		}
-		if status.Redo {
-			c.redoSpanController.UpdateStatus(stm, status)
-		} else {
-			c.spanController.UpdateStatus(stm, status)
-		}
+		spanController.UpdateStatus(stm, status)
 	}
 }
 
