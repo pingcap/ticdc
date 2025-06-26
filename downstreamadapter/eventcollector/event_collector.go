@@ -254,8 +254,7 @@ func (c *EventCollector) collectMemory() []event.AvailableMemory {
 			continue
 		}
 		gid := changefeedID.(common.ChangeFeedID).ID()
-		available := quota.MaxMemory() - quota.MemoryUsage()
-		result = append(result, event.NewAvailableMemory(gid, uint64(available)))
+		result = append(result, event.NewAvailableMemory(gid, uint64(quota.AvailableMemory())))
 	}
 	return result
 }
