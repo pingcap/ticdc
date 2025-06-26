@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
@@ -28,9 +29,8 @@ import (
 )
 
 func TestRegionCountSplitSpan(t *testing.T) {
-	t.Parallel()
-
 	cache := NewMockRegionCache(nil)
+	appcontext.SetService(appcontext.RegionCache, cache)
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, 2)
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, 3)
@@ -105,16 +105,15 @@ func TestRegionCountSplitSpan(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	for i, cs := range cases {
-		splitter := newRegionCountSplitter(cfID, cache, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
+		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
 		spans := splitter.split(context.Background(), cs.span)
 		require.Equalf(t, cs.expectSpans, spans, "%d %s", i, cs.span.String())
 	}
 }
 
 func TestRegionCountEvenlySplitSpan(t *testing.T) {
-	t.Parallel()
-
 	cache := NewMockRegionCache(nil)
+	appcontext.SetService(appcontext.RegionCache, cache)
 	totalRegion := 1000
 	for i := 0; i < totalRegion; i++ {
 		cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{
@@ -188,16 +187,15 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	spans := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	for i, cs := range cases {
-		splitter := newRegionCountSplitter(cfID, cache, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
+		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
 		spans := splitter.split(context.Background(), spans)
 		require.Equalf(t, cs.expectedSpans, len(spans), "%d %v", i, cs)
 	}
 }
 
 func TestSplitSpanRegionOutOfOrder(t *testing.T) {
-	t.Parallel()
-
 	cache := NewMockRegionCache(nil)
+	appcontext.SetService(appcontext.RegionCache, cache)
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_1"), EndKey: []byte("t1_4")}, 2)
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, 3)
@@ -207,7 +205,7 @@ func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 		RegionCountPerSpan: 1,
 	}
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newRegionCountSplitter(cfID, cache, cfg.RegionThreshold, cfg.RegionCountPerSpan)
+	splitter := newRegionCountSplitter(cfID, cfg.RegionThreshold, cfg.RegionCountPerSpan)
 	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	spans := splitter.split(context.Background(), span)
 	require.Equal(

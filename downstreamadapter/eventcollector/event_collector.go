@@ -39,18 +39,6 @@ const (
 	retryLimit      = 3 // The maximum number of retries for sending dispatcher requests and heartbeats.
 )
 
-var (
-	metricsHandleEventDuration = metrics.EventCollectorHandleEventDuration
-	metricsDSInputChanLen      = metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector")
-	metricsDSPendingQueueLen   = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector")
-	metricsDroppedEventCount   = metrics.EventCollectorDroppedEventCount
-)
-
-const (
-	eventServiceTopic   = messaging.EventServiceTopic
-	eventCollectorTopic = messaging.EventCollectorTopic
-)
-
 // DispatcherMessage is the message send to EventService.
 type DispatcherMessage struct {
 	Message    *messaging.TargetMessage
@@ -123,9 +111,9 @@ func (c *EventCollector) Run(ctx context.Context) {
 	c.g = g
 	c.cancel = cancel
 
-	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
+	for _, ch := range c.receiveChannels {
 		g.Go(func() error {
-			return c.runDispatchMessage(ctx, c.receiveChannels[i])
+			return c.runDispatchMessage(ctx, ch)
 		})
 	}
 
@@ -366,9 +354,10 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
 	inflightDuration := time.Since(time.UnixMilli(targetMessage.CreateAt)).Seconds()
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
+
 	start := time.Now()
 	defer func() {
-		metricsHandleEventDuration.Observe(time.Since(start).Seconds())
+		metrics.EventCollectorHandleEventDuration.Observe(time.Since(start).Seconds())
 	}()
 
 	// If the message is a log service event, we need to forward it to the
@@ -434,8 +423,8 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 			return context.Cause(ctx)
 		case <-ticker.C:
 			dsMetrics := c.ds.GetMetrics()
-			metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
-			metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
+			metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector").Set(float64(dsMetrics.EventChanSize))
+			metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector").Set(float64(dsMetrics.PendingQueueLen))
 			for _, areaMetric := range dsMetrics.MemoryControl.AreaMemoryMetrics {
 				cfID, ok := c.changefeedIDMap.Load(areaMetric.Area())
 				if !ok {

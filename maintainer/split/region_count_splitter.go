@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
@@ -35,8 +36,9 @@ type regionCountSplitter struct {
 }
 
 func newRegionCountSplitter(
-	changefeedID common.ChangeFeedID, regionCache RegionCache, regionThreshold int, regionCountPerSpan int,
+	changefeedID common.ChangeFeedID, regionThreshold int, regionCountPerSpan int,
 ) *regionCountSplitter {
+	regionCache := appcontext.GetService[RegionCache](appcontext.RegionCache)
 	return &regionCountSplitter{
 		changefeedID:       changefeedID,
 		regionCache:        regionCache,

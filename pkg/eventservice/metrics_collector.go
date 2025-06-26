@@ -117,7 +117,7 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		snapshot.dispatcherCount++
 		dispatcher := value.(*dispatcherStat)
 
-		if dispatcher.isRunning.Load() {
+		if dispatcher.isReadyRecevingData.Load() {
 			snapshot.runningDispatcherCount++
 		} else {
 			snapshot.pausedDispatcherCount++
@@ -149,8 +149,8 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 
 // collectPendingTaskMetrics collects metrics about pending tasks
 func (mc *metricsCollector) collectPendingTaskMetrics(snapshot *metricsSnapshot) {
-	for i := 0; i < mc.broker.scanWorkerCount; i++ {
-		snapshot.pendingTaskCount += len(mc.broker.taskChan[i])
+	for _, ch := range mc.broker.taskChan {
+		snapshot.pendingTaskCount += len(ch)
 	}
 }
 
@@ -191,7 +191,7 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 		zap.Duration("updateDiff",
 			time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())-
 				time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())),
-		zap.Bool("isPaused", !snapshot.slowestDispatcher.isRunning.Load()),
+		zap.Bool("isPaused", !snapshot.slowestDispatcher.isReadyRecevingData.Load()),
 		zap.Bool("isHandshaked", snapshot.slowestDispatcher.isHandshaked.Load()),
 		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
 	)

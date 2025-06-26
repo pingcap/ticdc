@@ -47,7 +47,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
-	require.True(t, stat.isRunning.Load())
+	require.True(t, stat.isReadyRecevingData.Load())
 	require.False(t, stat.enableSyncPoint)
 	require.Equal(t, info.GetSyncPointTs(), stat.nextSyncPoint)
 	require.Equal(t, info.GetSyncPointInterval(), stat.syncPointInterval)
