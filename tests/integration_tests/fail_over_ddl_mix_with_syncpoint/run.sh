@@ -37,7 +37,7 @@ function prepare() {
 	SINK_URI="mysql://root@127.0.0.1:3306/"
 
 	case $SINK_TYPE in
-	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
+	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=3" ;;
 	storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
 	pulsar)
 		run_pulsar_cluster $WORK_DIR normal
@@ -47,7 +47,7 @@ function prepare() {
 	esac
 	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
+	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
 	esac

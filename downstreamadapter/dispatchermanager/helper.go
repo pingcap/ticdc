@@ -371,10 +371,6 @@ func (h *CheckpointTsMessageHandler) Handle(eventDispatcherManager *EventDispatc
 	checkpointTsMessage := messages[0]
 	if eventDispatcherManager.tableTriggerEventDispatcher != nil {
 		eventDispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
-	} else {
-		log.Warn("table trigger event dispatcher is not set, skip checkpoint ts message",
-			zap.String("changefeedID", checkpointTsMessage.ChangefeedID.String()),
-			zap.Uint64("checkpointTs", checkpointTsMessage.CheckpointTs))
 	}
 	return false
 }
