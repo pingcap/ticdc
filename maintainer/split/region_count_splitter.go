@@ -49,6 +49,7 @@ func (m *regionCountSplitter) split(
 	ctx context.Context, span *heartbeatpb.TableSpan,
 ) []*heartbeatpb.TableSpan {
 	bo := tikv.NewBackoffer(ctx, 500)
+	// TODO: use BatchLocateKeyRanges instead of ListRegionIDsInKeyRange to speed up; make a performance test here.
 	regions, err := m.regionCache.ListRegionIDsInKeyRange(bo, span.StartKey, span.EndKey)
 	if err != nil {
 		log.Warn("list regions failed, skip split span",
