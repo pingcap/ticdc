@@ -395,7 +395,6 @@ func (p *persistentStorage) fetchTableDDLEvents(tableID int64, tableFilter filte
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
 		ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
-		log.Debug("read ddl", zap.String("query", ddlEvent.Query))
 		if ok {
 			events = append(events, ddlEvent)
 		}

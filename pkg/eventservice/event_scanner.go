@@ -182,7 +182,6 @@ func (s *eventScanner) scanAndMergeEvents(
 	ddlEvents []pevent.DDLEvent,
 	iter eventstore.EventIterator,
 ) ([]event.Event, bool, error) {
-	log.Info("start scanning events", zap.Int("ddlEventLen", len(ddlEvents)))
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id)
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
 	checker := newLimitChecker(session.limit.maxScannedBytes, session.limit.timeout, session.startTime)
