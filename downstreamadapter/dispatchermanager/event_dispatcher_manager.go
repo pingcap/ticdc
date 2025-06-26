@@ -804,16 +804,18 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 					zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs))
 				continue
 			}
-			if e.dispatcherMap.Len() != 0 {
+			if checkpointTs != math.MaxUint64 {
 				previousCheckpointTs = max(previousCheckpointTs, checkpointTs)
 			}
-			if e.redoDispatcherMap.Len() != 0 {
+			if resolvedTs != math.MaxUint64 {
 				previousResolvedTs = max(previousResolvedTs, resolvedTs)
 			}
 			message := new(heartbeatpb.RedoTsMessage)
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.CheckpointTs = checkpointTs
 			message.ResolvedTs = resolvedTs
+			// checkpointTs:18446744073709551615
+			// resolvedTs:458998784479461567 "
 			err := mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
