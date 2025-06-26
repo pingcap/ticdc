@@ -67,7 +67,7 @@ kafka_groups=(
 	# G00
 	'debezium'
 	# G01
-	''
+	'generate_column'
 	# G02
 	''
 	# G03
@@ -100,7 +100,7 @@ kafka_groups=(
 
 pulsar_groups=(
 	# G00
-	''
+	'generate_column'
 	# G01
 	''
 	# G02
