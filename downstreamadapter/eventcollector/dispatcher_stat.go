@@ -585,7 +585,6 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 		zap.Uint64("commitTs", dropEvent.GetCommitTs()),
 		zap.Uint64("sequence", dropEvent.GetSeq()),
 		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
-	d.lastEventCommitTs.Store(dropEvent.GetCommitTs())
 	d.reset(d.connState.getEventServiceID())
 	metrics.EventCollectorDroppedEventCount.Inc()
 }
