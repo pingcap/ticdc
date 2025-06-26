@@ -38,7 +38,7 @@ type mockMounter struct {
 
 func makeDispatcherReady(disp *dispatcherStat) {
 	disp.isHandshaked.Store(true)
-	disp.isRunning.Store(true)
+	disp.isReadyRecevingData.Store(true)
 	disp.resetTs.Store(disp.info.GetStartTs())
 }
 
@@ -74,8 +74,8 @@ func TestEventScanner(t *testing.T) {
 		maxScannedBytes: 1000,
 		timeout:         10 * time.Second,
 	}
-	dataRange, needScan := broker.scanReady(disp, true)
-	require.True(t, needScan)
+	ok, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
 	events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
@@ -97,8 +97,8 @@ func TestEventScanner(t *testing.T) {
 	mockSchemaStore.AppendDDLEvent(tableID, ddlEvent)
 
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	dataRange, needScan = broker.scanReady(disp, true)
-	require.True(t, needScan)
+	ok, dataRange = broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
 
 	sl = scanLimit{
 		maxScannedBytes: 1000,
@@ -124,8 +124,8 @@ func TestEventScanner(t *testing.T) {
 	err = mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
 	require.NoError(t, err)
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	dataRange, needScan = broker.scanReady(disp, true)
-	require.True(t, needScan)
+	ok, dataRange = broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
 	sl = scanLimit{
 		maxScannedBytes: 1000,
 		timeout:         10 * time.Second,
@@ -325,8 +325,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	dataRange, needScan := broker.scanReady(disp, true)
-	require.True(t, needScan)
+	ok, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
 
 	eSize := len(kvEvents[0].Key) + len(kvEvents[0].Value) + len(kvEvents[0].OldValue)
 
@@ -423,8 +423,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL3)
 	resolvedTs = resolvedTs + 3
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	dataRange, needScan = broker.scanReady(disp, true)
-	require.True(t, needScan)
+	ok, dataRange = broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
 
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -1247,11 +1247,11 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	// Create scan session
 	ctx := context.Background()
 	dispatcherStat := &dispatcherStat{
-		id:        dispatcherID,
-		isRunning: atomic.Bool{},
-		isRemoved: atomic.Bool{},
+		id:                  dispatcherID,
+		isReadyRecevingData: atomic.Bool{},
+		isRemoved:           atomic.Bool{},
 	}
-	dispatcherStat.isRunning.Store(true)
+	dispatcherStat.isReadyRecevingData.Store(true)
 
 	dataRange := common.DataRange{
 		Span: &heartbeatpb.TableSpan{

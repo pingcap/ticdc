@@ -73,10 +73,10 @@ type dispatcherStat struct {
 	// If the dispatcher is reset, the seq should be set to 1.
 	seq atomic.Uint64
 
-	// isRunning is used to indicate whether the dispatcher is running.
+	// isReadyRecevingData is used to indicate whether the dispatcher is ready to receive data events.
 	// It will be set to false, after it receives the pause event from the dispatcher.
 	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
-	isRunning atomic.Bool
+	isReadyRecevingData atomic.Bool
 	// isHandshaked is used to indicate whether the dispatcher is ready to send data.
 	// It will be set to true, after it sends the handshake event to the dispatcher.
 	// It will be set to false, after it receives the reset event from the dispatcher.
@@ -138,7 +138,7 @@ func newDispatcherStat(
 	dispStat.eventStoreResolvedTs.Store(startTs)
 	dispStat.checkpointTs.Store(startTs)
 	dispStat.sentResolvedTs.Store(startTs)
-	dispStat.isRunning.Store(true)
+	dispStat.isReadyRecevingData.Store(true)
 	dispStat.resetScanLimit()
 
 	now := time.Now()
@@ -149,7 +149,7 @@ func newDispatcherStat(
 }
 
 func (a *dispatcherStat) getEventSenderState() pevent.EventSenderState {
-	if a.IsRunning() {
+	if a.IsReadyRecevingData() {
 		return pevent.EventSenderStateNormal
 	}
 	return pevent.EventSenderStatePaused
@@ -179,7 +179,7 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 
 	a.isTaskScanning.Store(false)
 
-	a.isRunning.Store(true)
+	a.isReadyRecevingData.Store(true)
 	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 }
 
@@ -226,8 +226,8 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	return r, true
 }
 
-func (a *dispatcherStat) IsRunning() bool {
-	return a.isRunning.Load() && a.changefeedStat.isRunning.Load()
+func (a *dispatcherStat) IsReadyRecevingData() bool {
+	return a.isReadyRecevingData.Load() && a.changefeedStat.isReadyRecevingData.Load()
 }
 
 // getCurrentScanLimitInBytes returns the current scan limit in bytes.
@@ -312,6 +312,14 @@ func (w *wrapEvent) getDispatcherID() common.DispatcherID {
 	return e.GetDispatcherID()
 }
 
+func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent) *wrapEvent {
+	w := getWrapEvent()
+	w.serverID = serverID
+	w.e = &e
+	w.msgType = pevent.TypeHandshakeEvent
+	return w
+}
+
 func newWrapReadyEvent(serverID node.ID, e pevent.ReadyEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
@@ -394,10 +402,10 @@ func (c *resolvedTsCache) reset() {
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
-	// isRunning is used to indicate whether the changefeed is running.
+	// isReadyRecevingData is used to indicate whether the changefeed is running.
 	// It will be set to false, after it receives the pause event from the dispatcher.
 	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
-	isRunning atomic.Bool
+	isReadyRecevingData atomic.Bool
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
 	dispatcherCount atomic.Uint64
 
@@ -406,10 +414,10 @@ type changefeedStatus struct {
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 	stat := &changefeedStatus{
-		changefeedID: changefeedID,
-		isRunning:    atomic.Bool{},
+		changefeedID:        changefeedID,
+		isReadyRecevingData: atomic.Bool{},
 	}
-	stat.isRunning.Store(true)
+	stat.isReadyRecevingData.Store(true)
 	return stat
 }
 

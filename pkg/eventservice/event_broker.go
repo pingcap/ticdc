@@ -226,16 +226,6 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	metricEventServiceSendResolvedTsCount.Inc()
 }
 
-func (c *eventBroker) sendReadyEvent(
-	server node.ID,
-	d *dispatcherStat,
-) {
-	e := pevent.NewReadyEvent(d.info.GetID())
-	readyEvent := newWrapReadyEvent(server, e)
-	c.getMessageCh(d.messageWorkerIndex) <- readyEvent
-	metricEventServiceSendCommandCount.Inc()
-}
-
 func (c *eventBroker) sendNotReusableEvent(
 	server node.ID,
 	d *dispatcherStat,
@@ -278,9 +268,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				if !c.checkAndSendReady(dispatcherStat) {
 					return true
 				}
-				if !c.checkAndSendHandshake(dispatcherStat) {
-					return true
-				}
+				c.sendHandshakeIfNeed(dispatcherStat)
 				startTs := dispatcherStat.sentResolvedTs.Load()
 				remoteID := node.ID(dispatcherStat.info.GetServerID())
 				// TODO: maybe limit 1 is enough.
@@ -329,99 +317,108 @@ func (c *eventBroker) logUnresetDispatchers(ctx context.Context) error {
 	}
 }
 
-// scanReady checks if the dispatcher needs to scan the event store.
-// If the dispatcher needs to scan the event store, it returns true.
-// send resolvedTs to the dispatcher and returns false if the task belonged dispatcher is not running
-func (c *eventBroker) scanReady(task scanTask, mustCheck bool) (common.DataRange, bool) {
-	if !mustCheck && task.isTaskScanning.Load() {
-		return common.DataRange{}, false
-	}
-
-	// If the dispatcher is not ready, we don't need to scan the event store.
-	if !c.checkAndSendReady(task) {
-		return common.DataRange{}, false
-	}
-
-	if !c.checkAndSendHandshake(task) {
-		return common.DataRange{}, false
-	}
-
-	// Only check scan when the dispatcher is running.
-	if !task.IsRunning() {
-		// If the dispatcher is not running, we also need to send the watermark to the dispatcher.
-		// And the resolvedTs should be the last sent watermark.
-		resolvedTs := task.sentResolvedTs.Load()
-		c.sendResolvedTs(task, resolvedTs)
-		return common.DataRange{}, false
+// getScanTaskDataRange determines the valid data range for scanning a given task.
+// It checks various conditions (dispatcher status, DDL state, max commit ts of dml event)
+// to decide whether scanning is needed and returns the appropriate time range.
+// If no valid range is found, it returns an empty DataRange.
+func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRange) {
+	// Only do scan when the dispatcher is ready to receive data.
+	if !task.IsReadyRecevingData() {
+		return false, common.DataRange{}
 	}
 
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
 		metricEventServiceSkipResolvedTsCount.Inc()
-		return common.DataRange{}, false
+		return false, common.DataRange{}
 	}
 
 	// 2. Constrain the data range by the ddl state of the table.
 	ddlState := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().TableID)
 	dataRange.EndTs = min(dataRange.EndTs, ddlState.ResolvedTs)
 
-	if ddlState.ResolvedTs <= dataRange.StartTs {
-		metricEventServiceSkipResolvedTsCount.Inc()
-		return common.DataRange{}, false
-	}
-
-	// Note: Maybe we should still send a resolvedTs to downstream to tell that
-	// the dispatcher is alive?
 	if dataRange.EndTs <= dataRange.StartTs {
 		metricEventServiceSkipResolvedTsCount.Inc()
-		return common.DataRange{}, false
+		return false, common.DataRange{}
 	}
 
-	// target ts range: (dataRange.StartTs, dataRange.EndTs]
+	// 3. Check whether there is any events in the data range
+	// Note: target range is (dataRange.StartTs, dataRange.EndTs]
 	if dataRange.StartTs >= task.latestCommitTs.Load() &&
 		dataRange.StartTs >= ddlState.MaxEventCommitTs {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.EndTs)
-		return common.DataRange{}, false
+		return false, common.DataRange{}
+	}
+	return true, dataRange
+}
+
+// scanReady checks if the dispatcher needs to scan the event store/schema store.
+// If the dispatcher needs to scan the event store/schema store, it returns true.
+// If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher.
+//
+// Note: A true return value only indicates potential scanning need,
+// final determination occurs when the scanTask is actully processed.
+func (c *eventBroker) scanReady(task scanTask) bool {
+	// If there is already a scan task running, skip this one.
+	if task.isTaskScanning.Load() {
+		return false
 	}
 
-	return dataRange, true
+	// If the dispatcher is not ready, we don't need do the scan.
+	if !c.checkAndSendReady(task) {
+		return false
+	}
+
+	c.sendHandshakeIfNeed(task)
+
+	// Only check scan when the dispatcher is ready to receive data event.
+	if !task.IsReadyRecevingData() {
+		// If the dispatcher is not ready to receive data event,
+		// we still need to send the last resolvedTs to the dispatcher.
+		resolvedTs := task.sentResolvedTs.Load()
+		c.sendResolvedTs(task, resolvedTs)
+		return false
+	}
+
+	ok, _ := c.getScanTaskDataRange(task)
+	return ok
 }
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
 		remoteID := node.ID(task.info.GetServerID())
-		c.sendReadyEvent(remoteID, task)
+		event := pevent.NewReadyEvent(task.info.GetID())
+		wrapEvent := newWrapReadyEvent(remoteID, event)
+		c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
+		metricEventServiceSendCommandCount.Inc()
 		return false
 	}
 	return true
 }
 
-func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
+func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	if task.isHandshaked.Load() {
-		return true
+		return
+	}
+	if !task.isHandshaked.CompareAndSwap(false, true) {
+		log.Panic("should not happen: sendHandshakeIfNeed should not be called concurrently")
+		return
 	}
 	// Always reset the seq of the dispatcher to 0 before sending a handshake event.
 	task.seq.Store(0)
-	handshake := &wrapEvent{
-		serverID: node.ID(task.info.GetServerID()),
-		e: pevent.NewHandshakeEvent(
-			task.id,
-			task.resetTs.Load(),
-			task.seq.Add(1),
-			task.startTableInfo.Load()),
-		msgType: pevent.TypeHandshakeEvent,
-		postSendFunc: func() {
-			log.Info("checkAndSendHandshake", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Bool("handshaked", task.isHandshaked.Load()))
-			task.isHandshaked.Store(true)
-		},
-	}
-	c.getMessageCh(task.messageWorkerIndex) <- handshake
+	remoteID := node.ID(task.info.GetServerID())
+	event := pevent.NewHandshakeEvent(
+		task.id,
+		task.resetTs.Load(),
+		task.seq.Add(1),
+		task.startTableInfo.Load())
+	wrapEvent := newWrapHandshakeEvent(remoteID, event)
+	c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
-	return false
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
@@ -484,7 +481,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	dataRange, needScan := c.scanReady(task, true)
+	needScan, dataRange := c.getScanTaskDataRange(task)
 	if !needScan {
 		return
 	}
@@ -501,8 +498,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	// If the task is not running, we don't send the events to the dispatcher.
-	if !task.isRunning.Load() {
+	// Check whether the task is ready to receive data events again before sending events.
+	if !task.isReadyRecevingData.Load() {
 		return
 	}
 
@@ -575,19 +572,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				if m.msgType == pevent.TypeResolvedEvent {
 					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
 					continue
-				}
-				// Check if the dispatcher is initialized, if so, ignore the handshake event.
-				if m.msgType == pevent.TypeHandshakeEvent {
-					// If the message is a handshake event, we need to reset the dispatcher.
-					d, ok := c.getDispatcher(m.getDispatcherID())
-					if !ok {
-						log.Warn("Get dispatcher failed", zap.Any("dispatcherID", m.getDispatcherID()))
-						continue
-					}
-					if d.isHandshaked.Load() {
-						log.Info("Ignore handshake event since the dispatcher already handshaked", zap.Any("dispatcherID", m.getDispatcherID()))
-						continue
-					}
 				}
 				tMsg := messaging.NewSingleTargetMessage(
 					m.serverID,
@@ -722,8 +706,7 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 		d.lastReceivedResolvedTsTime.Store(time.Now())
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)
-		_, needScan := c.scanReady(d, false)
-		if needScan {
+		if c.scanReady(d) {
 			c.pushTask(d, true)
 		}
 	}
@@ -858,7 +841,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat.(*dispatcherStat).isRemoved.Store(true)
-	stat.(*dispatcherStat).isRunning.Store(false)
+	stat.(*dispatcherStat).isReadyRecevingData.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
 	// todo: how to handle this error?
 	_ = c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
@@ -884,7 +867,7 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
-	stat.isRunning.Store(false)
+	stat.isReadyRecevingData.Store(false)
 	stat.resetScanLimit()
 }
 
@@ -899,7 +882,7 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
-	stat.isRunning.Store(true)
+	stat.isReadyRecevingData.Store(true)
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
@@ -913,7 +896,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 
 	// Must set the isRunning to false before reset the dispatcher.
 	// Otherwise, the scan task goroutine will not return before reset the dispatcher.
-	stat.isRunning.Store(false)
+	stat.isReadyRecevingData.Store(false)
 
 	// Wait until the scan task goroutine return before reset the dispatcher.
 	for {
@@ -945,7 +928,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 		stat = newChangefeedStatus(changefeedID)
 		log.Info("new changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
-			zap.Bool("isRunning", stat.(*changefeedStatus).isRunning.Load()),
+			zap.Bool("isRunning", stat.(*changefeedStatus).isReadyRecevingData.Load()),
 		)
 		c.changefeedMap.Store(changefeedID, stat)
 	}
