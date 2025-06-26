@@ -325,17 +325,17 @@ func (c *eventBroker) logUnresetDispatchers(ctx context.Context) error {
 // It checks various conditions (dispatcher status, DDL state, max commit ts of dml event)
 // to decide whether scanning is needed and returns the appropriate time range.
 // If no valid range is found, it returns an empty DataRange.
-func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRange) {
+func (c *eventBroker) getScanTaskDataRange(task scanTask) (common.DataRange, bool) {
 	// Only do scan when the dispatcher is ready to receive data.
 	if !task.IsReadyRecevingData() {
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
 
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
 		metricEventServiceSkipResolvedTsCount.Inc()
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
 
 	// 2. Constrain the data range by the ddl state of the table.
@@ -344,7 +344,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	if dataRange.EndTs <= dataRange.StartTs {
 		metricEventServiceSkipResolvedTsCount.Inc()
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
 
 	// 3. Check whether there is any events in the data range
@@ -354,9 +354,9 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.EndTs)
-		return false, common.DataRange{}
+		return common.DataRange{}, false
 	}
-	return true, dataRange
+	return dataRange, true
 }
 
 // scanReady checks if the dispatcher needs to scan the event store/schema store.
@@ -387,7 +387,7 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 		return false
 	}
 
-	ok, _ := c.getScanTaskDataRange(task)
+	_, ok := c.getScanTaskDataRange(task)
 	return ok
 }
 
@@ -464,6 +464,14 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
+func calculateScanLimit(task scanTask, available uint64) scanLimit {
+	return scanLimit{
+		maxScannedBytes: task.getCurrentScanLimitInBytes(),
+		timeout:         time.Millisecond * 1000, // 1 Second
+		maxDMLBytes:     available,
+	}
+}
+
 func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	var interrupted bool
 	defer func() {
@@ -485,27 +493,31 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	//if c.dmlEventsQuota.Load() <= 1024*1024*128 {
-	//	log.Info("scan quota is not enough, skip scan",
-	//		zap.String("changefeed", task.info.GetChangefeedID().String()),
-	//		zap.String("dispatcher", task.id.String()),
-	//		zap.String("remote", remoteID.String()),
-	//		zap.Uint64("dmlEventQuota", c.dmlEventsQuota.Load()))
-	//	return
-	//}
+	quota, ok := c.changefeedAvailables.Load(task.info.GetChangefeedID().ID())
+	if !ok {
+		log.Panic("cannot found the changefeed available memory quota",
+			zap.Any("changefeed", task.info.GetChangefeedID().ID()))
+	}
 
-	needScan, dataRange := c.getScanTaskDataRange(task)
+	available := quota.(*atomic.Uint64).Load()
+	if available <= 1024*1024*128 {
+		log.Info("scan quota is not enough, skip scan",
+			zap.String("changefeed", task.info.GetChangefeedID().String()),
+			zap.String("dispatcher", task.id.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available))
+		return
+	}
+
+	dataRange, needScan := c.getScanTaskDataRange(task)
 	if !needScan {
 		return
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
-	sl := scanLimit{
-		//dmlEventQuota:   c.dmlEventsQuota,
-		maxScannedBytes: task.getCurrentScanLimitInBytes(),
-		timeout:         time.Millisecond * 1000, // 1 Second
-	}
+	sl := calculateScanLimit(task, available)
 
+	// interrupted means scan too many entries hits the limit, still ok to send scanned events.
 	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))

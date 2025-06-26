@@ -74,7 +74,7 @@ func TestEventScanner(t *testing.T) {
 		maxScannedBytes: 1000,
 		timeout:         10 * time.Second,
 	}
-	ok, dataRange := broker.getScanTaskDataRange(disp)
+	dataRange, ok := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 	events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -97,7 +97,7 @@ func TestEventScanner(t *testing.T) {
 	mockSchemaStore.AppendDDLEvent(tableID, ddlEvent)
 
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	ok, dataRange = broker.getScanTaskDataRange(disp)
+	dataRange, ok = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
 	sl = scanLimit{
@@ -124,7 +124,7 @@ func TestEventScanner(t *testing.T) {
 	err = mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
 	require.NoError(t, err)
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	ok, dataRange = broker.getScanTaskDataRange(disp)
+	dataRange, ok = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 	sl = scanLimit{
 		maxScannedBytes: 1000,
@@ -325,7 +325,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	ok, dataRange := broker.getScanTaskDataRange(disp)
+	dataRange, ok := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
 	eSize := len(kvEvents[0].Key) + len(kvEvents[0].Value) + len(kvEvents[0].OldValue)
@@ -423,7 +423,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL3)
 	resolvedTs = resolvedTs + 3
 	disp.eventStoreResolvedTs.Store(resolvedTs)
-	ok, dataRange = broker.getScanTaskDataRange(disp)
+	dataRange, ok = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
 	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)

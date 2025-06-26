@@ -26,7 +26,6 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -49,8 +48,10 @@ type scanLimit struct {
 	// maxScannedBytes is the maximum number of bytes to scan
 	maxScannedBytes int64
 	// timeout is the maximum time to spend scanning
-	timeout       time.Duration
-	dmlEventQuota *atomic.Uint64
+	timeout time.Duration
+
+	// maxDMLBytes is the maximum number of bytes for DML events
+	maxDMLBytes uint64
 }
 
 // eventScanner scans events from eventStore and schemaStore
@@ -242,9 +243,9 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 		return true, nil
 	}
 
-	if session.limit.dmlEventQuota.Load() <= 1024*1024*8 {
-		return true, nil
-	}
+	//if session.limit.dmlEventQuota.Load() <= 1024*1024*8 {
+	//	return true, nil
+	//}
 
 	return false, nil
 }
