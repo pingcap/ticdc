@@ -20,6 +20,10 @@ import (
 
 // TODO: clean this file
 
+// ALTER TABLE t2 ADD FULLTEXT INDEX (b) WITH PARSER standard;
+// TODO: remove this after ADD FULLTEXT INDEX has a dedicated action type in tidb repo
+const ActionAddFullTextIndex = timodel.ActionType(230)
+
 // ddlWhiteListMap is a map of all DDL types that can be applied to cdc's schema storage.
 var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	// schema related DDLs
@@ -78,6 +82,8 @@ var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	// In case that some users will use TiCDC to replicate data from TiDB v6.1.x.
 	timodel.ActionAddColumns:  bf.AddColumn,
 	timodel.ActionDropColumns: bf.DropColumn,
+
+	ActionAddFullTextIndex: bf.AddFullTextIndex,
 }
 
 // singleTableDDLs should only affect one table.

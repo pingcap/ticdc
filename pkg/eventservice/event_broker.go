@@ -445,14 +445,12 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		if len(commitTsList) > 16 {
 			newCommitTsList = commitTsList[:16]
 		}
-		syncPointEvent := newWrapSyncPointEvent(
-			remoteID,
-			&pevent.SyncPointEvent{
-				DispatcherID: d.id,
-				CommitTsList: newCommitTsList,
-			},
-			d.getEventSenderState(),
-			d.info.GetRedo())
+		e := &pevent.SyncPointEvent{
+			DispatcherID: d.id,
+			CommitTsList: newCommitTsList,
+			Seq:          d.seq.Add(1),
+		}
+		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState(), d.info.GetRedo())
 		c.getMessageCh(d.messageWorkerIndex) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
