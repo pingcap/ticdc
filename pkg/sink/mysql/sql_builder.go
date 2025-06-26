@@ -170,6 +170,18 @@ func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
 	return args
 }
 
+func getArgsWithGeneratedColumn(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
+	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
+	for i, col := range tableInfo.GetColumns() {
+		if col == nil {
+			continue
+		}
+		v := common.ExtractColVal(row, col, i)
+		args = append(args, v)
+	}
+	return args
+}
+
 // whereSlice returns the column names and values for the WHERE clause
 func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool) ([]string, []interface{}) {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
