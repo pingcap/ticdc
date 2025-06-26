@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -648,6 +649,12 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	if shouldSkipDDL(job, p.tableMap) {
 		p.mu.Unlock()
 		return nil
+	}
+
+	// ALTER TABLE t2 ADD FULLTEXT INDEX (b) WITH PARSER standard;
+	// TODO: remove this after ADD FULLTEXT INDEX has a dedicated action type in tidb repo
+	if strings.Contains(strings.ToUpper(job.Query), "ADD FULLTEXT INDEX") {
+		job.Type = ActionAddFullTextIndex
 	}
 
 	handler, ok := allDDLHandlers[job.Type]
