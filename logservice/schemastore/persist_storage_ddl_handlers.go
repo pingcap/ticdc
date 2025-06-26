@@ -110,10 +110,6 @@ type persistStorageDDLHandler struct {
 	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool)
 }
 
-// ALTER TABLE t2 ADD FULLTEXT INDEX (b) WITH PARSER standard;
-// TODO: remove this after ADD FULLTEXT INDEX has a dedicated action type in tidb repo
-const ActionAddFullTextIndex = model.ActionType(230)
-
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionCreateSchema: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
@@ -457,14 +453,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForRemovePartitioning,
 		buildDDLEventFunc:          buildDDLEventForRemovePartitioning,
 	},
-	ActionAddFullTextIndex: {
+	filter.ActionAddFullTextIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
 	},
 }
 
