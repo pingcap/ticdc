@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
@@ -123,7 +124,7 @@ func (c *server) prepare(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	c.RegionCache = tikv.NewRegionCache(c.pdClient)
+	appctx.SetService(appctx.RegionCache, tikv.NewRegionCache(c.pdClient))
 
 	if err = c.initDir(); err != nil {
 		return errors.Trace(err)
