@@ -145,6 +145,14 @@ func (c *NodeManager) GetAliveNodes() map[node.ID]*node.Info {
 	return *c.nodes.Load()
 }
 
+func (c *NodeManager) GetAliveNodeIDs() []node.ID {
+	nodes := c.GetAliveNodes()
+	ids := make([]node.ID, 0, len(nodes))
+	for id := range nodes {
+		ids = append(ids, id)
+	}
+}
+
 func (c *NodeManager) GetNodeInfo(id node.ID) *node.Info {
 	return (*c.nodes.Load())[id]
 }

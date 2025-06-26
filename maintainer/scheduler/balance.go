@@ -123,9 +123,9 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 		// TODO: consider to make 2 a config
 		spansNum := len(s.nodeManager.GetAliveNodes()) * 2
 		var splitSpans []*heartbeatpb.TableSpan
-		if result.SplitType == replica.SplitTypeTraffic {
+		if result.SplitType == replica.SplitByTraffic {
 			splitSpans = s.splitter.SplitSpansByWriteKey(context.Background(), result.Span.Span, spansNum)
-		} else if result.SplitType == replica.SplitTypeRegion {
+		} else if result.SplitType == replica.SplitByRegion {
 			splitSpans = s.splitter.SplitSpansByRegion(context.Background(), result.Span.Span, spansNum)
 		}
 		if len(splitSpans) > 1 {

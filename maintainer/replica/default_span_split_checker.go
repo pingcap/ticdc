@@ -81,10 +81,8 @@ func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *
 // spanSplitStatus tracks the split status of a span in the default group
 type spanSplitStatus struct {
 	*SpanReplication
-	trafficScore int
-	regionCount  int
-	// lastUpdateTime records when the status was last updated
-	lastUpdateTime  time.Time
+	trafficScore    int
+	regionCount     int
 	regionCheckTime time.Time
 }
 
@@ -100,7 +98,7 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 		SpanReplication: replica,
 		trafficScore:    0,
 		regionCount:     0,
-		lastUpdateTime:  time.Now(),
+		regionCheckTime: time.Now(),
 	}
 }
 
@@ -148,13 +146,15 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 	}
 }
 
+type SplitType int
+
 const (
-	SplitTypeTraffic = iota
-	SplitTypeRegion
+	SplitByTraffic SplitType = iota
+	SplitByRegion
 )
 
 type DefaultSpanSplitCheckResult struct {
-	SplitType int
+	SplitType SplitType
 	Span      *SpanReplication
 }
 
@@ -164,12 +164,12 @@ func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
 		// We prefer do traffic split when both traffic score and region count are high
 		if status.trafficScore > trafficScoreThreshold {
 			results = append(results, DefaultSpanSplitCheckResult{
-				SplitType: SplitTypeTraffic,
+				SplitType: SplitByTraffic,
 				Span:      status.SpanReplication,
 			})
 		} else if status.regionCount > s.regionThreshold {
 			results = append(results, DefaultSpanSplitCheckResult{
-				SplitType: SplitTypeRegion,
+				SplitType: SplitByRegion,
 				Span:      status.SpanReplication,
 			})
 		}
