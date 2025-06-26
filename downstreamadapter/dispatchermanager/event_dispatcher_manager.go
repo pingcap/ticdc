@@ -799,6 +799,9 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			})
 			// Avoid invalid message
 			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
+				log.Error("Avoid invalid message",
+					zap.Any("previousCheckpointTs", previousCheckpointTs), zap.Any("previousResolvedTs", previousResolvedTs),
+					zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs))
 				continue
 			}
 			if e.dispatcherMap.Len() != 0 {
