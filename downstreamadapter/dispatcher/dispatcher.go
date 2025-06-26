@@ -174,7 +174,10 @@ type Dispatcher struct {
 
 	redo         bool
 	redoGlobalTs *atomic.Uint64
-	cacheEvents  chan cacheEvents
+	cacheEvents  struct {
+		sync.Mutex
+		events chan cacheEvents
+	}
 }
 
 func NewDispatcher(
@@ -226,8 +229,8 @@ func NewDispatcher(
 		// redo
 		redo:         redo,
 		redoGlobalTs: redoGlobalTs,
-		cacheEvents:  make(chan cacheEvents, 1),
 	}
+	dispatcher.cacheEvents.events = make(chan cacheEvents, 1)
 
 	return dispatcher
 }
@@ -256,7 +259,10 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 
 func (d *Dispatcher) HandleCacheEvents() {
 	select {
-	case cacheEvents := <-d.cacheEvents:
+	case cacheEvents, ok := <-d.cacheEvents.events:
+		if !ok {
+			return
+		}
 		block := d.HandleEvents(cacheEvents.events, cacheEvents.wakeCallback)
 		if !block {
 			cacheEvents.wakeCallback()
@@ -265,28 +271,34 @@ func (d *Dispatcher) HandleCacheEvents() {
 	}
 }
 
-func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+func (d *Dispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback func()) {
+	d.cacheEvents.Lock()
+	defer d.cacheEvents.Unlock()
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher has removed", zap.Any("id", d.id))
-		return true
+		return
 	}
+	// cache here
+	cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
+	select {
+	case d.cacheEvents.events <- cacheEvents:
+		log.Warn("cache event",
+			zap.Stringer("dispatcher", d.id),
+			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
+			zap.Int("length", len(dispatcherEvents)),
+			zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()),
+			zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
+			zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
+		)
+	default:
+		log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents.events)))
+	}
+}
+
+func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// redo check
 	if d.redo && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
-		// cache here
-		cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
-		select {
-		case d.cacheEvents <- cacheEvents:
-			log.Warn("cache event",
-				zap.Stringer("dispatcher", d.id),
-				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
-				zap.Int("length", len(dispatcherEvents)),
-				zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()),
-				zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
-				zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
-			)
-		default:
-			log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents)))
-		}
+		d.cache(dispatcherEvents, wakeCallback)
 		return true
 	}
 	return d.handleEvents(dispatcherEvents, wakeCallback)
@@ -488,7 +500,9 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 // it also remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *Dispatcher) Remove() {
 	if d.isRemoving.CompareAndSwap(false, true) {
-		close(d.cacheEvents)
+		d.cacheEvents.Lock()
+		defer d.cacheEvents.Unlock()
+		close(d.cacheEvents.events)
 	}
 	log.Info("remove dispatcher",
 		zap.Stringer("dispatcher", d.id),

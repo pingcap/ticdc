@@ -550,7 +550,10 @@ func (m *Maintainer) onNodeChanged() {
 	}
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),
 		zap.Int("new", len(newNodes)),
-		zap.Int("removed", len(removedNodes)))
+		zap.Int("removed", len(removedNodes)),
+		zap.Any("activeNodes", activeNodes),
+		zap.Any("removedNodes", removedNodes),
+		zap.Any("self", m.selfNode.ID))
 	m.sendMessages(m.bootstrapper.HandleNewNodes(newNodes))
 	cachedResponse := m.bootstrapper.HandleRemoveNodes(removedNodes)
 	if cachedResponse != nil {
