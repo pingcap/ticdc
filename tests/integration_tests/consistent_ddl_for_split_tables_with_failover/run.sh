@@ -136,7 +136,7 @@ main() {
 	cleanup_process $CDC_BINARY
 
 	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/"
-	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml 100
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 }
 
 trap stop_tidb_cluster EXIT
