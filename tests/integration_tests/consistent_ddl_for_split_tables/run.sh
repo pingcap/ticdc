@@ -30,28 +30,10 @@ function main() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500_
 
 	SINK_URI="mysql://root:@127.0.0.1:3306/"
-	#SINK_URI="kafka://127.0.0.1:9094/$TOPIC_NAME?protocol=open-protocol&partition-num=1&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
-	# case $SINK_TYPE in
-	# kafka) SINK_URI="kafka://127.0.0.1:9094/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	# storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
-	# pulsar)
-	# 	run_pulsar_cluster $WORK_DIR normal
-	# 	SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
-	# 	;;
-	# *) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
-	# esac
 
 	sleep 10
 
 	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
-
-	#run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9094/$TOPIC_NAME?protocol=open-protocol&partition-num=1&version=${KAFKA_VERSION}&max-message-bytes=10485760"
-
-	# case $SINK_TYPE in
-	# kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	# storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	# pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
-	# esac
 
 	## execute ddls
 	run_sql_file $CUR/data/ddls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
