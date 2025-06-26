@@ -226,11 +226,9 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 // Queues a message for sending (best-effort, no delivery guarantee)
 // Messages may be dropped if errors occur. For reliable delivery, implement retry/ack logic at caller side
 func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
-	if msg != nil {
-		c.dispatcherMessageChan.In() <- DispatcherMessage{
-			Message:    msg,
-			RetryCount: 0,
-		}
+	c.dispatcherMessageChan.In() <- DispatcherMessage{
+		Message:    msg,
+		RetryCount: 0,
 	}
 }
 
