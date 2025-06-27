@@ -52,7 +52,17 @@ type EventDispatcher interface {
 	GetSyncPointInterval() time.Duration
 	GetStartTsIsSyncpoint() bool
 	GetResolvedTs() uint64
-	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
+	HandleEvents(events []DispatcherEvent, wakeCallback func()) bool
+	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
+	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
+	GetComponentStatus() heartbeatpb.ComponentState
+	SetComponentStatus(heartbeatpb.ComponentState)
+	SetStartTs(uint64)
+	SetCurrentPDTs(uint64)
+	HandleError(error)
+	SetStartTsIsSyncpoint(bool)
+	// GetType returns the dispatcher type
+	GetType() int
 }
 
 /*
@@ -161,6 +171,13 @@ type Dispatcher struct {
 	seq     uint64
 
 	BootstrapState bootstrapState
+
+	redo         bool
+	redoGlobalTs *atomic.Uint64
+	cacheEvents  struct {
+		sync.Mutex
+		events chan cacheEvents
+	}
 }
 
 func NewDispatcher(
@@ -181,6 +198,8 @@ func NewDispatcher(
 	currentPdTs uint64,
 	errCh chan error,
 	bdrMode bool,
+	redo bool,
+	redoGlobalTs *atomic.Uint64,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
 		changefeedID:          changefeedID,
@@ -207,7 +226,11 @@ func NewDispatcher(
 		errCh:                 errCh,
 		bdrMode:               bdrMode,
 		BootstrapState:        BootstrapFinished,
+		// redo
+		redo:         redo,
+		redoGlobalTs: redoGlobalTs,
 	}
+	dispatcher.cacheEvents.events = make(chan cacheEvents, 1)
 
 	return dispatcher
 }
@@ -234,7 +257,54 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 	return true, nil
 }
 
-// HandleEvents can batch handle events about resolvedTs Event and DML Event.
+func (d *Dispatcher) HandleCacheEvents() {
+	select {
+	case cacheEvents, ok := <-d.cacheEvents.events:
+		if !ok {
+			return
+		}
+		block := d.HandleEvents(cacheEvents.events, cacheEvents.wakeCallback)
+		if !block {
+			cacheEvents.wakeCallback()
+		}
+	default:
+	}
+}
+
+func (d *Dispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback func()) {
+	d.cacheEvents.Lock()
+	defer d.cacheEvents.Unlock()
+	if d.GetRemovingStatus() {
+		log.Warn("dispatcher has removed", zap.Any("id", d.id))
+		return
+	}
+	// cache here
+	cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
+	select {
+	case d.cacheEvents.events <- cacheEvents:
+		log.Warn("cache event",
+			zap.Stringer("dispatcher", d.id),
+			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
+			zap.Int("length", len(dispatcherEvents)),
+			zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()),
+			zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
+			zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
+		)
+	default:
+		log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents.events)))
+	}
+}
+
+func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+	// redo check
+	if d.redo && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
+		d.cache(dispatcherEvents, wakeCallback)
+		return true
+	}
+	return d.handleEvents(dispatcherEvents, wakeCallback)
+}
+
+// handleEvents can batch handle events about resolvedTs Event and DML Event.
 // While for DDLEvent and SyncPointEvent, they should be handled separately,
 // because they are block events.
 // We ensure we only will receive one event when it's ddl event or sync point event
@@ -243,7 +313,7 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 //
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
 // It will be called when all the events are flushed to downstream successfully.
-func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+func (d *Dispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	dmlWakeOnce := &sync.Once{}
@@ -272,6 +342,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			continue
 		}
 
+		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
 		if d.isFirstEvent(event) {
 			d.updateDispatcherStatusToWorking()
@@ -428,12 +499,15 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 // It set isRemoving to true, to make the dispatcher can be clean by the eventDispatcherManager.
 // it also remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *Dispatcher) Remove() {
-	log.Info("Remove dispatcher",
+	if d.isRemoving.CompareAndSwap(false, true) {
+		d.cacheEvents.Lock()
+		defer d.cacheEvents.Unlock()
+		close(d.cacheEvents.events)
+	}
+	log.Info("remove dispatcher",
 		zap.Stringer("dispatcher", d.id),
 		zap.Stringer("changefeedID", d.changefeedID),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
-	d.isRemoving.Store(true)
-
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
@@ -546,7 +620,7 @@ func (d *Dispatcher) EmitBootstrap() bool {
 func (d *Dispatcher) updateDispatcherStatusToWorking() {
 	// only when we receive the first event, we can regard the dispatcher begin syncing data
 	// then add it to status dynamic stream to receive dispatcher status from maintainer
-	d.addToStatusDynamicStream()
+	addToStatusDynamicStream(d)
 	// set the dispatcher to working status
 	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
 	d.statusesChan <- TableSpanStatusWithSeq{
@@ -554,8 +628,10 @@ func (d *Dispatcher) updateDispatcherStatusToWorking() {
 			ID:              d.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    d.GetCheckpointTs(),
+			Redo:            false,
 		},
-		Seq: d.seq,
+		ResolvedTs: d.GetResolvedTs(),
+		Seq:        d.seq,
 	}
 }
 

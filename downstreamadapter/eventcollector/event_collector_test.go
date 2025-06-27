@@ -75,6 +75,10 @@ func (m *mockEventDispatcher) GetResolvedTs() uint64 {
 	return 0
 }
 
+func (m *mockEventDispatcher) GetType() int {
+	return dispatcher.TypeDispatcherCommon
+}
+
 func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	for _, dispatcherEvent := range dispatcherEvents {
 		m.handle(dispatcherEvent.Event)
@@ -82,8 +86,65 @@ func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.Dispatc
 	return false
 }
 
+func (m *mockEventDispatcher) HandleCheckpointTs(checkpointTs uint64) {
+}
+
+func (m *mockEventDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
+}
+
+func (m *mockEventDispatcher) GetSchemaID() int64 {
+	return 0
+}
+
+func (m *mockEventDispatcher) SetComponentStatus(heartbeatpb.ComponentState) {
+}
+
+func (m *mockEventDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
+	return 0
+}
+
+func (m *mockEventDispatcher) GetCheckpointTs() uint64 {
+	return 0
+}
+
+func (m *mockEventDispatcher) GetBlockEventStatus() *heartbeatpb.State {
+	return &heartbeatpb.State{}
+}
+
+func (m *mockEventDispatcher) IsTableTriggerEventDispatcher() bool {
+	return false
+}
+
+func (m *mockEventDispatcher) GetRemovingStatus() bool {
+	return false
+}
+
+func (m *mockEventDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
+	return nil
+}
+
+func (m *mockEventDispatcher) GetHeartBeatInfo(h *dispatcher.HeartBeatInfo) {
+}
+
+func (m *mockEventDispatcher) GetEventSizePerSecond() float32 {
+	return 0
+}
+
+func (m *mockEventDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+	return
+}
+
+func (m *mockEventDispatcher) Remove() {
+}
+
 func (m *mockEventDispatcher) GetBDRMode() bool {
 	return false
+}
+
+func (m *mockEventDispatcher) SetCurrentPDTs(uint64) {
+}
+
+func (m *mockEventDispatcher) SetStartTs(uint64) {
 }
 
 func (m *mockEventDispatcher) GetTimezone() string {
@@ -92,6 +153,12 @@ func (m *mockEventDispatcher) GetTimezone() string {
 
 func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 	return nil
+}
+
+func (m *mockEventDispatcher) HandleError(_ error) {
+}
+
+func (m *mockEventDispatcher) SetStartTsIsSyncpoint(_ bool) {
 }
 
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {

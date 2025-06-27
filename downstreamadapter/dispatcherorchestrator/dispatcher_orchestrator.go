@@ -95,6 +95,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				cfId,
 				cfConfig,
 				req.TableTriggerEventDispatcherId,
+				req.RedoTableTriggerEventDispatcherId,
 				req.StartTs,
 				from,
 				req.IsNewChangefeed,
@@ -126,12 +127,29 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		// This is necessary during maintainer node migration, as the existing
 		// dispatcher manager on the new node may not have a table trigger
 		// event dispatcher configured yet.
+		if req.RedoTableTriggerEventDispatcherId != nil {
+			redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher()
+			if redoTableTriggerDispatcher == nil {
+				_, err = manager.NewTableTriggerEventDispatcher(
+					req.RedoTableTriggerEventDispatcherId,
+					req.StartTs,
+					false,
+					true,
+				)
+				if err != nil {
+					log.Error("failed to create new redo table trigger event dispatcher",
+						zap.Stringer("changefeedID", cfId), zap.Error(err))
+					return m.handleDispatcherError(from, req.ChangefeedID, err)
+				}
+			}
+		}
 		if req.TableTriggerEventDispatcherId != nil {
 			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
 			if tableTriggerDispatcher == nil {
 				startTs, err = manager.NewTableTriggerEventDispatcher(
 					req.TableTriggerEventDispatcherId,
 					req.StartTs,
+					false,
 					false,
 				)
 				if err != nil {
@@ -258,10 +276,22 @@ func createBootstrapResponse(
 		Spans:        make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
 	}
 
+	// table trigger dispatcher startTs
 	if startTs != 0 {
 		response.CheckpointTs = startTs
 	}
 
+	manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
+		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
+			ID:              id.ToPB(),
+			SchemaID:        d.GetSchemaID(),
+			Span:            d.GetTableSpan(),
+			ComponentStatus: d.GetComponentStatus(),
+			CheckpointTs:    d.GetCheckpointTs(),
+			BlockState:      d.GetBlockEventStatus(),
+			Redo:            true,
+		})
+	})
 	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.Dispatcher) {
 		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 			ID:              id.ToPB(),
