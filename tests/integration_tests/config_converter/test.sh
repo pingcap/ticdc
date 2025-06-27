@@ -9,6 +9,9 @@ tmpconfig=$(mktemp).toml
 tmpjson=$(mktemp).json
 toml_converted=$(mktemp).toml
 
+CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+main="$CUR/../../../cmd/config-converter/main.go"
+
 check_port_available() {
     local port=$1
     while ! nc -z localhost "$port"; do
@@ -58,7 +61,7 @@ case-sensitive = true
 EOF
 
 echo -e "${YELLOW}Convert config to model${NC}"
-config=$(go run main.go -c "$tmpconfig")
+config=$(go run "$main" -c "$tmpconfig")
 
 # Create changefeed
 # Set case_sensitive=true, force_replicate=true
@@ -90,7 +93,7 @@ should_eq '"*.*"' "$rules"
 
 echo "$data" | jq '.config' > "$tmpjson"
 
-tomldata=$(go run main.go -m "$tmpjson")
+tomldata=$(go run "$main" -m "$tmpjson")
 echo "$tomldata" > "$toml_converted"
 
 if ! grep -q 'case-sensitive = true' "$toml_converted"; then
