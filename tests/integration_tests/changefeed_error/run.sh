@@ -83,12 +83,12 @@ function run() {
 	echo "Start case 2: Test retryable error"
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/NewChangefeedRetryError=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} ${changefeedid} "warning" "failpoint injected retriable error" ""
+	ensure $MAX_RETRIES check_changefeed_status http://${UP_PD_HOST_1}:${UP_PD_PORT_1} ${changefeedid} warning last_warning ErrExecDDLFailed
 
 	# try to create another changefeed to make sure the coordinator is not stuck
 	changefeedid_2="changefeed-error-2"
 	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c $changefeedid_2
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} ${changefeedid_2} "warning" "failpoint injected retriable error" ""
+	ensure $MAX_RETRIES check_changefeed_status http://${UP_PD_HOST_1}:${UP_PD_PORT_1} ${changefeedid_2} warning last_warning "failpoint injected retriable error"
 
 	run_cdc_cli changefeed remove -c $changefeedid
 	ensure $MAX_RETRIES check_no_changefeed ${UP_PD_HOST_1}:${UP_PD_PORT_1}

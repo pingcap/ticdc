@@ -3,11 +3,12 @@
 # $2: command to run
 
 total=$1
-shift
+command=$2
+shift 2
 for ((i = 1; i <= $total; i++)); do
 	# run the command
-	echo "command: $*"
-	bash -c "$*"
+	echo "command: $command $@"
+	bash -c "${command} \"\$@\"" _ "$@"
 	if [ $? == 0 ]; then
 		echo "run task successfully"
 		exit 0

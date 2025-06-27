@@ -18,7 +18,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -404,17 +403,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-
 					log.Debug("send message to kafka", zap.String("messageKey", string(message.Key)), zap.String("messageValue", string(message.Value)))
-
-					failpoint.Inject("KafkaSinkAsyncSendError", func() {
-						// simulate sending message to input channel successfully but flushing
-						// message to Kafka meets error
-						log.Info("KafkaSinkAsyncSendError error injected", zap.String("namespace", s.changefeedID.Namespace()),
-							zap.String("changefeed", s.changefeedID.Name()))
-						s.failpointCh <- errors.New("kafka sink injected error")
-						failpoint.Return(nil)
-					})
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
