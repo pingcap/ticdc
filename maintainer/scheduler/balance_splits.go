@@ -14,20 +14,27 @@
 package scheduler
 
 import (
+	"context"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
 )
 
-// balanceSplitsScheduler is a scheduler that balances the spans of the splitted tables.
+// balanceSplitsScheduler is a scheduler that balances the spans of split tables.
+// It manages the distribution and optimization of table spans across different nodes
+// by performing operations such as splitting, merging, and moving spans based on
+// traffic load, region count.
 type balanceSplitsScheduler struct {
 	changefeedID common.ChangeFeedID
 	batchSize    int
@@ -56,17 +63,29 @@ func NewBalanceSplitsScheduler(
 	}
 }
 
+func (s *balanceSplitsScheduler) Name() string {
+	return "balance_splits_scheduler"
+}
+
 func (s *balanceSplitsScheduler) Execute() time.Time {
-	// 因为每一步前后都有依赖，所以每个 group 中的操作步骤最多做一种
-	// 1. 先检查是否有现有的 spans 需要被拆分（spans 的 region 超过了上限，span 的流量超过了上限），如有则先拆分
-	// 2. 检查当前的 spans 是否具备有全部合并回一个 span 的需求。（全部加起来 region 和流量都不超标，并且 lag 低），如有则合并（这里的合并通过先 move，再 merge 的方式）
-	// 3. 查看各个节点之间的流量是否均衡，如果存在明显的不均衡，先尝试能不能从最大流量的节点往最小节点的流量迁移 span, 如果不行就拆最大流量节点的 span，然后移过去
-	// 4. 查看是否有需要 merge 的 dispatchers，满足在同一个节点相邻，并且 lag 低，并且 合并以后 span 的 region 和 流量都不超标
-	// 5. 如果都没有，先计算目前的 dispatchers 个数是否在可接受范围内，如果不在，就查看可以移动什么 dispatchers 来促成 merge 操作。
+	availableSize := s.batchSize - s.operatorController.OperatorSize()
+	// We check the state of each group as following. Since each step has dependencies before and after,
+	// at most one operation step can be performed in each group.
+	// The main function please refer to check() in split_span_checker.go
+	//
+	// 1. First check if there are existing spans that need to be split (spans' region count exceeds the limit, span's traffic exceeds the limit)
+	// if so, split first
+	// 2. Check if the current spans meet the requirement to merge all back into one span
+	// (total region count and traffic are within limits, and lag is low), if so, merge (merge is done by first move, then merge)
+	// 3. Check if traffic is balanced between nodes, if there is obvious imbalance,
+	// first try to migrate spans from the node with maximum traffic to the node with minimum traffic,
+	// if not possible, split the span of the maximum traffic node and move it over
+	// 4. Check if there are dispatchers that need to be merged, satisfying that they are adjacent in the same node, lag is low,
+	// and the merged span's region count and traffic are within limits
+	// 5. If none of the above, first calculate whether the current number of dispatchers is within acceptable range,
+	// if not, check what dispatchers can be moved to facilitate merge operations.
 
-	// 也就是我需要知道的
-
-	// 理论上 对拆表 span 的平衡，我们就是只处理一个 group 的 spans 都在 replicating 状态(merge/split/move op 一创建就会进入 scheduling 状态)
+	// we only process spans of one group that are all in replicating state (merge/split/move operations will enter scheduling state once created)
 	for _, group := range s.spanController.GetGroups() {
 		// we don't deal with the default group in this scheduler
 		if group == pkgReplica.DefaultGroupID {
@@ -83,5 +102,75 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 			continue
 		}
 
+		checkResults := s.spanController.CheckByGroup(group, availableSize)
+		for _, checkResult := range checkResults.([]replica.SplitSpanCheckResult) {
+			if checkResult.OpType == replica.OpSplit {
+				var splitSpans []*heartbeatpb.TableSpan
+				if checkResult.SplitType == replica.SplitByTraffic {
+					splitSpans = s.splitter.SplitSpansByWriteKey(context.Background(), checkResult.SplitSpan.Span, 2)
+				} else if checkResult.SplitType == replica.SplitByRegion {
+					splitSpans = s.splitter.SplitSpansByRegion(context.Background(), checkResult.SplitSpan.Span, 2)
+				}
+				if len(splitSpans) > 1 {
+					op := operator.NewSplitDispatcherOperator(s.spanController, checkResult.SplitSpan, splitSpans)
+					ret := s.operatorController.AddOperator(op)
+					if ret {
+						availableSize--
+					}
+				}
+			} else if checkResult.OpType == replica.OpMove {
+				for _, span := range checkResult.MoveSpans {
+					op := operator.NewMoveDispatcherOperator(s.spanController, span, span.GetNodeID(), checkResult.TargetNode)
+					ret := s.operatorController.AddOperator(op)
+					if ret {
+						availableSize--
+					}
+				}
+			} else if checkResult.OpType == replica.OpMerge {
+				operators := make([]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(checkResult.MergeSpans))
+				for _, span := range checkResult.MergeSpans {
+					op := operator.NewOccupyDispatcherOperator(s.spanController, span)
+					ret := s.operatorController.AddOperator(op)
+					if ret {
+						operators = append(operators, op)
+					} else {
+						log.Error("failed to add occupy dispatcher operator",
+							zap.String("changefeed", s.changefeedID.String()),
+							zap.Int64("group", int64(group)),
+							zap.String("span", span.Span.String()),
+							zap.String("operator", op.String()))
+						// set prev op taskRemoved
+						for _, op := range operators {
+							op.OnTaskRemoved()
+						}
+						continue
+					}
+				}
+
+				op := operator.NewMergeDispatcherOperator(s.spanController, checkResult.MergeSpans, operators)
+				ret := s.operatorController.AddOperator(op)
+				if ret {
+					availableSize--
+				} else {
+					log.Error("failed to add merge dispatcher operator",
+						zap.String("changefeed", s.changefeedID.String()),
+						zap.Int64("group", int64(group)),
+						zap.Any("mergeSpans", checkResult.MergeSpans),
+						zap.String("operator", op.String()))
+					// set prev op taskRemoved
+					for _, op := range operators {
+						op.OnTaskRemoved()
+					}
+					continue
+				}
+			}
+		}
+
+		if availableSize <= 0 {
+			// too many schedule ops, wait for next tick
+			return time.Now().Add(time.Second * 5)
+		}
 	}
+
+	return time.Now().Add(time.Second * 5)
 }
