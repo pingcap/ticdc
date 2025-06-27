@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -44,7 +45,6 @@ const (
 type sink struct {
 	changefeedID commonType.ChangeFeedID
 
-	adminClient      kafka.ClusterAdminClient
 	dmlProducer      kafka.AsyncProducer
 	ddlProducer      kafka.SyncProducer
 	metricsCollector kafka.MetricsCollector
@@ -64,6 +64,9 @@ type sink struct {
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
 	ctx      context.Context
+	// failpointCh is used to inject failpoints to the run loop.
+	// Only used in test.
+	failpointCh chan error
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -115,8 +118,9 @@ func New(
 		eventChan:      make(chan *commonEvent.DMLEvent, 32),
 		rowChan:        make(chan *commonEvent.MQRowEvent, 32),
 
-		isNormal: atomic.NewBool(true),
-		ctx:      ctx,
+		isNormal:    atomic.NewBool(true),
+		ctx:         ctx,
+		failpointCh: make(chan error, 1),
 	}, nil
 }
 
@@ -403,6 +407,14 @@ func (s *sink) sendMessages(ctx context.Context) error {
 
 					log.Debug("send message to kafka", zap.String("messageKey", string(message.Key)), zap.String("messageValue", string(message.Value)))
 
+					failpoint.Inject("KafkaSinkAsyncSendError", func() {
+						// simulate sending message to input channel successfully but flushing
+						// message to Kafka meets error
+						log.Info("KafkaSinkAsyncSendError error injected", zap.String("namespace", s.changefeedID.Namespace()),
+							zap.String("changefeed", s.changefeedID.Name()))
+						s.failpointCh <- errors.New("kafka sink injected error")
+						failpoint.Return(nil)
+					})
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
