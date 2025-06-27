@@ -7,43 +7,43 @@ config=""
 start_ts=0
 
 while [ $# -ne 0 ]; do
-    case "$1" in
-        --sink-uri=*)
-            sink_uri="${1#*=}"
-            ;;
-        --start-ts=*)
-            start_ts="${1#*=}"
-            ;;
-        -c)
-            shift
-            changefeed="$1"
-            ;;
-        --server)
-            shift
-            server="$1"
-            ;;
-        --config)
-            shift
-            config="$1"
-            ;;
-        *)
-            echo "Unknown option: $1"
-            exit 1
-            ;;
-    esac
-    shift
+	case "$1" in
+	--sink-uri=*)
+		sink_uri="${1#*=}"
+		;;
+	--start-ts=*)
+		start_ts="${1#*=}"
+		;;
+	-c)
+		shift
+		changefeed="$1"
+		;;
+	--server)
+		shift
+		server="$1"
+		;;
+	--config)
+		shift
+		config="$1"
+		;;
+	*)
+		echo "Unknown option: $1"
+		exit 1
+		;;
+	esac
+	shift
 done
 
 replica_config="{}"
 if [ -n "$config" ]; then
-    replica_config=$(cdc_config2model -c "$config")
+	replica_config=$(cdc_config_converter -c "$config")
 fi
 
 set -x
 SINK_PARA="{\"changefeed_id\":\"$changefeed\", \"start_ts\": $start_ts, \"sink_uri\":\"$sink_uri\", \"replica_config\":$replica_config}"
 if [ "$IS_NEXT_GEN" = 1 ]; then
-    curl -X POST -H "Content-type: appliction/json" "http://$TIKV_WORKER_HOST:$TIKV_WORKER_PORT/cdc/api/v2/changefeeds?keyspace_id=1" -d "$SINK_PARA"
+	curl -X POST -H "Content-type: appliction/json" "http://$TIKV_WORKER_HOST:$TIKV_WORKER_PORT/cdc/api/v2/changefeeds?keyspace_id=1" -d "$SINK_PARA"
 else
-    curl -X POST -H "Content-type:application/json" "$server/api/v2/changefeeds" -d "$SINK_PARA"
+	curl -X POST -H "Content-type:application/json" "$server/api/v2/changefeeds" -d "$SINK_PARA"
 fi
 set +x
