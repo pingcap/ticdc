@@ -413,6 +413,7 @@ type CodecConfig struct {
 	AvroDecimalHandlingMode        *string `toml:"avro-decimal-handling-mode" json:"avro-decimal-handling-mode,omitempty"`
 	AvroBigintUnsignedHandlingMode *string `toml:"avro-bigint-unsigned-handling-mode" json:"avro-bigint-unsigned-handling-mode,omitempty"`
 	EncodingFormat                 *string `toml:"encoding-format" json:"encoding-format,omitempty"`
+	OutputRowKey                   *bool   `toml:"output-row-key" json:"output-row-key,omitempty"`
 }
 
 // KafkaConfig represents a kafka sink configuration
