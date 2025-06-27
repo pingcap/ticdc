@@ -28,6 +28,7 @@ type BatchResolvedEvent struct {
 	// Version is the version of the BatchResolvedEvent struct.
 	Version byte
 	Events  []ResolvedEvent
+	Epoch   uint64
 }
 
 func (b BatchResolvedEvent) GetType() int {
@@ -52,6 +53,10 @@ func (b BatchResolvedEvent) GetStartTs() common.Ts {
 func (b *BatchResolvedEvent) GetSeq() uint64 {
 	// It's a fake seq.
 	return 0
+}
+
+func (b *BatchResolvedEvent) GetEpoch() uint64 {
+	return b.Epoch
 }
 
 func (b *BatchResolvedEvent) Len() int32 {
@@ -111,6 +116,7 @@ type ResolvedEvent struct {
 	ResolvedTs   common.Ts
 	State        EventSenderState
 	Version      byte
+	Epoch        uint64
 }
 
 func NewResolvedEvent(
@@ -143,6 +149,10 @@ func (e ResolvedEvent) GetStartTs() common.Ts {
 
 func (e ResolvedEvent) GetSeq() uint64 {
 	return 0
+}
+
+func (e ResolvedEvent) GetEpoch() uint64 {
+	return e.Epoch
 }
 
 func (e ResolvedEvent) Len() int32 {
