@@ -84,7 +84,7 @@ kafka_groups=(
 	# G08
 	'tidb_mysql_test'
 	# G09
-	''
+	'kafka_sink_error_resume'
 	# G10
 	''
 	# G11
