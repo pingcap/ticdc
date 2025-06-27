@@ -22,17 +22,13 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+func NewEventDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
 	option := dynstream.NewOption()
 	option.BatchCount = 4196
 	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
 	option.EnableMemoryControl = true
-	if option.EnableMemoryControl {
-		log.Info("New EventDynamicStream, memory control is enabled")
-	} else {
-		log.Info("New EventDynamicStream, memory control is disabled")
-	}
+	log.Info("New EventDynamicStream, memory control is enabled")
 
 	eventsHandler := &EventsHandler{}
 	stream := dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return (common.GID)(id).FastHash() }, eventsHandler, option)

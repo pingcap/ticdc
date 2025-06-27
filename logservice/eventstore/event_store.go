@@ -597,20 +597,20 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		e.dispatcherMeta.RUnlock()
 		return nil, nil
 	}
-	subscriptionStat := stat.subStat
-	checkpoint := subscriptionStat.checkpointTs.Load()
+	subscription := stat.subStat
+	checkpoint := subscription.checkpointTs.Load()
 	if dataRange.StartTs < checkpoint {
-		log.Panic("dataRange startTs is smaller than subscriptionStat checkpointTs, it should not happen",
+		log.Panic("dataRange startTs is smaller than subscription checkpointTs, it should not happen",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Uint64("startTs", dataRange.StartTs),
 			zap.Uint64("checkpointTs", checkpoint))
 	}
-	db := e.dbs[subscriptionStat.dbIndex]
+	db := e.dbs[subscription.dbIndex]
 	e.dispatcherMeta.RUnlock()
 
 	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
-	start := EncodeKeyPrefix(uint64(subscriptionStat.subID), stat.tableSpan.TableID, dataRange.StartTs+1)
-	end := EncodeKeyPrefix(uint64(subscriptionStat.subID), stat.tableSpan.TableID, dataRange.EndTs+1)
+	start := EncodeKeyPrefix(uint64(subscription.subID), stat.tableSpan.TableID, dataRange.StartTs+1)
+	end := EncodeKeyPrefix(uint64(subscription.subID), stat.tableSpan.TableID, dataRange.EndTs+1)
 	// TODO: optimize read performance
 	iter, err := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,
@@ -626,7 +626,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	metrics.EventStoreScanRequestsCount.Inc()
 
 	needCheckSpan := true
-	if stat.tableSpan.Equal(subscriptionStat.tableSpan) {
+	if stat.tableSpan.Equal(subscription.tableSpan) {
 		needCheckSpan = false
 	}
 
@@ -815,6 +815,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 			break
 		}
+		// todo: take this into the monitoring, also consider skipped entry count, since it also takes time
 		log.Debug("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
 			zap.String("key", hex.EncodeToString(rawKV.Key)),
