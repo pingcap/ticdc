@@ -5,6 +5,10 @@ GREEN='\033[0;32m'  # Sets text to green
 YELLOW='\033[0;33m' # Sets text to yellow
 NC='\033[0m'        # Resets the text color to default, no color
 
+tmpconfig=$(mktemp).toml
+tmpjson=$(mktemp).json
+toml_converted=$(mktemp).toml
+
 check_port_available() {
     local port=$1
     while ! nc -z localhost "$port"; do
@@ -28,6 +32,10 @@ teardown() {
     ps -ef | grep tiup | grep config2model | awk '{print $2}' | xargs kill -9 >/dev/null 2>/dev/null
     tiup clean config2model-upstream >/dev/null 2>/dev/null
     tiup clean config2model-downstream >/dev/null 2>/dev/null
+
+    rm -f "$tmpconfig"
+    rm -f "$tmpjson"
+    rm -f "$toml_converted"
 }
 
 should_eq() {
@@ -43,16 +51,30 @@ trap teardown EXIT
 
 setup
 
+
+cat <<EOF >"$tmpconfig"
+force-replicate = true
+case-sensitive = true
+EOF
+
+echo -e "${YELLOW}Convert config to model${NC}"
+config=$(go run main.go -c "$tmpconfig")
+
 # Create changefeed
 # Set case_sensitive=true, force_replicate=true
 echo -e "${YELLOW}Create changefeed${NC}"
+set -x
 curl -X POST 'http://127.0.0.1:8300/api/v2/changefeeds' -H 'Content-type: application/json' \
-    -d '{ "changefeed_id": "1", "sink_uri": "mysql://root@127.0.0.1:14000/", "start_ts": 0, "replica_config": { "memory_quota": 0, "case_sensitive": true, "force_replicate": true, "ignore_ineligible_table": false, "check_gc_safe_point": false, "filter": null, "mounter": null, "sink": null, "scheduler": null } }'
+    -d "{ \"changefeed_id\": \"1\", \"sink_uri\": \"mysql://root@127.0.0.1:14000/\", \"start_ts\": 0, \"replica_config\": $config }"
 
+set +x
 echo ""
 
+# Wait for the changefeed to be created
+sleep 2
+
 # verify the result
-data=$(curl -s 'http://127.0.0.1:8300/api/v2/changefeeds/1')
+data=$(curl 'http://127.0.0.1:8300/api/v2/changefeeds/1')
 
 memory_quota=$(echo "$data" | jq '.config.memory_quota')
 should_eq 1073741824 "$memory_quota"
@@ -65,6 +87,24 @@ should_eq true "$force_replicate"
 
 rules=$(echo "$data" | jq '.config.filter.rules[0]')
 should_eq '"*.*"' "$rules"
+
+echo "$data" | jq '.config' > "$tmpjson"
+
+tomldata=$(go run main.go -m "$tmpjson")
+echo "$tomldata" > "$toml_converted"
+
+if ! grep -q 'case-sensitive = true' "$toml_converted"; then
+    echo -e "${RED}Expected case-sensitive = true, but got $(grep 'case-sensitive' "$toml_converted")${NC}"
+    exit 1
+fi
+if ! grep -q 'force-replicate = true' "$toml_converted"; then
+    echo -e "${RED}Expected force-replicate = true, but got $(grep 'force-replicate' "$toml_converted")${NC}"
+    exit 1
+fi
+if ! grep -q 'memory-quota = 1073741824' "$toml_converted"; then
+    echo -e "${RED}Expected memory-quota = 1073741824, but got $(grep 'memory-quota' "$toml_converted")${NC}"
+    exit 1
+fi
 
 echo -e "${GREEN}Test passed${NC}"
 

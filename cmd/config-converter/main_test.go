@@ -24,7 +24,7 @@ import (
 )
 
 // go test -gcflags=all=-l
-func Test_runConvert(t *testing.T) {
+func Test_runConfig2Model(t *testing.T) {
 	tests := []struct {
 		name       string
 		config     string
@@ -136,7 +136,8 @@ case-sensitive = false
 						}
 					}
 				}()
-				runConvert(cmd, args)
+				modelPath = ""
+				run(cmd, args)
 
 				// Verify output for success case
 				if !tt.wantErr {
@@ -144,7 +145,135 @@ case-sensitive = false
 					out, _ := io.ReadAll(r)
 					output := string(out)
 					if tt.wantOutput != "" && !strings.Contains(output, tt.wantOutput) {
-						t.Errorf("output doesn't contain expected content.\nGot: %s\nWant to contain: %s", output, tt.wantOutput)
+						t.Errorf("output doesn't contain expected content. Got: %s Want to contain: %s", output, tt.wantOutput)
+					}
+				}
+			}()
+		})
+	}
+}
+
+func Test_runModel2Config(t *testing.T) {
+	tests := []struct {
+		name         string
+		modelContent string
+		wantOutput   string
+		wantErr      bool
+		setup        func()
+		cleanup      func()
+	}{
+		{
+			name:         "valid model with expected output",
+			modelContent: `{"case_sensitive":true, "memory_quota": 2048}`,
+			wantOutput:   `memory-quota = 2048`,
+			wantErr:      false,
+			setup: func() {
+				file, err := os.CreateTemp("", "test-model-*.json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				modelPath = file.Name()
+				file.Close()
+			},
+			cleanup: func() {
+				os.Remove(modelPath)
+			},
+		},
+		{
+			name:         "invalid model",
+			modelContent: `invalid json content`,
+			wantErr:      true,
+			setup: func() {
+				file, err := os.CreateTemp("", "test-model-*.json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				modelPath = file.Name()
+				file.Close()
+			},
+			cleanup: func() {
+				os.Remove(modelPath)
+			},
+		},
+		{
+			name:    "non-existent file",
+			wantErr: true,
+			setup: func() {
+				modelPath = "/nonexistent/file.json"
+			},
+		},
+		{
+			name:         "empty model",
+			modelContent: `{}`,
+			wantOutput:   `case-sensitive = false`,
+			wantErr:      false,
+			setup: func() {
+				file, err := os.CreateTemp("", "test-model-*.json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				modelPath = file.Name()
+				file.Close()
+			},
+			cleanup: func() {
+				os.Remove(modelPath)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setup != nil {
+				tt.setup()
+				if tt.modelContent != "" {
+					err := os.WriteFile(modelPath, []byte(tt.modelContent), 0o644)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if tt.cleanup != nil {
+				defer tt.cleanup()
+			}
+
+			// Mock cobra.Command and args
+			cmd := &cobra.Command{}
+			args := []string{}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			defer func() {
+				os.Stdout = oldStdout
+				w.Close()
+			}()
+
+			// Run the test
+			func() {
+				// Replace os.Exit to capture exit codes
+				patches := gomonkey.ApplyFuncReturn(os.Exit)
+				defer patches.Reset()
+
+				defer func() {
+					if r := recover(); r != nil {
+						if !tt.wantErr {
+							t.Errorf("unexpected panic: %v", r)
+						}
+					}
+				}()
+
+				// Set cfgPath to empty to ensure runModel2Config is called
+				cfgPath = ""
+				run(cmd, args)
+
+				// Verify output for success case
+				if !tt.wantErr {
+					w.Close()
+					out, _ := io.ReadAll(r)
+					output := string(out)
+					if tt.wantOutput != "" && !strings.Contains(output, tt.wantOutput) {
+						t.Errorf("output doesn't contain expected content. Got: %s Want to contain: %s", output, tt.wantOutput)
 					}
 				}
 			}()

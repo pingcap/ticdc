@@ -147,8 +147,8 @@ oauth2_server:
 filter_helper:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
 
-config2model:
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_config2model ./cmd/config2model/main.go
+config-converter:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_config_converter ./cmd/config-converter/main.go
 
 fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "run gci (format imports)"
