@@ -267,12 +267,7 @@ func (c *coordinator) handleStateChange(
 		return errors.Trace(err)
 	}
 	cfInfo.State = event.state
-	switch event.state {
-	case config.StateWarning:
-		cfInfo.Warning = event.err
-	case config.StateFailed:
-		cfInfo.Error = event.err
-	}
+	cfInfo.Error = event.err
 	progress := config.ProgressNone
 	if event.state == config.StateFailed || event.state == config.StateFinished {
 		progress = config.ProgressStopping

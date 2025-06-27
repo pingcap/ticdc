@@ -1114,24 +1114,23 @@ func (h *OpenAPIV2) status(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	var lastError *config.RunningError
+	var (
+		lastError   *config.RunningError
+		lastWarning *config.RunningError
+	)
 	if info.Error != nil &&
 		oracle.GetTimeFromTS(status.CheckpointTs).Before(info.Error.Time) {
-		lastError = &config.RunningError{
+		err := &config.RunningError{
 			Time:    info.Error.Time,
 			Addr:    info.Error.Addr,
 			Code:    info.Error.Code,
 			Message: info.Error.Message,
 		}
-	}
-	var lastWarning *config.RunningError
-	if info.Warning != nil &&
-		oracle.GetTimeFromTS(status.CheckpointTs).Before(info.Warning.Time) {
-		lastWarning = &config.RunningError{
-			Time:    info.Warning.Time,
-			Addr:    info.Warning.Addr,
-			Code:    info.Warning.Code,
-			Message: info.Warning.Message,
+		switch info.State {
+		case config.StateFailed:
+			lastError = err
+		case config.StateWarning:
+			lastWarning = err
 		}
 	}
 
