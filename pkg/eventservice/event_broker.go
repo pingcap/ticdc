@@ -395,9 +395,8 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
 		remoteID := node.ID(task.info.GetServerID())
-		event := pevent.NewReadyEvent(task.info.GetID())
-		wrapEvent := newWrapReadyEvent(remoteID, event)
-		c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
+		ready := pevent.NewReadyEvent(task.info.GetID())
+		c.getMessageCh(task.messageWorkerIndex) <- newWrapReadyEvent(remoteID, ready)
 		metricEventServiceSendCommandCount.Inc()
 		return false
 	}
@@ -415,13 +414,12 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	// Always reset the seq of the dispatcher to 0 before sending a handshake event.
 	task.seq.Store(0)
 	remoteID := node.ID(task.info.GetServerID())
-	event := pevent.NewHandshakeEvent(
+	handshake := pevent.NewHandshakeEvent(
 		task.id,
 		task.resetTs.Load(),
 		task.seq.Add(1),
 		task.startTableInfo.Load())
-	wrapEvent := newWrapHandshakeEvent(remoteID, event)
-	c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
+	c.getMessageCh(task.messageWorkerIndex) <- newWrapHandshakeEvent(remoteID, handshake)
 	metricEventServiceSendCommandCount.Inc()
 }
 
@@ -790,7 +788,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
 			zap.Uint64("startTs", startTs),
-			zap.Duration("brokerRegisterDuration", time.Since(start)),
+			zap.Duration("duration", time.Since(start)),
 		)
 		return nil
 	}
@@ -964,7 +962,6 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 		c.changefeedMap.Store(changefeedID, stat)
 		c.changefeedAvailables.Store(changefeedID.ID(), atomic.NewUint64(uint64(config.DefaultChangefeedMemoryQuota)))
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.ID().String()).Set(float64(config.DefaultChangefeedMemoryQuota))
-
 	}
 	return stat.(*changefeedStatus)
 }
