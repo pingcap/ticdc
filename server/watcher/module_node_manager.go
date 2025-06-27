@@ -151,6 +151,7 @@ func (c *NodeManager) GetAliveNodeIDs() []node.ID {
 	for id := range nodes {
 		ids = append(ids, id)
 	}
+	return ids
 }
 
 func (c *NodeManager) GetNodeInfo(id node.ID) *node.Info {
