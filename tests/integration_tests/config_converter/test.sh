@@ -54,6 +54,9 @@ trap teardown EXIT
 
 setup
 
+# Wait for the TiCDC server to be ready
+sleep 2
+
 cat <<EOF >"$tmpconfig"
 force-replicate = true
 case-sensitive = true
@@ -77,6 +80,8 @@ sleep 2
 
 # verify the result
 data=$(curl 'http://127.0.0.1:8300/api/v2/changefeeds/1')
+
+set -x
 
 memory_quota=$(echo "$data" | jq '.config.memory_quota')
 should_eq 1073741824 "$memory_quota"
