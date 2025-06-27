@@ -13,47 +13,46 @@ CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 main="$CUR/../../../cmd/config-converter/main.go"
 
 check_port_available() {
-    local port=$1
-    while ! nc -z localhost "$port"; do
-        echo "Waiting for port $port to be available..."
-        sleep 1
-    done
+	local port=$1
+	while ! nc -z localhost "$port"; do
+		echo "Waiting for port $port to be available..."
+		sleep 1
+	done
 }
 
 setup() {
-    echo -e "${YELLOW}Setting up...${NC}"
-    echo -e "${YELLOW}Deploy upstream TiDB cluster${NC}"
-    nohup tiup playground v8.5.2 --tag config2model-upstream --pd 1 --kv 1 --db 1 --ticdc 1 &
-    check_port_available 4000
+	echo -e "${YELLOW}Setting up...${NC}"
+	echo -e "${YELLOW}Deploy upstream TiDB cluster${NC}"
+	nohup tiup playground v8.5.2 --tag config2model-upstream --pd 1 --kv 1 --db 1 --ticdc 1 &
+	check_port_available 4000
 
-    echo -e "${YELLOW}Deploy downstream TiDB cluster...${NC}"
-    nohup tiup playground v8.5.2 --tag config2model-downstream --pd 1 --kv 1 --db 1 --ticdc 1 --port-offset 10000 &
-    check_port_available 14000
+	echo -e "${YELLOW}Deploy downstream TiDB cluster...${NC}"
+	nohup tiup playground v8.5.2 --tag config2model-downstream --pd 1 --kv 1 --db 1 --ticdc 1 --port-offset 10000 &
+	check_port_available 14000
 }
 
 teardown() {
-    ps -ef | grep tiup | grep config2model | awk '{print $2}' | xargs kill -9 >/dev/null 2>/dev/null
-    tiup clean config2model-upstream >/dev/null 2>/dev/null
-    tiup clean config2model-downstream >/dev/null 2>/dev/null
+	ps -ef | grep tiup | grep config2model | awk '{print $2}' | xargs kill -9 >/dev/null 2>/dev/null
+	tiup clean config2model-upstream >/dev/null 2>/dev/null
+	tiup clean config2model-downstream >/dev/null 2>/dev/null
 
-    rm -f "$tmpconfig"
-    rm -f "$tmpjson"
-    rm -f "$toml_converted"
+	rm -f "$tmpconfig"
+	rm -f "$tmpjson"
+	rm -f "$toml_converted"
 }
 
 should_eq() {
-    local expected=$1
-    local actual=$2
-    if [ "$expected" != "$actual" ]; then
-        echo -e "${RED}Expected $expected, but got $actual${NC}"
-        exit 1
-    fi
+	local expected=$1
+	local actual=$2
+	if [ "$expected" != "$actual" ]; then
+		echo -e "${RED}Expected $expected, but got $actual${NC}"
+		exit 1
+	fi
 }
 
 trap teardown EXIT
 
 setup
-
 
 cat <<EOF >"$tmpconfig"
 force-replicate = true
@@ -68,7 +67,7 @@ config=$(go run "$main" -c "$tmpconfig")
 echo -e "${YELLOW}Create changefeed${NC}"
 set -x
 curl -X POST 'http://127.0.0.1:8300/api/v2/changefeeds' -H 'Content-type: application/json' \
-    -d "{ \"changefeed_id\": \"1\", \"sink_uri\": \"mysql://root@127.0.0.1:14000/\", \"start_ts\": 0, \"replica_config\": $config }"
+	-d "{ \"changefeed_id\": \"1\", \"sink_uri\": \"mysql://root@127.0.0.1:14000/\", \"start_ts\": 0, \"replica_config\": $config }"
 
 set +x
 echo ""
@@ -91,22 +90,22 @@ should_eq true "$force_replicate"
 rules=$(echo "$data" | jq '.config.filter.rules[0]')
 should_eq '"*.*"' "$rules"
 
-echo "$data" | jq '.config' > "$tmpjson"
+echo "$data" | jq '.config' >"$tmpjson"
 
 tomldata=$(go run "$main" -m "$tmpjson")
-echo "$tomldata" > "$toml_converted"
+echo "$tomldata" >"$toml_converted"
 
 if ! grep -q 'case-sensitive = true' "$toml_converted"; then
-    echo -e "${RED}Expected case-sensitive = true, but got $(grep 'case-sensitive' "$toml_converted")${NC}"
-    exit 1
+	echo -e "${RED}Expected case-sensitive = true, but got $(grep 'case-sensitive' "$toml_converted")${NC}"
+	exit 1
 fi
 if ! grep -q 'force-replicate = true' "$toml_converted"; then
-    echo -e "${RED}Expected force-replicate = true, but got $(grep 'force-replicate' "$toml_converted")${NC}"
-    exit 1
+	echo -e "${RED}Expected force-replicate = true, but got $(grep 'force-replicate' "$toml_converted")${NC}"
+	exit 1
 fi
 if ! grep -q 'memory-quota = 1073741824' "$toml_converted"; then
-    echo -e "${RED}Expected memory-quota = 1073741824, but got $(grep 'memory-quota' "$toml_converted")${NC}"
-    exit 1
+	echo -e "${RED}Expected memory-quota = 1073741824, but got $(grep 'memory-quota' "$toml_converted")${NC}"
+	exit 1
 fi
 
 echo -e "${GREEN}Test passed${NC}"
