@@ -110,6 +110,9 @@ type dispatcherStat struct {
 	connState dispatcherConnState
 
 	memoryQuota uint64
+	// epoch is used to filter invalid events.
+	// It is incremented when the dispatcher is reset.
+	epoch atomic.Uint64
 	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
@@ -159,8 +162,9 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("startTs", d.target.GetStartTs()))
 	d.lastEventSeq.Store(0)
+	epoch := d.epoch.Add(1)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.target.GetStartTs()))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.target.GetStartTs(), epoch))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -168,6 +172,7 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 // it will remove the dispatcher from the dynamic stream and add it back.
 func (d *dispatcherStat) reset(serverID node.ID) {
 	resetTs := d.getResetTs()
+	epoch := d.epoch.Add(1)
 	d.handshaked.Store(false)
 	// reset the dispatcher's path in the dynamic stream
 	err := d.eventCollector.ds.RemovePath(d.getDispatcherID())
@@ -181,7 +186,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 	}
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs, epoch))
 	d.eventCollector.enqueueMessageForSend(msg)
 	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
 		zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -644,7 +649,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 	}
 }
 
-func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64) *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
 	syncPointInterval := d.target.GetSyncPointInterval()
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
@@ -659,6 +664,7 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64) *messaging.Di
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
+			Epoch:             epoch,
 		},
 	}
 }

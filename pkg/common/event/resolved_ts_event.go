@@ -122,12 +122,14 @@ type ResolvedEvent struct {
 func NewResolvedEvent(
 	resolvedTs common.Ts,
 	dispatcherID common.DispatcherID,
+	epoch uint64,
 ) ResolvedEvent {
 	return ResolvedEvent{
 		DispatcherID: dispatcherID,
 		ResolvedTs:   resolvedTs,
 		State:        EventSenderStateNormal,
 		Version:      ResolvedEventVersion,
+		Epoch:        epoch,
 	}
 }
 
