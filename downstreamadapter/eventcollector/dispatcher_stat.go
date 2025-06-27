@@ -124,8 +124,6 @@ type dispatcherStat struct {
 	gotSyncpointOnTS atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
-	// handshaked indicates whether the dispatcher has received a handshake event.
-	handshaked atomic.Bool
 }
 
 func newDispatcherStat(
@@ -173,7 +171,6 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 func (d *dispatcherStat) reset(serverID node.ID) {
 	resetTs := d.getResetTs()
 	epoch := d.epoch.Add(1)
-	d.handshaked.Store(false)
 	// reset the dispatcher's path in the dynamic stream
 	err := d.eventCollector.ds.RemovePath(d.getDispatcherID())
 	if err != nil {
@@ -363,6 +360,10 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 	return true
 }
 
+func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
+	return event.GetEpoch() == d.epoch.Load()
+}
+
 // handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
 // 1. First pass: Check if there are any valid events from current event service and if any events are from stale services
 //   - Valid events must come from current event service and have valid sequence numbers
@@ -377,7 +378,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	containsValidEvents := false
 	containsStaleEvents := false
 	for _, event := range events {
-		if d.connState.isCurrentEventService(*event.From) {
+		if d.isFromCurrentEpoch(event) {
 			containsValidEvents = true
 			if !d.verifyEventSequence(event) {
 				d.reset(d.connState.getEventServiceID())
@@ -433,11 +434,13 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		log.Panic("should not happen: only one event should be sent for DDL/SyncPoint/Handshake event")
 	}
 	from := events[0].From
-	if !d.connState.isCurrentEventService(*from) {
-		log.Info("receive DDL/SyncPoint/Handshake event from a stale event service, ignore it",
+	if !d.isFromCurrentEpoch(events[0]) {
+		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", events[0].Event),
+			zap.Uint64("eventEpoch", events[0].GetEpoch()),
+			zap.Uint64("dispatcherEpoch", d.epoch.Load()),
 			zap.Stringer("staleEventService", *from),
 			zap.Stringer("currentEventService", d.connState.getEventServiceID()))
 		return false
@@ -491,9 +494,6 @@ func (d *dispatcherStat) handleBatchDMLEvent(event dispatcher.DispatcherEvent, f
 }
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
-	if !d.handshaked.Load() {
-		return false
-	}
 	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent:
@@ -584,6 +584,13 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event))
 	}
+	if !d.isFromCurrentEpoch(event) {
+		log.Info("receive a drop event from a stale epoch, ignore it",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Any("event", event.Event))
+		return
+	}
 	log.Info("received a dropEvent, need to reset the dispatcher",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -604,11 +611,17 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	if !ok {
 		log.Panic("handshake event is not a handshake event", zap.Any("event", event))
 	}
+	if !d.isFromCurrentEpoch(event) {
+		log.Info("receive a handshake event from a stale epoch, ignore it",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Any("event", event.Event))
+		return
+	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
 		d.tableInfo.Store(tableInfo)
 	}
-	d.handshaked.Store(true)
 	d.lastEventSeq.Store(handshakeEvent.Seq)
 }
 
