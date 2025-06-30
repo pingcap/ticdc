@@ -119,6 +119,7 @@ type mockEvent struct {
 	size         int64
 	isPaused     bool
 	len          int32
+	epoch        uint64
 }
 
 func (m *mockEvent) GetType() int {
@@ -127,6 +128,10 @@ func (m *mockEvent) GetType() int {
 
 func (m *mockEvent) GetSeq() uint64 {
 	return m.seq
+}
+
+func (m *mockEvent) GetEpoch() uint64 {
+	return m.epoch
 }
 
 func (m *mockEvent) GetDispatcherID() common.DispatcherID {
@@ -169,27 +174,21 @@ func TestGetResetTs(t *testing.T) {
 	stat.lastEventCommitTs.Store(100)
 	stat.target.(*mockDispatcher).startTs = 50
 	resetTs := stat.getResetTs()
-	if resetTs != 99 {
-		t.Errorf("Expected resetTs to be 99, got %d", resetTs)
-	}
+	require.Equal(t, uint64(99), resetTs)
 
 	// Test case 2: lastEventCommitTs is equal to startTs
 	// Expected: resetTs should be startTs
 	stat.lastEventCommitTs.Store(50)
 	stat.target.(*mockDispatcher).startTs = 50
 	resetTs = stat.getResetTs()
-	if resetTs != 50 {
-		t.Errorf("Expected resetTs to be 50, got %d", resetTs)
-	}
+	require.Equal(t, uint64(50), resetTs)
 
 	// Test case 3: lastEventCommitTs is less than startTs
 	// Expected: resetTs should be startTs
 	stat.lastEventCommitTs.Store(30)
 	stat.target.(*mockDispatcher).startTs = 50
 	resetTs = stat.getResetTs()
-	if resetTs != 50 {
-		t.Errorf("Expected resetTs to be 50, got %d", resetTs)
-	}
+	require.Equal(t, uint64(50), resetTs)
 }
 
 func TestVerifyEventSequence(t *testing.T) {
@@ -265,6 +264,17 @@ func TestVerifyEventSequence(t *testing.T) {
 						{Seq: 5},
 						{Seq: 6},
 					},
+				},
+			},
+			expectedResult: false,
+		},
+		{
+			name:         "discontinuous sync point event sequence",
+			lastEventSeq: 3,
+			event: dispatcher.DispatcherEvent{
+				Event: &commonEvent.SyncPointEvent{
+					CommitTsList: []uint64{100},
+					Seq:          5,
 				},
 			},
 			expectedResult: false,
@@ -604,86 +614,6 @@ func TestHandleSignalEvent(t *testing.T) {
 	}
 }
 
-func TestHandleDropEvent(t *testing.T) {
-	localServerID := node.ID("local-server")
-	remoteServerID := node.ID("remote-server")
-	dispatcherID := common.NewDispatcherID()
-	changefeedID := common.NewChangeFeedIDWithName("test-changefeed")
-
-	tests := []struct {
-		name             string
-		event            dispatcher.DispatcherEvent
-		initialState     func(*dispatcherStat)
-		expectedCommitTs uint64
-		expectedPanic    bool
-	}{
-		{
-			name: "handle valid drop event",
-			event: dispatcher.DispatcherEvent{
-				From: &remoteServerID,
-				Event: &commonEvent.DropEvent{
-					Version:         commonEvent.DropEventVersion,
-					DispatcherID:    dispatcherID,
-					DroppedSeq:      1,
-					DroppedCommitTs: 100,
-				},
-			},
-			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.lastEventCommitTs.Store(50)
-			},
-			expectedCommitTs: 100,
-			expectedPanic:    false,
-		},
-		{
-			name: "panic on non-drop event",
-			event: dispatcher.DispatcherEvent{
-				From: &remoteServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeDMLEvent,
-					commitTs:  100,
-				},
-			},
-			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.lastEventCommitTs.Store(50)
-			},
-			expectedPanic: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create a mock dispatcher
-			mockDisp := newMockDispatcher(dispatcherID, 0)
-			mockDisp.changefeedID = changefeedID
-
-			// Create dispatcherStat
-			stat := &dispatcherStat{
-				target:         mockDisp,
-				eventCollector: newTestEventCollector(localServerID),
-			}
-
-			// Set initial state
-			if tt.initialState != nil {
-				tt.initialState(stat)
-			}
-
-			if tt.expectedPanic {
-				require.Panics(t, func() {
-					stat.handleDropEvent(tt.event)
-				})
-				return
-			}
-
-			stat.handleDropEvent(tt.event)
-
-			// Verify results
-			require.Equal(t, tt.expectedCommitTs, stat.lastEventCommitTs.Load())
-		})
-	}
-}
-
 func TestHandleDataEvents(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
@@ -698,36 +628,26 @@ func TestHandleDataEvents(t *testing.T) {
 		initialState   func(*dispatcherStat)
 		handleEvents   func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
 		expectedResult bool
-		expectedEvents []dispatcher.DispatcherEvent
 	}{
 		{
-			name: "return false when dispatcher is not handshaked",
+			name: "return false when event epoch is stale",
 			events: []dispatcher.DispatcherEvent{
 				{
 					From: &remoteServerID,
 					Event: &mockEvent{
 						eventType: commonEvent.TypeDMLEvent,
 						seq:       1,
+						epoch:     1,
 						commitTs:  100,
 					},
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.handshaked.Store(false)
+				stat.epoch.Store(2)
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: false,
-			expectedEvents: []dispatcher.DispatcherEvent{
-				{
-					From: &remoteServerID,
-					Event: &mockEvent{
-						eventType: commonEvent.TypeDMLEvent,
-						seq:       1,
-						commitTs:  100,
-					},
-				},
-			},
 		},
 		{
 			name: "handle DML events normally",
@@ -737,28 +657,19 @@ func TestHandleDataEvents(t *testing.T) {
 					Event: &mockEvent{
 						eventType: commonEvent.TypeDMLEvent,
 						seq:       1,
+						epoch:     2,
 						commitTs:  100,
 					},
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.handshaked.Store(true)
+				stat.epoch.Store(2)
 				stat.lastEventSeq.Store(0)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: true,
-			expectedEvents: []dispatcher.DispatcherEvent{
-				{
-					From: &remoteServerID,
-					Event: &mockEvent{
-						eventType: commonEvent.TypeDMLEvent,
-						seq:       1,
-						commitTs:  100,
-					},
-				},
-			},
 		},
 		{
 			name: "return false when event sequence is discontinuous",
@@ -768,19 +679,19 @@ func TestHandleDataEvents(t *testing.T) {
 					Event: &mockEvent{
 						eventType: commonEvent.TypeDMLEvent,
 						seq:       3,
+						epoch:     10,
 						commitTs:  100,
 					},
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.handshaked.Store(true)
 				stat.lastEventSeq.Store(1)
+				stat.epoch.Store(10)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: false,
-			expectedEvents: nil,
 		},
 		{
 			name: "handle DDL event normally",
@@ -790,6 +701,7 @@ func TestHandleDataEvents(t *testing.T) {
 					Event: &commonEvent.DDLEvent{
 						Version:    commonEvent.DDLEventVersion,
 						FinishedTs: 100,
+						Epoch:      10,
 						Seq:        1,
 						TableInfo:  &common.TableInfo{},
 					},
@@ -797,23 +709,12 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.handshaked.Store(true)
+				stat.epoch.Store(10)
 				stat.lastEventSeq.Store(0)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: true,
-			expectedEvents: []dispatcher.DispatcherEvent{
-				{
-					From: &remoteServerID,
-					Event: &commonEvent.DDLEvent{
-						Version:    commonEvent.DDLEventVersion,
-						FinishedTs: 100,
-						Seq:        1,
-						TableInfo:  &common.TableInfo{},
-					},
-				},
-			},
 		},
 		{
 			name: "handle BatchDML event normally",
@@ -826,10 +727,12 @@ func TestHandleDataEvents(t *testing.T) {
 						DMLEvents: []*commonEvent.DMLEvent{
 							{
 								Seq:      1,
+								Epoch:    10,
 								CommitTs: 100,
 							},
 							{
 								Seq:      2,
+								Epoch:    10,
 								CommitTs: 100,
 							},
 						},
@@ -838,32 +741,13 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.handshaked.Store(true)
+				stat.epoch.Store(10)
 				stat.lastEventSeq.Store(0)
 				stat.lastEventCommitTs.Store(50)
 				stat.tableInfo.Store(&common.TableInfo{})
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: true,
-			expectedEvents: []dispatcher.DispatcherEvent{
-				{
-					From: &remoteServerID,
-					Event: &commonEvent.BatchDMLEvent{
-						Rows:    chunk.NewEmptyChunk(nil),
-						RawRows: []byte("test batchDML event"),
-						DMLEvents: []*commonEvent.DMLEvent{
-							{
-								Seq:      1,
-								CommitTs: 100,
-							},
-							{
-								Seq:      2,
-								CommitTs: 100,
-							},
-						},
-					},
-				},
-			},
 		},
 		{
 			name: "handle Resolved event normally",
@@ -872,49 +756,19 @@ func TestHandleDataEvents(t *testing.T) {
 					From: &remoteServerID,
 					Event: &mockEvent{
 						eventType: commonEvent.TypeResolvedEvent,
+						epoch:     10,
 						commitTs:  100,
 					},
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.handshaked.Store(true)
+				stat.epoch.Store(10)
 				stat.lastEventSeq.Store(0)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: true,
-			expectedEvents: []dispatcher.DispatcherEvent{
-				{
-					From: &remoteServerID,
-					Event: &mockEvent{
-						eventType: commonEvent.TypeResolvedEvent,
-						commitTs:  100,
-					},
-				},
-			},
-		},
-		{
-			name: "ignore events from stale event service",
-			events: []dispatcher.DispatcherEvent{
-				{
-					From: &localServerID,
-					Event: &mockEvent{
-						eventType: commonEvent.TypeDMLEvent,
-						seq:       1,
-						commitTs:  100,
-					},
-				},
-			},
-			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.handshaked.Store(true)
-				stat.lastEventSeq.Store(0)
-				stat.lastEventCommitTs.Store(50)
-			},
-			handleEvents:   normalHandleEvents,
-			expectedResult: false,
-			expectedEvents: nil,
 		},
 		{
 			name: "ignore events with commit ts less than last commit ts",
@@ -924,19 +778,19 @@ func TestHandleDataEvents(t *testing.T) {
 					Event: &mockEvent{
 						eventType: commonEvent.TypeDMLEvent,
 						seq:       1,
+						epoch:     20,
 						commitTs:  40,
 					},
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.handshaked.Store(true)
+				stat.epoch.Store(20)
 				stat.lastEventSeq.Store(0)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: false,
-			expectedEvents: nil,
 		},
 	}
 
@@ -972,32 +826,25 @@ func TestHandleBatchDataEvents(t *testing.T) {
 		currentService node.ID
 		lastSeq        uint64
 		lastCommitTs   uint64
-		handshaked     bool
+		epoch          uint64
 		want           bool
 	}{
-		{
-			name:           "not handshaked",
-			events:         []dispatcher.DispatcherEvent{},
-			currentService: node.ID("service1"),
-			handshaked:     false,
-			want:           false,
-		},
 		{
 			name: "valid events from current service",
 			events: []dispatcher.DispatcherEvent{
 				{
 					From:  createNodeID("service1"),
-					Event: &commonEvent.DMLEvent{Seq: 1, CommitTs: 100},
+					Event: &commonEvent.DMLEvent{Seq: 1, Epoch: 3, CommitTs: 100},
 				},
 				{
 					From:  createNodeID("service1"),
-					Event: &commonEvent.DMLEvent{Seq: 2, CommitTs: 101},
+					Event: &commonEvent.DMLEvent{Seq: 2, Epoch: 3, CommitTs: 101},
 				},
 			},
 			currentService: node.ID("service1"),
 			lastSeq:        0,
 			lastCommitTs:   99,
-			handshaked:     true,
+			epoch:          3,
 			want:           true,
 		},
 		{
@@ -1005,13 +852,13 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			events: []dispatcher.DispatcherEvent{
 				{
 					From:  createNodeID("service1"),
-					Event: &commonEvent.DMLEvent{Seq: 2, CommitTs: 100},
+					Event: &commonEvent.DMLEvent{Seq: 2, Epoch: 3, CommitTs: 100},
 				},
 			},
 			currentService: node.ID("service1"),
 			lastSeq:        0,
 			lastCommitTs:   99,
-			handshaked:     true,
+			epoch:          3,
 			want:           false,
 		},
 		{
@@ -1019,17 +866,17 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			events: []dispatcher.DispatcherEvent{
 				{
 					From:  createNodeID("service2"),
-					Event: &commonEvent.DMLEvent{Seq: 1, CommitTs: 100},
+					Event: &commonEvent.DMLEvent{Seq: 1, Epoch: 2, CommitTs: 100},
 				},
 				{
 					From:  createNodeID("service1"),
-					Event: &commonEvent.DMLEvent{Seq: 2, CommitTs: 101},
+					Event: &commonEvent.DMLEvent{Seq: 2, Epoch: 3, CommitTs: 101},
 				},
 			},
 			currentService: node.ID("service1"),
 			lastSeq:        1,
 			lastCommitTs:   99,
-			handshaked:     true,
+			epoch:          3,
 			want:           true,
 		},
 	}
@@ -1046,9 +893,9 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
 			stat := newDispatcherStat(mockDisp, mockEventCollector, nil, 0)
-			stat.handshaked.Store(tt.handshaked)
 			stat.lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
+			stat.epoch.Store(tt.epoch)
 			stat.connState.setEventServiceID(tt.currentService)
 			stat.connState.readyEventReceived.Store(true)
 
@@ -1067,7 +914,7 @@ func TestHandleSingleDataEvents(t *testing.T) {
 		currentService node.ID
 		lastSeq        uint64
 		lastCommitTs   uint64
-		handshaked     bool
+		epoch          uint64
 		want           bool
 	}{
 		{
@@ -1077,7 +924,6 @@ func TestHandleSingleDataEvents(t *testing.T) {
 				{Event: &commonEvent.DDLEvent{}},
 			},
 			currentService: node.ID("service1"),
-			handshaked:     true,
 			want:           false,
 		},
 		{
@@ -1085,11 +931,11 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			events: []dispatcher.DispatcherEvent{
 				{
 					From:  createNodeID("service2"),
-					Event: &commonEvent.DDLEvent{Seq: 1},
+					Event: &commonEvent.DDLEvent{Seq: 1, Epoch: 9},
 				},
 			},
 			currentService: node.ID("service1"),
-			handshaked:     true,
+			epoch:          10,
 			want:           false,
 		},
 		{
@@ -1097,12 +943,12 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			events: []dispatcher.DispatcherEvent{
 				{
 					From:  createNodeID("service1"),
-					Event: &commonEvent.DDLEvent{Seq: 2},
+					Event: &commonEvent.DDLEvent{Seq: 2, Epoch: 10},
 				},
 			},
 			currentService: node.ID("service1"),
 			lastSeq:        0,
-			handshaked:     true,
+			epoch:          10,
 			want:           false,
 		},
 		{
@@ -1110,13 +956,13 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			events: []dispatcher.DispatcherEvent{
 				{
 					From:  createNodeID("service1"),
-					Event: &commonEvent.DDLEvent{Seq: 1, FinishedTs: 100},
+					Event: &commonEvent.DDLEvent{Seq: 1, Epoch: 10, FinishedTs: 100},
 				},
 			},
 			currentService: node.ID("service1"),
 			lastSeq:        0,
 			lastCommitTs:   99,
-			handshaked:     true,
+			epoch:          10,
 			want:           true,
 		},
 	}
@@ -1133,9 +979,9 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
 			stat := newDispatcherStat(mockDisp, mockEventCollector, nil, 0)
-			stat.handshaked.Store(tt.handshaked)
 			stat.lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
+			stat.epoch.Store(tt.epoch)
 			stat.connState.setEventServiceID(tt.currentService)
 			stat.connState.readyEventReceived.Store(true)
 
@@ -1163,6 +1009,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 		from         *node.ID
 		tableInfo    *common.TableInfo
 		lastCommitTs uint64
+		epoch        uint64
 		want         bool
 	}{
 		{
@@ -1172,14 +1019,15 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 					Rows:    chunk.NewEmptyChunk(nil),
 					RawRows: []byte("test batch DML event"),
 					DMLEvents: []*commonEvent.DMLEvent{
-						{Seq: 1, CommitTs: 100},
-						{Seq: 2, CommitTs: 100},
+						{Seq: 1, Epoch: 10, CommitTs: 100},
+						{Seq: 2, Epoch: 10, CommitTs: 100},
 					},
 				},
 			},
 			from:         createNodeID("service1"),
 			tableInfo:    &common.TableInfo{},
 			lastCommitTs: 96,
+			epoch:        10,
 			want:         true,
 		},
 		{
@@ -1189,13 +1037,14 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 					Rows:    chunk.NewEmptyChunk(nil),
 					RawRows: []byte("test batch DML event"),
 					DMLEvents: []*commonEvent.DMLEvent{
-						{Seq: 1, CommitTs: 100},
-						{Seq: 2, CommitTs: 100},
+						{Seq: 1, Epoch: 10, CommitTs: 100},
+						{Seq: 2, Epoch: 10, CommitTs: 100},
 					},
 				},
 			},
-			from: createNodeID("service1"),
-			want: false,
+			from:  createNodeID("service1"),
+			epoch: 10,
+			want:  false,
 		},
 		{
 			name: "stale commit ts",
@@ -1204,13 +1053,14 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 					Rows:    chunk.NewEmptyChunk(nil),
 					RawRows: []byte("test batch DML event"),
 					DMLEvents: []*commonEvent.DMLEvent{
-						{CommitTs: 98},
+						{Epoch: 10, CommitTs: 98},
 					},
 				},
 			},
 			from:         createNodeID("service1"),
 			tableInfo:    &common.TableInfo{},
 			lastCommitTs: 99,
+			epoch:        10,
 			want:         false,
 		},
 	}
@@ -1223,6 +1073,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			mockDisp.handleEvents = normalHandleEvents
 			stat := newDispatcherStat(mockDisp, nil, nil, 0)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
+			stat.epoch.Store(tt.epoch)
 			if tt.tableInfo != nil {
 				stat.tableInfo.Store(tt.tableInfo)
 			}

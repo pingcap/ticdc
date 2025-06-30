@@ -110,6 +110,9 @@ type dispatcherStat struct {
 	connState dispatcherConnState
 
 	memoryQuota uint64
+	// epoch is used to filter invalid events.
+	// It is incremented when the dispatcher is reset.
+	epoch atomic.Uint64
 	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
@@ -121,8 +124,6 @@ type dispatcherStat struct {
 	gotSyncpointOnTS atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
-	// handshaked indicates whether the dispatcher has received a handshake event.
-	handshaked atomic.Bool
 }
 
 func newDispatcherStat(
@@ -159,8 +160,9 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("startTs", d.target.GetStartTs()))
 	d.lastEventSeq.Store(0)
+	epoch := d.epoch.Add(1)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.target.GetStartTs()))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.target.GetStartTs(), epoch))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -168,7 +170,7 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 // it will remove the dispatcher from the dynamic stream and add it back.
 func (d *dispatcherStat) reset(serverID node.ID) {
 	resetTs := d.getResetTs()
-	d.handshaked.Store(false)
+	epoch := d.epoch.Add(1)
 	// reset the dispatcher's path in the dynamic stream
 	err := d.eventCollector.ds.RemovePath(d.getDispatcherID())
 	if err != nil {
@@ -181,7 +183,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 	}
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs, epoch))
 	d.eventCollector.enqueueMessageForSend(msg)
 	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
 		zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -358,9 +360,13 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 	return true
 }
 
+func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
+	return event.GetEpoch() == d.epoch.Load()
+}
+
 // handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
-// 1. First pass: Check if there are any valid events from current event service and if any events are from stale services
-//   - Valid events must come from current event service and have valid sequence numbers
+// 1. First pass: Check if there are any valid events from current epoch and if any events are from stale epoch
+//   - Valid events must come from current epoch and have valid sequence numbers
 //   - If any event has invalid sequence, reset dispatcher and return false
 //
 // 2. Second pass: Filter events based on whether there are stale events
@@ -372,7 +378,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	containsValidEvents := false
 	containsStaleEvents := false
 	for _, event := range events {
-		if d.connState.isCurrentEventService(*event.From) {
+		if d.isFromCurrentEpoch(event) {
 			containsValidEvents = true
 			if !d.verifyEventSequence(event) {
 				d.reset(d.connState.getEventServiceID())
@@ -415,7 +421,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 
 // handleSingleDataEvents processes single DDL, SyncPoint or BatchDML events with the following algorithm:
 // 1. Validate event count (must be exactly 1)
-// 2. Check if event comes from current event service
+// 2. Check if event comes from current epoch
 // 3. Verify event sequence number
 // 4. Process event based on type:
 //   - BatchDML: Split into individual DML events
@@ -428,11 +434,13 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		log.Panic("should not happen: only one event should be sent for DDL/SyncPoint/Handshake event")
 	}
 	from := events[0].From
-	if !d.connState.isCurrentEventService(*from) {
-		log.Info("receive DDL/SyncPoint/Handshake event from a stale event service, ignore it",
+	if !d.isFromCurrentEpoch(events[0]) {
+		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", events[0].Event),
+			zap.Uint64("eventEpoch", events[0].GetEpoch()),
+			zap.Uint64("dispatcherEpoch", d.epoch.Load()),
 			zap.Stringer("staleEventService", *from),
 			zap.Stringer("currentEventService", d.connState.getEventServiceID()))
 		return false
@@ -486,9 +494,6 @@ func (d *dispatcherStat) handleBatchDMLEvent(event dispatcher.DispatcherEvent, f
 }
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
-	if !d.handshaked.Load() {
-		return false
-	}
 	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent:
@@ -579,13 +584,19 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event))
 	}
+	if !d.isFromCurrentEpoch(event) {
+		log.Info("receive a drop event from a stale epoch, ignore it",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Any("event", event.Event))
+		return
+	}
 	log.Info("received a dropEvent, need to reset the dispatcher",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Uint64("commitTs", dropEvent.GetCommitTs()),
 		zap.Uint64("sequence", dropEvent.GetSeq()),
 		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
-	d.lastEventCommitTs.Store(dropEvent.GetCommitTs())
 	d.reset(d.connState.getEventServiceID())
 	metrics.EventCollectorDroppedEventCount.Inc()
 }
@@ -600,11 +611,17 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	if !ok {
 		log.Panic("handshake event is not a handshake event", zap.Any("event", event))
 	}
+	if !d.isFromCurrentEpoch(event) {
+		log.Info("receive a handshake event from a stale epoch, ignore it",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Any("event", event.Event))
+		return
+	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
 		d.tableInfo.Store(tableInfo)
 	}
-	d.handshaked.Store(true)
 	d.lastEventSeq.Store(handshakeEvent.Seq)
 }
 
@@ -645,7 +662,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 	}
 }
 
-func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64) *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
 	syncPointInterval := d.target.GetSyncPointInterval()
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
@@ -660,6 +677,7 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64) *messaging.Di
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
+			Epoch:             epoch,
 		},
 	}
 }
