@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +38,7 @@ func TestNewController(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	controller := NewController(cfID, ddlSpan, nil, false)
+	controller := NewController(cfID, ddlSpan, nil, nil)
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
 	require.False(t, controller.enableTableAcrossNodes)
@@ -57,8 +58,8 @@ func TestController_AddNewTable(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	table := commonEvent.Table{
@@ -92,8 +93,8 @@ func TestController_GetTaskByID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add a table first
@@ -144,8 +145,8 @@ func TestController_GetTasksByTableID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add a table
@@ -179,8 +180,8 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add tables from the same schema
@@ -218,8 +219,8 @@ func TestController_UpdateSchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add a table
@@ -258,8 +259,8 @@ func TestController_Statistics(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add some tables
@@ -469,5 +470,5 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 			CheckpointTs:    1,
 		}, "node1")
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	return NewController(cfID, ddlSpan, nil, true)
+	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true})
 }

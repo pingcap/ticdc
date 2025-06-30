@@ -51,7 +51,7 @@ func (c *ChangefeedSchedulerConfig) Validate() error {
 	if c.SplitNumberPerNode <= 0 {
 		return errors.New("split-number-per-node must be larger than 0")
 	}
-	if c.SchedulingTaskCountPerNode <= 0 {
+	if c.SchedulingTaskCountPerNode < 0 {
 		return errors.New("scheduling-task-count-per-node must be larger than 0")
 	}
 	if c.RegionCountPerSpan <= 0 {

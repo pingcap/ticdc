@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -79,12 +80,16 @@ func NewController(
 	changefeedID common.ChangeFeedID,
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
-	enableTableAcrossNodes bool,
+	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) *Controller {
+	enableTableAcrossNodes := false
+	if schedulerCfg != nil {
+		enableTableAcrossNodes = schedulerCfg.EnableTableAcrossNodes
+	}
 	c := &Controller{
 		changefeedID:           changefeedID,
 		ddlSpan:                ddlSpan,
-		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, enableTableAcrossNodes),
+		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg),
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
@@ -144,7 +149,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes && c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
 		// split the whole table span base on region count if table region count is exceed the limit
-		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan)
+		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan, 0)
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
 }
@@ -281,6 +286,7 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
 
+	// TODO: check if we need to lock the mu here, or we can add a lock inner the checker
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	checker.UpdateStatus(span)
