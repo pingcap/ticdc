@@ -4,7 +4,7 @@ set -eu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
-WORK_DIR=$OUT_DIR/$TEST_NAME
+export WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
@@ -27,7 +27,8 @@ function run() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	cdc cli changefeed create --sink-uri="$SINK_URI"
+	SINK_PARA="{\"changefeed_id\":\"autorandom\", \"sink_uri\":\"$SINK_URI\"}"
+    create_changefeed -c "autorandom" --sink-uri="$SINK_URI"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
