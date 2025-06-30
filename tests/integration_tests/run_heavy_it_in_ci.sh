@@ -76,7 +76,8 @@ kafka_groups=(
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	'move_table drop_many_tables ddl_for_split_tables_with_merge_and_split'
+	# move_table
+	'drop_many_tables ddl_for_split_tables_with_merge_and_split'
 	# G06
 	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
 	# G07

@@ -252,6 +252,10 @@ func (r DispatcherRequest) GetTimezone() *time.Location {
 	return tz
 }
 
+func (r DispatcherRequest) GetEpoch() uint64 {
+	return r.Epoch
+}
+
 type IOTypeT interface {
 	Unmarshal(data []byte) error
 	Marshal() (data []byte, err error)

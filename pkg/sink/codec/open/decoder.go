@@ -28,7 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -353,7 +353,7 @@ func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.T
 	}
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = *key.Partition
-	tableInfo.Name = pmodel.NewCIStr(key.Table)
+	tableInfo.Name = ast.NewCIStr(key.Table)
 
 	var rawColumns map[string]column
 	if value.Update != nil {
@@ -376,7 +376,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 	for name, raw := range rawColumns {
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
-		col.Name = pmodel.NewCIStr(name)
+		col.Name = ast.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
 
 		if isPrimary(raw.Flag) || isHandle(raw.Flag) {
@@ -439,7 +439,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 			indices = append(indices, &timodel.IndexInfo{
 				ID:      1,
-				Name:    pmodel.NewCIStr("primary"),
+				Name:    ast.NewCIStr("primary"),
 				Columns: indexColumns,
 				Primary: true,
 				Unique:  true,
@@ -452,7 +452,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 			indices = append(indices, &timodel.IndexInfo{
 				ID:      1 + int64(len(indices)),
-				Name:    pmodel.NewCIStr(col.Name.O + "_idx"),
+				Name:    ast.NewCIStr(col.Name.O + "_idx"),
 				Columns: indexColumns,
 				Unique:  true,
 			})
@@ -468,7 +468,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	if len(multiColumns) != 0 {
 		indices = append(indices, &timodel.IndexInfo{
 			ID:      1 + int64(len(indices)),
-			Name:    pmodel.NewCIStr("multi_idx"),
+			Name:    ast.NewCIStr("multi_idx"),
 			Columns: multiColumns,
 			Unique:  false,
 		})

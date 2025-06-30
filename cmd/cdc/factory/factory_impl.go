@@ -25,6 +25,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/version"
 	pd "github.com/tikv/pd/client"
+	pdOpt "github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 	etcdlogutil "go.etcd.io/etcd/client/pkg/v3/logutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -136,11 +138,11 @@ func (f *factoryImpl) PdClient() (pd.Client, error) {
 	}
 
 	pdClient, err := pd.NewClientWithContext(
-		ctx, pdEndpoints, credential.PDSecurityOption(),
-		pd.WithMaxErrorRetry(maxGetPDClientRetryTimes),
+		ctx, caller.Component("ticdc"), pdEndpoints, credential.PDSecurityOption(),
+		pdOpt.WithMaxErrorRetry(maxGetPDClientRetryTimes),
 		// TODO(hi-rustin): add gRPC metrics to Options.
 		// See also: https://github.com/pingcap/tiflow/pull/2341#discussion_r673032407.
-		pd.WithGRPCDialOptions(
+		pdOpt.WithGRPCDialOptions(
 			grpcTLSOption,
 			grpc.WithBlock(),
 			grpc.WithConnectParams(grpc.ConnectParams{

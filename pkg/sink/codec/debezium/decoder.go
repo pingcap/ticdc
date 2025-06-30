@@ -29,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/types"
@@ -237,7 +237,7 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tidbTableInfo.Name = pmodel.NewCIStr(tableName)
+	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 	fields := d.valueSchema["fields"].([]interface{})
 	after := fields[1].(map[string]interface{})
@@ -262,7 +262,7 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 		}
 		if _, ok = d.keyPayload[colName]; ok {
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
-				Name:   pmodel.NewCIStr(colName),
+				Name:   ast.NewCIStr(colName),
 				Offset: idx,
 			})
 			fieldType.AddFlag(mysql.PriKeyFlag)
@@ -270,13 +270,13 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, &timodel.ColumnInfo{
 			ID:        int64(idx),
 			State:     timodel.StatePublic,
-			Name:      pmodel.NewCIStr(colName),
+			Name:      ast.NewCIStr(colName),
 			FieldType: *fieldType,
 		})
 	}
 	tidbTableInfo.Indices = append(tidbTableInfo.Indices, &timodel.IndexInfo{
 		ID:      1,
-		Name:    pmodel.NewCIStr("primary"),
+		Name:    ast.NewCIStr("primary"),
 		Columns: indexColumns,
 		Unique:  true,
 		Primary: true,
