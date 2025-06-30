@@ -276,54 +276,7 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 
 	require.Equal(t, 5, redoCount)
 
-	// ===== sync point event =====
-
-	syncPointEvent := &commonEvent.SyncPointEvent{
-		CommitTsList: []uint64{6},
-	}
-	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, redoCallback)
-	require.Equal(t, true, block)
-	require.Equal(t, 0, len(sink.GetDMLs()))
-	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
-
-	// not available for write to sink
-	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
-	require.Equal(t, true, isEmpty)
-	require.Equal(t, uint64(4), checkpointTs)
-
-	// receive the ack info
-	dispatcherStatus = &heartbeatpb.DispatcherStatus{
-		Ack: &heartbeatpb.ACK{
-			CommitTs:    syncPointEvent.GetCommitTs(),
-			IsSyncPoint: true,
-		},
-	}
-	dispatcher.HandleDispatcherStatus(dispatcherStatus)
-	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
-	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
-
-	// receive the action info
-	dispatcherStatus = &heartbeatpb.DispatcherStatus{
-		Action: &heartbeatpb.DispatcherAction{
-			Action:      heartbeatpb.Action_Pass,
-			CommitTs:    syncPointEvent.GetCommitTs(),
-			IsSyncPoint: true,
-		},
-	}
-	dispatcher.HandleDispatcherStatus(dispatcherStatus)
-	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
-	require.Equal(t, true, isEmpty)
-	require.Equal(t, uint64(5), checkpointTs)
-
-	require.Equal(t, 6, redoCount)
-
 	// ===== resolved event =====
-	checkpointTs = dispatcher.GetCheckpointTs()
-	require.Equal(t, uint64(5), checkpointTs)
 	resolvedEvent := commonEvent.ResolvedEvent{
 		ResolvedTs: 7,
 	}

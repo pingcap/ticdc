@@ -15,7 +15,6 @@ package redo
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -28,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -42,8 +42,9 @@ type Sink struct {
 	dmlWriter writer.RedoLogWriter
 
 	logBuffer chan writer.RedoEvent
-	closed    int32
 
+	// isNormal indicate whether the sink is in the normal state.
+	isNormal   *atomic.Bool
 	statistics *metrics.Statistics
 }
 
@@ -74,6 +75,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			MaxLogSizeInBytes: cfg.MaxLogSize * redo.Megabyte,
 		},
 		logBuffer:  make(chan writer.RedoEvent, 32),
+		isNormal:   atomic.NewBool(true),
 		statistics: metrics.NewStatistics(changefeedID, "redo"),
 	}
 	start := time.Now()
@@ -108,15 +110,21 @@ func (s *Sink) Run(ctx context.Context) error {
 	g.Go(func() error {
 		return s.sendMessages(ctx)
 	})
-	return g.Wait()
+	err := g.Wait()
+	s.isNormal.Store(false)
+	return err
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		return s.statistics.RecordDDLExecution(func() error {
+		err := s.statistics.RecordDDLExecution(func() error {
 			return s.ddlWriter.WriteEvents(s.ctx, e)
 		})
+		if err != nil {
+			s.isNormal.Store(false)
+			return errors.Trace(err)
+		}
 	}
 	return nil
 }
@@ -144,7 +152,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 }
 
 func (s *Sink) IsNormal() bool {
-	return true
+	return s.isNormal.Load()
 }
 
 func (s *Sink) SinkType() common.SinkType {
@@ -159,9 +167,9 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
 func (s *Sink) Close(_ bool) {
-	atomic.StoreInt32(&s.closed, 1)
-
-	close(s.logBuffer)
+	if s.isNormal.CompareAndSwap(true, false) {
+		close(s.logBuffer)
+	}
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close ddl writer",

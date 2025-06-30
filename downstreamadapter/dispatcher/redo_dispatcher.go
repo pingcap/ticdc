@@ -497,7 +497,9 @@ func (rd *RedoDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 	}
 	for _, event := range events {
 		rd.redoSink.AddDMLEvent(event)
-		failpoint.Inject("BlockAddDMLEvents", nil)
+		failpoint.Inject("BlockAddDMLEvents", func() {
+			return
+		})
 	}
 }
 
@@ -588,9 +590,9 @@ func (rd *RedoDispatcher) Remove() {
 }
 
 func (rd *RedoDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
-	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully.
-	// If sink is not normal, we can close the dispatcher immediately.
-	if rd.tableProgress.Empty() {
+	// If redoSink is normal(not meet error), we need to wait all the events in redoSink to flushed downstream successfully.
+	// If redoSink is not normal, we can close the dispatcher immediately.
+	if !rd.redoSink.IsNormal() || rd.tableProgress.Empty() {
 		w.CheckpointTs = rd.GetCheckpointTs()
 		w.ResolvedTs = rd.GetResolvedTs()
 

@@ -30,7 +30,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "table_trigger_event_dispatcher_count",
 			Help:      "The number of table event dispatchers",
-		}, []string{"namespace", "changefeed"})
+		}, []string{"namespace", "changefeed", "event_type"})
 
 	EventDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -38,7 +38,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "table_event_dispatcher_count",
 			Help:      "The number of table event dispatchers",
-		}, []string{"namespace", "changefeed"})
+		}, []string{"namespace", "changefeed", "event_type"})
 
 	CreateDispatcherDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -47,7 +47,7 @@ var (
 			Name:      "create_dispatcher_duration",
 			Help:      "Bucketed histogram of create dispatcher time (s) for table span.",
 			Buckets:   prometheus.ExponentialBuckets(0.000001, 2, 20), // 1us~524ms
-		}, []string{"namespace", "changefeed"})
+		}, []string{"namespace", "changefeed", "event_type"})
 
 	EventDispatcherManagerResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
