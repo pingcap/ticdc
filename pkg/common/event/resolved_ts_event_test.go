@@ -23,6 +23,7 @@ import (
 func TestResolvedEvent(t *testing.T) {
 	did := common.NewDispatcherID()
 	e := ResolvedEvent{
+		Version:      ResolvedEventVersion,
 		DispatcherID: did,
 		ResolvedTs:   123,
 	}
@@ -40,10 +41,12 @@ func TestBatchResolvedTs(t *testing.T) {
 	did := common.NewDispatcherID()
 	did2 := common.NewDispatcherID()
 	e := ResolvedEvent{
+		Version:      ResolvedEventVersion,
 		DispatcherID: did,
 		ResolvedTs:   123,
 	}
 	e2 := ResolvedEvent{
+		Version:      ResolvedEventVersion,
 		DispatcherID: did2,
 		ResolvedTs:   456,
 	}

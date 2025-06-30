@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -156,7 +155,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	regionCache split.RegionCache,
 	checkpointTs uint64,
 	newChangefeed bool,
 ) *Maintainer {
@@ -176,7 +174,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		controller: NewController(cfID, checkpointTs, pdAPI, regionCache, taskScheduler,
+		controller: NewController(cfID, checkpointTs, pdAPI, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
@@ -236,14 +234,13 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	regionCache split.RegionCache,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI, regionCache, 1, false)
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI, 1, false)
 	m.cascadeRemoving = true
 	return m
 }
@@ -464,7 +461,7 @@ func (m *Maintainer) onNodeChanged() {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
 			delete(m.checkpointTsByCapture, id)
-			m.controller.RemoveNode(id)
+			m.controller.operatorController.OnNodeRemoved(id)
 		}
 	}
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),
@@ -528,7 +525,7 @@ func (m *Maintainer) calCheckpointTs() {
 	// if there is no tables, there must be a table trigger dispatcher
 	for id := range m.bootstrapper.GetAllNodes() {
 		// maintainer node has the table trigger dispatcher
-		if id != m.selfNode.ID && m.controller.GetTaskSizeByNodeID(id) <= 0 {
+		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
 		// node level watermark reported, ignore this round
@@ -743,7 +740,7 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 		m.statusChanged.Store(true)
 	}
 	if !m.cascadeRemoving {
-		m.controller.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
+		m.controller.operatorController.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
 		return !m.ddlSpan.IsWorking()
 	}
 	return m.trySendMaintainerCloseRequestToAllNode()
@@ -856,10 +853,10 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
-		total := m.controller.TaskSize() - 1
-		scheduling := m.controller.replicationDB.GetSchedulingSize()
-		working := m.controller.replicationDB.GetReplicatingSize()
-		absent := m.controller.replicationDB.GetAbsentSize()
+		total := m.controller.spanController.TaskSize() - 1
+		scheduling := m.controller.spanController.GetSchedulingSize()
+		working := m.controller.spanController.GetReplicatingSize()
+		absent := m.controller.spanController.GetAbsentSize()
 
 		m.tableCountGauge.Set(float64(total))
 		m.scheduledTaskGauge.Set(float64(scheduling))
@@ -933,7 +930,7 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 
 // GetDispatcherCount returns the number of dispatchers.
 func (m *Maintainer) GetDispatcherCount() int {
-	return len(m.controller.GetAllTasks())
+	return len(m.controller.spanController.GetAllTasks())
 }
 
 // MoveTable moves a table to a specific node.
@@ -948,7 +945,7 @@ func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
 
 // GetTables returns all tables.
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.controller.replicationDB.GetAllTasks()
+	return m.controller.spanController.GetAllTasks()
 }
 
 // SplitTableByRegionCount split table based on region count

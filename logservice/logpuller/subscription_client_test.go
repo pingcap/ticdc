@@ -115,6 +115,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 
 	pdClient = &mockPDClient{Client: pdClient, versionGen: defaultVersionGen}
 	regionCache := tikv.NewRegionCache(pdClient)
+	appcontext.SetService(appcontext.RegionCache, regionCache)
 	pdClock := pdutil.NewClock4Test()
 	kvStorage, err := tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0)
 	require.Nil(t, err)
@@ -133,7 +134,6 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	client := NewSubscriptionClient(
 		clientConfig,
 		pdClient,
-		regionCache,
 		lockResolver,
 		&security.Credential{},
 	)

@@ -114,7 +114,7 @@ func (c *Controller) FinishBootstrap(
 
 	return barrier, &heartbeatpb.MaintainerPostBootstrapRequest{
 		ChangefeedID:                  c.changefeedID.ToPB(),
-		TableTriggerEventDispatcherId: c.ddlDispatcherID.ToPB(),
+		TableTriggerEventDispatcherId: c.spanController.GetDDLDispatcherID().ToPB(),
 		Schemas:                       initSchemaInfos,
 	}, nil
 }
@@ -129,9 +129,9 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 			zap.Int("spanCount", len(resp.Spans)))
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
-			status := c.replicationDB.GetDDLDispatcher().GetStatus()
+			status := c.spanController.GetDDLDispatcher().GetStatus()
 			status.CheckpointTs = startTs
-			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
+			c.spanController.UpdateStatus(c.spanController.GetDDLDispatcher(), status)
 		}
 	}
 	if startTs == 0 {
@@ -148,7 +148,7 @@ func (c *Controller) buildWorkingTaskMap(
 	for node, resp := range allNodesResp {
 		for _, spanInfo := range resp.Spans {
 			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
-			if c.isDDLDispatcher(dispatcherID) {
+			if c.spanController.IsDDLDispatcher(dispatcherID) {
 				continue
 			}
 			spanReplication := c.createSpanReplication(spanInfo, node)
@@ -216,7 +216,7 @@ func (c *Controller) processTableSpans(
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
-		c.addWorkingSpans(tableSpans)
+		c.spanController.AddWorkingSpans(tableSpans)
 
 		if c.enableTableAcrossNodes {
 			c.handleTableHoles(table, tableSpans, tableSpan)
@@ -224,7 +224,7 @@ func (c *Controller) processTableSpans(
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
-		c.AddNewTable(table, c.startCheckpointTs)
+		c.spanController.AddNewTable(table, c.startCheckpointTs)
 	}
 }
 
@@ -236,7 +236,7 @@ func (c *Controller) handleTableHoles(
 	holes := split.FindHoles(tableSpans, tableSpan)
 	// TODO: split the hole
 	// Add holes to the replicationDB
-	c.addNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+	c.spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs)
 }
 
 func (c *Controller) handleRemainingWorkingTasks(
@@ -253,7 +253,7 @@ func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 ) *Barrier {
 	// Initialize barrier
-	barrier := NewBarrier(c, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp)
+	barrier := NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp)
 
 	// Start scheduler
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
@@ -320,8 +320,4 @@ func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heart
 		tableInfo.TableName = table.TableName
 	}
 	return tableInfo
-}
-
-func (c *Controller) isDDLDispatcher(dispatcherID common.DispatcherID) bool {
-	return dispatcherID == c.ddlDispatcherID
 }

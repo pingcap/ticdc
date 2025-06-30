@@ -329,7 +329,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		},
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
-		}, n, taskScheduler, nil, nil, 10, true)
+		}, n, taskScheduler, nil, 10, true)
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
 		func(ctx context.Context, msg *messaging.TargetMessage) error {
@@ -353,11 +353,11 @@ func TestMaintainerSchedule(t *testing.T) {
 	}, time.Second*2, time.Millisecond*100)
 
 	require.Eventually(t, func() bool {
-		return maintainer.controller.replicationDB.GetReplicatingSize() == tableSize
+		return maintainer.controller.spanController.GetReplicatingSize() == tableSize
 	}, time.Second*2, time.Millisecond*100)
 
 	require.Eventually(t, func() bool {
-		return maintainer.controller.GetTaskSizeByNodeID(n.ID) == tableSize
+		return maintainer.controller.spanController.GetTaskSizeByNodeID(n.ID) == tableSize
 	}, time.Second*2, time.Millisecond*100)
 
 	maintainer.onRemoveMaintainer(false, false)

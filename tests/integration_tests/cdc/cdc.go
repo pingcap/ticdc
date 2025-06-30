@@ -41,7 +41,7 @@ func main() {
 		log.S().Fatal(err)
 	}
 	defer func() {
-		if err := util.CloseDB(sourceDB); err != nil {
+		if err = util.CloseDB(sourceDB); err != nil {
 			log.S().Errorf("Failed to close source database: %s\n", err)
 		}
 	}()
@@ -51,7 +51,7 @@ func main() {
 		log.S().Fatal(err)
 	}
 	defer func() {
-		if err := util.CloseDB(targetDB); err != nil {
+		if err = util.CloseDB(targetDB); err != nil {
 			log.S().Errorf("Failed to close target database: %s\n", err)
 		}
 	}()

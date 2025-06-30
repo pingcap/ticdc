@@ -60,28 +60,29 @@ mysql_groups=(
 	# G14
 	'fail_over_ddl_mix'
 	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	# 'fail_over_ddl_mix_with_syncpoint'
 )
 
+# 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
 	# G00
-	'debezium'
+	'many_pk_or_uk generate_column multi_source'
 	# G01
-	''
+	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
 	# G02
-	''
+	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
-	''
+	'canal_json_adapter_compatibility'
 	# G04
-	''
+	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	''
+	'move_table drop_many_tables'
 	# G06
-	''
+	'cdc default_value'
 	# G07
-	''
+	'resolve_lock force_replicate_table'
 	# G08
-	''
+	'tidb_mysql_test'
 	# G09
 	''
 	# G10
@@ -91,32 +92,33 @@ kafka_groups=(
 	# G12
 	''
 	# G13
-	''
+	'fail_over region_merge'
 	# G14
 	''
 	# G15
-	''
+	'debezium'
 )
 
+# 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
 pulsar_groups=(
 	# G00
-	''
+	'generate_column many_pk_or_uk multi_source'
 	# G01
-	''
+	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
 	# G02
-	''
+	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
-	''
+	'canal_json_adapter_compatibility'
 	# G04
-	''
+	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	''
+	'move_table drop_many_tables'
 	# G06
-	''
+	'cdc default_value'
 	# G07
-	''
+	'resolve_lock force_replicate_table'
 	# G08
-	''
+	'tidb_mysql_test'
 	# G09
 	''
 	# G10
@@ -126,11 +128,11 @@ pulsar_groups=(
 	# G12
 	''
 	# G13
-	''
+	'fail_over region_merge'
 	# G14
 	''
 	# G15
-	''
+	'debezium'
 )
 
 storage_groups=(

@@ -17,20 +17,18 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/maintainer/operator"
-	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/scheduler"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
-	"github.com/pingcap/ticdc/server/watcher"
 )
 
 func NewScheduleController(changefeedID common.ChangeFeedID,
 	batchSize int,
 	oc *operator.Controller,
-	db *replica.ReplicationDB,
-	nodeM *watcher.NodeManager,
+	spanController *span.Controller,
 	balanceInterval time.Duration,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
@@ -40,16 +38,14 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			changefeedID.String(),
 			batchSize,
 			oc,
-			db,
-			nodeM,
+			spanController,
 			schedulerCfg,
 		),
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,
 			batchSize,
 			oc,
-			db,
-			nodeM,
+			spanController,
 			balanceInterval,
 		),
 	}
@@ -59,8 +55,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			batchSize,
 			splitter,
 			oc,
-			db,
-			nodeM,
+			spanController,
 			balanceInterval,
 		)
 	}

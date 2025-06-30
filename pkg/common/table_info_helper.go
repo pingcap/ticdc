@@ -751,61 +751,19 @@ func placeHolder(n int) string {
 func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 	var b strings.Builder
 	nonGeneratedColumnCount := 0
-	for i, col := range s.Columns {
+	for _, col := range s.Columns {
 		if col == nil || col.IsGenerated() {
 			continue
 		}
-		nonGeneratedColumnCount++
-		if i > 0 {
+		// the first column may be generated.
+		if nonGeneratedColumnCount > 0 {
 			b.WriteString(",")
 		}
 		b.WriteString(QuoteName(col.Name.O))
 		if isUpdate {
 			b.WriteString(" = ?")
 		}
+		nonGeneratedColumnCount++
 	}
 	return nonGeneratedColumnCount, b.String()
-}
-
-func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
-	newColumnSchema := &columnSchema{
-		Digest:                        s.Digest,
-		Columns:                       s.Columns,
-		Indices:                       s.Indices,
-		PKIsHandle:                    s.PKIsHandle,
-		IsCommonHandle:                s.IsCommonHandle,
-		UpdateTS:                      s.UpdateTS,
-		ColumnsOffset:                 s.ColumnsOffset,
-		NameToColID:                   s.NameToColID,
-		RowColumnsOffset:              s.RowColumnsOffset,
-		HandleKeyIDs:                  s.HandleKeyIDs,
-		IndexColumns:                  s.IndexColumns,
-		RowColInfos:                   s.RowColInfos,
-		RowColFieldTps:                s.RowColFieldTps,
-		HandleColID:                   s.HandleColID,
-		RowColFieldTpsSlice:           s.RowColFieldTpsSlice,
-		VirtualColumnCount:            s.VirtualColumnCount,
-		RowColInfosWithoutVirtualCols: s.RowColInfosWithoutVirtualCols,
-		PreSQLs:                       s.PreSQLs,
-	}
-	newColumnSchema.Columns = make([]*model.ColumnInfo, 0, len(s.Columns))
-	rowColumnsCurrentOffset := 0
-	columnsOffset := make(map[string]int, len(newColumnSchema.Columns))
-	for _, srcCol := range newColumnSchema.Columns {
-		if !IsColCDCVisible(srcCol) {
-			continue
-		}
-		colInfo := srcCol.Clone()
-		colInfo.Offset = rowColumnsCurrentOffset
-		newColumnSchema.Columns = append(newColumnSchema.Columns, colInfo)
-		columnsOffset[colInfo.Name.O] = rowColumnsCurrentOffset
-		rowColumnsCurrentOffset += 1
-	}
-	// Keep all the index info even if it contains virtual columns for simplicity
-	for _, indexInfo := range newColumnSchema.Indices {
-		for _, col := range indexInfo.Columns {
-			col.Offset = columnsOffset[col.Name.O]
-		}
-	}
-	return newColumnSchema
 }

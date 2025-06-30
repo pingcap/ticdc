@@ -23,9 +23,11 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/cdc/sink/dmlsink/mq/transformer/columnselector"
-	"github.com/pingcap/tiflow/pkg/config"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"go.uber.org/zap"
 )
 
@@ -82,7 +84,7 @@ func main() {
 		}
 	}
 
-	columnFilter, err := columnselector.New(replicaConfig)
+	columnFilter, err := columnselector.New(replicaConfig.Sink)
 	if err != nil {
 		log.Panic("cannot create column filter", zap.Error(err))
 	}
@@ -96,7 +98,7 @@ func main() {
 }
 
 func compareCRC32CheckSum(
-	upstream, downstream *sql.DB, dbNames []string, selector *columnselector.ColumnSelector,
+	upstream, downstream *sql.DB, dbNames []string, selector *columnselector.ColumnSelectors,
 ) error {
 	start := time.Now()
 	source, err := getChecksum(upstream, dbNames, selector)
@@ -138,7 +140,7 @@ func compareCRC32CheckSum(
 }
 
 func getChecksum(
-	db *sql.DB, dbNames []string, selector *columnselector.ColumnSelector,
+	db *sql.DB, dbNames []string, selectors *columnselector.ColumnSelectors,
 ) (map[string]uint32, error) {
 	result := make(map[string]uint32)
 	for _, dbName := range dbNames {
@@ -152,7 +154,7 @@ func getChecksum(
 				_ = tx.Rollback()
 				return nil, errors.Trace(err)
 			}
-			columns, err := getColumns(tx, dbName, table, selector)
+			columns, err := getColumns(tx, dbName, table, selectors.Get(dbName, table))
 			if err != nil {
 				_ = tx.Rollback()
 				return nil, errors.Trace(err)
@@ -187,7 +189,7 @@ func doChecksum(tx *sql.Tx, schema, table string, columns []string) (uint32, err
 	return checkSum, nil
 }
 
-func getColumns(tx *sql.Tx, schema, table string, selector *columnselector.ColumnSelector) (result []string, err error) {
+func getColumns(tx *sql.Tx, schema, table string, selector columnselector.Selector) (result []string, err error) {
 	rows, err := tx.Query(fmt.Sprintf("SHOW COLUMNS FROM %s", schema+"."+table))
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -203,7 +205,8 @@ func getColumns(tx *sql.Tx, schema, table string, selector *columnselector.Colum
 		if err := rows.Scan(&t.Field, &t.Type, &t.Null, &t.Key, &t.Default, &t.Extra); err != nil {
 			return result, errors.Trace(err)
 		}
-		if selector.VerifyColumn(schema, table, t.Field) {
+		colInfo := &model.ColumnInfo{Name: pmodel.NewCIStr(t.Field)}
+		if selector.Select(colInfo) {
 			result = append(result, t.Field)
 		}
 	}

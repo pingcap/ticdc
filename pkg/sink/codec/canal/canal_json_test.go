@@ -292,7 +292,8 @@ func TestStringTypes(t *testing.T) {
 	job := helper.DDL2Job(`create table test.t(
     	id int primary key auto_increment, a char(10) , b varchar(10), c binary(10), d varbinary(10))`)
 
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values ("char","varchar","binary","varbinary")`)
+	// dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values ("char","varchar","binary","varbinary")`)
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t() values (1, "", "", "", "")`)
 	require.NotNil(t, dmlEvent)
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
@@ -300,7 +301,7 @@ func TestStringTypes(t *testing.T) {
 	tableInfo := helper.GetTableInfo(job)
 	rowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
-		CommitTs:       1,
+		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() {},
