@@ -112,7 +112,8 @@ type EventDispatcherManager struct {
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
 	// redo related
-	redoSink     *redo.Sink
+	redoSink *redo.Sink
+	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
 	redoMeta     *redo.RedoMeta
 
@@ -195,10 +196,6 @@ func NewEventDispatcherManager(
 		metricCheckpointTsLag:                  metrics.EventDispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTs:                       metrics.EventDispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTsLag:                    metrics.EventDispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
-		// redo
-		metricRedoTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
-		metricRedoEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
-		metricRedoCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo"),
 	}
 
 	// Set the epoch and maintainerID of the event dispatcher manager
@@ -244,6 +241,11 @@ func NewEventDispatcherManager(
 
 	// redo manager
 	if manager.redoSink.Enabled() {
+		// redo metrics
+		manager.metricRedoTableTriggerEventDispatcherCount = metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo")
+		manager.metricRedoEventDispatcherCount = metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo")
+		manager.metricRedoCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redo")
+
 		// every node
 		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoTsMessageDs(manager)
 		manager.wg.Add(2)
