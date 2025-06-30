@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
-
 	"github.com/stretchr/testify/require"
 )
 
