@@ -45,6 +45,7 @@ type Sink struct {
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal   *atomic.Bool
+	isClosed   *atomic.Bool
 	statistics *metrics.Statistics
 }
 
@@ -76,6 +77,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		},
 		logBuffer:  make(chan writer.RedoEvent, 32),
 		isNormal:   atomic.NewBool(true),
+		isClosed:   atomic.NewBool(false),
 		statistics: metrics.NewStatistics(changefeedID, "redo"),
 	}
 	start := time.Now()
@@ -167,9 +169,11 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
 func (s *Sink) Close(_ bool) {
-	if s.isNormal.CompareAndSwap(true, false) {
-		close(s.logBuffer)
+	if s.isClosed.Load() {
+		return
 	}
+	defer s.isClosed.Store(true)
+	close(s.logBuffer)
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close ddl writer",
