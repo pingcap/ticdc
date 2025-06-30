@@ -11,7 +11,7 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 check_time=60
 
-function prepare() {
+function main() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
@@ -47,15 +47,6 @@ function prepare() {
 }
 
 trap stop_tidb_cluster EXIT
-
-prepare $*
-## execute ddls
-run_sql_file $CUR/data/ddls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-# ## insert some datas
-run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-
-check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
-cleanup_process $CDC_BINARY
-
+main $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

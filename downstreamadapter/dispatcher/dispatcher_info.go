@@ -14,13 +14,12 @@
 package dispatcher
 
 import (
+	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	"go.uber.org/zap"
 )
 
 /*
@@ -102,26 +101,22 @@ func (d *Dispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return d.tableSpan
 }
 
+func (d *Dispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
+	return d.blockStatusesChan
+}
+
 func (d *Dispatcher) GetStartTs() uint64 {
 	return d.startTs
 }
 
-// addToDynamicStream add self to dynamic stream
-func (d *Dispatcher) addToStatusDynamicStream() {
-	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDS.AddPath(d.id, d)
-	if err != nil {
-		log.Error("add dispatcher to dynamic stream failed",
-			zap.Stringer("changefeedID", d.changefeedID),
-			zap.Stringer("dispatcher", d.id),
-			zap.Error(err))
-	}
+func (d *Dispatcher) GetType() int {
+	return TypeDispatcherCommon
 }
 
 // SetStartTs only be called after the dispatcher is created
 func (d *Dispatcher) SetStartTs(startTs uint64) {
-	d.startTs = startTs
-	d.resolvedTs = startTs
+	atomic.StoreUint64(&d.startTs, startTs)
+	atomic.StoreUint64(&d.resolvedTs, startTs)
 }
 
 func (d *Dispatcher) SetCurrentPDTs(currentPDTs uint64) {

@@ -359,8 +359,9 @@ func isGenerated(flag uint64) bool {
 }
 
 func initColumnFlags(tableInfo *commonType.TableInfo) map[string]uint64 {
-	result := make(map[string]uint64, len(tableInfo.GetColumns()))
-	for _, col := range tableInfo.GetColumns() {
+	colInfos := tableInfo.GetColumns()
+	result := make(map[string]uint64, len(colInfos))
+	for _, col := range colInfos {
 		var flag uint64
 		if col.GetCharset() == "binary" {
 			flag |= binaryFlag
@@ -408,7 +409,7 @@ func initColumnFlags(tableInfo *commonType.TableInfo) map[string]uint64 {
 			if len(idxInfo.Columns) > 1 {
 				flag |= multipleKeyFlag
 			}
-			colInfo := tableInfo.GetColumns()[idxCol.Offset]
+			colInfo := colInfos[idxCol.Offset]
 			if colInfo.IsGenerated() {
 				continue
 			}

@@ -54,7 +54,7 @@ func TestSchedule(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, nil, ddlSpan, 9, time.Minute)
+	controller := NewController(cfID, 1, nil, nil, nil, ddlSpan, nil, 9, time.Minute)
 	for i := 0; i < 10; i++ {
 		controller.spanController.AddNewTable(commonEvent.Table{
 			SchemaID: 1,
@@ -85,7 +85,7 @@ func TestRemoveAbsentTask(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, nil, ddlSpan, 9, time.Minute)
+	controller := NewController(cfID, 1, nil, nil, nil, ddlSpan, nil, 9, time.Minute)
 	controller.spanController.AddNewTable(commonEvent.Table{
 		SchemaID: 1,
 		TableID:  int64(1),
@@ -107,7 +107,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, nil, 1000, 0)
 
 	nodeID := node.ID("node1")
 	for i := 0; i < 100; i++ {
@@ -115,7 +115,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 		totalSpan := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		spanReplica.SetNodeID(nodeID)
 		s.spanController.AddReplicatingSpan(spanReplica)
 	}
@@ -178,13 +178,13 @@ func TestBalanceGlobalUneven(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, nil, 1000, 0)
 	for i := 0; i < 100; i++ {
 		// generate 100 groups
 		totalSpan := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		if i < 50 {
 			spanReplica.SetNodeID("node1")
 		} else {
@@ -252,12 +252,12 @@ func TestBalance(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, nil, 1000, 0)
 	for i := 0; i < 100; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		spanReplica.SetNodeID("node1")
 		s.spanController.AddReplicatingSpan(spanReplica)
 	}
@@ -318,12 +318,12 @@ func TestStoppedWhenMoving(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, nil, 1000, 0)
 	for i := 0; i < 2; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		spanReplica.SetNodeID("node1")
 		s.spanController.AddReplicatingSpan(spanReplica)
 	}
@@ -361,7 +361,7 @@ func TestFinishBootstrap(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	s := NewController(cfID, 1, nil, &mockThreadPool{},
-		config.GetDefaultReplicaConfig(), ddlSpan, 1000, 0)
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0)
 	totalSpan := common.TableIDToComparableSpan(1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	schemaStore := &mockSchemaStore{
@@ -376,7 +376,7 @@ func TestFinishBootstrap(t *testing.T) {
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 	dispatcherID2 := common.NewDispatcherID()
 	require.False(t, s.bootstrapped)
-	barrier, msg, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	msg, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"node1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -393,7 +393,7 @@ func TestFinishBootstrap(t *testing.T) {
 	}, false)
 	_ = msg
 	require.Nil(t, err)
-	require.NotNil(t, barrier)
+	require.NotNil(t, s.barrier)
 	require.True(t, s.bootstrapped)
 	require.Equal(t, msg.GetSchemas(), []*heartbeatpb.SchemaInfo{
 		{
@@ -412,7 +412,7 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Equal(t, 0, s.spanController.GetSchedulingSize())
 	require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
 	require.Panics(t, func() {
-		_, _, _ = s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false)
+		_, _ = s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false)
 	})
 }
 
@@ -430,13 +430,13 @@ func TestBalanceUnEvenTask(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, nil, 1000, 0)
 
 	for i := 0; i < 4; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, false)
 		s.spanController.AddAbsentReplicaSet(spanReplica)
 	}
 	for _, s := range s.schedulerController.GetSchedulers() {
@@ -524,7 +524,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 		WriteKeyThreshold:      1,
 	}
 	s := NewController(cfID, 1,
-		pdAPI, pdClock, nil, nil, defaultConfig, ddlSpan, 1000, 0)
+		pdAPI, pdClock, nil, nil, defaultConfig, ddlSpan, nil,1000, 0)
 	s.taskScheduler = &mockThreadPool{}
 	schemaStore := &mockSchemaStore{tables: []commonEvent.Table{
 		{TableID: 1, SchemaID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t"}},
@@ -608,7 +608,7 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 				RegionThreshold:        0,
 				WriteKeyThreshold:      1,
 			},
-		}, ddlSpan, 1000, 0)
+		}, ddlSpan, nil,1000, 0)
 	s.taskScheduler = &mockThreadPool{}
 
 	for i := 1; i <= 2; i++ {
@@ -696,7 +696,7 @@ func TestDynamicMergeAndSplitTable(t *testing.T) {
 				RegionThreshold:        0,
 				WriteKeyThreshold:      1,
 			},
-		}, ddlSpan, 1000, 0)
+		}, ddlSpan, nil, 1000, 0)
 	s.taskPool = &mockThreadPool{}
 
 	totalTables := 10
@@ -790,7 +790,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 				WriteKeyThreshold:      1,
 				SplitNumberPerNode:     1,
 			},
-		}, ddlSpan, 1000, 0)
+		}, ddlSpan, nil, 1000, 0)
 	s.taskPool = &mockThreadPool{}
 
 	mockPDClock := pdutil.NewClockWithValue4Test(time.Unix(0, 0))

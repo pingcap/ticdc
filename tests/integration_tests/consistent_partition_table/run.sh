@@ -39,7 +39,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 	# Inject the failpoint to prevent sink execution, but the global resolved can be moved forward.
 	# Then we can apply redo log to reach an eventual consistent state in downstream.
-	export GO_FAILPOINTS='github.com/pingcap/tiflow/cdc/sink/dmlsink/txn/mysql/MySQLSinkHangLongTime=return(true);github.com/pingcap/tiflow/cdc/sink/ddlsink/mysql/MySQLSinkExecDDLDelay=return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true);github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix partition_table.server2
 
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -51,16 +51,12 @@ function run() {
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
 	export GO_FAILPOINTS=''
 
-	rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
-	sed "s/<placeholder>/$rts/g" $CUR/conf/diff_config.toml >$WORK_DIR/diff_config.toml
-
-	cat $WORK_DIR/diff_config.toml
 	cdc redo apply --tmp-dir="$tmp_download_path/apply" \
 		--storage="$storage_path" \
 		--sink-uri="mysql://normal:123456@127.0.0.1:3306/"
 
 	# check_table_exists "partition_table.finish_mark" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
-	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 }
 
 trap stop EXIT

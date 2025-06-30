@@ -244,7 +244,11 @@ func (d *dispatcherStat) resume() {
 }
 
 func (d *dispatcherStat) wake() {
-	d.eventCollector.ds.Wake(d.getDispatcherID())
+	if dispatcher.IsRedoDispatcher(d.target) {
+		d.eventCollector.redoDs.Wake(d.getDispatcherID())
+	} else {
+		d.eventCollector.ds.Wake(d.getDispatcherID())
+	}
 }
 
 func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
@@ -639,6 +643,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			OnlyReuse:         onlyReuse,
 			BdrMode:           d.target.GetBDRMode(),
+			Redo:              dispatcher.IsRedoDispatcher(d.target),
 			Timezone:          d.target.GetTimezone(),
 			Integrity:         d.target.GetIntegrityConfig(),
 		},
@@ -659,6 +664,8 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64) *messaging.Di
 			FilterConfig:      d.target.GetFilterConfig(),
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
+			BdrMode:           d.target.GetBDRMode(),
+			Redo:              dispatcher.IsRedoDispatcher(d.target),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 		},
 	}
