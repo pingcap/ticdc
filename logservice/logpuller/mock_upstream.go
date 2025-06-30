@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/stretchr/testify/require"
 	pdClient "github.com/tikv/pd/client"
+	pdClientOpt "github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -83,7 +84,7 @@ type mockPDClient struct {
 
 var _ pdClient.Client = &mockPDClient{}
 
-func (m *mockPDClient) GetAllStores(ctx context.Context, _ ...pdClient.GetStoreOption) ([]*metapb.Store, error) {
+func (m *mockPDClient) GetAllStores(ctx context.Context, _ ...pdClientOpt.GetStoreOption) ([]*metapb.Store, error) {
 	s, err := m.Client.GetAllStores(ctx)
 	if err != nil {
 		return nil, err

@@ -22,6 +22,7 @@ import (
 type Event interface {
 	GetType() int
 	GetSeq() uint64
+	GetEpoch() uint64
 	GetDispatcherID() common.DispatcherID
 	GetCommitTs() common.Ts
 	GetStartTs() common.Ts
