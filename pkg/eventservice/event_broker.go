@@ -19,8 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/metrics"
-
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -32,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
