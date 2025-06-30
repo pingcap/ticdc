@@ -7,7 +7,6 @@ shift
 for ((i = 1; i <= $total; i++)); do
 	# run the command
 	echo "command: $*"
-	# bash -c "${command} \"\$@\"" _ "$@"
 	bash -c "$*"
 	if [ $? == 0 ]; then
 		echo "run task successfully"
