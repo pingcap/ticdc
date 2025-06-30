@@ -28,7 +28,6 @@ type BatchResolvedEvent struct {
 	// Version is the version of the BatchResolvedEvent struct.
 	Version byte
 	Events  []ResolvedEvent
-	Epoch   uint64
 }
 
 func (b BatchResolvedEvent) GetType() int {
@@ -56,7 +55,8 @@ func (b *BatchResolvedEvent) GetSeq() uint64 {
 }
 
 func (b *BatchResolvedEvent) GetEpoch() uint64 {
-	return b.Epoch
+	// It's a fake epoch.
+	return 0
 }
 
 func (b *BatchResolvedEvent) Len() int32 {
