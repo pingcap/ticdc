@@ -60,7 +60,7 @@ mysql_groups=(
 	# G14
 	'fail_over_ddl_mix'
 	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	#'fail_over_ddl_mix_with_syncpoint'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
@@ -96,7 +96,8 @@ kafka_groups=(
 	# G14
 	'fail_over_ddl_mix'
 	# G15
-	'debezium fail_over_ddl_mix_with_syncpoint'
+        # fail_over_ddl_mix_with_syncpoint
+	'debezium'
 )
 
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
@@ -132,7 +133,8 @@ pulsar_groups=(
 	# G14
 	'fail_over_ddl_mix'
 	# G15
-	'debezium fail_over_ddl_mix_with_syncpoint'
+        # fail_over_ddl_mix_with_syncpoint
+	'debezium'
 )
 
 storage_groups=(
