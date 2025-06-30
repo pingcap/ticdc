@@ -153,37 +153,39 @@ pulsar_groups=(
 # 6 CPU, 16 Gi memory.
 storage_groups=(
 	# G00
-	'lossy_ddl'
+	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	'storage_cleanup'
+	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
 	# G02
-	'csv_storage_basic'
+	'new_ci_collation savepoint fail_over_ddl_C'
 	# G03
-	'csv_storage_multi_tables_ddl'
+	'kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	''
+	# multi_capture
+	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
-	''
+	'vector simple partition_table fail_over_ddl_F'
 	# G06
-	''
+	'lossy_ddl fail_over_ddl_G'
 	# G07
-	''
+	'storage_cleanup fail_over_ddl_H'
 	# G08
-	''
+	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
-	''
+	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
-	''
+	'changefeed_error batch_add_table fail_over_ddl_K'
 	# G11
-	''
+	# ddl_attributes
+	'multi_tables_ddl fail_over_ddl_L'
 	# G12
-	''
+	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13
-	''
+	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	''
+	'csv_storage_basic csv_storage_multi_tables_ddl fail_over_ddl_O'
 	# G15
-	''
+	'split_region autorandom gc_safepoint'
 )
 
 # Source shared functions and check test coverage

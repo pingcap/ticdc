@@ -70,7 +70,7 @@ kafka_groups=(
 	# G01
 	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
 	# G02
-	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table'
+	'canal_json_handle_key_only'
 	# G03
 	'canal_json_adapter_compatibility'
 	# G04
@@ -106,7 +106,7 @@ pulsar_groups=(
 	# G01
 	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
 	# G02
-	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table'
+	'canal_json_handle_key_only'
 	# G03
 	'canal_json_adapter_compatibility'
 	# G04
@@ -137,23 +137,23 @@ pulsar_groups=(
 
 storage_groups=(
 	# G00
-	''
+	'many_pk_or_uk generate_column multi_source'
 	# G01
 	''
 	# G02
-	''
+	'canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
 	''
 	# G04
-	''
+	' '
 	# G05
-	''
+	'move_table drop_many_tables'
 	# G06
-	''
+	'cdc default_value'
 	# G07
-	''
+	'resolve_lock force_replicate_table'
 	# G08
-	''
+	'tidb_mysql_test'
 	# G09
 	''
 	# G10
@@ -163,7 +163,7 @@ storage_groups=(
 	# G12
 	''
 	# G13
-	''
+	'fail_over region_merge'
 	# G14
 	''
 	# G15
