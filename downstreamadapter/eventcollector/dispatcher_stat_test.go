@@ -119,6 +119,7 @@ type mockEvent struct {
 	size         int64
 	isPaused     bool
 	len          int32
+	epoch        uint64
 }
 
 func (m *mockEvent) GetType() int {
@@ -127,6 +128,10 @@ func (m *mockEvent) GetType() int {
 
 func (m *mockEvent) GetSeq() uint64 {
 	return m.seq
+}
+
+func (m *mockEvent) GetEpoch() uint64 {
+	return m.epoch
 }
 
 func (m *mockEvent) GetDispatcherID() common.DispatcherID {

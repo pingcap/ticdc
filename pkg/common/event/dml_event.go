@@ -214,6 +214,10 @@ func (b *BatchDMLEvent) GetSeq() uint64 {
 	return b.DMLEvents[len(b.DMLEvents)-1].Seq
 }
 
+func (b *BatchDMLEvent) GetEpoch() uint64 {
+	return b.DMLEvents[len(b.DMLEvents)-1].Epoch
+}
+
 func (b *BatchDMLEvent) GetDispatcherID() common.DispatcherID {
 	return b.DMLEvents[len(b.DMLEvents)-1].DispatcherID
 }
@@ -257,6 +261,8 @@ type DMLEvent struct {
 	CommitTs        uint64              `json:"commit_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
+	// Epoch is the epoch of the event. It is set by event service.
+	Epoch uint64 `json:"epoch"`
 	// State is the state of sender when sending this event.
 	State EventSenderState `json:"state"`
 	// Length is the number of rows in the transaction.
@@ -378,6 +384,10 @@ func (t *DMLEvent) PostFlush() {
 
 func (t *DMLEvent) GetSeq() uint64 {
 	return t.Seq
+}
+
+func (t *DMLEvent) GetEpoch() uint64 {
+	return t.Epoch
 }
 
 func (t *DMLEvent) PushFrontFlushFunc(f func()) {

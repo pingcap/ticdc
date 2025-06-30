@@ -54,6 +54,11 @@ func (e *NotReusableEvent) GetSeq() uint64 {
 	return 0
 }
 
+func (e *NotReusableEvent) GetEpoch() uint64 {
+	// not used
+	return 0
+}
+
 // GetDispatcherID returns the dispatcher ID
 func (e *NotReusableEvent) GetDispatcherID() common.DispatcherID {
 	return e.DispatcherID

@@ -56,6 +56,8 @@ type DDLEvent struct {
 	FinishedTs      uint64            `json:"finished_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
+	// The epoch of the event. It is set by event service.
+	Epoch uint64 `json:"epoch"`
 	// State is the state of sender when sending this event.
 	State EventSenderState `json:"state"`
 	// MultipleTableInfos holds information for multiple versions of a table.
@@ -200,6 +202,10 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 
 func (d *DDLEvent) GetSeq() uint64 {
 	return d.Seq
+}
+
+func (d *DDLEvent) GetEpoch() uint64 {
+	return d.Epoch
 }
 
 func (d *DDLEvent) ClearPostFlushFunc() {

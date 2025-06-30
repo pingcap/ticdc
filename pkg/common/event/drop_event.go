@@ -32,15 +32,22 @@ type DropEvent struct {
 	DispatcherID    common.DispatcherID
 	DroppedSeq      uint64
 	DroppedCommitTs common.Ts
+	DroppedEpoch    uint64
 }
 
 // NewDropEvent creates a new DropEvent
-func NewDropEvent(dispatcherID common.DispatcherID, seq uint64, commitTs common.Ts) *DropEvent {
+func NewDropEvent(
+	dispatcherID common.DispatcherID,
+	seq uint64,
+	epoch uint64,
+	commitTs common.Ts,
+) *DropEvent {
 	return &DropEvent{
 		Version:         DropEventVersion,
 		DispatcherID:    dispatcherID,
 		DroppedSeq:      seq,
 		DroppedCommitTs: commitTs,
+		DroppedEpoch:    epoch,
 	}
 }
 
@@ -52,6 +59,10 @@ func (e *DropEvent) GetType() int {
 // GetSeq returns the sequence number of the dropped event
 func (e *DropEvent) GetSeq() uint64 {
 	return e.DroppedSeq
+}
+
+func (e *DropEvent) GetEpoch() uint64 {
+	return e.DroppedEpoch
 }
 
 // GetDispatcherID returns the dispatcher ID
