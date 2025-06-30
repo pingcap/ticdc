@@ -47,8 +47,8 @@ function run() {
 	run_sql "CREATE table mq_sink_error_resume.t2(id int primary key auto_increment, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO mq_sink_error_resume.t1 VALUES ();" &
 
-	ensure $MAX_RETRIES check_changefeed_status "127.0.0.1:8300" "$changefeed_id" "warning" "last_warning" "$SINK_TYPE sink injected error"
-	ensure $MAX_RETRIES check_changefeed_status 127.0.0.1:8300 $changefeed_id "normal"
+	ensure $MAX_RETRIES "check_changefeed_status '127.0.0.1:8300' '$changefeed_id' 'warning' 'last_warning' '$SINK_TYPE sink injected error'"
+	ensure $MAX_RETRIES "check_changefeed_status '127.0.0.1:8300' '$changefeed_id' 'normal'"
 
 	check_table_exists "mq_sink_error_resume.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "mq_sink_error_resume.t2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
