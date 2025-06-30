@@ -29,7 +29,13 @@ type dispatcherCreateInfo struct {
 	SchemaID  int64
 }
 
-func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {
+type cleanMap struct {
+	id       common.DispatcherID
+	schemaID int64
+	redo     bool
+}
+
+func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.Dispatcher] {
 	return e.dispatcherMap
 }
 

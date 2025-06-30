@@ -199,3 +199,5 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		}
 	}
 }
+
+func (s *Sink) AddCheckpointTs(_ uint64) {}
