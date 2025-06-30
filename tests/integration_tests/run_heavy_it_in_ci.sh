@@ -84,7 +84,7 @@ kafka_groups=(
 	# G08
 	'tidb_mysql_test'
 	# G09
-	''
+	'mq_sink_error_resume'
 	# G10
 	''
 	# G11
@@ -120,7 +120,7 @@ pulsar_groups=(
 	# G08
 	'tidb_mysql_test'
 	# G09
-	''
+	'mq_sink_error_resume'
 	# G10
 	''
 	# G11

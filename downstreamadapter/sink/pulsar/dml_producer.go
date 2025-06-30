@@ -36,6 +36,8 @@ type dmlProducer interface {
 		ctx context.Context, topic string, message *common.Message,
 	) error
 
+	run(ctx context.Context) error
+
 	close()
 }
 
@@ -106,6 +108,17 @@ func newDMLProducers(
 	log.Info("Pulsar DML producer created", zap.Stringer("changefeed", p.changefeedID),
 		zap.Duration("duration", time.Since(start)))
 	return p, nil
+}
+
+func (p *dmlProducers) run(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-p.failpointCh:
+			return errors.Trace(err)
+		}
+	}
 }
 
 // asyncSendMessage  Async send one message
