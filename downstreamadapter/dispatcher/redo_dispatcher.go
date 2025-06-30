@@ -21,7 +21,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -46,7 +46,7 @@ type RedoDispatcher struct {
 	filterConfig *eventpb.FilterConfig
 
 	// shared by the event dispatcher manager
-	redoSink *redo.Sink
+	redoSink sink.Sink
 
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
@@ -93,7 +93,7 @@ func NewRedoDispatcher(
 	changefeedID common.ChangeFeedID,
 	id common.DispatcherID,
 	tableSpan *heartbeatpb.TableSpan,
-	redoSink *redo.Sink,
+	redoSink sink.Sink,
 	startTs uint64,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,

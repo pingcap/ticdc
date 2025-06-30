@@ -39,10 +39,6 @@ func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.D
 	return e.dispatcherMap
 }
 
-func (e *EventDispatcherManager) GetRedoDispatcherMap() *DispatcherMap[*dispatcher.RedoDispatcher] {
-	return e.redoDispatcherMap
-}
-
 func (e *EventDispatcherManager) GetMaintainerID() node.ID {
 	e.meta.Lock()
 	defer e.meta.Unlock()
@@ -65,10 +61,6 @@ func (e *EventDispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.Di
 	return e.tableTriggerEventDispatcher
 }
 
-func (e *EventDispatcherManager) GetRedoTableTriggerEventDispatcher() *dispatcher.RedoDispatcher {
-	return e.redoTableTriggerEventDispatcher
-}
-
 func (e *EventDispatcherManager) SetHeartbeatRequestQueue(heartbeatRequestQueue *HeartbeatRequestQueue) {
 	e.heartbeatRequestQueue = heartbeatRequestQueue
 }
@@ -78,14 +70,7 @@ func (e *EventDispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQu
 }
 
 // Get all dispatchers id of the specified schemaID. Including the tableTriggerEventDispatcherID if exists.
-func (e *EventDispatcherManager) GetAllDispatchers(schemaID int64, redo bool) []common.DispatcherID {
-	if redo {
-		dispatcherIDs := e.redoSchemaIDToDispatchers.GetDispatcherIDs(schemaID)
-		if e.redoTableTriggerEventDispatcher != nil {
-			dispatcherIDs = append(dispatcherIDs, e.redoTableTriggerEventDispatcher.GetId())
-		}
-		return dispatcherIDs
-	}
+func (e *EventDispatcherManager) GetAllDispatchers(schemaID int64) []common.DispatcherID {
 	dispatcherIDs := e.schemaIDToDispatchers.GetDispatcherIDs(schemaID)
 	if e.tableTriggerEventDispatcher != nil {
 		dispatcherIDs = append(dispatcherIDs, e.tableTriggerEventDispatcher.GetId())

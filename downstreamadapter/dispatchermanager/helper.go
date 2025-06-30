@@ -326,7 +326,12 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 		case heartbeatpb.InfluenceType_DB:
 			schemaID := dispatcherStatus.InfluencedDispatchers.SchemaID
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
-			dispatcherIds := eventDispatcherManager.GetAllDispatchers(schemaID, heartbeatResponse.Redo)
+			var dispatcherIds []common.DispatcherID
+			if heartbeatResponse.Redo {
+				dispatcherIds = eventDispatcherManager.GetAllRedoDispatchers(schemaID)
+			} else {
+				dispatcherIds = eventDispatcherManager.GetAllDispatchers(schemaID)
+			}
 			for _, id := range dispatcherIds {
 				if id != excludeDispatcherID {
 					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
