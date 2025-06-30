@@ -94,7 +94,7 @@ var (
 		Subsystem: "dispatcher",
 		Name:      "received_event_count",
 		Help:      "The number of events received by the dispatcher",
-	}, []string{"type"})
+	}, []string{"type", "event_type"})
 
 	EventCollectorRegisteredDispatcherCount = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "ticdc",
