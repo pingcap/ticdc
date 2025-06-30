@@ -19,6 +19,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 )
 
+// StatefulRts stores both the flushed and unflushed ts.
+// unflushed stores ts in memory
+// flushed stores ts on disk
 type statefulRts struct {
 	flushed   atomic.Uint64
 	unflushed atomic.Uint64
