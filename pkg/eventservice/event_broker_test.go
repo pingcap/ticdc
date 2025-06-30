@@ -48,11 +48,6 @@ func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	return newMockDispatcherInfo(t, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
 }
 
-type notifyMsg struct {
-	resolvedTs     uint64
-	latestCommitTs uint64
-}
-
 func TestCheckNeedScan(t *testing.T) {
 	broker, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
