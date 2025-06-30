@@ -63,9 +63,6 @@ type sink struct {
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
 	ctx      context.Context
-	// failpointCh is used to inject failpoints to the run loop.
-	// Only used in test.
-	failpointCh chan error
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -117,9 +114,8 @@ func New(
 		eventChan:      make(chan *commonEvent.DMLEvent, 32),
 		rowChan:        make(chan *commonEvent.MQRowEvent, 32),
 
-		isNormal:    atomic.NewBool(true),
-		ctx:         ctx,
-		failpointCh: make(chan error, 1),
+		isNormal: atomic.NewBool(true),
+		ctx:      ctx,
 	}, nil
 }
 
