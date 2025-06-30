@@ -108,22 +108,23 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 }
 
 const (
-	DataGroupResolvedTsOrDML = 1
-	DataGroupDDL             = 2
-	DataGroupSyncPoint       = 3
-	DataGroupHandshake       = 4
-	DataGroupReady           = 5
-	DataGroupNotReusable     = 6
-	DataGroupBatchDML        = 7
-	DataGroupDrop            = 8
+	DataGroupResolvedTs = iota + 1
+	DataGroupDML
+	DataGroupDDL
+	DataGroupSyncPoint
+	DataGroupHandshake
+	DataGroupReady
+	DataGroupNotReusable
+	DataGroupBatchDML
+	DataGroupDrop
 )
 
 func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.EventType {
 	switch event.GetType() {
 	case commonEvent.TypeResolvedEvent:
-		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.PeriodicSignal, Droppable: true}
+		return dynstream.EventType{DataGroup: DataGroupResolvedTs, Property: dynstream.PeriodicSignal, Droppable: true}
 	case commonEvent.TypeDMLEvent:
-		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.BatchableData, Droppable: true}
+		return dynstream.EventType{DataGroup: DataGroupDML, Property: dynstream.BatchableData, Droppable: true}
 	case commonEvent.TypeDDLEvent:
 		return dynstream.EventType{DataGroup: DataGroupDDL, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeSyncPointEvent:
