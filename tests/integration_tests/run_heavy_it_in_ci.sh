@@ -96,7 +96,7 @@ kafka_groups=(
 	# G14
 	'fail_over_ddl_mix'
 	# G15
-        # fail_over_ddl_mix_with_syncpoint
+	# fail_over_ddl_mix_with_syncpoint
 	'debezium'
 )
 
@@ -133,7 +133,7 @@ pulsar_groups=(
 	# G14
 	'fail_over_ddl_mix'
 	# G15
-        # fail_over_ddl_mix_with_syncpoint
+	# fail_over_ddl_mix_with_syncpoint
 	'debezium'
 )
 
