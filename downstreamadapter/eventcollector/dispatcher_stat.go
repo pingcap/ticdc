@@ -365,8 +365,8 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 }
 
 // handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
-// 1. First pass: Check if there are any valid events from current event service and if any events are from stale services
-//   - Valid events must come from current event service and have valid sequence numbers
+// 1. First pass: Check if there are any valid events from current epoch and if any events are from stale epoch
+//   - Valid events must come from current epoch and have valid sequence numbers
 //   - If any event has invalid sequence, reset dispatcher and return false
 //
 // 2. Second pass: Filter events based on whether there are stale events
@@ -421,7 +421,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 
 // handleSingleDataEvents processes single DDL, SyncPoint or BatchDML events with the following algorithm:
 // 1. Validate event count (must be exactly 1)
-// 2. Check if event comes from current event service
+// 2. Check if event comes from current epoch
 // 3. Verify event sequence number
 // 4. Process event based on type:
 //   - BatchDML: Split into individual DML events
