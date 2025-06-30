@@ -512,6 +512,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
+	var count uint64
+	c.dispatchers.Range(func(key, value interface{}) bool {
+		if value.(*dispatcherStat).isReadyRecevingData.Load() {
+			count++
+		}
+		return true
+	})
+	available = max(1024*1024*8, available/count)
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
 	sl := calculateScanLimit(task, available)
 

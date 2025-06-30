@@ -222,7 +222,7 @@ func (s *eventScanner) scanAndMergeEvents(
 				return nil, false, err
 			}
 
-			if uint64(processor.batchDML.GetSize()+processor.currentDML.GetSize()) > session.limit.maxDMLBytes {
+			if processor.dmlSize() > session.limit.maxDMLBytes {
 				return s.interruptScan(session, merger, processor)
 			}
 		}
@@ -610,6 +610,17 @@ func (p *dmlProcessor) shouldFlushBatch(tableInfoUpdateTs uint64, hasNewDDL bool
 func (p *dmlProcessor) flushBatch(tableInfoUpdateTs uint64) {
 	p.lastTableInfoUpdateTs = tableInfoUpdateTs
 	p.batchDML = pevent.NewBatchDMLEvent()
+}
+
+func (p *dmlProcessor) dmlSize() uint64 {
+	var result uint64
+	if p.batchDML != nil {
+		result += uint64(p.batchDML.GetSize())
+	}
+	if p.currentDML != nil {
+		result += uint64(p.currentDML.GetSize())
+	}
+	return result
 }
 
 // errorHandler manages error handling for different scenarios
