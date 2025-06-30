@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"bytes"
+	"context"
 	"time"
 
 	"github.com/pingcap/log"
@@ -234,9 +235,14 @@ func (c *Controller) handleTableHoles(
 	tableSpan *heartbeatpb.TableSpan,
 ) {
 	holes := findHoles(tableSpans, tableSpan)
-	// TODO: split the hole
-	// Add holes to the replicationDB
-	c.spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+	if c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
+		for _, hole := range holes {
+			spans := c.splitter.SplitSpansByRegion(context.Background(), hole, 0)
+			c.spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
+		}
+	} else {
+		c.spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+	}
 }
 
 func (c *Controller) handleRemainingWorkingTasks(

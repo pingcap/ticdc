@@ -45,6 +45,8 @@ type Controller struct {
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
 
+	splitter *split.Splitter
+
 	startCheckpointTs uint64
 
 	cfConfig     *config.ReplicaConfig
@@ -105,6 +107,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		cfConfig:               cfConfig,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		batchSize:              batchSize,
+		splitter:               splitter,
 	}
 }
 
