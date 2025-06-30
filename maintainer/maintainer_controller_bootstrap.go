@@ -237,7 +237,7 @@ func (c *Controller) handleTableHoles(
 	holes := findHoles(tableSpans, tableSpan)
 	if c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
 		for _, hole := range holes {
-			spans := c.splitter.SplitSpansByRegion(context.Background(), hole, 0)
+			spans := c.splitter.Split(context.Background(), hole, 0, replica.SplitByRegion)
 			c.spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
 		}
 	} else {

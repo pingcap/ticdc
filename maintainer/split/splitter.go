@@ -16,36 +16,28 @@ package split
 import (
 	"context"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/tikv"
-)
-
-const (
-	// spanRegionLimit is the maximum number of regions a span can cover.
-	spanRegionLimit = 50000
-	// DefaultMaxSpanNumber is the maximum number of spans that can be split
-	// in single batch.
-	DefaultMaxSpanNumber = 100
+	"go.uber.org/zap"
 )
 
 // RegionCache is a simplified interface of tikv.RegionCache.
 // It is useful to restrict RegionCache usage and mocking in tests.
-// TODO: change the function to get regions faster
 type RegionCache interface {
 	// ListRegionIDsInKeyRange lists ids of regions in [startKey,endKey].
-	ListRegionIDsInKeyRange(
+	LoadRegionsInKeyRange(
 		bo *tikv.Backoffer, startKey, endKey []byte,
-	) (regionIDs []uint64, err error)
-	// LocateRegionByID searches for the region with ID.
-	LocateRegionByID(bo *tikv.Backoffer, regionID uint64) (*tikv.KeyLocation, error)
+	) (regions []*tikv.Region, err error)
 }
 
 type splitter interface {
 	split(
-		ctx context.Context, span *heartbeatpb.TableSpan, totalCaptures int,
+		ctx context.Context, span *heartbeatpb.TableSpan, spansNum int,
 	) []*heartbeatpb.TableSpan
 }
 
@@ -68,25 +60,18 @@ func NewSplitter(
 	}
 }
 
-func (s *Splitter) SplitSpansByRegion(ctx context.Context,
+func (s *Splitter) Split(ctx context.Context,
 	span *heartbeatpb.TableSpan, spansNum int,
+	splitType replica.SplitType,
 ) []*heartbeatpb.TableSpan {
 	spans := []*heartbeatpb.TableSpan{span}
-	spans = s.regionCounterSplitter.split(ctx, span, spansNum)
-	if len(spans) > 1 {
-		return spans
-	}
-	return spans
-}
-
-func (s *Splitter) SplitSpansByWriteKey(ctx context.Context,
-	span *heartbeatpb.TableSpan,
-	spansNum int,
-) []*heartbeatpb.TableSpan {
-	spans := []*heartbeatpb.TableSpan{span}
-	spans = s.writeKeySplitter.split(ctx, span, spansNum)
-	if len(spans) > 1 {
-		return spans
+	switch splitType {
+	case replica.SplitByRegion:
+		spans = s.regionCounterSplitter.split(ctx, span, spansNum)
+	case replica.SplitByTraffic:
+		spans = s.writeKeySplitter.split(ctx, span, spansNum)
+	default:
+		log.Warn("splitter: unknown split type", zap.Any("splitType", splitType))
 	}
 	return spans
 }

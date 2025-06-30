@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -122,12 +121,7 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 		// so we just split the span to 2 * cdc-nodes
 		// TODO: consider to make 2 a config
 		spansNum := len(s.nodeManager.GetAliveNodes()) * 2
-		var splitSpans []*heartbeatpb.TableSpan
-		if result.SplitType == replica.SplitByTraffic {
-			splitSpans = s.splitter.SplitSpansByWriteKey(context.Background(), result.Span.Span, spansNum)
-		} else if result.SplitType == replica.SplitByRegion {
-			splitSpans = s.splitter.SplitSpansByRegion(context.Background(), result.Span.Span, spansNum)
-		}
+		splitSpans := s.splitter.Split(context.Background(), result.Span.Span, spansNum, result.SplitType)
 		if len(splitSpans) > 1 {
 			op := operator.NewSplitDispatcherOperator(s.spanController, result.Span, splitSpans)
 			ret := s.operatorController.AddOperator(op)

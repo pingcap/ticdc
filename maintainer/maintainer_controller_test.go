@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	pkgOpearator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
@@ -905,6 +906,80 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 		op.PostFinish()
 	}
 	require.Equal(t, totalTables, s.spanController.GetAbsentSize())
+}
+
+func TestMapFindHole(t *testing.T) {
+	cases := []struct {
+		spans        []*heartbeatpb.TableSpan
+		rang         *heartbeatpb.TableSpan
+		expectedHole []*heartbeatpb.TableSpan
+	}{
+		{ // 0. all found.
+			spans: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
+				{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")},
+				{StartKey: []byte("t1_2"), EndKey: []byte("t2_0")},
+			},
+			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+		},
+		{ // 1. on hole in the middle.
+			spans: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
+				{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")},
+				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+			},
+			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			expectedHole: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_1"), EndKey: []byte("t1_3")},
+			},
+		},
+		{ // 2. two holes in the middle.
+			spans: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
+				{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")},
+				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+			},
+			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			expectedHole: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")},
+				{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")},
+			},
+		},
+		{ // 3. all missing.
+			spans: []*heartbeatpb.TableSpan{},
+			rang:  &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			expectedHole: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			},
+		},
+		{ // 4. start not found
+			spans: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+			},
+			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			expectedHole: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_0"), EndKey: []byte("t1_4")},
+			},
+		},
+		{ // 5. end not found
+			spans: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
+			},
+			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			expectedHole: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_1"), EndKey: []byte("t2_0")},
+			},
+		},
+	}
+
+	for i, cs := range cases {
+		m := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
+		for _, span := range cs.spans {
+			m.ReplaceOrInsert(span, &replica.SpanReplication{})
+		}
+		holes := findHoles(m, cs.rang)
+		require.Equalf(t, cs.expectedHole, holes, "case %d, %#v", i, cs)
+	}
 }
 
 func appendNew(origin []byte, c byte) []byte {

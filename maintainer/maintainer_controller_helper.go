@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -135,7 +136,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		StartKey: span.StartKey,
 		EndKey:   span.EndKey,
 	}
-	splitTableSpans := c.spanController.GetSplitter().SplitSpansByRegion(context.Background(), wholeSpan, 0)
+	splitTableSpans := c.spanController.GetSplitter().Split(context.Background(), wholeSpan, 0, replica.SplitByRegion)
 
 	if len(splitTableSpans) == len(replications) {
 		log.Info("Split Table is finished; There is no need to do split", zap.Any("tableID", tableID))

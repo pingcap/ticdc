@@ -149,7 +149,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes && c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
 		// split the whole table span base on region count if table region count is exceed the limit
-		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan, 0)
+		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, replica.SplitByRegion)
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
 }

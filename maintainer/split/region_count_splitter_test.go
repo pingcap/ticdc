@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"unsafe"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -41,6 +43,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 	cases := []struct {
 		span        *heartbeatpb.TableSpan
 		cfg         *config.ChangefeedSchedulerConfig
+		spansNum    int
 		expectSpans []*heartbeatpb.TableSpan
 	}{
 		{
@@ -49,6 +52,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 1,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_1")},   // 1 region
 				{TableID: 1, StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, // 1 region
@@ -63,6 +67,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 2,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_2")},   // 2 region
 				{TableID: 1, StartKey: []byte("t1_2"), EndKey: []byte("t1_4")}, // 2 region
@@ -75,6 +80,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 3,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, // 3 region
 				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, // 2 region
@@ -86,6 +92,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 4,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, // 3 region
 				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, // 2 region
@@ -97,8 +104,21 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    10,
 				RegionCountPerSpan: 2,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}, // no split
+			},
+		},
+		{
+			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 1,
+			},
+			spansNum: 2,
+			expectSpans: []*heartbeatpb.TableSpan{
+				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, // 3 region
+				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, // 2 region
 			},
 		},
 	}
@@ -106,7 +126,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	for i, cs := range cases {
 		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
-		spans := splitter.split(context.Background(), cs.span)
+		spans := splitter.split(context.Background(), cs.span, cs.spansNum)
 		require.Equalf(t, cs.expectSpans, spans, "%d %s", i, cs.span.String())
 	}
 }
@@ -125,6 +145,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 	cases := []struct {
 		expectedSpans int
 		cfg           *config.ChangefeedSchedulerConfig
+		spansNum      int
 	}{
 		{
 			expectedSpans: 1000,
@@ -132,6 +153,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 1,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 500,
@@ -139,6 +161,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 2,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 334,
@@ -146,6 +169,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 3,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 250,
@@ -153,6 +177,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 4,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 200,
@@ -160,6 +185,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 5,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 167,
@@ -167,6 +193,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 6,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 143,
@@ -174,6 +201,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 7,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 125,
@@ -181,6 +209,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 8,
 			},
+			spansNum: 0,
 		},
 	}
 
@@ -188,7 +217,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 	spans := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	for i, cs := range cases {
 		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
-		spans := splitter.split(context.Background(), spans)
+		spans := splitter.split(context.Background(), spans, cs.spansNum)
 		require.Equalf(t, cs.expectedSpans, len(spans), "%d %v", i, cs)
 	}
 }
@@ -207,7 +236,7 @@ func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	splitter := newRegionCountSplitter(cfID, cfg.RegionThreshold, cfg.RegionCountPerSpan)
 	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
-	spans := splitter.split(context.Background(), span)
+	spans := splitter.split(context.Background(), span, 0)
 	require.Equal(
 		t, []*heartbeatpb.TableSpan{{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}}, spans)
 }
@@ -222,34 +251,28 @@ func NewMockRegionCache(regions []heartbeatpb.TableSpan) *mockCache {
 	return &mockCache{regions: spanz.NewBtreeMap[uint64]()}
 }
 
-// ListRegionIDsInKeyRange lists ids of regions in [startKey,endKey].
-func (m *mockCache) ListRegionIDsInKeyRange(
+func (m *mockCache) LoadRegionsInKeyRange(
 	bo *tikv.Backoffer, startKey, endKey []byte,
-) (regionIDs []uint64, err error) {
+) (regions []*tikv.Region, err error) {
 	m.regions.Ascend(func(loc heartbeatpb.TableSpan, id uint64) bool {
 		if bytes.Compare(loc.StartKey, endKey) >= 0 ||
 			bytes.Compare(loc.EndKey, startKey) <= 0 {
 			return true
 		}
-		regionIDs = append(regionIDs, id)
-		return true
-	})
-	return
-}
+		region := &tikv.Region{}
+		meta := &metapb.Region{
+			Id:       id,
+			StartKey: loc.StartKey,
+			EndKey:   loc.EndKey,
+		}
 
-// LocateRegionByID searches for the region with ID.
-func (m *mockCache) LocateRegionByID(
-	bo *tikv.Backoffer, regionID uint64,
-) (loc *tikv.KeyLocation, err error) {
-	m.regions.Ascend(func(span heartbeatpb.TableSpan, id uint64) bool {
-		if id != regionID {
-			return true
-		}
-		loc = &tikv.KeyLocation{
-			StartKey: span.StartKey,
-			EndKey:   span.EndKey,
-		}
-		return false
+		regionPtr := (*struct {
+			meta *metapb.Region
+		})(unsafe.Pointer(region))
+		regionPtr.meta = meta
+
+		regions = append(regions, region)
+		return true
 	})
 	return
 }

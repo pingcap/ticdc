@@ -57,7 +57,7 @@ func (m *writeSplitter) split(
 	spansNum int,
 ) []*heartbeatpb.TableSpan {
 	if m.writeKeyThreshold == 0 || spansNum <= 1 {
-		return nil
+		return []*heartbeatpb.TableSpan{span}
 	}
 	regions, err := m.pdAPIClient.ScanRegions(ctx, heartbeatpb.TableSpan{
 		TableID:  span.TableID,
@@ -161,7 +161,7 @@ func (m *writeSplitter) splitRegionsByWrittenKeysV1(
 	)
 
 	// 3. Split the table into spans, each span has approximately
-	// `writeWeightPerSpan` weight or `spanRegionLimit` regions.
+	// `writeWeightPerSpan` weight
 	for i := 0; i < len(regions); i++ {
 		restRegions := len(regions) - i
 		regionCount++
@@ -214,10 +214,9 @@ func (m *writeSplitter) splitRegionsByWrittenKeysV1(
 			continue
 		}
 
-		// If the spanWriteWeight is larger than writeLimitPerSpan or the regionCount
-		// is larger than spanRegionLimit, then use the region range from
-		// spanStartIndex to i to as a span.
-		if spanWriteWeight > writeLimitPerSpan || regionCount >= spanRegionLimit {
+		// If the spanWriteWeight is larger than writeLimitPerSpan
+		// then use the region range from spanStartIndex to i to as a span.
+		if spanWriteWeight > writeLimitPerSpan {
 			spans = append(spans, &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: decodeKey(regions[spanStartIndex].StartKey),
