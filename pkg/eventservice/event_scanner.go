@@ -223,6 +223,9 @@ func (s *eventScanner) scanAndMergeEvents(
 			}
 
 			if processor.dmlSize() > session.limit.maxDMLBytes {
+				log.Info("interrupt the scan since the DML size exceeds the limit",
+					zap.Uint64("dmlSize", processor.dmlSize()),
+					zap.Uint64("limit", session.limit.maxDMLBytes))
 				return s.interruptScan(session, merger, processor)
 			}
 		}
