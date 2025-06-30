@@ -48,7 +48,10 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	replication := replications[0]
 
 	op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-	c.operatorController.AddOperator(op)
+	ret := c.operatorController.AddOperator(op)
+	if !ret {
+		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+	}
 
 	// check the op is finished or not
 	count := 0
@@ -81,7 +84,13 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 			continue
 		}
 		op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-		c.operatorController.AddOperator(op)
+		ret := c.operatorController.AddOperator(op)
+		if !ret {
+			for _, op := range opList {
+				op.OnTaskRemoved()
+			}
+			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+		}
 		opList = append(opList, op)
 	}
 
