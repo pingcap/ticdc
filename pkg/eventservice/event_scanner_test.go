@@ -939,11 +939,11 @@ func TestLimitChecker(t *testing.T) {
 
 	// Test case 3: Test canInterrupt method - interrupt conditions
 	t.Run("TestCanInterrupt", func(t *testing.T) {
-		//startTime := time.Now()
-		//maxBytes := int64(1000)
-		//timeout := 10 * time.Second
+		// startTime := time.Now()
+		// maxBytes := int64(1000)
+		// timeout := 10 * time.Second
 
-		//checker := newLimitChecker(maxBytes, timeout, 5000, startTime)
+		// checker := newLimitChecker(maxBytes, timeout, 5000, startTime)
 
 		// Test cannot interrupt when currentTs <= lastCommitTs
 		currentTs := uint64(100)
