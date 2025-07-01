@@ -77,8 +77,8 @@ func (e *ReadyEvent) GetStartTs() common.Ts {
 }
 
 // GetSize returns the approximate size of the event in bytes
-func (e *ReadyEvent) GetSize() int64 {
-	return int64(1 + e.DispatcherID.GetSize())
+func (e *ReadyEvent) GetSize() uint64 {
+	return 1 + e.DispatcherID.GetSize()
 }
 
 func (e *ReadyEvent) IsPaused() bool {

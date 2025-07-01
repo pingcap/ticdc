@@ -301,7 +301,7 @@ type DispatcherEvent struct {
 	commonEvent.Event
 }
 
-func (d DispatcherEvent) GetSize() int64 {
+func (d DispatcherEvent) GetSize() uint64 {
 	return d.From.GetSize() + d.Event.GetSize()
 }
 

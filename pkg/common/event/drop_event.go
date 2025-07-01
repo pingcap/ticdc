@@ -81,8 +81,8 @@ func (e *DropEvent) GetStartTs() common.Ts {
 }
 
 // GetSize returns the approximate size of the event in bytes
-func (e *DropEvent) GetSize() int64 {
-	return int64(1 + e.DispatcherID.GetSize() + 8 + 8) // version + dispatcherID + seq + commitTs
+func (e *DropEvent) GetSize() uint64 {
+	return 1 + e.DispatcherID.GetSize() + 8 + 8 // version + dispatcherID + seq + commitTs
 }
 
 // IsPaused returns false as drop events are not pausable

@@ -77,8 +77,8 @@ func (e *NotReusableEvent) GetStartTs() common.Ts {
 }
 
 // GetSize returns the approximate size of the event in bytes
-func (e *NotReusableEvent) GetSize() int64 {
-	return int64(1 + e.DispatcherID.GetSize())
+func (e *NotReusableEvent) GetSize() uint64 {
+	return 1 + e.DispatcherID.GetSize()
 }
 
 func (e *NotReusableEvent) IsPaused() bool {

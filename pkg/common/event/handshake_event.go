@@ -91,9 +91,9 @@ func (e *HandshakeEvent) GetStartTs() common.Ts {
 }
 
 // GetSize returns the approximate size of the event in bytes
-func (e *HandshakeEvent) GetSize() int64 {
+func (e *HandshakeEvent) GetSize() uint64 {
 	// All fields size except tableInfo
-	return int64(1 + 8 + 8 + 8 + e.State.GetSize() + e.DispatcherID.GetSize())
+	return 1 + 8 + 8 + 8 + e.State.GetSize() + e.DispatcherID.GetSize()
 }
 
 func (e *HandshakeEvent) IsPaused() bool {
