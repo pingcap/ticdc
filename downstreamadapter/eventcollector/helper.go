@@ -22,17 +22,13 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+func NewEventDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
 	option := dynstream.NewOption()
 	option.BatchCount = 4196
 	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
 	option.EnableMemoryControl = true
-	if option.EnableMemoryControl {
-		log.Info("New EventDynamicStream, memory control is enabled")
-	} else {
-		log.Info("New EventDynamicStream, memory control is disabled")
-	}
+	log.Info("New EventDynamicStream, memory control is enabled")
 
 	eventsHandler := &EventsHandler{}
 	stream := dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return (common.GID)(id).FastHash() }, eventsHandler, option)
@@ -70,7 +66,6 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		return false
 	}
 
-	// log.Info("fizz handle events", zap.Any("events", events))
 	// Only check the first event type, because all events in the same batch should be in the same type group.
 	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
@@ -160,7 +155,7 @@ func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream
 
 func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
 	switch event.GetType() {
-	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent:
+	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent, commonEvent.TypeBatchDMLEvent:
 		log.Info("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
 		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetEpoch(), event.GetCommitTs())
 		return dispatcher.NewDispatcherEvent(event.From, dropEvent)

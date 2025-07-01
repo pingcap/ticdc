@@ -101,16 +101,17 @@ func (v *RawKVEntry) String() string {
 		v.OpType, string(v.Key), string(v.Value), string(v.OldValue), v.StartTs, v.CRTs, v.RegionID)
 }
 
-// ApproximateDataSize calculate the approximate size of protobuf binary
-// representation of this event.
-func (v *RawKVEntry) ApproximateDataSize() int64 {
-	return int64(len(v.Key) + len(v.Value) + len(v.OldValue))
+// Size return the accurate size of the RawKVEntry
+// todo: add unit test to cover this method
+func (v *RawKVEntry) Size() int64 {
+	return int64(len(v.Key)+len(v.Value)+len(v.OldValue)) + 40
 }
 
 // Encode serializes the RawKVEntry into a byte slice
+// todo: add unit test to cover the bytes size calculation
 func (v *RawKVEntry) Encode() []byte {
 	// Calculate total size
-	totalSize := 4*5 + 8*3 + len(v.Key) + len(v.Value) + len(v.OldValue)
+	totalSize := 4*4 + 8*3 + len(v.Key) + len(v.Value) + len(v.OldValue)
 	buf := make([]byte, 0, totalSize)
 	// Use binary.LittleEndian.PutUint32/64 to write directly to the buffer
 	buf = binary.LittleEndian.AppendUint32(buf, uint32(v.OpType))

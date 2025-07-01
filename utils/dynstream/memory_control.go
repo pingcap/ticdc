@@ -94,7 +94,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		}
 	}
 
-	if as.memoryUsageRatio() > 1 && as.settings.Load().algorithm == MemoryControlForEventCollector && event.eventType.Droppable {
+	if as.memoryUsageRatio() > 1 && as.settings.Load().algorithm ==
+		MemoryControlForEventCollector && event.eventType.Droppable {
 		dropEvent := handler.OnDrop(event.event)
 		if dropEvent != nil {
 			event.eventType = handler.GetType(dropEvent.(T))
@@ -115,18 +116,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			}
 		}
 	})
-
-	// Remove this after testing.
-	// if testCounter.Add(1)%10 == 0 && as.settings.Load().algorithm == MemoryControlForEventCollector {
-	// 	log.Info("fizz drop event", zap.Any("event", event.event))
-	// 	dropEvent := handler.OnDrop(event.event)
-	// 	if dropEvent != nil {
-	// 		event.eventType = handler.GetType(dropEvent.(T))
-	// 		event.event = dropEvent.(T)
-	// 		path.pendingQueue.PushBack(event)
-	// 		return true
-	// 	}
-	// }
 
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
@@ -355,6 +344,13 @@ func (a *AreaMemoryMetric[A]) MemoryUsage() int64 {
 
 func (a *AreaMemoryMetric[A]) MaxMemory() int64 {
 	return a.maxMemory
+}
+
+func (a *AreaMemoryMetric[A]) AvailableMemory() int64 {
+	if a.usedMemory > a.maxMemory {
+		return 0
+	}
+	return a.maxMemory - a.usedMemory
 }
 
 func (a *AreaMemoryMetric[A]) Area() A {

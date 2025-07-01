@@ -33,6 +33,12 @@ var (
 		Help:      "The number of events sent by the event service",
 	}, []string{"type"})
 
+	EventServiceAvailableMemoryQuotaGaugeVec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "available_memory_quota",
+	}, []string{"gid"})
+
 	// EventServiceSendEventDuration is the metric that records the duration of sending events by the event service.
 	EventServiceSendEventDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
@@ -129,6 +135,7 @@ var (
 func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceChannelSizeGauge)
 	registry.MustRegister(EventServiceSendEventCount)
+	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceSendEventDuration)
 	registry.MustRegister(EventServiceResolvedTsGauge)
 	registry.MustRegister(EventServiceResolvedTsLagGauge)
