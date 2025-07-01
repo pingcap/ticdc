@@ -103,7 +103,7 @@ func (d *dispatcherConnState) clearRemoteCandidates() {
 
 // dispatcherStat is a helper struct to manage the state of a dispatcher.
 type dispatcherStat struct {
-	target         dispatcher.EventDispatcher
+	target         dispatcher.DispatcherService
 	eventCollector *EventCollector
 	readyCallback  func()
 
@@ -127,7 +127,7 @@ type dispatcherStat struct {
 }
 
 func newDispatcherStat(
-	target dispatcher.EventDispatcher,
+	target dispatcher.DispatcherService,
 	eventCollector *EventCollector,
 	readyCallback func(),
 	memoryQuota uint64,

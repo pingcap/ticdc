@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,302 @@
 package dispatcher
 
 import (
+	"sync/atomic"
+	"time"
+
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
-// =================== functions to handle block event ===================
+// EventDispatcher is the interface that responsible for receiving events from Event Service
+type DispatcherService interface {
+	GetId() common.DispatcherID
+	GetType() int
+	GetStartTs() uint64
+	GetBDRMode() bool
+	GetChangefeedID() common.ChangeFeedID
+	GetTableSpan() *heartbeatpb.TableSpan
+	GetTimezone() string
+	GetIntegrityConfig() *eventpb.IntegrityConfig
+	GetFilterConfig() *eventpb.FilterConfig
+	EnableSyncPoint() bool
+	GetSyncPointInterval() time.Duration
+	GetStartTsIsSyncpoint() bool
+	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
+}
+
+type Dispatcher interface {
+	DispatcherService
+	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
+	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
+	GetComponentStatus() heartbeatpb.ComponentState
+	HandleError(err error)
+	SetStartTs(startTs uint64)
+	SetCurrentPDTs(currentPDTs uint64)
+	SetStartTsIsSyncpoint(startTsIsSyncpoint bool)
+	SetComponentStatus(status heartbeatpb.ComponentState)
+}
+
+/*
+Dispatcher is responsible for getting events from Event Service and sending them to Sink in appropriate order.
+Each dispatcher only deal with the events of one tableSpan in one changefeed.
+Here is a special dispatcher will deal with the events of the DDLSpan in one changefeed, we call it TableTriggerEventDispatcher
+One changefeed across multiple nodes only will have one TableTriggerEventDispatcher.
+Each EventDispatcherManager will have multiple dispatchers.
+
+All dispatchers in the changefeed will share the same Sink.
+All dispatchers will communicate with the Maintainer about self progress and whether can push down the blocked ddl event.
+
+Because Sink does not flush events to the downstream in strict order.
+the dispatcher can't send event to Sink continuously all the time,
+1. The ddl event/sync point event can be sent to Sink only when the previous event has been flushed to downstream successfully.
+2. Only when the ddl event/sync point event is flushed to downstream successfully, the dispatcher can send the following event to Sink.
+3. For the cross table ddl event/sync point event, dispatcher needs to negotiate with the maintainer to decide whether and when send it to Sink.
+
+The workflow related to the dispatcher is as follows:
+
+	+--------------+       +----------------+       +------------+       +--------+        +------------+
+	| EventService |  -->  | EventCollector |  -->  | Dispatcher |  -->  |  Sink  |  -->   | Downstream |
+	+--------------+       +----------------+       +------------+       +--------+        +------------+
+	                                                        |
+										  HeartBeatResponse | HeartBeatRequest
+										   DispatcherStatus | BlockStatus
+	                                              +--------------------+
+	                                              | HeartBeatCollector |
+												  +--------------------+
+												            |
+															|
+												      +------------+
+	                                                  | Maintainer |
+												      +------------+
+*/
+
+type BasicDispatcher struct {
+	changefeedID common.ChangeFeedID
+	id           common.DispatcherID
+	schemaID     int64
+	tableSpan    *heartbeatpb.TableSpan
+	// startTs is the timestamp that the dispatcher need to receive and flush events.
+	startTs            uint64
+	startTsIsSyncpoint bool
+	// The ts from pdClock when the dispatcher is created.
+	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
+	// to determine whether the insert event should use `Replace` or just `Insert`
+	// Because when the dispatcher scheduled or the node restarts, there may be some dml events to receive twice.
+	// So we need to use `Replace` to avoid duplicate key error.
+	// Table Trigger Event Dispatcher doesn't need this, because it doesn't deal with dml events.
+	creationPDTs uint64
+	// componentStatus is the status of the dispatcher, such as working, removing, stopped.
+	componentStatus *ComponentStateWithMutex
+	// the config of filter
+	filterConfig *eventpb.FilterConfig
+
+	// shared by the event dispatcher manager
+	sink sink.Sink
+
+	// statusesChan is used to store the status of dispatchers when status changed
+	// and push to heartbeatRequestQueue
+	statusesChan chan TableSpanStatusWithSeq
+	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
+	// shared by the event dispatcher manager
+	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
+
+	// schemaIDToDispatchers is shared in the eventDispatcherManager,
+	// it store all the infos about schemaID->Dispatchers
+	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
+	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
+	schemaIDToDispatchers *SchemaIDToDispatchers
+
+	timezone        string
+	integrityConfig *eventpb.IntegrityConfig
+
+	// if syncPointInfo is not nil, means enable Sync Point feature,
+	syncPointConfig *syncpoint.SyncPointConfig
+
+	// the max resolvedTs received by the dispatcher
+	resolvedTs uint64
+
+	// blockEventStatus is used to store the current pending ddl/sync point event and its block status.
+	blockEventStatus BlockEventStatus
+
+	// tableProgress is used to calculate the checkpointTs of the dispatcher
+	tableProgress *TableProgress
+
+	// resendTaskMap is store all the resend task of ddl/sync point event current.
+	// When we meet a block event that need to report to maintainer, we will create a resend task and store it in the map(avoid message lost)
+	// When we receive the ack from maintainer, we will cancel the resend task.
+	resendTaskMap *ResendTaskMap
+
+	// tableSchemaStore only exist when the dispatcher is a table trigger event dispatcher
+	// tableSchemaStore store the schema infos for all the table in the event dispatcher manager
+	// it's used for sink to calculate the tableNames or TableIds
+	tableSchemaStore *util.TableSchemaStore
+
+	isRemoving atomic.Bool
+
+	// errCh is used to collect the errors that need to report to maintainer
+	// such as error of flush ddl events
+	// errCh is shared in the eventDispatcherManager
+	errCh chan error
+
+	bdrMode        bool
+	seq            uint64
+	dispatcherType int
+}
+
+func NewBasicDispatcher(
+	changefeedID common.ChangeFeedID,
+	id common.DispatcherID,
+	tableSpan *heartbeatpb.TableSpan,
+	sink sink.Sink,
+	startTs uint64,
+	statusesChan chan TableSpanStatusWithSeq,
+	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
+	schemaID int64,
+	schemaIDToDispatchers *SchemaIDToDispatchers,
+	timezone string,
+	integrityConfig *eventpb.IntegrityConfig,
+	syncPointConfig *syncpoint.SyncPointConfig,
+	startTsIsSyncpoint bool,
+	filterConfig *eventpb.FilterConfig,
+	currentPdTs uint64,
+	errCh chan error,
+	bdrMode bool,
+	dispatcherType int,
+) *BasicDispatcher {
+	dispatcher := &BasicDispatcher{
+		changefeedID:          changefeedID,
+		id:                    id,
+		tableSpan:             tableSpan,
+		sink:                  sink,
+		startTs:               startTs,
+		startTsIsSyncpoint:    startTsIsSyncpoint,
+		statusesChan:          statusesChan,
+		blockStatusesChan:     blockStatusesChan,
+		timezone:              timezone,
+		integrityConfig:       integrityConfig,
+		syncPointConfig:       syncPointConfig,
+		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		resolvedTs:            startTs,
+		filterConfig:          filterConfig,
+		isRemoving:            atomic.Bool{},
+		blockEventStatus:      BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:         NewTableProgress(),
+		schemaID:              schemaID,
+		schemaIDToDispatchers: schemaIDToDispatchers,
+		resendTaskMap:         newResendTaskMap(),
+		creationPDTs:          currentPdTs,
+		errCh:                 errCh,
+		bdrMode:               bdrMode,
+		dispatcherType:        dispatcherType,
+	}
+
+	return dispatcher
+}
+
+func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
+	// for one batch events, we need to add all them in table progress first, then add them to sink
+	// because we need to ensure the wakeCallback only will be called when
+	// all these events are flushed to downstream successfully
+	for _, event := range events {
+		d.tableProgress.Add(event)
+	}
+	for _, event := range events {
+		d.sink.AddDMLEvent(event)
+		failpoint.Inject("BlockAddDMLEvents", nil)
+	}
+}
+
+func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
+	d.tableProgress.Add(event)
+	return d.sink.WriteBlockEvent(event)
+}
+
+func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
+	d.tableProgress.Pass(event)
+	event.PostFlush()
+}
+
+func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
+	if d.componentStatus.Get() == heartbeatpb.ComponentState_Initializing {
+		switch event.GetType() {
+		case commonEvent.TypeResolvedEvent, commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent, commonEvent.TypeSyncPointEvent:
+			if event.GetCommitTs() > d.startTs {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (d *BasicDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
+	h.Watermark.CheckpointTs = d.GetCheckpointTs()
+	h.Watermark.ResolvedTs = d.GetResolvedTs()
+	h.Id = d.GetId()
+	h.ComponentStatus = d.GetComponentStatus()
+	h.IsRemoving = d.GetRemovingStatus()
+}
+
+func (d *BasicDispatcher) GetResolvedTs() uint64 {
+	return atomic.LoadUint64(&d.resolvedTs)
+}
+
+func (d *BasicDispatcher) GetCheckpointTs() uint64 {
+	checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
+	if checkpointTs == 0 {
+		// This means the dispatcher has never send events to the sink,
+		// so we use resolvedTs as checkpointTs
+		return d.GetResolvedTs()
+	}
+
+	if isEmpty {
+		return max(checkpointTs, d.GetResolvedTs())
+	}
+	return checkpointTs
+}
+
+// updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
+func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
+	// only when we receive the first event, we can regard the dispatcher begin syncing data
+	// then add it to status dynamic stream to receive dispatcher status from maintainer
+	addToStatusDynamicStream(d)
+	// set the dispatcher to working status
+	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
+	d.statusesChan <- TableSpanStatusWithSeq{
+		TableSpanStatus: &heartbeatpb.TableSpanStatus{
+			ID:              d.id.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    d.GetCheckpointTs(),
+			Redo:            IsRedoDispatcher(d),
+		},
+		Seq: d.seq,
+	}
+}
+
+func (d *BasicDispatcher) HandleError(err error) {
+	select {
+	case d.errCh <- err:
+	default:
+		log.Error("error channel is full, discard error",
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.Stringer("dispatcherID", d.id),
+			zap.Error(err))
+	}
+}
+
+func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+	log.Panic("should not call this")
+	return false
+}
 
 // HandleDispatcherStatus is used to handle the dispatcher status from the Maintainer to deal with the block event.
 // Each dispatcher status may contain an ACK info or a dispatcher action or both.
@@ -31,7 +317,7 @@ import (
 // If we get a dispatcher action, we need to check whether the action is for the current pending ddl event. If so, we can deal the ddl event based on the action.
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
-func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
+func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
 	log.Info("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),
 		zap.Stringer("dispatcher", d.id),
@@ -99,6 +385,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
+			Redo: IsRedoDispatcher(d),
 		}
 	}
 }
@@ -107,7 +394,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 // For the ddl event with more than one blockedTable, it should block.
 // For the ddl event with only one blockedTable, it should block only if the table is not complete span.
 // Sync point event should always block.
-func (d *Dispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
+func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		ddlEvent := event.(*commonEvent.DDLEvent)
@@ -138,7 +425,7 @@ func (d *Dispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 1.If the event is a single table DDL, it will be added to the sink for writing to downstream.
 // If the ddl leads to add new tables or drop tables, it should send heartbeat to maintainer
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
-func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
+func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
 		ddl, ok := event.(*commonEvent.DDLEvent)
 		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
@@ -283,7 +570,7 @@ func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	}
 }
 
-func (d *Dispatcher) cancelResendTask(identifier BlockEventIdentifier) {
+func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 	task := d.resendTaskMap.Get(identifier)
 	if task == nil {
 		return
@@ -293,7 +580,7 @@ func (d *Dispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 	d.resendTaskMap.Delete(identifier)
 }
 
-func (d *Dispatcher) GetBlockEventStatus() *heartbeatpb.State {
+func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
 
 	// we only need to report the block status for the ddl that block others and not finished.

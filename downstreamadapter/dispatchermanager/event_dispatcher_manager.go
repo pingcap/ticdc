@@ -81,10 +81,10 @@ type EventDispatcherManager struct {
 	syncPointConfig *syncpoint.SyncPointConfig
 
 	// tableTriggerEventDispatcher is a special dispatcher, that is responsible for handling ddl and checkpoint events.
-	tableTriggerEventDispatcher     *dispatcher.Dispatcher
+	tableTriggerEventDispatcher     *dispatcher.EventDispatcher
 	redoTableTriggerEventDispatcher *dispatcher.RedoDispatcher
 	// dispatcherMap restore all the dispatchers in the EventDispatcherManager, including table trigger event dispatcher
-	dispatcherMap *DispatcherMap[*dispatcher.Dispatcher]
+	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// dispatcherMap restore all the redo dispatchers in the EventDispatcherManager, including redo table trigger event dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
 	// schemaIDToDispatchers is store the schemaID info for all normal dispatchers.
@@ -173,7 +173,7 @@ func NewEventDispatcherManager(
 	)
 	manager := &EventDispatcherManager{
 		ctx:                                    ctx,
-		dispatcherMap:                          newDispatcherMap[*dispatcher.Dispatcher](),
+		dispatcherMap:                          newDispatcherMap[*dispatcher.EventDispatcher](),
 		redoDispatcherMap:                      newDispatcherMap[*dispatcher.RedoDispatcher](),
 		changefeedID:                           changefeedID,
 		pdClock:                                pdClock,
@@ -351,7 +351,7 @@ func NewEventDispatcherManager(
 func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool, redo bool) (uint64, error) {
 	var (
 		err                         error
-		tableTriggerEventDispatcher dispatcher.EventDispatcher
+		tableTriggerEventDispatcher dispatcher.Dispatcher
 	)
 	if redo {
 		err = e.newRedoDispatchers([]dispatcherCreateInfo{
@@ -492,7 +492,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	}
 
 	for idx, id := range dispatcherIds {
-		d := dispatcher.NewDispatcher(
+		d := dispatcher.NewEventDispatcher(
 			e.changefeedID,
 			id, tableSpans[idx], e.sink,
 			uint64(newStartTsList[idx]),
@@ -746,7 +746,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			})
 		}
 	})
-	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
+	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
 		// the merged dispatcher in preparing state, don't need to join the calculation of the heartbeat
 		// the dispatcher still not know the startTs of it, and the dispatchers to be merged are still in the calculation of the checkpointTs
@@ -807,7 +807,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 		})
-		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
 			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
@@ -908,7 +908,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		EndKey:   endKey,
 	}
 
-	mergedDispatcher := dispatcher.NewDispatcher(
+	mergedDispatcher := dispatcher.NewEventDispatcher(
 		e.changefeedID,
 		mergedDispatcherID,
 		mergedSpan,
@@ -1139,8 +1139,8 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 
 // closeAllDispatchers is called when the event dispatcher manager is closing
 func (e *EventDispatcherManager) closeAllDispatchers() {
-	leftToCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
-	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+	leftToCloseDispatchers := make([]*dispatcher.EventDispatcher, 0)
+	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
 

@@ -35,7 +35,7 @@ type cleanMap struct {
 	redo     bool
 }
 
-func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.Dispatcher] {
+func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.EventDispatcher] {
 	return e.dispatcherMap
 }
 
@@ -57,7 +57,7 @@ func (e *EventDispatcherManager) GetMaintainerEpoch() uint64 {
 	return e.meta.maintainerEpoch
 }
 
-func (e *EventDispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.Dispatcher {
+func (e *EventDispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {
 	return e.tableTriggerEventDispatcher
 }
 

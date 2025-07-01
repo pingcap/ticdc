@@ -27,7 +27,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type DispatcherMap[T dispatcher.EventDispatcher] struct {
+type DispatcherMap[T dispatcher.Dispatcher] struct {
 	m sync.Map
 	// sequence number is increasing when dispatcher is added.
 	//
@@ -55,7 +55,7 @@ type DispatcherMap[T dispatcher.EventDispatcher] struct {
 	seq atomic.Uint64
 }
 
-func newDispatcherMap[T dispatcher.EventDispatcher]() *DispatcherMap[T] {
+func newDispatcherMap[T dispatcher.Dispatcher]() *DispatcherMap[T] {
 	dispatcherMap := &DispatcherMap[T]{
 		m: sync.Map{},
 	}
@@ -278,7 +278,7 @@ func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequ
 	return nil
 }
 
-func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.EventDispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
+func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
 		newHeartBeatResponseHandler(dds))
@@ -295,10 +295,10 @@ func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse
 }
 
 type HeartBeatResponseHandler struct {
-	dispatcherStatusDynamicStream dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.EventDispatcher, *dispatcher.DispatcherStatusHandler]
+	dispatcherStatusDynamicStream dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
 }
 
-func newHeartBeatResponseHandler(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.EventDispatcher, *dispatcher.DispatcherStatusHandler]) *HeartBeatResponseHandler {
+func newHeartBeatResponseHandler(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) *HeartBeatResponseHandler {
 	return &HeartBeatResponseHandler{dispatcherStatusDynamicStream: dds}
 }
 
@@ -346,7 +346,7 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 					}
 				})
 			} else {
-				eventDispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.Dispatcher) {
+				eventDispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.EventDispatcher) {
 					if id != excludeDispatcherID {
 						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 					}
@@ -463,7 +463,7 @@ func (h *RedoTsMessageHandler) Handle(eventDispatcherManager *EventDispatcherMan
 	msg := messages[0]
 	ok := eventDispatcherManager.SetGlobalRedoTs(msg.CheckpointTs, msg.ResolvedTs)
 	if ok {
-		eventDispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+		eventDispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
 			dispatcher.HandleCacheEvents()
 		})
 	}

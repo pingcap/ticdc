@@ -180,7 +180,7 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 		case <-ticker.C:
 			var checkpointTs uint64 = math.MaxUint64
 			var resolvedTs uint64 = math.MaxUint64
-			e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+			e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
 				checkpointTs = min(checkpointTs, dispatcher.GetCheckpointTs())
 			})
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {

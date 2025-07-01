@@ -49,10 +49,10 @@ func getUncompleteTableSpan() *heartbeatpb.TableSpan {
 	}
 }
 
-func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dispatcher {
+func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *EventDispatcher {
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	return NewDispatcher(
+	return NewEventDispatcher(
 		common.NewChangefeedID(),
 		common.NewDispatcherID(),
 		tableSpan,

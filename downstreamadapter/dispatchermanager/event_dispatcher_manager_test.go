@@ -35,7 +35,7 @@ import (
 var mockSink = sink.NewMockSink(common.MysqlSinkType)
 
 // createTestDispatcher creates a test dispatcher with given parameters
-func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.Dispatcher {
+func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
 	span := &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: startKey,
@@ -43,7 +43,7 @@ func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id comm
 	}
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	d := dispatcher.NewDispatcher(
+	d := dispatcher.NewEventDispatcher(
 		manager.changefeedID,
 		id,
 		span,
@@ -73,7 +73,7 @@ func createTestManager(t *testing.T) *EventDispatcherManager {
 	changefeedID := common.NewChangeFeedIDWithName("test")
 	manager := &EventDispatcherManager{
 		changefeedID:            changefeedID,
-		dispatcherMap:           newDispatcherMap[*dispatcher.Dispatcher](),
+		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
 		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),

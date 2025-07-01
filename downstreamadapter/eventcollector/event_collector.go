@@ -172,7 +172,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
+func (c *EventCollector) AddDispatcher(target dispatcher.DispatcherService, memoryQuota uint64) {
 	c.PrepareAddDispatcher(target, memoryQuota, nil)
 	c.logCoordinatorClient.requestReusableEventService(target)
 }
@@ -180,7 +180,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 // PrepareAddDispatcher is used to prepare the dispatcher to be added to the event collector.
 // It will send a register request to local event service and call `readyCallback` when local event service is ready.
 func (c *EventCollector) PrepareAddDispatcher(
-	target dispatcher.EventDispatcher,
+	target dispatcher.DispatcherService,
 	memoryQuota uint64,
 	readyCallback func(),
 ) {
@@ -204,7 +204,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
-func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, startTs uint64) {
+func (c *EventCollector) CommitAddDispatcher(target dispatcher.Dispatcher, startTs uint64) {
 	log.Info("commit add dispatcher", zap.Stringer("dispatcher", target.GetId()), zap.Uint64("startTs", startTs))
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
@@ -217,7 +217,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 	stat.commitReady(c.getLocalServerID())
 }
 
-func (c *EventCollector) RemoveDispatcher(target dispatcher.EventDispatcher) {
+func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 	log.Info("remove dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))

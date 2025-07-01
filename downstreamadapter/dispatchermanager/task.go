@@ -94,11 +94,11 @@ func SetMergeCheckTaskScheduler(taskScheduler threadpool.ThreadPool) {
 type MergeCheckTask struct {
 	taskHandle       *threadpool.TaskHandle
 	manager          *EventDispatcherManager
-	mergedDispatcher dispatcher.EventDispatcher
+	mergedDispatcher dispatcher.Dispatcher
 	dispatcherIDs    []common.DispatcherID // the ids of dispatchers to be merged
 }
 
-func newMergeCheckTask(manager *EventDispatcherManager, mergedDispatcher dispatcher.EventDispatcher, dispatcherIDs []common.DispatcherID) *MergeCheckTask {
+func newMergeCheckTask(manager *EventDispatcherManager, mergedDispatcher dispatcher.Dispatcher, dispatcherIDs []common.DispatcherID) *MergeCheckTask {
 	taskScheduler := GetMergeCheckTaskScheduler()
 	t := &MergeCheckTask{
 		manager:          manager,
