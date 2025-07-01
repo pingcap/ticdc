@@ -28,6 +28,12 @@ type BatchResolvedEvent struct {
 	// Version is the version of the BatchResolvedEvent struct.
 	Version byte
 	Events  []ResolvedEvent
+	// for redo
+	Redo bool
+}
+
+func (b BatchResolvedEvent) GetRedo() bool {
+	return b.Redo
 }
 
 func (b BatchResolvedEvent) GetType() int {
@@ -117,12 +123,15 @@ type ResolvedEvent struct {
 	State        EventSenderState
 	Version      byte
 	Epoch        uint64
+	// for redo
+	Redo bool
 }
 
 func NewResolvedEvent(
 	resolvedTs common.Ts,
 	dispatcherID common.DispatcherID,
 	epoch uint64,
+	redo bool,
 ) ResolvedEvent {
 	return ResolvedEvent{
 		DispatcherID: dispatcherID,
@@ -130,7 +139,12 @@ func NewResolvedEvent(
 		State:        EventSenderStateNormal,
 		Version:      ResolvedEventVersion,
 		Epoch:        epoch,
+		Redo:         redo,
 	}
+}
+
+func (e ResolvedEvent) GetRedo() bool {
+	return e.Redo
 }
 
 func (e ResolvedEvent) GetType() int {
@@ -193,6 +207,9 @@ func (e ResolvedEvent) encodeV0() ([]byte, error) {
 	offset := 0
 	data[offset] = e.Version
 	offset += 1
+	// Redo
+	data[offset] = bool2byte(e.Redo)
+	offset += 1
 	binary.BigEndian.PutUint64(data[offset:], uint64(e.ResolvedTs))
 	offset += 8
 	copy(data[offset:], e.State.encode())
@@ -206,6 +223,9 @@ func (e *ResolvedEvent) decodeV0(data []byte) error {
 		return fmt.Errorf("ResolvedEvent.decodeV0: invalid data length, expected %d, got %d", e.GetSize(), len(data))
 	}
 	offset := 1 // Skip version byte
+	// Redo
+	e.Redo = byte2bool(data[1])
+	offset += 1
 	e.ResolvedTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
 	e.State.decode(data[offset:])

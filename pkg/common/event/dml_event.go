@@ -46,11 +46,8 @@ type BatchDMLEvent struct {
 	// The receiver needs to call DecodeRawRows function to decode the RawRows into Rows.
 	RawRows   []byte            `json:"raw_rows"`
 	TableInfo *common.TableInfo `json:"table_info"`
-}
-
-func (b *BatchDMLEvent) String() string {
-	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %v, RawRows: %v, Table: %v, Len: %d}",
-		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo.TableName, b.Len())
+	// for redo
+	Redo bool `json:"redo"`
 }
 
 // NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
@@ -59,6 +56,15 @@ func NewBatchDMLEvent() *BatchDMLEvent {
 		Version:   0,
 		DMLEvents: make([]*DMLEvent, 0),
 	}
+}
+
+func (b *BatchDMLEvent) String() string {
+	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %v, RawRows: %v, Table: %v, Len: %d}",
+		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo.TableName, b.Len())
+}
+
+func (b *BatchDMLEvent) GetRedo() bool {
+	return b.Redo
 }
 
 // PopHeadDMLEvents pops the first `count` DMLEvents from the BatchDMLEvent and returns a new BatchDMLEvent.
@@ -74,6 +80,7 @@ func (b *BatchDMLEvent) PopHeadDMLEvents(count int) *BatchDMLEvent {
 		DMLEvents: make([]*DMLEvent, 0, count),
 		Rows:      b.Rows,
 		TableInfo: b.TableInfo,
+		Redo:      b.Redo,
 	}
 	for i := 0; i < count; i++ {
 		newBatch.DMLEvents = append(newBatch.DMLEvents, b.DMLEvents[i])
@@ -109,7 +116,7 @@ func (b *BatchDMLEvent) Unmarshal(data []byte) error {
 }
 
 func (b *BatchDMLEvent) decodeV0(data []byte) error {
-	if len(data) < 1+8*3 {
+	if len(data) < 2+8*3 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
 	b.Version = data[0]
@@ -117,7 +124,9 @@ func (b *BatchDMLEvent) decodeV0(data []byte) error {
 		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
 		return nil
 	}
-	offset := 1
+	// Redo
+	b.Redo = byte2bool(data[1])
+	offset := 2
 	length := int(binary.LittleEndian.Uint64(data[offset:]))
 	offset += 8
 	b.DMLEvents = make([]*DMLEvent, 0, length)
@@ -145,11 +154,13 @@ func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
 		return nil, nil
 	}
-	size := 1 + 8 + (1+16+6*8+4*2+1)*len(b.DMLEvents) + int(b.Len())
+	size := 2 + 8 + (1+16+6*8+4*2+1)*len(b.DMLEvents) + int(b.Len())
 	data := make([]byte, 0, size)
 	// Encode all fields
 	// Version
 	data = append(data, b.Version)
+	// Redo
+	data = append(data, bool2byte(b.Redo))
 	// DMLEvents
 	dmlEventsDataSize := make([]byte, 8)
 	binary.LittleEndian.PutUint64(dmlEventsDataSize, uint64(len(b.DMLEvents)))
@@ -298,11 +309,6 @@ type DMLEvent struct {
 	checksumOffset int                   `json:"-"`
 }
 
-func (t *DMLEvent) String() string {
-	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
-		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName, t.Checksum, t.Length, t.ApproximateSize)
-}
-
 // NewDMLEvent creates a new DMLEvent with the given parameters
 func NewDMLEvent(
 	dispatcherID common.DispatcherID,
@@ -320,6 +326,16 @@ func NewDMLEvent(
 		TableInfo:       tableInfo,
 		RowTypes:        make([]RowType, 0),
 	}
+}
+
+func (t *DMLEvent) String() string {
+	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
+		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName, t.Checksum, t.Length, t.ApproximateSize)
+}
+
+func (t *DMLEvent) GetRedo() bool {
+	log.Panic("should not call this")
+	return false
 }
 
 // SetRows sets the Rows chunk for this DMLEvent

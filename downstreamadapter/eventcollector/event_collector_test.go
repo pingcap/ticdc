@@ -133,8 +133,8 @@ func TestProcessMessage(t *testing.T) {
 	)
 	require.NotNil(t, dmls)
 
-	readyEvent := commonEvent.NewReadyEvent(did)
-	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, 1, ddl.TableInfo)
+	readyEvent := commonEvent.NewReadyEvent(did, false)
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, 1, ddl.TableInfo, false)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
 	handshakeEvent.Seq = seq.Add(1)

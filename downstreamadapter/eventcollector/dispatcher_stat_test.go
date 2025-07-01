@@ -126,6 +126,10 @@ type mockEvent struct {
 	epoch        uint64
 }
 
+func (m *mockEvent) GetRedo() bool {
+	return false
+}
+
 func (m *mockEvent) GetType() int {
 	return m.eventType
 }

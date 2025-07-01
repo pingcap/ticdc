@@ -30,17 +30,24 @@ var _ Event = &NotReusableEvent{}
 type NotReusableEvent struct {
 	Version      byte
 	DispatcherID common.DispatcherID
+	// for redo
+	Redo bool
 }
 
-func NewNotReusableEvent(dispatcherID common.DispatcherID) NotReusableEvent {
+func NewNotReusableEvent(dispatcherID common.DispatcherID, redo bool) NotReusableEvent {
 	return NotReusableEvent{
 		Version:      NotReusableEventVersion,
 		DispatcherID: dispatcherID,
+		Redo:         redo,
 	}
 }
 
 func (e *NotReusableEvent) String() string {
 	return fmt.Sprintf("NotReusableEvent{Version: %d, DispatcherID: %s}", e.Version, e.DispatcherID)
+}
+
+func (e *NotReusableEvent) GetRedo() bool {
+	return e.Redo
 }
 
 // GetType returns the event type
@@ -78,7 +85,7 @@ func (e *NotReusableEvent) GetStartTs() common.Ts {
 
 // GetSize returns the approximate size of the event in bytes
 func (e *NotReusableEvent) GetSize() int64 {
-	return int64(1 + e.DispatcherID.GetSize())
+	return int64(2 + e.DispatcherID.GetSize())
 }
 
 func (e *NotReusableEvent) IsPaused() bool {
@@ -118,6 +125,9 @@ func (e NotReusableEvent) encodeV0() ([]byte, error) {
 	offset := 0
 	data[offset] = e.Version
 	offset += 1
+	// Redo
+	data[offset] = bool2byte(e.Redo)
+	offset += 1
 	copy(data[offset:], e.DispatcherID.Marshal())
 	offset += e.DispatcherID.GetSize()
 	return data, nil
@@ -126,6 +136,9 @@ func (e NotReusableEvent) encodeV0() ([]byte, error) {
 func (e *NotReusableEvent) decodeV0(data []byte) error {
 	offset := 0
 	e.Version = data[offset]
+	offset += 1
+	// Redo
+	e.Redo = byte2bool(data[offset])
 	offset += 1
 	dispatcherIDData := data[offset:]
 	return e.DispatcherID.Unmarshal(dispatcherIDData)

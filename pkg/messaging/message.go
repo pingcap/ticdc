@@ -359,7 +359,6 @@ type TargetMessage struct {
 	// Group is used to group messages into a same group.
 	// Different groups can be processed in different goroutines.
 	Group uint64
-	Redo  bool
 }
 
 // NewSingleTargetMessage creates a new TargetMessage to be sent to a target server, with a single message.
@@ -453,7 +452,7 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 }
 
 func (m *TargetMessage) String() string {
-	return fmt.Sprintf("From: %s, To: %s, Type: %s, Message: %v, Redo: %v", m.From, m.To, m.Type, m.Message, m.Redo)
+	return fmt.Sprintf("From: %s, To: %s, Type: %s, Message: %v", m.From, m.To, m.Type, m.Message)
 }
 
 func (m *TargetMessage) GetGroup() uint64 {

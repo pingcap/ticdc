@@ -310,11 +310,11 @@ func TestDoMerge(t *testing.T) {
 	)
 
 	// Add resolved event to dispatcher1 to update the checkpointTs
-	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
+	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0, false)
 	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
 
 	// Add resolved event to dispatcher2 to update the checkpointTs
-	resolvedEvent2 := event.NewResolvedEvent(200, dispatcher2.GetId(), 0)
+	resolvedEvent2 := event.NewResolvedEvent(200, dispatcher2.GetId(), 0, false)
 	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
 
 	// Add dispatchers to manager
@@ -369,15 +369,15 @@ func TestDoMergeWithThreeDispatchers(t *testing.T) {
 	)
 
 	// Add resolved event to dispatcher1 to update the checkpointTs
-	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
+	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0, false)
 	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
 
 	// Add resolved event to dispatcher2 to update the checkpointTs
-	resolvedEvent2 := event.NewResolvedEvent(100, dispatcher2.GetId(), 0)
+	resolvedEvent2 := event.NewResolvedEvent(100, dispatcher2.GetId(), 0, false)
 	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
 
 	// Add resolved event to dispatcher3 to update the checkpointTs
-	resolvedEvent3 := event.NewResolvedEvent(200, dispatcher3.GetId(), 0)
+	resolvedEvent3 := event.NewResolvedEvent(200, dispatcher3.GetId(), 0, false)
 	dispatcher3.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent3)}, func() {})
 
 	// Add dispatchers to manager

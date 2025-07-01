@@ -162,10 +162,11 @@ func newEventBroker(
 }
 
 func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
+	batchEvent.Redo = d.info.GetRedo()
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
-			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState(), d.info.GetRedo())
+			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
 			metricEventServiceSendKvCount.Add(float64(e.Len()))
 		}
 	}
@@ -198,6 +199,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
 	e.Epoch = d.epoch.Load()
+	e.Redo = d.info.GetRedo()
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
@@ -205,8 +207,8 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 		zap.Int64("eventTableID", e.TableID),
 		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq),
-		zap.Bool("redo", d.info.GetRedo()))
-	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState(), d.info.GetRedo())
+		zap.Bool("redo", e.GetRedo()))
+	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
 		return
@@ -218,12 +220,11 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
-	re := pevent.NewResolvedEvent(watermark, d.id, d.epoch.Load())
+	re := pevent.NewResolvedEvent(watermark, d.id, d.epoch.Load(), d.info.GetRedo())
 	resolvedEvent := newWrapResolvedEvent(
 		remoteID,
 		re,
-		d.getEventSenderState(),
-		d.info.GetRedo())
+		d.getEventSenderState())
 	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	metricEventServiceSendResolvedTsCount.Inc()
@@ -233,8 +234,8 @@ func (c *eventBroker) sendNotReusableEvent(
 	server node.ID,
 	d *dispatcherStat,
 ) {
-	event := pevent.NewNotReusableEvent(d.info.GetID())
-	wrapEvent := newWrapNotReusableEvent(server, event, d.info.GetRedo())
+	event := pevent.NewNotReusableEvent(d.info.GetID(), d.info.GetRedo())
+	wrapEvent := newWrapNotReusableEvent(server, event)
 
 	// must success unless we can do retry later
 	c.getMessageCh(d.messageWorkerIndex) <- wrapEvent
@@ -394,8 +395,8 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
 		remoteID := node.ID(task.info.GetServerID())
-		event := pevent.NewReadyEvent(task.info.GetID())
-		wrapEvent := newWrapReadyEvent(remoteID, event, task.info.GetRedo())
+		event := pevent.NewReadyEvent(task.info.GetID(), task.info.GetRedo())
+		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
 		metricEventServiceSendCommandCount.Inc()
 		return false
@@ -419,8 +420,9 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		task.resetTs.Load(),
 		task.seq.Add(1),
 		task.epoch.Load(),
-		task.startTableInfo.Load())
-	wrapEvent := newWrapHandshakeEvent(remoteID, event, task.info.GetRedo())
+		task.startTableInfo.Load(),
+		task.info.GetRedo())
+	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
 }
@@ -452,8 +454,9 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			CommitTsList: newCommitTsList,
 			Seq:          d.seq.Add(1),
 			Epoch:        d.epoch.Load(),
+			Redo:         d.info.GetRedo(),
 		}
-		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState(), d.info.GetRedo())
+		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
 		c.getMessageCh(d.messageWorkerIndex) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
@@ -574,11 +577,11 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 			}
 
 			for _, m = range batchM {
+				cacheMap := resolvedTsCacheMap
+				if m.redo {
+					cacheMap = redoResolvedTsCacheMap
+				}
 				if m.msgType == pevent.TypeResolvedEvent {
-					cacheMap := resolvedTsCacheMap
-					if m.redo {
-						cacheMap = redoResolvedTsCacheMap
-					}
 					c.handleResolvedTs(ctx, cacheMap, m, workerIndex)
 					continue
 				}
@@ -590,12 +593,8 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				)
 				// Note: we need to flush the resolvedTs cache before sending the message
 				// to keep the order of the resolvedTs and the message.
-				cacheMap := resolvedTsCacheMap
-				if m.redo {
-					cacheMap = redoResolvedTsCacheMap
-				}
 				c.flushResolvedTs(ctx, cacheMap[m.serverID], m.serverID, workerIndex, m.redo)
-				c.sendMsg(ctx, tMsg, m.postSendFunc, m.redo)
+				c.sendMsg(ctx, tMsg, m.postSendFunc)
 				m.reset()
 			}
 			batchM = batchM[:0]
@@ -628,7 +627,9 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 	if cache == nil || cache.len == 0 {
 		return
 	}
-	msg := &pevent.BatchResolvedEvent{}
+	msg := &pevent.BatchResolvedEvent{
+		Redo: redo,
+	}
 	msg.Events = append(msg.Events, cache.getAll()...)
 	tMsg := messaging.NewSingleTargetMessage(
 		serverID,
@@ -636,10 +637,10 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 		msg,
 		uint64(workerIndex),
 	)
-	c.sendMsg(ctx, tMsg, nil, redo)
+	c.sendMsg(ctx, tMsg, nil)
 }
 
-func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage, postSendMsg func(), redo bool) {
+func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage, postSendMsg func()) {
 	start := time.Now()
 	congestedRetryInterval := time.Millisecond * 10
 	// Send the message to messageCenter. Retry if to send failed.
@@ -650,7 +651,6 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		default:
 		}
 		// Send the message to the dispatcher.
-		tMsg.Redo = redo
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
 			_, ok := err.(apperror.AppError)

@@ -30,17 +30,24 @@ var _ Event = &ReadyEvent{}
 type ReadyEvent struct {
 	Version      byte
 	DispatcherID common.DispatcherID
+	// for redo
+	Redo bool
 }
 
-func NewReadyEvent(dispatcherID common.DispatcherID) ReadyEvent {
+func NewReadyEvent(dispatcherID common.DispatcherID, redo bool) ReadyEvent {
 	return ReadyEvent{
 		Version:      ReadyEventVersion,
 		DispatcherID: dispatcherID,
+		Redo:         redo,
 	}
 }
 
 func (e *ReadyEvent) String() string {
 	return fmt.Sprintf("ReadyEvent{Version: %d, DispatcherID: %s}", e.Version, e.DispatcherID)
+}
+
+func (e *ReadyEvent) GetRedo() bool {
+	return e.Redo
 }
 
 // GetType returns the event type
@@ -78,7 +85,7 @@ func (e *ReadyEvent) GetStartTs() common.Ts {
 
 // GetSize returns the approximate size of the event in bytes
 func (e *ReadyEvent) GetSize() int64 {
-	return int64(1 + e.DispatcherID.GetSize())
+	return int64(2 + e.DispatcherID.GetSize())
 }
 
 func (e *ReadyEvent) IsPaused() bool {
@@ -118,6 +125,9 @@ func (e ReadyEvent) encodeV0() ([]byte, error) {
 	offset := 0
 	data[offset] = e.Version
 	offset += 1
+	// Redo
+	data[offset] = bool2byte(e.Redo)
+	offset += 1
 	copy(data[offset:], e.DispatcherID.Marshal())
 	offset += e.DispatcherID.GetSize()
 	return data, nil
@@ -126,6 +136,9 @@ func (e ReadyEvent) encodeV0() ([]byte, error) {
 func (e *ReadyEvent) decodeV0(data []byte) error {
 	offset := 0
 	e.Version = data[offset]
+	offset += 1
+	// Redo
+	e.Redo = byte2bool(data[offset])
 	offset += 1
 	dispatcherIDData := data[offset:]
 	return e.DispatcherID.Unmarshal(dispatcherIDData)
