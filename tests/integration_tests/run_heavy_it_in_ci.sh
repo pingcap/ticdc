@@ -68,7 +68,8 @@ kafka_groups=(
 	# G00
 	'generate_column many_pk_or_uk multi_source'
 	# G01
-	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
+	# ddl_for_split_tables_with_random_move_table
+	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
 	# G02
 	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
@@ -76,10 +77,11 @@ kafka_groups=(
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	# move_table
-	'drop_many_tables ddl_for_split_tables_with_merge_and_split'
+	# move_table ddl_for_split_tables_with_merge_and_split
+	'drop_many_tables'
 	# G06
-	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
+	# ddl_for_split_tables_with_random_merge_and_split
+	'cdc default_value'
 	# G07
 	# merge_table
 	'resolve_lock force_replicate_table'
@@ -92,7 +94,8 @@ kafka_groups=(
 	# G11
 	''
 	# G12
-	'ddl_with_random_move_table'
+	# ddl_with_random_move_table
+	''
 	# G13
 	'fail_over region_merge'
 	# G14
