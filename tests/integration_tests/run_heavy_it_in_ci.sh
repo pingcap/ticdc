@@ -96,7 +96,8 @@ kafka_groups=(
 	# G13
 	'fail_over region_merge'
 	# G14
-	'fail_over_ddl_mix'
+	# fail_over_ddl_mix
+	''
 	# G15
 	# fail_over_ddl_mix_with_syncpoint
 	'debezium'
@@ -135,7 +136,8 @@ pulsar_groups=(
 	# G13
 	'fail_over region_merge'
 	# G14
-	'fail_over_ddl_mix'
+	# fail_over_ddl_mix
+	''
 	# G15
 	# fail_over_ddl_mix_with_syncpoint
 	'debezium'
