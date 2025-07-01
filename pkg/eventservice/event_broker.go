@@ -491,21 +491,21 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	//quota, ok := c.changefeedAvailables.Load(task.info.GetChangefeedID().ID())
-	//if !ok {
-	//	log.Panic("cannot found the changefeed available memory quota",
-	//		zap.Any("changefeed", task.info.GetChangefeedID().ID()))
-	//}
+	quota, ok := c.changefeedAvailables.Load(task.info.GetChangefeedID().ID())
+	if !ok {
+		log.Panic("cannot found the changefeed available memory quota",
+			zap.Any("changefeed", task.info.GetChangefeedID().ID()))
+	}
 
-	//available := quota.(*atomic.Uint64).Load()
-	//if available <= 1024*1024*128 {
-	//	log.Info("scan quota is not enough, skip scan",
-	//		zap.String("changefeed", task.info.GetChangefeedID().String()),
-	//		zap.String("dispatcher", task.id.String()),
-	//		zap.String("remote", remoteID.String()),
-	//		zap.Uint64("available", available))
-	//	return
-	//}
+	available := quota.(*atomic.Uint64).Load()
+	if available <= 1024*1024*128 {
+		log.Info("scan quota is not enough, skip scan",
+			zap.String("changefeed", task.info.GetChangefeedID().String()),
+			zap.String("dispatcher", task.id.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available))
+		return
+	}
 
 	dataRange, needScan := c.getScanTaskDataRange(task)
 	if !needScan {
