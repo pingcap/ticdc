@@ -72,6 +72,8 @@ func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *
 	regionCache := appcontext.GetService[RegionCache](appcontext.RegionCache)
 	return &defaultSpanSplitChecker{
 		changefeedID:    changefeedID,
+		allTasks:        make(map[common.DispatcherID]*spanSplitStatus),
+		splitReadyTasks: make(map[common.DispatcherID]*spanSplitStatus),
 		writeThreshold:  schedulerCfg.WriteKeyThreshold,
 		regionThreshold: schedulerCfg.RegionThreshold,
 		regionCache:     regionCache,
@@ -123,6 +125,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 			status.trafficScore++
 		}
 	}
+	log.Info("default span split checker: update status", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
 
 	// check region count, because the change of region count is not frequent, so we can check less frequently
 	if time.Since(status.regionCheckTime) > regionCheckInterval {
@@ -146,13 +149,6 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 	}
 }
 
-type SplitType int
-
-const (
-	SplitByTraffic SplitType = iota
-	SplitByRegion
-)
-
 type DefaultSpanSplitCheckResult struct {
 	SplitType SplitType
 	Span      *SpanReplication
@@ -162,7 +158,7 @@ func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
 	results := make([]DefaultSpanSplitCheckResult, 0, batch)
 	for _, status := range s.splitReadyTasks {
 		// We prefer do traffic split when both traffic score and region count are high
-		if status.trafficScore > trafficScoreThreshold {
+		if status.trafficScore >= trafficScoreThreshold {
 			results = append(results, DefaultSpanSplitCheckResult{
 				SplitType: SplitByTraffic,
 				Span:      status.SpanReplication,

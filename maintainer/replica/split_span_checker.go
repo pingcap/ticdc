@@ -152,7 +152,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 
 	lastThreeTrafficPerNode := make(map[node.ID][]float64)
 	totalRegionCount := 0
-	lastThreeTraffic := make([]float64, 0, 3)
+	lastThreeTrafficSum := make([]float64, 3)
 	// nodeID -> []*splitSpanStatus
 	taskMap := make(map[node.ID][]*splitSpanStatus)
 
@@ -163,7 +163,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 
 	// step1. check whether the split spans should be split again
 	//        if a span's region count or traffic exceeds threshold, we should split it again
-	results = s.chooseSplitSpans(totalRegionCount, lastThreeTrafficPerNode, lastThreeTraffic, taskMap)
+	results = s.chooseSplitSpans(totalRegionCount, lastThreeTrafficPerNode, lastThreeTrafficSum, taskMap)
 	if len(results) > 0 {
 		// If some spans need to split, we just return the results
 		return results
@@ -172,14 +172,14 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	// step2. check whether the whole dispatchers should be merged together.
 	//        only when all spans' total region count and traffic are less then threshold/2, we can merge them together
 	//        consider we only support to merge the spans in the same node, we first do move, then merge
-	results = s.checkMergeWhole(totalRegionCount, lastThreeTraffic, lastThreeTrafficPerNode)
+	results = s.checkMergeWhole(totalRegionCount, lastThreeTrafficSum, lastThreeTrafficPerNode)
 	if len(results) > 0 {
 		return results
 	}
 
 	// step3. check the traffic of each node. If the traffic is not balanced,
 	//        we try to move some spans from the node with max traffic to the node with min traffic
-	results, minTrafficNodeID, maxTrafficNodeID := s.checkBalanceTraffic(aliveNodeIDs, lastThreeTraffic, lastThreeTrafficPerNode, taskMap)
+	results, minTrafficNodeID, maxTrafficNodeID := s.checkBalanceTraffic(aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap)
 	if len(results) > 0 {
 		return results
 	}
@@ -218,7 +218,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	//        if the span count is smaller than the upper limit, we don't need merge anymore.
 	upperSpanCount := 0
 	if s.writeThreshold > 0 {
-		upperSpanCount = int(math.Ceil(lastThreeTraffic[latestTrafficIndex] / float64(s.writeThreshold)))
+		upperSpanCount = int(math.Ceil(lastThreeTrafficSum[latestTrafficIndex] / float64(s.writeThreshold)))
 	}
 
 	if s.regionThreshold > 0 {
@@ -235,7 +235,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		log.Info("the span count is proper, so we don't need merge spans",
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Int64("groupID", s.groupID),
-			zap.Float64("totalTraffic", lastThreeTraffic[0]),
+			zap.Float64("totalTraffic", lastThreeTrafficSum[0]),
 			zap.Int("totalRegionCount", totalRegionCount),
 			zap.Int("regionThreshold", s.regionThreshold),
 			zap.Float32("writeThreshold", float32(s.writeThreshold)),
@@ -249,7 +249,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 
 // chooseMoveSpans chooses the spans to move to make we can merge the spans later.
 // we try to find some span move to the minTrafficNodeID
-// we each time just choose one span to move.
+// we each time just choose one span or one pair spans to move.
 func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, nodeSpans []*splitSpanStatus, sortedSpans []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
 	results := make([]SplitSpanCheckResult, 0)
 
@@ -283,7 +283,7 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 		trafficNextSpan := next.lastThreeTraffic[latestTrafficIndex]
 
 		// if the span traffic + minTrafficNodeID's traffic is less than the nextNodeID's traffic - this span traffic, we can move the span to the minTrafficNodeID directly
-		if trafficNextSpan+lastThreeTrafficPerNode[minTrafficNodeID][latestTrafficIndex] < lastThreeTrafficPerNode[nextNodeID][latestTrafficIndex]-trafficNextSpan {
+		if trafficNextSpan+lastThreeTrafficPerNode[minTrafficNodeID][latestTrafficIndex] <= lastThreeTrafficPerNode[nextNodeID][latestTrafficIndex]-trafficNextSpan {
 			results = append(results, SplitSpanCheckResult{
 				OpType: OpMove,
 				MoveSpans: []*SpanReplication{
@@ -291,7 +291,7 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 				},
 				TargetNode: minTrafficNodeID,
 			})
-			break
+			return results
 		}
 		// we need to also find span in minTrafficNodeID to move to nextNodeID to balance the whole traffic in node.
 		traffic := lastThreeTrafficPerNode[nextNodeID][latestTrafficIndex]
@@ -306,7 +306,7 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 			if span.ID == cur.ID {
 				continue
 			}
-			if span.lastThreeTraffic[latestTrafficIndex] > minTraffic && span.lastThreeTraffic[latestTrafficIndex] < maxTraffic {
+			if span.lastThreeTraffic[latestTrafficIndex] >= minTraffic && span.lastThreeTraffic[latestTrafficIndex] <= maxTraffic {
 				results = append(results, SplitSpanCheckResult{
 					OpType: OpMove,
 					MoveSpans: []*SpanReplication{
@@ -321,9 +321,10 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 					},
 					TargetNode: minTrafficNodeID,
 				})
-				break
+				return results
 			}
 		}
+		idx++
 	}
 
 	return results
@@ -424,7 +425,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 // check whether the whole dispatchers should be merged together.
 // only when all spans' total region count and traffic are less then threshold/2, we can merge them together
 // consider we only support to merge the spans in the same node, we first do move, then merge
-func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffic []float64, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
+func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTrafficSum []float64, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
 	results := make([]SplitSpanCheckResult, 0)
 
 	// check whether satisfy the threshold
@@ -433,7 +434,7 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 	}
 
 	if s.writeThreshold > 0 {
-		for _, traffic := range lastThreeTraffic {
+		for _, traffic := range lastThreeTrafficSum {
 			if traffic > float64(s.writeThreshold)/2 {
 				return results
 			}
@@ -485,11 +486,10 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 func (s *SplitSpanChecker) chooseSplitSpans(
 	totalRegionCount int,
 	lastThreeTrafficPerNode map[node.ID][]float64,
-	lastThreeTraffic []float64,
+	lastThreeTrafficSum []float64,
 	taskMap map[node.ID][]*splitSpanStatus,
 ) []SplitSpanCheckResult {
 	results := make([]SplitSpanCheckResult, 0)
-
 	for _, status := range s.allTasks {
 		if s.writeThreshold > 0 {
 			if status.trafficScore > trafficScoreThreshold {
@@ -502,9 +502,9 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			}
 			// Accumulate statistics for traffic balancing and node distribution
 			totalRegionCount += status.regionCount
-			lastThreeTraffic[0] += status.lastThreeTraffic[0]
-			lastThreeTraffic[1] += status.lastThreeTraffic[1]
-			lastThreeTraffic[2] += status.lastThreeTraffic[2]
+			lastThreeTrafficSum[0] += status.lastThreeTraffic[0]
+			lastThreeTrafficSum[1] += status.lastThreeTraffic[1]
+			lastThreeTrafficSum[2] += status.lastThreeTraffic[2]
 
 			nodeID := status.GetNodeID()
 			if nodeID == "" {
@@ -536,7 +536,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 // If not existing spans can be moved, we try to split a span from the node with max traffic.
 func (s *SplitSpanChecker) checkBalanceTraffic(
 	aliveNodeIDs []node.ID,
-	lastThreeTraffic []float64,
+	lastThreeTrafficSum []float64,
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
 ) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID) {
@@ -544,7 +544,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	// check whether the traffic is balance for each nodes
 	avgLastThreeTraffic := make([]float64, 3)
-	for idx, traffic := range lastThreeTraffic {
+	for idx, traffic := range lastThreeTrafficSum {
 		avgLastThreeTraffic[idx] = traffic / float64(nodeCount)
 	}
 

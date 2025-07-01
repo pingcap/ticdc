@@ -14,8 +14,6 @@
 package replica
 
 import (
-	"fmt"
-
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -32,37 +30,12 @@ const (
 	OpMove
 )
 
+type SplitType int
+
 const (
-	HotSpanWriteThreshold = 1024 * 1024 // 1MB per second
-	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
-	DefaultScoreThreshold = 10
-
-	// defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
-	defaultHardImbalanceThreshold = float64(5) // used to trigger the rebalance
-	clearTimeout                  = 300        // seconds
+	SplitByTraffic SplitType = iota
+	SplitByRegion
 )
-
-var MinSpanNumberCoefficient = 0
-
-type CheckResult struct {
-	OpType       OpType
-	Replications []*SpanReplication
-}
-
-func (c CheckResult) String() string {
-	opStr := ""
-	switch c.OpType {
-	case OpSplit:
-		opStr = "split"
-	case OpMerge:
-		opStr = "merge"
-	case OpMergeAndSplit:
-		opStr = "merge and split"
-	default:
-		panic("unknown op type")
-	}
-	return fmt.Sprintf("OpType: %s, ReplicationSize: %d", opStr, len(c.Replications))
-}
 
 func GetNewGroupChecker(
 	cfID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig,
