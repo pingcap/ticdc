@@ -181,11 +181,6 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 		return nil
 	}
 
-	dmlsSize := int(dmls.approximateSize)
-	for _, sql := range dmls.sqls {
-		dmlsSize += len(sql) + 100
-	}
-
 	var err error
 	if !w.cfg.DryRun {
 		err = w.execDMLWithMaxRetries(dmls)
