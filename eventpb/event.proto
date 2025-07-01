@@ -97,5 +97,6 @@ message DispatcherRequest {
     bool bdr_mode = 13;
     IntegrityConfig integrity = 14;
 	string timezone = 15;
-    bool redo = 16;
+    uint64 epoch = 16;
+    bool redo = 17;
 }

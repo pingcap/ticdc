@@ -17,7 +17,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 )
@@ -100,11 +100,11 @@ func rewriteColsOffset(index *model.IndexInfo, source *common.TableInfo) *model.
 func getPKIsHandleIdx(ti *common.TableInfo) *model.IndexInfo {
 	if pk := ti.GetPkColInfo(); pk != nil {
 		return &model.IndexInfo{
-			Table:   pmodel.CIStr{O: ti.TableName.Table, L: ti.TableName.Table},
+			Table:   ast.CIStr{O: ti.TableName.Table, L: ti.TableName.Table},
 			Unique:  true,
 			Primary: true,
 			State:   model.StatePublic,
-			Tp:      pmodel.IndexTypeBtree,
+			Tp:      ast.IndexTypeBtree,
 			Columns: []*model.IndexColumn{{
 				Name:   pk.Name,
 				Offset: pk.Offset,

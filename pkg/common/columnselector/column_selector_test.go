@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,13 +80,13 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 		selector := selectors.Get("test", "t1")
 		columns := []*model.ColumnInfo{
 			{
-				Name: pmodel.NewCIStr("a"),
+				Name: ast.NewCIStr("a"),
 			},
 			{
-				Name: pmodel.NewCIStr("b"),
+				Name: ast.NewCIStr("b"),
 			},
 			{
-				Name: pmodel.NewCIStr("c"),
+				Name: ast.NewCIStr("c"),
 			},
 		}
 		for _, col := range columns {
@@ -102,13 +102,13 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 		selector := selectors.Get("test1", "aaa")
 		columns := []*model.ColumnInfo{
 			{
-				Name: pmodel.NewCIStr("a"),
+				Name: ast.NewCIStr("a"),
 			},
 			{
-				Name: pmodel.NewCIStr("b"),
+				Name: ast.NewCIStr("b"),
 			},
 			{
-				Name: pmodel.NewCIStr("c"),
+				Name: ast.NewCIStr("c"),
 			},
 		}
 		for _, col := range columns {
@@ -124,13 +124,13 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 		selector := selectors.Get("test2", "t2")
 		columns := []*model.ColumnInfo{
 			{
-				Name: pmodel.NewCIStr("a"),
+				Name: ast.NewCIStr("a"),
 			},
 			{
-				Name: pmodel.NewCIStr("col2"),
+				Name: ast.NewCIStr("col2"),
 			},
 			{
-				Name: pmodel.NewCIStr("col1"),
+				Name: ast.NewCIStr("col1"),
 			},
 		}
 		for _, col := range columns {
@@ -146,13 +146,13 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 		selector := selectors.Get("test3", "t3")
 		columns := []*model.ColumnInfo{
 			{
-				Name: pmodel.NewCIStr("a"),
+				Name: ast.NewCIStr("a"),
 			},
 			{
-				Name: pmodel.NewCIStr("col2"),
+				Name: ast.NewCIStr("col2"),
 			},
 			{
-				Name: pmodel.NewCIStr("col1"),
+				Name: ast.NewCIStr("col1"),
 			},
 		}
 		for _, col := range columns {
@@ -168,13 +168,13 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 		selector := selectors.Get("test4", "t4")
 		columns := []*model.ColumnInfo{
 			{
-				Name: pmodel.NewCIStr("a"),
+				Name: ast.NewCIStr("a"),
 			},
 			{
-				Name: pmodel.NewCIStr("col2"),
+				Name: ast.NewCIStr("col2"),
 			},
 			{
-				Name: pmodel.NewCIStr("col1"),
+				Name: ast.NewCIStr("col1"),
 			},
 		}
 		for _, col := range columns {

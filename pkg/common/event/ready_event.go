@@ -54,6 +54,11 @@ func (e *ReadyEvent) GetSeq() uint64 {
 	return 0
 }
 
+func (e *ReadyEvent) GetEpoch() uint64 {
+	// not used
+	return 0
+}
+
 // GetDispatcherID returns the dispatcher ID
 func (e *ReadyEvent) GetDispatcherID() common.DispatcherID {
 	return e.DispatcherID

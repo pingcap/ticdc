@@ -27,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -205,7 +205,7 @@ func getColumns(tx *sql.Tx, schema, table string, selector columnselector.Select
 		if err := rows.Scan(&t.Field, &t.Type, &t.Null, &t.Key, &t.Default, &t.Extra); err != nil {
 			return result, errors.Trace(err)
 		}
-		colInfo := &model.ColumnInfo{Name: pmodel.NewCIStr(t.Field)}
+		colInfo := &model.ColumnInfo{Name: ast.NewCIStr(t.Field)}
 		if selector.Select(colInfo) {
 			result = append(result, t.Field)
 		}

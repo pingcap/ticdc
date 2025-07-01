@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -35,9 +35,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "normal columns without update",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -51,9 +51,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "normal columns with update",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -67,9 +67,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "with generated columns",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "full_name", L: "full_name"}, ID: 3, FieldType: types.FieldType{}}, // generated column
+				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "full_name", L: "full_name"}, ID: 3, FieldType: types.FieldType{}}, // generated column
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -83,9 +83,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "with nil column",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
 				nil,
-				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -125,9 +125,9 @@ func newFieldTypeWithFlag(flags ...uint) *types.FieldType {
 
 func TestColumnIndex(t *testing.T) {
 	columns := []*model.ColumnInfo{
-		{ID: 101, Name: pmodel.NewCIStr("a"), FieldType: *newFieldTypeWithFlag(mysql.PriKeyFlag)},
-		{ID: 102, Name: pmodel.NewCIStr("b"), FieldType: *newFieldTypeWithFlag(mysql.UniqueKeyFlag)},
-		{ID: 103, Name: pmodel.NewCIStr("c"), FieldType: *newFieldTypeWithFlag()},
+		{ID: 101, Name: ast.NewCIStr("a"), FieldType: *newFieldTypeWithFlag(mysql.PriKeyFlag)},
+		{ID: 102, Name: ast.NewCIStr("b"), FieldType: *newFieldTypeWithFlag(mysql.UniqueKeyFlag)},
+		{ID: 103, Name: ast.NewCIStr("c"), FieldType: *newFieldTypeWithFlag()},
 	}
 	tableInfo := WrapTableInfo("test", &model.TableInfo{
 		PKIsHandle: true,
@@ -160,10 +160,10 @@ func TestIndexByName(t *testing.T) {
 	tableInfo = WrapTableInfo("test", &model.TableInfo{
 		Indices: []*model.IndexInfo{
 			{
-				Name: pmodel.NewCIStr("idx1"),
+				Name: ast.NewCIStr("idx1"),
 				Columns: []*model.IndexColumn{
 					{
-						Name: pmodel.NewCIStr("col1"),
+						Name: ast.NewCIStr("col1"),
 					},
 				},
 			},
@@ -195,15 +195,15 @@ func TestColumnsByNames(t *testing.T) {
 	tableInfo := WrapTableInfo("test", &model.TableInfo{
 		Columns: []*model.ColumnInfo{
 			{
-				Name: pmodel.NewCIStr("col2"),
+				Name: ast.NewCIStr("col2"),
 				ID:   1,
 			},
 			{
-				Name: pmodel.NewCIStr("col1"),
+				Name: ast.NewCIStr("col1"),
 				ID:   0,
 			},
 			{
-				Name: pmodel.NewCIStr("col3"),
+				Name: ast.NewCIStr("col3"),
 				ID:   2,
 			},
 		},
@@ -233,15 +233,15 @@ func TestColumnsByNames(t *testing.T) {
 func TestHandleKey(t *testing.T) {
 	tableInfo := &model.TableInfo{
 		Columns: []*model.ColumnInfo{
-			{ID: 1, Name: pmodel.NewCIStr("id"), Offset: 0},
-			{ID: 2, Name: pmodel.NewCIStr("name"), Offset: 1},
+			{ID: 1, Name: ast.NewCIStr("id"), Offset: 0},
+			{ID: 2, Name: ast.NewCIStr("name"), Offset: 1},
 		},
 		Indices: []*model.IndexInfo{
 			{
 				ID: 1,
 				Columns: []*model.IndexColumn{
-					{Name: pmodel.NewCIStr("id"), Offset: 0},
-					{Name: pmodel.NewCIStr("name"), Offset: 1},
+					{Name: ast.NewCIStr("id"), Offset: 0},
+					{Name: ast.NewCIStr("name"), Offset: 1},
 				},
 				Primary: true,
 			},

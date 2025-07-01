@@ -55,6 +55,7 @@ type DispatcherInfo interface {
 	GetIntegrity() *integrity.Config
 	GetTimezone() *time.Location
 	GetRedo() bool
+	GetEpoch() uint64
 }
 
 type DispatcherHeartBeatWithServerID struct {

@@ -48,7 +48,10 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	replication := replications[0]
 
 	op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-	c.operatorController.AddOperator(op)
+	ret := c.operatorController.AddOperator(op)
+	if !ret {
+		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+	}
 
 	// check the op is finished or not
 	count := 0
@@ -81,7 +84,13 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 			continue
 		}
 		op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-		c.operatorController.AddOperator(op)
+		ret := c.operatorController.AddOperator(op)
+		if !ret {
+			for _, op := range opList {
+				op.OnTaskRemoved()
+			}
+			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+		}
 		opList = append(opList, op)
 	}
 
@@ -145,6 +154,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 	randomIdx := rand.Intn(len(replications))
 	primaryID := replications[randomIdx].ID
 	primaryOp := operator.NewMergeSplitDispatcherOperator(c.spanController, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
+	operators := make([]*operator.MergeSplitDispatcherOperator, 0, len(replications))
 	for _, replicaSet := range replications {
 		var op *operator.MergeSplitDispatcherOperator
 		if replicaSet.ID == primaryID {
@@ -154,8 +164,13 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		}
 		ret := c.operatorController.AddOperator(op)
 		if !ret {
+			// this op is created failed, so we need to remove the previous operators. Otherwise, the previous operators will never finish.
+			for _, op := range operators {
+				op.OnTaskRemoved()
+			}
 			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge split dispatcher operator")
 		}
+		operators = append(operators, op)
 	}
 
 	count := 0
