@@ -33,8 +33,8 @@ function run() {
 	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config $CUR/conf/changefeed.toml ;;
 	esac
 	run_sql_file $CUR/data/virtual.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
