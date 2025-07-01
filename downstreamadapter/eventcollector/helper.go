@@ -70,7 +70,6 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		return false
 	}
 
-	// log.Info("fizz handle events", zap.Any("events", events))
 	// Only check the first event type, because all events in the same batch should be in the same type group.
 	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
@@ -159,7 +158,7 @@ func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream
 
 func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
 	switch event.GetType() {
-	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent:
+	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent, commonEvent.TypeBatchDMLEvent:
 		log.Info("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
 		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetEpoch(), event.GetCommitTs())
 		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
