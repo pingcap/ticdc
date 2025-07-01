@@ -33,7 +33,7 @@ function prepare() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
-	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
+	TOPIC_NAME="ticdc-failover-ddl-test-mix-with-syncpoint-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
 
 	case $SINK_TYPE in

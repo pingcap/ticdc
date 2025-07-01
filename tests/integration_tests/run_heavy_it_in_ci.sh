@@ -30,13 +30,13 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'generate_column many_pk_or_uk'
+	'generate_column many_pk_or_uk multi_source'
 	# G01
 	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G02
 	'availability ddl_for_split_tables_with_failover'
 	# G03
-	'multi_source'
+	''
 	# G04
 	'syncpoint syncpoint_check_ts'
 	# G05
@@ -60,14 +60,15 @@ mysql_groups=(
 	# G14
 	'fail_over_ddl_mix'
 	# G15
-	# 'fail_over_ddl_mix_with_syncpoint'
+	#'fail_over_ddl_mix_with_syncpoint'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
 	# G00
-	'many_pk_or_uk generate_column multi_source'
+	'generate_column many_pk_or_uk multi_source'
 	# G01
+	# ddl_for_split_tables_with_random_move_table
 	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
 	# G02
 	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table'
@@ -76,11 +77,13 @@ kafka_groups=(
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	# 'move_table drop_many_tables'
+	# move_table ddl_for_split_tables_with_merge_and_split
 	'drop_many_tables'
 	# G06
+	# ddl_for_split_tables_with_random_merge_and_split
 	'cdc default_value'
 	# G07
+	# merge_table
 	'resolve_lock force_replicate_table'
 	# G08
 	'tidb_mysql_test'
@@ -91,12 +94,15 @@ kafka_groups=(
 	# G11
 	''
 	# G12
+	# ddl_with_random_move_table
 	''
 	# G13
 	'fail_over region_merge'
 	# G14
+	# fail_over_ddl_mix
 	''
 	# G15
+	# fail_over_ddl_mix_with_syncpoint
 	'debezium'
 )
 
@@ -105,18 +111,20 @@ pulsar_groups=(
 	# G00
 	'generate_column many_pk_or_uk multi_source'
 	# G01
-	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
+	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
 	# G02
-	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table'
+	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table ddl_for_split_tables_with_failover'
 	# G03
 	'canal_json_adapter_compatibility'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	'move_table drop_many_tables'
+	# move_table
+	'drop_many_tables ddl_for_split_tables_with_merge_and_split'
 	# G06
 	'cdc default_value'
 	# G07
+	# merge_table
 	'resolve_lock force_replicate_table'
 	# G08
 	'tidb_mysql_test'
@@ -127,12 +135,14 @@ pulsar_groups=(
 	# G11
 	''
 	# G12
-	''
+	'ddl_with_random_move_table'
 	# G13
 	'fail_over region_merge'
 	# G14
+	# fail_over_ddl_mix
 	''
 	# G15
+	# fail_over_ddl_mix_with_syncpoint
 	'debezium'
 )
 
