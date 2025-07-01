@@ -78,7 +78,7 @@ func (h *mockHandler) Handle(dest any, events ...*mockEvent) (await bool) {
 	return false
 }
 
-func (h *mockHandler) GetSize(event *mockEvent) int            { return 0 }
+func (h *mockHandler) GetSize(event *mockEvent) uint64         { return 0 }
 func (h *mockHandler) GetArea(path string, dest any) int       { return 0 }
 func (h *mockHandler) GetTimestamp(event *mockEvent) Timestamp { return 0 }
 func (h *mockHandler) GetType(event *mockEvent) EventType      { return DefaultEventType }

@@ -235,22 +235,22 @@ func TestUpdateAreaPauseState(t *testing.T) {
 	mc.addPathToArea(path, settings, feedbackChan)
 	areaMemStat := path.areaMemStat
 
-	areaMemStat.totalPendingSize.Store(int64(10))
+	areaMemStat.totalPendingSize.Store(uint64(10))
 	areaMemStat.updateAreaPauseState(path)
 	require.False(t, areaMemStat.paused.Load())
 
-	areaMemStat.totalPendingSize.Store(int64(60))
+	areaMemStat.totalPendingSize.Store(uint64(60))
 	areaMemStat.updateAreaPauseState(path)
 	require.False(t, areaMemStat.paused.Load())
 
-	areaMemStat.totalPendingSize.Store(int64(80))
+	areaMemStat.totalPendingSize.Store(uint64(80))
 	areaMemStat.updateAreaPauseState(path)
 	require.True(t, areaMemStat.paused.Load())
 	fb := <-feedbackChan
 	require.Equal(t, PauseArea, fb.FeedbackType)
 	require.Equal(t, path.area, fb.Area)
 
-	areaMemStat.totalPendingSize.Store(int64(30))
+	areaMemStat.totalPendingSize.Store(uint64(30))
 	areaMemStat.updateAreaPauseState(path)
 	require.False(t, areaMemStat.paused.Load())
 	fb = <-feedbackChan
@@ -279,18 +279,18 @@ func TestUpdatePathPauseState(t *testing.T) {
 	mc.addPathToArea(path, settings, feedbackChan)
 	areaMemStat := path.areaMemStat
 
-	path.pendingSize.Store(int64(10))
+	path.pendingSize.Store(uint64(10))
 	areaMemStat.updatePathPauseState(path)
 	require.False(t, path.paused.Load())
 
-	path.pendingSize.Store(int64(60))
+	path.pendingSize.Store(uint64(60))
 	areaMemStat.updatePathPauseState(path)
 	require.True(t, path.paused.Load())
 	fb := <-feedbackChan
 	require.Equal(t, PausePath, fb.FeedbackType)
 	require.Equal(t, path.area, fb.Area)
 
-	path.pendingSize.Store(int64(9))
+	path.pendingSize.Store(uint64(9))
 	areaMemStat.updatePathPauseState(path)
 	require.True(t, path.paused.Load())
 
