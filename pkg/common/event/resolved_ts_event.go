@@ -239,7 +239,7 @@ func (e ResolvedEvent) String() string {
 
 // Update GetSize method to reflect the new structure
 func (e ResolvedEvent) GetSize() int64 {
-	return int64(1 + 8 + e.State.GetSize() + e.DispatcherID.GetSize()) // Version(1) + ResolvedTs(8) + State(1) + DispatcherID(16)
+	return int64(2 + 8 + e.State.GetSize() + e.DispatcherID.GetSize()) // Version(1) + Redo(1) + ResolvedTs(8) + State(1) + DispatcherID(16)
 }
 
 func (e ResolvedEvent) IsPaused() bool {
