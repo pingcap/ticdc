@@ -26,8 +26,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -279,7 +279,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 				},
 			},
@@ -372,12 +372,12 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 					tables: []*model.TableInfo{
 						{
 							ID:        200,
-							Name:      pmodel.NewCIStr("t1"),
+							Name:      ast.NewCIStr("t1"),
 							Partition: buildPartitionDefinitionsForTest([]int64{201, 202, 203}),
 						},
 					},
@@ -640,13 +640,13 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 				},
 				{
 					dbInfo: &model.DBInfo{
 						ID:   105,
-						Name: pmodel.NewCIStr("test2"),
+						Name: ast.NewCIStr("test2"),
 					},
 				},
 			},
@@ -788,13 +788,13 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 				},
 				{
 					dbInfo: &model.DBInfo{
 						ID:   105,
-						Name: pmodel.NewCIStr("test2"),
+						Name: ast.NewCIStr("test2"),
 					},
 				},
 			},
@@ -960,13 +960,13 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 				},
 				{
 					dbInfo: &model.DBInfo{
 						ID:   105,
-						Name: pmodel.NewCIStr("test2"),
+						Name: ast.NewCIStr("test2"),
 					},
 				},
 			},
@@ -1108,23 +1108,23 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 					tables: []*model.TableInfo{
 						{
 							ID:   200,
-							Name: pmodel.NewCIStr("t1"),
+							Name: ast.NewCIStr("t1"),
 						},
 						{
 							ID:   201,
-							Name: pmodel.NewCIStr("t2"),
+							Name: ast.NewCIStr("t2"),
 						},
 					},
 				},
 				{
 					dbInfo: &model.DBInfo{
 						ID:   105,
-						Name: pmodel.NewCIStr("test2"),
+						Name: ast.NewCIStr("test2"),
 					},
 				},
 			},
@@ -1297,7 +1297,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 				},
 			},
@@ -1473,7 +1473,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 				},
 			},
@@ -1657,12 +1657,12 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 					tables: []*model.TableInfo{
 						{
 							ID:   300,
-							Name: pmodel.NewCIStr("t1"),
+							Name: ast.NewCIStr("t1"),
 						},
 					},
 				},
@@ -1793,12 +1793,12 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   100,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 					tables: []*model.TableInfo{
 						{
 							ID:   300,
-							Name: pmodel.NewCIStr("t1"),
+							Name: ast.NewCIStr("t1"),
 						},
 					},
 				},
@@ -1807,15 +1807,15 @@ func TestApplyDDLJobs(t *testing.T) {
 				return []*model.Job{
 					buildAddPrimaryKeyJobForTest(100, 300, 1010, &model.IndexInfo{
 						ID:        500,
-						Name:      pmodel.NewCIStr("idx1"),
-						Table:     pmodel.NewCIStr("t1"),
+						Name:      ast.NewCIStr("idx1"),
+						Table:     ast.NewCIStr("t1"),
 						Primary:   true,
 						Invisible: true,
 					}),
 					buildAlterIndexVisibilityJobForTest(100, 300, 1020, &model.IndexInfo{
 						ID:        500,
-						Name:      pmodel.NewCIStr("idx1"),
-						Table:     pmodel.NewCIStr("t1"),
+						Name:      ast.NewCIStr("idx1"),
+						Table:     ast.NewCIStr("t1"),
 						Primary:   true,
 						Invisible: false,
 					}),
@@ -2139,12 +2139,12 @@ func TestRegisterTable(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   50,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 					tables: []*model.TableInfo{
 						{
 							ID:   99,
-							Name: pmodel.NewCIStr("t1"),
+							Name: ast.NewCIStr("t1"),
 						},
 					},
 				},
@@ -2174,7 +2174,7 @@ func TestRegisterTable(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   50,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 				},
 			},
@@ -2204,7 +2204,7 @@ func TestRegisterTable(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   50,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 				},
 			},
@@ -2238,12 +2238,12 @@ func TestRegisterTable(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   50,
-						Name: pmodel.NewCIStr("test"),
+						Name: ast.NewCIStr("test"),
 					},
 					tables: []*model.TableInfo{
 						{
 							ID:        102,
-							Name:      pmodel.NewCIStr("t1"),
+							Name:      ast.NewCIStr("t1"),
 							Partition: buildPartitionDefinitionsForTest([]int64{201, 202, 203}),
 						},
 					},
@@ -2325,16 +2325,16 @@ func TestGCPersistStorage(t *testing.T) {
 		{
 			dbInfo: &model.DBInfo{
 				ID:   schemaID,
-				Name: pmodel.NewCIStr("test"),
+				Name: ast.NewCIStr("test"),
 			},
 			tables: []*model.TableInfo{
 				{
 					ID:   tableID1,
-					Name: pmodel.NewCIStr("t1"),
+					Name: ast.NewCIStr("t1"),
 				},
 				{
 					ID:   tableID2,
-					Name: pmodel.NewCIStr("t2"),
+					Name: ast.NewCIStr("t2"),
 				},
 			},
 		},
@@ -2353,7 +2353,7 @@ func TestGCPersistStorage(t *testing.T) {
 				SchemaVersion: 501,
 				TableInfo: &model.TableInfo{
 					ID:   tableID3,
-					Name: pmodel.NewCIStr("t3"),
+					Name: ast.NewCIStr("t3"),
 				},
 				FinishedTS: 602,
 			},
@@ -2386,7 +2386,7 @@ func TestGCPersistStorage(t *testing.T) {
 				SchemaVersion: 505,
 				TableInfo: &model.TableInfo{
 					ID:   tableID1,
-					Name: pmodel.NewCIStr("t1_r"),
+					Name: ast.NewCIStr("t1_r"),
 				},
 				FinishedTS: 605,
 			},
@@ -2411,16 +2411,16 @@ func TestGCPersistStorage(t *testing.T) {
 			{
 				dbInfo: &model.DBInfo{
 					ID:   schemaID,
-					Name: pmodel.NewCIStr("test"),
+					Name: ast.NewCIStr("test"),
 				},
 				tables: []*model.TableInfo{
 					{
 						ID:   tableID1,
-						Name: pmodel.NewCIStr("t1"),
+						Name: ast.NewCIStr("t1"),
 					},
 					{
 						ID:   tableID2,
-						Name: pmodel.NewCIStr("t2"),
+						Name: ast.NewCIStr("t2"),
 					},
 				},
 			},
@@ -2442,16 +2442,16 @@ func TestGCPersistStorage(t *testing.T) {
 			{
 				dbInfo: &model.DBInfo{
 					ID:   schemaID,
-					Name: pmodel.NewCIStr("test"),
+					Name: ast.NewCIStr("test"),
 				},
 				tables: []*model.TableInfo{
 					{
 						ID:   tableID1,
-						Name: pmodel.NewCIStr("t1"),
+						Name: ast.NewCIStr("t1"),
 					},
 					{
 						ID:   tableID2,
-						Name: pmodel.NewCIStr("t3"),
+						Name: ast.NewCIStr("t3"),
 					},
 				},
 			},

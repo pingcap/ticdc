@@ -22,7 +22,7 @@ import (
 
 func TestDropEvent(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewDropEvent(did, 123, 456)
+	e := NewDropEvent(did, 123, 100, 456)
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize()))
@@ -38,7 +38,7 @@ func TestDropEvent(t *testing.T) {
 
 func TestDropEventMethods(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewDropEvent(did, 123, 456)
+	e := NewDropEvent(did, 123, 100, 456)
 
 	// Test GetType
 	require.Equal(t, TypeDropEvent, e.GetType())
@@ -73,6 +73,7 @@ func TestDropEventMarshalUnmarshal(t *testing.T) {
 			event: NewDropEvent(
 				common.NewDispatcherID(),
 				123,
+				100,
 				456,
 			),
 			wantError: false,
@@ -92,6 +93,7 @@ func TestDropEventMarshalUnmarshal(t *testing.T) {
 			event: NewDropEvent(
 				common.NewDispatcherID(),
 				^uint64(0),
+				0,
 				common.Ts(^uint64(0)),
 			),
 			wantError: false,
@@ -132,6 +134,7 @@ func TestDropEventEncodeDecode(t *testing.T) {
 			event: NewDropEvent(
 				common.NewDispatcherID(),
 				123,
+				100,
 				456,
 			),
 			wantError: false,

@@ -25,7 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
@@ -161,7 +161,7 @@ func newEligibleTableInfoForTest(tableID int64, tableName string) *model.TableIn
 	columnInfo.SetFlag(mysql.PriKeyFlag)
 	return &model.TableInfo{
 		ID:         tableID,
-		Name:       pmodel.NewCIStr(tableName),
+		Name:       ast.NewCIStr(tableName),
 		Columns:    []*model.ColumnInfo{columnInfo},
 		PKIsHandle: true,
 	}
@@ -183,7 +183,7 @@ func buildCreateSchemaJobForTest(schemaID int64, schemaName string, finishedTs u
 		BinlogInfo: &model.HistoryInfo{
 			DBInfo: &model.DBInfo{
 				ID:   schemaID,
-				Name: pmodel.NewCIStr(schemaName),
+				Name: ast.NewCIStr(schemaName),
 			},
 			FinishedTS: finishedTs,
 		},
@@ -298,9 +298,9 @@ func buildRenameTablesJobForTest(
 			OldSchemaID:   oldSchemaIDs[i],
 			NewSchemaID:   newSchemaIDs[i],
 			TableID:       tableIDs[i],
-			NewTableName:  pmodel.NewCIStr(newTableNames[i]),
-			OldSchemaName: pmodel.NewCIStr(oldSchemaNames[i]),
-			OldTableName:  pmodel.NewCIStr(oldTableNames[i]),
+			NewTableName:  ast.NewCIStr(newTableNames[i]),
+			OldSchemaName: ast.NewCIStr(oldSchemaNames[i]),
+			OldTableName:  ast.NewCIStr(oldTableNames[i]),
 		})
 		multiTableInfos = append(multiTableInfos, newEligibleTableInfoForTest(tableIDs[i], newTableNames[i]))
 	}

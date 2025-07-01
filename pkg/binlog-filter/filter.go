@@ -115,6 +115,7 @@ const (
 	AlterTTLInfo                  EventType = "alter ttl info"
 	AlterTTLRemove                EventType = "alter ttl remove"
 	MultiSchemaChange             EventType = "multi schema change"
+	AddFullTextIndex              EventType = "add fulltext index"
 
 	// NullEvent is used to represents unsupported ddl event type when we
 	// convert a ast.StmtNode or a string to EventType.

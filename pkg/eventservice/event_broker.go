@@ -183,6 +183,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 		dml := batchEvent.DMLEvents[i]
 		// Set sequence number for the event
 		dml.Seq = d.seq.Add(1)
+		dml.Epoch = d.epoch.Load()
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(i)
 			doSendDML(events)
@@ -201,6 +202,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
+	e.Epoch = d.epoch.Load()
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
@@ -220,7 +222,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
-	re := pevent.NewResolvedEvent(watermark, d.id)
+	re := pevent.NewResolvedEvent(watermark, d.id, d.epoch.Load())
 	resolvedEvent := newWrapResolvedEvent(
 		remoteID,
 		re,
@@ -417,6 +419,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		task.id,
 		task.resetTs.Load(),
 		task.seq.Add(1),
+		task.epoch.Load(),
 		task.startTableInfo.Load())
 	c.getMessageCh(task.messageWorkerIndex) <- newWrapHandshakeEvent(remoteID, handshake)
 	metricEventServiceSendCommandCount.Inc()
@@ -444,13 +447,13 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		if len(commitTsList) > 16 {
 			newCommitTsList = commitTsList[:16]
 		}
-		syncPointEvent := newWrapSyncPointEvent(
-			remoteID,
-			&pevent.SyncPointEvent{
-				DispatcherID: d.id,
-				CommitTsList: newCommitTsList,
-			},
-			d.getEventSenderState())
+		e := &pevent.SyncPointEvent{
+			DispatcherID: d.id,
+			CommitTsList: newCommitTsList,
+			Seq:          d.seq.Add(1),
+			Epoch:        d.epoch.Load(),
+		}
+		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
 		c.getMessageCh(d.messageWorkerIndex) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
@@ -520,9 +523,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return true
 	})
 	available = max(1024*1024*8, available/count)
-	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
+	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.epoch.Load())
 	sl := calculateScanLimit(task, available)
-
 	// interrupted means scan too many entries hits the limit, still ok to send scanned events.
 	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
@@ -943,6 +945,16 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	oldSeq := stat.seq.Load()
 	oldSentResolvedTs := stat.sentResolvedTs.Load()
 	stat.resetState(dispatcherInfo.GetStartTs())
+	newEpoch := dispatcherInfo.GetEpoch()
+	for {
+		oldEpoch := stat.epoch.Load()
+		if oldEpoch >= newEpoch {
+			break
+		}
+		if stat.epoch.CompareAndSwap(oldEpoch, newEpoch) {
+			break
+		}
+	}
 
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
@@ -951,6 +963,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("originStartTs", stat.info.GetStartTs()),
 		zap.Uint64("oldSeq", oldSeq),
 		zap.Uint64("newSeq", stat.seq.Load()),
+		zap.Uint64("newEpoch", newEpoch),
 		zap.Uint64("oldSentResolvedTs", oldSentResolvedTs),
 		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()))
 }

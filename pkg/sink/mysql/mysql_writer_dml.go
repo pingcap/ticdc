@@ -737,15 +737,10 @@ func (w *Writer) groupRowsByType(
 	deleteRow := make([]*sqlmodel.RowChange, 0, rowSize)
 
 	eventTableInfo := tableInfo
-	// RowChangedEvent doesn't contain data for virtual columns,
-	// so we need to create a new table info without virtual columns before pass it to NewRowChange.
-	if eventTableInfo.HasVirtualColumns() {
-		eventTableInfo = common.BuildTiDBTableInfoWithoutVirtualColumns(eventTableInfo)
-	}
 	for _, row := range rows {
 		switch row.RowType {
 		case commonEvent.RowTypeInsert:
-			args := getArgs(&row.Row, tableInfo, true)
+			args := getArgsWithGeneratedColumn(&row.Row, tableInfo)
 			newInsertRow := sqlmodel.NewRowChange(
 				&tableInfo.TableName,
 				nil,
@@ -760,8 +755,8 @@ func (w *Writer) groupRowsByType(
 				insertRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}
 		case commonEvent.RowTypeUpdate:
-			args := getArgs(&row.Row, tableInfo, true)
-			preArgs := getArgs(&row.PreRow, tableInfo, true)
+			args := getArgsWithGeneratedColumn(&row.Row, tableInfo)
+			preArgs := getArgsWithGeneratedColumn(&row.PreRow, tableInfo)
 			newUpdateRow := sqlmodel.NewRowChange(
 				&tableInfo.TableName,
 				nil,
@@ -775,7 +770,7 @@ func (w *Writer) groupRowsByType(
 				updateRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}
 		case commonEvent.RowTypeDelete:
-			preArgs := getArgs(&row.PreRow, tableInfo, true)
+			preArgs := getArgsWithGeneratedColumn(&row.PreRow, tableInfo)
 			newDeleteRow := sqlmodel.NewRowChange(
 				&tableInfo.TableName,
 				nil,

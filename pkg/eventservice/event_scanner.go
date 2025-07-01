@@ -59,6 +59,7 @@ type eventScanner struct {
 	eventGetter  eventGetter
 	schemaGetter schemaGetter
 	mounter      pevent.Mounter
+	epoch        uint64
 }
 
 // newEventScanner creates a new EventScanner
@@ -66,11 +67,13 @@ func newEventScanner(
 	eventStore eventstore.EventStore,
 	schemaStore schemastore.SchemaStore,
 	mounter pevent.Mounter,
+	epoch uint64,
 ) *eventScanner {
 	return &eventScanner{
 		eventGetter:  eventStore,
 		schemaGetter: schemaStore,
 		mounter:      mounter,
+		epoch:        epoch,
 	}
 }
 
@@ -166,7 +169,7 @@ func (s *eventScanner) getEventIterator(session *session) (eventstore.EventItera
 
 // handleEmptyIterator handles the case when there are no DML events
 func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, session *session) []event.Event {
-	merger := newEventMerger(ddlEvents, session.dispatcherStat.id)
+	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
 	events := merger.appendRemainingDDLs(session.dataRange.EndTs)
 	return events
 }
@@ -187,7 +190,7 @@ func (s *eventScanner) scanAndMergeEvents(
 	ddlEvents []pevent.DDLEvent,
 	iter eventstore.EventIterator,
 ) ([]event.Event, bool, error) {
-	merger := newEventMerger(ddlEvents, session.dispatcherStat.id)
+	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
 	// todo: can we remove this checker, use session to check limits, or let the limit check itself ?
 	checker := newLimitChecker(session.limit.maxScannedBytes, session.limit.timeout, session.limit.maxDMLBytes, session.startTime)
@@ -432,14 +435,20 @@ type eventMerger struct {
 	ddlEvents    []pevent.DDLEvent
 	ddlIndex     int
 	dispatcherID common.DispatcherID
+	epoch        uint64
 }
 
 // newEventMerger creates a new event merger
-func newEventMerger(ddlEvents []pevent.DDLEvent, dispatcherID common.DispatcherID) *eventMerger {
+func newEventMerger(
+	ddlEvents []pevent.DDLEvent,
+	dispatcherID common.DispatcherID,
+	epoch uint64,
+) *eventMerger {
 	return &eventMerger{
 		ddlEvents:    ddlEvents,
 		ddlIndex:     0,
 		dispatcherID: dispatcherID,
+		epoch:        epoch,
 	}
 }
 
@@ -473,7 +482,7 @@ func (m *eventMerger) appendRemainingDDLs(endTs uint64) []event.Event {
 		m.ddlIndex++
 	}
 
-	events = append(events, pevent.NewResolvedEvent(endTs, m.dispatcherID))
+	events = append(events, pevent.NewResolvedEvent(endTs, m.dispatcherID, m.epoch))
 
 	return events
 }

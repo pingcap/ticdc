@@ -465,15 +465,3 @@ func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo 
 	result.InitPrivateFields()
 	return result
 }
-
-// BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info
-func BuildTiDBTableInfoWithoutVirtualColumns(source *TableInfo) *TableInfo {
-	newColumnSchema := source.columnSchema.getColumnSchemaWithoutVirtualColumns()
-	tableInfo := &TableInfo{
-		TableName:    source.TableName,
-		columnSchema: newColumnSchema,
-	}
-
-	tableInfo.InitPrivateFields()
-	return tableInfo
-}

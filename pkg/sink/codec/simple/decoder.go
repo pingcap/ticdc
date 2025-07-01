@@ -31,8 +31,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/types"
@@ -378,7 +378,7 @@ func newTiColumnInfo(
 ) *timodel.ColumnInfo {
 	col := new(timodel.ColumnInfo)
 	col.ID = colID
-	col.Name = pmodel.NewCIStr(column.Name)
+	col.Name = ast.NewCIStr(column.Name)
 	col.FieldType = *types.NewFieldType(ptypes.StrToType(column.DataType.MySQLType))
 	col.SetCharset(column.DataType.Charset)
 	col.SetCollate(column.DataType.Collate)
@@ -456,13 +456,13 @@ func newTiIndexInfo(indexSchema *IndexSchema, columns []*timodel.ColumnInfo) *ti
 			}
 		}
 		indexColumns[i] = &timodel.IndexColumn{
-			Name:   pmodel.NewCIStr(col),
+			Name:   ast.NewCIStr(col),
 			Offset: offset,
 		}
 	}
 	return &timodel.IndexInfo{
 		ID:      1,
-		Name:    pmodel.NewCIStr(indexSchema.Name),
+		Name:    ast.NewCIStr(indexSchema.Name),
 		Columns: indexColumns,
 		Unique:  indexSchema.Unique,
 		Primary: indexSchema.Primary,
@@ -473,7 +473,7 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 	tidbTableInfo := &timodel.TableInfo{}
 	if m != nil {
 		tidbTableInfo.ID = m.TableID
-		tidbTableInfo.Name = pmodel.NewCIStr(m.Table)
+		tidbTableInfo.Name = ast.NewCIStr(m.Table)
 		tidbTableInfo.UpdateTS = m.Version
 		nextMockID := int64(1)
 		for _, col := range m.Columns {

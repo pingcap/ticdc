@@ -35,6 +35,8 @@ import (
 	"github.com/pingcap/tidb/pkg/util/memory"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
+	pdOpt "github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -55,11 +57,11 @@ func (c *server) prepare(ctx context.Context) error {
 	}
 	log.Info("create pd client", zap.Strings("endpoints", c.pdEndpoints))
 	c.pdClient, err = pd.NewClientWithContext(
-		ctx, c.pdEndpoints, conf.Security.PDSecurityOption(),
+		ctx, caller.Component("ticdc"), c.pdEndpoints, conf.Security.PDSecurityOption(),
 		// the default `timeout` is 3s, maybe too small if the pd is busy,
 		// set to 10s to avoid frequent timeout.
-		pd.WithCustomTimeoutOption(10*time.Second),
-		pd.WithGRPCDialOptions(
+		pdOpt.WithCustomTimeoutOption(10*time.Second),
+		pdOpt.WithGRPCDialOptions(
 			grpcTLSOption,
 			grpc.WithBlock(),
 			grpc.WithConnectParams(grpc.ConnectParams{
@@ -72,7 +74,7 @@ func (c *server) prepare(ctx context.Context) error {
 				MinConnectTimeout: 3 * time.Second,
 			}),
 		),
-		pd.WithForwardingOption(config.EnablePDForwarding))
+		pdOpt.WithForwardingOption(config.EnablePDForwarding))
 	if err != nil {
 		return errors.Trace(err)
 	}

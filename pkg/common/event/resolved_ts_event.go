@@ -54,6 +54,11 @@ func (b *BatchResolvedEvent) GetSeq() uint64 {
 	return 0
 }
 
+func (b *BatchResolvedEvent) GetEpoch() uint64 {
+	// It's a fake epoch.
+	return 0
+}
+
 func (b *BatchResolvedEvent) Len() int32 {
 	// Return the length of events.
 	return int32(len(b.Events))
@@ -111,17 +116,20 @@ type ResolvedEvent struct {
 	ResolvedTs   common.Ts
 	State        EventSenderState
 	Version      byte
+	Epoch        uint64
 }
 
 func NewResolvedEvent(
 	resolvedTs common.Ts,
 	dispatcherID common.DispatcherID,
+	epoch uint64,
 ) ResolvedEvent {
 	return ResolvedEvent{
 		DispatcherID: dispatcherID,
 		ResolvedTs:   resolvedTs,
 		State:        EventSenderStateNormal,
 		Version:      ResolvedEventVersion,
+		Epoch:        epoch,
 	}
 }
 
@@ -143,6 +151,10 @@ func (e ResolvedEvent) GetStartTs() common.Ts {
 
 func (e ResolvedEvent) GetSeq() uint64 {
 	return 0
+}
+
+func (e ResolvedEvent) GetEpoch() uint64 {
+	return e.Epoch
 }
 
 func (e ResolvedEvent) Len() int32 {

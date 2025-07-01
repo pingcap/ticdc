@@ -76,7 +76,8 @@ kafka_groups=(
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	'move_table drop_many_tables'
+	# 'move_table drop_many_tables'
+	'drop_many_tables'
 	# G06
 	'cdc default_value'
 	# G07

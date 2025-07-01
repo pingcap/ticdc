@@ -19,16 +19,22 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
+var _ Event = &SyncPointEvent{}
+
 // Implement Event / FlushEvent / BlockEvent interface
 // CommitTsList contains the commit ts of sync point.
 // If a period of time has no other dml and ddl, commitTsList may contains multiple commit ts in order.
 // Otherwise, the commitTsList only contains one commit ts.
 type SyncPointEvent struct {
 	// State is the state of sender when sending this event.
-	State          EventSenderState    `json:"state"`
-	DispatcherID   common.DispatcherID `json:"dispatcher_id"`
-	CommitTsList   []uint64            `json:"commit_ts_list"`
-	PostTxnFlushed []func()            `msg:"-"`
+	State        EventSenderState    `json:"state"`
+	DispatcherID common.DispatcherID `json:"dispatcher_id"`
+	CommitTsList []uint64            `json:"commit_ts_list"`
+	// The seq of the event. It is set by event service.
+	Seq uint64 `json:"seq"`
+	// The epoch of the event. It is set by event service.
+	Epoch          uint64   `json:"epoch"`
+	PostTxnFlushed []func() `msg:"-"`
 }
 
 func (e *SyncPointEvent) GetType() int {
@@ -65,8 +71,11 @@ func (e SyncPointEvent) Marshal() ([]byte, error) {
 }
 
 func (e SyncPointEvent) GetSeq() uint64 {
-	// It's a fake seq.
-	return 0
+	return e.Seq
+}
+
+func (e SyncPointEvent) GetEpoch() uint64 {
+	return e.Epoch
 }
 
 func (e *SyncPointEvent) Unmarshal(data []byte) error {

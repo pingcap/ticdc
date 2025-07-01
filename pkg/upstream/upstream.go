@@ -33,6 +33,8 @@ import (
 	tikvconfig "github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
+	pdOpt "github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 	uatomic "github.com/uber-go/atomic"
 	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -134,11 +136,11 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 	// default upstream always use the pdClient pass from cdc server
 	if !up.isDefaultUpstream {
 		up.PDClient, err = pd.NewClientWithContext(
-			ctx, up.PdEndpoints, up.SecurityConfig.PDSecurityOption(),
+			ctx, caller.Component("ticdc"), up.PdEndpoints, up.SecurityConfig.PDSecurityOption(),
 			// the default `timeout` is 3s, maybe too small if the pd is busy,
 			// set to 10s to avoid frequent timeout.
-			pd.WithCustomTimeoutOption(10*time.Second),
-			pd.WithGRPCDialOptions(
+			pdOpt.WithCustomTimeoutOption(10*time.Second),
+			pdOpt.WithGRPCDialOptions(
 				grpcTLSOption,
 				grpc.WithConnectParams(grpc.ConnectParams{
 					Backoff: backoff.Config{

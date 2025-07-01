@@ -61,7 +61,7 @@ func TestEventScanner(t *testing.T) {
 	makeDispatcherReady(disp)
 	broker.addDispatcher(disp.info)
 
-	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 
 	// case 1: Only has resolvedTs event
 	// Tests that the scanner correctly returns just the resolvedTs event
@@ -295,7 +295,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	makeDispatcherReady(disp)
 	broker.addDispatcher(disp.info)
 
-	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 
 	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
 	helper := commonEvent.NewEventTestHelper(t)
@@ -939,11 +939,11 @@ func TestLimitChecker(t *testing.T) {
 
 	// Test case 3: Test canInterrupt method - interrupt conditions
 	t.Run("TestCanInterrupt", func(t *testing.T) {
-		//startTime := time.Now()
-		//maxBytes := int64(1000)
-		//timeout := 10 * time.Second
+		// startTime := time.Now()
+		// maxBytes := int64(1000)
+		// timeout := 10 * time.Second
 
-		//checker := newLimitChecker(maxBytes, timeout, 5000, startTime)
+		// checker := newLimitChecker(maxBytes, timeout, 5000, startTime)
 
 		// Test cannot interrupt when currentTs <= lastCommitTs
 		currentTs := uint64(100)
@@ -974,7 +974,7 @@ func TestEventMerger(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 	mounter := commonEvent.NewMounter(time.UTC, &integrity.Config{})
 	t.Run("NoDDLEvents", func(t *testing.T) {
-		merger := newEventMerger(nil, dispatcherID)
+		merger := newEventMerger(nil, dispatcherID, 0)
 
 		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
@@ -1023,7 +1023,7 @@ func TestEventMerger(t *testing.T) {
 		}
 
 		ddlEvents := []commonEvent.DDLEvent{ddlEvent1, ddlEvent2, ddlEvent3}
-		merger := newEventMerger(ddlEvents, dispatcherID)
+		merger := newEventMerger(ddlEvents, dispatcherID, 0)
 
 		// Create first DML event (timestamp after DDL1, before DDL2)
 		batchDML1 := commonEvent.NewBatchDMLEvent()
@@ -1090,7 +1090,7 @@ func TestEventMerger(t *testing.T) {
 		}
 
 		ddlEvents := []commonEvent.DDLEvent{ddlEvent2, ddlEvent3, ddlEvent4}
-		merger := newEventMerger(ddlEvents, dispatcherID)
+		merger := newEventMerger(ddlEvents, dispatcherID, 0)
 
 		// Test endTs is exactly equal to some DDL's FinishedTs
 		endTs := uint64(200)
@@ -1104,7 +1104,7 @@ func TestEventMerger(t *testing.T) {
 		require.Equal(t, endTs, events1[2].GetCommitTs())
 
 		// Recreate merger to test endTs is less than all DDLs
-		merger2 := newEventMerger(ddlEvents, dispatcherID)
+		merger2 := newEventMerger(ddlEvents, dispatcherID, 0)
 		endTs2 := uint64(50)
 		events2 := merger2.appendRemainingDDLs(endTs2)
 		require.Equal(t, 1, len(events2)) // Only ResolvedEvent
@@ -1112,7 +1112,7 @@ func TestEventMerger(t *testing.T) {
 		require.Equal(t, endTs2, events2[0].GetCommitTs())
 
 		// Recreate merger to test endTs is greater than all DDLs
-		merger3 := newEventMerger(ddlEvents, dispatcherID)
+		merger3 := newEventMerger(ddlEvents, dispatcherID, 0)
 		endTs3 := uint64(500)
 		events3 := merger3.appendRemainingDDLs(endTs3)
 		require.Equal(t, 4, len(events3)) // all DDLs + ResolvedEvent
