@@ -497,15 +497,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Any("changefeed", task.info.GetChangefeedID().ID()))
 	}
 
-	available := quota.(*atomic.Uint64).Load()
-	if available <= 1024*1024*128 {
-		log.Info("scan quota is not enough, skip scan",
-			zap.String("changefeed", task.info.GetChangefeedID().String()),
-			zap.String("dispatcher", task.id.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Uint64("available", available))
-		return
-	}
+	//available := quota.(*atomic.Uint64).Load()
+	//if available <= 1024*1024*128 {
+	//	log.Info("scan quota is not enough, skip scan",
+	//		zap.String("changefeed", task.info.GetChangefeedID().String()),
+	//		zap.String("dispatcher", task.id.String()),
+	//		zap.String("remote", remoteID.String()),
+	//		zap.Uint64("available", available))
+	//	return
+	//}
 
 	dataRange, needScan := c.getScanTaskDataRange(task)
 	if !needScan {
@@ -519,9 +519,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 		return true
 	})
-	available = max(1024*1024*8, available/count)
+	//available = max(1024*1024*8, available/count)
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
-	sl := calculateScanLimit(task, available)
+	sl := calculateScanLimit(task, 1024*1024*8)
 
 	// interrupted means scan too many entries hits the limit, still ok to send scanned events.
 	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
