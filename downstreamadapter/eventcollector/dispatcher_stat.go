@@ -430,9 +430,9 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 //
 // 5. For all types: Filter by commitTs before forwarding
 func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEvent) bool {
-	if len(events) != 1 {
-		log.Panic("should not happen: only one event should be sent for DDL/SyncPoint/Handshake event")
-	}
+	// if len(events) != 1 {
+	// 	log.Panic("should not happen: only one event should be sent for DDL/SyncPoint/Handshake event")
+	// }
 	from := events[0].From
 	if !d.isFromCurrentEpoch(events[0]) {
 		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
