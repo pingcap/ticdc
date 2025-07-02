@@ -24,10 +24,9 @@ import (
 type OpType int
 
 const (
-	OpSplit         OpType = iota // Split one span to multiple subspans
-	OpMerge                       // merge multiple spans to one span
-	OpMergeAndSplit               // remove old spans and split to multiple subspans
-	OpMove
+	OpSplit OpType = iota // Split one span to multiple subspans
+	OpMerge               // merge multiple spans to one span
+	OpMove                // move one span to another node
 )
 
 type SplitType int
