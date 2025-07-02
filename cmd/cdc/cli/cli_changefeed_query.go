@@ -42,7 +42,7 @@ type cfMeta struct {
 	CheckpointTime api.JSONTime               `json:"checkpoint_time"`
 	Engine         config.SortEngine          `json:"sort_engine,omitempty"`
 	FeedState      config.FeedState           `json:"state"`
-	RunningError   *v2.RunningError           `json:"error,omitempty"`
+	RunningError   *config.RunningError       `json:"error,omitempty"`
 	ErrorHis       []int64                    `json:"error_history,omitempty"`
 	CreatorVersion string                     `json:"creator_version"`
 	TaskStatus     []config.CaptureTaskStatus `json:"task_status,omitempty"`

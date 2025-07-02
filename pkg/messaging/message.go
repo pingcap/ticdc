@@ -258,6 +258,9 @@ func (r DispatcherRequest) GetTimezone() *time.Location {
 func (r DispatcherRequest) GetRedo() bool {
 	return r.Redo
 }
+func (r DispatcherRequest) GetEpoch() uint64 {
+	return r.Epoch
+}
 
 type IOTypeT interface {
 	Unmarshal(data []byte) error

@@ -57,7 +57,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID, redo bool) err
 	op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
 	ret := operatorController.AddOperator(op)
 	if !ret {
-		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move dispatcher operator")
+		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
 	}
 
 	// check the op is finished or not
@@ -99,11 +99,10 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID, redo bool
 		op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
 		ret := operatorController.AddOperator(op)
 		if !ret {
-			// this op is created failed, so we need to remove the previous operators. Otherwise, the previous operators will never finish.
 			for _, op := range opList {
 				op.OnTaskRemoved()
 			}
-			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move split dispatcher operator")
+			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
 		}
 		opList = append(opList, op)
 	}

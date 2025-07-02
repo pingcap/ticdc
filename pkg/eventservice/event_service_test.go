@@ -609,6 +609,9 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 func (m *mockDispatcherInfo) GetRedo() bool {
 	return m.redo
 }
+func (m *mockDispatcherInfo) GetEpoch() uint64 {
+	return 0
+}
 
 func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)

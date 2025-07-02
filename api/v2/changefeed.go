@@ -306,17 +306,26 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 	c.JSON(http.StatusOK, detail)
 }
 
+func shouldShowRunningError(state config.FeedState) bool {
+	switch state {
+	case config.StateNormal, config.StateStopped, config.StateFinished, config.StateRemoved:
+		return false
+	default:
+		return true
+	}
+}
+
 func CfInfoToAPIModel(
 	info *config.ChangeFeedInfo,
 	status *config.ChangeFeedStatus,
 	taskStatus []config.CaptureTaskStatus,
 ) *ChangeFeedInfo {
-	var runningError *RunningError
+	var runningError *config.RunningError
 
 	// if the state is normal, we shall not return the error info
 	// because changefeed will is retrying. errors will confuse the users
-	if info.State != config.StateNormal && info.Error != nil {
-		runningError = &RunningError{
+	if info.Error != nil && shouldShowRunningError(info.State) {
+		runningError = &config.RunningError{
 			Addr:    info.Error.Addr,
 			Code:    info.Error.Code,
 			Message: info.Error.Message,
@@ -1088,6 +1097,51 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 
 	number := maintainer.GetDispatcherCount()
 	c.JSON(http.StatusOK, &DispatcherCount{Count: number})
+}
+
+// status returns the status of a changefeed.
+// Usage:
+// curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/status
+func (h *OpenAPIV2) status(c *gin.Context) {
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	co, err := h.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	info, status, err := co.GetChangefeed(c, changefeedDisplayName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	var (
+		lastError   *config.RunningError
+		lastWarning *config.RunningError
+	)
+	if info.Error != nil &&
+		oracle.GetTimeFromTS(status.CheckpointTs).Before(info.Error.Time) {
+		err := &config.RunningError{
+			Time:    info.Error.Time,
+			Addr:    info.Error.Addr,
+			Code:    info.Error.Code,
+			Message: info.Error.Message,
+		}
+		switch info.State {
+		case config.StateFailed:
+			lastError = err
+		case config.StateWarning:
+			lastWarning = err
+		}
+	}
+
+	c.JSON(http.StatusOK, &ChangefeedStatus{
+		State:        string(info.State),
+		CheckpointTs: status.CheckpointTs,
+		// FIXME: add correct resolvedTs
+		ResolvedTs:  status.CheckpointTs,
+		LastError:   lastError,
+		LastWarning: lastWarning,
+	})
 }
 
 // syncState returns the sync state of a changefeed.
