@@ -417,19 +417,6 @@ func IsRedoDispatcher(d DispatcherService) bool {
 	return d.GetType() == TypeDispatcherRedo
 }
 
-type cacheEvents struct {
-	events       []DispatcherEvent
-	wakeCallback func()
-}
-
-func newCacheEvents(events []DispatcherEvent, wakeCallback func()) cacheEvents {
-	cacheEvents := cacheEvents{
-		events:       append(make([]DispatcherEvent, 0, len(events)), events...),
-		wakeCallback: wakeCallback,
-	}
-	return cacheEvents
-}
-
 // addToDynamicStream add self to dynamic stream
 func addToStatusDynamicStream(d Dispatcher) {
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()

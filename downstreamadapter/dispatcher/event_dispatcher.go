@@ -148,7 +148,11 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 		log.Warn("dispatcher has removed", zap.Any("id", d.id))
 		return
 	}
-	cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
+	// Here we have to create a new event slice, because dispatcherEvents will be cleaned up in dynamic stream
+	cacheEvents := cacheEvents{
+		events:       append(make([]DispatcherEvent, 0, len(dispatcherEvents)), dispatcherEvents...),
+		wakeCallback: wakeCallback,
+	}
 	select {
 	case d.cacheEvents.events <- cacheEvents:
 		log.Info("cache events",
@@ -297,4 +301,9 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 		zap.Int("tables", len(currentTables)),
 		zap.Duration("cost", time.Since(start)))
 	return true
+}
+
+type cacheEvents struct {
+	events       []DispatcherEvent
+	wakeCallback func()
 }
