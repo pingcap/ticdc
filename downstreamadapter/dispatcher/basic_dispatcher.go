@@ -32,7 +32,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// EventDispatcher is the interface that responsible for receiving events from Event Service
+// DispatcherService is the interface that responsible for receiving events from Event Service
 type DispatcherService interface {
 	GetId() common.DispatcherID
 	GetType() int
@@ -49,6 +49,7 @@ type DispatcherService interface {
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 }
 
+// Dispatcher is the interface that responsible for dispatcher manager since there exist event dispatcher and redo dispatcher.
 type Dispatcher interface {
 	DispatcherService
 	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
@@ -62,13 +63,10 @@ type Dispatcher interface {
 }
 
 /*
-Dispatcher is responsible for getting events from Event Service and sending them to Sink in appropriate order.
+BasicDispatcher is responsible for getting events from Event Service and sending them to Sink in appropriate order.
 Each dispatcher only deal with the events of one tableSpan in one changefeed.
-Here is a special dispatcher will deal with the events of the DDLSpan in one changefeed, we call it TableTriggerEventDispatcher
-One changefeed across multiple nodes only will have one TableTriggerEventDispatcher.
 Each EventDispatcherManager will have multiple dispatchers.
 
-All dispatchers in the changefeed will share the same Sink.
 All dispatchers will communicate with the Maintainer about self progress and whether can push down the blocked ddl event.
 
 Because Sink does not flush events to the downstream in strict order.

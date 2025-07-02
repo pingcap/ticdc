@@ -35,17 +35,23 @@ import (
 
 var _ Dispatcher = (*EventDispatcher)(nil)
 
+// EventDispatcher is the dispatcher to flush events to the downstream
 type EventDispatcher struct {
 	*BasicDispatcher
 	BootstrapState bootstrapState
 	redoEnable     bool
-	redoGlobalTs   *atomic.Uint64
-	cacheEvents    struct {
+	// redoGlobalTs is updated by maintainer, all events can't replicate util the commit-ts is greater than redoGlobalTs
+	redoGlobalTs *atomic.Uint64
+	// cacheEvents used to store the events which  commit-ts is not greater than redoGlobalTs
+	cacheEvents struct {
 		sync.Mutex
 		events chan cacheEvents
 	}
 }
 
+// All event dispatchers in the changefeed will share the same Sink.
+// Here is a special dispatcher will deal with the events of the DDLSpan in one changefeed, we call it TableTriggerEventDispatcher
+// One changefeed across multiple nodes only will have one TableTriggerEventDispatcher.
 func NewEventDispatcher(
 	changefeedID common.ChangeFeedID,
 	id common.DispatcherID,
@@ -119,6 +125,7 @@ func (d *EventDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	return true, nil
 }
 
+// HandleCacheEvents called when redoGlobalTs is updated
 func (d *EventDispatcher) HandleCacheEvents() {
 	select {
 	case cacheEvents, ok := <-d.cacheEvents.events:
@@ -133,6 +140,7 @@ func (d *EventDispatcher) HandleCacheEvents() {
 	}
 }
 
+// cache will send the dispatcherEvents to the cacheEvents channel
 func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback func()) {
 	d.cacheEvents.Lock()
 	defer d.cacheEvents.Unlock()
@@ -140,11 +148,10 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 		log.Warn("dispatcher has removed", zap.Any("id", d.id))
 		return
 	}
-	// cache here
 	cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
 	select {
 	case d.cacheEvents.events <- cacheEvents:
-		log.Warn("cache event",
+		log.Info("cache events",
 			zap.Stringer("dispatcher", d.id),
 			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 			zap.Int("length", len(dispatcherEvents)),
@@ -159,6 +166,8 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 
 func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// redo check
+	// if the commit-ts of last event of dispatcherEvents is greater than redoGlobalTs,
+	// the dispatcherEvents will be cached util the redoGlobalTs is updated.
 	if d.redoEnable && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
 		d.cache(dispatcherEvents, wakeCallback)
 		return true

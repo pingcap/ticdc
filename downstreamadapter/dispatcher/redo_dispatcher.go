@@ -24,10 +24,12 @@ import (
 
 var _ Dispatcher = (*RedoDispatcher)(nil)
 
+// RedoDispatcher is the dispatcher to flush events to the redo log
 type RedoDispatcher struct {
 	*BasicDispatcher
 }
 
+// RedoDispatcher is similar with BasicDispatcher.
 func NewRedoDispatcher(
 	changefeedID common.ChangeFeedID,
 	id common.DispatcherID,
