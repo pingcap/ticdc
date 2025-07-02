@@ -115,7 +115,7 @@ func (e *NotReusableEvent) decode(data []byte) error {
 
 func (e NotReusableEvent) encodeV0() ([]byte, error) {
 	data := make([]byte, e.GetSize())
-	offset := 0
+	var offset uint64
 	data[offset] = e.Version
 	offset += 1
 	copy(data[offset:], e.DispatcherID.Marshal())

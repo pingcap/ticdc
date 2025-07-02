@@ -207,21 +207,23 @@ func (d *writer) writeIndexFile(ctx context.Context, path, content string) error
 func (d *writer) writeDataFile(ctx context.Context, path string, task *singleTableTask) error {
 	var callbacks []func()
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
-	rowsCnt := 0
-	bytesCnt := int64(0)
+	var (
+		rowsCnt  int
+		bytesCnt uint64
+	)
 	// There is always only one message here in task.msgs
 	for _, msg := range task.msgs {
 		if msg.Key != nil && rowsCnt == 0 {
 			buf.Write(msg.Key)
-			bytesCnt += int64(len(msg.Key))
+			bytesCnt += uint64(len(msg.Key))
 		}
-		bytesCnt += int64(len(msg.Value))
+		bytesCnt += uint64(len(msg.Value))
 		rowsCnt += msg.GetRowsCount()
 		buf.Write(msg.Value)
 		callbacks = append(callbacks, msg.Callback)
 	}
 
-	if err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
+	if err := d.statistics.RecordBatchExecution(func() (int, uint64, error) {
 		start := time.Now()
 		if d.config.FlushConcurrency <= 1 {
 			return rowsCnt, bytesCnt, d.storage.WriteFile(ctx, path, buf.Bytes())

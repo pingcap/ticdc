@@ -115,7 +115,7 @@ func (e *ReadyEvent) decode(data []byte) error {
 
 func (e ReadyEvent) encodeV0() ([]byte, error) {
 	data := make([]byte, e.GetSize())
-	offset := 0
+	var offset uint64
 	data[offset] = e.Version
 	offset += 1
 	copy(data[offset:], e.DispatcherID.Marshal())

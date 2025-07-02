@@ -56,7 +56,7 @@ type Writer struct {
 	stmtCache *lru.Cache
 	// Indicate if the CachePrepStmts should be enabled or not
 	cachePrepStmts   bool
-	maxAllowedPacket int64
+	maxAllowedPacket uint64
 
 	statistics *metrics.Statistics
 	needFormat bool
@@ -186,7 +186,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 		err = w.execDMLWithMaxRetries(dmls)
 	} else {
 		w.tryDryRunBlock()
-		err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
+		err = w.statistics.RecordBatchExecution(func() (int, uint64, error) {
 			return dmls.rowCount, dmls.approximateSize, nil
 		})
 	}
