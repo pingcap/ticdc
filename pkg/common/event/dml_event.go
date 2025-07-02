@@ -500,7 +500,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + uint64(int(t.Length))
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + uint64(t.Length)
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
