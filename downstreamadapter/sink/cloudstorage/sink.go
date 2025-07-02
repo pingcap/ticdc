@@ -193,14 +193,14 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	// write the previous table first
 	if event.GetDDLType() == model.ActionExchangeTablePartition {
 		var def cloudstorage.TableDefinition
-		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.GetCommitTs(), s.cfg.OutputColumnID)
+		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.FinishedTs, s.cfg.OutputColumnID)
 		def.Query = event.Query
 		def.Type = event.Type
 		if err := s.writeFile(event, def); err != nil {
 			return err
 		}
 		var sourceTableDef cloudstorage.TableDefinition
-		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, event.MultipleTableInfos[1], event.GetCommitTs(), s.cfg.OutputColumnID)
+		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, event.MultipleTableInfos[1], event.FinishedTs, s.cfg.OutputColumnID)
 		if err := s.writeFile(event, sourceTableDef); err != nil {
 			return err
 		}
