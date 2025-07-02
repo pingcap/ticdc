@@ -72,10 +72,7 @@ type EventStore interface {
 
 	UnregisterDispatcher(dispatcherID common.DispatcherID)
 
-	// TODO: Implement this after checkpointTs is correctly reported by the downstream dispatcher.
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
-
-	GetDispatcherDMLEventState(dispatcherID common.DispatcherID) (bool, DMLEventState)
 
 	// GetIterator return an iterator which scan the data in ts range (dataRange.StartTs, dataRange.EndTs]
 	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error)
@@ -511,7 +508,6 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
 		subStat.idleTime.Store(time.Now().UnixMilli())
 	}
 	subStat.dispatchers.Unlock()
-	return
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(
@@ -571,21 +567,6 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			zap.Uint64("subID", uint64(subStat.subID)),
 			zap.Uint64("newCheckpointTs", newCheckpointTs),
 			zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
-	}
-}
-
-func (e *eventStore) GetDispatcherDMLEventState(dispatcherID common.DispatcherID) (bool, DMLEventState) {
-	e.dispatcherMeta.RLock()
-	defer e.dispatcherMeta.RUnlock()
-	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
-	if !ok {
-		log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
-		return false, DMLEventState{
-			MaxEventCommitTs: math.MaxUint64,
-		}
-	}
-	return true, DMLEventState{
-		MaxEventCommitTs: stat.subStat.maxEventCommitTs.Load(),
 	}
 }
 
