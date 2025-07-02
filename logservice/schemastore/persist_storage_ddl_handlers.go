@@ -649,6 +649,9 @@ func buildPersistedDDLEventForNormalPartitionDDL(args buildPersistedDDLEventFunc
 	return event
 }
 
+// buildPersistedDDLEventForExchangePartition build a exchange partition ddl event
+// the TableID is the new table(nt)
+// the Tableinfo is the previous table(pt)
 func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.TableName = getTableName(args.tableMap, event.TableID)
