@@ -49,8 +49,9 @@ func main() {
 		Short: "A tool to convert between config and model",
 		Run:   run,
 	}
+	// If FlagConfig and FlagModel are both set, FlagModel will be ignored
 	rootCmd.Flags().StringVarP(&cfgPath, FlagConfig, "c", "", "changefeed config file path, convert to model")
-	rootCmd.Flags().StringVarP(&modelPath, FlagModel, "m", "", "changefeed model file path, convert to config")
+	rootCmd.Flags().StringVarP(&modelPath, FlagModel, "m", "", "changefeed model file path, convert to config, if both config and model are set, model will be ignored")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(ExitCodeExecuteFailed)
