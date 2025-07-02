@@ -424,11 +424,8 @@ type cacheEvents struct {
 
 func newCacheEvents(events []DispatcherEvent, wakeCallback func()) cacheEvents {
 	cacheEvents := cacheEvents{
-		events:       make([]DispatcherEvent, 0, len(events)),
+		events:       append(make([]DispatcherEvent, 0, len(events)), events...),
 		wakeCallback: wakeCallback,
-	}
-	for _, event := range events {
-		cacheEvents.events = append(cacheEvents.events, NewDispatcherEvent(event.From, event.Event))
 	}
 	return cacheEvents
 }
