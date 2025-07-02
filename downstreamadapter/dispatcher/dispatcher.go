@@ -263,6 +263,9 @@ func (d *Dispatcher) HandleCacheEvents() {
 		if !ok {
 			return
 		}
+		for _, e := range cacheEvents.events {
+			log.Error("HandleCacheEvents", zap.Any("e", e), zap.Any("from", e.From), zap.Any("event", e.Event))
+		}
 		block := d.HandleEvents(cacheEvents.events, cacheEvents.wakeCallback)
 		if !block {
 			cacheEvents.wakeCallback()
@@ -279,7 +282,14 @@ func (d *Dispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback func
 		return
 	}
 	// cache here
-	cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
+	// cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
+	cacheEvents := cacheEvents{
+		events:       dispatcherEvents,
+		wakeCallback: wakeCallback,
+	}
+	for _, e := range cacheEvents.events {
+		log.Error("cache", zap.Any("e", e), zap.Any("from", e.From), zap.Any("event", e.Event))
+	}
 	select {
 	case d.cacheEvents.events <- cacheEvents:
 		log.Warn("cache event",
