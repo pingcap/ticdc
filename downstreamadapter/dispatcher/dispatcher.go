@@ -248,6 +248,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	block = false
 	dmlWakeOnce := &sync.Once{}
 	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
+	latestResolvedTs := uint64(0)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
@@ -279,7 +280,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 
 		switch event.GetType() {
 		case commonEvent.TypeResolvedEvent:
-			atomic.StoreUint64(&d.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
+			latestResolvedTs = event.(commonEvent.ResolvedEvent).ResolvedTs
 		case commonEvent.TypeDMLEvent:
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
@@ -353,8 +354,17 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Uint64("commitTs", event.GetCommitTs()))
 		}
 	}
+	// resolvedTs and dml events can be in the same batch,
+	// We need to update the resolvedTs after all the dml events are added to sink.
+	//
+	// If resolvedTs updated first, and then dml events are added to sink,
+	// the checkpointTs may be incorrect set as the new resolvedTs,
+	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
 		d.AddDMLEventsToSink(dmlEvents)
+	}
+	if latestResolvedTs > 0 {
+		atomic.StoreUint64(&d.resolvedTs, latestResolvedTs)
 	}
 	return block
 }
