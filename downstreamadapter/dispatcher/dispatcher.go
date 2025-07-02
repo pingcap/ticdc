@@ -284,11 +284,8 @@ func (d *Dispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback func
 	// cache here
 	// cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
 	cacheEvents := cacheEvents{
-		events:       dispatcherEvents,
+		events:       append(make([]DispatcherEvent, 0, len(dispatcherEvents)), dispatcherEvents...),
 		wakeCallback: wakeCallback,
-	}
-	for _, e := range cacheEvents.events {
-		log.Error("cache", zap.Any("e", e), zap.Any("from", e.From), zap.Any("event", e.Event))
 	}
 	select {
 	case d.cacheEvents.events <- cacheEvents:

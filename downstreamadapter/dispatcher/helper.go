@@ -422,17 +422,6 @@ type cacheEvents struct {
 	wakeCallback func()
 }
 
-func newCacheEvents(events []DispatcherEvent, wakeCallback func()) cacheEvents {
-	cacheEvents := cacheEvents{
-		events:       make([]DispatcherEvent, 0, len(events)),
-		wakeCallback: wakeCallback,
-	}
-	for _, event := range events {
-		cacheEvents.events = append(cacheEvents.events, NewDispatcherEvent(event.From, event.Event))
-	}
-	return cacheEvents
-}
-
 // addToDynamicStream add self to dynamic stream
 func addToStatusDynamicStream(d EventDispatcher) {
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
