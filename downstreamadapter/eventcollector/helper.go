@@ -65,12 +65,10 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 
 // Invariant: at any times, we can receive events from at most two event service, and one of them must be local event service.
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
-	log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()))
+	log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()), zap.Any("eventLength", len(events)))
 	if len(events) == 0 {
 		return false
 	}
-
-	// log.Info("fizz handle events", zap.Any("events", events))
 	// Only check the first event type, because all events in the same batch should be in the same type group.
 	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
