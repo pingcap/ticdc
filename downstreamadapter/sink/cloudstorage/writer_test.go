@@ -127,5 +127,4 @@ func TestWriterRun(t *testing.T) {
 	cancel()
 	d.close()
 	wg.Wait()
-	fragCh.Close()
 }
