@@ -455,8 +455,10 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		if !d.filterAndUpdateEventByCommitTs(events[0]) {
 			return false
 		}
-		tableInfo := events[0].Event.(*event.DDLEvent).TableInfo
+		ddl := events[0].Event.(*event.DDLEvent)
+		tableInfo := ddl.TableInfo
 		if tableInfo != nil {
+			tableInfo.FinishedTs = ddl.FinishedTs
 			d.tableInfo.Store(tableInfo)
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })

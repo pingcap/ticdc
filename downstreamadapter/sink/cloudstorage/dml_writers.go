@@ -114,7 +114,7 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 			IsPartition: event.TableInfo.IsPartitionTable(),
 		},
 		// FIXME
-		TableInfoVersion: event.CommitTs,
+		TableInfoVersion: event.TableInfo.FinishedTs,
 	}
 	seq := atomic.AddUint64(&d.lastSeqNum, 1)
 	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
