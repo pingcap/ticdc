@@ -180,6 +180,8 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	// rows is already set, no need to assemble again
 	// When the event is passed from the same node, the Rows is already set.
 	if b.Rows != nil {
+		// FIXME
+		b.TableInfo.FinishedTs = tableInfo.FinishedTs
 		return
 	}
 	if tableInfo == nil {
