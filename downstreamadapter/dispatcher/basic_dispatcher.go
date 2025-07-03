@@ -32,7 +32,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// DispatcherService is the interface that responsible for receiving events from Event Service
+// DispatcherService defines the interface for providing dispatcher information and basic event handling.
 type DispatcherService interface {
 	GetId() common.DispatcherID
 	GetType() int
