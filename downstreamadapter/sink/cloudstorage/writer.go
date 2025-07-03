@@ -46,7 +46,7 @@ type writer struct {
 	config       *cloudstorage.Config
 	// toBeFlushedCh contains a set of batchedTask waiting to be flushed to cloud storage.
 	toBeFlushedCh          chan batchedTask
-	inputCh                *chann.DrainableChann[eventFragment]
+	inputCh                *chann.UnlimitedChannel[eventFragment, any]
 	isClosed               uint64
 	statistics             *pmetrics.Statistics
 	filePathGenerator      *cloudstorage.FilePathGenerator
@@ -63,7 +63,7 @@ func newWriter(
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
 	extension string,
-	inputCh *chann.DrainableChann[eventFragment],
+	inputCh *chann.UnlimitedChannel[eventFragment, any],
 	statistics *pmetrics.Statistics,
 ) *writer {
 	d := &writer{
@@ -272,10 +272,12 @@ func (d *writer) writeDataFile(ctx context.Context, path string, task *singleTab
 // 1. the flush interval exceeds the upper limit.
 // 2. the file size exceeds the upper limit.
 func (d *writer) genAndDispatchTask(ctx context.Context,
-	ch *chann.DrainableChann[eventFragment],
+	ch *chann.UnlimitedChannel[eventFragment, any],
 ) error {
 	batchedTask := newBatchedTask()
 	ticker := time.NewTicker(d.config.FlushInterval)
+
+	buffer := make([]eventFragment, 0, 10240)
 	for {
 		// this failpoint is use to pass this ticker once
 		// to make writeEvent in the test case can write into the same file
@@ -286,38 +288,43 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case <-ticker.C:
+		default:
+			frags, ok := ch.GetMultipleNoGroup(buffer)
+			if !ok {
+				return errors.Trace(ctx.Err())
+			}
 			if atomic.LoadUint64(&d.isClosed) == 1 {
 				return nil
 			}
-			select {
-			case <-ctx.Done():
-				return errors.Trace(ctx.Err())
-			case d.toBeFlushedCh <- batchedTask:
-				log.Debug("flush task is emitted successfully when flush interval exceeds",
-					zap.Int("tablesLength", len(batchedTask.batch)))
-				batchedTask = newBatchedTask()
-			default:
+			for _, frag := range frags {
+				batchedTask.handleSingleTableEvent(frag)
+				// if the file size exceeds the upper limit, emit the flush task containing the table
+				// as soon as possible.
+				table := frag.versionedTable
+				if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
+					task := batchedTask.generateTaskByTable(table)
+					select {
+					case <-ctx.Done():
+						return errors.Trace(ctx.Err())
+					case d.toBeFlushedCh <- task:
+						log.Info("flush task is emitted successfully when file size exceeds",
+							zap.Any("table", table),
+							zap.Int("eventsLenth", len(task.batch[table].msgs)))
+					}
+				}
 			}
-		case frag, ok := <-ch.Out():
-			if !ok || atomic.LoadUint64(&d.isClosed) == 1 {
-				return nil
-			}
-			batchedTask.handleSingleTableEvent(frag)
-			// if the file size exceeds the upper limit, emit the flush task containing the table
-			// as soon as possible.
-			table := frag.versionedTable
-			if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
-				task := batchedTask.generateTaskByTable(table)
+			if len(batchedTask.batch) > 0 {
 				select {
 				case <-ctx.Done():
 					return errors.Trace(ctx.Err())
-				case d.toBeFlushedCh <- task:
-					log.Debug("flush task is emitted successfully when file size exceeds",
-						zap.Any("table", table),
-						zap.Int("eventsLenth", len(task.batch[table].msgs)))
+				case d.toBeFlushedCh <- batchedTask:
+					log.Info("flush task is emitted successfully when no more event",
+						zap.Int("tablesLength", len(batchedTask.batch)))
+					batchedTask = newBatchedTask()
+				default:
 				}
 			}
+			buffer = buffer[:0]
 		}
 	}
 }

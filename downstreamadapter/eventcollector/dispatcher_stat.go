@@ -375,46 +375,45 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 //
 // 3. Finally: Forward valid events to target with wake callback
 func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEvent) bool {
-	containsValidEvents := false
-	containsStaleEvents := false
-	for _, event := range events {
-		if d.isFromCurrentEpoch(event) {
-			containsValidEvents = true
-			if !d.verifyEventSequence(event) {
-				d.reset(d.connState.getEventServiceID())
-				return false
-			}
-		} else {
-			containsStaleEvents = true
-		}
-	}
-	if !containsValidEvents {
-		return false
-	}
 	var validEvents []dispatcher.DispatcherEvent
-	if containsStaleEvents {
-		for _, event := range events {
-			if d.connState.isCurrentEventService(*event.From) && d.filterAndUpdateEventByCommitTs(event) {
+	for _, event := range events {
+		if !d.isFromCurrentEpoch(event) {
+			continue
+		}
+		if !d.verifyEventSequence(event) {
+			d.reset(d.connState.getEventServiceID())
+			return false
+		}
+		if event.GetType() == commonEvent.TypeResolvedEvent {
+			validEvents = append(validEvents, event)
+		} else if event.GetType() == commonEvent.TypeDMLEvent {
+			if d.filterAndUpdateEventByCommitTs(event) {
 				validEvents = append(validEvents, event)
 			}
-		}
-	} else {
-		invalidEventCount := 0
-		meetValidEvent := false
-		for _, event := range events {
-			if !d.filterAndUpdateEventByCommitTs(event) {
-				if meetValidEvent {
-					log.Panic("should not happen: invalid event after valid event",
-						zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
-						zap.Stringer("dispatcherID", d.getDispatcherID()))
-				}
-				events[invalidEventCount] = event
-				invalidEventCount++
-			} else {
-				meetValidEvent = true
+		} else if event.GetType() == commonEvent.TypeBatchDMLEvent {
+			tableInfo := d.tableInfo.Load().(*common.TableInfo)
+			if tableInfo == nil {
+				log.Panic("should not happen: table info should be set before batch DML event",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()))
 			}
+			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
+			batchDML.AssembleRows(tableInfo)
+			for _, dml := range batchDML.DMLEvents {
+				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
+				if d.filterAndUpdateEventByCommitTs(dmlEvent) {
+					validEvents = append(validEvents, dmlEvent)
+				}
+			}
+		} else {
+			log.Panic("should not happen: unknown event type in batch data events",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcherID", d.getDispatcherID()),
+				zap.Int("eventType", event.GetType()))
 		}
-		validEvents = events[invalidEventCount:]
+	}
+	if len(validEvents) == 0 {
+		return false
 	}
 	return d.target.HandleEvents(validEvents, func() { d.wake() })
 }
@@ -449,9 +448,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		d.reset(d.connState.getEventServiceID())
 		return false
 	}
-	if events[0].GetType() == commonEvent.TypeBatchDMLEvent {
-		return d.handleBatchDMLEvent(events[0], from)
-	} else if events[0].GetType() == commonEvent.TypeDDLEvent {
+	if events[0].GetType() == commonEvent.TypeDDLEvent {
 		if !d.filterAndUpdateEventByCommitTs(events[0]) {
 			return false
 		}
@@ -468,39 +465,14 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	}
 }
 
-// handleBatchDMLEvent processes a single BatchDML event with the following algorithm:
-// 1. Load and validate table info
-// 2. Assemble rows using table info
-// 3. Convert each DML in batch to individual DispatcherEvent
-// 4. Filter DML events by commitTs
-// 5. Forward valid DML events to target with wake callback
-func (d *dispatcherStat) handleBatchDMLEvent(event dispatcher.DispatcherEvent, from *node.ID) bool {
-	tableInfo := d.tableInfo.Load().(*common.TableInfo)
-	if tableInfo == nil {
-		log.Panic("should not happen: table info should be set before batch DML event",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()))
-	}
-	batchDML := event.Event.(*commonEvent.BatchDMLEvent)
-	batchDML.AssembleRows(tableInfo)
-	dmlEvents := make([]dispatcher.DispatcherEvent, 0, len(batchDML.DMLEvents))
-	for _, dml := range batchDML.DMLEvents {
-		dmlEvent := dispatcher.NewDispatcherEvent(from, dml)
-		if d.filterAndUpdateEventByCommitTs(dmlEvent) {
-			dmlEvents = append(dmlEvents, dmlEvent)
-		}
-	}
-	return d.target.HandleEvents(dmlEvents, func() { d.wake() })
-}
-
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
 	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
-		commonEvent.TypeResolvedEvent:
+		commonEvent.TypeResolvedEvent,
+		commonEvent.TypeBatchDMLEvent:
 		return d.handleBatchDataEvents(events)
 	case commonEvent.TypeDDLEvent,
-		commonEvent.TypeSyncPointEvent,
-		commonEvent.TypeBatchDMLEvent:
+		commonEvent.TypeSyncPointEvent:
 		return d.handleSingleDataEvents(events)
 	default:
 		log.Panic("should not happen: unknown event type", zap.Int("eventType", events[0].GetType()))

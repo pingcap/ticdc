@@ -61,7 +61,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	d := newWriter(1, changefeedID, storage,
-		cfg, ".json", chann.NewAutoDrainChann[eventFragment](), statistics)
+		cfg, ".json", chann.NewUnlimitedChannel[eventFragment, any](nil, nil), statistics)
 	return d
 }
 
@@ -108,7 +108,7 @@ func TestWriterRun(t *testing.T) {
 				},
 			},
 		}
-		fragCh.In() <- frag
+		fragCh.Push(frag)
 	}
 
 	var wg sync.WaitGroup
@@ -123,8 +123,8 @@ func TestWriterRun(t *testing.T) {
 	fileNames := getTableFiles(t, table1Dir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.json", "CDC.index"}, fileNames)
+	fragCh.Close()
 	cancel()
 	d.close()
 	wg.Wait()
-	fragCh.CloseAndDrain()
 }
