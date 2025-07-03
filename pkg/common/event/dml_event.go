@@ -177,11 +177,11 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	defer func() {
 		b.TableInfo.InitPrivateFields()
 	}()
+	// FIXME
+	b.TableInfo = tableInfo
 	// rows is already set, no need to assemble again
 	// When the event is passed from the same node, the Rows is already set.
 	if b.Rows != nil {
-		// FIXME
-		b.TableInfo.FinishedTs = tableInfo.FinishedTs
 		return
 	}
 	if tableInfo == nil {
@@ -200,7 +200,6 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	}
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	b.Rows, _ = decoder.Decode(b.RawRows)
-	b.TableInfo = tableInfo
 	b.RawRows = nil
 	for _, dml := range b.DMLEvents {
 		dml.Rows = b.Rows
