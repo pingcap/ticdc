@@ -7,13 +7,13 @@ export-fix-sql = true
 check-struct-only = false
 
 [task]
-    output-dir = "/tmp/tidb_cdc_test/kafka_sink_error_resume/sync_diff/output"
+    output-dir = "/tmp/tidb_cdc_test/mq_sink_error_resume/sync_diff/output"
 
     source-instances = ["mysql1"]
 
     target-instance = "tidb0"
 
-    target-check-tables = ["kafka_sink_error_resume.t?*"]
+    target-check-tables = ["mq_sink_error_resume.t?*"]
 
 [data-sources]
 [data-sources.mysql1]

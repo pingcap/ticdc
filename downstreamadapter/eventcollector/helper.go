@@ -24,7 +24,7 @@ import (
 
 func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
 	option := dynstream.NewOption()
-	option.BatchCount = 4196
+	option.BatchCount = 67136
 	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
 	option.EnableMemoryControl = true
@@ -108,8 +108,10 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 }
 
 const (
-	DataGroupResolvedTs = iota + 1
-	DataGroupDML
+	// We ensure the resolvedTs and dml events can be in the same batch
+	// To avoid the dml batch to be too small with frequent resolvedTs events.
+	// If the dml event batch is too small, the sink may not be able to batch enough, leading to the performance degradation.
+	DataGroupResolvedTsOrDML = iota + 1
 	DataGroupDDL
 	DataGroupSyncPoint
 	DataGroupHandshake
@@ -122,9 +124,9 @@ const (
 func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.EventType {
 	switch event.GetType() {
 	case commonEvent.TypeResolvedEvent:
-		return dynstream.EventType{DataGroup: DataGroupResolvedTs, Property: dynstream.PeriodicSignal, Droppable: true}
+		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.PeriodicSignal, Droppable: true}
 	case commonEvent.TypeDMLEvent:
-		return dynstream.EventType{DataGroup: DataGroupDML, Property: dynstream.BatchableData, Droppable: true}
+		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.BatchableData, Droppable: true}
 	case commonEvent.TypeDDLEvent:
 		return dynstream.EventType{DataGroup: DataGroupDDL, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeSyncPointEvent:

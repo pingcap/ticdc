@@ -117,11 +117,11 @@ UT_PACKAGES_DISPATCHER := ./pkg/sink/cloudstorage/... ./pkg/sink/mysql/... ./pkg
 UT_PACKAGES_MAINTAINER := ./maintainer/...
 UT_PACKAGES_COORDINATOR := ./coordinator/...
 UT_PACKAGES_LOGSERVICE := ./logservice/...
-UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/... 
+UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/...
 
 include tools/Makefile
 
-generate-protobuf: 
+generate-protobuf:
 	@echo "generate-protobuf"
 	./scripts/generate-protobuf.sh
 
@@ -146,6 +146,9 @@ oauth2_server:
 
 filter_helper:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
+
+config-converter:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_config_converter ./cmd/config-converter/main.go
 
 fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "run gci (format imports)"
