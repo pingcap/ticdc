@@ -599,6 +599,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false, // sync point event must should block
 					Stage:             heartbeatpb.BlockStage_NONE,
 				},
+				Redo: IsRedoDispatcher(d),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
@@ -652,6 +653,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 						IsSyncPoint:       true,
 						Stage:             heartbeatpb.BlockStage_WAITING,
 					},
+					Redo: IsRedoDispatcher(d),
 				}
 				identifier := BlockEventIdentifier{
 					CommitTs:    commitTs,
@@ -673,6 +675,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false,
 					Stage:             heartbeatpb.BlockStage_WAITING,
 				},
+				Redo: IsRedoDispatcher(d),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
