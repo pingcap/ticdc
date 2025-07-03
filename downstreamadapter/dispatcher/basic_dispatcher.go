@@ -365,7 +365,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		case commonEvent.TypeDMLEvent:
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
-				return block
+				continue
 			}
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
