@@ -363,6 +363,7 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 			},
 		}, newChangefeed)
 		tableTriggerEventDispatcher = e.redoTableTriggerEventDispatcher
+		e.setRedoMeta()
 	} else {
 		err = e.newDispatchers([]dispatcherCreateInfo{
 			{
@@ -373,13 +374,12 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 			},
 		}, newChangefeed)
 		tableTriggerEventDispatcher = e.tableTriggerEventDispatcher
-		e.setRedoMeta()
 	}
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
 	log.Info("table trigger event dispatcher created",
-		zap.Bool("redo", redo),
+		zap.Bool("isRedo", redo),
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", tableTriggerEventDispatcher.GetId()),
 		zap.Uint64("startTs", tableTriggerEventDispatcher.GetStartTs()),
