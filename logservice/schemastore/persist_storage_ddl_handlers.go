@@ -505,8 +505,6 @@ func getSchemaID(tableMap map[int64]*BasicTableInfo, tableID int64) int64 {
 // buildPersistedDDLEventFunc start
 // =======
 func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
-
-	log.Info("hyy tableInfo", zap.Any("tableInfo", args.job.BinlogInfo.TableInfo))
 	var query string
 	job := args.job
 	// only in unit test job.Query is empty
