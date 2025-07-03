@@ -587,7 +587,6 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
-		tableInfo.FinishedTs = handshakeEvent.GetCommitTs()
 		d.tableInfo.Store(tableInfo)
 	}
 	d.lastEventSeq.Store(handshakeEvent.Seq)

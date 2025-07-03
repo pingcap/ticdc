@@ -423,8 +423,6 @@ func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
 // make newColumnSchema as a private method, in order to avoid other method to directly create a columnSchema object.
 // we only want user to get columnSchema by GetOrSetColumnSchema or Clone method.
 func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
-	// tableInfo.Version
-	// tableInfo.Revision
 	colSchema := &columnSchema{
 		Digest:           digest,
 		Columns:          tableInfo.Columns,
