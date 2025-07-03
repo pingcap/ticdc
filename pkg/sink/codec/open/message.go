@@ -61,6 +61,9 @@ type column struct {
 
 // formatColumn formats a codec column.
 func formatColumn(c column, ft types.FieldType) column {
+	if c.Value == nil {
+		return c
+	}
 	var err error
 	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
@@ -331,6 +334,10 @@ func isPrimary(flag uint64) bool {
 	return flag&primaryKeyFlag != 0
 }
 
+func isHandle(flag uint64) bool {
+	return flag&handleKeyFlag != 0
+}
+
 func isUnique(flag uint64) bool {
 	return flag&uniqueKeyFlag != 0
 }
@@ -345,6 +352,10 @@ func isNullable(flag uint64) bool {
 
 func isUnsigned(flag uint64) bool {
 	return flag&unsignedFlag != 0
+}
+
+func isGenerated(flag uint64) bool {
+	return flag&generatedColumnFlag != 0
 }
 
 func initColumnFlags(tableInfo *commonType.TableInfo) map[string]uint64 {
@@ -397,8 +408,11 @@ func initColumnFlags(tableInfo *commonType.TableInfo) map[string]uint64 {
 			if len(idxInfo.Columns) > 1 {
 				flag |= multipleKeyFlag
 			}
-			colID := tableInfo.ForceGetColumnIDByName(idxCol.Name.O)
-			if tableInfo.IsHandleKey(colID) {
+			colInfo := tableInfo.GetColumns()[idxCol.Offset]
+			if colInfo.IsGenerated() {
+				continue
+			}
+			if tableInfo.IsHandleKey(colInfo.ID) {
 				flag |= handleKeyFlag
 			}
 			result[idxCol.Name.O] = flag

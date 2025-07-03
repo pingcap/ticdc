@@ -33,9 +33,24 @@ function prepare() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
-	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
+	TOPIC_NAME="ticdc-failover-ddl-test-mix-with-syncpoint-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
+
+	case $SINK_TYPE in
+	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=3" ;;
+	storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
+	pulsar)
+		run_pulsar_cluster $WORK_DIR normal
+		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
+		;;
+	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
+	esac
 	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+	case $SINK_TYPE in
+	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	esac
 }
 
 function create_tables() {

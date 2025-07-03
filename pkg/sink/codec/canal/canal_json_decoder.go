@@ -30,7 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
@@ -86,7 +86,7 @@ type decoder struct {
 }
 
 var (
-	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableIDAllocator  = common.NewTableIDAllocator()
 	tableInfoAccessor = common.NewTableInfoAccessor()
 )
 
@@ -351,13 +351,14 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
-	physicalTableID := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
-	result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableID)
-	log.Debug("set blocked tables for the DDL event",
-		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
-
-	tableInfoAccessor.Remove(result.SchemaName, result.TableName)
+	result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
+	schemaName := result.SchemaName
+	tableName := result.TableName
+	if result.Type == byte(timodel.ActionRenameTable) {
+		schemaName = result.ExtraSchemaName
+		tableName = result.ExtraTableName
+	}
+	tableInfoAccessor.Remove(schemaName, tableName)
 	return result
 }
 
@@ -528,8 +529,8 @@ func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
-	tableInfo.Name = pmodel.NewCIStr(tableName)
+	tableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableInfo.Name = ast.NewCIStr(tableName)
 
 	columns := newTiColumns(msg)
 	tableInfo.Columns = columns
@@ -544,7 +545,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 	for name, mysqlType := range msg.getMySQLType() {
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
-		col.Name = pmodel.NewCIStr(name)
+		col.Name = ast.NewCIStr(name)
 		basicType := common.ExtractBasicMySQLType(mysqlType)
 		col.FieldType = *types.NewFieldType(basicType)
 		if common.IsBinaryMySQLType(mysqlType) {
@@ -604,7 +605,7 @@ func newTiIndices(columns []*timodel.ColumnInfo, keys map[string]struct{}) []*ti
 	}
 	indexInfo := &timodel.IndexInfo{
 		ID:      1,
-		Name:    pmodel.NewCIStr("primary"),
+		Name:    ast.NewCIStr("primary"),
 		Columns: indexColumns,
 		Primary: true,
 		Unique:  true,

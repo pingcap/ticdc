@@ -14,6 +14,7 @@
 package metrics
 
 import (
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
@@ -40,4 +41,5 @@ func InitMetrics(registry *prometheus.Registry) {
 	kafka.InitMetrics(registry)
 	codec.InitMetrics(registry)
 	gc.InitMetrics(registry)
+	metrics.InitCloudStorageMetrics(registry)
 }

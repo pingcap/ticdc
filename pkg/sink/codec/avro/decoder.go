@@ -29,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -37,7 +37,7 @@ import (
 )
 
 var (
-	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableIDAllocator  = common.NewTableIDAllocator()
 	tableInfoAccessor = common.NewTableInfoAccessor()
 )
 
@@ -243,7 +243,7 @@ func assembleEvent(
 
 		tiCol := &timodel.ColumnInfo{
 			ID:    int64(idx),
-			Name:  pmodel.NewCIStr(colName),
+			Name:  ast.NewCIStr(colName),
 			State: timodel.StatePublic,
 		}
 		tiCol.SetType(mysqlType)
@@ -295,8 +295,8 @@ func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo,
 
 func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
-	tidbTableInfo.Name = pmodel.NewCIStr(tableName)
+	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tidbTableInfo.Name = ast.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)
 	for _, col := range columns {
@@ -308,7 +308,7 @@ func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, k
 	}
 	tidbTableInfo.Indices = []*timodel.IndexInfo{{
 		Primary: true,
-		Name:    pmodel.NewCIStr("primary"),
+		Name:    ast.NewCIStr("primary"),
 		Columns: indexColumns,
 		State:   timodel.StatePublic,
 	}}
@@ -469,11 +469,14 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.Type = byte(actionType)
 
 	if d.idx == 0 {
-		physicalTableIDs := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
-		result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
-		log.Debug("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-			zap.Any("actionType", actionType.String()), zap.Any("tableID", physicalTableIDs))
-		tableInfoAccessor.Remove(result.SchemaName, result.TableName)
+		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
+		schemaName := result.SchemaName
+		tableName := result.TableName
+		if result.Type == byte(timodel.ActionRenameTable) {
+			schemaName = result.ExtraSchemaName
+			tableName = result.ExtraTableName
+		}
+		tableInfoAccessor.Remove(schemaName, tableName)
 	}
 	return result
 }

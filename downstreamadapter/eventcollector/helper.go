@@ -24,7 +24,7 @@ import (
 
 func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
 	option := dynstream.NewOption()
-	option.BatchCount = 4196
+	option.BatchCount = 67136
 	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
 	option.EnableMemoryControl = true
@@ -69,8 +69,6 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	if len(events) == 0 {
 		return false
 	}
-
-	// log.Info("fizz handle events", zap.Any("events", events))
 	// Only check the first event type, because all events in the same batch should be in the same type group.
 	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
@@ -108,14 +106,16 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 }
 
 const (
-	DataGroupResolvedTsOrDML = 1
-	DataGroupDDL             = 2
-	DataGroupSyncPoint       = 3
-	DataGroupHandshake       = 4
-	DataGroupReady           = 5
-	DataGroupNotReusable     = 6
-	DataGroupBatchDML        = 7
-	DataGroupDrop            = 8
+	// We ensure the resolvedTs and dml events can be in the same batch
+	// To avoid the dml batch to be too small with frequent resolvedTs events.
+	// If the dml event batch is too small, the sink may not be able to batch enough, leading to the performance degradation.
+	DataGroupResolvedTsOrDML = iota + 1
+	DataGroupDDL
+	DataGroupSyncPoint
+	DataGroupHandshake
+	DataGroupReady
+	DataGroupNotReusable
+	DataGroupDrop
 )
 
 func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.EventType {
@@ -123,6 +123,8 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 	case commonEvent.TypeResolvedEvent:
 		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.PeriodicSignal, Droppable: true}
 	case commonEvent.TypeDMLEvent:
+		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.BatchableData, Droppable: true}
+	case commonEvent.TypeBatchDMLEvent:
 		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.BatchableData, Droppable: true}
 	case commonEvent.TypeDDLEvent:
 		return dynstream.EventType{DataGroup: DataGroupDDL, Property: dynstream.NonBatchable, Droppable: true}
@@ -134,9 +136,6 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 		return dynstream.EventType{DataGroup: DataGroupReady, Property: dynstream.NonBatchable, Droppable: false}
 	case commonEvent.TypeNotReusableEvent:
 		return dynstream.EventType{DataGroup: DataGroupNotReusable, Property: dynstream.NonBatchable, Droppable: false}
-	case commonEvent.TypeBatchDMLEvent:
-		// Note: set TypeBatchDMLEvent to NonBatchable for simplicity.
-		return dynstream.EventType{DataGroup: DataGroupBatchDML, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeDropEvent:
 		return dynstream.EventType{DataGroup: DataGroupDrop, Property: dynstream.NonBatchable, Droppable: false}
 	default:
@@ -161,7 +160,7 @@ func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent:
 		log.Info("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
-		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetCommitTs())
+		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetEpoch(), event.GetCommitTs())
 		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
 	}
 	return nil

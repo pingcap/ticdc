@@ -23,7 +23,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -452,6 +452,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		iterateEventTablesFunc:     iterateEventTablesForRemovePartitioning,
 		extractTableInfoFunc:       extractTableInfoFuncForRemovePartitioning,
 		buildDDLEventFunc:          buildDDLEventForRemovePartitioning,
+	},
+	filter.ActionAddFullTextIndex: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
 	},
 }
 
@@ -1330,7 +1339,7 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 	columnSchema := event.ExtraTableInfo.ShadowCopyColumnSchema()
 	tableInfo := common.NewTableInfo(
 		event.SchemaName,
-		pmodel.NewCIStr(event.TableName).O,
+		ast.NewCIStr(event.TableName).O,
 		tableID,
 		false,
 		columnSchema,

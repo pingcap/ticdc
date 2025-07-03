@@ -135,7 +135,7 @@ func GenUpdateSQL(changes ...*RowChange) (string, []any) {
 		whenCaseStmts[i] = whereBuf.String()
 	}
 
-	// Build gegerated columns lower name set to accelerate the following check
+	// Build generated columns lower name set to accelerate the following check
 	targetGeneratedColSet := generatedColumnsNameSet(first.targetTableInfo.GetColumns())
 
 	// Generate `ColumnName`=CASE WHEN .. THEN .. END
@@ -246,7 +246,7 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 	columnNum := 0
 	var skipColIdx []int
 
-	// build gegerated columns lower name set to accelerate the following check
+	// build generated columns lower name set to accelerate the following check
 	generatedColumns := generatedColumnsNameSet(first.targetTableInfo.GetColumns())
 	for i, col := range first.sourceTableInfo.GetColumns() {
 		if _, ok := generatedColumns[col.Name.L]; ok {

@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -30,8 +31,8 @@ import (
 	"github.com/pingcap/tidb/pkg/meta"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -139,6 +140,23 @@ func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 	// Done to Synced.
 	jobs[0].State = timodel.JobStateDone
 	res := jobs[0]
+
+	if res.Type == timodel.ActionExchangeTablePartition {
+		upperQuery := strings.ToUpper(res.Query)
+		idx1 := strings.Index(upperQuery, "EXCHANGE PARTITION") + len("EXCHANGE PARTITION")
+		idx2 := strings.Index(upperQuery, "WITH TABLE")
+
+		// Note that partition name should be parsed from original query, not the upperQuery.
+		partName := strings.TrimSpace(res.Query[idx1:idx2])
+		partName = strings.Replace(partName, "`", "", -1)
+		res.Query = fmt.Sprintf("ALTER TABLE `%s`.`%s` EXCHANGE PARTITION `%s` WITH TABLE `%s`.`%s`",
+			res.InvolvingSchemaInfo[0].Database, res.InvolvingSchemaInfo[0].Table, partName, res.SchemaName, res.TableName)
+
+		if strings.HasSuffix(upperQuery, "WITHOUT VALIDATION") {
+			res.Query += " WITHOUT VALIDATION"
+		}
+	}
+
 	s.ApplyJob(res)
 	if res.Type != timodel.ActionRenameTables {
 		return res
@@ -158,13 +176,13 @@ func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 	for i := 0; i < tableNum; i++ {
 		oldTableIDs[i] = res.BinlogInfo.MultipleTableInfos[i].ID
 	}
-	newTableNames := make([]pmodel.CIStr, tableNum)
+	newTableNames := make([]ast.CIStr, tableNum)
 	for i := 0; i < tableNum; i++ {
 		newTableNames[i] = res.BinlogInfo.MultipleTableInfos[i].Name
 	}
-	oldSchemaNames := make([]pmodel.CIStr, tableNum)
+	oldSchemaNames := make([]ast.CIStr, tableNum)
 	for i := 0; i < tableNum; i++ {
-		oldSchemaNames[i] = pmodel.NewCIStr(schema)
+		oldSchemaNames[i] = ast.NewCIStr(schema)
 	}
 	newSchemaIDs := oldSchemaIDs
 
@@ -184,8 +202,8 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 	return &DDLEvent{
 		SchemaID:   job.SchemaID,
 		TableID:    info.TableName.TableID,
-		SchemaName: info.GetSchemaName(),
-		TableName:  info.GetTableName(),
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
 		Query:      job.Query,
 		Type:       byte(job.Type),
 		TableInfo:  info,

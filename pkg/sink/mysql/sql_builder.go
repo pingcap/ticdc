@@ -70,7 +70,7 @@ func buildInsert(
 	row commonEvent.RowChange,
 	translateToInsert bool,
 ) (string, []interface{}) {
-	args := getArgs(&row.Row, tableInfo, false)
+	args := getArgs(&row.Row, tableInfo)
 	if len(args) == 0 {
 		return "", nil
 	}
@@ -128,7 +128,7 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 	}
 	builder.WriteString(tableInfo.GetPreUpdateSQL())
 
-	args := getArgs(&row.Row, tableInfo, false)
+	args := getArgs(&row.Row, tableInfo)
 	if len(args) == 0 {
 		return "", nil
 	}
@@ -158,10 +158,22 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 	return sql, args
 }
 
-func getArgs(row *chunk.Row, tableInfo *common.TableInfo, enableGeneratedColumn bool) []interface{} {
+func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || (col.IsGenerated() && !enableGeneratedColumn) {
+		if col == nil || col.IsGenerated() {
+			continue
+		}
+		v := common.ExtractColVal(row, col, i)
+		args = append(args, v)
+	}
+	return args
+}
+
+func getArgsWithGeneratedColumn(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
+	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
+	for i, col := range tableInfo.GetColumns() {
+		if col == nil {
 			continue
 		}
 		v := common.ExtractColVal(row, col, i)

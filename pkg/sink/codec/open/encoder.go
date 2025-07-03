@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"sync"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -31,6 +32,11 @@ const (
 	batchVersion1 uint64 = 1
 )
 
+var (
+	lock             sync.RWMutex
+	columnFlagsCache = make(map[int64]map[string]uint64, 32)
+)
+
 // batchEncoder for open protocol will batch multiple row changed events into a single message.
 // One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed MaxMessageBytes.
 type batchEncoder struct {
@@ -39,8 +45,6 @@ type batchEncoder struct {
 	callbackBuff []func()
 
 	claimCheck *claimcheck.ClaimCheck
-
-	columnFlagsCache map[int64]map[string]uint64
 
 	config *common.Config
 }
@@ -51,10 +55,12 @@ func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEn
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	lock.Lock()
+	clear(columnFlagsCache)
+	lock.Unlock()
 	return &batchEncoder{
-		config:           config,
-		claimCheck:       claimCheck,
-		columnFlagsCache: make(map[int64]map[string]uint64, 32),
+		config:     config,
+		claimCheck: claimCheck,
 	}, nil
 }
 
@@ -65,10 +71,14 @@ func (d *batchEncoder) Clean() {
 }
 
 func (d *batchEncoder) fetchColumnFlags(e *commonEvent.RowEvent) map[string]uint64 {
-	result, ok := d.columnFlagsCache[e.GetTableID()]
+	lock.RLock()
+	result, ok := columnFlagsCache[e.GetTableID()]
+	lock.RUnlock()
 	if !ok {
 		result = initColumnFlags(e.TableInfo)
-		d.columnFlagsCache[e.GetTableID()] = result
+		lock.Lock()
+		columnFlagsCache[e.GetTableID()] = result
+		lock.Unlock()
 	}
 	return result
 }
@@ -224,7 +234,10 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 }
 
 func (d *batchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
-	delete(d.columnFlagsCache, e.TableID)
+	lock.Lock()
+	delete(columnFlagsCache, e.TableID)
+	defer lock.Unlock()
+
 	key, value, err := encodeDDLEvent(e, d.config)
 	if err != nil {
 		return nil, errors.Trace(err)

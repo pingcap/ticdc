@@ -31,15 +31,16 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/tests/integration_tests/util"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/store/driver"
 	"github.com/pingcap/tidb/pkg/tablecodec"
-	"github.com/pingcap/tiflow/tests/integration_tests/util"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 func main() {
@@ -115,7 +116,7 @@ func addLock(ctx context.Context, cfg *util.Config) error {
 	}
 
 	pdcli, err := pd.NewClientWithContext(
-		ctx, strings.Split(cfg.PDAddr, ","), pd.SecurityOption{})
+		ctx, caller.Component("ticdc"), strings.Split(cfg.PDAddr, ","), pd.SecurityOption{})
 	if err != nil {
 		return errors.Trace(err)
 	}
