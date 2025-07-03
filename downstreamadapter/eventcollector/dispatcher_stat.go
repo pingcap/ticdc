@@ -449,7 +449,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		ddl := events[0].Event.(*event.DDLEvent)
 		tableInfo := ddl.TableInfo
 		if tableInfo != nil {
-			tableInfo.SetUpdateTS(ddl.FinishedTs)
+			tableInfo.FinishedTs = ddl.FinishedTs
 			d.tableInfo.Store(tableInfo)
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })
@@ -587,7 +587,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
-		tableInfo.SetUpdateTS(handshakeEvent.GetCommitTs())
+		tableInfo.FinishedTs = handshakeEvent.GetCommitTs()
 		d.tableInfo.Store(tableInfo)
 	}
 	d.lastEventSeq.Store(handshakeEvent.Seq)

@@ -76,10 +76,11 @@ type TableInfo struct {
 	// In general, we always use the physical ID to represent a table, but we
 	// record the logical ID from the DDL event(job.BinlogInfo.TableInfo).
 	// So be careful when using the TableInfo.
-	TableName TableName `json:"table-name"`
-	Charset   string    `json:"charset"`
-	Collate   string    `json:"collate"`
-	Comment   string    `json:"comment"`
+	TableName  TableName `json:"table-name"`
+	Charset    string    `json:"charset"`
+	Collate    string    `json:"collate"`
+	Comment    string    `json:"comment"`
+	FinishedTs uint64    `json:"-"`
 
 	columnSchema *columnSchema `json:"-"`
 
@@ -202,11 +203,9 @@ func (ti *TableInfo) UpdateTS() uint64 {
 	return ti.columnSchema.UpdateTS
 }
 
-// SetUpdateTS set updateTS
-// for changing schema operations include 'truncate table', 'rename table',
-// 'rename tables', 'truncate partition' and 'exchange partition'.
-func (ti *TableInfo) SetUpdateTS(updateTS uint64) {
-	ti.columnSchema.UpdateTS = updateTS
+// GetTableVersion returns the table version
+func (ti *TableInfo) GetTableVersion() uint64 {
+	return max(ti.FinishedTs, ti.columnSchema.UpdateTS)
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
