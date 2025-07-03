@@ -49,7 +49,9 @@ type DispatcherService interface {
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 }
 
-// Dispatcher is the interface that responsible for dispatcher manager since there exist event dispatcher and redo dispatcher.
+// Dispatcher defines the interface for event dispatchers that are responsible for receiving events
+// from EventCollector and dispatching them to Sink components. It extends DispatcherService with
+// additional lifecycle management and capabilities for handling block events (DDL/SyncPoint)
 type Dispatcher interface {
 	DispatcherService
 	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
