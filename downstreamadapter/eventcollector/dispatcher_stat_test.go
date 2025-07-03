@@ -1013,8 +1013,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		event        dispatcher.DispatcherEvent
-		from         *node.ID
+		events       []dispatcher.DispatcherEvent
 		tableInfo    *common.TableInfo
 		lastCommitTs uint64
 		epoch        uint64
@@ -1022,17 +1021,30 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 	}{
 		{
 			name: "valid batch DML",
-			event: dispatcher.DispatcherEvent{
-				Event: &commonEvent.BatchDMLEvent{
-					Rows:    chunk.NewEmptyChunk(nil),
-					RawRows: []byte("test batch DML event"),
-					DMLEvents: []*commonEvent.DMLEvent{
-						{Seq: 1, Epoch: 10, CommitTs: 100},
-						{Seq: 2, Epoch: 10, CommitTs: 100},
+			events: []dispatcher.DispatcherEvent{
+				{
+					Event: &commonEvent.BatchDMLEvent{
+						Rows:    chunk.NewEmptyChunk(nil),
+						RawRows: []byte("test batch DML event"),
+						DMLEvents: []*commonEvent.DMLEvent{
+							{Seq: 1, Epoch: 10, CommitTs: 100},
+							{Seq: 2, Epoch: 10, CommitTs: 100},
+						},
 					},
+					From: createNodeID("service1"),
+				},
+				{
+					Event: &commonEvent.BatchDMLEvent{
+						Rows:    chunk.NewEmptyChunk(nil),
+						RawRows: []byte("test batch DML event"),
+						DMLEvents: []*commonEvent.DMLEvent{
+							{Seq: 3, Epoch: 10, CommitTs: 200},
+							{Seq: 4, Epoch: 10, CommitTs: 200},
+						},
+					},
+					From: createNodeID("service1"),
 				},
 			},
-			from:         createNodeID("service1"),
 			tableInfo:    &common.TableInfo{},
 			lastCommitTs: 96,
 			epoch:        10,
@@ -1040,32 +1052,36 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 		},
 		{
 			name: "nil table info",
-			event: dispatcher.DispatcherEvent{
-				Event: &commonEvent.BatchDMLEvent{
-					Rows:    chunk.NewEmptyChunk(nil),
-					RawRows: []byte("test batch DML event"),
-					DMLEvents: []*commonEvent.DMLEvent{
-						{Seq: 1, Epoch: 10, CommitTs: 100},
-						{Seq: 2, Epoch: 10, CommitTs: 100},
+			events: []dispatcher.DispatcherEvent{
+				{
+					Event: &commonEvent.BatchDMLEvent{
+						Rows:    chunk.NewEmptyChunk(nil),
+						RawRows: []byte("test batch DML event"),
+						DMLEvents: []*commonEvent.DMLEvent{
+							{Seq: 1, Epoch: 10, CommitTs: 100},
+							{Seq: 2, Epoch: 10, CommitTs: 100},
+						},
 					},
+					From: createNodeID("service1"),
 				},
 			},
-			from:  createNodeID("service1"),
 			epoch: 10,
 			want:  false,
 		},
 		{
 			name: "stale commit ts",
-			event: dispatcher.DispatcherEvent{
-				Event: &commonEvent.BatchDMLEvent{
-					Rows:    chunk.NewEmptyChunk(nil),
-					RawRows: []byte("test batch DML event"),
-					DMLEvents: []*commonEvent.DMLEvent{
-						{Epoch: 10, CommitTs: 98},
+			events: []dispatcher.DispatcherEvent{
+				{
+					Event: &commonEvent.BatchDMLEvent{
+						Rows:    chunk.NewEmptyChunk(nil),
+						RawRows: []byte("test batch DML event"),
+						DMLEvents: []*commonEvent.DMLEvent{
+							{Seq: 1, Epoch: 10, CommitTs: 98},
+						},
 					},
+					From: createNodeID("service1"),
 				},
 			},
-			from:         createNodeID("service1"),
 			tableInfo:    &common.TableInfo{},
 			lastCommitTs: 99,
 			epoch:        10,
@@ -1087,10 +1103,10 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			}
 			if stat.tableInfo.Load() == nil {
 				require.Panics(t, func() {
-					stat.handleBatchDMLEvent(tt.event, tt.from)
+					stat.handleBatchDataEvents(tt.events)
 				})
 			} else {
-				got := stat.handleBatchDMLEvent(tt.event, tt.from)
+				got := stat.handleBatchDataEvents(tt.events)
 				require.Equal(t, tt.want, got)
 			}
 		})
