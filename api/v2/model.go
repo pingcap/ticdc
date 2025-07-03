@@ -1091,11 +1091,11 @@ type ChangeFeedInfo struct {
 	// The ChangeFeed will exits until sync to timestamp TargetTs
 	TargetTs uint64 `json:"target_ts,omitempty"`
 	// used for admin job notification, trigger watch event in capture
-	AdminJobType   config.AdminJobType `json:"admin_job_type,omitempty"`
-	Config         *ReplicaConfig      `json:"config,omitempty"`
-	State          config.FeedState    `json:"state,omitempty"`
-	Error          *RunningError       `json:"error,omitempty"`
-	CreatorVersion string              `json:"creator_version,omitempty"`
+	AdminJobType   config.AdminJobType  `json:"admin_job_type,omitempty"`
+	Config         *ReplicaConfig       `json:"config,omitempty"`
+	State          config.FeedState     `json:"state,omitempty"`
+	Error          *config.RunningError `json:"error,omitempty"`
+	CreatorVersion string               `json:"creator_version,omitempty"`
 
 	ResolvedTs     uint64                     `json:"resolved_ts"`
 	CheckpointTs   uint64                     `json:"checkpoint_ts"`
@@ -1114,15 +1114,6 @@ type SyncedStatus struct {
 	LastSyncedTs     api.JSONTime `json:"last_synced_ts"`
 	NowTs            api.JSONTime `json:"now_ts"`
 	Info             string       `json:"info"`
-}
-
-// RunningError represents some running error from cdc components,
-// such as processor.
-type RunningError struct {
-	Time    *time.Time `json:"time,omitempty"`
-	Addr    string     `json:"addr"`
-	Code    string     `json:"code"`
-	Message string     `json:"message"`
 }
 
 // toCredential generates a security.Credential from a PDConfig
@@ -1313,11 +1304,11 @@ type CloudStorageConfig struct {
 
 // ChangefeedStatus holds common information of a changefeed in cdc
 type ChangefeedStatus struct {
-	State        string        `json:"state,omitempty"`
-	ResolvedTs   uint64        `json:"resolved_ts"`
-	CheckpointTs uint64        `json:"checkpoint_ts"`
-	LastError    *RunningError `json:"last_error,omitempty"`
-	LastWarning  *RunningError `json:"last_warning,omitempty"`
+	State        string               `json:"state,omitempty"`
+	ResolvedTs   uint64               `json:"resolved_ts"`
+	CheckpointTs uint64               `json:"checkpoint_ts"`
+	LastError    *config.RunningError `json:"last_error,omitempty"`
+	LastWarning  *config.RunningError `json:"last_warning,omitempty"`
 }
 
 // GlueSchemaRegistryConfig represents a glue schema registry configuration
