@@ -25,11 +25,11 @@ trap stop_tidb_cluster EXIT
 run_sql "set global foreign_key_checks=0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 cd $WORK_DIR
-start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1"
+create_changefeed --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1"
 
 run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

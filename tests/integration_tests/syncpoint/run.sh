@@ -158,13 +158,13 @@ function run() {
 	run_sql "CREATE DATABASE testSync;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/InjectDropEvent=10%return(true)'
-	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	# this test contains `set global tidb_external_ts = ?` , which requires super privilege, so we
 	# can't use the normal user
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	create_changefeed --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
 
 	goSql
 

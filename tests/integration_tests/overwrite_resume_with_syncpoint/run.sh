@@ -41,7 +41,7 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml --changefeed-id="test4"
+	create_changefeed --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml --changefeed-id="test4"
 
 	check_ts_forward "test4"
 
