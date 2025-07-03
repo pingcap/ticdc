@@ -452,8 +452,10 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		if !d.filterAndUpdateEventByCommitTs(events[0]) {
 			return false
 		}
-		tableInfo := events[0].Event.(*event.DDLEvent).TableInfo
+		ddl := events[0].Event.(*event.DDLEvent)
+		tableInfo := ddl.TableInfo
 		if tableInfo != nil {
+			tableInfo.FinishedTs = ddl.FinishedTs
 			d.tableInfo.Store(tableInfo)
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })
@@ -467,8 +469,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
 	switch events[0].GetType() {
-	case commonEvent.TypeDMLEvent,
-		commonEvent.TypeResolvedEvent,
+	case commonEvent.TypeResolvedEvent,
 		commonEvent.TypeBatchDMLEvent:
 		return d.handleBatchDataEvents(events)
 	case commonEvent.TypeDDLEvent,
@@ -592,6 +593,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
+		tableInfo.FinishedTs = handshakeEvent.GetCommitTs()
 		d.tableInfo.Store(tableInfo)
 	}
 	d.lastEventSeq.Store(handshakeEvent.Seq)

@@ -76,10 +76,11 @@ type TableInfo struct {
 	// In general, we always use the physical ID to represent a table, but we
 	// record the logical ID from the DDL event(job.BinlogInfo.TableInfo).
 	// So be careful when using the TableInfo.
-	TableName TableName `json:"table-name"`
-	Charset   string    `json:"charset"`
-	Collate   string    `json:"collate"`
-	Comment   string    `json:"comment"`
+	TableName  TableName `json:"table-name"`
+	Charset    string    `json:"charset"`
+	Collate    string    `json:"collate"`
+	Comment    string    `json:"comment"`
+	FinishedTs uint64    `msg:"finished_ts"`
 
 	columnSchema *columnSchema `json:"-"`
 
