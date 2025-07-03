@@ -257,7 +257,8 @@ func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
 // Returns false if sequence is discontinuous (indicating dropped events), which requires dispatcher reset.
 func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) bool {
 	switch event.GetType() {
-	case commonEvent.TypeDDLEvent,
+	case commonEvent.TypeDMLEvent,
+		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent,
 		commonEvent.TypeSyncPointEvent:
 		log.Debug("check event sequence",
@@ -351,6 +352,7 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent,
+		commonEvent.TypeDMLEvent,
 		commonEvent.TypeBatchDMLEvent:
 		d.lastEventCommitTs.Store(event.GetCommitTs())
 	}
@@ -384,6 +386,10 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 		}
 		if event.GetType() == commonEvent.TypeResolvedEvent {
 			validEvents = append(validEvents, event)
+		} else if event.GetType() == commonEvent.TypeDMLEvent {
+			if d.filterAndUpdateEventByCommitTs(event) {
+				validEvents = append(validEvents, event)
+			}
 		} else if event.GetType() == commonEvent.TypeBatchDMLEvent {
 			tableInfo := d.tableInfo.Load().(*common.TableInfo)
 			if tableInfo == nil {
@@ -463,7 +469,8 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
 	switch events[0].GetType() {
-	case commonEvent.TypeResolvedEvent,
+	case commonEvent.TypeDMLEvent,
+		commonEvent.TypeResolvedEvent,
 		commonEvent.TypeBatchDMLEvent:
 		return d.handleBatchDataEvents(events)
 	case commonEvent.TypeDDLEvent,
