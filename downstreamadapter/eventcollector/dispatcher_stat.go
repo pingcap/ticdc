@@ -123,7 +123,8 @@ type dispatcherStat struct {
 	// gotSyncpointOnTS indicates whether a sync point was received at the sentCommitTs.
 	gotSyncpointOnTS atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
-	tableInfo atomic.Value
+	tableInfo        atomic.Value
+	tableInfoVersion atomic.Uint64
 }
 
 func newDispatcherStat(
@@ -392,6 +393,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			}
 		} else if event.GetType() == commonEvent.TypeBatchDMLEvent {
 			tableInfo := d.tableInfo.Load().(*common.TableInfo)
+			tableInfoVersion := d.tableInfoVersion.Load()
 			if tableInfo == nil {
 				log.Panic("should not happen: table info should be set before batch DML event",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
@@ -400,6 +402,8 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
+				// FIXME: more elegant implementation
+				dml.TableInfoVersion = max(tableInfoVersion, dml.TableInfo.UpdateTS())
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.filterAndUpdateEventByCommitTs(dmlEvent) {
 					validEvents = append(validEvents, dmlEvent)
@@ -455,8 +459,8 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		ddl := events[0].Event.(*event.DDLEvent)
 		tableInfo := ddl.TableInfo
 		if tableInfo != nil {
-			tableInfo.FinishedTs = ddl.FinishedTs
 			d.tableInfo.Store(tableInfo)
+			d.tableInfoVersion.Store(ddl.FinishedTs)
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })
 	} else {

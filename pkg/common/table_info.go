@@ -80,9 +80,6 @@ type TableInfo struct {
 	Charset   string    `json:"charset"`
 	Collate   string    `json:"collate"`
 	Comment   string    `json:"comment"`
-	// FinishedTs record the table info version from last ddl event.
-	// include 'truncate table', 'rename table', 'rename tables', 'truncate partition' and 'exchange partition'.
-	FinishedTs uint64 `json:"-"`
 
 	columnSchema *columnSchema `json:"-"`
 
@@ -203,11 +200,6 @@ func (ti *TableInfo) GetPKIndex() []int64 {
 // 'rename tables', 'truncate partition' and 'exchange partition'.
 func (ti *TableInfo) UpdateTS() uint64 {
 	return ti.columnSchema.UpdateTS
-}
-
-// GetTableInfoVersion returns the table version
-func (ti *TableInfo) GetTableInfoVersion() uint64 {
-	return max(ti.FinishedTs, ti.columnSchema.UpdateTS)
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
