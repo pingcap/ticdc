@@ -71,8 +71,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	}
 	// Only check the first event type, because all events in the same batch should be in the same type group.
 	switch events[0].GetType() {
-	case commonEvent.TypeDMLEvent,
-		commonEvent.TypeResolvedEvent,
+	case commonEvent.TypeResolvedEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeBatchDMLEvent:

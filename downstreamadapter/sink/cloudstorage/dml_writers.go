@@ -17,7 +17,6 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -25,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -63,9 +61,9 @@ func newDMLWriters(
 	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh.Out(), encodedOutCh)
 
 	writers := make([]*writer, config.WorkerCount)
-	writerInputChs := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
+	writerInputChs := make([]*chann.UnlimitedChannel[eventFragment, any], config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		inputCh := chann.NewAutoDrainChann[eventFragment]()
+		inputCh := chann.NewUnlimitedChannel[eventFragment, any](nil, nil)
 		writerInputChs[i] = inputCh
 		writers[i] = newWriter(i, changefeedID, storage, config, extension, inputCh, statistics)
 	}
@@ -116,10 +114,7 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 			IsPartition: event.TableInfo.IsPartitionTable(),
 		},
 		// FIXME
-		TableInfoVersion: event.TableInfo.FinishedTs,
-	}
-	if event.TableInfo.FinishedTs == 0 {
-		log.Error("add dml", zap.Any("info", event.TableInfo))
+		TableInfoVersion: event.TableInfo.UpdateTS(),
 	}
 	seq := atomic.AddUint64(&d.lastSeqNum, 1)
 	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
