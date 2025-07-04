@@ -32,38 +32,38 @@ group_num=${group#G}
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
-	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
+	'bdr_mode'
 	# G01
-	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
+	'bdr_mode'
 	# G02
-	'new_ci_collation safe_mode savepoint fail_over_ddl_C'
+	'bdr_mode'
 	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
+	'bdr_mode'
 	# G04
 	# multi_capture
-	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'bdr_mode'
 	# G05
-	'vector simple partition_table fail_over_ddl_F'
+	'bdr_mode'
 	# G06
-	'http_api http_api_tls ddl_wait fail_over_ddl_G'
+	'bdr_mode'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H'
+	'bdr_mode'
 	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	'bdr_mode'
 	# G09
-	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
+	'bdr_mode'
 	# G10
-	'changefeed_error bdr_mode fail_over_ddl_K'
+	'bdr_mode'
 	# G11
-	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	'bdr_mode'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'bdr_mode'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	'bdr_mode'
 	# G14
-	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
+	'bdr_mode'
 	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables'
+	'bdr_mode'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
