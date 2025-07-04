@@ -79,38 +79,9 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	return rd.handleEvents(dispatcherEvents, wakeCallback)
 }
 
+// Remove is called when TryClose returns true
+// It set isRemoving to true, to make the dispatcher can be clean by the eventDispatcherManager.
 func (rd *RedoDispatcher) Remove() {
 	rd.isRemoving.Store(true)
-	log.Info("remove redo dispatcher",
-		zap.Stringer("dispatcher", rd.id),
-		zap.Stringer("changefeedID", rd.changefeedID),
-		zap.String("table", common.FormatTableSpan(rd.tableSpan)))
-	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDS.RemovePath(rd.id)
-	if err != nil {
-		log.Error("remove redo dispatcher from dynamic stream failed",
-			zap.Stringer("changefeedID", rd.changefeedID),
-			zap.Stringer("dispatcher", rd.id),
-			zap.String("table", common.FormatTableSpan(rd.tableSpan)),
-			zap.Uint64("checkpointTs", rd.GetCheckpointTs()),
-			zap.Uint64("resolvedTs", rd.GetResolvedTs()),
-			zap.Error(err))
-	}
-}
-
-func (rd *RedoDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
-	// If redoSink is normal(not meet error), we need to wait all the events in redoSink to flushed downstream successfully.
-	// If redoSink is not normal, we can close the dispatcher immediately.
-	if !rd.sink.IsNormal() || rd.tableProgress.Empty() {
-		w.CheckpointTs = rd.GetCheckpointTs()
-		w.ResolvedTs = rd.GetResolvedTs()
-
-		rd.componentStatus.Set(heartbeatpb.ComponentState_Stopped)
-		return w, true
-	}
-	log.Info("redo dispatcher is not ready to close",
-		zap.Stringer("dispatcher", rd.id),
-		zap.Bool("sinkIsNormal", rd.sink.IsNormal()),
-		zap.Bool("tableProgressEmpty", rd.tableProgress.Empty()))
-	return w, false
+	rd.removeDispatcher()
 }

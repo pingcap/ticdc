@@ -54,14 +54,22 @@ type DispatcherService interface {
 // additional lifecycle management and capabilities for handling block events (DDL/SyncPoint)
 type Dispatcher interface {
 	DispatcherService
+	GetSchemaID() int64
 	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
-	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
-	GetComponentStatus() heartbeatpb.ComponentState
 	HandleError(err error)
+	SetSeq(seq uint64)
 	SetStartTs(startTs uint64)
 	SetCurrentPDTs(currentPDTs uint64)
 	SetStartTsIsSyncpoint(startTsIsSyncpoint bool)
 	SetComponentStatus(status heartbeatpb.ComponentState)
+	GetRemovingStatus() bool
+	GetCheckpointTs() uint64
+	GetHeartBeatInfo(h *HeartBeatInfo)
+	GetComponentStatus() heartbeatpb.ComponentState
+	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
+	GetEventSizePerSecond() float32
+	TryClose() (w heartbeatpb.Watermark, ok bool)
+	Remove()
 }
 
 /*
@@ -749,5 +757,63 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 		UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
 		IsSyncPoint:       pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
 		Stage:             blockStage,
+	}
+}
+
+func (d *BasicDispatcher) Remove() {
+	log.Panic("should not call this")
+}
+
+// TryClose should be called before Remove(), because the dispatcher may still wait the dispatcher status from maintainer.
+// TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
+// EventDispatcherManager will clean the dispatcher info after Remove() is called.
+func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
+	// If sink is not normal, we can close the dispatcher immediately.
+	if !d.sink.IsNormal() || d.tableProgress.Empty() {
+		w.CheckpointTs = d.GetCheckpointTs()
+		w.ResolvedTs = d.GetResolvedTs()
+
+		d.componentStatus.Set(heartbeatpb.ComponentState_Stopped)
+		if d.IsTableTriggerEventDispatcher() {
+			if d.tableSchemaStore != nil {
+				d.tableSchemaStore.Clear()
+			}
+		}
+		log.Info("dispatcher component has stopped and is ready for cleanup",
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.Stringer("dispatcher", d.id),
+			zap.Bool("isRedo", IsRedoDispatcher(d)),
+			zap.String("table", common.FormatTableSpan(d.tableSpan)),
+			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
+			zap.Uint64("resolvedTs", d.GetResolvedTs()),
+		)
+		return w, true
+	}
+	log.Info("dispatcher is not ready to close",
+		zap.Stringer("dispatcher", d.id),
+		zap.Bool("isRedo", IsRedoDispatcher(d)),
+		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
+		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()))
+	return w, false
+}
+
+// It removes the dispatcher from status dynamic stream to stop receiving status info from maintainer.
+func (d *BasicDispatcher) removeDispatcher() {
+	log.Info("remove dispatcher",
+		zap.Stringer("dispatcher", d.id),
+		zap.Bool("isRedo", IsRedoDispatcher(d)),
+		zap.Stringer("changefeedID", d.changefeedID),
+		zap.String("table", common.FormatTableSpan(d.tableSpan)))
+	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	err := dispatcherStatusDS.RemovePath(d.id)
+	if err != nil {
+		log.Error("remove dispatcher from dynamic stream failed",
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.Stringer("dispatcher", d.id),
+			zap.String("table", common.FormatTableSpan(d.tableSpan)),
+			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
+			zap.Uint64("resolvedTs", d.GetResolvedTs()),
+			zap.Error(err))
 	}
 }

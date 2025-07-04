@@ -207,7 +207,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 		zap.Int64("eventTableID", e.TableID),
 		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq),
-		zap.Bool("redo", e.GetRedo()))
+		zap.Bool("isRedo", e.GetRedo()))
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
@@ -829,7 +829,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
-		zap.Bool("redo", info.GetRedo()),
+		zap.Bool("isRedo", info.GetRedo()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", startTs),
 		zap.Duration("duration", time.Since(start)))

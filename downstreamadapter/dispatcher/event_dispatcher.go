@@ -38,6 +38,9 @@ var _ Dispatcher = (*EventDispatcher)(nil)
 // EventDispatcher is the dispatcher to flush events to the downstream
 type EventDispatcher struct {
 	*BasicDispatcher
+	// BootstrapState stores a bootstrap state
+	// when state is BootstrapNotStarted, it will send bootstrap messages
+	// only for simple protocol
 	BootstrapState bootstrapState
 	redoEnable     bool
 	// redoGlobalTs is updated by maintainer, all events can't replicate util the commit-ts is greater than redoGlobalTs
@@ -94,7 +97,7 @@ func NewEventDispatcher(
 	dispatcher := &EventDispatcher{
 		BasicDispatcher: basicDispatcher,
 		BootstrapState:  BootstrapFinished,
-		// redo
+		// redo related
 		redoEnable:   redoEnable,
 		redoGlobalTs: redoGlobalTs,
 	}
@@ -178,60 +181,15 @@ func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	return d.handleEvents(dispatcherEvents, wakeCallback)
 }
 
-// TryClose should be called before Remove(), because the dispatcher may still wait the dispatcher status from maintainer.
-// TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
-// EventDispatcherManager will clean the dispatcher info after Remove() is called.
-func (d *EventDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
-	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
-	// If sink is not normal, we can close the dispatcher immediately.
-	if !d.sink.IsNormal() || d.tableProgress.Empty() {
-		w.CheckpointTs = d.GetCheckpointTs()
-		w.ResolvedTs = d.GetResolvedTs()
-
-		d.componentStatus.Set(heartbeatpb.ComponentState_Stopped)
-		if d.IsTableTriggerEventDispatcher() {
-			d.tableSchemaStore.Clear()
-		}
-		log.Info("dispatcher component has stopped and is ready for cleanup",
-			zap.Stringer("changefeedID", d.changefeedID),
-			zap.Stringer("dispatcher", d.id),
-			zap.String("table", common.FormatTableSpan(d.tableSpan)),
-			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
-			zap.Uint64("resolvedTs", d.GetResolvedTs()),
-		)
-		return w, true
-	}
-	log.Info("dispatcher is not ready to close",
-		zap.Stringer("dispatcher", d.id),
-		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
-		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()))
-	return w, false
-}
-
-// Remove is called when TryClose returns true,
+// Remove is called when TryClose returns true
 // It set isRemoving to true, to make the dispatcher can be clean by the eventDispatcherManager.
-// it also remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *EventDispatcher) Remove() {
 	if d.isRemoving.CompareAndSwap(false, true) {
 		d.cacheEvents.Lock()
 		defer d.cacheEvents.Unlock()
 		close(d.cacheEvents.events)
 	}
-	log.Info("remove dispatcher",
-		zap.Stringer("dispatcher", d.id),
-		zap.Stringer("changefeedID", d.changefeedID),
-		zap.String("table", common.FormatTableSpan(d.tableSpan)))
-	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDS.RemovePath(d.id)
-	if err != nil {
-		log.Error("remove dispatcher from dynamic stream failed",
-			zap.Stringer("changefeedID", d.changefeedID),
-			zap.Stringer("dispatcher", d.id),
-			zap.String("table", common.FormatTableSpan(d.tableSpan)),
-			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
-			zap.Uint64("resolvedTs", d.GetResolvedTs()),
-			zap.Error(err))
-	}
+	d.removeDispatcher()
 }
 
 // EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started
@@ -303,6 +261,8 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 	return true
 }
 
+// cacheEvents cache the events which commit-ts is less than or equal the redoGlobalTs
+// it will be used when redoEnable is true
 type cacheEvents struct {
 	events       []DispatcherEvent
 	wakeCallback func()

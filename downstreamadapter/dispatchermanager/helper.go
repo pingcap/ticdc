@@ -213,9 +213,9 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 				log.Error("invalid remove dispatcher request count in one batch", zap.Int("count", len(reqs)))
 			}
 			if config.Redo {
-				eventDispatcherManager.removeRedoDispatcher(dispatcherID)
+				removeDispatcher(eventDispatcherManager.changefeedID, dispatcherID, eventDispatcherManager.redoDispatcherMap, eventDispatcherManager.statusesChan)
 			} else {
-				eventDispatcherManager.removeDispatcher(dispatcherID)
+				removeDispatcher(eventDispatcherManager.changefeedID, dispatcherID, eventDispatcherManager.dispatcherMap, eventDispatcherManager.statusesChan)
 			}
 		}
 	}

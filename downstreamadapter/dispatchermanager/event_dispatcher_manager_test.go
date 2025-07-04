@@ -328,7 +328,7 @@ func TestDoMerge(t *testing.T) {
 	}, mergedID)
 
 	// Execute DoMerge
-	manager.DoMerge(task)
+	doMerge(task, task.manager.dispatcherMap)
 
 	// Verify merged dispatcher state
 	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)
@@ -394,7 +394,7 @@ func TestDoMergeWithThreeDispatchers(t *testing.T) {
 	}, mergedID)
 
 	// Execute DoMerge
-	manager.DoMerge(task)
+	doMerge(task, task.manager.dispatcherMap)
 
 	// Verify merged dispatcher state
 	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)
