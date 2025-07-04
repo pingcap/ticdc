@@ -21,12 +21,14 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	pkgRedo "github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -41,9 +43,16 @@ func initRedoComponet(
 	startTs uint64,
 	newChangefeed bool,
 ) error {
-	if !manager.redoSink.Enabled() {
+	//
+	if manager.config.Consistent == nil || !pkgRedo.IsConsistentEnabled(manager.config.Consistent.Level) {
 		return nil
 	}
+	manager.redoEnable = true
+	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
+	manager.redoSink = redo.New(ctx, changefeedID, startTs, manager.config.Consistent)
+	manager.redoMeta = redo.NewRedoMeta(changefeedID, startTs, manager.config.Consistent)
+	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
+
 	// init redo table trigger event dispatcher when redoTableTriggerEventDispatcherID is not nil
 	if redoTableTriggerEventDispatcherID != nil {
 		err := manager.NewRedoTableTriggerEventDispatcher(redoTableTriggerEventDispatcherID, startTs, newChangefeed)
@@ -85,6 +94,9 @@ func (e *EventDispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbea
 		return errors.Trace(err)
 	}
 	tableTriggerEventDispatcher := e.redoTableTriggerEventDispatcher
+	// redo meta should keep the same node with table trigger event dispatcher
+	// table trigger event dispatcher and redo table trigger event dispatcher must exist on the same node
+	e.setRedoMeta()
 	log.Info("redo table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", tableTriggerEventDispatcher.GetId()),
@@ -164,7 +176,7 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 }
 
 func (e *EventDispatcherManager) setRedoMeta() {
-	if !e.redoMeta.Enabled() || e.redoMeta.Running() {
+	if e.redoMeta.Running() {
 		return
 	}
 	e.wg.Add(1)
@@ -229,10 +241,11 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 			if resolvedTs != math.MaxUint64 {
 				previousResolvedTs = max(previousResolvedTs, resolvedTs)
 			}
-			message := new(heartbeatpb.RedoTsMessage)
-			message.ChangefeedID = e.changefeedID.ToPB()
-			message.CheckpointTs = checkpointTs
-			message.ResolvedTs = resolvedTs
+			message := &heartbeatpb.RedoTsMessage{
+				ChangefeedID: e.changefeedID.ToPB(),
+				CheckpointTs: checkpointTs,
+				ResolvedTs:   resolvedTs,
+			}
 			err := mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
@@ -287,22 +300,6 @@ func (e *EventDispatcherManager) MergeRedoDispatcher(dispatcherIDs []common.Disp
 
 	registerMergeDispatcher(e.changefeedID, dispatcherIDs, e.redoDispatcherMap, mergedDispatcherID, mergedDispatcher, e.redoSchemaIDToDispatchers, e.metricRedoEventDispatcherCount, e.redoQuota)
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
-}
-
-func (e *EventDispatcherManager) closeRedoAllDispatchers() {
-	leftToCloseDispatchers := make([]*dispatcher.RedoDispatcher, 0)
-	e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-		// Remove dispatcher from eventService
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
-
-		_, ok := dispatcher.TryClose()
-		if !ok {
-			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcher)
-		} else {
-			dispatcher.Remove()
-		}
-	})
-	waitClose(e.changefeedID, leftToCloseDispatchers)
 }
 
 func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {

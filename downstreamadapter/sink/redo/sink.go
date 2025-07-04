@@ -61,11 +61,6 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	startTs common.Ts,
 	cfg *config.ConsistentConfig,
 ) *Sink {
-	// return a disabled Manager if no consistent config or normal consistent level
-	if cfg == nil || !redo.IsConsistentEnabled(cfg.Level) {
-		return &Sink{enabled: false}
-	}
-
 	s := &Sink{
 		ctx:     ctx,
 		enabled: true,
@@ -159,10 +154,6 @@ func (s *Sink) IsNormal() bool {
 
 func (s *Sink) SinkType() common.SinkType {
 	return common.RedoSinkType
-}
-
-func (s *Sink) Enabled() bool {
-	return s.enabled
 }
 
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {

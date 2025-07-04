@@ -68,6 +68,7 @@ type Dispatcher interface {
 	GetComponentStatus() heartbeatpb.ComponentState
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
+	IsTableTriggerEventDispatcher() bool
 	TryClose() (w heartbeatpb.Watermark, ok bool)
 	Remove()
 }

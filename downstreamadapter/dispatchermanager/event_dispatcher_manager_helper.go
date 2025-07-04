@@ -70,7 +70,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
 				CheckpointTs:    watermark.CheckpointTs,
-				Redo:            true,
+				Redo:            dispatcher.IsRedoDispatcher(dispatcherItem),
 			}, &cleanMap{dispatcherItem.GetId(), dispatcherItem.GetSchemaID(), dispatcher.IsRedoDispatcher(dispatcherItem)}, &watermark
 		}
 	}
@@ -80,7 +80,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 			ComponentStatus:    heartBeatInfo.ComponentStatus,
 			CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 			EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
-			Redo:               true,
+			Redo:               dispatcher.IsRedoDispatcher(dispatcherItem),
 		}, nil, &heartBeatInfo.Watermark
 	}
 	return nil, nil, nil
@@ -272,8 +272,31 @@ func removeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 	}
 }
 
-// wait all dispatchers finish syncing the data to sink
-func waitClose[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID, leftToCloseDispatchers []T) {
+// closeAllDispatchers is called when the event dispatcher manager is closing
+func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID, dispatcherMap *DispatcherMap[T], sinkType common.SinkType) {
+	leftToCloseDispatchers := make([]T, 0)
+	dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem T) {
+		// Remove dispatcher from eventService
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
+
+		if !dispatcher.IsRedoDispatcher(dispatcherItem) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
+			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
+			if err != nil {
+				log.Error("remove checkpointTs message failed",
+					zap.Stringer("changefeedID", changefeedID),
+					zap.Error(err),
+				)
+			}
+		}
+
+		_, ok := dispatcherItem.TryClose()
+		if !ok {
+			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcherItem)
+		} else {
+			dispatcherItem.Remove()
+		}
+	})
+
 	for _, dispatcherItem := range leftToCloseDispatchers {
 		log.Info("closing dispatcher",
 			zap.Stringer("changefeedID", changefeedID),
