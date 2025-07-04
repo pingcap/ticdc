@@ -227,7 +227,7 @@ func NewEventDispatcherManager(
 	var tableTriggerStartTs uint64 = 0
 	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
 	if tableTriggerEventDispatcherID != nil {
-		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs, newChangefeed, false)
+		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs, newChangefeed)
 		if err != nil {
 			return nil, 0, errors.Trace(err)
 		}
@@ -291,38 +291,22 @@ func NewEventDispatcherManager(
 	return manager, tableTriggerStartTs, nil
 }
 
-func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool, redo bool) (uint64, error) {
-	var (
-		err                         error
-		tableTriggerEventDispatcher dispatcher.Dispatcher
-	)
-	if redo {
-		err = e.newRedoDispatchers([]dispatcherCreateInfo{
-			{
-				Id:        common.NewDispatcherIDFromPB(id),
-				TableSpan: common.DDLSpan,
-				StartTs:   startTs,
-				SchemaID:  0,
-			},
-		}, newChangefeed)
-		tableTriggerEventDispatcher = e.redoTableTriggerEventDispatcher
-		e.setRedoMeta()
-	} else {
-		err = e.newDispatchers([]dispatcherCreateInfo{
-			{
-				Id:        common.NewDispatcherIDFromPB(id),
-				TableSpan: common.DDLSpan,
-				StartTs:   startTs,
-				SchemaID:  0,
-			},
-		}, newChangefeed)
-		tableTriggerEventDispatcher = e.tableTriggerEventDispatcher
-	}
+func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) (uint64, error) {
+	err := e.newDispatchers([]dispatcherCreateInfo{
+		{
+			Id:        common.NewDispatcherIDFromPB(id),
+			TableSpan: common.DDLSpan,
+			StartTs:   startTs,
+			SchemaID:  0,
+		},
+	}, newChangefeed)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
+	tableTriggerEventDispatcher := e.tableTriggerEventDispatcher
+	// redo meta should keep the same node with table trigger event dispatcher
+	e.setRedoMeta()
 	log.Info("table trigger event dispatcher created",
-		zap.Bool("isRedo", redo),
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", tableTriggerEventDispatcher.GetId()),
 		zap.Uint64("startTs", tableTriggerEventDispatcher.GetStartTs()),
@@ -651,7 +635,9 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		if cleanMap != nil {
 			toCleanMap = append(toCleanMap, cleanMap)
 		}
-		message.Watermark.UpdateMin(*watermark)
+		if watermark != nil {
+			message.Watermark.UpdateMin(*watermark)
+		}
 	})
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)

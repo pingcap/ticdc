@@ -130,11 +130,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		if req.RedoTableTriggerEventDispatcherId != nil {
 			redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher()
 			if redoTableTriggerDispatcher == nil {
-				_, err = manager.NewTableTriggerEventDispatcher(
+				err = manager.NewRedoTableTriggerEventDispatcher(
 					req.RedoTableTriggerEventDispatcherId,
 					req.StartTs,
 					false,
-					true,
 				)
 				if err != nil {
 					log.Error("failed to create new redo table trigger event dispatcher",
@@ -149,7 +148,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				startTs, err = manager.NewTableTriggerEventDispatcher(
 					req.TableTriggerEventDispatcherId,
 					req.StartTs,
-					false,
 					false,
 				)
 				if err != nil {

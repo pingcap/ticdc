@@ -30,10 +30,10 @@ import (
 
 func (e *EventDispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
 	var (
-		newStartTsList         []int64
-		startTsIsSyncpointList []bool
-		err                    error
+		newStartTsList []int64
+		err            error
 	)
+	startTsIsSyncpointList := make([]bool, len(startTsList))
 	if e.sink.SinkType() == common.MysqlSinkType {
 		newStartTsList, startTsIsSyncpointList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
 		if err != nil {

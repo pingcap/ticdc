@@ -41,12 +41,12 @@ func initRedoComponet(
 	startTs uint64,
 	newChangefeed bool,
 ) error {
-	if manager.redoSink.Enabled() {
+	if !manager.redoSink.Enabled() {
 		return nil
 	}
 	// init redo table trigger event dispatcher when redoTableTriggerEventDispatcherID is not nil
 	if redoTableTriggerEventDispatcherID != nil {
-		_, err := manager.NewTableTriggerEventDispatcher(redoTableTriggerEventDispatcherID, startTs, newChangefeed, true)
+		err := manager.NewRedoTableTriggerEventDispatcher(redoTableTriggerEventDispatcherID, startTs, newChangefeed)
 		if err != nil {
 			return err
 		}
@@ -69,6 +69,27 @@ func initRedoComponet(
 		err := manager.collectRedoTs(ctx)
 		manager.handleError(ctx, err)
 	}()
+	return nil
+}
+
+func (e *EventDispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
+	err := e.newRedoDispatchers([]dispatcherCreateInfo{
+		{
+			Id:        common.NewDispatcherIDFromPB(id),
+			TableSpan: common.DDLSpan,
+			StartTs:   startTs,
+			SchemaID:  0,
+		},
+	}, newChangefeed)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	tableTriggerEventDispatcher := e.redoTableTriggerEventDispatcher
+	log.Info("redo table trigger event dispatcher created",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", tableTriggerEventDispatcher.GetId()),
+		zap.Uint64("startTs", tableTriggerEventDispatcher.GetStartTs()),
+	)
 	return nil
 }
 
