@@ -32,38 +32,38 @@ group_num=${group#G}
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G01
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G02
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G03
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G04
 	# multi_capture
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G05
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G06
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G07
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G08
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G09
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G10
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G11
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G12
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G13
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G14
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 	# G15
-	'bdr_mode'
+	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
