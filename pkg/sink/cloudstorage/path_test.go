@@ -29,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tiflow/engine/pkg/clock"
@@ -302,14 +302,14 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	ft := types.NewFieldType(mysql.TypeLong)
 	ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
 	col := &timodel.ColumnInfo{
-		Name:         ast.NewCIStr("Id"),
+		Name:         pmodel.NewCIStr("Id"),
 		FieldType:    *ft,
 		DefaultValue: 10,
 	}
 	columns = append(columns, col)
 	tidbInfo := &timodel.TableInfo{
 		ID:      20,
-		Name:    ast.NewCIStr("table1"),
+		Name:    pmodel.NewCIStr("table1"),
 		Columns: columns,
 		Version: 100,
 	}
