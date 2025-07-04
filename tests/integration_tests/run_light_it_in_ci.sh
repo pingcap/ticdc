@@ -71,7 +71,8 @@ mysql_groups=(
 # 6 CPU, 16 Gi memory.
 kafka_groups=(
 	# G00
-	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	# fail_over_ddl_A
+	'charset_gbk changefeed_finish changefeed_reconstruct'
 	# G01
 	# foreign_key
 	'common_1 changefeed_pause_resume fail_over_ddl_B'
