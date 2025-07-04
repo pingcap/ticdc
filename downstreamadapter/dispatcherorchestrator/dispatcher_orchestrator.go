@@ -279,17 +279,19 @@ func createBootstrapResponse(
 		response.CheckpointTs = startTs
 	}
 
-	manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
-		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
-			ID:              id.ToPB(),
-			SchemaID:        d.GetSchemaID(),
-			Span:            d.GetTableSpan(),
-			ComponentStatus: d.GetComponentStatus(),
-			CheckpointTs:    d.GetCheckpointTs(),
-			BlockState:      d.GetBlockEventStatus(),
-			Redo:            true,
+	if manager.RedoEnable {
+		manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
+			response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
+				ID:              id.ToPB(),
+				SchemaID:        d.GetSchemaID(),
+				Span:            d.GetTableSpan(),
+				ComponentStatus: d.GetComponentStatus(),
+				CheckpointTs:    d.GetCheckpointTs(),
+				BlockState:      d.GetBlockEventStatus(),
+				Redo:            true,
+			})
 		})
-	})
+	}
 	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
 		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 			ID:              id.ToPB(),

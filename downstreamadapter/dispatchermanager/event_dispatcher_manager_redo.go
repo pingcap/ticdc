@@ -46,7 +46,7 @@ func initRedoComponet(
 	if manager.config.Consistent == nil || !pkgRedo.IsConsistentEnabled(manager.config.Consistent.Level) {
 		return nil
 	}
-	manager.redoEnable = true
+	manager.RedoEnable = true
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
 	manager.redoSink = redo.New(ctx, changefeedID, startTs, manager.config.Consistent)
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()

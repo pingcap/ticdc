@@ -111,7 +111,7 @@ type EventDispatcherManager struct {
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
 	// redo related
-	redoEnable bool
+	RedoEnable bool
 	redoSink   *redo.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
@@ -262,7 +262,7 @@ func NewEventDispatcherManager(
 	}()
 
 	totalQuota := manager.config.MemoryQuota
-	if manager.redoEnable {
+	if manager.RedoEnable {
 		consistentMemoryUsage := manager.config.Consistent.MemoryUsage
 		if consistentMemoryUsage == nil {
 			consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
@@ -282,7 +282,7 @@ func NewEventDispatcherManager(
 		zap.Uint64("tableTriggerStartTs", tableTriggerStartTs),
 		zap.Uint64("sinkQuota", manager.sinkQuota),
 		zap.Uint64("redoQuota", manager.redoQuota),
-		zap.Bool("redoEnable", manager.redoEnable),
+		zap.Bool("redoEnable", manager.RedoEnable),
 	)
 	return manager, tableTriggerStartTs, nil
 }
@@ -331,7 +331,7 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	}
 
 	// redo
-	if e.redoEnable {
+	if e.RedoEnable {
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota)
 	}
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
@@ -403,7 +403,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			currentPdTs,
 			e.errCh,
 			e.config.BDRMode,
-			e.redoEnable,
+			e.RedoEnable,
 			&e.redoGlobalTs,
 		)
 		if e.heartBeatTask == nil {
@@ -613,7 +613,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
 
-	if e.redoEnable {
+	if e.RedoEnable {
 		e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
 			status, cleanMap, _ := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
@@ -659,7 +659,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			DispatcherCount:      0,
 			DispatcherProgresses: make([]event.DispatcherProgress, 0, dispatcherCount),
 		}
-		if e.redoEnable {
+		if e.RedoEnable {
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 			})
@@ -720,7 +720,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		0, // currentPDTs will be calculated later.
 		e.errCh,
 		e.config.BDRMode,
-		e.redoEnable,
+		e.RedoEnable,
 		&e.redoGlobalTs,
 	)
 
@@ -753,7 +753,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		zap.Stringer("changefeedID", e.changefeedID))
 
 	defer e.closing.Store(false)
-	if e.redoEnable {
+	if e.RedoEnable {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 	}
 	closeAllDispatchers(e.changefeedID, e.dispatcherMap, e.sink.SinkType())
@@ -775,7 +775,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
-	if e.redoEnable {
+	if e.RedoEnable {
 		e.redoSink.Close(removeChangefeed)
 	}
 	e.sink.Close(removeChangefeed)
