@@ -115,8 +115,6 @@ type EventDispatcherManager struct {
 	redoSink   *redo.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
-	// redoMeta stores the redo meta log
-	redoMeta *redo.RedoMeta
 
 	latestWatermark Watermark
 
@@ -290,6 +288,9 @@ func NewEventDispatcherManager(
 }
 
 func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) (uint64, error) {
+	if e.tableTriggerEventDispatcher != nil {
+		log.Error("table trigger event dispatcher existed!")
+	}
 	err := e.newDispatchers([]dispatcherCreateInfo{
 		{
 			Id:        common.NewDispatcherIDFromPB(id),

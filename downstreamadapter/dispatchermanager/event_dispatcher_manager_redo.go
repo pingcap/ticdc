@@ -50,7 +50,6 @@ func initRedoComponet(
 	manager.redoEnable = true
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
 	manager.redoSink = redo.New(ctx, changefeedID, startTs, manager.config.Consistent)
-	manager.redoMeta = redo.NewRedoMeta(changefeedID, startTs, manager.config.Consistent)
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
 
 	// init redo table trigger event dispatcher when redoTableTriggerEventDispatcherID is not nil
@@ -82,6 +81,9 @@ func initRedoComponet(
 }
 
 func (e *EventDispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
+	if e.redoTableTriggerEventDispatcher != nil {
+		log.Error("redo table trigger event dispatcher existed!")
+	}
 	err := e.newRedoDispatchers([]dispatcherCreateInfo{
 		{
 			Id:        common.NewDispatcherIDFromPB(id),
@@ -96,7 +98,7 @@ func (e *EventDispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbea
 	tableTriggerEventDispatcher := e.redoTableTriggerEventDispatcher
 	// redo meta should keep the same node with table trigger event dispatcher
 	// table trigger event dispatcher and redo table trigger event dispatcher must exist on the same node
-	e.setRedoMeta()
+	tableTriggerEventDispatcher.SetRedoMeta(e.config.Consistent)
 	log.Info("redo table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", tableTriggerEventDispatcher.GetId()),
@@ -173,42 +175,6 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 		zap.Duration("duration", time.Since(start)),
 	)
 	return nil
-}
-
-func (e *EventDispatcherManager) setRedoMeta() {
-	if e.redoMeta.Running() {
-		return
-	}
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-		err := e.redoMeta.PreStart(e.ctx)
-		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-			select {
-			case <-e.ctx.Done():
-				return
-			case e.errCh <- err:
-			default:
-				log.Error("error channel is full, discard error",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Error(err),
-				)
-			}
-		}
-		err = e.redoMeta.Run(e.ctx)
-		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-			select {
-			case <-e.ctx.Done():
-				return
-			case e.errCh <- err:
-			default:
-				log.Error("error channel is full, discard error",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Error(err),
-				)
-			}
-		}
-	}()
 }
 
 func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
@@ -319,9 +285,8 @@ func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, sch
 
 func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
 	// only update meta on the one node
-	if e.tableTriggerEventDispatcher != nil && e.redoMeta.Running() {
-		log.Info("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs), zap.Any("redoGlobalTs", e.redoGlobalTs.Load()))
-		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
+	if e.redoTableTriggerEventDispatcher != nil {
+		e.redoTableTriggerEventDispatcher.UpdateMeta(checkpointTs, resolvedTs)
 	}
 	return util.CompareAndMonotonicIncrease(&e.redoGlobalTs, resolvedTs)
 }
