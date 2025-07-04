@@ -129,8 +129,9 @@ func TestApplyDDLJobs(t *testing.T) {
 					snapTs: 1010,
 					result: []commonEvent.Table{
 						{
-							SchemaID: 100,
-							TableID:  200,
+							SchemaID:  100,
+							TableID:   200,
+							Splitable: true,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t1",
@@ -142,16 +143,18 @@ func TestApplyDDLJobs(t *testing.T) {
 					snapTs: 1020,
 					result: []commonEvent.Table{
 						{
-							SchemaID: 100,
-							TableID:  200,
+							SchemaID:  100,
+							TableID:   200,
+							Splitable: true,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t1",
 							},
 						},
 						{
-							SchemaID: 100,
-							TableID:  201,
+							SchemaID:  100,
+							TableID:   201,
+							Splitable: true,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t2",
@@ -164,8 +167,9 @@ func TestApplyDDLJobs(t *testing.T) {
 					tableFilter: buildTableFilterByNameForTest("test", "t1"),
 					result: []commonEvent.Table{
 						{
-							SchemaID: 100,
-							TableID:  202,
+							SchemaID:  100,
+							TableID:   202,
+							Splitable: true,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t1",
@@ -194,8 +198,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  200,
+									SchemaID:  100,
+									TableID:   200,
+									Splitable: true,
 								},
 							},
 							TableNameChange: &commonEvent.TableNameChange{
@@ -216,8 +221,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  201,
+									SchemaID:  100,
+									TableID:   201,
+									Splitable: true,
 								},
 							},
 							TableNameChange: &commonEvent.TableNameChange{
@@ -259,8 +265,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  202,
+									SchemaID:  100,
+									TableID:   202,
+									Splitable: true,
 								},
 							},
 							NeedDroppedTables: &commonEvent.InfluencedTables{
@@ -319,16 +326,19 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  301,
+									SchemaID:  100,
+									TableID:   301,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  302,
+									SchemaID:  100,
+									TableID:   302,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  303,
+									SchemaID:  100,
+									TableID:   303,
+									Splitable: true,
 								},
 							},
 							TableNameChange: &commonEvent.TableNameChange{
@@ -428,24 +438,27 @@ func TestApplyDDLJobs(t *testing.T) {
 					snapTs: 1010,
 					result: []commonEvent.Table{
 						{
-							SchemaID: 100,
-							TableID:  201,
+							SchemaID:  100,
+							TableID:   201,
+							Splitable: false,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t1",
 							},
 						},
 						{
-							SchemaID: 100,
-							TableID:  202,
+							SchemaID:  100,
+							TableID:   202,
+							Splitable: false,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t1",
 							},
 						},
 						{
-							SchemaID: 100,
-							TableID:  203,
+							SchemaID:  100,
+							TableID:   203,
+							Splitable: false,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t1",
@@ -457,24 +470,27 @@ func TestApplyDDLJobs(t *testing.T) {
 					snapTs: 1050,
 					result: []commonEvent.Table{
 						{
-							SchemaID: 100,
-							TableID:  206,
+							SchemaID:  100,
+							TableID:   206,
+							Splitable: true,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t1",
 							},
 						},
 						{
-							SchemaID: 100,
-							TableID:  207,
+							SchemaID:  100,
+							TableID:   207,
+							Splitable: true,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t1",
 							},
 						},
 						{
-							SchemaID: 100,
-							TableID:  208,
+							SchemaID:  100,
+							TableID:   208,
+							Splitable: true,
 							SchemaTableName: &commonEvent.SchemaTableName{
 								SchemaName: "test",
 								TableName:  "t1",
@@ -514,8 +530,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  208,
+									SchemaID:  100,
+									TableID:   208,
+									Splitable: true,
 								},
 							},
 						},
@@ -540,16 +557,19 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  204,
+									SchemaID:  100,
+									TableID:   204,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  205,
+									SchemaID:  100,
+									TableID:   205,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  206,
+									SchemaID:  100,
+									TableID:   206,
+									Splitable: true,
 								},
 							},
 						},
@@ -572,16 +592,19 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  204,
+									SchemaID:  100,
+									TableID:   204,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  205,
+									SchemaID:  100,
+									TableID:   205,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  206,
+									SchemaID:  100,
+									TableID:   206,
+									Splitable: true,
 								},
 							},
 						},
@@ -594,8 +617,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  207,
+									SchemaID:  100,
+									TableID:   207,
+									Splitable: true,
 								},
 							},
 						},
@@ -624,8 +648,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  208,
+									SchemaID:  100,
+									TableID:   208,
+									Splitable: true,
 								},
 							},
 						},
@@ -744,8 +769,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  300,
+									SchemaID:  100,
+									TableID:   300,
+									Splitable: true,
 								},
 							},
 						},
@@ -771,8 +797,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 105,
-									TableID:  203,
+									SchemaID:  105,
+									TableID:   203,
+									Splitable: true,
 								},
 							},
 						},
@@ -1371,16 +1398,19 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  301,
+									SchemaID:  100,
+									TableID:   301,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  302,
+									SchemaID:  100,
+									TableID:   302,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  303,
+									SchemaID:  100,
+									TableID:   303,
+									Splitable: true,
 								},
 							},
 							TableNameChange: &commonEvent.TableNameChange{
@@ -1410,12 +1440,14 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  304,
+									SchemaID:  100,
+									TableID:   304,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  305,
+									SchemaID:  100,
+									TableID:   305,
+									Splitable: true,
 								},
 							},
 							TableNameChange: &commonEvent.TableNameChange{
@@ -1449,8 +1481,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  301,
+									SchemaID:  100,
+									TableID:   301,
+									Splitable: true,
 								},
 							},
 							TableNameChange: &commonEvent.TableNameChange{
@@ -1555,40 +1588,49 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  301,
+									SchemaID:  100,
+									TableID:   301,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  302,
+									SchemaID:  100,
+									TableID:   302,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  303,
+									SchemaID:  100,
+									TableID:   303,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  401,
+									SchemaID:  100,
+									TableID:   401,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  402,
+									SchemaID:  100,
+									TableID:   402,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  403,
+									SchemaID:  100,
+									TableID:   403,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  501,
+									SchemaID:  100,
+									TableID:   501,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  502,
+									SchemaID:  100,
+									TableID:   502,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  503,
+									SchemaID:  100,
+									TableID:   503,
+									Splitable: true,
 								},
 							},
 							TableNameChange: &commonEvent.TableNameChange{
@@ -1625,16 +1667,19 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  301,
+									SchemaID:  100,
+									TableID:   301,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  302,
+									SchemaID:  100,
+									TableID:   302,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  303,
+									SchemaID:  100,
+									TableID:   303,
+									Splitable: true,
 								},
 							},
 							TableNameChange: &commonEvent.TableNameChange{
@@ -1720,16 +1765,19 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  501,
+									SchemaID:  100,
+									TableID:   501,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  502,
+									SchemaID:  100,
+									TableID:   502,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  503,
+									SchemaID:  100,
+									TableID:   503,
+									Splitable: true,
 								},
 							},
 						},
@@ -1746,16 +1794,19 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  504,
+									SchemaID:  100,
+									TableID:   504,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  505,
+									SchemaID:  100,
+									TableID:   505,
+									Splitable: true,
 								},
 								{
-									SchemaID: 100,
-									TableID:  506,
+									SchemaID:  100,
+									TableID:   506,
+									Splitable: true,
 								},
 							},
 						},
@@ -1772,8 +1823,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 							NeedAddedTables: []commonEvent.Table{
 								{
-									SchemaID: 100,
-									TableID:  303,
+									SchemaID:  100,
+									TableID:   303,
+									Splitable: true,
 								},
 							},
 						},
