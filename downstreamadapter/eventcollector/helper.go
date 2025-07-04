@@ -69,7 +69,6 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	if len(events) == 0 {
 		return false
 	}
-
 	// Only check the first event type, because all events in the same batch should be in the same type group.
 	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
@@ -116,7 +115,6 @@ const (
 	DataGroupHandshake
 	DataGroupReady
 	DataGroupNotReusable
-	DataGroupBatchDML
 	DataGroupDrop
 )
 
@@ -125,6 +123,8 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 	case commonEvent.TypeResolvedEvent:
 		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.PeriodicSignal, Droppable: true}
 	case commonEvent.TypeDMLEvent:
+		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.BatchableData, Droppable: true}
+	case commonEvent.TypeBatchDMLEvent:
 		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.BatchableData, Droppable: true}
 	case commonEvent.TypeDDLEvent:
 		return dynstream.EventType{DataGroup: DataGroupDDL, Property: dynstream.NonBatchable, Droppable: true}
@@ -136,9 +136,6 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 		return dynstream.EventType{DataGroup: DataGroupReady, Property: dynstream.NonBatchable, Droppable: false}
 	case commonEvent.TypeNotReusableEvent:
 		return dynstream.EventType{DataGroup: DataGroupNotReusable, Property: dynstream.NonBatchable, Droppable: false}
-	case commonEvent.TypeBatchDMLEvent:
-		// Note: set TypeBatchDMLEvent to NonBatchable for simplicity.
-		return dynstream.EventType{DataGroup: DataGroupBatchDML, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeDropEvent:
 		return dynstream.EventType{DataGroup: DataGroupDrop, Property: dynstream.NonBatchable, Droppable: false}
 	default:
@@ -161,7 +158,7 @@ func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream
 
 func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
 	switch event.GetType() {
-	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent:
+	case commonEvent.TypeDMLEvent, commonEvent.TypeHandshakeEvent, commonEvent.TypeDDLEvent, commonEvent.TypeBatchDMLEvent:
 		log.Info("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event))
 		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetEpoch(), event.GetCommitTs())
 		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
