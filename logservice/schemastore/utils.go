@@ -93,6 +93,9 @@ func isSplitable(tableInfo *model.TableInfo) bool {
 
 	indices := tableInfo.Indices
 	for _, index := range indices {
+		if index.Primary {
+			continue
+		}
 		if index.Unique {
 			return false
 		}

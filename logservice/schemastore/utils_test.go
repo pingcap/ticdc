@@ -39,4 +39,24 @@ func TestIsSplitable(t *testing.T) {
 	job = helper.DDL2Job(createTableSQLWithNoPK)
 	tableInfo = helper.GetModelTableInfo(job)
 	require.False(t, isSplitable(tableInfo))
+
+	createTableSQLWithVarcharPK := "create table t4 (id varchar(32) primary key, name varchar(32));"
+	job = helper.DDL2Job(createTableSQLWithVarcharPK)
+	tableInfo = helper.GetModelTableInfo(job)
+	require.True(t, isSplitable(tableInfo))
+
+	createTableSQLWithVarcharPKNONCLUSTERED := "create table t5 (a varchar(200), b int, primary key(a) NONCLUSTERED);"
+	job = helper.DDL2Job(createTableSQLWithVarcharPKNONCLUSTERED)
+	tableInfo = helper.GetModelTableInfo(job)
+	require.True(t, isSplitable(tableInfo))
+
+	createTableSQLWithMultiPK := "create table t6 (a int, b int, primary key(a, b));"
+	job = helper.DDL2Job(createTableSQLWithMultiPK)
+	tableInfo = helper.GetModelTableInfo(job)
+	require.True(t, isSplitable(tableInfo))
+
+	createTableSQLWithUK := "create table t7 (a int, b int, unique key(a, b));"
+	job = helper.DDL2Job(createTableSQLWithUK)
+	tableInfo = helper.GetModelTableInfo(job)
+	require.False(t, isSplitable(tableInfo))
 }
