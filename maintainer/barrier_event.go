@@ -416,6 +416,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 						zap.Uint64("commitTs", be.commitTs),
 						zap.Int64("tableId", tableId),
 						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+						zap.Uint64("barrier event commitTs", be.commitTs),
 						zap.String("dispatcher", replication.ID.String()),
 					)
 					// one related table has forward checkpointTs, means the block event can be advanced
@@ -430,6 +431,13 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		replications := be.spanController.GetTasksBySchemaID(schemaID)
 		for _, replication := range replications {
 			if replication.GetStatus().CheckpointTs >= be.commitTs {
+				log.Info("one related table has forward checkpointTs, means the block event can be advanced",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+					zap.Uint64("barrier event commitTs", be.commitTs),
+					zap.String("dispatcher", replication.ID.String()),
+				)
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
@@ -440,6 +448,13 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		replications := be.spanController.GetAllTasks()
 		for _, replication := range replications {
 			if replication.GetStatus().CheckpointTs >= be.commitTs {
+				log.Info("one related table has forward checkpointTs, means the block event can be advanced",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+					zap.Uint64("barrier event commitTs", be.commitTs),
+					zap.String("dispatcher", replication.ID.String()),
+				)
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
