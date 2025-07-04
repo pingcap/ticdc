@@ -119,6 +119,10 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 	s.tableInfos[key] = info
 }
 
+func (s *EventTestHelper) GetModelTableInfo(job *timodel.Job) *timodel.TableInfo {
+	return job.BinlogInfo.TableInfo
+}
+
 func (s *EventTestHelper) GetTableInfo(job *timodel.Job) *common.TableInfo {
 	table := ""
 	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
