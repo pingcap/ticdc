@@ -311,7 +311,7 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 			time.Sleep(10 * time.Millisecond)
 			count += 1
 			if count%100 == 0 {
-				log.Info("waiting for redo dispatcher to close",
+				log.Info("waiting for dispatcher to close",
 					zap.Stringer("changefeedID", changefeedID),
 					zap.Stringer("dispatcherID", dispatcherItem.GetId()),
 					zap.Bool("isRedo", dispatcher.IsRedoDispatcher(dispatcherItem)),

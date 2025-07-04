@@ -59,7 +59,6 @@ Architecture:
 - Each EventDispatcherManager has exactly one backend sink
 */
 type EventDispatcherManager struct {
-	ctx          context.Context
 	changefeedID common.ChangeFeedID
 
 	// meta is used to store the meta info of the event dispatcher manager
@@ -80,14 +79,16 @@ type EventDispatcherManager struct {
 	syncPointConfig *syncpoint.SyncPointConfig
 
 	// tableTriggerEventDispatcher is a special dispatcher, that is responsible for handling ddl and checkpoint events.
-	tableTriggerEventDispatcher     *dispatcher.EventDispatcher
+	tableTriggerEventDispatcher *dispatcher.EventDispatcher
+	// redoTableTriggerEventDispatcher is a special redo dispatcher, that is responsible for handling ddl and checkpoint events.
 	redoTableTriggerEventDispatcher *dispatcher.RedoDispatcher
 	// dispatcherMap restore all the dispatchers in the EventDispatcherManager, including table trigger event dispatcher
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
-	// dispatcherMap restore all the redo dispatchers in the EventDispatcherManager, including redo table trigger event dispatcher
+	// redoDispatcherMap restore all the redo dispatchers in the EventDispatcherManager, including redo table trigger event dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
-	// schemaIDToDispatchers is store the schemaID info for all normal dispatchers.
-	schemaIDToDispatchers     *dispatcher.SchemaIDToDispatchers
+	// schemaIDToDispatchers is store the schemaID info for all event dispatchers.
+	schemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
+	// redoSchemaIDToDispatchers is store the schemaID info for all redo dispatchers.
 	redoSchemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
 
 	// statusesChan is used to store the status of dispatchers when status changed
@@ -172,7 +173,6 @@ func NewEventDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	manager := &EventDispatcherManager{
-		ctx:                                    ctx,
 		dispatcherMap:                          newDispatcherMap[*dispatcher.EventDispatcher](),
 		changefeedID:                           changefeedID,
 		pdClock:                                pdClock,
@@ -782,17 +782,17 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 	e.cancel()
 	e.wg.Wait()
 
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "eventDispatcher")
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "eventDispatcher")
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "eventDispatcher")
 	metrics.EventDispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redoDispatcher")
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redoDispatcher")
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redoDispatcher")
 
 	e.closed.Store(true)
 	log.Info("event dispatcher manager closed",
@@ -828,17 +828,17 @@ func (e *EventDispatcherManager) cleanMetrics() {
 		e.changefeedID.String(),
 	)
 
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "eventDispatcher")
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "eventDispatcher")
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "eventDispatcher")
 	metrics.EventDispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redo")
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redoDispatcher")
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redoDispatcher")
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name(), "redoDispatcher")
 }
 
 // ==== remove and clean related functions END ====
