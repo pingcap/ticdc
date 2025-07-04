@@ -35,7 +35,7 @@ type SyncPointEvent struct {
 	// The epoch of the event. It is set by event service.
 	Epoch          uint64   `json:"epoch"`
 	PostTxnFlushed []func() `msg:"-"`
-	// for redo
+	// only for redo
 	Redo bool `json:"redo"`
 }
 

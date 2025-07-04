@@ -46,7 +46,7 @@ type BatchDMLEvent struct {
 	// The receiver needs to call DecodeRawRows function to decode the RawRows into Rows.
 	RawRows   []byte            `json:"raw_rows"`
 	TableInfo *common.TableInfo `json:"table_info"`
-	// for redo
+	// only for redo
 	Redo bool `json:"redo"`
 }
 

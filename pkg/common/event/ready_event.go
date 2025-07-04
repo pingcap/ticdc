@@ -30,7 +30,7 @@ var _ Event = &ReadyEvent{}
 type ReadyEvent struct {
 	Version      byte
 	DispatcherID common.DispatcherID
-	// for redo
+	// only for redo
 	Redo bool
 }
 

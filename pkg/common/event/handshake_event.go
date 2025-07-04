@@ -37,7 +37,7 @@ type HandshakeEvent struct {
 	State        EventSenderState    `json:"state"`
 	DispatcherID common.DispatcherID `json:"-"`
 	TableInfo    *common.TableInfo   `json:"table_info"`
-	// for redo
+	// only for redo
 	Redo bool
 }
 

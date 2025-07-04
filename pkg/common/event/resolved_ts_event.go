@@ -28,7 +28,7 @@ type BatchResolvedEvent struct {
 	// Version is the version of the BatchResolvedEvent struct.
 	Version byte
 	Events  []ResolvedEvent
-	// for redo
+	// only for redo
 	Redo bool
 }
 
@@ -123,7 +123,7 @@ type ResolvedEvent struct {
 	State        EventSenderState
 	Version      byte
 	Epoch        uint64
-	// for redo
+	// only for redo
 	Redo bool
 }
 

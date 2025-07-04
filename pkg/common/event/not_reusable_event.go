@@ -30,7 +30,7 @@ var _ Event = &NotReusableEvent{}
 type NotReusableEvent struct {
 	Version      byte
 	DispatcherID common.DispatcherID
-	// for redo
+	// only for redo
 	Redo bool
 }
 

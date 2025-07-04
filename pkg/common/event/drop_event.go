@@ -33,7 +33,7 @@ type DropEvent struct {
 	DroppedSeq      uint64
 	DroppedCommitTs common.Ts
 	DroppedEpoch    uint64
-	// for redo
+	// only for redo
 	Redo bool
 }
 

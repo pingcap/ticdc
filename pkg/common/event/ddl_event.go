@@ -97,7 +97,7 @@ type DDLEvent struct {
 
 	// for simple protocol
 	IsBootstrap bool `msg:"-"`
-	// for redo
+	// only for redo
 	Redo bool `json:"redo"`
 }
 
