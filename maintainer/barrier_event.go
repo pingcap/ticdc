@@ -249,8 +249,9 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 			zap.Int64("schema", add.SchemaID),
 			zap.Int64("table", add.TableID))
 		be.spanController.AddNewTable(commonEvent.Table{
-			SchemaID: add.SchemaID,
-			TableID:  add.TableID,
+			SchemaID:  add.SchemaID,
+			TableID:   add.TableID,
+			Splitable: add.Splitable,
 		}, be.commitTs)
 	}
 

@@ -83,3 +83,22 @@ func transformDDLJobQuery(job *model.Job) (string, error) {
 
 	return result, nil
 }
+
+// isSplitable returns whether the table is eligible for split in all sinks
+// Only the table with pk and no uk can be splitted in all sinks.
+func isSplitable(tableInfo *model.TableInfo) bool {
+	if tableInfo.GetPkColInfo() == nil {
+		return false
+	}
+
+	indices := tableInfo.Indices
+	for _, index := range indices {
+		if index.Primary {
+			continue
+		}
+		if index.Unique {
+			return false
+		}
+	}
+	return true
+}
