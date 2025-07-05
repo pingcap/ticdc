@@ -219,30 +219,27 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 			}
 		}
 	}
+	handleErr := func(err error) {
+		select {
+		case eventDispatcherManager.errCh <- err:
+			log.Error("new redo dispatcher meet error", zap.String("ChangefeedID", eventDispatcherManager.changefeedID.String()),
+				zap.Error(err))
+		default:
+			log.Error("error channel is full, discard error",
+				zap.Any("ChangefeedID", eventDispatcherManager.changefeedID.String()),
+				zap.Error(err))
+		}
+	}
 	if len(redoInfos) > 0 {
 		err := eventDispatcherManager.newRedoDispatchers(redoInfos, false)
 		if err != nil {
-			select {
-			case eventDispatcherManager.errCh <- err:
-			default:
-				log.Error("error channel is full, discard error",
-					zap.Any("ChangefeedID", eventDispatcherManager.changefeedID.String()),
-					zap.Error(err))
-			}
+			handleErr(err)
 		}
 	}
 	if len(infos) > 0 {
 		err := eventDispatcherManager.newDispatchers(infos, false)
 		if err != nil {
-			select {
-			case eventDispatcherManager.errCh <- err:
-				log.Error("new dispatcher meet error", zap.String("ChangefeedID", eventDispatcherManager.changefeedID.String()),
-					zap.Error(err))
-			default:
-				log.Error("error channel is full, discard error",
-					zap.String("ChangefeedID", eventDispatcherManager.changefeedID.String()),
-					zap.Error(err))
-			}
+			handleErr(err)
 		}
 	}
 	return false

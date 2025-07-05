@@ -207,9 +207,9 @@ func registerMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.Change
 	metricDispatcherCount.Inc()
 
 	for _, id := range dispatcherIDs {
-		dispatcher, ok := dispatcherMap.Get(id)
+		dispatcherItem, ok := dispatcherMap.Get(id)
 		if ok {
-			dispatcher.SetComponentStatus(heartbeatpb.ComponentState_WaitingMerge)
+			dispatcherItem.SetComponentStatus(heartbeatpb.ComponentState_WaitingMerge)
 		}
 	}
 	// Step 3: register mergeDispatcher into event collector, and generate a task to check the merged dispatcher status
