@@ -194,12 +194,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 // getResetTs is used to get the resetTs of the dispatcher.
 // resetTs must be larger than the startTs, otherwise it will cause panic in eventStore.
 func (d *dispatcherStat) getResetTs() uint64 {
-	dis, ok := d.target.(*dispatcher.Dispatcher)
-	if !ok {
-		log.Panic("should not happen: dispatcher is not a dispatcher.Dispatcher",
-			zap.Stringer("dispatcher", d.getDispatcherID()))
-	}
-	return dis.GetCheckpointTs()
+	return d.target.GetCheckpointTs()
 }
 
 // remove is used to remove the dispatcher from the event service.

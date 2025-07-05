@@ -75,6 +75,10 @@ func (m *mockEventDispatcher) GetResolvedTs() uint64 {
 	return 0
 }
 
+func (m *mockEventDispatcher) GetCheckpointTs() uint64 {
+	return 0
+}
+
 func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	for _, dispatcherEvent := range dispatcherEvents {
 		m.handle(dispatcherEvent.Event)
