@@ -31,7 +31,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
-	pmodel "github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 
 	// NOTE: Do not remove the `test_driver` import.
@@ -181,13 +181,13 @@ func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 	for i := 0; i < tableNum; i++ {
 		oldTableIDs[i] = res.BinlogInfo.MultipleTableInfos[i].ID
 	}
-	newTableNames := make([]pmodel.CIStr, tableNum)
+	newTableNames := make([]ast.CIStr, tableNum)
 	for i := 0; i < tableNum; i++ {
 		newTableNames[i] = res.BinlogInfo.MultipleTableInfos[i].Name
 	}
-	oldSchemaNames := make([]pmodel.CIStr, tableNum)
+	oldSchemaNames := make([]ast.CIStr, tableNum)
 	for i := 0; i < tableNum; i++ {
-		oldSchemaNames[i] = pmodel.NewCIStr(schema)
+		oldSchemaNames[i] = ast.NewCIStr(schema)
 	}
 	newSchemaIDs := oldSchemaIDs
 
