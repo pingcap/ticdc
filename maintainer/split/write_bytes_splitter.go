@@ -54,10 +54,10 @@ func newWriteSplitter(
 func (m *writeSplitter) split(
 	ctx context.Context,
 	span *heartbeatpb.TableSpan,
-	captureNum int,
+	spansNum int,
 ) []*heartbeatpb.TableSpan {
-	if m.writeKeyThreshold == 0 {
-		return nil
+	if m.writeKeyThreshold == 0 || spansNum <= 1 {
+		return []*heartbeatpb.TableSpan{span}
 	}
 	regions, err := m.pdAPIClient.ScanRegions(ctx, heartbeatpb.TableSpan{
 		TableID:  span.TableID,
@@ -74,19 +74,6 @@ func (m *writeSplitter) split(
 		return []*heartbeatpb.TableSpan{span}
 	}
 
-	spansNum := getSpansNumber(len(regions), captureNum)
-	if spansNum <= 1 {
-		log.Warn("only one capture and the regions number less than"+
-			" the maxSpanRegionLimit, skip split span",
-			zap.String("namespace", m.changefeedID.Namespace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", span.String()),
-			zap.Int("captureNum", captureNum),
-			zap.Int("regionsLen", len(regions)),
-			zap.Error(err))
-		return []*heartbeatpb.TableSpan{span}
-	}
-
 	splitInfo := m.splitRegionsByWrittenKeysV1(span.TableID, regions, spansNum)
 	log.Info("split span by written keys",
 		zap.String("namespace", m.changefeedID.Namespace()),
@@ -95,10 +82,7 @@ func (m *writeSplitter) split(
 		zap.Ints("perSpanRegionCounts", splitInfo.RegionCounts),
 		zap.Uint64s("weights", splitInfo.Weights),
 		zap.Int("spans", len(splitInfo.Spans)),
-		zap.Int("totalCaptures", captureNum),
-		zap.Int("writeKeyThreshold", m.writeKeyThreshold),
-		zap.Int("spanRegionLimit", spanRegionLimit),
-		zap.Uint64("baseSpansNum", uint64(spansNum)))
+		zap.Int("writeKeyThreshold", m.writeKeyThreshold))
 
 	return splitInfo.Spans
 }
@@ -177,7 +161,7 @@ func (m *writeSplitter) splitRegionsByWrittenKeysV1(
 	)
 
 	// 3. Split the table into spans, each span has approximately
-	// `writeWeightPerSpan` weight or `spanRegionLimit` regions.
+	// `writeWeightPerSpan` weight
 	for i := 0; i < len(regions); i++ {
 		restRegions := len(regions) - i
 		regionCount++
@@ -230,10 +214,9 @@ func (m *writeSplitter) splitRegionsByWrittenKeysV1(
 			continue
 		}
 
-		// If the spanWriteWeight is larger than writeLimitPerSpan or the regionCount
-		// is larger than spanRegionLimit, then use the region range from
-		// spanStartIndex to i to as a span.
-		if spanWriteWeight > writeLimitPerSpan || regionCount >= spanRegionLimit {
+		// If the spanWriteWeight is larger than writeLimitPerSpan
+		// then use the region range from spanStartIndex to i to as a span.
+		if spanWriteWeight > writeLimitPerSpan {
 			spans = append(spans, &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: decodeKey(regions[spanStartIndex].StartKey),

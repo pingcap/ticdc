@@ -14,13 +14,14 @@
 package maintainer
 
 import (
+	"bytes"
+	"context"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -233,10 +234,15 @@ func (c *Controller) handleTableHoles(
 	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	tableSpan *heartbeatpb.TableSpan,
 ) {
-	holes := split.FindHoles(tableSpans, tableSpan)
-	// TODO: split the hole
-	// Add holes to the replicationDB
-	c.spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+	holes := findHoles(tableSpans, tableSpan)
+	if c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
+		for _, hole := range holes {
+			spans := c.splitter.Split(context.Background(), hole, 0, replica.SplitByRegion)
+			c.spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
+		}
+	} else {
+		c.spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+	}
 }
 
 func (c *Controller) handleRemainingWorkingTasks(
@@ -319,4 +325,42 @@ func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heart
 		tableInfo.TableName = table.TableName
 	}
 	return tableInfo
+}
+
+// findHoles returns an array of Span that are not covered in the range
+func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication], totalSpan *heartbeatpb.TableSpan) []*heartbeatpb.TableSpan {
+	lastSpan := &heartbeatpb.TableSpan{
+		TableID:  totalSpan.TableID,
+		StartKey: totalSpan.StartKey,
+		EndKey:   totalSpan.StartKey,
+	}
+	var holes []*heartbeatpb.TableSpan
+	// table span is sorted
+	currentSpan.Ascend(func(current *heartbeatpb.TableSpan, _ *replica.SpanReplication) bool {
+		ord := bytes.Compare(lastSpan.EndKey, current.StartKey)
+		if ord < 0 {
+			// Find a hole.
+			holes = append(holes, &heartbeatpb.TableSpan{
+				TableID:  totalSpan.TableID,
+				StartKey: lastSpan.EndKey,
+				EndKey:   current.StartKey,
+			})
+		} else if ord > 0 {
+			log.Panic("map is out of order",
+				zap.String("lastSpan", lastSpan.String()),
+				zap.String("current", current.String()))
+		}
+		lastSpan = current
+		return true
+	})
+	// Check if there is a hole in the end.
+	// the lastSpan not reach the totalSpan end
+	if !bytes.Equal(lastSpan.EndKey, totalSpan.EndKey) {
+		holes = append(holes, &heartbeatpb.TableSpan{
+			TableID:  totalSpan.TableID,
+			StartKey: lastSpan.EndKey,
+			EndKey:   totalSpan.EndKey,
+		})
+	}
+	return holes
 }
