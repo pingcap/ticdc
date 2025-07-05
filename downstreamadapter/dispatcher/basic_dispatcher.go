@@ -337,11 +337,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	dmlWakeOnce := &sync.Once{}
 	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	latestResolvedTs := uint64(0)
-	redo := IsRedoDispatcher(d)
+	isRedo := IsRedoDispatcher(d)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
-			zap.Stringer("dispatcher", d.id), zap.Any("redo", redo),
+			zap.Stringer("dispatcher", d.id), zap.Bool("isRedo", isRedo),
 			zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
 			zap.Any("event", dispatcherEvent.Event))
 		failpoint.Inject("HandleEventsSlowly", func() {
@@ -418,7 +418,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			})
 			d.dealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
-			if redo {
+			if isRedo {
 				continue
 			}
 			if len(dispatcherEvents) != 1 {

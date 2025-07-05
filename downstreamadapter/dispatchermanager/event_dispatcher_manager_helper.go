@@ -20,36 +20,12 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
-
-func (e *EventDispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
-	var (
-		newStartTsList []int64
-		err            error
-	)
-	startTsIsSyncpointList := make([]bool, len(startTsList))
-	if e.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, startTsIsSyncpointList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
-		if err != nil {
-			return nil, nil, err
-		}
-		log.Info("calculate real startTs for dispatchers",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Any("receiveStartTs", startTsList),
-			zap.Any("realStartTs", newStartTsList),
-			zap.Bool("removeDDLTs", removeDDLTs),
-		)
-	} else {
-		newStartTsList = startTsList
-	}
-	return newStartTsList, startTsIsSyncpointList, nil
-}
 
 func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispatcher, needCompleteStatus bool) (*heartbeatpb.TableSpanStatus, *cleanMap, *heartbeatpb.Watermark) {
 	heartBeatInfo := &dispatcher.HeartBeatInfo{}
@@ -108,7 +84,12 @@ func prepareCreateDispatcher[T dispatcher.Dispatcher](infos []dispatcherCreateIn
 	return dispatcherIds, tableIds, startTsList, tableSpans, schemaIds
 }
 
-func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID, dispatcherIDs []common.DispatcherID, dispatcherMap *DispatcherMap[T], mergedDispatcherID common.DispatcherID, statusesChan chan dispatcher.TableSpanStatusWithSeq) bool {
+func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
+	dispatcherIDs []common.DispatcherID,
+	dispatcherMap *DispatcherMap[T],
+	mergedDispatcherID common.DispatcherID,
+	statusesChan chan dispatcher.TableSpanStatusWithSeq,
+) bool {
 	if len(dispatcherIDs) < 2 {
 		log.Error("merge dispatcher failed, invalid dispatcherIDs",
 			zap.Stringer("changefeedID", changefeedID),
@@ -134,7 +115,10 @@ func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeF
 	return true
 }
 
-func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID, dispatcherIDs []common.DispatcherID, dispatcherMap *DispatcherMap[T]) (*heartbeatpb.TableSpan, uint64, int64) {
+func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
+	dispatcherIDs []common.DispatcherID,
+	dispatcherMap *DispatcherMap[T],
+) (*heartbeatpb.TableSpan, uint64, int64) {
 	var prevTableSpan *heartbeatpb.TableSpan
 	var startKey []byte
 	var endKey []byte
@@ -227,17 +211,31 @@ func registerMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.Change
 		})
 }
 
-func removeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
+func removeDispatcher[T dispatcher.Dispatcher](e *EventDispatcherManager,
 	id common.DispatcherID,
 	dispatcherMap *DispatcherMap[T],
-	statusesChan chan dispatcher.TableSpanStatusWithSeq,
+	sinkType common.SinkType,
 ) {
+	changefeedID := e.changefeedID
+	statusesChan := e.statusesChan
+
 	dispatcherItem, ok := dispatcherMap.Get(id)
 	if ok {
 		if dispatcherItem.GetRemovingStatus() {
 			return
 		}
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
+
+		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
+		if !dispatcher.IsRedoDispatcher(dispatcherItem) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
+			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
+			if err != nil {
+				log.Error("remove checkpointTs message failed",
+					zap.Stringer("changefeedID", changefeedID),
+					zap.Error(err),
+				)
+			}
+		}
 
 		count := 0
 		ok := false
@@ -273,7 +271,10 @@ func removeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 }
 
 // closeAllDispatchers is called when the event dispatcher manager is closing
-func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID, dispatcherMap *DispatcherMap[T], sinkType common.SinkType) {
+func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
+	dispatcherMap *DispatcherMap[T],
+	sinkType common.SinkType,
+) {
 	leftToCloseDispatchers := make([]T, 0)
 	dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem T) {
 		// Remove dispatcher from eventService
