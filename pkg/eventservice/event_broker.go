@@ -177,9 +177,6 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 			break
 		}
 		dml := batchEvent.DMLEvents[i]
-		// Set sequence number for the event
-		dml.Seq = d.seq.Add(1)
-		dml.Epoch = d.epoch.Load()
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(i)
 			doSendDML(events)
@@ -190,6 +187,9 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 		} else {
 			i++
 		}
+		// Set sequence number for the event
+		dml.Seq = d.seq.Add(1)
+		dml.Epoch = d.epoch.Load()
 	}
 	doSendDML(batchEvent)
 }
