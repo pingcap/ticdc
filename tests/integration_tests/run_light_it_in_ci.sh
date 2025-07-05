@@ -32,38 +32,38 @@ group_num=${group#G}
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
 	# G02
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'new_ci_collation safe_mode savepoint fail_over_ddl_C'
 	# G03
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
 	# multi_capture
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'vector simple partition_table fail_over_ddl_F'
 	# G06
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'http_api http_api_tls ddl_wait fail_over_ddl_G'
 	# G07
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'http_api_tls_with_user_auth fail_over_ddl_H'
 	# G08
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
 	# G10
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'changefeed_error bdr_mode fail_over_ddl_K'
 	# G11
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
 	# G15
-	'bdr_mode bdr_mode bdr_mode bdr_mode bdr_mode'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
