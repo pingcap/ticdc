@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
@@ -155,6 +156,8 @@ func NewEventDispatcherManager(
 	maintainerID node.ID,
 	newChangefeed bool,
 ) (*EventDispatcherManager, uint64, error) {
+	failpoint.Inject("NewEventDispatcherManagerDelay", nil)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
@@ -302,13 +305,12 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	tableTriggerEventDispatcher := e.tableTriggerEventDispatcher
 	log.Info("table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", tableTriggerEventDispatcher.GetId()),
-		zap.Uint64("startTs", tableTriggerEventDispatcher.GetStartTs()),
+		zap.Stringer("dispatcherID", e.tableTriggerEventDispatcher.GetId()),
+		zap.Uint64("startTs", e.tableTriggerEventDispatcher.GetStartTs()),
 	)
-	return tableTriggerEventDispatcher.GetStartTs(), nil
+	return e.tableTriggerEventDispatcher.GetStartTs(), nil
 }
 
 func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
@@ -558,9 +560,6 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 				}
-				if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
-					newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
-				}
 			}
 			delay.Reset(10 * time.Millisecond)
 		loop:
@@ -574,9 +573,6 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 						}
 						if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 							newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
-						}
-						if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
-							newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
 						}
 					}
 				case <-delay.C:

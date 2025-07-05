@@ -94,14 +94,13 @@ func (e *EventDispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbea
 	if err != nil {
 		return errors.Trace(err)
 	}
-	tableTriggerEventDispatcher := e.redoTableTriggerEventDispatcher
 	// redo meta should keep the same node with table trigger event dispatcher
 	// table trigger event dispatcher and redo table trigger event dispatcher must exist on the same node
-	tableTriggerEventDispatcher.SetRedoMeta(e.config.Consistent)
+	e.redoTableTriggerEventDispatcher.SetRedoMeta(e.config.Consistent)
 	log.Info("redo table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", tableTriggerEventDispatcher.GetId()),
-		zap.Uint64("startTs", tableTriggerEventDispatcher.GetStartTs()),
+		zap.Stringer("dispatcherID", e.redoTableTriggerEventDispatcher.GetId()),
+		zap.Uint64("startTs", e.redoTableTriggerEventDispatcher.GetStartTs()),
 	)
 	return nil
 }

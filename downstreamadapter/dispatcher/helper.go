@@ -230,8 +230,7 @@ func (s *ComponentStateWithMutex) Get() heartbeatpb.ComponentState {
 
 type TableSpanStatusWithSeq struct {
 	*heartbeatpb.TableSpanStatus
-	ResolvedTs uint64
-	Seq        uint64
+	Seq uint64
 }
 
 /*

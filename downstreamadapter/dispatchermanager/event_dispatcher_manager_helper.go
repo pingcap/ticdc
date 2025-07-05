@@ -83,7 +83,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 			Redo:               dispatcher.IsRedoDispatcher(dispatcherItem),
 		}, nil, &heartBeatInfo.Watermark
 	}
-	return nil, nil, nil
+	return nil, nil, &heartBeatInfo.Watermark
 }
 
 func prepareCreateDispatcher[T dispatcher.Dispatcher](infos []dispatcherCreateInfo, dispatcherMap *DispatcherMap[T]) (

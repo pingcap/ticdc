@@ -670,6 +670,7 @@ func (d *dispatcherStat) newDispatcherRemoveRequest() *messaging.DispatcherReque
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
+			Redo:       dispatcher.IsRedoDispatcher(d.target),
 		},
 	}
 }
@@ -683,6 +684,7 @@ func (d *dispatcherStat) newDispatcherPauseRequest() *messaging.DispatcherReques
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
+			Redo:       dispatcher.IsRedoDispatcher(d.target),
 		},
 	}
 }
@@ -696,6 +698,7 @@ func (d *dispatcherStat) newDispatcherResumeRequest() *messaging.DispatcherReque
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
+			Redo:       dispatcher.IsRedoDispatcher(d.target),
 		},
 	}
 }
