@@ -35,9 +35,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "normal columns without update",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -51,9 +51,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "normal columns with update",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -67,9 +67,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "with generated columns",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
-				{Name: pmodel.CIStr{O: "full_name", L: "full_name"}, ID: 3, FieldType: types.FieldType{}}, // generated column
+				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "full_name", L: "full_name"}, ID: 3, FieldType: types.FieldType{}}, // generated column
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -83,9 +83,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "with nil column",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
 				nil,
-				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
+				{Name: ast.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,

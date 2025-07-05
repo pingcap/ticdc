@@ -29,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +38,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 
 	ctx := context.Background()
 	cfg := &Config{
-		MaxAllowedPacket:   int64(variable.DefMaxAllowedPacket),
+		MaxAllowedPacket:   int64(vardef.DefMaxAllowedPacket),
 		SyncPointRetention: 100 * time.Second,
 		MaxTxnRow:          256,
 		BatchDMLEnable:     true,
@@ -56,7 +56,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 
 	ctx := context.Background()
 	cfg := &Config{
-		MaxAllowedPacket:   int64(variable.DefMaxAllowedPacket),
+		MaxAllowedPacket:   int64(vardef.DefMaxAllowedPacket),
 		SyncPointRetention: 100 * time.Second,
 		IsTiDB:             true,
 		EnableDDLTs:        defaultEnableDDLTs,
