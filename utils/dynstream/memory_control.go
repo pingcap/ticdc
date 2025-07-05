@@ -44,7 +44,7 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	feedbackChan chan<- Feedback[A, P, D]
 
 	pathCount            atomic.Int64
-	totalPendingSize     atomic.Int64
+	totalPendingSize     atomic.Uint64
 	paused               atomic.Bool
 	lastSendFeedbackTime atomic.Value
 	algorithm            MemoryControlAlgorithm
@@ -120,8 +120,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
-	path.updatePendingSize(int64(event.eventSize))
-	as.totalPendingSize.Add(int64(event.eventSize))
+	path.updatePendingSize(event.eventSize)
+	as.totalPendingSize.Add(event.eventSize)
 	return true
 }
 
@@ -243,12 +243,8 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	}
 }
 
-func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
-	as.totalPendingSize.Add(int64(-size))
-	if as.totalPendingSize.Load() < 0 {
-		log.Warn("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
-		as.totalPendingSize.Store(0)
-	}
+func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size uint64) {
+	as.totalPendingSize.Add(-size)
 	as.updatePathPauseState(path)
 	as.updateAreaPauseState(path)
 }
@@ -297,7 +293,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.decPendingSize(path, int64(path.pendingSize.Load()))
+	area.decPendingSize(path, path.pendingSize.Load())
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -317,7 +313,7 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A] {
 		areaMetric := AreaMemoryMetric[A]{
 			area:       area.area,
 			usedMemory: area.totalPendingSize.Load(),
-			maxMemory:  int64(area.settings.Load().maxPendingSize),
+			maxMemory:  area.settings.Load().maxPendingSize,
 		}
 		metrics.AreaMemoryMetrics = append(metrics.AreaMemoryMetrics, areaMetric)
 	}
@@ -330,19 +326,19 @@ type MemoryMetric[A Area] struct {
 
 type AreaMemoryMetric[A Area] struct {
 	area       A
-	usedMemory int64
-	maxMemory  int64
+	usedMemory uint64
+	maxMemory  uint64
 }
 
 func (a *AreaMemoryMetric[A]) MemoryUsageRatio() float64 {
 	return float64(a.usedMemory) / float64(a.maxMemory)
 }
 
-func (a *AreaMemoryMetric[A]) MemoryUsage() int64 {
+func (a *AreaMemoryMetric[A]) MemoryUsage() uint64 {
 	return a.usedMemory
 }
 
-func (a *AreaMemoryMetric[A]) MaxMemory() int64 {
+func (a *AreaMemoryMetric[A]) MaxMemory() uint64 {
 	return a.maxMemory
 }
 

@@ -501,12 +501,12 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			}
 			for _, message := range future.Messages {
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+				if err = s.statistics.RecordBatchExecution(func() (int, uint64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
 					if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
 						return 0, 0, err
 					}
-					return message.GetRowsCount(), int64(message.Length()), nil
+					return message.GetRowsCount(), uint64(message.Length()), nil
 				}); err != nil {
 					return errors.Trace(err)
 				}

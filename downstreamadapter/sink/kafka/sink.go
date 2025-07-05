@@ -397,7 +397,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			}
 			for _, message := range future.Messages {
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+				if err = s.statistics.RecordBatchExecution(func() (int, uint64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
 					log.Debug("send message to kafka", zap.String("messageKey", string(message.Key)), zap.String("messageValue", string(message.Value)))
 					if err = s.dmlProducer.AsyncSend(
@@ -407,7 +407,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						message); err != nil {
 						return 0, 0, err
 					}
-					return message.GetRowsCount(), int64(message.Length()), nil
+					return message.GetRowsCount(), uint64(message.Length()), nil
 				}); err != nil {
 					return err
 				}

@@ -301,7 +301,7 @@ type DispatcherEvent struct {
 	commonEvent.Event
 }
 
-func (d DispatcherEvent) GetSize() int64 {
+func (d DispatcherEvent) GetSize() uint64 {
 	return d.From.GetSize() + d.Event.GetSize()
 }
 
@@ -354,8 +354,8 @@ func (h *DispatcherStatusHandler) Handle(dispatcher *Dispatcher, events ...Dispa
 	return false
 }
 
-func (h *DispatcherStatusHandler) GetSize(event DispatcherStatusWithID) int   { return 0 }
-func (h *DispatcherStatusHandler) IsPaused(event DispatcherStatusWithID) bool { return false }
+func (h *DispatcherStatusHandler) GetSize(event DispatcherStatusWithID) uint64 { return 0 }
+func (h *DispatcherStatusHandler) IsPaused(event DispatcherStatusWithID) bool  { return false }
 func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest *Dispatcher) common.GID {
 	return dest.GetChangefeedID().ID()
 }

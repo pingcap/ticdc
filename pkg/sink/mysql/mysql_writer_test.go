@@ -38,7 +38,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 
 	ctx := context.Background()
 	cfg := &Config{
-		MaxAllowedPacket:   int64(vardef.DefMaxAllowedPacket),
+		MaxAllowedPacket:   vardef.DefMaxAllowedPacket,
 		SyncPointRetention: 100 * time.Second,
 		MaxTxnRow:          256,
 		BatchDMLEnable:     true,
@@ -56,7 +56,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 
 	ctx := context.Background()
 	cfg := &Config{
-		MaxAllowedPacket:   int64(vardef.DefMaxAllowedPacket),
+		MaxAllowedPacket:   vardef.DefMaxAllowedPacket,
 		SyncPointRetention: 100 * time.Second,
 		IsTiDB:             true,
 		EnableDDLTs:        defaultEnableDDLTs,

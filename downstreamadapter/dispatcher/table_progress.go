@@ -38,7 +38,7 @@ type TableProgress struct {
 
 	// cumulate dml event size for a period of time,
 	// it will be cleared after once query
-	cumulateEventSize int64
+	cumulateEventSize uint64
 	// it used to calculate the sum-dml-event-size/s for each dispatcher
 	lastQueryTime time.Time
 }

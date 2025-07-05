@@ -105,7 +105,7 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 	// Return 0 by default implementation, if the size is not used.
 	//
 	// Used by the memory control.
-	GetSize(event T) int
+	GetSize(event T) uint64
 
 	// IsPaused Returns the pause status from the upstream status.
 	// DynamicStream sends feedbacks if the pause status of upstream is not equals to the local status.

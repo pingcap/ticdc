@@ -144,7 +144,7 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 	return dynstream.DefaultEventType
 }
 
-func (h *EventsHandler) GetSize(event dispatcher.DispatcherEvent) int { return int(event.GetSize()) }
+func (h *EventsHandler) GetSize(event dispatcher.DispatcherEvent) uint64 { return event.GetSize() }
 
 func (h *EventsHandler) IsPaused(event dispatcher.DispatcherEvent) bool { return event.IsPaused() }
 

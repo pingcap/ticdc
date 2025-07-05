@@ -31,8 +31,8 @@ func (s ID) String() string {
 	return string(s)
 }
 
-func (s ID) GetSize() int64 {
-	return int64(len(s))
+func (s ID) GetSize() uint64 {
+	return uint64(len(s))
 }
 
 func NewID() ID {

@@ -18,11 +18,11 @@ package dynstream
 type MemoryControlAlgorithm interface {
 	// ShouldPausePath determines if a path should be paused based on its memory usage.
 	// Returns pause, resume flags and the memory usage ratio.
-	ShouldPausePath(paused bool, pathPendingSize int64, areaPendingSize int64, maxPendingSize uint64, pathCount int64) (pause bool, resume bool, memoryUsageRatio float64)
+	ShouldPausePath(paused bool, pathPendingSize, areaPendingSize, maxPendingSize uint64, pathCount int64) (pause bool, resume bool, memoryUsageRatio float64)
 
 	// ShouldPauseArea determines if an area should be paused based on its memory usage.
 	// Returns pause, resume flags and the memory usage ratio.
-	ShouldPauseArea(paused bool, pendingSize int64, maxPendingSize uint64) (pause bool, resume bool, memoryUsageRatio float64)
+	ShouldPauseArea(paused bool, pendingSize uint64, maxPendingSize uint64) (pause bool, resume bool, memoryUsageRatio float64)
 }
 
 // NewMemoryControlAlgorithm creates a new MemoryControlAlgorithm based on the algorithm type.
@@ -40,7 +40,7 @@ func NewMemoryControlAlgorithm(algorithm int) MemoryControlAlgorithm {
 type PullerMemoryControl struct{}
 
 // ShouldPausePath implements MemoryControlAlgorithm.ShouldPausePath for puller components.
-func (p *PullerMemoryControl) ShouldPausePath(paused bool, pathPendingSize int64, areaPendingSize int64, maxPendingSize uint64, pathCount int64) (bool, bool, float64) {
+func (p *PullerMemoryControl) ShouldPausePath(paused bool, pathPendingSize, _, maxPendingSize uint64, _ int64) (bool, bool, float64) {
 	memoryUsageRatio := float64(pathPendingSize) / float64(maxPendingSize)
 
 	switch {
@@ -58,7 +58,7 @@ func (p *PullerMemoryControl) ShouldPausePath(paused bool, pathPendingSize int64
 }
 
 // ShouldPauseArea implements MemoryControlAlgorithm.ShouldPauseArea for puller components.
-func (p *PullerMemoryControl) ShouldPauseArea(paused bool, pendingSize int64, maxPendingSize uint64) (bool, bool, float64) {
+func (p *PullerMemoryControl) ShouldPauseArea(paused bool, pendingSize uint64, maxPendingSize uint64) (bool, bool, float64) {
 	memoryUsageRatio := float64(pendingSize) / float64(maxPendingSize)
 
 	switch {
@@ -80,7 +80,7 @@ func (p *PullerMemoryControl) ShouldPauseArea(paused bool, pendingSize int64, ma
 type EventCollectorMemoryControl struct{}
 
 // ShouldPausePath implements MemoryControlAlgorithm.ShouldPausePath for event collector components.
-func (e *EventCollectorMemoryControl) ShouldPausePath(paused bool, pathPendingSize int64, areaPendingSize int64, maxPendingSize uint64, pathCount int64) (bool, bool, float64) {
+func (e *EventCollectorMemoryControl) ShouldPausePath(paused bool, pathPendingSize, areaPendingSize, maxPendingSize uint64, pathCount int64) (bool, bool, float64) {
 	if pathCount == 0 {
 		pathCount = 1
 	}
@@ -157,7 +157,7 @@ func (e *EventCollectorMemoryControl) calculateThresholds(pathCount int64, areaM
 }
 
 // ShouldPauseArea implements MemoryControlAlgorithm.ShouldPauseArea for event collector components.
-func (e *EventCollectorMemoryControl) ShouldPauseArea(paused bool, pendingSize int64, maxPendingSize uint64) (bool, bool, float64) {
+func (e *EventCollectorMemoryControl) ShouldPauseArea(_ bool, pendingSize uint64, maxPendingSize uint64) (bool, bool, float64) {
 	memoryUsageRatio := float64(pendingSize) / float64(maxPendingSize)
 	return false, false, memoryUsageRatio
 }
