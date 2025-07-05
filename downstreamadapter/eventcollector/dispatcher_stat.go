@@ -393,16 +393,20 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			}
 		} else if event.GetType() == commonEvent.TypeBatchDMLEvent {
 			tableInfo := d.tableInfo.Load().(*common.TableInfo)
-			tableInfoVersion := d.tableInfoVersion.Load()
 			if tableInfo == nil {
 				log.Panic("should not happen: table info should be set before batch DML event",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()))
 			}
+			// The cloudstorage sink replicate different file according the table version.
+			// But the updateTS don't include 'truncate table', 'rename table', 'rename tables',
+			// 'truncate partition' and 'exchange partition' schema operations
+			// Here use tableInfoVersion to store the newest schema operation
+			// FIXME: more elegant implementation
+			tableInfoVersion := max(d.tableInfoVersion.Load(), tableInfo.UpdateTS())
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
-				// FIXME: more elegant implementation
 				dml.TableInfoVersion = max(tableInfoVersion, dml.TableInfo.UpdateTS())
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.filterAndUpdateEventByCommitTs(dmlEvent) {
