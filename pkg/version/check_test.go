@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
-	pdOpt "github.com/tikv/pd/client/opt"
+	pdopt "github.com/tikv/pd/client/opt"
 	"github.com/tikv/pd/pkg/utils/tempurl"
 )
 
@@ -40,7 +40,7 @@ type mockPDClient struct {
 	getStatusCode func() int
 }
 
-func (m *mockPDClient) GetAllStores(ctx context.Context, opts ...pdOpt.GetStoreOption) ([]*metapb.Store, error) {
+func (m *mockPDClient) GetAllStores(ctx context.Context, opts ...pdopt.GetStoreOption) ([]*metapb.Store, error) {
 	if m.getAllStores != nil {
 		return m.getAllStores(), nil
 	}

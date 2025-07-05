@@ -300,7 +300,6 @@ func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 	tables, err := schemaStore.GetAllPhysicalTables(startTs, f)
-	log.Info("get table ids", zap.Int("count", len(tables)), zap.String("changefeed", c.changefeedID.Name()))
 	return tables, err
 }
 
