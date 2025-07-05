@@ -165,32 +165,6 @@ func newTestEventCollector(localServerID node.ID) *EventCollector {
 	return New(localServerID)
 }
 
-func TestGetResetTs(t *testing.T) {
-	// Test case 1: lastEventCommitTs is greater than startTs
-	// Expected: resetTs should be lastEventCommitTs - 1
-	stat := &dispatcherStat{
-		target: &mockDispatcher{},
-	}
-	stat.lastEventCommitTs.Store(100)
-	stat.target.(*mockDispatcher).startTs = 50
-	resetTs := stat.getResetTs()
-	require.Equal(t, uint64(99), resetTs)
-
-	// Test case 2: lastEventCommitTs is equal to startTs
-	// Expected: resetTs should be startTs
-	stat.lastEventCommitTs.Store(50)
-	stat.target.(*mockDispatcher).startTs = 50
-	resetTs = stat.getResetTs()
-	require.Equal(t, uint64(50), resetTs)
-
-	// Test case 3: lastEventCommitTs is less than startTs
-	// Expected: resetTs should be startTs
-	stat.lastEventCommitTs.Store(30)
-	stat.target.(*mockDispatcher).startTs = 50
-	resetTs = stat.getResetTs()
-	require.Equal(t, uint64(50), resetTs)
-}
-
 func TestVerifyEventSequence(t *testing.T) {
 	tests := []struct {
 		name           string

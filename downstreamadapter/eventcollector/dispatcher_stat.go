@@ -194,7 +194,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 // getResetTs is used to get the resetTs of the dispatcher.
 // resetTs must be larger than the startTs, otherwise it will cause panic in eventStore.
 func (d *dispatcherStat) getResetTs() uint64 {
-	return max(d.lastEventCommitTs.Load()-1, d.target.GetStartTs())
+	return d.target.GetCheckpointTs()
 }
 
 // remove is used to remove the dispatcher from the event service.
@@ -269,13 +269,14 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 			zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
 			zap.Uint64("commitTs", event.GetCommitTs()))
 
+		lastEventSeq := d.lastEventSeq.Load()
 		expectedSeq := d.lastEventSeq.Add(1)
 		if event.GetSeq() != expectedSeq {
 			log.Warn("Received an out-of-order event, reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.Int("eventType", event.GetType()),
-				zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
+				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+				zap.Uint64("lastEventSeq", lastEventSeq),
 				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
 				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("expectedSeq", expectedSeq),
