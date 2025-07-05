@@ -32,6 +32,8 @@ type Event interface {
 	IsPaused() bool
 	// GetLen returns the number of rows in the event.
 	Len() int32
+	// GetRedo returns true if the event is handled by redo dispatcher
+	GetRedo() bool
 }
 
 // FlushableEvent is an event that can be flushed to downstream by a dispatcher.

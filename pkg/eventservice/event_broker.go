@@ -162,6 +162,7 @@ func newEventBroker(
 }
 
 func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
+	batchEvent.Redo = d.info.GetRedo()
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
@@ -198,13 +199,15 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
 	e.Epoch = d.epoch.Load()
+	e.Redo = d.info.GetRedo()
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
 		zap.String("query", e.Query),
 		zap.Int64("eventTableID", e.TableID),
 		zap.Uint64("commitTs", e.FinishedTs),
-		zap.Uint64("seq", e.Seq))
+		zap.Uint64("seq", e.Seq),
+		zap.Bool("isRedo", e.GetRedo()))
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
@@ -217,12 +220,11 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
-	re := pevent.NewResolvedEvent(watermark, d.id, d.epoch.Load())
+	re := pevent.NewResolvedEvent(watermark, d.id, d.epoch.Load(), d.info.GetRedo())
 	resolvedEvent := newWrapResolvedEvent(
 		remoteID,
 		re,
-		d.getEventSenderState(),
-	)
+		d.getEventSenderState())
 	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	metricEventServiceSendResolvedTsCount.Inc()
@@ -232,7 +234,7 @@ func (c *eventBroker) sendNotReusableEvent(
 	server node.ID,
 	d *dispatcherStat,
 ) {
-	event := pevent.NewNotReusableEvent(d.info.GetID())
+	event := pevent.NewNotReusableEvent(d.info.GetID(), d.info.GetRedo())
 	wrapEvent := newWrapNotReusableEvent(server, event)
 
 	// must success unless we can do retry later
@@ -393,7 +395,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
 		remoteID := node.ID(task.info.GetServerID())
-		event := pevent.NewReadyEvent(task.info.GetID())
+		event := pevent.NewReadyEvent(task.info.GetID(), task.info.GetRedo())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
 		metricEventServiceSendCommandCount.Inc()
@@ -418,7 +420,8 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		task.resetTs.Load(),
 		task.seq.Add(1),
 		task.epoch.Load(),
-		task.startTableInfo.Load())
+		task.startTableInfo.Load(),
+		task.info.GetRedo())
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
@@ -451,6 +454,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			CommitTsList: newCommitTsList,
 			Seq:          d.seq.Add(1),
 			Epoch:        d.epoch.Load(),
+			Redo:         d.info.GetRedo(),
 		}
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
 		c.getMessageCh(d.messageWorkerIndex) <- syncPointEvent
@@ -549,6 +553,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 	defer ticker.Stop()
 
 	resolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
+	redoResolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
 	messageCh := c.messageCh[workerIndex]
 	batchM := make([]*wrapEvent, 0, defaultMaxBatchSize)
 	for {
@@ -572,8 +577,12 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 			}
 
 			for _, m = range batchM {
+				cacheMap := resolvedTsCacheMap
+				if m.redo {
+					cacheMap = redoResolvedTsCacheMap
+				}
 				if m.msgType == pevent.TypeResolvedEvent {
-					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
+					c.handleResolvedTs(ctx, cacheMap, m, workerIndex)
 					continue
 				}
 				tMsg := messaging.NewSingleTargetMessage(
@@ -584,15 +593,18 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				)
 				// Note: we need to flush the resolvedTs cache before sending the message
 				// to keep the order of the resolvedTs and the message.
-				c.flushResolvedTs(ctx, resolvedTsCacheMap[m.serverID], m.serverID, workerIndex)
+				c.flushResolvedTs(ctx, cacheMap[m.serverID], m.serverID, workerIndex, m.redo)
 				c.sendMsg(ctx, tMsg, m.postSendFunc)
 				m.reset()
 			}
 			batchM = batchM[:0]
 
 		case <-ticker.C:
+			for serverID, cache := range redoResolvedTsCacheMap {
+				c.flushResolvedTs(ctx, cache, serverID, workerIndex, true)
+			}
 			for serverID, cache := range resolvedTsCacheMap {
-				c.flushResolvedTs(ctx, cache, serverID, workerIndex)
+				c.flushResolvedTs(ctx, cache, serverID, workerIndex, false)
 			}
 		}
 	}
@@ -607,15 +619,17 @@ func (c *eventBroker) handleResolvedTs(ctx context.Context, cacheMap map[node.ID
 	}
 	cache.add(m.resolvedTsEvent)
 	if cache.isFull() {
-		c.flushResolvedTs(ctx, cache, m.serverID, workerIndex)
+		c.flushResolvedTs(ctx, cache, m.serverID, workerIndex, m.redo)
 	}
 }
 
-func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCache, serverID node.ID, workerIndex int) {
+func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCache, serverID node.ID, workerIndex int, redo bool) {
 	if cache == nil || cache.len == 0 {
 		return
 	}
-	msg := &pevent.BatchResolvedEvent{}
+	msg := &pevent.BatchResolvedEvent{
+		Redo: redo,
+	}
 	msg.Events = append(msg.Events, cache.getAll()...)
 	tMsg := messaging.NewSingleTargetMessage(
 		serverID,
@@ -815,6 +829,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
+		zap.Bool("isRedo", info.GetRedo()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", startTs),
 		zap.Duration("duration", time.Since(start)))

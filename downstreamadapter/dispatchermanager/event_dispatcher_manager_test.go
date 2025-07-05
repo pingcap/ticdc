@@ -13,6 +13,7 @@
 package dispatchermanager
 
 import (
+	"math"
 	"sync/atomic"
 	"testing"
 
@@ -34,13 +35,15 @@ import (
 var mockSink = sink.NewMockSink(common.MysqlSinkType)
 
 // createTestDispatcher creates a test dispatcher with given parameters
-func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.Dispatcher {
+func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
 	span := &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: startKey,
 		EndKey:   endKey,
 	}
-	d := dispatcher.NewDispatcher(
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	d := dispatcher.NewEventDispatcher(
 		manager.changefeedID,
 		id,
 		span,
@@ -58,6 +61,8 @@ func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id comm
 		0,
 		make(chan error, 1),
 		false,
+		false,
+		&redoTs,
 	)
 	d.SetComponentStatus(heartbeatpb.ComponentState_Working)
 	return d
@@ -68,7 +73,7 @@ func createTestManager(t *testing.T) *EventDispatcherManager {
 	changefeedID := common.NewChangeFeedIDWithName("test")
 	manager := &EventDispatcherManager{
 		changefeedID:            changefeedID,
-		dispatcherMap:           newDispatcherMap(),
+		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
 		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),
@@ -305,11 +310,11 @@ func TestDoMerge(t *testing.T) {
 	)
 
 	// Add resolved event to dispatcher1 to update the checkpointTs
-	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
+	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0, false)
 	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
 
 	// Add resolved event to dispatcher2 to update the checkpointTs
-	resolvedEvent2 := event.NewResolvedEvent(200, dispatcher2.GetId(), 0)
+	resolvedEvent2 := event.NewResolvedEvent(200, dispatcher2.GetId(), 0, false)
 	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
 
 	// Add dispatchers to manager
@@ -323,7 +328,7 @@ func TestDoMerge(t *testing.T) {
 	}, mergedID)
 
 	// Execute DoMerge
-	manager.DoMerge(task)
+	doMerge(task, task.manager.dispatcherMap)
 
 	// Verify merged dispatcher state
 	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)
@@ -364,15 +369,15 @@ func TestDoMergeWithThreeDispatchers(t *testing.T) {
 	)
 
 	// Add resolved event to dispatcher1 to update the checkpointTs
-	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
+	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0, false)
 	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
 
 	// Add resolved event to dispatcher2 to update the checkpointTs
-	resolvedEvent2 := event.NewResolvedEvent(100, dispatcher2.GetId(), 0)
+	resolvedEvent2 := event.NewResolvedEvent(100, dispatcher2.GetId(), 0, false)
 	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
 
 	// Add resolved event to dispatcher3 to update the checkpointTs
-	resolvedEvent3 := event.NewResolvedEvent(200, dispatcher3.GetId(), 0)
+	resolvedEvent3 := event.NewResolvedEvent(200, dispatcher3.GetId(), 0, false)
 	dispatcher3.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent3)}, func() {})
 
 	// Add dispatchers to manager
@@ -389,7 +394,7 @@ func TestDoMergeWithThreeDispatchers(t *testing.T) {
 	}, mergedID)
 
 	// Execute DoMerge
-	manager.DoMerge(task)
+	doMerge(task, task.manager.dispatcherMap)
 
 	// Verify merged dispatcher state
 	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)

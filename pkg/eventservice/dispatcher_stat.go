@@ -285,6 +285,7 @@ type wrapEvent struct {
 	msgType int
 	// postSendFunc should be called after the message is sent to message center
 	postSendFunc func()
+	redo         bool
 }
 
 func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState) *wrapEvent {
@@ -295,6 +296,7 @@ func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state peven
 	w.serverID = serverID
 	w.e = e
 	w.msgType = e.GetType()
+	w.redo = e.GetRedo()
 	return w
 }
 
@@ -304,6 +306,7 @@ func (w *wrapEvent) reset() {
 	w.resolvedTsEvent = zeroResolvedEvent
 	w.serverID = ""
 	w.msgType = -1
+	w.redo = false
 	wrapEventPool.Put(w)
 }
 
@@ -320,6 +323,7 @@ func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent) *wrapEvent
 	w.serverID = serverID
 	w.e = &e
 	w.msgType = pevent.TypeHandshakeEvent
+	w.redo = e.GetRedo()
 	return w
 }
 
@@ -328,6 +332,7 @@ func newWrapReadyEvent(serverID node.ID, e pevent.ReadyEvent) *wrapEvent {
 	w.serverID = serverID
 	w.e = &e
 	w.msgType = pevent.TypeReadyEvent
+	w.redo = e.GetRedo()
 	return w
 }
 
@@ -336,6 +341,7 @@ func newWrapNotReusableEvent(serverID node.ID, e pevent.NotReusableEvent) *wrapE
 	w.serverID = serverID
 	w.e = &e
 	w.msgType = pevent.TypeNotReusableEvent
+	w.redo = e.GetRedo()
 	return w
 }
 
@@ -345,6 +351,7 @@ func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent, state pevent
 	w.serverID = serverID
 	w.resolvedTsEvent = e
 	w.msgType = pevent.TypeResolvedEvent
+	w.redo = e.GetRedo()
 	return w
 }
 
@@ -354,6 +361,7 @@ func newWrapDDLEvent(serverID node.ID, e *pevent.DDLEvent, state pevent.EventSen
 	w.serverID = serverID
 	w.e = e
 	w.msgType = pevent.TypeDDLEvent
+	w.redo = e.GetRedo()
 	return w
 }
 
@@ -363,6 +371,7 @@ func newWrapSyncPointEvent(serverID node.ID, e *pevent.SyncPointEvent, state pev
 	w.serverID = serverID
 	w.e = e
 	w.msgType = pevent.TypeSyncPointEvent
+	w.redo = e.GetRedo()
 	return w
 }
 

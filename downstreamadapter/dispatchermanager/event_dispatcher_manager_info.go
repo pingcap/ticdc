@@ -29,7 +29,13 @@ type dispatcherCreateInfo struct {
 	SchemaID  int64
 }
 
-func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {
+type cleanMap struct {
+	id       common.DispatcherID
+	schemaID int64
+	redo     bool
+}
+
+func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.EventDispatcher] {
 	return e.dispatcherMap
 }
 
@@ -51,7 +57,7 @@ func (e *EventDispatcherManager) GetMaintainerEpoch() uint64 {
 	return e.meta.maintainerEpoch
 }
 
-func (e *EventDispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.Dispatcher {
+func (e *EventDispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {
 	return e.tableTriggerEventDispatcher
 }
 
