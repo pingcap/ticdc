@@ -189,19 +189,28 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	if event.TiDBOnly {
 		return nil
 	}
-	for _, e := range event.GetEvents() {
+	// For exchange partition, we need to write the schema of the source table.
+	// write the previous table first
+	if event.GetDDLType() == model.ActionExchangeTablePartition {
 		var def cloudstorage.TableDefinition
-		def.FromDDLEvent(e, s.cfg.OutputColumnID)
-		if err := s.writeFile(e, def); err != nil {
+		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.FinishedTs, s.cfg.OutputColumnID)
+		def.Query = event.Query
+		def.Type = event.Type
+		if err := s.writeFile(event, def); err != nil {
 			return err
 		}
-	}
-	if event.GetDDLType() == model.ActionExchangeTablePartition {
-		// For exchange partition, we need to write the schema of the source table.
 		var sourceTableDef cloudstorage.TableDefinition
-		sourceTableDef.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.MultipleTableInfos[1], event.GetCommitTs(), s.cfg.OutputColumnID)
+		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, event.MultipleTableInfos[1], event.FinishedTs, s.cfg.OutputColumnID)
 		if err := s.writeFile(event, sourceTableDef); err != nil {
 			return err
+		}
+	} else {
+		for _, e := range event.GetEvents() {
+			var def cloudstorage.TableDefinition
+			def.FromDDLEvent(e, s.cfg.OutputColumnID)
+			if err := s.writeFile(e, def); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

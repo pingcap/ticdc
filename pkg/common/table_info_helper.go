@@ -347,7 +347,8 @@ type columnSchema struct {
 	// enabled and the primary key is not a single integer column.
 	IsCommonHandle bool `json:"is_common_handle"`
 	// UpdateTS is used to record the timestamp of updating the table's schema information.
-	// These changing schema operations don't include 'truncate table' and 'rename table'.
+	// These changing schema operations don't include 'truncate table', 'rename table',
+	// 'truncate partition' and 'exchange partition'.
 	UpdateTS uint64 `json:"update_timestamp"`
 
 	// rest fields are generated

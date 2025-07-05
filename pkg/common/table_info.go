@@ -195,6 +195,9 @@ func (ti *TableInfo) GetPKIndex() []int64 {
 	return ti.columnSchema.PKIndex
 }
 
+// UpdateTS returns the UpdateTS of columnSchema
+// These changing schema operations don't include 'truncate table', 'rename table',
+// 'rename tables', 'truncate partition' and 'exchange partition'.
 func (ti *TableInfo) UpdateTS() uint64 {
 	return ti.columnSchema.UpdateTS
 }

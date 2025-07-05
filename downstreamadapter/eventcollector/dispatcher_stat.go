@@ -123,7 +123,8 @@ type dispatcherStat struct {
 	// gotSyncpointOnTS indicates whether a sync point was received at the sentCommitTs.
 	gotSyncpointOnTS atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
-	tableInfo atomic.Value
+	tableInfo        atomic.Value
+	tableInfoVersion atomic.Uint64
 }
 
 func newDispatcherStat(
@@ -397,9 +398,16 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 					zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()))
 			}
+			// The cloudstorage sink replicate different file according the table version.
+			// But the updateTS don't include 'truncate table', 'rename table', 'rename tables',
+			// 'truncate partition' and 'exchange partition' schema operations
+			// Here use tableInfoVersion to store the newest schema operation
+			// FIXME: more elegant implementation
+			tableInfoVersion := max(d.tableInfoVersion.Load(), tableInfo.UpdateTS())
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
+				dml.TableInfoVersion = max(tableInfoVersion, dml.TableInfo.UpdateTS())
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.filterAndUpdateEventByCommitTs(dmlEvent) {
 					validEvents = append(validEvents, dmlEvent)
@@ -452,9 +460,11 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		if !d.filterAndUpdateEventByCommitTs(events[0]) {
 			return false
 		}
-		tableInfo := events[0].Event.(*event.DDLEvent).TableInfo
+		ddl := events[0].Event.(*event.DDLEvent)
+		tableInfo := ddl.TableInfo
 		if tableInfo != nil {
 			d.tableInfo.Store(tableInfo)
+			d.tableInfoVersion.Store(ddl.FinishedTs)
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })
 	} else {
