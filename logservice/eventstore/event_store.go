@@ -403,6 +403,9 @@ func (e *eventStore) RegisterDispatcher(
 				}
 
 				// Track the smallest containing span that meets ts requirements
+				// Note: this is still not bestMatch
+				// for example, we have a dispatcher with span [b, c),
+				// it is hard to determin whether [a, d) or [b, h) is beshMatch without some statistics.
 				if bestMatch == nil ||
 					(bytes.Compare(subStat.tableSpan.StartKey, bestMatch.tableSpan.StartKey) >= 0 &&
 						bytes.Compare(subStat.tableSpan.EndKey, bestMatch.tableSpan.EndKey) <= 0) {
@@ -634,25 +637,44 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 
 	// get from pendingSubStat first,
 	// because its span is more close to dispatcher span if it it not nil
+	var needUpgradeLock bool
 	db := tryGetDB(stat.pendingSubStat)
 	subStat := stat.pendingSubStat
 	if db != nil {
-		// when pendingSubStat can satisfy the scan request, we can detach from stat.subStat
-		e.detachFromSubStat(dispatcherID, stat.subStat)
-		stat.subStat = stat.pendingSubStat
-		stat.pendingSubStat = nil
+		needUpgradeLock = true
 	} else {
 		db = tryGetDB(stat.subStat)
 		subStat = stat.subStat
 	}
 	if db == nil {
+		e.dispatcherMeta.RUnlock()
 		log.Panic("fail to find db for dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.String("span", common.FormatTableSpan(stat.tableSpan)),
 			zap.Uint64("startTs", dataRange.StartTs),
 			zap.Uint64("endTs", dataRange.EndTs))
 	}
-	e.dispatcherMeta.RUnlock()
+	if needUpgradeLock {
+		e.dispatcherMeta.RUnlock()
+		e.dispatcherMeta.Lock()
+		// check stat again because we release the lock for a short period
+		stat = e.dispatcherMeta.dispatcherStats[dispatcherID]
+		if stat == nil {
+			e.dispatcherMeta.Unlock()
+			log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
+			return nil, nil
+		}
+		db = tryGetDB(stat.pendingSubStat)
+		if db != nil {
+			e.detachFromSubStat(dispatcherID, stat.subStat)
+			stat.subStat = stat.pendingSubStat
+			stat.pendingSubStat = nil
+			subStat = stat.subStat
+		}
+		e.dispatcherMeta.Unlock()
+	} else {
+		e.dispatcherMeta.RUnlock()
+	}
 
 	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
 	start := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.StartTs+1)

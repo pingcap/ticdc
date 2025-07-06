@@ -207,7 +207,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 	{
 		span := &heartbeatpb.TableSpan{
 			TableID:  tableID,
-			StartKey: []byte("b"),
+			StartKey: []byte("c"),
 			EndKey:   []byte("i"),
 		}
 		ok := store.RegisterDispatcher(dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
