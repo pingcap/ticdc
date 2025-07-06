@@ -104,7 +104,7 @@ type dispatcherStat struct {
 	// the subscription which this dispatcher finally depends on.
 	// the difference between subStat and pendingSubStat is that
 	// subStat may have span larger than dispatcher span,
-	// which pendingSubStat must have span the same as dispatcher span.
+	// while pendingSubStat must have span the same as dispatcher span.
 	pendingSubStat *subscriptionStat
 }
 
@@ -404,7 +404,7 @@ func (e *eventStore) RegisterDispatcher(
 
 				// Track the smallest containing span that meets ts requirements
 				// Note: this is still not bestMatch
-				// for example, we have a dispatcher with span [b, c),
+				// for example, if we have a dispatcher with span [b, c),
 				// it is hard to determin whether [a, d) or [b, h) is beshMatch without some statistics.
 				if bestMatch == nil ||
 					(bytes.Compare(subStat.tableSpan.StartKey, bestMatch.tableSpan.StartKey) >= 0 &&
