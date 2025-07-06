@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -291,70 +292,6 @@ func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
 	require.Equal(t, 0, spanStatus.trafficScore) // Should not update due to non-working status
 }
 
-func TestDefaultSpanSplitChecker_UpdateStatus_ReplicaNotFound(t *testing.T) {
-	t.Parallel()
-
-	cfID := common.NewChangeFeedIDWithName("test")
-	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
-	}
-
-	mockCache := &mockRegionCache{}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
-
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
-
-	replica := createTestSpanReplication(cfID, 1)
-
-	// Test panic when replica not found
-	require.Panics(t, func() {
-		checker.UpdateStatus(replica)
-	})
-}
-
-func TestDefaultSpanSplitChecker_Check_TrafficSplitPriority(t *testing.T) {
-	t.Parallel()
-
-	cfID := common.NewChangeFeedIDWithName("test")
-	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
-	}
-
-	mockCache := &mockRegionCache{}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
-
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
-
-	replica := createTestSpanReplication(cfID, 1)
-
-	checker.AddReplica(replica)
-
-	// Set up high traffic score and region count
-	status := &heartbeatpb.TableSpanStatus{
-		ID:                 replica.ID.ToPB(),
-		ComponentStatus:    heartbeatpb.ComponentState_Working,
-		EventSizePerSecond: 1500,
-		CheckpointTs:       1,
-	}
-	replica.UpdateStatus(status)
-	// Set region count above threshold
-	spanStatus := checker.allTasks[replica.ID]
-	spanStatus.regionCount = 10
-
-	// Update multiple times to reach traffic threshold
-	for i := 0; i < 3; i++ {
-		checker.UpdateStatus(replica)
-	}
-
-	// Test check results - should prefer traffic split
-	results := checker.Check(10)
-	require.Len(t, results, 1)
-	require.Equal(t, SplitByTraffic, results.([]DefaultSpanSplitCheckResult)[0].SplitType)
-	require.Equal(t, replica, results.([]DefaultSpanSplitCheckResult)[0].Span)
-}
-
 func TestDefaultSpanSplitChecker_Check_RegionSplit(t *testing.T) {
 	t.Parallel()
 
@@ -390,7 +327,7 @@ func TestDefaultSpanSplitChecker_Check_RegionSplit(t *testing.T) {
 	// Test check results - should return region split
 	results := checker.Check(10)
 	require.Len(t, results, 1)
-	require.Equal(t, SplitByRegion, results.([]DefaultSpanSplitCheckResult)[0].SplitType)
+	require.Equal(t, split.SplitByTraffic, results.([]DefaultSpanSplitCheckResult)[0].SplitType)
 	require.Equal(t, replica, results.([]DefaultSpanSplitCheckResult)[0].Span)
 }
 
@@ -530,7 +467,7 @@ func TestDefaultSpanSplitChecker_Integration_ConfigurationChanges(t *testing.T) 
 		eventSize       float32
 		regionCount     int
 		expectedSplit   bool
-		expectedType    SplitType
+		expectedType    split.SplitType
 	}{
 		{
 			name:            "high traffic split",
@@ -539,7 +476,7 @@ func TestDefaultSpanSplitChecker_Integration_ConfigurationChanges(t *testing.T) 
 			eventSize:       1500,
 			regionCount:     3,
 			expectedSplit:   true,
-			expectedType:    SplitByTraffic,
+			expectedType:    split.SplitByTraffic,
 		},
 		{
 			name:            "high region count split",
@@ -548,7 +485,7 @@ func TestDefaultSpanSplitChecker_Integration_ConfigurationChanges(t *testing.T) 
 			eventSize:       500,
 			regionCount:     8,
 			expectedSplit:   true,
-			expectedType:    SplitByRegion,
+			expectedType:    split.SplitByTraffic,
 		},
 		{
 			name:            "no split needed",

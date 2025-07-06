@@ -14,6 +14,7 @@ package testutil
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -23,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/tikv/client-go/v2/tikv"
 )
 
 // GetTableSpanByID returns a mock TableSpan for testing
@@ -40,6 +42,7 @@ func SetNodeManagerAndMessageCenter() *watcher.NodeManager {
 	n := node.NewInfo("", "")
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
 	mc := messaging.NewMessageCenter(context.Background(), n.ID, config.NewDefaultMessageCenterConfig(n.AdvertiseAddr), nil)
 	mc.Run(context.Background())
 	defer mc.Close()
@@ -47,5 +50,38 @@ func SetNodeManagerAndMessageCenter() *watcher.NodeManager {
 
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	regionCache := newMockRegionCache()
+	appcontext.SetService(appcontext.RegionCache, regionCache)
 	return nodeManager
+}
+
+type MockCache struct {
+	regions map[string][]*tikv.Region
+	err     error
+}
+
+// NewMockRegionCache returns a new MockCache.
+func newMockRegionCache() *MockCache {
+	return &MockCache{
+		regions: make(map[string][]*tikv.Region),
+	}
+}
+
+func (m *MockCache) SetError(err error) {
+	m.err = err
+}
+
+func (m *MockCache) SetRegions(key string, regions []*tikv.Region) {
+	m.regions[key] = regions
+}
+
+func (m *MockCache) LoadRegionsInKeyRange(
+	bo *tikv.Backoffer, startKey, endKey []byte,
+) (regions []*tikv.Region, err error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	key := fmt.Sprintf("%s-%s", string(startKey), string(endKey))
+	return m.regions[key], nil
 }

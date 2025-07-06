@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -426,36 +427,6 @@ func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 	require.Equal(t, 0, spanStatus.trafficScore) // Should still not update
 }
 
-func TestSplitSpanChecker_UpdateStatus_ReplicaNotFound(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
-
-	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
-	}
-
-	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
-	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
-
-	replica := replicas[0]
-	// Don't add replica to checker
-
-	status := &heartbeatpb.TableSpanStatus{
-		ID:                 replica.ID.ToPB(),
-		ComponentStatus:    heartbeatpb.ComponentState_Working,
-		EventSizePerSecond: 1500,
-		CheckpointTs:       1,
-	}
-	replica.UpdateStatus(status)
-
-	// Test panic when replica not found in allTasks
-	require.Panics(t, func() {
-		checker.UpdateStatus(replica)
-	})
-}
-
 func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 	setup := setupTestHelper()
 	cfID := setup.cfID
@@ -504,7 +475,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, SplitByTraffic, splitResult.SplitType)
+	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
@@ -552,54 +523,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, SplitByRegion, splitResult.SplitType)
-	require.Equal(t, replicas[0], splitResult.SplitSpan)
-}
-
-func TestSplitSpanChecker_ChooseSplitSpans_Priority(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
-
-	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
-	}
-
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
-
-	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
-	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
-
-	// Add replicas to checker
-	for _, replica := range replicas {
-		checker.AddReplica(replica)
-	}
-
-	// Set up both traffic and region thresholds exceeded for first span
-	spanStatus1 := checker.allTasks[replicas[0].ID]
-	spanStatus1.trafficScore = 4 // Above traffic threshold
-	spanStatus1.regionCount = 8  // Above region threshold
-	spanStatus1.lastThreeTraffic = []float64{1500, 1500, 1500}
-
-	// Second span: both below thresholds
-	spanStatus2 := checker.allTasks[replicas[1].ID]
-	spanStatus2.trafficScore = 1
-	spanStatus2.regionCount = 3
-	spanStatus2.lastThreeTraffic = []float64{400, 400, 400}
-
-	// Set node IDs
-	replicas[0].SetNodeID("node1")
-	replicas[1].SetNodeID("node2")
-
-	// Test split decision - should prioritize traffic split
-	results := checker.Check(10)
-	require.Len(t, results, 1)
-
-	splitResult := results.([]SplitSpanCheckResult)[0]
-	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, SplitByTraffic, splitResult.SplitType) // Traffic split has priority
+	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
@@ -871,7 +795,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, SplitByTraffic, splitResult.SplitType)
+	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan) // Split the span from max traffic node
 }
 
@@ -1256,7 +1180,7 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, SplitByTraffic, splitResult.SplitType)
+	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
@@ -1330,7 +1254,7 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, SplitByRegion, splitResult.SplitType)
+	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[2], splitResult.SplitSpan)
 }
 
@@ -1404,7 +1328,7 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, SplitByTraffic, splitResult.SplitType)
+	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 

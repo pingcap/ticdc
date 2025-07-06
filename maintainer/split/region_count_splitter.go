@@ -37,14 +37,14 @@ type regionCountSplitter struct {
 }
 
 func newRegionCountSplitter(
-	changefeedID common.ChangeFeedID, regionThreshold int, regionCountPerSpan int,
+	changefeedID common.ChangeFeedID, regionCountPerSpan int, regionThreshold int,
 ) *regionCountSplitter {
 	regionCache := appcontext.GetService[RegionCache](appcontext.RegionCache)
 	return &regionCountSplitter{
 		changefeedID:       changefeedID,
 		regionCache:        regionCache,
-		regionThreshold:    regionThreshold,
 		regionCountPerSpan: regionCountPerSpan,
+		regionThreshold:    regionThreshold,
 	}
 }
 
@@ -62,6 +62,7 @@ func (m *regionCountSplitter) split(
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}
+
 	if len(regions) <= m.regionThreshold {
 		log.Info("skip split span by region count",
 			zap.String("changefeed", m.changefeedID.Name()),
@@ -117,7 +118,6 @@ func (m *regionCountSplitter) split(
 		zap.String("span", span.String()),
 		zap.Int("spans", len(spans)),
 		zap.Int("regionCount", len(regions)),
-		zap.Int("regionThreshold", m.regionThreshold),
 		zap.Int("regionCountPerSpan", m.regionCountPerSpan),
 		zap.Int("spansNum", spansNum))
 	return spans

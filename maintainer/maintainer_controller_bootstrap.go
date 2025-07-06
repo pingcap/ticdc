@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -192,7 +193,7 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
 		// Process table spans
-		c.processTableSpans(table, workingTaskMap)
+		c.processTableSpans(table, workingTaskMap, isMysqlCompatibleBackend)
 	}
 
 	return schemaInfos
@@ -237,7 +238,7 @@ func (c *Controller) handleTableHoles(
 	holes := findHoles(tableSpans, tableSpan)
 	if c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
 		for _, hole := range holes {
-			spans := c.splitter.Split(context.Background(), hole, 0, replica.SplitByRegion)
+			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitByRegion)
 			c.spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
 		}
 	} else {

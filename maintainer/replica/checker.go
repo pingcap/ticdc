@@ -29,13 +29,6 @@ const (
 	OpMove                // move one span to another node
 )
 
-type SplitType int
-
-const (
-	SplitByTraffic SplitType = iota
-	SplitByRegion
-)
-
 func GetNewGroupChecker(
 	cfID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig,
 ) func(replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {

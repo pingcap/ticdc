@@ -41,6 +41,7 @@ type SplitDispatcherOperator struct {
 	splitSpanInfo  string
 
 	finished atomic.Bool
+	removed  atomic.Bool
 
 	lck sync.Mutex
 }
@@ -81,6 +82,7 @@ func (m *SplitDispatcherOperator) OnNodeRemove(n node.ID) {
 		log.Info("origin node is removed",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
 		m.finished.Store(true)
+		m.removed.Store(true)
 	}
 }
 
@@ -123,11 +125,17 @@ func (m *SplitDispatcherOperator) OnTaskRemoved() {
 
 	log.Info("task removed", zap.String("replicaSet", m.replicaSet.ID.String()))
 	m.finished.Store(true)
+	m.removed.Store(true)
 }
 
 func (m *SplitDispatcherOperator) PostFinish() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
+
+	if m.removed.Load() {
+		m.spanController.MarkSpanAbsent(m.replicaSet)
+		return
+	}
 
 	log.Info("split dispatcher operator finished", zap.String("id", m.replicaSet.ID.String()))
 	m.spanController.ReplaceReplicaSet([]*replica.SpanReplication{m.replicaSet}, m.splitSpans, m.checkpointTs)

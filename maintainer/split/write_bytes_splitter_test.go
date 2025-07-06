@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"strconv"
 	"testing"
 
@@ -58,7 +57,7 @@ func TestSplitRegionsByWrittenKeysUniform(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{100, 100, 100, 100, 100, 100, 100}) // region id: [2,3,4,5,6,7,8]
-	splitter := newWriteSplitter(cfID, nil, 0)
+	splitter := newWriteSplitter(cfID, nil)
 	info := splitter.splitRegionsByWrittenKeysV1(0, cloneRegions(regions), 1)
 	re.Len(info.RegionCounts, 1)
 	re.EqualValues(7, info.RegionCounts[0])
@@ -123,7 +122,7 @@ func TestSplitRegionsByWrittenKeysHotspot1(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{100, 1, 100, 1, 1, 1, 100})
-	splitter := newWriteSplitter(cfID, nil, 4)
+	splitter := newWriteSplitter(cfID, nil)
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, 4) // [2], [3,4], [5,6,7], [8]
 	re.Len(info.RegionCounts, 4)
 	re.EqualValues(1, info.RegionCounts[0])
@@ -154,7 +153,7 @@ func TestSplitRegionsByWrittenKeysHotspot2(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{1000, 1, 1, 1, 100, 1, 99})
-	splitter := newWriteSplitter(cfID, nil, 4)
+	splitter := newWriteSplitter(cfID, nil)
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, 4) // [2], [3,4,5,6], [7], [8]
 	re.Len(info.Spans, 4)
 	re.EqualValues(startKeys[2], info.Spans[0].StartKey)
@@ -172,7 +171,7 @@ func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteSplitter(cfID, nil, 0)
+	splitter := newWriteSplitter(cfID, nil)
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, 3) // [2,3,4], [5,6,7], [8]
 	re.Len(info.RegionCounts, 3)
@@ -196,7 +195,7 @@ func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
 	t.Parallel()
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteSplitter(cfID, nil, 1)
+	splitter := newWriteSplitter(cfID, nil)
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, 3) // [2,3,4,5,6,7,8]
 	re.Len(info.RegionCounts, 1)
@@ -206,29 +205,6 @@ func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
 	re.Len(info.Spans, 1)
 	re.EqualValues(startKeys[2], info.Spans[0].StartKey)
 	re.EqualValues(endKeys[8], info.Spans[0].EndKey)
-}
-
-func TestSplitRegionsByWrittenKeysConfig(t *testing.T) {
-	t.Parallel()
-	re := require.New(t)
-
-	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteSplitter(cfID, nil, math.MaxInt)
-	regions, startKeys, endKeys := prepareRegionsInfo([]int{1, 1, 1, 1, 1, 1, 1})
-	info := splitter.splitRegionsByWrittenKeysV1(1, regions, 3) // [2,3,4,5,6,7,8]
-	re.Len(info.RegionCounts, 1)
-	re.EqualValues(7, info.RegionCounts[0], info)
-	re.Len(info.Weights, 1)
-	re.EqualValues(14, info.Weights[0])
-	re.Len(info.Spans, 1)
-	re.EqualValues(startKeys[2], info.Spans[0].StartKey)
-	re.EqualValues(endKeys[8], info.Spans[0].EndKey)
-	re.EqualValues(1, info.Spans[0].TableID)
-
-	splitter.writeKeyThreshold = 0
-	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: startKeys[2], EndKey: endKeys[8]}
-	spans := splitter.split(context.Background(), span, 3)
-	require.Equal(t, spans, []*heartbeatpb.TableSpan{span})
 }
 
 func TestSplitRegionEven(t *testing.T) {
@@ -244,7 +220,7 @@ func TestSplitRegionEven(t *testing.T) {
 		}
 	}
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteSplitter(cfID, nil, 4)
+	splitter := newWriteSplitter(cfID, nil)
 	info := splitter.splitRegionsByWrittenKeysV1(tblID, regions, 5)
 	require.Len(t, info.RegionCounts, 5)
 	require.Len(t, info.Weights, 5)
@@ -263,7 +239,7 @@ func TestSplitRegionsSingleRegion(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	regions, startKeys, endKeys := prepareRegionsInfo([]int{100})
-	splitter := newWriteSplitter(cfID, nil, 50)
+	splitter := newWriteSplitter(cfID, nil)
 
 	info := splitter.splitRegionsByWrittenKeysV1(1, regions, 3)
 	re.Len(info.RegionCounts, 1)
@@ -282,7 +258,7 @@ func TestSplitRegionsSpansNumOne(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	regions, startKeys, endKeys := prepareRegionsInfo([]int{100, 200, 300})
-	splitter := newWriteSplitter(cfID, nil, 50)
+	splitter := newWriteSplitter(cfID, nil)
 
 	info := splitter.splitRegionsByWrittenKeysV1(1, regions, 1)
 	re.Len(info.RegionCounts, 1)
@@ -304,7 +280,7 @@ func TestSplitRegionsPDAPIFailure(t *testing.T) {
 		scanRegionsError: fmt.Errorf("PD API connection failed"),
 	}
 
-	splitter := newWriteSplitter(cfID, mockPDClient, 100)
+	splitter := newWriteSplitter(cfID, mockPDClient)
 	span := &heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{0x61}, // 'a'

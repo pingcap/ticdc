@@ -148,8 +148,11 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes && c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
+		if split.ShouldSplit(table.TableInfo, c.sink.IsMysqlSink()) {
+			tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitByRegion)
+		}
 		// split the whole table span base on region count if table region count is exceed the limit
-		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, replica.SplitByRegion)
+		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitByRegion)
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
 }

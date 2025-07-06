@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -37,6 +38,7 @@ const (
 
 // defaultSpanSplitChecker is used to check whether spans in the default group need to be split
 // based on multiple thresholds including write traffic and region count.
+// we only track the spans who is enabled to split(in mysqlSink with pk but no uk, or other sink).
 //
 // This checker monitors spans in the default group (GroupDefault) and determines if they should
 // be split into multiple subspans when:
@@ -111,7 +113,8 @@ func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
 func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 	status, ok := s.allTasks[replica.ID]
 	if !ok {
-		log.Panic("default span split checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()))
+		log.Warn("default span split checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()))
+		return
 	}
 	if status.GetStatus().ComponentStatus != heartbeatpb.ComponentState_Working {
 		return
@@ -138,7 +141,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 		status.regionCheckTime = time.Now()
 	}
 
-	if status.trafficScore >= trafficScoreThreshold || status.regionCount >= s.regionThreshold {
+	if status.trafficScore >= trafficScoreThreshold || (s.regionThreshold > 0 && status.regionCount >= s.regionThreshold) {
 		if _, ok := s.splitReadyTasks[status.ID]; !ok {
 			s.splitReadyTasks[status.ID] = status
 		}
@@ -150,22 +153,17 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 }
 
 type DefaultSpanSplitCheckResult struct {
-	SplitType SplitType
+	SplitType split.SplitType
 	Span      *SpanReplication
 }
 
 func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
 	results := make([]DefaultSpanSplitCheckResult, 0, batch)
 	for _, status := range s.splitReadyTasks {
-		// We prefer do traffic split when both traffic score and region count are high
-		if status.trafficScore >= trafficScoreThreshold {
+		// for default span to do split, we use splitByTraffic to make the split more balanced
+		if status.trafficScore >= trafficScoreThreshold || status.regionCount >= s.regionThreshold {
 			results = append(results, DefaultSpanSplitCheckResult{
-				SplitType: SplitByTraffic,
-				Span:      status.SpanReplication,
-			})
-		} else if status.regionCount > s.regionThreshold {
-			results = append(results, DefaultSpanSplitCheckResult{
-				SplitType: SplitByRegion,
+				SplitType: split.SplitByTraffic,
 				Span:      status.SpanReplication,
 			})
 		}

@@ -27,9 +27,8 @@ import (
 const regionWrittenKeyBase = 1
 
 type writeSplitter struct {
-	changefeedID      common.ChangeFeedID
-	pdAPIClient       pdutil.PDAPIClient
-	writeKeyThreshold int
+	changefeedID common.ChangeFeedID
+	pdAPIClient  pdutil.PDAPIClient
 }
 
 type splitRegionsInfo struct {
@@ -42,12 +41,10 @@ type splitRegionsInfo struct {
 func newWriteSplitter(
 	changefeedID common.ChangeFeedID,
 	pdAPIClient pdutil.PDAPIClient,
-	writeKeyThreshold int,
 ) *writeSplitter {
 	return &writeSplitter{
-		changefeedID:      changefeedID,
-		pdAPIClient:       pdAPIClient,
-		writeKeyThreshold: writeKeyThreshold,
+		changefeedID: changefeedID,
+		pdAPIClient:  pdAPIClient,
 	}
 }
 
@@ -56,14 +53,10 @@ func (m *writeSplitter) split(
 	span *heartbeatpb.TableSpan,
 	spansNum int,
 ) []*heartbeatpb.TableSpan {
-	if m.writeKeyThreshold == 0 || spansNum <= 1 {
+	if spansNum <= 1 {
 		return []*heartbeatpb.TableSpan{span}
 	}
-	regions, err := m.pdAPIClient.ScanRegions(ctx, heartbeatpb.TableSpan{
-		TableID:  span.TableID,
-		StartKey: span.StartKey,
-		EndKey:   span.EndKey,
-	})
+	regions, err := m.pdAPIClient.ScanRegions(ctx, *span)
 	if err != nil {
 		// Skip split.
 		log.Warn("scan regions failed, skip split span",
@@ -74,6 +67,8 @@ func (m *writeSplitter) split(
 		return []*heartbeatpb.TableSpan{span}
 	}
 
+	log.Info("regions", zap.Any("regions", regions))
+
 	splitInfo := m.splitRegionsByWrittenKeysV1(span.TableID, regions, spansNum)
 	log.Info("split span by written keys",
 		zap.String("namespace", m.changefeedID.Namespace()),
@@ -81,8 +76,7 @@ func (m *writeSplitter) split(
 		zap.String("span", span.String()),
 		zap.Ints("perSpanRegionCounts", splitInfo.RegionCounts),
 		zap.Uint64s("weights", splitInfo.Weights),
-		zap.Int("spans", len(splitInfo.Spans)),
-		zap.Int("writeKeyThreshold", m.writeKeyThreshold))
+		zap.Int("spans", len(splitInfo.Spans)))
 
 	return splitInfo.Spans
 }
@@ -120,26 +114,7 @@ func (m *writeSplitter) splitRegionsByWrittenKeysV1(
 		totalWriteNormalized += regions[i].WrittenKeys
 	}
 
-	// 1. If the total write is less than writeKeyThreshold
-	// don't need to split the regions
-	if totalWrite < uint64(m.writeKeyThreshold) {
-		log.Info("total write less than writeKeyThreshold, skip split", zap.Any("changefeedID", m.changefeedID.Name()), zap.Any("totalWrite", totalWrite), zap.Any("writeKeyThreshold", m.writeKeyThreshold))
-		return &splitRegionsInfo{
-			RegionCounts: []int{len(regions)},
-			Weights:      []uint64{totalWriteNormalized},
-			Spans: []*heartbeatpb.TableSpan{{
-				TableID:  tableID,
-				StartKey: decodeKey(regions[0].StartKey),
-				EndKey:   decodeKey(regions[len(regions)-1].EndKey),
-			}},
-		}
-	}
-
-	log.Info("total write", zap.Any("changefeedID", m.changefeedID.Name()), zap.Any("totalWrite", totalWrite), zap.Any("writeKeyThreshold", m.writeKeyThreshold))
-
-	// calc the spansNum by totalWriteNormalized and writeKeyThreshold?
-
-	// 2. Calculate the writeLimitPerSpan, if one span's write is larger that
+	// Calculate the writeLimitPerSpan, if one span's write is larger that
 	// this number, we should create a new span.
 	writeLimitPerSpan := totalWriteNormalized / uint64(baseSpansNum)
 

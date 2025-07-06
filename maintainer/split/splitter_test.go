@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -83,7 +82,7 @@ func TestSplitter_Split_ByRegion(t *testing.T) {
 	}
 
 	// Test splitting by region count
-	spans := splitter.Split(context.Background(), span, 2, replica.SplitByRegion)
+	spans := splitter.Split(context.Background(), span, 2, SplitByRegion)
 	re.Equal(2, len(spans))
 	re.Equal(&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, spans[0])
 	re.Equal(&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, spans[1])
@@ -124,7 +123,7 @@ func TestSplitter_Split_ByTraffic(t *testing.T) {
 	}
 
 	// Test splitting by traffic with real data
-	spans := splitter.Split(context.Background(), span, 2, replica.SplitByTraffic)
+	spans := splitter.Split(context.Background(), span, 2, SplitByTraffic)
 	re.Equal(2, len(spans))
 	re.Equal(&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("d")}, spans[0])
 	re.Equal(&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("d"), EndKey: []byte("e")}, spans[1])
@@ -165,7 +164,7 @@ func TestSplitter_Split_UnknownSplitType(t *testing.T) {
 	}
 
 	// Test unknown split type
-	spans := splitter.Split(context.Background(), span, 3, replica.SplitType(999))
+	spans := splitter.Split(context.Background(), span, 3, SplitType(999))
 	re.NotNil(spans)
 	re.Len(spans, 1)
 	re.Equal(span, spans[0])

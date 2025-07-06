@@ -190,6 +190,7 @@ func (pc *pdAPIClient) ScanRegions(ctx context.Context, span heartbeatpb.TableSp
 	return pc.scanRegions(ctx, span, endpoints, scanLimit)
 }
 
+// TODO:change to use grpc client
 func (pc *pdAPIClient) scanRegions(
 	ctx context.Context, span heartbeatpb.TableSpan, endpoints []string, scanLimit int,
 ) ([]RegionInfo, error) {
