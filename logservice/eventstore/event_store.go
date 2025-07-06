@@ -504,13 +504,13 @@ func (e *eventStore) RegisterDispatcher(
 	serverConfig := config.GetGlobalServerConfig()
 	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
 	// Note: don't hold any lock when call Subscribe
-	e.subClient.Subscribe(stat.subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
+	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	log.Info("new subscription created",
-		zap.Uint64("subID", uint64(stat.subStat.subID)),
-		zap.String("subSpan", common.FormatTableSpan(stat.subStat.tableSpan)))
+		zap.Uint64("subID", uint64(subStat.subID)),
+		zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
-		SubID:        uint64(stat.subStat.subID),
+		SubID:        uint64(subStat.subID),
 		Span:         dispatcherSpan,
 		CheckpointTs: startTs,
 		ResolvedTs:   startTs,
@@ -561,11 +561,15 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				newCheckpointTs = dispatcherStat.checkpointTs
 			}
 		}
-
+		resolvedTs := subStat.resolvedTs.Load()
+		// newCheckpointTs maybe larger than subStat's resolvedTs,
+		// because dispatcher may depend on multiple subStats.
+		if newCheckpointTs > resolvedTs {
+			newCheckpointTs = resolvedTs
+		}
 		if newCheckpointTs == 0 {
 			return
 		}
-
 		oldCheckpointTs := subStat.checkpointTs.Load()
 		if newCheckpointTs == oldCheckpointTs {
 			return
