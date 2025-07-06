@@ -95,7 +95,7 @@ function failOverCaseJ-1() {
 
 	sleep 10 # ensure dispatcher gets pass action
 
-	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
 	kill_cdc_pid $cdc_pid_2
 	# restart cdc server
 	export GO_FAILPOINTS=''
@@ -150,7 +150,7 @@ function failOverCaseJ-2() {
 
 	sleep 10 # ensure dispatcher gets pass action
 
-	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
 	kill_cdc_pid $cdc_pid_2
 	export GO_FAILPOINTS=''
 	# restart cdc server
@@ -211,7 +211,7 @@ function failOverCaseJ-3() {
 
 	sleep 10 # ensure dispatcher gets pass action
 
-	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
 	kill_cdc_pid $cdc_pid_2
 	# restart cdc server
 	export GO_FAILPOINTS=''
@@ -277,7 +277,7 @@ function failOverCaseJ-4() {
 
 	sleep 10 # ensure dispatcher gets pass action
 
-	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
