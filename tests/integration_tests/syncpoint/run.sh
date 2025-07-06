@@ -140,7 +140,7 @@ function checkDiff() {
 		deployConfig ${primaryArr[$i]} ${secondaryArr[$i]}
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	done
-	rm -f $CUR/conf/diff_config.toml
+	rm $CUR/conf/diff_config.toml
 }
 
 function run() {
