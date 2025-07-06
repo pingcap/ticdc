@@ -389,7 +389,7 @@ func TestEventStoreGetIterator(t *testing.T) {
 	}
 	// get iterator from subStat 1
 	{
-		_, err := store.GetIterator(dispatcherID2, common.DataRange{
+		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -399,6 +399,8 @@ func TestEventStoreGetIterator(t *testing.T) {
 			EndTs:   150,
 		})
 		require.Nil(t, err)
+		iterImpl := iter.(*eventStoreIter)
+		require.True(t, iterImpl.needCheckSpan)
 	}
 	// update subStat 2 resolvedTs
 	{
@@ -411,7 +413,7 @@ func TestEventStoreGetIterator(t *testing.T) {
 	}
 	// get iterator from subStat 2
 	{
-		_, err := store.GetIterator(dispatcherID2, common.DataRange{
+		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -421,6 +423,8 @@ func TestEventStoreGetIterator(t *testing.T) {
 			EndTs:   150,
 		})
 		require.Nil(t, err)
+		iterImpl := iter.(*eventStoreIter)
+		require.False(t, iterImpl.needCheckSpan)
 	}
 	// check dispatcher 2 is no longer depend on subStat 1
 	{
