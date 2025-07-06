@@ -136,6 +136,7 @@ function checkDiff() {
 				"is recorded in a DDL event(${check_in_ddl[0]}), skip the check of it"
 			continue
 		fi
+		echo "check syncpoint primary_ts: ${primaryArr[$i]}, secondary_ts: ${secondaryArr[$i]}"
 		deployConfig ${primaryArr[$i]} ${secondaryArr[$i]}
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	done
