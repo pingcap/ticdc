@@ -94,7 +94,7 @@ function kill_server() {
 	while true; do
 		case $((RANDOM % 3)) in
 		0)
-			cdc_pid_1=$(ps aux | grep cdc | grep 8300 | awk '{print $2}')
+			cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
 			if [ -z "$cdc_pid_1" ]; then
 				continue
 			fi
