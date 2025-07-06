@@ -664,13 +664,13 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 			log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 			return nil, nil
 		}
-		db = tryGetDB(stat.pendingSubStat)
-		if db != nil {
-			e.detachFromSubStat(dispatcherID, stat.subStat)
-			stat.subStat = stat.pendingSubStat
-			stat.pendingSubStat = nil
-			subStat = stat.subStat
-		}
+		// GetIterator for the same dispatcher won't be called concurrently.
+		// So if the dispatcher is not unregistered during the unlock period,
+		// we can safely update the stat.subStat to stat.pendingSubStat.
+		e.detachFromSubStat(dispatcherID, stat.subStat)
+		stat.subStat = stat.pendingSubStat
+		stat.pendingSubStat = nil
+		subStat = stat.subStat
 		e.dispatcherMeta.Unlock()
 	} else {
 		e.dispatcherMeta.RUnlock()
