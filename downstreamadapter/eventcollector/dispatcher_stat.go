@@ -123,7 +123,9 @@ type dispatcherStat struct {
 	// gotSyncpointOnTS indicates whether a sync point was received at the sentCommitTs.
 	gotSyncpointOnTS atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
-	tableInfo        atomic.Value
+	tableInfo atomic.Value
+	// tableInfoVersion is the latest table info version of the dispatcher's corresponding table.
+	// It is updated by ddl event
 	tableInfoVersion atomic.Uint64
 }
 
@@ -399,14 +401,10 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 					zap.Stringer("dispatcher", d.getDispatcherID()))
 			}
 			// The cloudstorage sink replicate different file according the table version.
-			// But the updateTS don't include 'truncate table', 'rename table', 'rename tables',
-			// 'truncate partition' and 'exchange partition' schema operations
-			// Here use tableInfoVersion to store the newest schema operation
-			//
 			// If one table is just scheduled to a new processor, the tableInfoVersion should be
 			// greater than or equal to the startTs of dispatcher.
 			// FIXME: more elegant implementation
-			tableInfoVersion := max(d.tableInfoVersion.Load(), tableInfo.UpdateTS(), d.target.GetStartTs())
+			tableInfoVersion := max(d.tableInfoVersion.Load(), d.target.GetStartTs())
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
