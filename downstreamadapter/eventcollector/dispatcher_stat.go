@@ -402,8 +402,11 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			// But the updateTS don't include 'truncate table', 'rename table', 'rename tables',
 			// 'truncate partition' and 'exchange partition' schema operations
 			// Here use tableInfoVersion to store the newest schema operation
+			//
+			// If one table is just scheduled to a new processor, the tableInfoVersion should be
+			// greater than or equal to the startTs of dispatcher.
 			// FIXME: more elegant implementation
-			tableInfoVersion := max(d.tableInfoVersion.Load(), tableInfo.UpdateTS())
+			tableInfoVersion := max(d.tableInfoVersion.Load(), tableInfo.UpdateTS(), d.target.GetStartTs())
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
