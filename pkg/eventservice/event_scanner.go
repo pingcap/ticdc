@@ -343,8 +343,8 @@ type session struct {
 
 	// State tracking
 	startTime         time.Time
-	scannedBytes      int64
 	lastCommitTs      uint64
+	scannedBytes      int64
 	scannedEntryCount int
 	// dmlCount is the count of transactions.
 	dmlCount int
@@ -388,8 +388,7 @@ func (s *session) isContextDone() bool {
 // recordMetrics records the scan duration metrics
 func (s *session) recordMetrics() {
 	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
-	metrics.EventServiceScannedBytes.Observe(float64(s.scannedBytes))
-	metrics.EventServiceScannedCount.Observe(float64(s.dmlCount))
+	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
 }
 
 // limitChecker manages scan limits and interruption logic
