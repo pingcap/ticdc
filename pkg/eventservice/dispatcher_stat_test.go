@@ -127,9 +127,7 @@ func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	// Case 3: new events, and watermark decrease
 	// watermark should not decrease
 	stat.onLatestCommitTs(500)
-	require.Panics(t, func() {
-		stat.onResolvedTs(300)
-	})
+	stat.onResolvedTs(300)
 	require.Equal(t, uint64(500), stat.latestCommitTs.Load())
 	require.Equal(t, uint64(400), stat.eventStoreResolvedTs.Load())
 }
