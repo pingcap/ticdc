@@ -16,6 +16,7 @@ package split
 import (
 	"bytes"
 	"context"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -50,6 +51,7 @@ func newRegionCountSplitter(
 func (m *regionCountSplitter) split(
 	ctx context.Context, span *heartbeatpb.TableSpan,
 ) []*heartbeatpb.TableSpan {
+	startTimestamp := time.Now()
 	bo := tikv.NewBackoffer(ctx, 500)
 	regions, err := m.regionCache.ListRegionIDsInKeyRange(bo, span.StartKey, span.EndKey)
 	if err != nil {
@@ -131,7 +133,8 @@ func (m *regionCountSplitter) split(
 		zap.Int("regionCount", len(regions)),
 		zap.Int("regionThreshold", m.regionThreshold),
 		zap.Int("regionCountPerSpan", m.regionCountPerSpan),
-		zap.Int("spanRegionLimit", spanRegionLimit))
+		zap.Int("spanRegionLimit", spanRegionLimit),
+		zap.Duration("splitTime", time.Since(startTimestamp)))
 	return spans
 }
 
