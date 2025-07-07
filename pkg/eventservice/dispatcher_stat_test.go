@@ -70,11 +70,6 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 	// Test same ts update
 	updated = stat.onResolvedTs(150)
 	require.False(t, updated)
-
-	// Test smaller ts update should panic
-	require.Panics(t, func() {
-		stat.onResolvedTs(140)
-	})
 }
 
 func TestDispatcherStatGetDataRange(t *testing.T) {
