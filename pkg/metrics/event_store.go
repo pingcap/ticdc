@@ -139,6 +139,14 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(32, 2, 20),
 		})
 
+	EventStoreWriteBytes = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "write_bytes",
+			Help:      "The number of bytes written by event store.",
+		})
+
 	EventStoreWriteRequestsCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -168,6 +176,7 @@ func InitEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreOnDiskDataSizeGauge)
 	registry.MustRegister(EventStoreInMemoryDataSizeGauge)
 	registry.MustRegister(EventStoreResolvedTsLagGauge)
+	registry.MustRegister(EventStoreWriteBytes)
 	registry.MustRegister(EventStoreDispatcherWatermarkLagHist)
 	registry.MustRegister(EventStoreCompressRatio)
 	registry.MustRegister(EventStoreWriteBatchEventsCountHist)
