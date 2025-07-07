@@ -239,6 +239,7 @@ func (m *mockCache) LoadRegionsInKeyRange(
 			EndKey:   loc.EndKey,
 		}
 
+		// meta.id is not exported, so we use unsafe to access it more easier for test.
 		regionPtr := (*struct {
 			meta *metapb.Region
 		})(unsafe.Pointer(region))
