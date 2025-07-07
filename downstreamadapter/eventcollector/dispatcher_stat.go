@@ -462,10 +462,9 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			return false
 		}
 		ddl := events[0].Event.(*event.DDLEvent)
-		tableInfo := ddl.TableInfo
-		if tableInfo != nil {
-			d.tableInfo.Store(tableInfo)
-			d.tableInfoVersion.Store(ddl.FinishedTs)
+		d.tableInfoVersion.Store(ddl.FinishedTs)
+		if ddl.TableInfo != nil {
+			d.tableInfo.Store(ddl.TableInfo)
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })
 	} else {
