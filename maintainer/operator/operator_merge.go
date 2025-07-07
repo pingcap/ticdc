@@ -46,6 +46,7 @@ type MergeDispatcherOperator struct {
 	checkpointTs        uint64
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+	repeat          bool
 }
 
 func NewMergeDispatcherOperator(
@@ -109,7 +110,8 @@ func NewMergeDispatcherOperator(
 		newDispatcherID,
 		toMergedReplicaSets[0].GetSchemaID(),
 		mergeTableSpan,
-		1) // use a fake checkpointTs here.
+		1, // use a fake checkpointTs here.
+		toMergedReplicaSets[0].GetRedo())
 
 	spanController.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 
@@ -174,13 +176,15 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.removed.Load() {
 		return nil
 	}
-	return messaging.NewSingleTargetMessage(m.node,
+	msg := messaging.NewSingleTargetMessage(m.node,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.MergeDispatcherRequest{
-			ChangefeedID:       m.toMergedReplicaSets[0].ChangefeedID.ToPB(),
+			ChangefeedID:       m.newReplicaSet.ChangefeedID.ToPB(),
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
+			Redo:               m.newReplicaSet.GetRedo(),
 		})
+	return msg
 }
 
 // OnTaskRemoved is called when the task is removed by ddl
@@ -216,4 +220,12 @@ func (m *MergeDispatcherOperator) String() string {
 
 func (m *MergeDispatcherOperator) Type() string {
 	return "merge"
+}
+
+func (m *MergeDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *MergeDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

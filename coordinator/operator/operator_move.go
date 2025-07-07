@@ -184,3 +184,10 @@ func (m *MoveMaintainerOperator) String() string {
 func (m *MoveMaintainerOperator) Type() string {
 	return "move"
 }
+
+func (m *MoveMaintainerOperator) IsRepeat() bool {
+	return false
+}
+
+func (m *MoveMaintainerOperator) SetRepeat(repeat bool) {
+}

@@ -41,7 +41,8 @@ type SplitDispatcherOperator struct {
 
 	finished atomic.Bool
 
-	lck sync.Mutex
+	lck    sync.Mutex
+	repeat bool
 }
 
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator
@@ -134,10 +135,18 @@ func (m *SplitDispatcherOperator) PostFinish() {
 }
 
 func (m *SplitDispatcherOperator) String() string {
-	return fmt.Sprintf("split dispatcher operator: %s, splitSpans:%s",
+	return fmt.Sprintf("split dispatcher operator: %s, splitSpans: %s",
 		m.replicaSet.ID, m.splitSpanInfo)
 }
 
 func (m *SplitDispatcherOperator) Type() string {
 	return "split"
+}
+
+func (m *SplitDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *SplitDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }
