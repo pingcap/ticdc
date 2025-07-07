@@ -41,6 +41,7 @@ type mockDispatcher struct {
 	changefeedID common.ChangeFeedID
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
 	events       []dispatcher.DispatcherEvent
+	checkPointTs uint64
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -48,6 +49,7 @@ func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
 		id:           id,
 		startTs:      startTs,
 		changefeedID: mockChangefeedID,
+		checkPointTs: startTs,
 	}
 }
 
@@ -93,11 +95,16 @@ func (m *mockDispatcher) GetResolvedTs() uint64 {
 	return m.startTs
 }
 
+func (m *mockDispatcher) GetCheckpointTs() uint64 {
+	return m.checkPointTs
+}
+
 func (m *mockDispatcher) HandleEvents(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	if m.handleEvents == nil {
 		return false
 	}
 	m.events = append(m.events, events...)
+	m.checkPointTs = m.events[len(m.events)-1].GetCommitTs()
 	return m.handleEvents(m.events, wakeCallback)
 }
 
