@@ -51,7 +51,7 @@ func (m *regionCountSplitter) split(
 	ctx context.Context, span *heartbeatpb.TableSpan,
 ) []*heartbeatpb.TableSpan {
 	bo := tikv.NewBackoffer(ctx, 500)
-	regions, err := m.regionCache.ListRegionIDsInKeyRange(bo, span.StartKey, span.EndKey)
+	regions, err := m.regionCache.LoadRegionsInKeyRange(bo, span.StartKey, span.EndKey)
 	if err != nil {
 		log.Warn("list regions failed, skip split span",
 			zap.String("changefeed", m.changefeedID.Name()),
@@ -74,38 +74,23 @@ func (m *regionCountSplitter) split(
 	spans := make([]*heartbeatpb.TableSpan, 0, stepper.SpanCount())
 	start, end := 0, stepper.Step()
 	for {
-		startRegion, err := m.regionCache.LocateRegionByID(bo, regions[start])
-		if err != nil {
-			log.Warn("schedulerv3: get regions failed, skip split span",
-				zap.String("namespace", m.changefeedID.Namespace()),
-				zap.String("changefeed", m.changefeedID.Name()),
-				zap.String("span", span.String()),
-				zap.Error(err))
-			return []*heartbeatpb.TableSpan{span}
-		}
-		endRegion, err := m.regionCache.LocateRegionByID(bo, regions[end-1])
-		if err != nil {
-			log.Warn("schedulerv3: get regions failed, skip split span",
-				zap.String("namespace", m.changefeedID.Namespace()),
-				zap.String("changefeed", m.changefeedID.Name()),
-				zap.String("span", span.String()),
-				zap.Error(err))
-			return []*heartbeatpb.TableSpan{span}
-		}
+		startKey := regions[start].StartKey()
+		endKey := regions[end-1].EndKey()
 		if len(spans) > 0 &&
-			bytes.Compare(spans[len(spans)-1].EndKey, startRegion.StartKey) > 0 {
+			bytes.Compare(spans[len(spans)-1].EndKey, startKey) > 0 {
 			log.Warn("schedulerv3: list region out of order detected",
 				zap.String("namespace", m.changefeedID.Namespace()),
 				zap.String("changefeed", m.changefeedID.Name()),
 				zap.String("span", span.String()),
 				zap.Stringer("lastSpan", spans[len(spans)-1]),
-				zap.Stringer("region", startRegion))
+				zap.Any("startKey", startKey),
+				zap.Any("endKey", endKey))
 			return []*heartbeatpb.TableSpan{span}
 		}
 		spans = append(spans, &heartbeatpb.TableSpan{
 			TableID:  span.TableID,
-			StartKey: startRegion.StartKey,
-			EndKey:   endRegion.EndKey,
+			StartKey: startKey,
+			EndKey:   endKey,
 		},
 		)
 
