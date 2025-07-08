@@ -189,6 +189,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 		// Set sequence number for the event
 		dml.Seq = d.seq.Add(1)
 		dml.Epoch = d.epoch.Load()
+		log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(dml.GetType())), zap.Uint64("commitTs", dml.GetCommitTs()), zap.Uint64("seq", dml.GetSeq()))
 	}
 	doSendDML(batchEvent)
 }
@@ -419,6 +420,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		task.seq.Add(1),
 		task.epoch.Load(),
 		task.startTableInfo.Load())
+	log.Debug("send handshake event to dispatcher", zap.Stringer("dispatcher", task.id), zap.String("eventType", pevent.TypeToString(event.GetType())), zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
@@ -439,7 +441,6 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		commitTsList = append(commitTsList, d.nextSyncPoint)
 		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
 	}
-
 	for len(commitTsList) > 0 {
 		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
 		newCommitTsList := commitTsList
@@ -452,6 +453,8 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			Seq:          d.seq.Add(1),
 			Epoch:        d.epoch.Load(),
 		}
+		log.Debug("send syncpoint event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(e.GetType())), zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
+
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
 		c.getMessageCh(d.messageWorkerIndex) <- syncPointEvent
 
@@ -557,7 +560,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 			return context.Cause(ctx)
 		case m := <-messageCh:
 			batchM = append(batchM, m)
-
 		LOOP:
 			for {
 				select {
@@ -570,7 +572,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 					break LOOP
 				}
 			}
-
 			for _, m = range batchM {
 				if m.msgType == pevent.TypeResolvedEvent {
 					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)

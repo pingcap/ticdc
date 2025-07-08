@@ -57,8 +57,8 @@ func (e *SyncPointEvent) GetStartTs() common.Ts {
 	return e.CommitTsList[0]
 }
 
-func (e *SyncPointEvent) GetSize() int64 {
-	return int64(e.State.GetSize() + e.DispatcherID.GetSize() + 8*len(e.CommitTsList))
+func (e *SyncPointEvent) GetSize() uint64 {
+	return e.State.GetSize() + e.DispatcherID.GetSize() + 8*uint64(len(e.CommitTsList))
 }
 
 func (e *SyncPointEvent) IsPaused() bool {

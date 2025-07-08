@@ -93,7 +93,7 @@ type DDLEvent struct {
 	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
-	eventSize int64 `json:"-"`
+	eventSize uint64 `json:"-"`
 
 	// for simple protocol
 	IsBootstrap bool `msg:"-"`
@@ -301,7 +301,7 @@ func (t DDLEvent) Marshal() ([]byte, error) {
 
 func (t *DDLEvent) Unmarshal(data []byte) error {
 	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
-	t.eventSize = int64(len(data))
+	t.eventSize = uint64(len(data))
 	end := len(data)
 	multipletableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	for i := 0; i < int(multipletableInfosDataSize); i++ {
@@ -346,7 +346,7 @@ func (t *DDLEvent) Unmarshal(data []byte) error {
 	return nil
 }
 
-func (t *DDLEvent) GetSize() int64 {
+func (t *DDLEvent) GetSize() uint64 {
 	return t.eventSize
 }
 
