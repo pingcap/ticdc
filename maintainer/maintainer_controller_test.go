@@ -276,6 +276,105 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 	require.Greater(t, 100, s.spanController.GetTaskSizeByNodeID("node2"))
 }
 
+// this test is to test the scenario that the split balance scheduler when a node is removed.
+func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
+	nodeManager.GetAliveNodes()["node3"] = &node.Info{ID: "node3"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test")
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1")
+	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
+		Scheduler: &config.ChangefeedSchedulerConfig{
+			EnableTableAcrossNodes: true,
+			WriteKeyThreshold:      500,
+		},
+	}, ddlSpan, 1000, 0)
+
+	nodeIDList := []node.ID{"node1", "node2", "node3"}
+	for i := 0; i < 100; i++ {
+		// generate 100 groups
+		totalSpan := common.TableIDToComparableSpan(int64(i))
+		for j := 0; j < 6; j++ {
+			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
+			dispatcherID := common.NewDispatcherID()
+			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+			spanReplica.SetNodeID(nodeIDList[j%3])
+			s.spanController.AddReplicatingSpan(spanReplica)
+
+			status := &heartbeatpb.TableSpanStatus{
+				ID:                 spanReplica.ID.ToPB(),
+				ComponentStatus:    heartbeatpb.ComponentState_Working,
+				EventSizePerSecond: 300,
+				CheckpointTs:       2,
+			}
+			s.spanController.UpdateStatus(spanReplica, status)
+
+		}
+
+	}
+	require.Equal(t, 0, s.operatorController.OperatorSize())
+	require.Equal(t, 600, s.spanController.GetReplicatingSize())
+	require.Equal(t, 200, s.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 200, s.spanController.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 200, s.spanController.GetTaskSizeByNodeID("node3"))
+
+	// remove the node3
+	delete(nodeManager.GetAliveNodes(), "node3")
+	s.operatorController.OnNodeRemoved("node3")
+
+	require.Equal(t, 200, s.spanController.GetAbsentSize())
+	require.Equal(t, 0, s.spanController.GetSchedulingSize())
+
+	s.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+	require.Equal(t, 200, s.operatorController.OperatorSize())
+
+	for _, span := range s.spanController.GetAbsent() {
+		if op := s.operatorController.GetOperator(span.ID); op != nil {
+			op.Start()
+		}
+	}
+
+	require.Equal(t, 200, s.spanController.GetSchedulingSize())
+
+	for _, span := range s.spanController.GetScheduling() {
+		if op := s.operatorController.GetOperator(span.ID); op != nil {
+			op.PostFinish()
+			s.operatorController.RemoveOp(op.ID())
+		}
+	}
+	require.Equal(t, 600, s.spanController.GetReplicatingSize())
+
+	// balance the spans
+	s.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	require.LessOrEqual(t, 0, s.operatorController.OperatorSize())
+	require.GreaterOrEqual(t, 200, s.operatorController.OperatorSize())
+
+	for _, op := range s.operatorController.GetAllOperators() {
+		require.Equal(t, op.Type(), "move")
+		op.Start()
+		op.Schedule()
+		op.PostFinish()
+	}
+
+	require.Equal(t, 600, s.spanController.GetReplicatingSize())
+	require.Equal(t, 0, s.spanController.GetSchedulingSize())
+	require.Equal(t, 0, s.spanController.GetAbsentSize())
+
+	// balance after the schedule
+	require.Equal(t, 300, s.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 300, s.spanController.GetTaskSizeByNodeID("node2"))
+}
+
 func TestBalance(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)

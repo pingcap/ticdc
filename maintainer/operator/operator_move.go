@@ -166,6 +166,7 @@ func (m *MoveDispatcherOperator) OnTaskRemoved() {
 	log.Info("replicaset is removed, mark move dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
+	m.spanController.MarkSpanReplicating(m.replicaSet)
 	m.noPostFinishNeed = true
 }
 

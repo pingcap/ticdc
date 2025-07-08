@@ -516,9 +516,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 ) []SplitSpanCheckResult {
 	log.Info("SplitSpanChecker try to choose split spans",
 		zap.Any("changefeedID", s.changefeedID),
-		zap.Any("groupID", s.groupID),
-		zap.Any("lastThreeTrafficPerNode", lastThreeTrafficPerNode),
-		zap.Any("lastThreeTrafficSum", lastThreeTrafficSum))
+		zap.Any("groupID", s.groupID))
 	results := make([]SplitSpanCheckResult, 0)
 	for _, status := range s.allTasks {
 		if s.writeThreshold > 0 {

@@ -413,3 +413,21 @@ func (oc *Controller) GetLock() *sync.RWMutex {
 func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
 	mutex.Unlock()
 }
+
+// =========== following func only for test ===========
+func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(oc.operators))
+	for _, op := range oc.operators {
+		operators = append(operators, op.OP)
+	}
+	return operators
+}
+
+func (oc *Controller) RemoveOp(id common.DispatcherID) {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	delete(oc.operators, id)
+}
