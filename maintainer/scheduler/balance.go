@@ -121,7 +121,7 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 		// so we just split the span to 2 * cdc-nodes
 		// TODO: consider to make 2 a config
 		spansNum := len(s.nodeManager.GetAliveNodes()) * 2
-		splitSpans := s.splitter.Split(context.Background(), result.Span.Span, spansNum, result.SplitType)
+		splitSpans := s.splitter.Split(context.Background(), result.Span.Span, spansNum)
 		if len(splitSpans) > 1 {
 			op := operator.NewSplitDispatcherOperator(s.spanController, result.Span, splitSpans)
 			ret := s.operatorController.AddOperator(op)

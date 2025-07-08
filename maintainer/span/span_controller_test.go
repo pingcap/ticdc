@@ -460,6 +460,7 @@ func TestRemoveAllTables(t *testing.T) {
 }
 
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
+	testutil.SetUpTestServices()
 	cfID := common.NewChangeFeedIDWithName("test")
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -469,6 +470,5 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
 	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true})
 }

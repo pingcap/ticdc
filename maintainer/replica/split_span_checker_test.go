@@ -15,12 +15,13 @@ package replica
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/split"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -32,25 +33,6 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
-
-// mockPDClock implements pdutil.Clock interface for testing
-type mockPDClock struct {
-	currentTime time.Time
-}
-
-func (m *mockPDClock) CurrentTime() time.Time {
-	return m.currentTime
-}
-
-func (m *mockPDClock) CurrentTS() uint64 {
-	return oracle.ComposeTS(int64(m.currentTime.UnixNano()), 0)
-}
-
-func (m *mockPDClock) Run(ctx context.Context) {
-}
-
-func (m *mockPDClock) Close() {
-}
 
 type mockPDAPIClient struct {
 	scanRegionsError error
@@ -81,33 +63,6 @@ func (m *mockPDAPIClient) CollectMemberEndpoints(ctx context.Context) ([]string,
 
 func (m *mockPDAPIClient) Healthy(ctx context.Context, endpoint string) error {
 	return nil
-}
-
-// testSetup contains common test setup components
-type testSetup struct {
-	cfID        common.ChangeFeedID
-	mockCache   *mockRegionCache
-	nodeManager *watcher.NodeManager
-	mockClock   *mockPDClock
-}
-
-// setupTestHelper creates a common test setup with default configuration
-func setupTestHelper() *testSetup {
-	cfID := common.NewChangeFeedIDWithName("test")
-	mockCache := &mockRegionCache{}
-	nodeManager := watcher.NewNodeManager(nil, nil)
-	mockClock := &mockPDClock{currentTime: time.Unix(0, 0)}
-
-	appcontext.SetService(appcontext.RegionCache, mockCache)
-	appcontext.SetService(watcher.NodeManagerName, nodeManager)
-	appcontext.SetService(appcontext.DefaultPDClock, mockClock)
-
-	return &testSetup{
-		cfID:        cfID,
-		mockCache:   mockCache,
-		nodeManager: nodeManager,
-		mockClock:   mockClock,
-	}
 }
 
 // count should be in [1, 10000]
@@ -180,8 +135,8 @@ func TestSplitTableSpanIntoMultiple_Properties(t *testing.T) {
 }
 
 func TestSplitSpanChecker_AddReplica(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
@@ -212,8 +167,8 @@ func TestSplitSpanChecker_AddReplica(t *testing.T) {
 }
 
 func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
@@ -253,8 +208,8 @@ func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 }
 
 func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
@@ -326,25 +281,13 @@ func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 }
 
 func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   5,
 	}
-
-	// Mock regions
-	mockRegions := []*tikv.Region{
-		mockRegionWithID(1),
-		mockRegionWithID(2),
-		mockRegionWithID(3),
-		mockRegionWithID(4),
-		mockRegionWithID(5),
-		mockRegionWithID(6), // Above threshold
-	}
-
-	setup.mockCache.regions = mockRegions
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
 	groupID := replicas[0].GetGroupID()
@@ -352,6 +295,18 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 
 	replica := replicas[0]
 	checker.AddReplica(replica)
+
+	// Mock regions
+	mockRegions := []*tikv.Region{
+		testutil.MockRegionWithID(1),
+		testutil.MockRegionWithID(2),
+		testutil.MockRegionWithID(3),
+		testutil.MockRegionWithID(4),
+		testutil.MockRegionWithID(5),
+		testutil.MockRegionWithID(6), // Above threshold
+	}
+	mockCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
+	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
 
 	// Set region check time to force update
 	spanStatus := checker.allTasks[replica.ID]
@@ -376,12 +331,13 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	require.Equal(t, 6, spanStatus.regionCount) // Should not change due to time interval
 
 	// Test region count below threshold
-	mockRegionsBelow := []*tikv.Region{
-		mockRegionWithID(1),
-		mockRegionWithID(2),
-		mockRegionWithID(3),
+	mockRegions = []*tikv.Region{
+		testutil.MockRegionWithID(1),
+		testutil.MockRegionWithID(2),
+		testutil.MockRegionWithID(3),
 	}
-	setup.mockCache.regions = mockRegionsBelow
+	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
+
 	spanStatus.regionCheckTime = time.Now().Add(-time.Second * 20)
 
 	checker.UpdateStatus(replica)
@@ -390,8 +346,8 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 }
 
 func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
@@ -428,16 +384,17 @@ func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
@@ -475,21 +432,21 @@ func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
 func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   5,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
@@ -523,20 +480,20 @@ func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
 func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 2000,
 		RegionThreshold:   20,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
@@ -569,17 +526,18 @@ func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 2000,
 		RegionThreshold:   20,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
-	setup.nodeManager.GetAliveNodes()["node3"] = node.NewInfo("node3", "127.0.0.1:8302")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager.GetAliveNodes()["node3"] = node.NewInfo("node3", "127.0.0.1:8302")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
@@ -612,15 +570,16 @@ func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
@@ -651,16 +610,17 @@ func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
@@ -709,16 +669,17 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
@@ -752,16 +713,17 @@ func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
@@ -795,20 +757,20 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan) // Split the span from max traffic node
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
@@ -841,16 +803,17 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   0,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
@@ -910,16 +873,16 @@ func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   20,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.mockClock.currentTime = time.Now()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
@@ -945,15 +908,16 @@ func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   20,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
@@ -973,6 +937,18 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 		spanStatus.lastThreeTraffic = []float64{200, 200, 200} // Below 3/4 threshold (750)
 	}
 
+	// Set low lag scenario
+	currentTime := time.Now()
+	for _, replica := range replicas {
+		status := &heartbeatpb.TableSpanStatus{
+			ID:                 replica.ID.ToPB(),
+			ComponentStatus:    heartbeatpb.ComponentState_Working,
+			EventSizePerSecond: 200,
+			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixNano()), 0),
+		}
+		replica.UpdateStatus(status)
+	}
+
 	// Test local merge decision
 	results := checker.Check(10)
 	require.Len(t, results, 1)
@@ -986,16 +962,17 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   20,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 5)
 	groupID := replicas[0].GetGroupID()
@@ -1029,7 +1006,6 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 
 	// Set low lag scenario
 	currentTime := time.Now()
-	setup.mockClock.currentTime = currentTime
 	for _, replica := range replicas {
 		status := &heartbeatpb.TableSpanStatus{
 			ID:                 replica.ID.ToPB(),
@@ -1053,16 +1029,17 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   20,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 6)
 	groupID := replicas[0].GetGroupID()
@@ -1089,7 +1066,6 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 
 	// Set low lag scenario
 	currentTime := time.Now()
-	setup.mockClock.currentTime = currentTime
 	for _, replica := range replicas {
 		status := &heartbeatpb.TableSpanStatus{
 			ID:                 replica.ID.ToPB(),
@@ -1111,16 +1087,17 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 }
 
 func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
@@ -1163,7 +1140,6 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 
 	// Set low lag scenario
 	currentTime := time.Now()
-	setup.mockClock.currentTime = currentTime
 	for _, replica := range replicas {
 		status := &heartbeatpb.TableSpanStatus{
 			ID:                 replica.ID.ToPB(),
@@ -1180,21 +1156,21 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
 func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 0, // No write threshold
 		RegionThreshold:   10,
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
@@ -1237,7 +1213,6 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 
 	// Set low lag scenario
 	currentTime := time.Now()
-	setup.mockClock.currentTime = currentTime
 	for _, replica := range replicas {
 		status := &heartbeatpb.TableSpanStatus{
 			ID:                 replica.ID.ToPB(),
@@ -1254,21 +1229,21 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[2], splitResult.SplitSpan)
 }
 
 func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   0, // No region threshold
 	}
 
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
@@ -1311,7 +1286,6 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 
 	// Set low lag scenario
 	currentTime := time.Now()
-	setup.mockClock.currentTime = currentTime
 	for _, replica := range replicas {
 		status := &heartbeatpb.TableSpanStatus{
 			ID:                 replica.ID.ToPB(),
@@ -1328,13 +1302,13 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 
 	splitResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, OpSplit, splitResult.OpType)
-	require.Equal(t, split.SplitByTraffic, splitResult.SplitType)
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
 func TestSplitSpanChecker_Check_PerformanceWithManySpans(t *testing.T) {
-	setup := setupTestHelper()
-	cfID := setup.cfID
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test")
+
 	spanCount := 10000
 	regionCount := 3
 	traffic := 100.0
@@ -1345,8 +1319,9 @@ func TestSplitSpanChecker_Check_PerformanceWithManySpans(t *testing.T) {
 	}
 
 	nodeIDs := []node.ID{"node1", "node2"}
-	setup.nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
-	setup.nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, spanCount)
 	groupID := replicas[0].GetGroupID()

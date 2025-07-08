@@ -15,13 +15,12 @@ package replica
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
-	"unsafe"
 
-	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/split"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -29,46 +28,19 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 )
 
-// mockRegionCache implements RegionCache interface for testing
-type mockRegionCache struct {
-	regions []*tikv.Region
-	err     error
-}
-
-func (m *mockRegionCache) LoadRegionsInKeyRange(
-	bo *tikv.Backoffer, startKey, endKey []byte,
-) (regions []*tikv.Region, err error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.regions, nil
-}
-
-func mockRegionWithID(id uint64) *tikv.Region {
-	region := &tikv.Region{}
-	meta := &metapb.Region{Id: id}
-	regionPtr := (*struct {
-		meta *metapb.Region
-	})(unsafe.Pointer(region))
-	regionPtr.meta = meta
-	return region
-}
-
 func createTestSpanReplication(cfID common.ChangeFeedID, tableID int64) *SpanReplication {
 	totalSpan := common.TableIDToComparableSpan(tableID)
 	return NewSpanReplication(cfID, common.NewDispatcherID(), 0, &totalSpan, 1)
 }
 
 func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {
-	t.Parallel()
-
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
 
-	mockCache := &mockRegionCache{}
+	mockCache := testutil.NewMockRegionCache()
 	appcontext.SetService(appcontext.RegionCache, mockCache)
 
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
@@ -93,16 +65,13 @@ func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
-	t.Parallel()
+	testutil.SetUpTestServices()
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
-
-	mockCache := &mockRegionCache{}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
 
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 
@@ -119,16 +88,13 @@ func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
-	t.Parallel()
-
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   10,
 	}
 
-	mockCache := &mockRegionCache{}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
+	testutil.SetUpTestServices()
 
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 
@@ -177,7 +143,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
-	t.Parallel()
+	testutil.SetUpTestServices()
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -185,22 +151,21 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 		RegionThreshold:   5,
 	}
 
-	// Mock regions
-	mockRegions := []*tikv.Region{
-		mockRegionWithID(1),
-		mockRegionWithID(2),
-		mockRegionWithID(3),
-		mockRegionWithID(4),
-		mockRegionWithID(5),
-		mockRegionWithID(6), // Above threshold
-	}
-
-	mockCache := &mockRegionCache{regions: mockRegions}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
-
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 
 	replica := createTestSpanReplication(cfID, 1)
+
+	// Mock regions
+	mockRegions := []*tikv.Region{
+		testutil.MockRegionWithID(1),
+		testutil.MockRegionWithID(2),
+		testutil.MockRegionWithID(3),
+		testutil.MockRegionWithID(4),
+		testutil.MockRegionWithID(5),
+		testutil.MockRegionWithID(6), // Above threshold
+	}
+	mockCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
+	mockCache.SetRegions(fmt.Sprintf("%s-%s", replica.Span.StartKey, replica.Span.EndKey), mockRegions)
 
 	checker.AddReplica(replica)
 
@@ -228,7 +193,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
-	t.Parallel()
+	testutil.SetUpTestServices()
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -237,8 +202,8 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 	}
 
 	// Mock region cache with error
-	mockCache := &mockRegionCache{err: context.DeadlineExceeded}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
+	mockCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
+	mockCache.SetError(context.DeadlineExceeded)
 
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 
@@ -261,16 +226,13 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
-	t.Parallel()
+	testutil.SetUpTestServices()
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   5,
 	}
-
-	mockCache := &mockRegionCache{}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
 
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 
@@ -292,17 +254,14 @@ func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
 	require.Equal(t, 0, spanStatus.trafficScore) // Should not update due to non-working status
 }
 
-func TestDefaultSpanSplitChecker_Check_RegionSplit(t *testing.T) {
-	t.Parallel()
+func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
+	testutil.SetUpTestServices()
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   5,
 	}
-
-	mockCache := &mockRegionCache{}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
 
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 
@@ -327,21 +286,17 @@ func TestDefaultSpanSplitChecker_Check_RegionSplit(t *testing.T) {
 	// Test check results - should return region split
 	results := checker.Check(10)
 	require.Len(t, results, 1)
-	require.Equal(t, split.SplitByTraffic, results.([]DefaultSpanSplitCheckResult)[0].SplitType)
 	require.Equal(t, replica, results.([]DefaultSpanSplitCheckResult)[0].Span)
 }
 
 func TestDefaultSpanSplitChecker_Check_BatchLimit(t *testing.T) {
-	t.Parallel()
+	testutil.SetUpTestServices()
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   5,
 	}
-
-	mockCache := &mockRegionCache{}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
 
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 
@@ -370,16 +325,13 @@ func TestDefaultSpanSplitChecker_Check_BatchLimit(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_Check_EmptyResults(t *testing.T) {
-	t.Parallel()
+	testutil.SetUpTestServices()
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   5,
 	}
-
-	mockCache := &mockRegionCache{}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
 
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 
@@ -406,16 +358,13 @@ func TestDefaultSpanSplitChecker_Check_EmptyResults(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_Stat(t *testing.T) {
-	t.Parallel()
+	testutil.SetUpTestServices()
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
 		RegionThreshold:   5,
 	}
-
-	mockCache := &mockRegionCache{}
-	appcontext.SetService(appcontext.RegionCache, mockCache)
 
 	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
 
@@ -452,91 +401,4 @@ func TestDefaultSpanSplitChecker_Stat(t *testing.T) {
 	require.Contains(t, stat, "regionCount: 8")
 	require.Contains(t, stat, "regionCount: 6")
 	require.Contains(t, stat, "];")
-}
-
-func TestDefaultSpanSplitChecker_Integration_ConfigurationChanges(t *testing.T) {
-	t.Parallel()
-
-	cfID := common.NewChangeFeedIDWithName("test")
-
-	// Test with different configurations
-	testCases := []struct {
-		name            string
-		writeThreshold  int
-		regionThreshold int
-		eventSize       float32
-		regionCount     int
-		expectedSplit   bool
-		expectedType    split.SplitType
-	}{
-		{
-			name:            "high traffic split",
-			writeThreshold:  1000,
-			regionThreshold: 10,
-			eventSize:       1500,
-			regionCount:     3,
-			expectedSplit:   true,
-			expectedType:    split.SplitByTraffic,
-		},
-		{
-			name:            "high region count split",
-			writeThreshold:  1000,
-			regionThreshold: 5,
-			eventSize:       500,
-			regionCount:     8,
-			expectedSplit:   true,
-			expectedType:    split.SplitByTraffic,
-		},
-		{
-			name:            "no split needed",
-			writeThreshold:  1000,
-			regionThreshold: 10,
-			eventSize:       500,
-			regionCount:     3,
-			expectedSplit:   false,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			schedulerCfg := &config.ChangefeedSchedulerConfig{
-				WriteKeyThreshold: tc.writeThreshold,
-				RegionThreshold:   tc.regionThreshold,
-			}
-
-			mockCache := &mockRegionCache{}
-			appcontext.SetService(appcontext.RegionCache, mockCache)
-
-			checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
-
-			replica := createTestSpanReplication(cfID, 1)
-
-			checker.AddReplica(replica)
-
-			status := &heartbeatpb.TableSpanStatus{
-				ID:                 replica.ID.ToPB(),
-				ComponentStatus:    heartbeatpb.ComponentState_Working,
-				EventSizePerSecond: tc.eventSize,
-				CheckpointTs:       1,
-			}
-			replica.UpdateStatus(status)
-
-			// Set region count
-			spanStatus := checker.allTasks[replica.ID]
-			spanStatus.regionCount = tc.regionCount
-
-			// Update status multiple times for traffic check
-			for i := 0; i < 5; i++ {
-				checker.UpdateStatus(replica)
-			}
-
-			results := checker.Check(10)
-			if tc.expectedSplit {
-				require.Len(t, results, 1)
-				require.Equal(t, tc.expectedType, results.([]DefaultSpanSplitCheckResult)[0].SplitType)
-			} else {
-				require.Len(t, results, 0)
-			}
-		})
-	}
 }

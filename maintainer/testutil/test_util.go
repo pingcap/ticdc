@@ -15,7 +15,9 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"unsafe"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -37,8 +39,8 @@ func GetTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
 	}
 }
 
-// SetNodeManagerAndMessageCenter sets up the node manager and message center for testing
-func SetNodeManagerAndMessageCenter() *watcher.NodeManager {
+// InitializeTestServices sets up the node manager and message center for testing
+func SetUpTestServices() {
 	n := node.NewInfo("", "")
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
@@ -51,9 +53,8 @@ func SetNodeManagerAndMessageCenter() *watcher.NodeManager {
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
-	regionCache := newMockRegionCache()
+	regionCache := NewMockRegionCache()
 	appcontext.SetService(appcontext.RegionCache, regionCache)
-	return nodeManager
 }
 
 type MockCache struct {
@@ -62,7 +63,7 @@ type MockCache struct {
 }
 
 // NewMockRegionCache returns a new MockCache.
-func newMockRegionCache() *MockCache {
+func NewMockRegionCache() *MockCache {
 	return &MockCache{
 		regions: make(map[string][]*tikv.Region),
 	}
@@ -84,4 +85,24 @@ func (m *MockCache) LoadRegionsInKeyRange(
 	}
 	key := fmt.Sprintf("%s-%s", string(startKey), string(endKey))
 	return m.regions[key], nil
+}
+
+func MockRegionWithKeyRange(id uint64, startKey, endKey []byte) *tikv.Region {
+	region := &tikv.Region{}
+	meta := &metapb.Region{Id: id, StartKey: startKey, EndKey: endKey}
+	regionPtr := (*struct {
+		meta *metapb.Region
+	})(unsafe.Pointer(region))
+	regionPtr.meta = meta
+	return region
+}
+
+func MockRegionWithID(id uint64) *tikv.Region {
+	region := &tikv.Region{}
+	meta := &metapb.Region{Id: id}
+	regionPtr := (*struct {
+		meta *metapb.Region
+	})(unsafe.Pointer(region))
+	regionPtr.meta = meta
+	return region
 }

@@ -24,14 +24,16 @@ import (
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
 func TestOneBlockEvent(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -159,7 +161,7 @@ func TestOneBlockEvent(t *testing.T) {
 }
 
 func TestNormalBlock(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -326,7 +328,7 @@ func TestNormalBlock(t *testing.T) {
 }
 
 func TestNormalBlockWithTableTrigger(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -465,7 +467,8 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 }
 
 func TestSchemaBlock(t *testing.T) {
-	nm := testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
+	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nmap := nm.GetAliveNodes()
 	for key := range nmap {
 		delete(nmap, key)
@@ -642,7 +645,8 @@ func TestSchemaBlock(t *testing.T) {
 }
 
 func TestSyncPointBlock(t *testing.T) {
-	nm := testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
+	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nmap := nm.GetAliveNodes()
 	for key := range nmap {
 		delete(nmap, key)
@@ -809,7 +813,7 @@ func TestSyncPointBlock(t *testing.T) {
 }
 
 func TestNonBlocked(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -858,7 +862,7 @@ func TestNonBlocked(t *testing.T) {
 }
 
 func TestUpdateCheckpointTs(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -913,7 +917,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 
 // TODO:Add more cases here
 func TestHandleBlockBootstrapResponse(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -1074,7 +1078,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 }
 
 func TestSyncPointBlockPerf(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,

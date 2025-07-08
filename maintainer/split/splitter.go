@@ -16,20 +16,10 @@ package split
 import (
 	"context"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/tikv"
-	"go.uber.org/zap"
-)
-
-type SplitType int
-
-const (
-	SplitByTraffic SplitType = iota
-	SplitByRegion
 )
 
 type splitter interface {
@@ -40,42 +30,24 @@ type splitter interface {
 
 type Splitter struct {
 	regionCounterSplitter *regionCountSplitter
-	writeKeySplitter      *writeSplitter
 	changefeedID          common.ChangeFeedID
 }
 
-// We support two kind of splits:
-//  1. Split by region count, each span will contains similar count of regions.
-//     we use SplitByRegion when we add new table span, to make the incremental scan more balanced.
-//     we will check whether the span exceed the region count threshold or write key count threshold.
-//  2. Split by write key, each span will contains similar count of write keys.
-//     we use SplitByTraffic when we do split in balance, to make the sink throughput more balanced.
+// Now we only support Split span by region count,  each span will contains similar count of regions.
 func NewSplitter(
 	changefeedID common.ChangeFeedID,
-	pdapi pdutil.PDAPIClient,
 	config *config.ChangefeedSchedulerConfig,
 ) *Splitter {
 	return &Splitter{
 		changefeedID:          changefeedID,
 		regionCounterSplitter: newRegionCountSplitter(changefeedID, config.RegionCountPerSpan, config.RegionThreshold),
-		writeKeySplitter:      newWriteSplitter(changefeedID, pdapi),
 	}
 }
 
 func (s *Splitter) Split(ctx context.Context,
 	span *heartbeatpb.TableSpan, spansNum int,
-	splitType SplitType,
 ) []*heartbeatpb.TableSpan {
-	spans := []*heartbeatpb.TableSpan{span}
-	switch splitType {
-	case SplitByRegion:
-		spans = s.regionCounterSplitter.split(ctx, span, spansNum)
-	case SplitByTraffic:
-		spans = s.writeKeySplitter.split(ctx, span, spansNum)
-	default:
-		log.Warn("splitter: unknown split type", zap.Any("splitType", splitType))
-	}
-	return spans
+	return s.regionCounterSplitter.split(ctx, span, spansNum)
 }
 
 // RegionCache is a simplified interface of tikv.RegionCache.

@@ -24,7 +24,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -145,7 +144,6 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 type SplitSpanCheckResult struct {
 	OpType OpType
 
-	SplitType split.SplitType
 	SplitSpan *SpanReplication
 
 	MergeSpans []*SpanReplication
@@ -508,7 +506,6 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 }
 
 // chooseSplitSpans checks all split spans and determines whether any spans should be split again based on traffic and region thresholds.
-// Here we just use splitByTraffic to make the split more balanced
 // It returns a list of SplitSpanCheckResult indicating which spans should be split.
 // The function also collects statistics about total region count, traffic per node, and organizes tasks by node.
 func (s *SplitSpanChecker) chooseSplitSpans(
@@ -528,7 +525,6 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.trafficScore > trafficScoreThreshold {
 				results = append(results, SplitSpanCheckResult{
 					OpType:    OpSplit,
-					SplitType: split.SplitByTraffic,
 					SplitSpan: status.SpanReplication,
 				})
 				continue
@@ -554,7 +550,6 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.regionCount > s.regionThreshold {
 				results = append(results, SplitSpanCheckResult{
 					OpType:    OpSplit,
-					SplitType: split.SplitByTraffic,
 					SplitSpan: status.SpanReplication,
 				})
 			}
@@ -636,7 +631,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	sortedSpans := taskMap[maxTrafficNodeID]
 	// select spans need to move from maxTrafficNodeID to minTrafficNodeID
-	for true {
+	for len(sortedSpans) > 0 {
 		idx, span := findClosestSmaller(sortedSpans, diffTraffic)
 		if span != nil {
 			moveSpans = append(moveSpans, span.SpanReplication)
@@ -680,7 +675,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	results = append(results, SplitSpanCheckResult{
 		OpType:    OpSplit,
-		SplitType: split.SplitByTraffic,
 		SplitSpan: span.SpanReplication,
 	})
 	return

@@ -23,13 +23,15 @@ import (
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
 
 func TestScheduleEvent(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -80,7 +82,8 @@ func TestScheduleEvent(t *testing.T) {
 }
 
 func TestResendAction(t *testing.T) {
-	nodeManager := testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -186,7 +189,7 @@ func TestResendAction(t *testing.T) {
 }
 
 func TestUpdateSchemaID(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,

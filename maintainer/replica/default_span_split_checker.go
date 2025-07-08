@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -153,8 +152,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 }
 
 type DefaultSpanSplitCheckResult struct {
-	SplitType split.SplitType
-	Span      *SpanReplication
+	Span *SpanReplication
 }
 
 func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
@@ -163,8 +161,7 @@ func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
 		// for default span to do split, we use splitByTraffic to make the split more balanced
 		if status.trafficScore >= trafficScoreThreshold || status.regionCount >= s.regionThreshold {
 			results = append(results, DefaultSpanSplitCheckResult{
-				SplitType: split.SplitByTraffic,
-				Span:      status.SpanReplication,
+				Span: status.SpanReplication,
 			})
 		}
 		if len(results) >= batch {

@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -84,6 +83,8 @@ func (c *Controller) FinishBootstrap(
 		zap.Stringer("changefeed", c.changefeedID),
 		zap.Int("nodeCount", len(allNodesResp)))
 
+	c.spanController.SetIsMysqlCompatibleBackend(isMysqlCompatibleBackend)
+
 	// Step 1: Determine start timestamp and update DDL dispatcher
 	startTs := c.determineStartTs(allNodesResp)
 
@@ -106,7 +107,7 @@ func (c *Controller) FinishBootstrap(
 	c.handleRemainingWorkingTasks(workingTaskMap)
 
 	// Step 6: Initialize and start sub components
-	barrier := c.initializeComponents(allNodesResp)
+	barrier := c.initializeComponents(allNodesResp, isMysqlCompatibleBackend)
 
 	// Step 7: Prepare response
 	initSchemaInfos := c.prepareSchemaInfoResponse(schemaInfos)
@@ -227,7 +228,7 @@ func (c *Controller) processTableSpans(
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
-		c.spanController.AddNewTable(table, c.startCheckpointTs, isMysqlCompatibleBackend)
+		c.spanController.AddNewTable(table, c.startCheckpointTs)
 	}
 }
 
@@ -239,7 +240,7 @@ func (c *Controller) handleTableHoles(
 	holes := findHoles(tableSpans, tableSpan)
 	if c.splitter != nil {
 		for _, hole := range holes {
-			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitByRegion)
+			spans := c.splitter.Split(context.Background(), hole, 0)
 			c.spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
 		}
 	} else {
@@ -259,6 +260,7 @@ func (c *Controller) handleRemainingWorkingTasks(
 
 func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	isMysqlCompatibleBackend bool,
 ) *Barrier {
 	// Initialize barrier
 	barrier := NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp)
