@@ -46,6 +46,8 @@ type DispatcherService interface {
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
 	GetStartTsIsSyncpoint() bool
+	GetResolvedTs() uint64
+	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 }
 
@@ -63,7 +65,6 @@ type Dispatcher interface {
 	SetStartTsIsSyncpoint(startTsIsSyncpoint bool)
 	SetComponentStatus(status heartbeatpb.ComponentState)
 	GetRemovingStatus() bool
-	GetCheckpointTs() uint64
 	GetHeartBeatInfo(h *HeartBeatInfo)
 	GetComponentStatus() heartbeatpb.ComponentState
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus

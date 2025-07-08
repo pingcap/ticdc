@@ -245,7 +245,10 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 	return false
 }
 
-func (h *SchedulerDispatcherRequestHandler) GetSize(event SchedulerDispatcherRequest) int { return 0 }
+func (h *SchedulerDispatcherRequestHandler) GetSize(event SchedulerDispatcherRequest) uint64 {
+	return 0
+}
+
 func (h *SchedulerDispatcherRequestHandler) IsPaused(event SchedulerDispatcherRequest) bool {
 	return false
 }
@@ -354,8 +357,8 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 	return false
 }
 
-func (h *HeartBeatResponseHandler) GetSize(event HeartBeatResponse) int   { return 0 }
-func (h *HeartBeatResponseHandler) IsPaused(event HeartBeatResponse) bool { return false }
+func (h *HeartBeatResponseHandler) GetSize(event HeartBeatResponse) uint64 { return 0 }
+func (h *HeartBeatResponseHandler) IsPaused(event HeartBeatResponse) bool  { return false }
 func (h *HeartBeatResponseHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
 	return 0
 }
@@ -407,8 +410,8 @@ func (h *CheckpointTsMessageHandler) Handle(eventDispatcherManager *EventDispatc
 	return false
 }
 
-func (h *CheckpointTsMessageHandler) GetSize(event CheckpointTsMessage) int   { return 0 }
-func (h *CheckpointTsMessageHandler) IsPaused(event CheckpointTsMessage) bool { return false }
+func (h *CheckpointTsMessageHandler) GetSize(event CheckpointTsMessage) uint64 { return 0 }
+func (h *CheckpointTsMessageHandler) IsPaused(event CheckpointTsMessage) bool  { return false }
 func (h *CheckpointTsMessageHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
 	return 0
 }
@@ -467,8 +470,8 @@ func (h *RedoTsMessageHandler) Handle(eventDispatcherManager *EventDispatcherMan
 	return false
 }
 
-func (h *RedoTsMessageHandler) GetSize(event RedoTsMessage) int   { return 0 }
-func (h *RedoTsMessageHandler) IsPaused(event RedoTsMessage) bool { return false }
+func (h *RedoTsMessageHandler) GetSize(event RedoTsMessage) uint64 { return 0 }
+func (h *RedoTsMessageHandler) IsPaused(event RedoTsMessage) bool  { return false }
 func (h *RedoTsMessageHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
 	return 0
 }
@@ -525,8 +528,8 @@ func (h *MergeDispatcherRequestHandler) Handle(eventDispatcherManager *EventDisp
 	return false
 }
 
-func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) int   { return 0 }
-func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool { return false }
+func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) uint64 { return 0 }
+func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool  { return false }
 func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
 	return 0
 }

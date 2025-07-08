@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"unsafe"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -222,34 +224,29 @@ func NewMockRegionCache(regions []heartbeatpb.TableSpan) *mockCache {
 	return &mockCache{regions: spanz.NewBtreeMap[uint64]()}
 }
 
-// ListRegionIDsInKeyRange lists ids of regions in [startKey,endKey].
-func (m *mockCache) ListRegionIDsInKeyRange(
+func (m *mockCache) LoadRegionsInKeyRange(
 	bo *tikv.Backoffer, startKey, endKey []byte,
-) (regionIDs []uint64, err error) {
+) (regions []*tikv.Region, err error) {
 	m.regions.Ascend(func(loc heartbeatpb.TableSpan, id uint64) bool {
 		if bytes.Compare(loc.StartKey, endKey) >= 0 ||
 			bytes.Compare(loc.EndKey, startKey) <= 0 {
 			return true
 		}
-		regionIDs = append(regionIDs, id)
-		return true
-	})
-	return
-}
+		region := &tikv.Region{}
+		meta := &metapb.Region{
+			Id:       id,
+			StartKey: loc.StartKey,
+			EndKey:   loc.EndKey,
+		}
 
-// LocateRegionByID searches for the region with ID.
-func (m *mockCache) LocateRegionByID(
-	bo *tikv.Backoffer, regionID uint64,
-) (loc *tikv.KeyLocation, err error) {
-	m.regions.Ascend(func(span heartbeatpb.TableSpan, id uint64) bool {
-		if id != regionID {
-			return true
-		}
-		loc = &tikv.KeyLocation{
-			StartKey: span.StartKey,
-			EndKey:   span.EndKey,
-		}
-		return false
+		// meta.id is not exported, so we use unsafe to access it more easier for test.
+		regionPtr := (*struct {
+			meta *metapb.Region
+		})(unsafe.Pointer(region))
+		regionPtr.meta = meta
+
+		regions = append(regions, region)
+		return true
 	})
 	return
 }

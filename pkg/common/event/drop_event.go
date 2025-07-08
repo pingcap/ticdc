@@ -87,8 +87,8 @@ func (e *DropEvent) GetStartTs() common.Ts {
 }
 
 // GetSize returns the approximate size of the event in bytes
-func (e *DropEvent) GetSize() int64 {
-	return int64(2 + e.DispatcherID.GetSize() + 8 + 8) // version + dispatcherID + seq + commitTs
+func (e *DropEvent) GetSize() uint64 {
+	return 2 + e.DispatcherID.GetSize() + 8 + 8 // version + redo + dispatcherID + seq + commitTs
 }
 
 // IsPaused returns false as drop events are not pausable
@@ -145,14 +145,14 @@ func (e *DropEvent) encodeV0() ([]byte, error) {
 
 	// DispatcherID
 	copy(data[offset:], e.DispatcherID.Marshal())
-	offset += e.DispatcherID.GetSize()
+	offset += int(e.DispatcherID.GetSize())
 
 	// DroppedSeq
 	binary.LittleEndian.PutUint64(data[offset:], e.DroppedSeq)
 	offset += 8
 
 	// DroppedCommitTs
-	binary.LittleEndian.PutUint64(data[offset:], uint64(e.DroppedCommitTs))
+	binary.LittleEndian.PutUint64(data[offset:], e.DroppedCommitTs)
 	offset += 8
 
 	return data, nil
@@ -170,7 +170,7 @@ func (e *DropEvent) decodeV0(data []byte) error {
 	offset += 1
 
 	// DispatcherID
-	dispatcherIDSize := e.DispatcherID.GetSize()
+	dispatcherIDSize := int(e.DispatcherID.GetSize())
 	err := e.DispatcherID.Unmarshal(data[offset : offset+dispatcherIDSize])
 	if err != nil {
 		return err
@@ -182,7 +182,7 @@ func (e *DropEvent) decodeV0(data []byte) error {
 	offset += 8
 
 	// DroppedCommitTs
-	e.DroppedCommitTs = common.Ts(binary.LittleEndian.Uint64(data[offset:]))
+	e.DroppedCommitTs = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 
 	return nil

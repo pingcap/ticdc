@@ -28,7 +28,7 @@ type preparedDMLs struct {
 	sqls            []string
 	values          [][]interface{}
 	rowCount        int
-	approximateSize int64
+	approximateSize uint64
 	startTs         []uint64
 }
 

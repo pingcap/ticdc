@@ -123,7 +123,7 @@ type Config struct {
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache        *lru.Cache
-	MaxAllowedPacket int64
+	MaxAllowedPacket uint64
 
 	HasVectorType bool // HasVectorType is true if the column is vector type
 
@@ -310,7 +310,7 @@ func NewMysqlConfigAndDB(
 		log.Warn("failed to query max_allowed_packet, use default value",
 			zap.String("changefeed", changefeedID.String()),
 			zap.Error(err))
-		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+		cfg.MaxAllowedPacket = vardef.DefMaxAllowedPacket
 	}
 	return cfg, db, nil
 }

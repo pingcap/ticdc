@@ -36,7 +36,7 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 		m map[P]*pathInfo[A, P, T, D, H]
 	}
 
-	eventExtraSize int
+	eventExtraSize uint64
 	memControl     *memControl[A, P, T, D, H] // TODO: implement memory control
 
 	feedbackChan chan Feedback[A, P, D]
@@ -48,15 +48,15 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](hasher PathHasher[P], handler H, option Option) *parallelDynamicStream[A, P, T, D, H] {
 	option.fix()
 	var (
-		eventExtraSize int
+		eventExtraSize uint64
 		zero           T
 	)
 	if reflect.TypeOf(zero).Kind() == reflect.Pointer {
-		eventExtraSize = int(unsafe.Sizeof(eventWrap[A, P, T, D, H]{}))
+		eventExtraSize = uint64(unsafe.Sizeof(eventWrap[A, P, T, D, H]{}))
 	} else {
 		a := unsafe.Sizeof(eventWrap[A, P, T, D, H]{})
 		b := unsafe.Sizeof(zero)
-		eventExtraSize = int(a - b)
+		eventExtraSize = uint64(a - b)
 	}
 
 	s := &parallelDynamicStream[A, P, T, D, H]{

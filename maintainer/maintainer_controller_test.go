@@ -941,16 +941,8 @@ func newMockRegionCache() *mockCache {
 	return &mockCache{}
 }
 
-// ListRegionIDsInKeyRange lists ids of regions in [startKey,endKey].
-func (m *mockCache) ListRegionIDsInKeyRange(
+func (m *mockCache) LoadRegionsInKeyRange(
 	bo *tikv.Backoffer, startKey, endKey []byte,
-) (regionIDs []uint64, err error) {
-	return
-}
-
-// LocateRegionByID searches for the region with ID.
-func (m *mockCache) LocateRegionByID(
-	bo *tikv.Backoffer, regionID uint64,
-) (loc *tikv.KeyLocation, err error) {
-	return
+) (regions []*tikv.Region, err error) {
+	return nil, nil
 }
