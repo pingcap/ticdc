@@ -46,7 +46,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
 				CheckpointTs:    watermark.CheckpointTs,
-				Redo:            dispatcher.IsRedoDispatcher(dispatcherItem),
+				IsRedo:          dispatcher.IsRedoDispatcher(dispatcherItem),
 			}, &cleanMap{dispatcherItem.GetId(), dispatcherItem.GetSchemaID(), dispatcher.IsRedoDispatcher(dispatcherItem)}, &watermark
 		}
 	}
@@ -56,7 +56,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 			ComponentStatus:    heartBeatInfo.ComponentStatus,
 			CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 			EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
-			Redo:               dispatcher.IsRedoDispatcher(dispatcherItem),
+			IsRedo:             dispatcher.IsRedoDispatcher(dispatcherItem),
 		}, nil, &heartBeatInfo.Watermark
 	}
 	return nil, nil, &heartBeatInfo.Watermark
@@ -104,7 +104,7 @@ func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeF
 					ID:              mergedDispatcherID.ToPB(),
 					CheckpointTs:    dispatcherItem.GetCheckpointTs(),
 					ComponentStatus: heartbeatpb.ComponentState_Working,
-					Redo:            dispatcher.IsRedoDispatcher(dispatcherItem),
+					IsRedo:          dispatcher.IsRedoDispatcher(dispatcherItem),
 				},
 				Seq: dispatcherMap.GetSeq(),
 			}
@@ -263,7 +263,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
-				Redo:            dispatcher.IsRedoDispatcher(dispatcherItem),
+				IsRedo:          dispatcher.IsRedoDispatcher(dispatcherItem),
 			},
 			Seq: dispatcherMap.GetSeq(),
 		}

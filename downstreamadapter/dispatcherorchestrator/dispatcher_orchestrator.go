@@ -288,7 +288,7 @@ func createBootstrapResponse(
 				ComponentStatus: d.GetComponentStatus(),
 				CheckpointTs:    d.GetCheckpointTs(),
 				BlockState:      d.GetBlockEventStatus(),
-				Redo:            true,
+				IsRedo:          true,
 			})
 		})
 	}

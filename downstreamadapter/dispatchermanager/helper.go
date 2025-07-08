@@ -203,7 +203,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(DispatcherManager *Dispatcher
 				StartTs:   config.StartTs,
 				SchemaID:  config.SchemaID,
 			}
-			if config.Redo {
+			if config.IsRedo {
 				redoInfos = append(redoInfos, info)
 			} else {
 				infos = append(infos, info)
@@ -212,7 +212,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(DispatcherManager *Dispatcher
 			if len(reqs) != 1 {
 				log.Error("invalid remove dispatcher request count in one batch", zap.Int("count", len(reqs)))
 			}
-			if config.Redo {
+			if config.IsRedo {
 				removeDispatcher(DispatcherManager, dispatcherID, DispatcherManager.redoDispatcherMap, DispatcherManager.redoSink.SinkType())
 			} else {
 				removeDispatcher(DispatcherManager, dispatcherID, DispatcherManager.dispatcherMap, DispatcherManager.sink.SinkType())
@@ -327,7 +327,7 @@ func (h *HeartBeatResponseHandler) Handle(DispatcherManager *DispatcherManager, 
 			schemaID := dispatcherStatus.InfluencedDispatchers.SchemaID
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			var dispatcherIds []common.DispatcherID
-			if heartbeatResponse.Redo {
+			if heartbeatResponse.IsRedo {
 				dispatcherIds = DispatcherManager.GetAllRedoDispatchers(schemaID)
 			} else {
 				dispatcherIds = DispatcherManager.GetAllDispatchers(schemaID)
@@ -339,7 +339,7 @@ func (h *HeartBeatResponseHandler) Handle(DispatcherManager *DispatcherManager, 
 			}
 		case heartbeatpb.InfluenceType_All:
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
-			if heartbeatResponse.Redo {
+			if heartbeatResponse.IsRedo {
 				DispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
 					if id != excludeDispatcherID {
 						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
@@ -520,7 +520,7 @@ func (h *MergeDispatcherRequestHandler) Handle(DispatcherManager *DispatcherMana
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))
 	}
-	DispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID), mergeDispatcherRequest.Redo)
+	DispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID), mergeDispatcherRequest.IsRedo)
 	return false
 }
 

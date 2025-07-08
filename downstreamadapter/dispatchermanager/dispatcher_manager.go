@@ -579,7 +579,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			return
 		case tableSpanStatus := <-e.statusesChan:
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			if !tableSpanStatus.Redo {
+			if !tableSpanStatus.IsRedo {
 				newWatermark.Seq = tableSpanStatus.Seq
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
@@ -591,7 +591,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 				select {
 				case tableSpanStatus := <-e.statusesChan:
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if !tableSpanStatus.Redo {
+					if !tableSpanStatus.IsRedo {
 						if newWatermark.Seq < tableSpanStatus.Seq {
 							newWatermark.Seq = tableSpanStatus.Seq
 						}

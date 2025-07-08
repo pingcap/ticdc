@@ -98,5 +98,5 @@ message DispatcherRequest {
     IntegrityConfig integrity = 14;
 	string timezone = 15;
     uint64 epoch = 16;
-    bool redo = 17;
+    bool isRedo = 17;
 }

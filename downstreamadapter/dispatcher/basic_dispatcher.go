@@ -301,7 +301,7 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 			ID:              d.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    d.GetCheckpointTs(),
-			Redo:            IsRedoDispatcher(d),
+			IsRedo:          IsRedoDispatcher(d),
 		},
 		Seq: d.seq,
 	}
@@ -537,7 +537,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
-			Redo: IsRedoDispatcher(d),
+			IsRedo: IsRedoDispatcher(d),
 		}
 	}
 }
@@ -602,7 +602,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false, // sync point event must should block
 					Stage:             heartbeatpb.BlockStage_NONE,
 				},
-				Redo: IsRedoDispatcher(d),
+				IsRedo: IsRedoDispatcher(d),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
@@ -656,7 +656,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 						IsSyncPoint:       true,
 						Stage:             heartbeatpb.BlockStage_WAITING,
 					},
-					Redo: IsRedoDispatcher(d),
+					IsRedo: IsRedoDispatcher(d),
 				}
 				identifier := BlockEventIdentifier{
 					CommitTs:    commitTs,
@@ -678,7 +678,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false,
 					Stage:             heartbeatpb.BlockStage_WAITING,
 				},
-				Redo: IsRedoDispatcher(d),
+				IsRedo: IsRedoDispatcher(d),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),

@@ -256,7 +256,7 @@ func (r DispatcherRequest) GetTimezone() *time.Location {
 }
 
 func (r DispatcherRequest) GetRedo() bool {
-	return r.Redo
+	return r.IsRedo
 }
 
 func (r DispatcherRequest) GetEpoch() uint64 {
