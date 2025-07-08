@@ -50,7 +50,11 @@ func newRegionCountSplitter(
 }
 
 // If spansNum > 0, means we split the span to spansNum spans
-// If spansNum == 0, means we split the span to regionNum / regionCountPerSpan spans
+// In this split, we don't need to ensure the region count is larger than regionThreshold.
+//
+// If spansNum == 0, means we split the span to regionNum / regionCountPerSpan spans.
+// In this split, we need to ensure the region count is larger than regionThreshold.
+// Otherwise, we don't need to split the span.
 func (m *regionCountSplitter) split(
 	ctx context.Context, span *heartbeatpb.TableSpan, spansNum int,
 ) []*heartbeatpb.TableSpan {
@@ -65,13 +69,20 @@ func (m *regionCountSplitter) split(
 		return []*heartbeatpb.TableSpan{span}
 	}
 
-	if len(regions) <= m.regionThreshold {
-		log.Info("skip split span by region count",
+	if spansNum == 0 && len(regions) <= m.regionThreshold {
+		log.Info("skip split span because region count is less than region threshold",
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
 			zap.Int("regionCount", len(regions)),
-			zap.Int("regionThreshold", m.regionThreshold),
-			zap.Any("regionCountPerSpan", m.regionCountPerSpan))
+			zap.Int("regionThreshold", m.regionThreshold))
+		return []*heartbeatpb.TableSpan{span}
+	}
+	if spansNum > 0 && len(regions) < spansNum {
+		log.Info("skip split span because region count is less than target spans num",
+			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("span", span.String()),
+			zap.Int("regionCount", len(regions)),
+			zap.Int("targetSpansNum", spansNum))
 		return []*heartbeatpb.TableSpan{span}
 	}
 
