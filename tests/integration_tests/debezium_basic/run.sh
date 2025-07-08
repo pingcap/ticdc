@@ -44,14 +44,15 @@ function run() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "CREATE TABLE test.finish_mark3 (a int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	check_table_exists test.finish_mark3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-
 	echo "Starting build checksum checker..."
 	cd $CUR/../../utils/checksum_checker
 	if [ ! -f ./checksum_checker ]; then
 		GO111MODULE=on go build
 	fi
+	# wait the dml event replicate the downstream
+	sleep 10
+	run_sql "CREATE TABLE test.finish_mark3 (a int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists test.finish_mark3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	./checksum_checker --upstream-uri "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/" --downstream-uri "root@tcp(${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT})/" --databases "test" --config="$CUR/conf/changefeed.toml"
 
 	cleanup_process $CDC_BINARY
