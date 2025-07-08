@@ -130,8 +130,8 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 				log.Warn("list regions failed, skip check region count", zap.String("changefeed", s.changefeedID.Name()), zap.String("span", status.Span.String()), zap.Error(err))
 			} else {
 				status.regionCount = len(regions)
+				status.regionCheckTime = time.Now()
 			}
-			status.regionCheckTime = time.Now()
 		}
 	}
 

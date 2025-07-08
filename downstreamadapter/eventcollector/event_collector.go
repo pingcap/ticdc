@@ -401,7 +401,6 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					default:
-						// log.Info("fizz forward event to dynamic stream", zap.Any("event", e))
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						dispatcherEvent := dispatcher.NewDispatcherEvent(&targetMessage.From, e)
 						c.ds.Push(e.GetDispatcherID(), dispatcherEvent)

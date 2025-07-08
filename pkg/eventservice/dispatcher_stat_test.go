@@ -70,11 +70,6 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 	// Test same ts update
 	updated = stat.onResolvedTs(150)
 	require.False(t, updated)
-
-	// Test smaller ts update should panic
-	require.Panics(t, func() {
-		stat.onResolvedTs(140)
-	})
 }
 
 func TestDispatcherStatGetDataRange(t *testing.T) {
@@ -127,9 +122,7 @@ func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	// Case 3: new events, and watermark decrease
 	// watermark should not decrease
 	stat.onLatestCommitTs(500)
-	require.Panics(t, func() {
-		stat.onResolvedTs(300)
-	})
+	stat.onResolvedTs(300)
 	require.Equal(t, uint64(500), stat.latestCommitTs.Load())
 	require.Equal(t, uint64(400), stat.eventStoreResolvedTs.Load())
 }

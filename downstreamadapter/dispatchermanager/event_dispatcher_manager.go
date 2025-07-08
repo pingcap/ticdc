@@ -468,10 +468,10 @@ func (e *EventDispatcherManager) collectErrors(ctx context.Context) {
 				// resend message until the event dispatcher manager is closed
 				// the first error is matter most, so we just need to resend it continue and ignore the other errors.
 				ticker := time.NewTicker(time.Second * 5)
+				defer ticker.Stop()
 				for {
 					select {
 					case <-ctx.Done():
-						ticker.Stop()
 						return
 					case <-ticker.C:
 						e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})

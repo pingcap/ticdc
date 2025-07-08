@@ -63,21 +63,13 @@ var (
 			Help:      "The duration of scanning a data range from eventStore",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
-	EventServiceScannedBytes = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "event_service",
-			Name:      "scanned_bytes",
-			Help:      "The number of bytes scanned from eventStore",
-			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 15),
-		})
 	EventServiceScannedCount = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_service",
 			Name:      "scanned_count",
 			Help:      "The number of events scanned from eventStore",
-			Buckets:   prometheus.ExponentialBuckets(10, 2.0, 8),
+			Buckets:   prometheus.ExponentialBuckets(8, 2.0, 12), // 8 ~ 16384
 		})
 
 	EventServiceDispatcherGauge = prometheus.NewGaugeVec(
@@ -133,7 +125,6 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceResolvedTsGauge)
 	registry.MustRegister(EventServiceResolvedTsLagGauge)
 	registry.MustRegister(EventServiceScanDuration)
-	registry.MustRegister(EventServiceScannedBytes)
 	registry.MustRegister(EventServiceScannedCount)
 	registry.MustRegister(EventServiceDispatcherGauge)
 	registry.MustRegister(EventServiceScanTaskCount)

@@ -1593,17 +1593,20 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 	if isPartitionTable(rawEvent.TableInfo) {
 		physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 		ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(physicalIDs))
+		splitable := isSplitable(rawEvent.TableInfo)
 		for _, id := range physicalIDs {
 			ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
-				SchemaID: rawEvent.SchemaID,
-				TableID:  id,
+				SchemaID:  rawEvent.SchemaID,
+				TableID:   id,
+				Splitable: splitable,
 			})
 		}
 	} else {
 		ddlEvent.NeedAddedTables = []commonEvent.Table{
 			{
-				SchemaID: rawEvent.SchemaID,
-				TableID:  rawEvent.TableID,
+				SchemaID:  rawEvent.SchemaID,
+				TableID:   rawEvent.TableID,
+				Splitable: isSplitable(rawEvent.TableInfo),
 			},
 		}
 	}
@@ -1728,10 +1731,12 @@ func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filt
 		}
 		physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 		ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(physicalIDs))
+		splitable := isSplitable(rawEvent.TableInfo)
 		for _, id := range physicalIDs {
 			ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
-				SchemaID: rawEvent.SchemaID,
-				TableID:  id,
+				SchemaID:  rawEvent.SchemaID,
+				TableID:   id,
+				Splitable: splitable,
 			})
 		}
 	} else {
@@ -1741,8 +1746,9 @@ func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filt
 		}
 		ddlEvent.NeedAddedTables = []commonEvent.Table{
 			{
-				SchemaID: rawEvent.SchemaID,
-				TableID:  rawEvent.ExtraTableID,
+				SchemaID:  rawEvent.SchemaID,
+				TableID:   rawEvent.ExtraTableID,
+				Splitable: isSplitable(rawEvent.TableInfo),
 			},
 		}
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
@@ -1899,10 +1905,12 @@ func buildDDLEventForAddPartition(rawEvent *PersistedDDLEvent, tableFilter filte
 	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 	newCreatedIDs := getCreatedIDs(rawEvent.PrevPartitions, physicalIDs)
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(newCreatedIDs))
+	splitable := isSplitable(rawEvent.TableInfo)
 	for _, id := range newCreatedIDs {
 		ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
-			SchemaID: rawEvent.SchemaID,
-			TableID:  id,
+			SchemaID:  rawEvent.SchemaID,
+			TableID:   id,
+			Splitable: splitable,
 		})
 	}
 	return ddlEvent, true
@@ -1966,10 +1974,12 @@ func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent,
 	}
 	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 	newCreatedIDs := getCreatedIDs(rawEvent.PrevPartitions, physicalIDs)
+	splitable := isSplitable(rawEvent.TableInfo)
 	for _, id := range newCreatedIDs {
 		ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
-			SchemaID: rawEvent.SchemaID,
-			TableID:  id,
+			SchemaID:  rawEvent.SchemaID,
+			TableID:   id,
+			Splitable: splitable,
 		})
 	}
 	droppedIDs := getDroppedIDs(rawEvent.PrevPartitions, physicalIDs)
@@ -2027,8 +2037,9 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 		}
 		ddlEvent.NeedAddedTables = []commonEvent.Table{
 			{
-				SchemaID: rawEvent.SchemaID,
-				TableID:  targetPartitionID,
+				SchemaID:  rawEvent.SchemaID,
+				TableID:   targetPartitionID,
+				Splitable: isSplitable(rawEvent.TableInfo),
 			},
 		}
 	} else if !ignorePartitionTable {
@@ -2042,8 +2053,9 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 		}
 		ddlEvent.NeedAddedTables = []commonEvent.Table{
 			{
-				SchemaID: rawEvent.ExtraSchemaID,
-				TableID:  rawEvent.TableID,
+				SchemaID:  rawEvent.ExtraSchemaID,
+				TableID:   rawEvent.TableID,
+				Splitable: isSplitable(rawEvent.TableInfo),
 			},
 		}
 	} else {
@@ -2226,16 +2238,19 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			continue
 		}
 		if isPartitionTable(info) {
+			splitable := isSplitable(info)
 			for _, partitionID := range getAllPartitionIDs(info) {
 				ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
-					SchemaID: rawEvent.SchemaID,
-					TableID:  partitionID,
+					SchemaID:  rawEvent.SchemaID,
+					TableID:   partitionID,
+					Splitable: splitable,
 				})
 			}
 		} else {
 			ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
-				SchemaID: rawEvent.SchemaID,
-				TableID:  info.ID,
+				SchemaID:  rawEvent.SchemaID,
+				TableID:   info.ID,
+				Splitable: isSplitable(info),
 			})
 		}
 		addName = append(addName, commonEvent.SchemaTableName{
@@ -2278,10 +2293,12 @@ func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFi
 			TableIDs:      []int64{rawEvent.ExtraTableID},
 		}
 	}
+	splitable := isSplitable(rawEvent.TableInfo)
 	for _, id := range getAllPartitionIDs(rawEvent.TableInfo) {
 		ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
-			SchemaID: rawEvent.SchemaID,
-			TableID:  id,
+			SchemaID:  rawEvent.SchemaID,
+			TableID:   id,
+			Splitable: splitable,
 		})
 	}
 	return ddlEvent, true
@@ -2303,8 +2320,9 @@ func buildDDLEventForRemovePartitioning(rawEvent *PersistedDDLEvent, tableFilter
 	}
 	ddlEvent.NeedAddedTables = []commonEvent.Table{
 		{
-			SchemaID: rawEvent.SchemaID,
-			TableID:  rawEvent.TableID,
+			SchemaID:  rawEvent.SchemaID,
+			TableID:   rawEvent.TableID,
+			Splitable: isSplitable(rawEvent.TableInfo),
 		},
 	}
 	return ddlEvent, true

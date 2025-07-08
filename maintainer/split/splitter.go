@@ -78,22 +78,6 @@ func (s *Splitter) Split(ctx context.Context,
 	return spans
 }
 
-// ShouldSplit is used to determine whether the span should span:
-// If sink is mysql-sink, span can split only when the table only have the unique and only one primary key.
-func ShouldSplit(tableInfo *common.TableInfo, isMysqlSink bool) bool {
-	if isMysqlSink {
-		if !tableInfo.HasPrimaryKey() {
-			return false
-		}
-		for _, index := range tableInfo.GetIndices() {
-			if index.Unique {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // RegionCache is a simplified interface of tikv.RegionCache.
 // It is useful to restrict RegionCache usage and mocking in tests.
 type RegionCache interface {

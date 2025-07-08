@@ -988,6 +988,7 @@ func newMockRegionCache() *mockCache {
 func (m *mockCache) LoadRegionsInKeyRange(
 	bo *tikv.Backoffer, startKey, endKey []byte,
 ) (regions []*tikv.Region, err error) {
+<<<<<<< HEAD
 	return m.regions, nil
 }
 
@@ -1049,4 +1050,7 @@ func (m *mockPDClock) Run(ctx context.Context) {
 }
 
 func (m *mockPDClock) Close() {
+=======
+	return nil, nil
+>>>>>>> 5317a3fe3bbc3f7e602f827a52abf149897db60f
 }

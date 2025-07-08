@@ -132,7 +132,7 @@ func (c *Controller) initializeDDLSpan(ddlSpan *replica.SpanReplication) {
 
 // AddNewTable adds a new table to the span controller
 // This is a complex business logic method that handles table splitting and span creation
-func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
+func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64, isMysqlCompatibleBackend bool) {
 	if c.IsTableExists(table.TableID) {
 		log.Warn("table already add, ignore",
 			zap.String("changefeed", c.changefeedID.Name()),
@@ -148,11 +148,9 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes && c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
-		if split.ShouldSplit(table.TableInfo, c.sink.IsMysqlSink()) {
+		if table.Splitable || !isMysqlCompatibleBackend {
 			tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitByRegion)
 		}
-		// split the whole table span base on region count if table region count is exceed the limit
-		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitByRegion)
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
 }

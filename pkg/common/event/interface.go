@@ -28,7 +28,7 @@ type Event interface {
 	GetStartTs() common.Ts
 	// GetSize returns the approximate size of the event in bytes.
 	// It's used for memory control and monitoring.
-	GetSize() int64
+	GetSize() uint64
 	IsPaused() bool
 	// GetLen returns the number of rows in the event.
 	Len() int32
@@ -151,16 +151,18 @@ func ToTablesPB(tables []Table) []*heartbeatpb.Table {
 	res := make([]*heartbeatpb.Table, len(tables))
 	for i, t := range tables {
 		res[i] = &heartbeatpb.Table{
-			TableID:  t.TableID,
-			SchemaID: t.SchemaID,
+			TableID:   t.TableID,
+			SchemaID:  t.SchemaID,
+			Splitable: t.Splitable,
 		}
 	}
 	return res
 }
 
 type Table struct {
-	SchemaID int64
-	TableID  int64
+	SchemaID  int64
+	TableID   int64
+	Splitable bool // whether the table is eligible for split
 	*SchemaTableName
 }
 
@@ -213,7 +215,7 @@ func (s *EventSenderState) decode(data []byte) {
 	*s = EventSenderState(data[0])
 }
 
-func (s EventSenderState) GetSize() int {
+func (s EventSenderState) GetSize() uint64 {
 	return 1
 }
 

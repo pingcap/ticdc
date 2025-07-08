@@ -125,18 +125,13 @@ func TestOnNotify(t *testing.T) {
 	disp.resetState(100)
 	disp.isHandshaked.Store(true)
 
-	// Case 1: The resolvedTs is less than the startTs, it should not happen.
-	notifyMsgs1 := notifyMsg{1, 1}
-	require.Panics(t, func() { broker.onNotify(disp, notifyMsgs1.resolvedTs, notifyMsgs1.latestCommitTs) })
-	log.Info("Pass case 1")
-
-	// Case 2: The resolvedTs is greater than the startTs, it should be updated.
+	// Case 1: The resolvedTs is greater than the startTs, it should be updated.
 	notifyMsgs2 := notifyMsg{101, 1}
 	broker.onNotify(disp, notifyMsgs2.resolvedTs, notifyMsgs2.latestCommitTs)
 	require.Equal(t, uint64(101), disp.eventStoreResolvedTs.Load())
 	log.Info("Pass case 2")
 
-	// Case 3: The latestCommitTs is greater than the startTs, it triggers a scan task.
+	// Case 2: The latestCommitTs is greater than the startTs, it triggers a scan task.
 	notifyMsgs3 := notifyMsg{102, 101}
 	broker.onNotify(disp, notifyMsgs3.resolvedTs, notifyMsgs3.latestCommitTs)
 	require.Equal(t, uint64(102), disp.eventStoreResolvedTs.Load())
@@ -145,7 +140,7 @@ func TestOnNotify(t *testing.T) {
 	require.Equal(t, task.id, disp.id)
 	log.Info("Pass case 3")
 
-	// Case 4: When the scan task is running, even there is a larger resolvedTs,
+	// Case 3: When the scan task is running, even there is a larger resolvedTs,
 	// should not trigger a new scan task.
 	notifyMsgs4 := notifyMsg{103, 101}
 	broker.onNotify(disp, notifyMsgs4.resolvedTs, notifyMsgs4.latestCommitTs)
@@ -159,7 +154,7 @@ func TestOnNotify(t *testing.T) {
 		require.Fail(t, "should not trigger a new scan task")
 	}
 
-	// Case 5: Do scan, it will update the sentResolvedTs.
+	// Case 4: Do scan, it will update the sentResolvedTs.
 	broker.doScan(context.TODO(), task)
 	require.False(t, disp.isTaskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())

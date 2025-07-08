@@ -788,11 +788,13 @@ func loadAllPhysicalTablesAtTs(
 		if tableFilter != nil && tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name, fullTableInfo) {
 			continue
 		}
+		splitable := isSplitable(fullTableInfo)
 		if partitionInfo, ok := partitionMap[tableID]; ok {
 			for partitionID := range partitionInfo {
 				tables = append(tables, commonEvent.Table{
-					SchemaID: tableInfo.SchemaID,
-					TableID:  partitionID,
+					SchemaID:  tableInfo.SchemaID,
+					TableID:   partitionID,
+					Splitable: splitable,
 					SchemaTableName: &commonEvent.SchemaTableName{
 						SchemaName: schemaName,
 						TableName:  tableInfo.Name,
@@ -801,8 +803,9 @@ func loadAllPhysicalTablesAtTs(
 			}
 		} else {
 			tables = append(tables, commonEvent.Table{
-				SchemaID: tableInfo.SchemaID,
-				TableID:  tableID,
+				SchemaID:  tableInfo.SchemaID,
+				TableID:   tableID,
+				Splitable: splitable,
 				SchemaTableName: &commonEvent.SchemaTableName{
 					SchemaName: schemaName,
 					TableName:  tableInfo.Name,

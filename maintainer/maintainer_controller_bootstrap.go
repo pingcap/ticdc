@@ -202,6 +202,7 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 func (c *Controller) processTableSpans(
 	table commonEvent.Table,
 	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	isMysqlCompatibleBackend bool,
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 
@@ -226,7 +227,7 @@ func (c *Controller) processTableSpans(
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
-		c.spanController.AddNewTable(table, c.startCheckpointTs)
+		c.spanController.AddNewTable(table, c.startCheckpointTs, isMysqlCompatibleBackend)
 	}
 }
 
@@ -236,7 +237,7 @@ func (c *Controller) handleTableHoles(
 	tableSpan *heartbeatpb.TableSpan,
 ) {
 	holes := findHoles(tableSpans, tableSpan)
-	if c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
+	if c.splitter != nil {
 		for _, hole := range holes {
 			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitByRegion)
 			c.spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
@@ -307,7 +308,6 @@ func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 	tables, err := schemaStore.GetAllPhysicalTables(startTs, f)
-	log.Info("get table ids", zap.Int("count", len(tables)), zap.String("changefeed", c.changefeedID.Name()))
 	return tables, err
 }
 
