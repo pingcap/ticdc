@@ -51,11 +51,11 @@ type HeartBeatCollector struct {
 	blockStatusReqQueue *BlockStatusRequestQueue
 
 	dispatcherStatusDynamicStream           dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
-	heartBeatResponseDynamicStream          dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler]
-	schedulerDispatcherRequestDynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler]
-	checkpointTsMessageDynamicStream        dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler]
-	redoTsMessageDynamicStream              dynstream.DynamicStream[int, common.GID, RedoTsMessage, *EventDispatcherManager, *RedoTsMessageHandler]
-	mergeDispatcherRequestDynamicStream     dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *EventDispatcherManager, *MergeDispatcherRequestHandler]
+	heartBeatResponseDynamicStream          dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler]
+	schedulerDispatcherRequestDynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler]
+	checkpointTsMessageDynamicStream        dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *DispatcherManager, *CheckpointTsMessageHandler]
+	redoTsMessageDynamicStream              dynstream.DynamicStream[int, common.GID, RedoTsMessage, *DispatcherManager, *RedoTsMessageHandler]
+	mergeDispatcherRequestDynamicStream     dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler]
 	mc                                      messaging.MessageCenter
 
 	wg     sync.WaitGroup
@@ -105,7 +105,7 @@ func (c *HeartBeatCollector) Run(ctx context.Context) {
 	}()
 }
 
-func (c *HeartBeatCollector) RegisterEventDispatcherManager(m *EventDispatcherManager) error {
+func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) error {
 	m.SetHeartbeatRequestQueue(c.heartBeatReqQueue)
 	m.SetBlockStatusRequestQueue(c.blockStatusReqQueue)
 	err := c.heartBeatResponseDynamicStream.AddPath(m.changefeedID.Id, m)
@@ -123,17 +123,17 @@ func (c *HeartBeatCollector) RegisterEventDispatcherManager(m *EventDispatcherMa
 	return nil
 }
 
-func (c *HeartBeatCollector) RegisterCheckpointTsMessageDs(m *EventDispatcherManager) error {
+func (c *HeartBeatCollector) RegisterCheckpointTsMessageDs(m *DispatcherManager) error {
 	err := c.checkpointTsMessageDynamicStream.AddPath(m.changefeedID.Id, m)
 	return errors.Trace(err)
 }
 
-func (c *HeartBeatCollector) RegisterRedoTsMessageDs(m *EventDispatcherManager) error {
+func (c *HeartBeatCollector) RegisterRedoTsMessageDs(m *DispatcherManager) error {
 	err := c.redoTsMessageDynamicStream.AddPath(m.changefeedID.Id, m)
 	return errors.Trace(err)
 }
 
-func (c *HeartBeatCollector) RemoveEventDispatcherManager(id common.ChangeFeedID) error {
+func (c *HeartBeatCollector) RemoveDispatcherManager(id common.ChangeFeedID) error {
 	err := c.heartBeatResponseDynamicStream.RemovePath(id.Id)
 	if err != nil {
 		return errors.Trace(err)

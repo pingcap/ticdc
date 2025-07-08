@@ -32,7 +32,7 @@ type BatchResolvedEvent struct {
 	Redo bool
 }
 
-func (b BatchResolvedEvent) GetRedo() bool {
+func (b BatchResolvedEvent) IsRedo() bool {
 	return b.Redo
 }
 
@@ -143,7 +143,7 @@ func NewResolvedEvent(
 	}
 }
 
-func (e ResolvedEvent) GetRedo() bool {
+func (e ResolvedEvent) IsRedo() bool {
 	return e.Redo
 }
 

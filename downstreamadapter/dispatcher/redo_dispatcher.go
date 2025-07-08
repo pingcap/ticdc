@@ -87,7 +87,7 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 }
 
 // Remove is called when TryClose returns true
-// It set isRemoving to true, to make the dispatcher can be clean by the eventDispatcherManager.
+// It set isRemoving to true, to make the dispatcher can be clean by the DispatcherManager.
 func (rd *RedoDispatcher) Remove() {
 	rd.isRemoving.Store(true)
 	rd.removeDispatcher()

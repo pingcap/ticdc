@@ -31,12 +31,12 @@ import (
 // HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
 type HeartBeatTask struct {
 	taskHandle *threadpool.TaskHandle
-	manager    *EventDispatcherManager
+	manager    *DispatcherManager
 	// Used to determine when to collect complete status
 	statusTick int
 }
 
-func newHeartBeatTask(manager *EventDispatcherManager) *HeartBeatTask {
+func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 	taskScheduler := GetHeartBeatTaskScheduler()
 	t := &HeartBeatTask{
 		manager:    manager,
@@ -99,12 +99,12 @@ func SetMergeCheckTaskScheduler(taskScheduler threadpool.ThreadPool) {
 // MergeCheckTask is a task to check the status of the merged dispatcher.
 type MergeCheckTask struct {
 	taskHandle       *threadpool.TaskHandle
-	manager          *EventDispatcherManager
+	manager          *DispatcherManager
 	mergedDispatcher dispatcher.Dispatcher
 	dispatcherIDs    []common.DispatcherID // the ids of dispatchers to be merged
 }
 
-func newMergeCheckTask(manager *EventDispatcherManager, mergedDispatcher dispatcher.Dispatcher, dispatcherIDs []common.DispatcherID) *MergeCheckTask {
+func newMergeCheckTask(manager *DispatcherManager, mergedDispatcher dispatcher.Dispatcher, dispatcherIDs []common.DispatcherID) *MergeCheckTask {
 	taskScheduler := GetMergeCheckTaskScheduler()
 	t := &MergeCheckTask{
 		manager:          manager,

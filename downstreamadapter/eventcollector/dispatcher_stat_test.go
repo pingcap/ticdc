@@ -133,7 +133,7 @@ type mockEvent struct {
 	epoch        uint64
 }
 
-func (m *mockEvent) GetRedo() bool {
+func (m *mockEvent) IsRedo() bool {
 	return false
 }
 

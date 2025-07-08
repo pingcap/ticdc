@@ -37,7 +37,7 @@ const redoHeartBeatInterval = time.Second * 1
 
 func initRedoComponet(
 	ctx context.Context,
-	manager *EventDispatcherManager,
+	manager *DispatcherManager,
 	changefeedID common.ChangeFeedID,
 	redoTableTriggerEventDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
@@ -79,7 +79,7 @@ func initRedoComponet(
 	return nil
 }
 
-func (e *EventDispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
+func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
 	if e.redoTableTriggerEventDispatcher != nil {
 		log.Error("redo table trigger event dispatcher existed!")
 	}
@@ -105,7 +105,7 @@ func (e *EventDispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbea
 	return nil
 }
 
-func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
+func (e *DispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
 
 	dispatcherIds, tableIds, startTsList, tableSpans, schemaIds := prepareCreateDispatcher(infos, e.redoDispatcherMap)
@@ -175,7 +175,7 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 	return nil
 }
 
-func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
+func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	ticker := time.NewTicker(redoHeartBeatInterval)
 	defer ticker.Stop()
@@ -223,7 +223,7 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) error {
 	}
 }
 
-func (e *EventDispatcherManager) MergeRedoDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
+func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
 	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
 	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap
 	//         2. whether the dispatcherIDs exist in the dispatcherMap
@@ -266,7 +266,7 @@ func (e *EventDispatcherManager) MergeRedoDispatcher(dispatcherIDs []common.Disp
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 
-func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {
+func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {
 	e.redoDispatcherMap.Delete(id)
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
 	if e.redoTableTriggerEventDispatcher != nil && e.redoTableTriggerEventDispatcher.GetId() == id {
@@ -281,7 +281,7 @@ func (e *EventDispatcherManager) cleanRedoDispatcher(id common.DispatcherID, sch
 	)
 }
 
-func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
+func (e *DispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
 	// only update meta on the one node
 	if e.redoTableTriggerEventDispatcher != nil {
 		e.redoTableTriggerEventDispatcher.UpdateMeta(checkpointTs, resolvedTs)
@@ -289,15 +289,15 @@ func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64
 	return util.CompareAndMonotonicIncrease(&e.redoGlobalTs, resolvedTs)
 }
 
-func (e *EventDispatcherManager) GetRedoDispatcherMap() *DispatcherMap[*dispatcher.RedoDispatcher] {
+func (e *DispatcherManager) GetRedoDispatcherMap() *DispatcherMap[*dispatcher.RedoDispatcher] {
 	return e.redoDispatcherMap
 }
 
-func (e *EventDispatcherManager) GetRedoTableTriggerEventDispatcher() *dispatcher.RedoDispatcher {
+func (e *DispatcherManager) GetRedoTableTriggerEventDispatcher() *dispatcher.RedoDispatcher {
 	return e.redoTableTriggerEventDispatcher
 }
 
-func (e *EventDispatcherManager) GetAllRedoDispatchers(schemaID int64) []common.DispatcherID {
+func (e *DispatcherManager) GetAllRedoDispatchers(schemaID int64) []common.DispatcherID {
 	dispatcherIDs := e.redoSchemaIDToDispatchers.GetDispatcherIDs(schemaID)
 	if e.redoTableTriggerEventDispatcher != nil {
 		dispatcherIDs = append(dispatcherIDs, e.redoTableTriggerEventDispatcher.GetId())

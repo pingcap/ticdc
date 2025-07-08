@@ -46,7 +46,7 @@ func (e *ReadyEvent) String() string {
 	return fmt.Sprintf("ReadyEvent{Version: %d, DispatcherID: %s}", e.Version, e.DispatcherID)
 }
 
-func (e *ReadyEvent) GetRedo() bool {
+func (e *ReadyEvent) IsRedo() bool {
 	return e.Redo
 }
 

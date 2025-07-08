@@ -53,7 +53,7 @@ func NewDropEvent(
 	}
 }
 
-func (e *DropEvent) GetRedo() bool {
+func (e *DropEvent) IsRedo() bool {
 	return e.Redo
 }
 

@@ -182,7 +182,7 @@ func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 }
 
 // Remove is called when TryClose returns true
-// It set isRemoving to true, to make the dispatcher can be clean by the eventDispatcherManager.
+// It set isRemoving to true, to make the dispatcher can be clean by the DispatcherManager.
 func (d *EventDispatcher) Remove() {
 	if d.isRemoving.CompareAndSwap(false, true) {
 		d.cacheEvents.Lock()

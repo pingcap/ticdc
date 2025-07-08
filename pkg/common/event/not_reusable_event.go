@@ -46,7 +46,7 @@ func (e *NotReusableEvent) String() string {
 	return fmt.Sprintf("NotReusableEvent{Version: %d, DispatcherID: %s}", e.Version, e.DispatcherID)
 }
 
-func (e *NotReusableEvent) GetRedo() bool {
+func (e *NotReusableEvent) IsRedo() bool {
 	return e.Redo
 }
 

@@ -137,30 +137,30 @@ func TestResolvedTsCache(t *testing.T) {
 	rc.add(pevent.ResolvedEvent{
 		DispatcherID: common.NewDispatcherID(),
 		ResolvedTs:   100,
-	})
+	}, false)
 	require.Equal(t, 1, rc.len)
 	require.Equal(t, uint64(100), rc.cache[0].ResolvedTs)
-	require.False(t, rc.isFull())
+	require.False(t, rc.isFull(false))
 
 	// Case 2: add more resolved ts until full
 	i := 1
-	for !rc.isFull() {
+	for !rc.isFull(false) {
 		rc.add(pevent.ResolvedEvent{
 			DispatcherID: common.NewDispatcherID(),
 			ResolvedTs:   uint64(100 + i),
-		})
+		}, false)
 		i++
 	}
 	require.Equal(t, 10, rc.len)
 	require.Equal(t, uint64(100), rc.cache[0].ResolvedTs)
 	require.Equal(t, uint64(109), rc.cache[9].ResolvedTs)
-	require.True(t, rc.isFull())
+	require.True(t, rc.isFull(false))
 
 	// Case 3: get all resolved ts
-	res := rc.getAll()
+	res := rc.getAll(false)
 	require.Equal(t, 10, len(res))
 	require.Equal(t, 0, rc.len)
 	require.Equal(t, uint64(100), res[0].ResolvedTs)
 	require.Equal(t, uint64(109), res[9].ResolvedTs)
-	require.False(t, rc.isFull())
+	require.False(t, rc.isFull(false))
 }

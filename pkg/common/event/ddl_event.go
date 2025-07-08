@@ -106,7 +106,7 @@ func (d *DDLEvent) String() string {
 		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.TableID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.State, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TableNameInDDLJob, d.DBNameInDDLJob, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
 }
 
-func (d *DDLEvent) GetRedo() bool {
+func (d *DDLEvent) IsRedo() bool {
 	return d.Redo
 }
 

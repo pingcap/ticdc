@@ -208,7 +208,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 		zap.Int64("eventTableID", e.TableID),
 		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq),
-		zap.Bool("isRedo", e.GetRedo()))
+		zap.Bool("isRedo", e.IsRedo()))
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
@@ -556,7 +556,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 	defer ticker.Stop()
 
 	resolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
-	redoResolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
 	messageCh := c.messageCh[workerIndex]
 	batchM := make([]*wrapEvent, 0, defaultMaxBatchSize)
 	for {
@@ -578,12 +577,8 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				}
 			}
 			for _, m = range batchM {
-				cacheMap := resolvedTsCacheMap
-				if m.redo {
-					cacheMap = redoResolvedTsCacheMap
-				}
 				if m.msgType == pevent.TypeResolvedEvent {
-					c.handleResolvedTs(ctx, cacheMap, m, workerIndex)
+					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
 					continue
 				}
 				tMsg := messaging.NewSingleTargetMessage(
@@ -594,14 +589,14 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				)
 				// Note: we need to flush the resolvedTs cache before sending the message
 				// to keep the order of the resolvedTs and the message.
-				c.flushResolvedTs(ctx, cacheMap[m.serverID], m.serverID, workerIndex, m.redo)
+				c.flushResolvedTs(ctx, resolvedTsCacheMap[m.serverID], m.serverID, workerIndex, m.redo)
 				c.sendMsg(ctx, tMsg, m.postSendFunc)
 				m.reset()
 			}
 			batchM = batchM[:0]
 
 		case <-ticker.C:
-			for serverID, cache := range redoResolvedTsCacheMap {
+			for serverID, cache := range resolvedTsCacheMap {
 				c.flushResolvedTs(ctx, cache, serverID, workerIndex, true)
 			}
 			for serverID, cache := range resolvedTsCacheMap {
@@ -618,8 +613,8 @@ func (c *eventBroker) handleResolvedTs(ctx context.Context, cacheMap map[node.ID
 		cache = newResolvedTsCache(resolvedTsCacheSize)
 		cacheMap[m.serverID] = cache
 	}
-	cache.add(m.resolvedTsEvent)
-	if cache.isFull() {
+	cache.add(m.resolvedTsEvent, m.redo)
+	if cache.isFull(m.redo) {
 		c.flushResolvedTs(ctx, cache, m.serverID, workerIndex, m.redo)
 	}
 }
@@ -631,7 +626,7 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 	msg := &pevent.BatchResolvedEvent{
 		Redo: redo,
 	}
-	msg.Events = append(msg.Events, cache.getAll()...)
+	msg.Events = append(msg.Events, cache.getAll(redo)...)
 	tMsg := messaging.NewSingleTargetMessage(
 		serverID,
 		messaging.EventCollectorTopic,

@@ -39,7 +39,7 @@ type SyncPointEvent struct {
 	Redo bool `json:"redo"`
 }
 
-func (e *SyncPointEvent) GetRedo() bool {
+func (e *SyncPointEvent) IsRedo() bool {
 	return e.Redo
 }
 

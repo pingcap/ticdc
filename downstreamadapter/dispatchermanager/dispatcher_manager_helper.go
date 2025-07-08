@@ -211,7 +211,7 @@ func registerMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.Change
 		})
 }
 
-func removeDispatcher[T dispatcher.Dispatcher](e *EventDispatcherManager,
+func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 	id common.DispatcherID,
 	dispatcherMap *DispatcherMap[T],
 	sinkType common.SinkType,

@@ -63,7 +63,7 @@ func (b *BatchDMLEvent) String() string {
 		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo.TableName, b.Len())
 }
 
-func (b *BatchDMLEvent) GetRedo() bool {
+func (b *BatchDMLEvent) IsRedo() bool {
 	return b.Redo
 }
 
@@ -333,7 +333,7 @@ func (t *DMLEvent) String() string {
 		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName, t.Checksum, t.Length, t.ApproximateSize)
 }
 
-func (t *DMLEvent) GetRedo() bool {
+func (t *DMLEvent) IsRedo() bool {
 	log.Panic("should not call this")
 	return false
 }

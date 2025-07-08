@@ -65,7 +65,7 @@ func (e *HandshakeEvent) String() string {
 		e.Version, e.ResolvedTs, e.Seq, e.State, e.DispatcherID, e.TableInfo)
 }
 
-func (e *HandshakeEvent) GetRedo() bool {
+func (e *HandshakeEvent) IsRedo() bool {
 	return e.Redo
 }
 

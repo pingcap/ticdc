@@ -77,7 +77,7 @@ type Dispatcher interface {
 /*
 BasicDispatcher is responsible for getting events from Event Service and sending them to Sink in appropriate order.
 Each dispatcher only deal with the events of one tableSpan in one changefeed.
-Each EventDispatcherManager will have multiple dispatchers.
+Each DispatcherManager will have multiple dispatchers.
 
 All dispatchers will communicate with the Maintainer about self progress and whether can push down the blocked ddl event.
 
@@ -135,7 +135,7 @@ type BasicDispatcher struct {
 	// shared by the event dispatcher manager
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
 
-	// schemaIDToDispatchers is shared in the eventDispatcherManager,
+	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
 	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
 	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
@@ -170,7 +170,7 @@ type BasicDispatcher struct {
 
 	// errCh is used to collect the errors that need to report to maintainer
 	// such as error of flush ddl events
-	// errCh is shared in the eventDispatcherManager
+	// errCh is shared in the DispatcherManager
 	errCh chan error
 
 	bdrMode        bool
@@ -761,7 +761,7 @@ func (d *BasicDispatcher) Remove() {
 
 // TryClose should be called before Remove(), because the dispatcher may still wait the dispatcher status from maintainer.
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
-// EventDispatcherManager will clean the dispatcher info after Remove() is called.
+// DispatcherManager will clean the dispatcher info after Remove() is called.
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.

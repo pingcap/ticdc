@@ -412,8 +412,8 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
-					ds := c.getDynamicStream(e.GetRedo())
-					metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(e.GetRedo())
+					ds := c.getDynamicStream(e.IsRedo())
+					metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(e.IsRedo())
 					switch e.GetType() {
 					case event.TypeBatchResolvedEvent:
 						events := e.(*event.BatchResolvedEvent).Events

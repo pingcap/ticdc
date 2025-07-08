@@ -162,7 +162,7 @@ func (w *Watermark) Set(watermark *heartbeatpb.Watermark) {
 	w.Watermark = watermark
 }
 
-func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler] {
+func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
 		&SchedulerDispatcherRequestHandler{}, dynstream.NewOption())
@@ -184,7 +184,7 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 	return common.NewChangefeedGIDFromPB(scheduleDispatcherRequest.ChangefeedID)
 }
 
-func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *EventDispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
+func (h *SchedulerDispatcherRequestHandler) Handle(DispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	// If req is about remove dispatcher, then there will only be one request in reqs.
 	infos := make([]dispatcherCreateInfo, 0, len(reqs))
 	redoInfos := make([]dispatcherCreateInfo, 0, len(reqs))
@@ -213,31 +213,31 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 				log.Error("invalid remove dispatcher request count in one batch", zap.Int("count", len(reqs)))
 			}
 			if config.Redo {
-				removeDispatcher(eventDispatcherManager, dispatcherID, eventDispatcherManager.redoDispatcherMap, eventDispatcherManager.redoSink.SinkType())
+				removeDispatcher(DispatcherManager, dispatcherID, DispatcherManager.redoDispatcherMap, DispatcherManager.redoSink.SinkType())
 			} else {
-				removeDispatcher(eventDispatcherManager, dispatcherID, eventDispatcherManager.dispatcherMap, eventDispatcherManager.sink.SinkType())
+				removeDispatcher(DispatcherManager, dispatcherID, DispatcherManager.dispatcherMap, DispatcherManager.sink.SinkType())
 			}
 		}
 	}
 	handleErr := func(err error) {
 		select {
-		case eventDispatcherManager.errCh <- err:
-			log.Error("new redo dispatcher meet error", zap.String("ChangefeedID", eventDispatcherManager.changefeedID.String()),
+		case DispatcherManager.errCh <- err:
+			log.Error("new redo dispatcher meet error", zap.String("ChangefeedID", DispatcherManager.changefeedID.String()),
 				zap.Error(err))
 		default:
 			log.Error("error channel is full, discard error",
-				zap.Any("ChangefeedID", eventDispatcherManager.changefeedID.String()),
+				zap.Any("ChangefeedID", DispatcherManager.changefeedID.String()),
 				zap.Error(err))
 		}
 	}
 	if len(redoInfos) > 0 {
-		err := eventDispatcherManager.newRedoDispatchers(redoInfos, false)
+		err := DispatcherManager.newRedoDispatchers(redoInfos, false)
 		if err != nil {
 			handleErr(err)
 		}
 	}
 	if len(infos) > 0 {
-		err := eventDispatcherManager.newDispatchers(infos, false)
+		err := DispatcherManager.newEventDispatchers(infos, false)
 		if err != nil {
 			handleErr(err)
 		}
@@ -253,7 +253,7 @@ func (h *SchedulerDispatcherRequestHandler) IsPaused(event SchedulerDispatcherRe
 	return false
 }
 
-func (h *SchedulerDispatcherRequestHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
+func (h *SchedulerDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
@@ -278,7 +278,7 @@ func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequ
 	return nil
 }
 
-func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
+func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
 		newHeartBeatResponseHandler(dds))
@@ -306,7 +306,7 @@ func (h *HeartBeatResponseHandler) Path(HeartbeatResponse HeartBeatResponse) com
 	return common.NewChangefeedGIDFromPB(HeartbeatResponse.ChangefeedID)
 }
 
-func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatcherManager, resps ...HeartBeatResponse) bool {
+func (h *HeartBeatResponseHandler) Handle(DispatcherManager *DispatcherManager, resps ...HeartBeatResponse) bool {
 	if len(resps) != 1 {
 		// TODO: Support batch
 		panic("invalid response count")
@@ -328,9 +328,9 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			var dispatcherIds []common.DispatcherID
 			if heartbeatResponse.Redo {
-				dispatcherIds = eventDispatcherManager.GetAllRedoDispatchers(schemaID)
+				dispatcherIds = DispatcherManager.GetAllRedoDispatchers(schemaID)
 			} else {
-				dispatcherIds = eventDispatcherManager.GetAllDispatchers(schemaID)
+				dispatcherIds = DispatcherManager.GetAllDispatchers(schemaID)
 			}
 			for _, id := range dispatcherIds {
 				if id != excludeDispatcherID {
@@ -340,13 +340,13 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 		case heartbeatpb.InfluenceType_All:
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			if heartbeatResponse.Redo {
-				eventDispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
+				DispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
 					if id != excludeDispatcherID {
 						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 					}
 				})
 			} else {
-				eventDispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.EventDispatcher) {
+				DispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.EventDispatcher) {
 					if id != excludeDispatcherID {
 						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 					}
@@ -359,7 +359,7 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 
 func (h *HeartBeatResponseHandler) GetSize(event HeartBeatResponse) uint64 { return 0 }
 func (h *HeartBeatResponseHandler) IsPaused(event HeartBeatResponse) bool  { return false }
-func (h *HeartBeatResponseHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
+func (h *HeartBeatResponseHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
@@ -376,7 +376,7 @@ func (h *HeartBeatResponseHandler) OnDrop(event HeartBeatResponse) interface{} {
 }
 
 // checkpointTsMessageDynamicStream is responsible for push checkpointTsMessage to the corresponding table trigger event dispatcher.
-func newCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler] {
+func newCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *DispatcherManager, *CheckpointTsMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
 		&CheckpointTsMessageHandler{})
@@ -398,21 +398,21 @@ func (h *CheckpointTsMessageHandler) Path(checkpointTsMessage CheckpointTsMessag
 	return common.NewChangefeedGIDFromPB(checkpointTsMessage.ChangefeedID)
 }
 
-func (h *CheckpointTsMessageHandler) Handle(eventDispatcherManager *EventDispatcherManager, messages ...CheckpointTsMessage) bool {
+func (h *CheckpointTsMessageHandler) Handle(DispatcherManager *DispatcherManager, messages ...CheckpointTsMessage) bool {
 	if len(messages) != 1 {
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	if eventDispatcherManager.tableTriggerEventDispatcher != nil {
+	if DispatcherManager.tableTriggerEventDispatcher != nil {
 		checkpointTsMessage := messages[0]
-		eventDispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
+		DispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }
 
 func (h *CheckpointTsMessageHandler) GetSize(event CheckpointTsMessage) uint64 { return 0 }
 func (h *CheckpointTsMessageHandler) IsPaused(event CheckpointTsMessage) bool  { return false }
-func (h *CheckpointTsMessageHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
+func (h *CheckpointTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
@@ -429,7 +429,7 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 }
 
 // redoTsMessageDynamicStream is responsible for push RedoTsMessage to the corresponding table trigger event dispatcher.
-func newRedoTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoTsMessage, *EventDispatcherManager, *RedoTsMessageHandler] {
+func newRedoTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoTsMessage, *DispatcherManager, *RedoTsMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
 		&RedoTsMessageHandler{})
@@ -455,15 +455,15 @@ func (h *RedoTsMessageHandler) Path(redoTsMessage RedoTsMessage) common.GID {
 	return common.NewChangefeedGIDFromPB(redoTsMessage.ChangefeedID)
 }
 
-func (h *RedoTsMessageHandler) Handle(eventDispatcherManager *EventDispatcherManager, messages ...RedoTsMessage) bool {
+func (h *RedoTsMessageHandler) Handle(DispatcherManager *DispatcherManager, messages ...RedoTsMessage) bool {
 	if len(messages) != 1 {
 		// TODO: Support batch
 		panic("invalid message count")
 	}
 	msg := messages[0]
-	ok := eventDispatcherManager.SetGlobalRedoTs(msg.CheckpointTs, msg.ResolvedTs)
+	ok := DispatcherManager.SetGlobalRedoTs(msg.CheckpointTs, msg.ResolvedTs)
 	if ok {
-		eventDispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
+		DispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
 			dispatcher.HandleCacheEvents()
 		})
 	}
@@ -472,7 +472,7 @@ func (h *RedoTsMessageHandler) Handle(eventDispatcherManager *EventDispatcherMan
 
 func (h *RedoTsMessageHandler) GetSize(event RedoTsMessage) uint64 { return 0 }
 func (h *RedoTsMessageHandler) IsPaused(event RedoTsMessage) bool  { return false }
-func (h *RedoTsMessageHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
+func (h *RedoTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
@@ -488,7 +488,7 @@ func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) interface{} {
 	return nil
 }
 
-func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *EventDispatcherManager, *MergeDispatcherRequestHandler] {
+func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
 		&MergeDispatcherRequestHandler{})
@@ -510,7 +510,7 @@ func (h *MergeDispatcherRequestHandler) Path(mergeDispatcherRequest MergeDispatc
 	return common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID)
 }
 
-func (h *MergeDispatcherRequestHandler) Handle(eventDispatcherManager *EventDispatcherManager, reqs ...MergeDispatcherRequest) bool {
+func (h *MergeDispatcherRequestHandler) Handle(DispatcherManager *DispatcherManager, reqs ...MergeDispatcherRequest) bool {
 	if len(reqs) != 1 {
 		panic("invalid request count")
 	}
@@ -520,17 +520,13 @@ func (h *MergeDispatcherRequestHandler) Handle(eventDispatcherManager *EventDisp
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))
 	}
-	if mergeDispatcherRequest.Redo {
-		eventDispatcherManager.MergeRedoDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID))
-	} else {
-		eventDispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID))
-	}
+	DispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID), mergeDispatcherRequest.Redo)
 	return false
 }
 
 func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) uint64 { return 0 }
 func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool  { return false }
-func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
+func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
