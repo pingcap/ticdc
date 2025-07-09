@@ -38,7 +38,6 @@ import (
 type RedoMeta struct {
 	captureID    config.CaptureID
 	changeFeedID common.ChangeFeedID
-	enabled      bool
 
 	// running means the meta manager now running normally.
 	running atomic.Bool
@@ -72,7 +71,6 @@ func NewRedoMeta(
 		captureID:         config.GetGlobalServerConfig().AdvertiseAddr,
 		changeFeedID:      changefeedID,
 		uuidGenerator:     uuid.NewGenerator(),
-		enabled:           true,
 		cfg:               cfg,
 		startTs:           checkpoint,
 		flushIntervalInMs: cfg.MetaFlushIntervalInMs,

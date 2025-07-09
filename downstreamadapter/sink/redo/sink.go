@@ -36,7 +36,6 @@ import (
 // redo log resolved ts. It implements Sink interface.
 type Sink struct {
 	ctx       context.Context
-	enabled   bool
 	cfg       *writer.LogWriterConfig
 	ddlWriter writer.RedoLogWriter
 	dmlWriter writer.RedoLogWriter
@@ -62,8 +61,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
 ) *Sink {
 	s := &Sink{
-		ctx:     ctx,
-		enabled: true,
+		ctx: ctx,
 		cfg: &writer.LogWriterConfig{
 			ConsistentConfig:  *cfg,
 			CaptureID:         config.GetGlobalServerConfig().AdvertiseAddr,
