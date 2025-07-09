@@ -291,6 +291,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		default:
+			// TODO: optimize
 			frags, ok := ch.GetMultipleNoGroup(buffer)
 			if !ok {
 				return errors.Trace(ctx.Err())
