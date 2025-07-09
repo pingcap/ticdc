@@ -155,7 +155,7 @@ func (c *cluster) moveAllTables(sourceNode, targetNode string) error {
 			// table trigger dispatcher is not support to move, except the maintainer is crashed
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		err := c.
 			client.

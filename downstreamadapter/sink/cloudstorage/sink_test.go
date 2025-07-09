@@ -115,6 +115,7 @@ func TestBasicFunctionality(t *testing.T) {
 	}
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
+	dmlEvent.TableInfoVersion = job.BinlogInfo.FinishedTS
 	dmlEvent.PostTxnFlushed = []func(){
 		func() {
 			count.Add(1)
