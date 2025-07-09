@@ -588,7 +588,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				// to keep the order of the resolvedTs and the message.
 				c.flushResolvedTs(ctx, resolvedTsCacheMap[m.serverID], m.serverID, workerIndex)
 				c.sendMsg(ctx, tMsg, m.postSendFunc)
-				log.Error("send msg to eventcollector", zap.Any("msg", m.e))
 				m.reset()
 			}
 			batchM = batchM[:0]
