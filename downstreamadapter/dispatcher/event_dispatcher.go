@@ -43,9 +43,9 @@ type EventDispatcher struct {
 	// only for simple protocol
 	BootstrapState bootstrapState
 	redoEnable     bool
-	// redoGlobalTs is updated by maintainer, all events can't replicate util the commit-ts is greater than redoGlobalTs
+	// redoGlobalTs is updated by the maintainer. Events with a commit-ts greater than redoGlobalTs are cached until the redo log catches up.
 	redoGlobalTs *atomic.Uint64
-	// cacheEvents used to store the events which  commit-ts is not greater than redoGlobalTs
+	// cacheEvents is used to store events with a commit-ts greater than redoGlobalTs
 	cacheEvents struct {
 		sync.Mutex
 		events chan cacheEvents
