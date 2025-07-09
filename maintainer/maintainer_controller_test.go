@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -29,11 +30,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
+	"go.uber.org/zap"
 )
 
 func TestSchedule(t *testing.T) {
@@ -318,9 +322,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 				CheckpointTs:       2,
 			}
 			s.spanController.UpdateStatus(spanReplica, status)
-
 		}
-
 	}
 	require.Equal(t, 0, s.operatorController.OperatorSize())
 	require.Equal(t, 600, s.spanController.GetReplicatingSize())
@@ -373,6 +375,408 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 	// balance after the schedule
 	require.Equal(t, 300, s.spanController.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 300, s.spanController.GetTaskSizeByNodeID("node2"))
+}
+
+func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
+	nodeManager.GetAliveNodes()["node3"] = &node.Info{ID: "node3"}
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test")
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1")
+
+	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
+		Scheduler: &config.ChangefeedSchedulerConfig{
+			EnableTableAcrossNodes: true,
+			WriteKeyThreshold:      1000,
+			RegionThreshold:        20,
+		},
+	}, ddlSpan, 1000, 0)
+
+	nodeIDList := []node.ID{"node1", "node2", "node3"}
+	// make a group
+	regionCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
+	totalSpan := common.TableIDToComparableSpan(int64(1))
+
+	spanLists := make([]*replica.SpanReplication, 6)
+	// span1
+	startKey := appendNew(totalSpan.StartKey, byte('a'))
+	endKey := appendNew(totalSpan.StartKey, byte('b'))
+	span1 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	spanReplica := replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span1, 1)
+	spanReplica.SetNodeID(nodeIDList[1])
+	regionCache.SetRegions(fmt.Sprintf("%s-%s", span1.StartKey, span1.EndKey), []*tikv.Region{
+		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'a'), appendNew(startKey, 'b')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'b'), appendNew(startKey, 'c')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'c'), endKey),
+	})
+	spanLists[0] = spanReplica
+	// span2
+	startKey = appendNew(totalSpan.StartKey, byte('b'))
+	endKey = appendNew(totalSpan.StartKey, byte('c'))
+	span2 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span2, 1)
+	spanReplica.SetNodeID(nodeIDList[0])
+	regionCache.SetRegions(fmt.Sprintf("%s-%s", span2.StartKey, span2.EndKey), []*tikv.Region{
+		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'a'), endKey),
+	})
+	spanLists[1] = spanReplica
+	// span3
+	startKey = appendNew(totalSpan.StartKey, byte('c'))
+	endKey = appendNew(totalSpan.StartKey, byte('d'))
+	span3 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span3, 1)
+	spanReplica.SetNodeID(nodeIDList[1])
+	regionCache.SetRegions(fmt.Sprintf("%s-%s", span3.StartKey, span3.EndKey), []*tikv.Region{
+		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'a'), endKey),
+	})
+	spanLists[2] = spanReplica
+	// span4
+	startKey = appendNew(totalSpan.StartKey, byte('d'))
+	endKey = appendNew(totalSpan.StartKey, byte('e'))
+	span4 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span4, 1)
+	spanReplica.SetNodeID(nodeIDList[2])
+	regionCache.SetRegions(fmt.Sprintf("%s-%s", span4.StartKey, span4.EndKey), []*tikv.Region{
+		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'a'), endKey),
+	})
+	spanLists[3] = spanReplica
+	// span5
+	startKey = appendNew(totalSpan.StartKey, byte('e'))
+	endKey = appendNew(totalSpan.StartKey, byte('f'))
+	span5 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span5, 1)
+	spanReplica.SetNodeID(nodeIDList[0])
+	regionCache.SetRegions(fmt.Sprintf("%s-%s", span5.StartKey, span5.EndKey), []*tikv.Region{
+		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'a'), endKey),
+	})
+	spanLists[4] = spanReplica
+	// span6
+	startKey = appendNew(totalSpan.StartKey, byte('f'))
+	endKey = totalSpan.EndKey
+	span6 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span6, 1)
+	spanReplica.SetNodeID(nodeIDList[2])
+	regionCache.SetRegions(fmt.Sprintf("%s-%s", span6.StartKey, span6.EndKey), []*tikv.Region{
+		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'a'), endKey),
+	})
+	spanLists[5] = spanReplica
+
+	currentTime := time.Now()
+	for j := 0; j < 6; j++ {
+		spanReplica = spanLists[j]
+		controller.spanController.AddReplicatingSpan(spanReplica)
+
+		status := &heartbeatpb.TableSpanStatus{
+			ID:                 spanReplica.ID.ToPB(),
+			ComponentStatus:    heartbeatpb.ComponentState_Working,
+			EventSizePerSecond: 200,
+			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
+		}
+		// provide the last three traffic status
+		for i := 0; i < 3; i++ {
+			controller.spanController.UpdateStatus(spanReplica, status)
+		}
+
+		log.Info("spanReplica", zap.Any("j is", j), zap.Any("id", spanReplica.ID), zap.Any("span", common.FormatTableSpan(spanReplica.Span)))
+	}
+
+	// first keep the system is balanced
+	// node1 | node2 | node3
+	// 200   | 200   | 200
+	// 200   | 200   | 200
+	require.Equal(t, 0, controller.operatorController.OperatorSize())
+	require.Equal(t, 6, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node3"))
+
+	// increase the traffic of span3 and span4
+	// node1 | node2 | node3
+	// 200   | 600   | 500
+	// 200   | 200   | 200
+	spanReplica3 := spanLists[2]
+	spanReplica4 := spanLists[3]
+	status3 := &heartbeatpb.TableSpanStatus{
+		ID:                 spanReplica3.ID.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		EventSizePerSecond: 600,
+		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
+	}
+	status4 := &heartbeatpb.TableSpanStatus{
+		ID:                 spanReplica4.ID.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		EventSizePerSecond: 500,
+		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
+	}
+	// provide the last three traffic status
+	for i := 0; i < 2; i++ {
+		controller.spanController.UpdateStatus(spanReplica3, status3)
+		controller.spanController.UpdateStatus(spanReplica4, status4)
+	}
+
+	// check the balance result, check no operator here
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	require.Equal(t, controller.operatorController.OperatorSize(), 0)
+
+	// update the traffic again, will split the spanReplica1
+	controller.spanController.UpdateStatus(spanReplica3, status3)
+	controller.spanController.UpdateStatus(spanReplica4, status4)
+
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	require.Equal(t, controller.operatorController.OperatorSize(), 1)
+	operatorItem := controller.operatorController.GetAllOperators()[0]
+	require.Equal(t, operatorItem.Type(), "split")
+	require.Equal(t, operatorItem.ID(), spanLists[0].ID)
+
+	operatorItem.Start()
+	operatorItem.PostFinish()
+	controller.operatorController.RemoveOp(operatorItem.ID())
+
+	// will get 2 new add operator
+	require.Equal(t, controller.operatorController.OperatorSize(), 2)
+	operators := controller.operatorController.GetAllOperators()
+	require.Equal(t, operators[0].Type(), "add")
+	require.Equal(t, operators[1].Type(), "add")
+	spanReplicaID7 := operators[0].ID()
+	spanReplica7 := controller.spanController.GetTaskByID(spanReplicaID7)
+	log.Info("spanReplica7", zap.Any("id", spanReplica7.ID), zap.Any("span", common.FormatTableSpan(spanReplica7.Span)))
+	spanReplicaID8 := operators[1].ID()
+	spanReplica8 := controller.spanController.GetTaskByID(spanReplicaID8)
+	log.Info("spanReplica8", zap.Any("id", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
+	operators[0].Start()
+	operators[0].PostFinish()
+	operators[1].Start()
+	operators[1].PostFinish()
+	controller.operatorController.RemoveOp(operators[0].ID())
+	controller.operatorController.RemoveOp(operators[1].ID())
+
+	require.Equal(t, 7, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 3, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node3"))
+
+	startKey = spanReplica8.Span.StartKey
+	endKey = spanReplica8.Span.EndKey
+
+	startKeyofSpan1 := appendNew(totalSpan.StartKey, byte('a'))
+	endKeyofSpan1 := appendNew(totalSpan.StartKey, byte('b'))
+	regionCache.SetRegions(fmt.Sprintf("%s-%s", startKey, endKey), []*tikv.Region{
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKeyofSpan1, 'b'), appendNew(startKeyofSpan1, 'c')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKeyofSpan1, 'c'), endKeyofSpan1),
+	})
+
+	// update traffic for the new span replication
+	// node1 | node2 | node3
+	// 200   | 600   | 500
+	// 200   | 150   | 200
+	// 50    |       |
+	status7 := &heartbeatpb.TableSpanStatus{
+		ID:                 spanReplicaID7.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		EventSizePerSecond: 50,
+		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
+	}
+	status8 := &heartbeatpb.TableSpanStatus{
+		ID:                 spanReplicaID8.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		EventSizePerSecond: 150,
+		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
+	}
+
+	// provide the last three traffic status
+	for i := 0; i < 3; i++ {
+		controller.spanController.UpdateStatus(spanReplica7, status7)
+		controller.spanController.UpdateStatus(spanReplica8, status8)
+	}
+
+	// will split spanReplica8
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	require.Equal(t, controller.operatorController.OperatorSize(), 1)
+	operatorItem = controller.operatorController.GetAllOperators()[0]
+	require.Equal(t, operatorItem.Type(), "split")
+	require.Equal(t, operatorItem.ID(), spanReplicaID8)
+
+	operatorItem.Start()
+	operatorItem.PostFinish()
+	controller.operatorController.RemoveOp(operatorItem.ID())
+
+	// will get 2 new add operator
+	require.Equal(t, controller.operatorController.OperatorSize(), 2)
+	operators = controller.operatorController.GetAllOperators()
+	require.Equal(t, operators[0].Type(), "add")
+	require.Equal(t, operators[1].Type(), "add")
+	spanReplicaID9 := operators[0].ID()
+	spanReplica9 := controller.spanController.GetTaskByID(spanReplicaID9)
+	log.Info("spanReplica9", zap.Any("id", spanReplica9.ID), zap.Any("span", common.FormatTableSpan(spanReplica9.Span)))
+	spanReplicaID10 := operators[1].ID()
+	spanReplica10 := controller.spanController.GetTaskByID(spanReplicaID10)
+	log.Info("spanReplica10", zap.Any("id", spanReplica10.ID), zap.Any("span", common.FormatTableSpan(spanReplica10.Span)))
+	operators[0].Start()
+	operators[0].PostFinish()
+	operators[1].Start()
+	operators[1].PostFinish()
+	controller.operatorController.RemoveOp(operators[0].ID())
+	controller.operatorController.RemoveOp(operators[1].ID())
+
+	require.Equal(t, 8, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 4, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node3"))
+
+	// update the traffic for the new span replication
+	// node1 | node2 | node3
+	// 200   | 600   | 500
+	// 200   | 50   | 200
+	// 50    |       |
+	// 100   |       |
+	status9 := &heartbeatpb.TableSpanStatus{
+		ID:                 spanReplicaID9.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		EventSizePerSecond: 100,
+		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
+	}
+	status10 := &heartbeatpb.TableSpanStatus{
+		ID:                 spanReplicaID10.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		EventSizePerSecond: 50,
+		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
+	}
+
+	// provide the last three traffic status
+	for i := 0; i < 3; i++ {
+		controller.spanController.UpdateStatus(spanReplica9, status9)
+		controller.spanController.UpdateStatus(spanReplica10, status10)
+	}
+
+	// trigger merge, merge spanReplica7 and spanReplica9
+	// node1 | node2 | node3
+	// 200   | 600   | 500
+	// 200   | 50   | 200
+	// 150   |       |
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	require.Equal(t, controller.operatorController.OperatorSize(), 3)
+	typeCount := make(map[string][]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
+
+	for _, op := range controller.operatorController.GetAllOperators() {
+		typeCount[op.Type()] = append(typeCount[op.Type()], op)
+	}
+	require.Equal(t, len(typeCount["occupy"]), 2)
+	require.Equal(t, len(typeCount["merge"]), 1)
+	relatedIDs := []common.DispatcherID{typeCount["occupy"][0].ID(), typeCount["occupy"][1].ID()}
+	require.Contains(t, relatedIDs, spanReplicaID7)
+	require.Contains(t, relatedIDs, spanReplicaID9)
+	spanReplicaID11 := typeCount["merge"][0].ID()
+	spanReplica11 := controller.spanController.GetTaskByID(spanReplicaID11)
+	typeCount["merge"][0].Start()
+	typeCount["merge"][0].PostFinish()
+	controller.operatorController.RemoveOp(typeCount["merge"][0].ID())
+	controller.operatorController.RemoveOp(typeCount["occupy"][0].ID())
+	controller.operatorController.RemoveOp(typeCount["occupy"][1].ID())
+
+	require.Equal(t, 7, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 3, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node3"))
+
+	status11 := &heartbeatpb.TableSpanStatus{
+		ID:                 spanReplicaID11.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		EventSizePerSecond: 150,
+		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
+	}
+
+	// provide the last three traffic status
+	for i := 0; i < 3; i++ {
+		controller.spanController.UpdateStatus(spanReplica11, status11)
+	}
+
+	// trigger move
+	// node1 | node2 | node3
+	// 200   | 600   | 500
+	// 200   |       | 200
+	// 150   |       |
+	// 50    |       |
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	for _, operator := range controller.operatorController.GetAllOperators() {
+		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("id", operator.ID()))
+	}
+	require.Equal(t, controller.operatorController.OperatorSize(), 1)
+	operatorItem = controller.operatorController.GetAllOperators()[0]
+	require.Equal(t, operatorItem.Type(), "move")
+	require.Equal(t, operatorItem.ID(), spanReplicaID10)
+	operatorItem.Start()
+	operatorItem.(*operator.MoveDispatcherOperator).SetOriginNodeStopped()
+	operatorItem.Schedule()
+	operatorItem.PostFinish()
+	controller.operatorController.RemoveOp(operatorItem.ID())
+
+	require.Equal(t, 7, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 4, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 1, controller.spanController.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node3"))
+
+	// trigger merge
+	// node1 | node2 | node3
+	// 200   | 600   | 500
+	// 400   |       | 200
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	require.Equal(t, controller.operatorController.OperatorSize(), 4)
+	typeCount = make(map[string][]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
+
+	for _, op := range controller.operatorController.GetAllOperators() {
+		typeCount[op.Type()] = append(typeCount[op.Type()], op)
+	}
+	require.Equal(t, len(typeCount["occupy"]), 3)
+	require.Equal(t, len(typeCount["merge"]), 1)
+	relatedIDs = []common.DispatcherID{typeCount["occupy"][0].ID(), typeCount["occupy"][1].ID(), typeCount["occupy"][2].ID()}
+	require.Contains(t, relatedIDs, spanReplicaID10)
+	require.Contains(t, relatedIDs, spanReplicaID11)
+	require.Contains(t, relatedIDs, spanLists[1].ID)
+	spanReplicaID12 := typeCount["merge"][0].ID()
+	spanReplica12 := controller.spanController.GetTaskByID(spanReplicaID12)
+	typeCount["merge"][0].Start()
+	typeCount["merge"][0].PostFinish()
+	controller.operatorController.RemoveOp(typeCount["merge"][0].ID())
+	controller.operatorController.RemoveOp(typeCount["occupy"][0].ID())
+	controller.operatorController.RemoveOp(typeCount["occupy"][1].ID())
+	controller.operatorController.RemoveOp(typeCount["occupy"][2].ID())
+
+	require.Equal(t, 5, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 1, controller.spanController.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node3"))
+
+	// update the traffic for the new span replication
+	status12 := &heartbeatpb.TableSpanStatus{
+		ID:                 spanReplicaID12.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		EventSizePerSecond: 400,
+		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
+	}
+
+	// provide the last three traffic status
+	for i := 0; i < 3; i++ {
+		controller.spanController.UpdateStatus(spanReplica12, status12)
+	}
+
+	// no more operators
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	require.Equal(t, controller.operatorController.OperatorSize(), 0)
 }
 
 func TestBalance(t *testing.T) {

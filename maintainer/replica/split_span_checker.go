@@ -242,9 +242,9 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	}
 
 	// we have no need to make spans count too strict, it's ok for a small amount of spans.
-	upperSpanCount = upperSpanCount * 2
+	upperSpanCount = max(upperSpanCount, len(aliveNodeIDs)) * 2
 
-	if upperSpanCount > len(s.allTasks) {
+	if upperSpanCount >= len(s.allTasks) {
 		log.Info("the span count is proper, so we don't need merge spans",
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Int64("groupID", s.groupID),
@@ -365,6 +365,9 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 	sort.Slice(spanStatus, func(i, j int) bool {
 		return bytes.Compare(spanStatus[i].Span.StartKey, spanStatus[j].Span.StartKey) < 0
 	})
+	for _, spanStatusItem := range spanStatus {
+		log.Info("sorted spanStatus", zap.Any("span", common.FormatTableSpan(spanStatusItem.Span)), zap.Any("nodeID", spanStatusItem.GetNodeID()))
+	}
 
 	mergeSpans := make([]*SpanReplication, 0)
 	prev := spanStatus[0]
@@ -376,17 +379,21 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		if len(mergeSpans) > 1 {
 			results = append(results, SplitSpanCheckResult{
 				OpType:     OpMerge,
-				MergeSpans: mergeSpans,
+				MergeSpans: append([]*SpanReplication{}, mergeSpans...),
 			})
 		}
 		mergeSpans = mergeSpans[:0]
 		mergeSpans = append(mergeSpans, cur.SpanReplication)
-		regionCount += cur.regionCount
-		traffic += cur.lastThreeTraffic[latestTrafficIndex]
+		regionCount = cur.regionCount
+		traffic = cur.lastThreeTraffic[latestTrafficIndex]
 	}
 
 	idx := 1
 	for idx < len(spanStatus) {
+		log.Info("idx", zap.Any("idx", idx), zap.Any("len of mergeSpans", len(mergeSpans)))
+		for _, mergeSpan := range mergeSpans {
+			log.Info("mergeSpan", zap.Any("span", common.FormatTableSpan(mergeSpan.Span)))
+		}
 		cur := spanStatus[idx]
 		if !bytes.Equal(prev.Span.EndKey, cur.Span.StartKey) {
 			// just panic for debug
@@ -594,21 +601,25 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	log.Info("minTrafficNodeID", zap.Any("minTrafficNodeID", minTrafficNodeID))
 	log.Info("maxTrafficNodeID", zap.Any("maxTrafficNodeID", maxTrafficNodeID))
 
-	shouldBalance := true
 	// to avoid the fluctuation of traffic, we check traffic in last three time.
 	// only when each time, the min traffic is less than 80% of the avg traffic,
-	// and the max traffic is larger than 120% of the avg traffic,
+	// or the max traffic is larger than 120% of the avg traffic,
 	// we consider the traffic is imbalanced.
+	shouldBalance := true
 	for idx, traffic := range lastThreeTrafficPerNode[minTrafficNodeID] {
 		if traffic > avgLastThreeTraffic[idx]*0.8 {
 			shouldBalance = false
 			break
 		}
 	}
-	for idx, traffic := range lastThreeTrafficPerNode[maxTrafficNodeID] {
-		if traffic < avgLastThreeTraffic[idx]*1.2 {
-			shouldBalance = false
-			break
+
+	if !shouldBalance {
+		shouldBalance = true
+		for idx, traffic := range lastThreeTrafficPerNode[maxTrafficNodeID] {
+			if traffic < avgLastThreeTraffic[idx]*1.2 {
+				shouldBalance = false
+				break
+			}
 		}
 	}
 

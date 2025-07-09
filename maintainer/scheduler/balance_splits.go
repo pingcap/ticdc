@@ -125,6 +125,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 					}
 				}
 			} else if checkResult.OpType == replica.OpMerge {
+				// TODO(hyy):why we don't just use AddMergeOperator?
 				operators := make([]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(checkResult.MergeSpans))
 				for _, span := range checkResult.MergeSpans {
 					op := operator.NewOccupyDispatcherOperator(s.spanController, span)

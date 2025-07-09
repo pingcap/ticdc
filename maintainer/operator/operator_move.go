@@ -202,3 +202,12 @@ func (m *MoveDispatcherOperator) String() string {
 func (m *MoveDispatcherOperator) Type() string {
 	return "move"
 }
+
+// just for test.
+// TODO:find a more proper way to do this
+func (m *MoveDispatcherOperator) SetOriginNodeStopped() {
+	m.lck.Lock()
+	defer m.lck.Unlock()
+
+	m.originNodeStopped = true
+}
