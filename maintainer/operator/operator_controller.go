@@ -142,6 +142,11 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
+	return oc.AddOperatorWithoutLock(op)
+}
+
+// AddOperator adds an operator to the controller, if the operator already exists, return false.
+func (oc *Controller) AddOperatorWithoutLock(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
 	if _, ok := oc.operators[op.ID()]; ok {
 		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),

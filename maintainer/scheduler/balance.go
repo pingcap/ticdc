@@ -123,7 +123,7 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 		spansNum := len(s.nodeManager.GetAliveNodes()) * 2
 		splitSpans := s.splitter.Split(context.Background(), result.Span.Span, spansNum)
 		if len(splitSpans) > 1 {
-			op := operator.NewSplitDispatcherOperator(s.spanController, result.Span, splitSpans)
+			op := operator.NewSplitDispatcherOperator(s.spanController, result.Span, splitSpans, []node.ID{}, nil)
 			ret := s.operatorController.AddOperator(op)
 			if ret {
 				splitCount++

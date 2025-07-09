@@ -375,7 +375,12 @@ func (c *Controller) addSchedulingReplicaSetWithoutLock(span *replica.SpanReplic
 }
 
 // ReplaceReplicaSet replaces replica sets
-func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplication, newSpans []*heartbeatpb.TableSpan, checkpointTs uint64) {
+func (c *Controller) ReplaceReplicaSet(
+	oldReplications []*replica.SpanReplication,
+	newSpans []*heartbeatpb.TableSpan,
+	checkpointTs uint64,
+	splitTargetNodes []node.ID,
+) []*replica.SpanReplication {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -405,8 +410,16 @@ func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplicatio
 		news = append(news, new)
 	}
 
-	// 3. add the new replica set to the db
-	c.addAbsentReplicaSetWithoutLock(news...)
+	if len(splitTargetNodes) > 0 && len(splitTargetNodes) == len(news) {
+		// the spans have the target nodes
+		for idx, newSpan := range news {
+			c.addSchedulingReplicaSetWithoutLock(newSpan, splitTargetNodes[idx])
+		}
+	} else {
+		c.addAbsentReplicaSetWithoutLock(news...)
+	}
+
+	return news
 }
 
 // IsDDLDispatcher checks if the dispatcher is a DDL dispatcher

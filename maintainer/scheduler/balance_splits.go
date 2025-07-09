@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/node"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -107,7 +108,9 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 			if checkResult.OpType == replica.OpSplit {
 				splitSpans := s.splitter.Split(context.Background(), checkResult.SplitSpan.Span, 2)
 				if len(splitSpans) > 1 {
-					op := operator.NewSplitDispatcherOperator(s.spanController, checkResult.SplitSpan, splitSpans)
+					op := operator.NewSplitDispatcherOperator(s.spanController, checkResult.SplitSpan, splitSpans, checkResult.SplitTargetNodes, func(span *replica.SpanReplication, node node.ID) bool {
+						return s.operatorController.AddOperatorWithoutLock(operator.NewAddDispatcherOperator(s.spanController, span, node))
+					})
 					ret := s.operatorController.AddOperator(op)
 					if ret {
 						availableSize--

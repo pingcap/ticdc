@@ -144,7 +144,8 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 type SplitSpanCheckResult struct {
 	OpType OpType
 
-	SplitSpan *SpanReplication
+	SplitSpan        *SpanReplication
+	SplitTargetNodes []node.ID
 
 	MergeSpans []*SpanReplication
 
@@ -522,8 +523,9 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		if s.writeThreshold > 0 {
 			if status.trafficScore > trafficScoreThreshold {
 				results = append(results, SplitSpanCheckResult{
-					OpType:    OpSplit,
-					SplitSpan: status.SpanReplication,
+					OpType:           OpSplit,
+					SplitSpan:        status.SpanReplication,
+					SplitTargetNodes: []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
 				})
 				continue
 			}
@@ -547,8 +549,9 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		if s.regionThreshold > 0 {
 			if status.regionCount > s.regionThreshold {
 				results = append(results, SplitSpanCheckResult{
-					OpType:    OpSplit,
-					SplitSpan: status.SpanReplication,
+					OpType:           OpSplit,
+					SplitSpan:        status.SpanReplication,
+					SplitTargetNodes: []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
 				})
 			}
 		}
@@ -672,8 +675,9 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	results = append(results, SplitSpanCheckResult{
-		OpType:    OpSplit,
-		SplitSpan: span.SpanReplication,
+		OpType:           OpSplit,
+		SplitSpan:        span.SpanReplication,
+		SplitTargetNodes: []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
 	})
 	return
 }
