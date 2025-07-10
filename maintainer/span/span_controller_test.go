@@ -23,6 +23,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
@@ -371,11 +372,11 @@ func TestReplaceReplicaSet(t *testing.T) {
 
 	notExists := &replica.SpanReplication{ID: common.NewDispatcherID()}
 	require.PanicsWithValue(t, "old replica set not found", func() {
-		controller.ReplaceReplicaSet([]*replica.SpanReplication{notExists}, []*heartbeatpb.TableSpan{{}, {}}, 1)
+		controller.ReplaceReplicaSet([]*replica.SpanReplication{notExists}, []*heartbeatpb.TableSpan{{}, {}}, 1, []node.ID{})
 	})
 	require.Len(t, controller.GetAllTasks(), 2)
 
-	controller.ReplaceReplicaSet([]*replica.SpanReplication{replicaSpan}, []*heartbeatpb.TableSpan{testutil.GetTableSpanByID(3), testutil.GetTableSpanByID(4)}, 5)
+	controller.ReplaceReplicaSet([]*replica.SpanReplication{replicaSpan}, []*heartbeatpb.TableSpan{testutil.GetTableSpanByID(3), testutil.GetTableSpanByID(4)}, 5, []node.ID{})
 	require.Len(t, controller.GetAllTasks(), 3)
 	require.Equal(t, 2, controller.GetAbsentSize())
 	require.Equal(t, 2, controller.GetTaskSizeBySchemaID(1))
