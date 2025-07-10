@@ -30,35 +30,35 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'fail_over_ddl_mix_with_syncpoint'
+	'generate_column many_pk_or_uk multi_source'
 	# G01
-	'fail_over_ddl_mix_with_syncpoint'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G02
-	'fail_over_ddl_mix_with_syncpoint'
+	'availability ddl_for_split_tables_with_failover'
 	# G03
-	'fail_over_ddl_mix_with_syncpoint'
+	''
 	# G04
-	'fail_over_ddl_mix_with_syncpoint'
+	'syncpoint syncpoint_check_ts'
 	# G05
-	'fail_over_ddl_mix_with_syncpoint'
+	'move_table ddl_for_split_tables_with_merge_and_split'
 	# G06
-	'fail_over_ddl_mix_with_syncpoint'
+	'cdc ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'fail_over_ddl_mix_with_syncpoint'
+	'resolve_lock merge_table'
 	# G08
-	'fail_over_ddl_mix_with_syncpoint'
+	'bank'
 	# G09
-	'fail_over_ddl_mix_with_syncpoint'
+	'drop_many_tables'
 	# G10
-	'fail_over_ddl_mix_with_syncpoint'
+	'default_value http_proxies'
 	# G11
-	'fail_over_ddl_mix_with_syncpoint'
+	'ddl_reentrant force_replicate_table'
 	# G12
-	'fail_over_ddl_mix_with_syncpoint'
+	'tidb_mysql_test ddl_with_random_move_table'
 	# G13
-	'fail_over_ddl_mix_with_syncpoint'
+	'fail_over region_merge'
 	# G14
-	'fail_over_ddl_mix_with_syncpoint'
+	'fail_over_ddl_mix'
 	# G15
 	'fail_over_ddl_mix_with_syncpoint'
 )
@@ -92,7 +92,7 @@ kafka_groups=(
 	# G10
 	''
 	# G11
-	''
+	fail_over_ddl_mix_with_syncpoint
 	# G12
 	# ddl_with_random_move_table
 	''
@@ -102,7 +102,6 @@ kafka_groups=(
 	# fail_over_ddl_mix
 	''
 	# G15
-	# fail_over_ddl_mix_with_syncpoint
 	'debezium'
 )
 
@@ -133,7 +132,7 @@ pulsar_groups=(
 	# G10
 	''
 	# G11
-	''
+	fail_over_ddl_mix_with_syncpoint
 	# G12
 	'ddl_with_random_move_table'
 	# G13
@@ -142,7 +141,6 @@ pulsar_groups=(
 	# fail_over_ddl_mix
 	''
 	# G15
-	# fail_over_ddl_mix_with_syncpoint
 	'debezium'
 )
 
