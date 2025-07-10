@@ -38,7 +38,7 @@ type eventGetter interface {
 // schemaGetter is the interface for getting schema info and ddl events
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
-	FetchTableDDLEvents(tableID int64, filter filter.Filter, startTs, endTs uint64) ([]pevent.DDLEvent, error)
+	FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]pevent.DDLEvent, error)
 	GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
@@ -140,6 +140,7 @@ func (s *eventScanner) scan(
 // fetchDDLEvents retrieves DDL events for the scan
 func (s *eventScanner) fetchDDLEvents(session *session) ([]pevent.DDLEvent, error) {
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
+		session.dispatcherStat.info.GetID(),
 		session.dataRange.Span.TableID,
 		session.dispatcherStat.filter,
 		session.dataRange.StartTs,
