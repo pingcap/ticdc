@@ -847,6 +847,99 @@ func TestBalance(t *testing.T) {
 	require.Equal(t, 100, s.spanController.GetTaskSizeByNodeID("node1"))
 }
 
+func TestDefaultSpanIntoSplit(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test")
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1")
+	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
+		Scheduler: &config.ChangefeedSchedulerConfig{
+			EnableTableAcrossNodes:     true,
+			WriteKeyThreshold:          1000,
+			RegionThreshold:            8,
+			SchedulingTaskCountPerNode: 10,
+		},
+	}, ddlSpan, 1000, 0)
+	totalSpan := common.TableIDToComparableSpan(1)
+	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
+	dispatcherID := common.NewDispatcherID()
+	spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1)
+	spanReplica.SetNodeID("node1")
+	controller.spanController.AddReplicatingSpan(spanReplica)
+
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	controller.schedulerController.GetScheduler(scheduler.BalanceScheduler).Execute()
+	controller.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+	require.Equal(t, 0, controller.operatorController.OperatorSize())
+
+	require.Equal(t, 1, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 1, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 0, controller.spanController.GetTaskSizeByNodeID("node2"))
+
+	// update the traffic for the new span replication, to make split
+	status := &heartbeatpb.TableSpanStatus{
+		ID:                 spanReplica.ID.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		EventSizePerSecond: 1200,
+		CheckpointTs:       2,
+	}
+
+	regionCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
+	startKey := spanReplica.Span.StartKey
+	endKey := spanReplica.Span.EndKey
+	regionCache.SetRegions(fmt.Sprintf("%s-%s", startKey, endKey), []*tikv.Region{
+		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'a'), appendNew(startKey, 'b')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'b'), appendNew(startKey, 'c')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'c'), appendNew(startKey, 'd')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'd'), appendNew(startKey, 'e')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'e'), appendNew(startKey, 'f')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'f'), appendNew(startKey, 'g')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'g'), appendNew(startKey, 'h')),
+		testutil.MockRegionWithKeyRange(uint64(1), appendNew(startKey, 'h'), endKey),
+	})
+
+	for i := 0; i < 3; i++ {
+		controller.spanController.UpdateStatus(spanReplica, status)
+	}
+
+	controller.schedulerController.GetScheduler(scheduler.BalanceScheduler).Execute()
+	require.Equal(t, 1, controller.operatorController.OperatorSize())
+	operatorItem := controller.operatorController.GetAllOperators()[0]
+	require.Equal(t, operatorItem.Type(), "split")
+	require.Equal(t, operatorItem.ID(), spanReplica.ID)
+	operatorItem.Start()
+	operatorItem.PostFinish()
+	controller.operatorController.RemoveOp(operatorItem.ID())
+
+	require.Equal(t, 0, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 4, controller.spanController.GetAbsentSize())
+
+	controller.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+	require.Equal(t, 4, controller.operatorController.OperatorSize())
+
+	for _, operatorItem := range controller.operatorController.GetAllOperators() {
+		require.Equal(t, operatorItem.Type(), "add")
+		operatorItem.Start()
+		operatorItem.PostFinish()
+		controller.operatorController.RemoveOp(operatorItem.ID())
+	}
+
+	require.Equal(t, 4, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 0, controller.spanController.GetAbsentSize())
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node2"))
+}
+
 func TestStoppedWhenMoving(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
