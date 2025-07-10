@@ -538,8 +538,9 @@ func (m *Maintainer) calCheckpointTs() {
 			return
 		}
 		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
+		log.Info("watermark in capture", zap.Any("id", id), zap.Any("m.checkpointTsByCapture[id]", m.checkpointTsByCapture[id]))
 	}
-
+	log.Info("maintainer cal checkpoint", zap.Any("newWatermark", newWatermark))
 	m.setWatermark(*newWatermark)
 }
 
@@ -584,6 +585,7 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 		if !ok || req.Watermark.Seq >= old.Seq {
 			m.checkpointTsByCapture[msg.From] = *req.Watermark
 		}
+		log.Info("maintainer onHeartBeatRequest", zap.Any("checkpointTsByCapture", m.checkpointTsByCapture))
 	}
 	m.controller.HandleStatus(msg.From, req.Statuses)
 	if req.Err != nil {
