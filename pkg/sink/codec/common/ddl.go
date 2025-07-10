@@ -14,8 +14,6 @@
 package common
 
 import (
-	"strings"
-
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -24,130 +22,127 @@ import (
 	"go.uber.org/zap"
 )
 
-// GetDDLActionType return DDL ActionType by the prefix
-// see https://github.com/pingcap/tidb/blob/master/pkg/meta/model/job.go
+// GetDDLActionType return DDL ActionType by the DDL query
+// see https://github.com/pingcap/tidb/blob/master/pkg/meta/model/job.go,
+// https://github.com/pingcap/tidb/blob/9accc3cfa3de44130537fcf9767623c436869aa6/pkg/ddl/executor.go#L1710
+// and https://github.com/pingcap/tidb/blob/9accc3cfa3de44130537fcf9767623c436869aa6/pkg/executor/ddl.go#L96
 func GetDDLActionType(query string) timodel.ActionType {
-	query = strings.ToLower(query)
-	// DDL related to the Database
-	if strings.HasPrefix(query, "create schema") || strings.HasPrefix(query, "create database") {
-		return timodel.ActionCreateSchema
+	p := parser.New()
+	stmt, err := p.ParseOneStmt(query, "", "")
+	if err != nil {
+		log.Panic("parse ddl query failed", zap.String("query", query), zap.Error(err))
+		return timodel.ActionNone
 	}
-	if strings.HasPrefix(query, "drop schema") || strings.HasPrefix(query, "drop database") {
-		return timodel.ActionDropSchema
-	}
-	// DDL related to the Table
-	if strings.HasPrefix(query, "create table") {
+	switch s := stmt.(type) {
+	case *ast.CreateTableStmt:
 		return timodel.ActionCreateTable
-	}
-	if strings.HasPrefix(query, "drop table") {
-		return timodel.ActionDropTable
-	}
-	if strings.HasPrefix(query, "recover table") {
+	case *ast.DropTableStmt:
+		if s.IsView {
+			return timodel.ActionDropView
+		} else {
+			return timodel.ActionDropTable
+		}
+	case *ast.AlterDatabaseStmt:
+		return timodel.ActionModifySchemaCharsetAndCollate
+	case *ast.AlterTableStmt:
+		if len(s.Specs) > 1 {
+			return timodel.ActionMultiSchemaChange
+		}
+		spec := s.Specs[0]
+		switch spec.Tp {
+		case ast.AlterTableAddColumns:
+			return timodel.ActionAddColumn
+		case ast.AlterTableAttributes:
+			return timodel.ActionAlterTableAttributes
+		case ast.AlterTableOption:
+			if len(spec.Options) > 1 {
+				return timodel.ActionMultiSchemaChange
+			}
+			option := spec.Options[0]
+			switch option.Tp {
+			case ast.TableOptionAutoIncrement, ast.TableOptionAutoRandomBase:
+				return timodel.ActionRebaseAutoID
+			case ast.TableOptionComment:
+				return timodel.ActionModifyTableComment
+			case ast.TableOptionCharset, ast.TableOptionCollate:
+				return timodel.ActionModifyTableCharsetAndCollate
+			case ast.TableOptionTTL, ast.TableOptionTTLEnable, ast.TableOptionTTLJobInterval:
+				return timodel.ActionAlterTTLInfo
+			}
+		case ast.AlterTableAddPartitions, ast.AlterTableAddLastPartition:
+			return timodel.ActionAddTablePartition
+		case ast.AlterTableDropPartition, ast.AlterTableDropFirstPartition:
+			return timodel.ActionDropTablePartition
+		case ast.AlterTableSetTiFlashReplica:
+			return timodel.ActionSetTiFlashReplica
+		case ast.AlterTableAddConstraint:
+			switch spec.Constraint.Tp {
+			case ast.ConstraintKey, ast.ConstraintIndex, ast.ConstraintUniq, ast.ConstraintUniqIndex, ast.ConstraintUniqKey:
+				return timodel.ActionAddIndex
+			case ast.ConstraintForeignKey:
+				return timodel.ActionAddForeignKey
+			case ast.ConstraintPrimaryKey:
+				return timodel.ActionAddPrimaryKey
+			}
+			return timodel.ActionAddCheckConstraint
+		case ast.AlterTableDropColumn:
+			return timodel.ActionDropColumn
+		case ast.AlterTableDropPrimaryKey:
+			return timodel.ActionDropPrimaryKey
+		case ast.AlterTableDropIndex:
+			return timodel.ActionDropIndex
+		case ast.AlterTableDropForeignKey:
+			return timodel.ActionDropForeignKey
+		case ast.AlterTableModifyColumn, ast.AlterTableChangeColumn:
+			return timodel.ActionModifyColumn
+		case ast.AlterTableAlterColumn:
+			return timodel.ActionSetDefaultValue
+		case ast.AlterTableRenameTable:
+			return timodel.ActionRenameTable
+		case ast.AlterTableRenameIndex:
+			return timodel.ActionRenameIndex
+		case ast.AlterTableTruncatePartition:
+			return timodel.ActionTruncateTable
+		case ast.AlterTablePartition:
+			return timodel.ActionAlterTablePartitioning
+		case ast.AlterTableRemovePartitioning:
+			return timodel.ActionRemovePartitioning
+		case ast.AlterTableReorganizePartition, ast.AlterTableReorganizeLastPartition, ast.AlterTableReorganizeFirstPartition:
+			return timodel.ActionReorganizePartition
+		case ast.AlterTableExchangePartition:
+			return timodel.ActionExchangeTablePartition
+		case ast.AlterTableIndexInvisible:
+			return timodel.ActionAlterIndexVisibility
+		case ast.AlterTableRemoveTTL:
+			return timodel.ActionAlterTTLRemove
+		default:
+			log.Panic("AlterTableType is not supported", zap.Any("tp", spec.Tp))
+		}
+	case *ast.CreateIndexStmt:
+		return timodel.ActionAddIndex
+	case *ast.CreateDatabaseStmt:
+		return timodel.ActionCreateSchema
+	case *ast.CreateViewStmt:
+		return timodel.ActionCreateView
+	case *ast.DropIndexStmt:
+		return timodel.ActionDropIndex
+	case *ast.DropDatabaseStmt:
+		return timodel.ActionDropSchema
+	case *ast.RecoverTableStmt:
 		return timodel.ActionRecoverTable
-	}
-	if strings.HasPrefix(query, "truncate") {
-		return timodel.ActionTruncateTable
-	}
-	if strings.HasPrefix(query, "rename table") {
-		if strings.Contains(query, ",") {
+	case *ast.RenameTableStmt:
+		if len(s.TableToTables) > 1 {
 			return timodel.ActionRenameTables
 		}
 		return timodel.ActionRenameTable
-	}
-
-	if strings.Contains(query, "add partition") {
-		return timodel.ActionAddTablePartition
-	}
-	if strings.Contains(query, "drop partition") {
-		return timodel.ActionDropTablePartition
-	}
-	if strings.Contains(query, "truncate partition") {
-		return timodel.ActionTruncateTablePartition
-	}
-	if strings.Contains(query, "reorganize partition") {
-		return timodel.ActionReorganizePartition
-	}
-
-	// ALTER TABLE partitioned_table EXCHANGE PARTITION p1 WITH TABLE non_partitioned_table
-	if strings.Contains(query, "exchange partition") {
-		return timodel.ActionExchangeTablePartition
-	}
-	if strings.Contains(query, "partition by") {
-		return timodel.ActionAlterTablePartitioning
-	}
-	if strings.Contains(query, "remove partitioning") {
-		return timodel.ActionRemovePartitioning
-	}
-
-	if strings.Contains(query, "character set") {
-		if strings.HasPrefix(query, "alter table") {
-			return timodel.ActionModifyTableCharsetAndCollate
+	case *ast.TruncateTableStmt:
+		if len(s.Table.PartitionNames) > 0 {
+			return timodel.ActionTruncateTablePartition
 		}
-		if strings.HasPrefix(query, "alter database") {
-			return timodel.ActionModifySchemaCharsetAndCollate
-		}
-		log.Panic("how to set action for the DDL", zap.String("query", query))
+		return timodel.ActionTruncateTable
 	}
 
-	if strings.Contains(query, "add primary key") {
-		return timodel.ActionAddPrimaryKey
-	}
-	if strings.Contains(query, "add index") ||
-		strings.Contains(query, "add key") ||
-		strings.Contains(query, "add unique index") ||
-		strings.Contains(query, "add unique key") ||
-		strings.Contains(query, "add fulltext index") ||
-		strings.Contains(query, "add fulltext key") ||
-		strings.HasPrefix(query, "create index") {
-		return timodel.ActionAddIndex
-	}
-	// todo: add unit test to verify this
-	if strings.Contains(query, "drop primary key") {
-		return timodel.ActionDropPrimaryKey
-	}
-	if strings.Contains(query, "drop index") {
-		return timodel.ActionDropIndex
-	}
-	if strings.Contains(query, "add foreign key") {
-		return timodel.ActionAddForeignKey
-	}
-	if strings.Contains(query, "drop foreign key") {
-		return timodel.ActionDropForeignKey
-	}
-	if strings.Contains(query, "rename index") {
-		return timodel.ActionRenameIndex
-	}
-
-	if strings.Contains(query, "set default") || strings.Contains(query, "drop default") {
-		return timodel.ActionSetDefaultValue
-	}
-
-	// DDL related to column
-	if strings.Contains(query, "add column") {
-		return timodel.ActionAddColumn
-	}
-	if strings.Contains(query, "drop column") {
-		return timodel.ActionDropColumn
-	}
-	if strings.Contains(query, "modify") {
-		return timodel.ActionModifyColumn
-	}
-	if strings.Contains(query, "change") {
-		return timodel.ActionModifyColumn
-	}
-
-	if strings.Contains(query, "auto_increment") {
-		return timodel.ActionRebaseAutoID
-	}
-
-	if strings.Contains(query, "invisible") {
-		return timodel.ActionAlterIndexVisibility
-	}
-	if strings.Contains(query, "create view") {
-		return timodel.ActionCreateView
-	}
-
-	log.Panic("how to set action for the DDL ?", zap.String("query", query))
+	log.Panic("unsupport ddl type", zap.String("query", query))
 	return timodel.ActionNone
 }
 

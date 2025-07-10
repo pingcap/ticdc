@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -46,11 +47,15 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 	fieldName string,
 	row *chunk.Row,
 	tableInfo *commonType.TableInfo,
+	columnSelector columnselector.Selector,
 ) error {
 	var err error
 	writer.WriteObjectField(fieldName, func() {
-		for i, colInfos := range tableInfo.GetColumns() {
-			err = c.writeDebeziumFieldValue(writer, row, i, colInfos)
+		for i, colInfo := range tableInfo.GetColumns() {
+			if !columnSelector.Select(colInfo) {
+				continue
+			}
+			err = c.writeDebeziumFieldValue(writer, row, i, colInfo)
 			if err != nil {
 				log.Error("write Debezium field value meet error", zap.Error(err))
 				break
@@ -924,18 +929,18 @@ func (c *dbzCodec) EncodeValue(
 				// after: An optional field that specifies the state of the row after the event occurred.
 				// Optional field that specifies the state of the row after the event occurred.
 				// In a delete event value, the after field is null, signifying that the row no longer exists.
-				err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo)
+				err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector)
 			} else if e.IsDelete() {
 				jWriter.WriteStringField("op", "d")
 				jWriter.WriteNullField("after")
-				err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo)
+				err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector)
 			} else if e.IsUpdate() {
 				jWriter.WriteStringField("op", "u")
 				if c.config.DebeziumOutputOldValue {
-					err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo)
+					err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector)
 				}
 				if err == nil {
-					err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo)
+					err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector)
 				}
 			}
 		})
@@ -955,6 +960,9 @@ func (c *dbzCodec) EncodeValue(
 						fieldsBuf := &bytes.Buffer{}
 						fieldsWriter := util.BorrowJSONWriter(fieldsBuf)
 						for _, col := range e.TableInfo.GetColumns() {
+							if !e.ColumnSelector.Select(col) {
+								continue
+							}
 							c.writeDebeziumFieldSchema(fieldsWriter, col)
 						}
 						if e.TableInfo.HasVirtualColumns() {
