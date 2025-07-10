@@ -1217,3 +1217,103 @@ func (m *mockThreadPool) Submit(_ threadpool.Task, _ time.Time) *threadpool.Task
 func (m *mockThreadPool) SubmitFunc(_ threadpool.FuncTask, _ time.Time) *threadpool.TaskHandle {
 	return nil
 }
+
+func TestLargeTableInitialization(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
+	nodeManager.GetAliveNodes()["node3"] = &node.Info{ID: "node3"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test")
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1")
+
+	// Configure with the specified parameters
+	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
+		Scheduler: &config.ChangefeedSchedulerConfig{
+			EnableTableAcrossNodes:     true,
+			WriteKeyThreshold:          500,
+			RegionThreshold:            50,
+			RegionCountPerSpan:         10,
+			SchedulingTaskCountPerNode: 2,
+		},
+	}, ddlSpan, 1000, 0)
+
+	// Create a large table with 10000 regions
+	totalSpan := common.TableIDToComparableSpan(int64(1))
+	// Mock 100 regions for the large table
+	regionCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
+	regions := make([]*tikv.Region, 100)
+	for i := 0; i < 100; i++ {
+		startKey := appendNew(totalSpan.StartKey, byte(i))
+		endKey := appendNew(totalSpan.StartKey, byte(i+1))
+		if i == 0 {
+			startKey = totalSpan.StartKey
+		}
+		if i == 99 {
+			endKey = totalSpan.EndKey
+		}
+		regions[i] = testutil.MockRegionWithKeyRange(uint64(i+1), startKey, endKey)
+	}
+	regionCache.SetRegions(fmt.Sprintf("%s-%s", totalSpan.StartKey, totalSpan.EndKey), regions)
+	controller.spanController.AddNewTable(commonEvent.Table{
+		TableID:   1,
+		SchemaID:  1,
+		Splitable: true,
+	}, 1)
+
+	require.Equal(t, 10, controller.spanController.GetAbsentSize())
+
+	spanIDList := []common.DispatcherID{}
+
+	controller.schedulerController.GetScheduler(scheduler.BalanceScheduler).Execute()
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	require.Equal(t, 0, controller.operatorController.OperatorSize())
+
+	// first basic scheduler
+	controller.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+	require.Equal(t, 6, controller.operatorController.OperatorSize())
+	require.Equal(t, 4, controller.spanController.GetAbsentSize())
+	require.Equal(t, 6, controller.spanController.GetSchedulingSize())
+
+	for _, op := range controller.operatorController.GetAllOperators() {
+		require.Equal(t, "add", op.Type())
+		spanIDList = append(spanIDList, op.ID())
+		op.Start()
+		op.PostFinish()
+		controller.operatorController.RemoveOp(op.ID())
+	}
+
+	require.Equal(t, 6, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node2"))
+	require.Equal(t, 2, controller.spanController.GetTaskSizeByNodeID("node3"))
+
+	controller.schedulerController.GetScheduler(scheduler.BalanceScheduler).Execute()
+	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
+	require.Equal(t, 0, controller.operatorController.OperatorSize())
+
+	controller.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+	require.Equal(t, 4, controller.operatorController.OperatorSize())
+	for _, op := range controller.operatorController.GetAllOperators() {
+		require.Equal(t, "add", op.Type())
+		spanIDList = append(spanIDList, op.ID())
+		op.Start()
+		op.PostFinish()
+		controller.operatorController.RemoveOp(op.ID())
+	}
+
+	require.Equal(t, 10, controller.spanController.GetReplicatingSize())
+	require.Equal(t, 0, controller.spanController.GetAbsentSize())
+	require.Equal(t, 0, controller.spanController.GetSchedulingSize())
+	require.LessOrEqual(t, 3, controller.spanController.GetTaskSizeByNodeID("node1"))
+	require.LessOrEqual(t, 3, controller.spanController.GetTaskSizeByNodeID("node2"))
+	require.LessOrEqual(t, 3, controller.spanController.GetTaskSizeByNodeID("node3"))
+}
