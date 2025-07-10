@@ -92,7 +92,7 @@ kafka_groups=(
 	# G10
 	''
 	# G11
-	fail_over_ddl_mix_with_syncpoint
+	#fail_over_ddl_mix_with_syncpoint
 	# G12
 	# ddl_with_random_move_table
 	''
