@@ -180,7 +180,7 @@ func (c *server) initialize(ctx context.Context) error {
 	c.subModules = []common.SubModule{
 		subscriptionClient,
 		schemaStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, c.pdAPIClient),
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler),
 		eventStore,
 		eventService,
 	}

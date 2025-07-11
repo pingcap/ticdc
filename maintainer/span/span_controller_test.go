@@ -22,6 +22,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +39,7 @@ func TestNewController(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	controller := NewController(cfID, ddlSpan, nil, false)
+	controller := NewController(cfID, ddlSpan, nil, nil)
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
 	require.False(t, controller.enableTableAcrossNodes)
@@ -57,8 +59,8 @@ func TestController_AddNewTable(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	table := commonEvent.Table{
@@ -92,8 +94,8 @@ func TestController_GetTaskByID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add a table first
@@ -144,8 +146,8 @@ func TestController_GetTasksByTableID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add a table
@@ -179,8 +181,8 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add tables from the same schema
@@ -218,8 +220,8 @@ func TestController_UpdateSchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add a table
@@ -258,8 +260,8 @@ func TestController_Statistics(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil,   // splitter
-		false, // enableTableAcrossNodes
+		nil, // splitter
+		nil,
 	)
 
 	// Add some tables
@@ -370,11 +372,11 @@ func TestReplaceReplicaSet(t *testing.T) {
 
 	notExists := &replica.SpanReplication{ID: common.NewDispatcherID()}
 	require.PanicsWithValue(t, "old replica set not found", func() {
-		controller.ReplaceReplicaSet([]*replica.SpanReplication{notExists}, []*heartbeatpb.TableSpan{{}, {}}, 1)
+		controller.ReplaceReplicaSet([]*replica.SpanReplication{notExists}, []*heartbeatpb.TableSpan{{}, {}}, 1, []node.ID{})
 	})
 	require.Len(t, controller.GetAllTasks(), 2)
 
-	controller.ReplaceReplicaSet([]*replica.SpanReplication{replicaSpan}, []*heartbeatpb.TableSpan{testutil.GetTableSpanByID(3), testutil.GetTableSpanByID(4)}, 5)
+	controller.ReplaceReplicaSet([]*replica.SpanReplication{replicaSpan}, []*heartbeatpb.TableSpan{testutil.GetTableSpanByID(3), testutil.GetTableSpanByID(4)}, 5, []node.ID{})
 	require.Len(t, controller.GetAllTasks(), 3)
 	require.Equal(t, 2, controller.GetAbsentSize())
 	require.Equal(t, 2, controller.GetTaskSizeBySchemaID(1))
@@ -459,6 +461,7 @@ func TestRemoveAllTables(t *testing.T) {
 }
 
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
+	testutil.SetUpTestServices()
 	cfID := common.NewChangeFeedIDWithName("test")
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -468,6 +471,5 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	return NewController(cfID, ddlSpan, nil, true)
+	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true})
 }

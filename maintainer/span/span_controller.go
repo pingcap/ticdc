@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -72,6 +73,9 @@ type Controller struct {
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
 	ddlDispatcherID        common.DispatcherID
+
+	// isMysqlCompatibleBackend shows whether the sink of this changefeed is mysql-sink compatible
+	isMysqlCompatibleBackend bool
 }
 
 // NewController creates a new span controller
@@ -79,12 +83,16 @@ func NewController(
 	changefeedID common.ChangeFeedID,
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
-	enableTableAcrossNodes bool,
+	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) *Controller {
+	enableTableAcrossNodes := false
+	if schedulerCfg != nil {
+		enableTableAcrossNodes = schedulerCfg.EnableTableAcrossNodes
+	}
 	c := &Controller{
 		changefeedID:           changefeedID,
 		ddlSpan:                ddlSpan,
-		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, enableTableAcrossNodes),
+		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg),
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
@@ -125,6 +133,10 @@ func (c *Controller) initializeDDLSpan(ddlSpan *replica.SpanReplication) {
 	}
 }
 
+func (c *Controller) SetIsMysqlCompatibleBackend(isMysqlCompatibleBackend bool) {
+	c.isMysqlCompatibleBackend = isMysqlCompatibleBackend
+}
+
 // AddNewTable adds a new table to the span controller
 // This is a complex business logic method that handles table splitting and span creation
 func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
@@ -142,9 +154,10 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		EndKey:   span.EndKey,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
-	if c.enableTableAcrossNodes && table.Splitable && c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
-		// split the whole table span base on region count if table region count is exceed the limit
-		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan)
+	if c.enableTableAcrossNodes && c.splitter != nil {
+		if table.Splitable || !c.isMysqlCompatibleBackend {
+			tableSpans = c.splitter.Split(context.Background(), tableSpan, 0)
+		}
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
 }
@@ -281,6 +294,7 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
 
+	// TODO: check if we need to lock the mu here, or we can add a lock inner the checker
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	checker.UpdateStatus(span)
@@ -361,7 +375,12 @@ func (c *Controller) addSchedulingReplicaSetWithoutLock(span *replica.SpanReplic
 }
 
 // ReplaceReplicaSet replaces replica sets
-func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplication, newSpans []*heartbeatpb.TableSpan, checkpointTs uint64) {
+func (c *Controller) ReplaceReplicaSet(
+	oldReplications []*replica.SpanReplication,
+	newSpans []*heartbeatpb.TableSpan,
+	checkpointTs uint64,
+	splitTargetNodes []node.ID,
+) []*replica.SpanReplication {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -391,8 +410,16 @@ func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplicatio
 		news = append(news, new)
 	}
 
-	// 3. add the new replica set to the db
-	c.addAbsentReplicaSetWithoutLock(news...)
+	if len(splitTargetNodes) > 0 && len(splitTargetNodes) == len(news) {
+		// the spans have the target nodes
+		for idx, newSpan := range news {
+			c.addSchedulingReplicaSetWithoutLock(newSpan, splitTargetNodes[idx])
+		}
+	} else {
+		c.addAbsentReplicaSetWithoutLock(news...)
+	}
+
+	return news
 }
 
 // IsDDLDispatcher checks if the dispatcher is a DDL dispatcher

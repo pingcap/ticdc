@@ -97,7 +97,8 @@ func (oc *Controller) Execute() time.Time {
 			log.Info("send command to dispatcher",
 				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
-				zap.String("operator", op.String()))
+				zap.String("operator", op.String()),
+				zap.Any("msg", msg.Message))
 		}
 		executedCounter++
 		if executedCounter >= oc.batchSize {
@@ -142,6 +143,11 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
+	return oc.AddOperatorWithoutLock(op)
+}
+
+// AddOperator adds an operator to the controller, if the operator already exists, return false.
+func (oc *Controller) AddOperatorWithoutLock(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
 	if _, ok := oc.operators[op.ID()]; ok {
 		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
@@ -294,14 +300,6 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherI
 	}
 }
 
-func (oc *Controller) NewAddOperator(replicaSet *replica.SpanReplication, id node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return &AddDispatcherOperator{
-		replicaSet:     replicaSet,
-		dest:           id,
-		spanController: oc.spanController,
-	}
-}
-
 func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origin, dest node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
 	return &MoveDispatcherOperator{
 		replicaSet:     replicaSet,
@@ -309,19 +307,6 @@ func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origi
 		dest:           dest,
 		spanController: oc.spanController,
 	}
-}
-
-func (oc *Controller) NewRemoveOperator(replicaSet *replica.SpanReplication) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		spanController: oc.spanController,
-	}
-}
-
-func (oc *Controller) NewSplitOperator(
-	replicaSet *replica.SpanReplication, originNode node.ID, splitSpans []*heartbeatpb.TableSpan,
-) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return NewSplitDispatcherOperator(oc.spanController, replicaSet, originNode, splitSpans)
 }
 
 // AddMergeOperator creates a merge operator, which merge consecutive replica sets.
@@ -433,4 +418,22 @@ func (oc *Controller) GetLock() *sync.RWMutex {
 
 func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
 	mutex.Unlock()
+}
+
+// =========== following func only for test ===========
+func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(oc.operators))
+	for _, op := range oc.operators {
+		operators = append(operators, op.OP)
+	}
+	return operators
+}
+
+func (oc *Controller) RemoveOp(id common.DispatcherID) {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	delete(oc.operators, id)
 }

@@ -166,6 +166,7 @@ func (m *MoveDispatcherOperator) OnTaskRemoved() {
 	log.Info("replicaset is removed, mark move dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
+	m.spanController.MarkSpanReplicating(m.replicaSet)
 	m.noPostFinishNeed = true
 }
 
@@ -200,4 +201,13 @@ func (m *MoveDispatcherOperator) String() string {
 
 func (m *MoveDispatcherOperator) Type() string {
 	return "move"
+}
+
+// just for test.
+// TODO:find a more proper way to do this
+func (m *MoveDispatcherOperator) SetOriginNodeStopped() {
+	m.lck.Lock()
+	defer m.lck.Unlock()
+
+	m.originNodeStopped = true
 }

@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -45,6 +44,8 @@ type Controller struct {
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
 
+	splitter *split.Splitter
+
 	startCheckpointTs uint64
 
 	cfConfig     *config.ReplicaConfig
@@ -61,7 +62,6 @@ type Controller struct {
 
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
-	pdAPIClient pdutil.PDAPIClient,
 	taskPool threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
 	ddlSpan *replica.SpanReplication,
@@ -73,21 +73,21 @@ func NewController(changefeedID common.ChangeFeedID,
 	var splitter *split.Splitter
 	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
 		enableTableAcrossNodes = true
-		splitter = split.NewSplitter(changefeedID, pdAPIClient, cfConfig.Scheduler)
+		splitter = split.NewSplitter(changefeedID, cfConfig.Scheduler)
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	// Create span controller
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes)
-
-	// Create operator controller using spanController
-	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
-
 	var schedulerCfg *config.ChangefeedSchedulerConfig
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg)
+
+	// Create operator controller using spanController
+	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
+
 	sc := NewScheduleController(
 		changefeedID, batchSize, oc, spanController, balanceInterval, splitter, schedulerCfg,
 	)
@@ -105,12 +105,17 @@ func NewController(changefeedID common.ChangeFeedID,
 		cfConfig:               cfConfig,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		batchSize:              batchSize,
+		splitter:               splitter,
 	}
 }
 
 // HandleStatus handle the status report from the node
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	for _, status := range statusList {
+		log.Info("HandleStatus",
+			zap.String("changefeed", c.changefeedID.Name()),
+			zap.String("from", from.String()),
+			zap.Any("status", status))
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		c.operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm := c.spanController.GetTaskByID(dispatcherID)
