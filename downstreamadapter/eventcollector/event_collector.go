@@ -412,8 +412,8 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
-					ds := c.getDynamicStream(e.IsRedo())
-					metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(e.IsRedo())
+					ds := c.getDynamicStream(e.GetIsRedo())
+					metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(e.GetIsRedo())
 					switch e.GetType() {
 					case event.TypeBatchResolvedEvent:
 						events := e.(*event.BatchResolvedEvent).Events
@@ -470,15 +470,15 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	}
 }
 
-func (c *EventCollector) getDynamicStream(redo bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
-	if redo {
+func (c *EventCollector) getDynamicStream(isRedo bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+	if isRedo {
 		return c.redoDs
 	}
 	return c.ds
 }
 
-func (c *EventCollector) getMetric(redo bool) (prometheus.Counter, prometheus.Counter) {
-	if redo {
+func (c *EventCollector) getMetric(isRedo bool) (prometheus.Counter, prometheus.Counter) {
+	if isRedo {
 		return c.metricRedoDispatcherReceivedKVEventCount, c.metricRedoDispatcherReceivedResolvedTsEventCount
 	}
 	return c.metricDispatcherReceivedKVEventCount, c.metricDispatcherReceivedResolvedTsEventCount
