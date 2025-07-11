@@ -627,6 +627,9 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 		IsRedo: isRedo,
 	}
 	msg.Events = append(msg.Events, cache.getAll(isRedo)...)
+	if len(msg.Events) == 0 {
+		return
+	}
 	tMsg := messaging.NewSingleTargetMessage(
 		serverID,
 		messaging.EventCollectorTopic,
