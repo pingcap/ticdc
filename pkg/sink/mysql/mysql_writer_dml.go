@@ -176,7 +176,7 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 }
 
 func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	log.Info("generateBatchSQLInSafeMode", zap.Any("events", events))
+	log.Info("generateBatchSQLInSafeMode", zap.Any("events[0].CommitTs", events[0].CommitTs), zap.Any("events[0].ReplicatingTs", events[0].ReplicatingTs))
 	tableInfo := events[0].TableInfo
 	type RowChangeWithKeys struct {
 		RowChange  *commonEvent.RowChange
@@ -216,16 +216,19 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			flagList[i] = true
 		}
 		for i := 0; i < len(rowLists); i++ {
+			log.Info("generateBatchSQLInSafeMode", zap.Any("i", i), zap.Any("events[0].CommitTs", events[0].CommitTs), zap.Any("events[0].ReplicatingTs", events[0].ReplicatingTs))
 			if !flagList[i] {
 				continue
 			}
 		innerLoop:
 			for j := i + 1; j < len(rowLists); j++ {
+				log.Info("generateBatchSQLInSafeMode", zap.Any("j", j), zap.Any("events[0].CommitTs", events[0].CommitTs), zap.Any("events[0].ReplicatingTs", events[0].ReplicatingTs))
 				if !flagList[j] {
 					continue
 				}
 				rowType := rowLists[i].RowChange.RowType
 				nextRowType := rowLists[j].RowChange.RowType
+				log.Info("generateBatchSQLInSafeMode", zap.Any("rowType", rowType), zap.Any("nextRowType", nextRowType))
 				switch rowType {
 				case commonEvent.RowTypeInsert:
 					rowKey := rowLists[i].RowKeys
