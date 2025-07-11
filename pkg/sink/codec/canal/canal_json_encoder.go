@@ -48,7 +48,7 @@ func fillColumns(
 	out.RawByte('{')
 	isFirst := true
 	for _, col := range tableInfo.GetColumns() {
-		if !columnSelector.Select(col) {
+		if col.IsVirtualGenerated() || !columnSelector.Select(col) {
 			continue
 		}
 		if col != nil {
@@ -91,7 +91,7 @@ func fillUpdateColumns(
 	out.RawByte('{')
 	isFirst := true
 	for _, col := range tableInfo.GetColumns() {
-		if col != nil {
+		if col != nil && !col.IsVirtualGenerated() {
 			colID := col.ID
 			// column equal, do not output it
 			if onlyOutputUpdatedColumn && newValueMap[colID] == oldValueMap[colID] {
@@ -212,7 +212,7 @@ func newJSONMessageForDML(
 		row = e.GetPreRows()
 	}
 	for idx, col := range e.TableInfo.GetColumns() {
-		if !e.ColumnSelector.Select(col) {
+		if col == nil || col.IsVirtualGenerated() || !e.ColumnSelector.Select(col) {
 			continue
 		}
 		value, javaType := formatColumnValue(row, idx, col)
@@ -226,7 +226,7 @@ func newJSONMessageForDML(
 		tableInfo := e.TableInfo
 		columnInfos := tableInfo.GetColumns()
 		for _, col := range columnInfos {
-			if col != nil && e.ColumnSelector.Select(col) {
+			if col != nil && !col.IsVirtualGenerated() && e.ColumnSelector.Select(col) {
 				colID := col.ID
 				colName := col.Name.O
 				if onlyHandleKey && !tableInfo.IsHandleKey(colID) {
