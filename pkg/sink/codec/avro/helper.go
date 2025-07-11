@@ -167,14 +167,3 @@ func getAvroNamespace(namespace string, schema string) string {
 	}
 	return ns
 }
-
-// getColInfos get the column info which are not filter
-// func getColInfos(columnSelector columnselector.Selector, colInfos []*timodel.ColumnInfo) []*timodel.ColumnInfo {
-// 	res := make([]*timodel.ColumnInfo, 0, len(colInfos))
-// 	for _, colInfo := range colInfos {
-// 		if columnSelector.Select(colInfo) {
-// 			res = append(res, colInfo)
-// 		}
-// 	}
-// 	return res
-// }
