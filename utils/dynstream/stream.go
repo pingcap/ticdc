@@ -287,8 +287,8 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
-	pendingSize          atomic.Uint64 // The total size(bytes) of pending events in the pendingQueue of the path.
-	paused               atomic.Bool   // The path is paused to send events.
+	pendingSize          atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
+	paused               atomic.Bool  // The path is paused to send events.
 	lastSendFeedbackTime atomic.Value
 }
 
@@ -317,7 +317,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 
 	if event.eventType.Property != PeriodicSignal {
 		pi.pendingQueue.PushBack(event)
-		pi.updatePendingSize(event.eventSize)
+		pi.updatePendingSize(int64(event.eventSize))
 		return true
 	}
 
@@ -329,7 +329,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 		return false
 	} else {
 		pi.pendingQueue.PushBack(event)
-		pi.updatePendingSize(event.eventSize)
+		pi.updatePendingSize(int64(event.eventSize))
 		return true
 	}
 }
@@ -339,7 +339,7 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	if !ok {
 		return eventWrap[A, P, T, D, H]{}, false
 	}
-	pi.updatePendingSize(-e.eventSize)
+	pi.updatePendingSize(-int64(e.eventSize))
 
 	if pi.areaMemStat != nil {
 		pi.areaMemStat.decPendingSize(pi, e.eventSize)
@@ -347,8 +347,11 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	return e, true
 }
 
-func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta uint64) {
+func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
 	pi.pendingSize.Add(delta)
+	if pi.pendingSize.Load() < 0 {
+		pi.pendingSize.Store(0)
+	}
 }
 
 // eventWrap contains the event and the path info.
