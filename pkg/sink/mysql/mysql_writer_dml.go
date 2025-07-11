@@ -47,6 +47,7 @@ import (
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to a single delete / update/ insert query(in order)
 func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
+	log.Info("writer prepareDMLs", zap.Any("events", events))
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 	// Step 1: group the events by table ID

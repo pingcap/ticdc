@@ -158,6 +158,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				return errors.Trace(ctx.Err())
 			}
 			for _, txnEvent := range txnEvents {
+				log.Info("dml writer receive the txn event", zap.Any("event", txnEvent))
 				workerHandledRows.Add(float64(txnEvent.Len()))
 			}
 			start := time.Now()
@@ -189,6 +190,7 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	log.Info("Sink receive dml event", zap.Any("event", event))
 	s.conflictDetector.Add(event)
 }
 
