@@ -479,13 +479,13 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		progress.eventGroups[tableID] = group
 	}
 	if commitTs >= group.highWatermark {
-		group.Append(dml)
 		log.Info("DML event append to the group",
 			zap.Int32("partition", group.partition), zap.Any("offset", offset),
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]))
 		// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns))
+		group.Append(dml)
 		return
 	}
 	switch w.protocol {
