@@ -864,6 +864,9 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 	if !ok {
 		return
 	}
+	if !stat.isReadyRecevingData.Load() {
+		return
+	}
 	log.Info("pause dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),

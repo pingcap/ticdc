@@ -44,7 +44,7 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	feedbackChan chan<- Feedback[A, P, D]
 
 	pathCount            atomic.Int64
-	totalPendingSize     atomic.Uint64
+	totalPendingSize     atomic.Int64
 	paused               atomic.Bool
 	lastSendFeedbackTime atomic.Value
 	algorithm            MemoryControlAlgorithm
@@ -121,7 +121,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
 	path.updatePendingSize(int64(event.eventSize))
-	as.totalPendingSize.Add(uint64(event.eventSize))
+	as.totalPendingSize.Add(int64(event.eventSize))
 	return true
 }
 
@@ -136,7 +136,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 	pause, resume, memoryUsageRatio := as.algorithm.ShouldPausePath(
 		path.paused.Load(),
 		uint64(path.pendingSize.Load()),
-		as.totalPendingSize.Load(),
+		uint64(as.totalPendingSize.Load()),
 		as.settings.Load().maxPendingSize,
 		as.pathCount.Load(),
 	)
@@ -188,7 +188,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {
 	pause, resume, memoryUsageRatio := as.algorithm.ShouldPauseArea(
 		as.paused.Load(),
-		as.totalPendingSize.Load(),
+		uint64(as.totalPendingSize.Load()),
 		as.settings.Load().maxPendingSize,
 	)
 
@@ -244,7 +244,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 }
 
 func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size uint64) {
-	as.totalPendingSize.Add(-size)
+	as.totalPendingSize.Add(-int64(size))
 	as.updatePathPauseState(path)
 	as.updateAreaPauseState(path)
 }
@@ -312,7 +312,7 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A] {
 	for _, area := range m.areaStatMap {
 		areaMetric := AreaMemoryMetric[A]{
 			area:       area.area,
-			usedMemory: area.totalPendingSize.Load(),
+			usedMemory: uint64(area.totalPendingSize.Load()),
 			maxMemory:  area.settings.Load().maxPendingSize,
 		}
 		metrics.AreaMemoryMetrics = append(metrics.AreaMemoryMetrics, areaMetric)
