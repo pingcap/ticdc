@@ -97,7 +97,8 @@ func (oc *Controller) Execute() time.Time {
 			log.Info("send command to dispatcher",
 				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
-				zap.String("operator", op.String()))
+				zap.String("operator", op.String()),
+				zap.Any("msg", msg.Message))
 		}
 		executedCounter++
 		if executedCounter >= oc.batchSize {
