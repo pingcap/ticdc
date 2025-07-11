@@ -255,10 +255,6 @@ func (r DispatcherRequest) GetTimezone() *time.Location {
 	return tz
 }
 
-func (r DispatcherRequest) GetRedo() bool {
-	return r.IsRedo
-}
-
 func (r DispatcherRequest) GetEpoch() uint64 {
 	return r.Epoch
 }

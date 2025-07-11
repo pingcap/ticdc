@@ -34,7 +34,7 @@ type DropEvent struct {
 	DroppedCommitTs common.Ts
 	DroppedEpoch    uint64
 	// only for redo
-	Redo bool
+	IsRedo bool
 }
 
 // NewDropEvent creates a new DropEvent
@@ -53,8 +53,8 @@ func NewDropEvent(
 	}
 }
 
-func (e *DropEvent) IsRedo() bool {
-	return e.Redo
+func (e *DropEvent) GetIsRedo() bool {
+	return e.IsRedo
 }
 
 // GetType returns the event type
@@ -140,7 +140,7 @@ func (e *DropEvent) encodeV0() ([]byte, error) {
 	offset += 1
 
 	// Redo
-	data[offset] = bool2byte(e.Redo)
+	data[offset] = bool2byte(e.IsRedo)
 	offset += 1
 
 	// DispatcherID
@@ -166,7 +166,7 @@ func (e *DropEvent) decodeV0(data []byte) error {
 	offset += 1
 
 	// Redo
-	e.Redo = byte2bool(data[offset])
+	e.IsRedo = byte2bool(data[offset])
 	offset += 1
 
 	// DispatcherID

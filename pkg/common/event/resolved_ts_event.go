@@ -29,11 +29,11 @@ type BatchResolvedEvent struct {
 	Version byte
 	Events  []ResolvedEvent
 	// only for redo
-	Redo bool
+	IsRedo bool
 }
 
-func (b BatchResolvedEvent) IsRedo() bool {
-	return b.Redo
+func (b BatchResolvedEvent) GetIsRedo() bool {
+	return b.IsRedo
 }
 
 func (b BatchResolvedEvent) GetType() int {
@@ -124,14 +124,14 @@ type ResolvedEvent struct {
 	Version      byte
 	Epoch        uint64
 	// only for redo
-	Redo bool
+	IsRedo bool
 }
 
 func NewResolvedEvent(
 	resolvedTs common.Ts,
 	dispatcherID common.DispatcherID,
 	epoch uint64,
-	redo bool,
+	isRedo bool,
 ) ResolvedEvent {
 	return ResolvedEvent{
 		DispatcherID: dispatcherID,
@@ -139,12 +139,12 @@ func NewResolvedEvent(
 		State:        EventSenderStateNormal,
 		Version:      ResolvedEventVersion,
 		Epoch:        epoch,
-		Redo:         redo,
+		IsRedo:       isRedo,
 	}
 }
 
-func (e ResolvedEvent) IsRedo() bool {
-	return e.Redo
+func (e ResolvedEvent) GetIsRedo() bool {
+	return e.IsRedo
 }
 
 func (e ResolvedEvent) GetType() int {
@@ -208,7 +208,7 @@ func (e ResolvedEvent) encodeV0() ([]byte, error) {
 	data[offset] = e.Version
 	offset += 1
 	// Redo
-	data[offset] = bool2byte(e.Redo)
+	data[offset] = bool2byte(e.IsRedo)
 	offset += 1
 	binary.BigEndian.PutUint64(data[offset:], e.ResolvedTs)
 	offset += 8
@@ -224,7 +224,7 @@ func (e *ResolvedEvent) decodeV0(data []byte) error {
 	}
 	offset := 1 // Skip version byte
 	// Redo
-	e.Redo = byte2bool(data[1])
+	e.IsRedo = byte2bool(data[1])
 	offset += 1
 	e.ResolvedTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8

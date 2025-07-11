@@ -36,11 +36,11 @@ type SyncPointEvent struct {
 	Epoch          uint64   `json:"epoch"`
 	PostTxnFlushed []func() `msg:"-"`
 	// only for redo
-	Redo bool `json:"redo"`
+	IsRedo bool `json:"redo"`
 }
 
-func (e *SyncPointEvent) IsRedo() bool {
-	return e.Redo
+func (e *SyncPointEvent) GetIsRedo() bool {
+	return e.IsRedo
 }
 
 func (e *SyncPointEvent) GetType() int {

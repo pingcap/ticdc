@@ -606,7 +606,7 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
-func (m *mockDispatcherInfo) GetRedo() bool {
+func (m *mockDispatcherInfo) GetIsRedo() bool {
 	return m.redo
 }
 

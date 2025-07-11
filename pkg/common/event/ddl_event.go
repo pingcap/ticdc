@@ -98,7 +98,7 @@ type DDLEvent struct {
 	// for simple protocol
 	IsBootstrap bool `msg:"-"`
 	// only for redo
-	Redo bool `json:"redo"`
+	IsRedo bool `json:"redo"`
 }
 
 func (d *DDLEvent) String() string {
@@ -106,8 +106,8 @@ func (d *DDLEvent) String() string {
 		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.TableID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.State, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TableNameInDDLJob, d.DBNameInDDLJob, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
 }
 
-func (d *DDLEvent) IsRedo() bool {
-	return d.Redo
+func (d *DDLEvent) GetIsRedo() bool {
+	return d.IsRedo
 }
 
 func (d *DDLEvent) GetType() int {

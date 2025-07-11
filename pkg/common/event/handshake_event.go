@@ -38,7 +38,7 @@ type HandshakeEvent struct {
 	DispatcherID common.DispatcherID `json:"-"`
 	TableInfo    *common.TableInfo   `json:"table_info"`
 	// only for redo
-	Redo bool
+	IsRedo bool
 }
 
 func NewHandshakeEvent(
@@ -47,7 +47,7 @@ func NewHandshakeEvent(
 	seq uint64,
 	epoch uint64,
 	tableInfo *common.TableInfo,
-	redo bool,
+	isRedo bool,
 ) HandshakeEvent {
 	return HandshakeEvent{
 		Version:      HandshakeEventVersion,
@@ -56,7 +56,7 @@ func NewHandshakeEvent(
 		Epoch:        epoch,
 		DispatcherID: dispatcherID,
 		TableInfo:    tableInfo,
-		Redo:         redo,
+		IsRedo:       isRedo,
 	}
 }
 
@@ -65,8 +65,8 @@ func (e *HandshakeEvent) String() string {
 		e.Version, e.ResolvedTs, e.Seq, e.State, e.DispatcherID, e.TableInfo)
 }
 
-func (e *HandshakeEvent) IsRedo() bool {
-	return e.Redo
+func (e *HandshakeEvent) GetIsRedo() bool {
+	return e.IsRedo
 }
 
 // GetType returns the event type
@@ -145,7 +145,7 @@ func (e HandshakeEvent) encodeV0() ([]byte, error) {
 	data[offset] = e.Version
 	offset += 1
 	// Redo
-	data[offset] = bool2byte(e.Redo)
+	data[offset] = bool2byte(e.IsRedo)
 	offset += 1
 	binary.BigEndian.PutUint64(data[offset:], e.ResolvedTs)
 	offset += 8
@@ -166,7 +166,7 @@ func (e *HandshakeEvent) decodeV0(data []byte) error {
 	e.Version = data[offset]
 	offset += 1
 	// Redo
-	e.Redo = byte2bool(data[offset])
+	e.IsRedo = byte2bool(data[offset])
 	offset += 1
 	e.ResolvedTs = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
