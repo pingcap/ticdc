@@ -66,10 +66,10 @@ func TestIndexValueDispatcherWithIndexName(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table t1(a int, INDEX index1(a))")
+	job := helper.DDL2Job("create table t1(COL2 int not null, Col1 int not null, col3 int, CONSTRAINT index1 UNIQUE KEY `index1`(COL2,Col1))")
 	require.NotNil(t, job)
 	tableInfo := helper.GetTableInfo(job)
-	dml := helper.DML2Event("test", "t1", "insert into t1 values(11)")
+	dml := helper.DML2Event("test", "t1", "insert into t1 values(22, 11, 33)")
 	row, exist := dml.GetNextRow()
 	require.True(t, exist)
 
@@ -80,15 +80,15 @@ func TestIndexValueDispatcherWithIndexName(t *testing.T) {
 	p = newIndexValuePartitionGenerator("index1")
 	index, _, err := p.GeneratePartitionIndexAndKey(&row, 16, tableInfo, 33)
 	require.NoError(t, err)
-	require.Equal(t, int32(2), index)
+	require.Equal(t, int32(5), index)
 
 	p = newIndexValuePartitionGenerator("INDEX1")
 	index, _, err = p.GeneratePartitionIndexAndKey(&row, 16, tableInfo, 33)
 	require.NoError(t, err)
-	require.Equal(t, int32(2), index)
+	require.Equal(t, int32(5), index)
 
 	p = newIndexValuePartitionGenerator("")
-	index, _, err = p.GeneratePartitionIndexAndKey(&row, 3, tableInfo, 33)
+	index, _, err = p.GeneratePartitionIndexAndKey(&row, 16, tableInfo, 33)
 	require.NoError(t, err)
-	require.Equal(t, int32(0), index)
+	require.Equal(t, int32(5), index)
 }

@@ -15,7 +15,6 @@ package partition
 
 import (
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -70,7 +69,7 @@ func (r *ColumnsPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEven
 		if value == nil {
 			continue
 		}
-		r.hasher.Write([]byte(strings.ToLower(r.Columns[idx])), []byte(common.ColumnValueString(value)))
+		r.hasher.Write([]byte(colInfo.Name.O), []byte(common.ColumnValueString(value)))
 	}
 
 	sum32 := r.hasher.Sum32()
