@@ -13,6 +13,7 @@
 package dispatchermanager
 
 import (
+	"math"
 	"sync/atomic"
 	"testing"
 
@@ -34,13 +35,15 @@ import (
 var mockSink = sink.NewMockSink(common.MysqlSinkType)
 
 // createTestDispatcher creates a test dispatcher with given parameters
-func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.Dispatcher {
+func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
 	span := &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: startKey,
 		EndKey:   endKey,
 	}
-	d := dispatcher.NewDispatcher(
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	d := dispatcher.NewEventDispatcher(
 		manager.changefeedID,
 		id,
 		span,
@@ -58,17 +61,19 @@ func createTestDispatcher(t *testing.T, manager *EventDispatcherManager, id comm
 		0,
 		make(chan error, 1),
 		false,
+		false,
+		&redoTs,
 	)
 	d.SetComponentStatus(heartbeatpb.ComponentState_Working)
 	return d
 }
 
-// createTestManager creates a test EventDispatcherManager
-func createTestManager(t *testing.T) *EventDispatcherManager {
+// createTestManager creates a test DispatcherManager
+func createTestManager(t *testing.T) *DispatcherManager {
 	changefeedID := common.NewChangeFeedIDWithName("test")
-	manager := &EventDispatcherManager{
+	manager := &DispatcherManager{
 		changefeedID:            changefeedID,
-		dispatcherMap:           newDispatcherMap(),
+		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
 		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),
@@ -81,10 +86,10 @@ func createTestManager(t *testing.T) *EventDispatcherManager {
 			BDRMode: true,
 		},
 		metricEventDispatcherCount: metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
-		metricCheckpointTs:         metrics.EventDispatcherManagerCheckpointTsGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
-		metricResolvedTs:           metrics.EventDispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
-		metricCheckpointTsLag:      metrics.EventDispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
-		metricResolvedTsLag:        metrics.EventDispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+		metricCheckpointTs:         metrics.DispatcherManagerCheckpointTsGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+		metricResolvedTs:           metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+		metricCheckpointTsLag:      metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+		metricResolvedTsLag:        metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 	}
 	nodeID := node.NewID()
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
@@ -117,7 +122,7 @@ func TestMergeDispatcherNormal(t *testing.T) {
 
 	// Execute merge
 	mergedID := common.NewDispatcherID()
-	manager.MergeDispatcher([]common.DispatcherID{dispatcher1.GetId(), dispatcher2.GetId()}, mergedID)
+	manager.mergeEventDispatcher([]common.DispatcherID{dispatcher1.GetId(), dispatcher2.GetId()}, mergedID)
 
 	// Verify merged state
 	mergedDispatcher, exists := manager.dispatcherMap.Get(mergedID)
@@ -140,7 +145,7 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
 
 	mergedID := common.NewDispatcherID()
-	manager.MergeDispatcher([]common.DispatcherID{dispatcher1.GetId()}, mergedID)
+	manager.mergeEventDispatcher([]common.DispatcherID{dispatcher1.GetId()}, mergedID)
 
 	// Verify no new dispatcher is created
 	_, exists := manager.dispatcherMap.Get(mergedID)
@@ -160,7 +165,7 @@ func TestMergeDispatcherExistingID(t *testing.T) {
 	manager.dispatcherMap.Set(existingDispatcher.GetId(), existingDispatcher)
 
 	// Try to merge using existing ID
-	manager.MergeDispatcher([]common.DispatcherID{existingDispatcher.GetId()}, existingDispatcher.GetId())
+	manager.mergeEventDispatcher([]common.DispatcherID{existingDispatcher.GetId()}, existingDispatcher.GetId())
 
 	// Verify state remains unchanged
 	dispatcher, exists := manager.dispatcherMap.Get(existingDispatcher.GetId())
@@ -174,7 +179,7 @@ func TestMergeDispatcherNonExistent(t *testing.T) {
 	// Use non-existent dispatcherID
 	nonExistentID := common.NewDispatcherID()
 	mergedID := common.NewDispatcherID()
-	manager.MergeDispatcher([]common.DispatcherID{nonExistentID}, mergedID)
+	manager.mergeEventDispatcher([]common.DispatcherID{nonExistentID}, mergedID)
 
 	// Verify no new dispatcher is created
 	_, exists := manager.dispatcherMap.Get(mergedID)
@@ -195,7 +200,7 @@ func TestMergeDispatcherNotWorking(t *testing.T) {
 	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
 
 	mergedID := common.NewDispatcherID()
-	manager.MergeDispatcher([]common.DispatcherID{dispatcher1.GetId()}, mergedID)
+	manager.mergeEventDispatcher([]common.DispatcherID{dispatcher1.GetId()}, mergedID)
 
 	// Verify no new dispatcher is created
 	_, exists := manager.dispatcherMap.Get(mergedID)
@@ -223,7 +228,7 @@ func TestMergeDispatcherNonAdjacent(t *testing.T) {
 	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
 
 	mergedID := common.NewDispatcherID()
-	manager.MergeDispatcher([]common.DispatcherID{dispatcher1.GetId(), dispatcher2.GetId()}, mergedID)
+	manager.mergeEventDispatcher([]common.DispatcherID{dispatcher1.GetId(), dispatcher2.GetId()}, mergedID)
 
 	// Verify no new dispatcher is created
 	_, exists := manager.dispatcherMap.Get(mergedID)
@@ -260,7 +265,7 @@ func TestMergeDispatcherThreeDispatchers(t *testing.T) {
 
 	// Execute merge
 	mergedID := common.NewDispatcherID()
-	manager.MergeDispatcher([]common.DispatcherID{
+	manager.mergeEventDispatcher([]common.DispatcherID{
 		dispatcher1.GetId(),
 		dispatcher2.GetId(),
 		dispatcher3.GetId(),
@@ -305,11 +310,11 @@ func TestDoMerge(t *testing.T) {
 	)
 
 	// Add resolved event to dispatcher1 to update the checkpointTs
-	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
+	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0, false)
 	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
 
 	// Add resolved event to dispatcher2 to update the checkpointTs
-	resolvedEvent2 := event.NewResolvedEvent(200, dispatcher2.GetId(), 0)
+	resolvedEvent2 := event.NewResolvedEvent(200, dispatcher2.GetId(), 0, false)
 	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
 
 	// Add dispatchers to manager
@@ -317,13 +322,13 @@ func TestDoMerge(t *testing.T) {
 	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
 
 	mergedID := common.NewDispatcherID()
-	task := manager.MergeDispatcher([]common.DispatcherID{
+	task := manager.mergeEventDispatcher([]common.DispatcherID{
 		dispatcher1.GetId(),
 		dispatcher2.GetId(),
 	}, mergedID)
 
 	// Execute DoMerge
-	manager.DoMerge(task)
+	doMerge(task, task.manager.dispatcherMap)
 
 	// Verify merged dispatcher state
 	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)
@@ -364,15 +369,15 @@ func TestDoMergeWithThreeDispatchers(t *testing.T) {
 	)
 
 	// Add resolved event to dispatcher1 to update the checkpointTs
-	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
+	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0, false)
 	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
 
 	// Add resolved event to dispatcher2 to update the checkpointTs
-	resolvedEvent2 := event.NewResolvedEvent(100, dispatcher2.GetId(), 0)
+	resolvedEvent2 := event.NewResolvedEvent(100, dispatcher2.GetId(), 0, false)
 	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
 
 	// Add resolved event to dispatcher3 to update the checkpointTs
-	resolvedEvent3 := event.NewResolvedEvent(200, dispatcher3.GetId(), 0)
+	resolvedEvent3 := event.NewResolvedEvent(200, dispatcher3.GetId(), 0, false)
 	dispatcher3.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent3)}, func() {})
 
 	// Add dispatchers to manager
@@ -382,14 +387,14 @@ func TestDoMergeWithThreeDispatchers(t *testing.T) {
 
 	// merge dispatcher
 	mergedID := common.NewDispatcherID()
-	task := manager.MergeDispatcher([]common.DispatcherID{
+	task := manager.mergeEventDispatcher([]common.DispatcherID{
 		dispatcher1.GetId(),
 		dispatcher2.GetId(),
 		dispatcher3.GetId(),
 	}, mergedID)
 
 	// Execute DoMerge
-	manager.DoMerge(task)
+	doMerge(task, task.manager.dispatcherMap)
 
 	// Verify merged dispatcher state
 	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)

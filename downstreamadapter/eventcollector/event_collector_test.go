@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var _ dispatcher.EventDispatcher = (*mockEventDispatcher)(nil)
+var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
 	id        common.DispatcherID
@@ -43,8 +43,16 @@ func (m *mockEventDispatcher) GetId() common.DispatcherID {
 	return m.id
 }
 
+func (m *mockEventDispatcher) GetType() int {
+	return dispatcher.TypeDispatcherEvent
+}
+
 func (m *mockEventDispatcher) GetStartTs() uint64 {
 	return 0
+}
+
+func (m *mockEventDispatcher) GetBDRMode() bool {
+	return false
 }
 
 func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
@@ -53,6 +61,14 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return m.tableSpan
+}
+
+func (m *mockEventDispatcher) GetTimezone() string {
+	return "system"
+}
+
+func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
+	return nil
 }
 
 func (m *mockEventDispatcher) GetFilterConfig() *eventpb.FilterConfig {
@@ -86,16 +102,8 @@ func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.Dispatc
 	return false
 }
 
-func (m *mockEventDispatcher) GetBDRMode() bool {
-	return false
-}
-
-func (m *mockEventDispatcher) GetTimezone() string {
-	return "system"
-}
-
-func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
-	return nil
+func (m *mockEventDispatcher) GetBlockEventStatus() *heartbeatpb.State {
+	return &heartbeatpb.State{}
 }
 
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
@@ -133,8 +141,8 @@ func TestProcessMessage(t *testing.T) {
 	)
 	require.NotNil(t, dmls)
 
-	readyEvent := commonEvent.NewReadyEvent(did)
-	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, 1, ddl.TableInfo)
+	readyEvent := commonEvent.NewReadyEvent(did, false)
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, 1, ddl.TableInfo, false)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
 	handshakeEvent.Seq = seq.Add(1)

@@ -23,7 +23,7 @@ import (
 func TestNotReusableEvent(t *testing.T) {
 	// 1. Test new event
 	dispatcherID := common.NewDispatcherID()
-	event := NewNotReusableEvent(dispatcherID)
+	event := NewNotReusableEvent(dispatcherID, false)
 	require.Equal(t, event.GetType(), TypeNotReusableEvent)
 	require.Equal(t, event.GetDispatcherID(), dispatcherID)
 

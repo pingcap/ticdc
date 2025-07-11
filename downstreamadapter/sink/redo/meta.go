@@ -38,7 +38,6 @@ import (
 type RedoMeta struct {
 	captureID    config.CaptureID
 	changeFeedID common.ChangeFeedID
-	enabled      bool
 
 	// running means the meta manager now running normally.
 	running atomic.Bool
@@ -68,16 +67,10 @@ type RedoMeta struct {
 func NewRedoMeta(
 	changefeedID common.ChangeFeedID, checkpoint common.Ts, cfg *config.ConsistentConfig,
 ) *RedoMeta {
-	// return a disabled Manager if no consistent config or normal consistent level
-	if cfg == nil || !redo.IsConsistentEnabled(cfg.Level) {
-		return &RedoMeta{enabled: false}
-	}
-
 	m := &RedoMeta{
 		captureID:         config.GetGlobalServerConfig().AdvertiseAddr,
 		changeFeedID:      changefeedID,
 		uuidGenerator:     uuid.NewGenerator(),
-		enabled:           true,
 		cfg:               cfg,
 		startTs:           checkpoint,
 		flushIntervalInMs: cfg.MetaFlushIntervalInMs,
@@ -91,11 +84,6 @@ func NewRedoMeta(
 		m.flushIntervalInMs = redo.DefaultMetaFlushIntervalInMs
 	}
 	return m
-}
-
-// Enabled returns whether this meta is enabled
-func (m *RedoMeta) Enabled() bool {
-	return m.enabled
 }
 
 // Running return whether the meta is initialized,
