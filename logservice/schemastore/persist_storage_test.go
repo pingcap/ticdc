@@ -23,6 +23,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -2068,7 +2069,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					return true
 				}
 				for _, testCase := range tt.fetchTableDDLEventsTestCase {
-					events, err := pStorage.fetchTableDDLEvents(testCase.tableID, testCase.tableFilter, testCase.startTs, testCase.endTs)
+					events, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), testCase.tableID, testCase.tableFilter, testCase.startTs, testCase.endTs)
 					require.Nil(t, err)
 					if !checkDDLEvents(testCase.result, events) {
 						log.Warn("fetchTableDDLEvents result wrong",

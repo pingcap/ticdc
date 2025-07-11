@@ -120,8 +120,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
-	path.updatePendingSize(event.eventSize)
-	as.totalPendingSize.Add(event.eventSize)
+	path.updatePendingSize(int64(event.eventSize))
+	as.totalPendingSize.Add(uint64(event.eventSize))
 	return true
 }
 
@@ -135,7 +135,7 @@ func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
 func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H]) {
 	pause, resume, memoryUsageRatio := as.algorithm.ShouldPausePath(
 		path.paused.Load(),
-		path.pendingSize.Load(),
+		uint64(path.pendingSize.Load()),
 		as.totalPendingSize.Load(),
 		as.settings.Load().maxPendingSize,
 		as.pathCount.Load(),
@@ -293,7 +293,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.decPendingSize(path, path.pendingSize.Load())
+	area.decPendingSize(path, uint64(path.pendingSize.Load()))
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
