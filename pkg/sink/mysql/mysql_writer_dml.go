@@ -167,6 +167,7 @@ func allRowInSameSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
 // For these all changes to row, we will continue to compare from the beginnning to the end, until there is no change.
 // Then we can generate the final sql of delete/update/insert.
 func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	log.Info("generateBatchSQL", zap.Any("events", events))
 	inSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
 	if inSafeMode {
 		return w.generateBatchSQLInSafeMode(events)
@@ -175,6 +176,7 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 }
 
 func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	log.Info("generateBatchSQLInSafeMode", zap.Any("events", events))
 	tableInfo := events[0].TableInfo
 	type RowChangeWithKeys struct {
 		RowChange  *commonEvent.RowChange
@@ -202,6 +204,8 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			rowLists = append(rowLists, rowChangeWithKeys)
 		}
 	}
+
+	log.Info("generateBatchSQLInSafeMode line 208", zap.Any("rowLists", rowLists))
 
 	for {
 		// hasUpdate to determine whether we can break the combine logic
@@ -294,6 +298,8 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			}
 		}
 
+		log.Info("generateBatchSQLInSafeMode line 301", zap.Any("hasUpdate", hasUpdate))
+
 		if !hasUpdate {
 			// means no more changes for the rows, break and generate sqls.
 			break
@@ -309,6 +315,8 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 
 	}
 
+	log.Info("generateBatchSQLInSafeMode line 318", zap.Any("rowLists", rowLists))
+
 	finalRowLists := make([]*commonEvent.RowChange, 0, len(rowLists))
 
 	for i := 0; i < len(rowLists); i++ {
@@ -320,6 +328,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 }
 
 func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	log.Info("generateBatchSQLInUnsafeMode", zap.Any("events", events))
 	tableInfo := events[0].TableInfo
 	// step 1. divide update row to delete row and insert row, and set into map based on the key hash
 	rowsMap := make(map[uint64][]*commonEvent.RowChange)
@@ -397,6 +406,8 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		}
 	}
 
+	log.Info("generateBatchSQLInUnsafeMode line 403", zap.Any("event", events))
+
 	// step 2. compare the rows in the same key hash, to generate the final rows
 	rowsList := make([]*commonEvent.RowChange, 0, len(rowsMap))
 	for _, rowChanges := range rowsMap {
@@ -424,11 +435,14 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		}
 		rowsList = append(rowsList, rowChanges[len(rowChanges)-1])
 	}
+
+	log.Info("generateBatchSQLInUnsafeMode line 403", zap.Any("event", events))
 	// step 3. generate sqls
 	return w.batchSingleTxnDmls(rowsList, tableInfo, false)
 }
 
 func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	log.Info("generateNormalSQLs", zap.Any("events", events))
 	var (
 		queries []string
 		args    [][]interface{}
@@ -673,7 +687,10 @@ func (w *Writer) batchSingleTxnDmls(
 	tableInfo *common.TableInfo,
 	translateToInsert bool,
 ) (sqls []string, values [][]interface{}) {
+	log.Info("batchSingleTxnDmls", zap.Any("rows", rows), zap.Any("tableInfo", tableInfo), zap.Any("translateToInsert", translateToInsert))
 	insertRows, updateRows, deleteRows := w.groupRowsByType(rows, tableInfo)
+
+	log.Info("batchSingleTxnDmls line 687", zap.Any("insertRows", insertRows), zap.Any("updateRows", updateRows), zap.Any("deleteRows", deleteRows))
 
 	// handle delete
 	if len(deleteRows) > 0 {
@@ -683,6 +700,8 @@ func (w *Writer) batchSingleTxnDmls(
 			values = append(values, value)
 		}
 	}
+
+	log.Info("batchSingleTxnDmls line 698", zap.Any("sqls", sqls), zap.Any("values", values))
 
 	// handle update
 	if len(updateRows) > 0 {
@@ -706,6 +725,8 @@ func (w *Writer) batchSingleTxnDmls(
 		}
 	}
 
+	log.Info("batchSingleTxnDmls line 722", zap.Any("sqls", sqls), zap.Any("values", values))
+
 	// handle insert
 	if len(insertRows) > 0 {
 		for _, rows := range insertRows {
@@ -721,6 +742,7 @@ func (w *Writer) batchSingleTxnDmls(
 		}
 	}
 
+	log.Info("batchSingleTxnDmls line 739", zap.Any("sqls", sqls), zap.Any("values", values))
 	return
 }
 
