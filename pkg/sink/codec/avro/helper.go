@@ -16,6 +16,7 @@ package avro
 import (
 	"strings"
 
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -96,9 +97,10 @@ type ddlEvent struct {
 }
 
 type avroEncodeInput struct {
-	row      *chunk.Row
-	index    []int
-	colInfos []*timodel.ColumnInfo
+	row            *chunk.Row
+	index          []int
+	colInfos       []*timodel.ColumnInfo
+	columnselector columnselector.Selector
 }
 
 type avroSchema struct {
@@ -165,3 +167,14 @@ func getAvroNamespace(namespace string, schema string) string {
 	}
 	return ns
 }
+
+// getColInfos get the column info which are not filter
+// func getColInfos(columnSelector columnselector.Selector, colInfos []*timodel.ColumnInfo) []*timodel.ColumnInfo {
+// 	res := make([]*timodel.ColumnInfo, 0, len(colInfos))
+// 	for _, colInfo := range colInfos {
+// 		if columnSelector.Select(colInfo) {
+// 			res = append(res, colInfo)
+// 		}
+// 	}
+// 	return res
+// }

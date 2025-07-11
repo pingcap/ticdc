@@ -86,9 +86,10 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEve
 		return nil, nil
 	}
 	keyColumns := &avroEncodeInput{
-		row:      e.GetRows(),
-		index:    index,
-		colInfos: colInfos,
+		row:            e.GetRows(),
+		index:          index,
+		colInfos:       colInfos,
+		columnselector: e.ColumnSelector,
 	}
 	avroCodec, header, err := a.getKeySchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.UpdateTS(), keyColumns)
 	if err != nil {
@@ -131,9 +132,10 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonE
 		index[i] = i
 	}
 	input := &avroEncodeInput{
-		row:      e.GetRows(),
-		colInfos: e.TableInfo.GetColumns(),
-		index:    index,
+		row:            e.GetRows(),
+		colInfos:       e.TableInfo.GetColumns(),
+		index:          index,
+		columnselector: e.ColumnSelector,
 	}
 	avroCodec, header, err := a.getValueSchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.UpdateTS(), input)
 	if err != nil {
@@ -334,6 +336,9 @@ func (a *BatchEncoder) columns2AvroSchema(
 		Fields:    nil,
 	}
 	for _, info := range input.colInfos {
+		if !input.columnselector.Select(info) {
+			continue
+		}
 		avroType, err := a.columnToAvroSchema(info)
 		if err != nil {
 			return nil, err
@@ -426,7 +431,7 @@ func (a *BatchEncoder) columns2AvroData(
 ) (map[string]interface{}, error) {
 	ret := make(map[string]interface{}, len(input.colInfos))
 	for i, col := range input.colInfos {
-		if col == nil {
+		if col == nil || !input.columnselector.Select(col) {
 			continue
 		}
 		data, str, err := a.columnToAvroData(input.row, input.index[i], col)

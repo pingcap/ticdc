@@ -90,7 +90,7 @@ kafka_groups=(
 	# G09
 	'mq_sink_error_resume'
 	# G10
-	''
+	'kafka_column_selector kafka_column_selector_avro'
 	# G11
 	''
 	# G12
