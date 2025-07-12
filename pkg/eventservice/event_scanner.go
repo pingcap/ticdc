@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
 // eventGetter is the interface for getting iterator of events
@@ -57,6 +58,7 @@ type eventScanner struct {
 	schemaGetter schemaGetter
 	mounter      pevent.Mounter
 	epoch        uint64
+	rateLimiter  *rate.Limiter
 }
 
 // newEventScanner creates a new EventScanner
@@ -65,12 +67,14 @@ func newEventScanner(
 	schemaStore schemastore.SchemaStore,
 	mounter pevent.Mounter,
 	epoch uint64,
+	rateLimiter *rate.Limiter,
 ) *eventScanner {
 	return &eventScanner{
 		eventGetter:  eventStore,
 		schemaGetter: schemaStore,
 		mounter:      mounter,
 		epoch:        epoch,
+		rateLimiter:  rateLimiter,
 	}
 }
 
@@ -208,6 +212,8 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		session.addBytes(rawEvent.ApproximateDataSize())
 		session.scannedEntryCount++
+		s.rateLimiter.WaitN(session.ctx, int(rawEvent.ApproximateDataSize()))
+
 		if isNewTxn && checker.checkLimits(session.scannedBytes) {
 			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
 				return s.interruptScan(session, merger, processor)
