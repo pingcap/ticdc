@@ -37,7 +37,7 @@ const (
 	maxScanLimitInBytes     = 1024 * 1024 * 1 // 1MB
 	updateScanLimitInterval = time.Second * 10
 
-	maxScanLimitInBytesPerSecond = 1024 * 1024 * 128 // 128MB/s
+	maxScanLimitInBytesPerSecond = 1024 * 1024 * 96 // 96MB/s
 )
 
 // Store the progress of the dispatcher, and the incremental events stats.
