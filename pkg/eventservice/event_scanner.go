@@ -58,7 +58,6 @@ type eventScanner struct {
 	schemaGetter schemaGetter
 	mounter      pevent.Mounter
 	epoch        uint64
-	rateLimiter  *rate.Limiter
 }
 
 // newEventScanner creates a new EventScanner
@@ -74,7 +73,6 @@ func newEventScanner(
 		schemaGetter: schemaStore,
 		mounter:      mounter,
 		epoch:        epoch,
-		rateLimiter:  rateLimiter,
 	}
 }
 
@@ -212,7 +210,6 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		session.addBytes(rawEvent.ApproximateDataSize())
 		session.scannedEntryCount++
-		s.rateLimiter.WaitN(session.ctx, int(rawEvent.ApproximateDataSize()))
 
 		if isNewTxn && checker.checkLimits(session.scannedBytes) {
 			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
