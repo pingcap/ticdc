@@ -35,6 +35,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -79,6 +80,8 @@ type eventBroker struct {
 
 	// metricsCollector handles all metrics collection and reporting
 	metricsCollector *metricsCollector
+
+	scanRateLimiter *rate.Limiter
 }
 
 func newEventBroker(
@@ -122,6 +125,7 @@ func newEventBroker(
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		cancel:                  cancel,
 		g:                       g,
+		scanRateLimiter:         rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), maxScanLimitInBytesPerSecond),
 	}
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
@@ -492,7 +496,18 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.epoch.Load())
+	if !c.scanRateLimiter.AllowN(time.Now(), int(task.getCurrentScanLimitInBytes())) {
+		return
+	}
+
+	scanner := newEventScanner(
+		c.eventStore,
+		c.schemaStore,
+		c.mounter,
+		task.epoch.Load(),
+		c.scanRateLimiter,
+	)
+
 	sl := scanLimit{
 		maxScannedBytes: task.getCurrentScanLimitInBytes(),
 		timeout:         time.Millisecond * 1000, // 1 Second

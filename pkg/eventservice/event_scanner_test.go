@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
+	"golang.org/x/time/rate"
 )
 
 type mockMounter struct {
@@ -63,7 +64,10 @@ func TestEventScanner(t *testing.T) {
 	makeDispatcherReady(disp)
 	broker.addDispatcher(disp.info)
 
-	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
+	scanner := newEventScanner(
+		broker.eventStore, broker.schemaStore, &mockMounter{}, 0,
+		rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), 1),
+	)
 
 	// case 1: Only has resolvedTs event
 	// Tests that the scanner correctly returns just the resolvedTs event
@@ -297,7 +301,10 @@ func TestEventScannerWithDDL(t *testing.T) {
 	makeDispatcherReady(disp)
 	broker.addDispatcher(disp.info)
 
-	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
+	scanner := newEventScanner(
+		broker.eventStore, broker.schemaStore, &mockMounter{}, 0,
+		rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), 1),
+	)
 
 	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
 	helper := commonEvent.NewEventTestHelper(t)

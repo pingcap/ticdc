@@ -45,7 +45,7 @@ func (h *incHandler) Handle(dest D, events ...*inc) (await bool) {
 	return false
 }
 
-func (h *incHandler) GetSize(event *inc) uint64         { return 0 }
+func (h *incHandler) GetSize(event *inc) int            { return 0 }
 func (h *incHandler) GetArea(path string, dest D) int   { return 0 }
 func (h *incHandler) GetTimestamp(event *inc) Timestamp { return 0 }
 func (h *incHandler) GetType(event *inc) EventType      { return DefaultEventType }

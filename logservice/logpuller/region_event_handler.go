@@ -45,7 +45,7 @@ type regionEvent struct {
 	resolvedTs uint64
 }
 
-func (event *regionEvent) getSize() uint64 {
+func (event *regionEvent) getSize() int {
 	if event == nil {
 		return 0
 	}
@@ -60,7 +60,7 @@ func (event *regionEvent) getSize() uint64 {
 			size += len(row.OldValue)
 		}
 	}
-	return uint64(size)
+	return size
 }
 
 type regionEventHandler struct {
@@ -119,7 +119,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	return false
 }
 
-func (h *regionEventHandler) GetSize(event regionEvent) uint64 {
+func (h *regionEventHandler) GetSize(event regionEvent) int {
 	return event.getSize()
 }
 

@@ -35,7 +35,7 @@ func TestDispatcherProgress(t *testing.T) {
 	// Test Marshal and Unmarshal
 	data, err := progress.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, int(progress.GetSize()))
+	require.Len(t, data, progress.GetSize())
 
 	var unmarshalledProgress DispatcherProgress
 	err = unmarshalledProgress.Unmarshal(data)
@@ -94,7 +94,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	heartbeat.DispatcherCount = uint32(len(heartbeat.DispatcherProgresses))
 	data, err := heartbeat.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, int(heartbeat.GetSize()))
+	require.Len(t, data, heartbeat.GetSize())
 
 	var unmarshalledResponse DispatcherHeartbeat
 	err = unmarshalledResponse.Unmarshal(data)
@@ -172,7 +172,7 @@ func TestDispatcherState(t *testing.T) {
 	// Test Marshal and Unmarshal
 	data, err := ds.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, int(ds.GetSize()))
+	require.Len(t, data, ds.GetSize())
 
 	var unmarshaledState DispatcherState
 	err = unmarshaledState.Unmarshal(data)
@@ -215,7 +215,7 @@ func TestDispatcherHeartbeatResponse(t *testing.T) {
 	response.DispatcherCount = uint32(len(response.DispatcherStates))
 	data, err := response.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, int(response.GetSize()))
+	require.Len(t, data, response.GetSize())
 
 	var unmarshalledResponse DispatcherHeartbeatResponse
 	err = unmarshalledResponse.Unmarshal(data)

@@ -230,10 +230,10 @@ func (b *BatchDMLEvent) GetStartTs() common.Ts {
 	return b.DMLEvents[0].GetStartTs()
 }
 
-func (b *BatchDMLEvent) GetSize() uint64 {
-	var size uint64
-	for _, item := range b.DMLEvents {
-		size += item.GetSize()
+func (b *BatchDMLEvent) GetSize() int64 {
+	var size int64
+	for _, dml := range b.DMLEvents {
+		size += dml.GetSize()
 	}
 	return size
 }
@@ -268,7 +268,7 @@ type DMLEvent struct {
 	// Length is the number of rows in the transaction.
 	Length int32 `json:"length"`
 	// ApproximateSize is the approximate size of all rows in the transaction.
-	ApproximateSize uint64 `json:"approximate_size"`
+	ApproximateSize int64 `json:"approximate_size"`
 	// RowTypes is the types of every row in the transaction.
 	RowTypes []RowType `json:"row_types"`
 	// Rows shares BatchDMLEvent rows
@@ -347,7 +347,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		t.RowTypes = append(t.RowTypes, rowType)
 	}
 	t.Length += 1
-	t.ApproximateSize += uint64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
+	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
 	if checksum != nil {
 		t.Checksum = append(t.Checksum, checksum)
 	}
@@ -471,14 +471,14 @@ func (t *DMLEvent) Unmarshal(data []byte) error {
 }
 
 // GetSize returns the size of the event in bytes, including all fields.
-func (t *DMLEvent) GetSize() uint64 {
+func (t *DMLEvent) GetSize() int64 {
 	// Notice: events send from local channel will not have the size field.
 	// return t.eventSize
 	return t.GetRowsSize()
 }
 
 // GetRowsSize returns the approximate size of the rows in the transaction.
-func (t *DMLEvent) GetRowsSize() uint64 {
+func (t *DMLEvent) GetRowsSize() int64 {
 	return t.ApproximateSize
 }
 
@@ -500,7 +500,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + uint64(t.Length)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + int(t.Length)
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -530,12 +530,12 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	offset += 8
 	// State
 	copy(buf[offset:], t.State.encode())
-	offset += int(t.State.GetSize())
+	offset += t.State.GetSize()
 	// Length
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.Length))
 	offset += 4
 	// ApproximateSize
-	binary.LittleEndian.PutUint64(buf[offset:], t.ApproximateSize)
+	binary.LittleEndian.PutUint64(buf[offset:], uint64(t.ApproximateSize))
 	offset += 8
 	// PreviousTotalOffset
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.PreviousTotalOffset))
@@ -569,7 +569,7 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	}
 	offset := 1
 	t.DispatcherID.Unmarshal(data[offset:])
-	offset += int(t.DispatcherID.GetSize())
+	offset += t.DispatcherID.GetSize()
 	t.PhysicalTableID = int64(binary.LittleEndian.Uint64(data[offset:]))
 	offset += 8
 	t.StartTs = binary.LittleEndian.Uint64(data[offset:])
@@ -579,10 +579,10 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	t.Seq = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 	t.State.decode(data[offset:])
-	offset += int(t.State.GetSize())
+	offset += t.State.GetSize()
 	t.Length = int32(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4
-	t.ApproximateSize = binary.LittleEndian.Uint64(data[offset:])
+	t.ApproximateSize = int64(binary.LittleEndian.Uint64(data[offset:]))
 	offset += 8
 	t.PreviousTotalOffset = int(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4

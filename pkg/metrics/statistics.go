@@ -61,7 +61,7 @@ type Statistics struct {
 }
 
 // RecordBatchExecution stats batch executors which return (batchRowCount, batchWriteBytes, error).
-func (b *Statistics) RecordBatchExecution(executor func() (int, uint64, error)) error {
+func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) error {
 	batchSize, batchWriteBytes, err := executor()
 	if err != nil {
 		b.metricExecErrCnt.Inc()

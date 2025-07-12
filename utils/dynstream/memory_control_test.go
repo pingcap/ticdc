@@ -83,7 +83,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	}
 	ok := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
 	require.True(t, ok)
-	require.Equal(t, uint64(1), path1.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(1), path1.areaMemStat.totalPendingSize.Load())
 	require.False(t, path1.paused.Load())
 	require.False(t, path1.areaMemStat.paused.Load())
 
@@ -97,7 +97,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	}
 	ok = path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
 	require.True(t, ok)
-	require.Equal(t, uint64(2), path1.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(2), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ := path1.pendingQueue.BackRef()
 	require.Equal(t, periodicEvent.timestamp, back.timestamp)
@@ -111,7 +111,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	ok = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
 	require.False(t, ok)
 	// Size should remain the same as the signal was replaced
-	require.Equal(t, uint64(2), path1.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(2), path1.areaMemStat.totalPendingSize.Load())
 	// The pending queue should only have 2 events
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	// The last event timestamp should be the latest
@@ -129,7 +129,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	}
 	ok = path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
 	require.True(t, ok)
-	require.Equal(t, uint64(22), path1.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(22), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 3, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
 	require.Equal(t, normalEvent2.timestamp, back.timestamp)
@@ -163,7 +163,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	}
 	ok = path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
 	require.True(t, ok)
-	require.Equal(t, uint64(42), path1.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(42), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 4, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
 	require.Equal(t, normalEvent3.timestamp, back.timestamp)
@@ -215,13 +215,13 @@ func TestGetMetrics(t *testing.T) {
 	}, nil)
 	metrics = mc.getMetrics()
 	require.Equal(t, 1, len(metrics.AreaMemoryMetrics))
-	require.Equal(t, uint64(0), metrics.AreaMemoryMetrics[0].usedMemory)
-	require.Equal(t, uint64(100), metrics.AreaMemoryMetrics[0].maxMemory)
+	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].usedMemory)
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].maxMemory)
 
 	path.areaMemStat.totalPendingSize.Store(100)
 	metrics = mc.getMetrics()
-	require.Equal(t, uint64(100), metrics.AreaMemoryMetrics[0].usedMemory)
-	require.Equal(t, uint64(100), metrics.AreaMemoryMetrics[0].maxMemory)
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].usedMemory)
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].maxMemory)
 }
 
 func TestUpdateAreaPauseState(t *testing.T) {
@@ -235,22 +235,22 @@ func TestUpdateAreaPauseState(t *testing.T) {
 	mc.addPathToArea(path, settings, feedbackChan)
 	areaMemStat := path.areaMemStat
 
-	areaMemStat.totalPendingSize.Store(uint64(10))
+	areaMemStat.totalPendingSize.Store(int64(10))
 	areaMemStat.updateAreaPauseState(path)
 	require.False(t, areaMemStat.paused.Load())
 
-	areaMemStat.totalPendingSize.Store(uint64(60))
+	areaMemStat.totalPendingSize.Store(int64(60))
 	areaMemStat.updateAreaPauseState(path)
 	require.False(t, areaMemStat.paused.Load())
 
-	areaMemStat.totalPendingSize.Store(uint64(80))
+	areaMemStat.totalPendingSize.Store(int64(80))
 	areaMemStat.updateAreaPauseState(path)
 	require.True(t, areaMemStat.paused.Load())
 	fb := <-feedbackChan
 	require.Equal(t, PauseArea, fb.FeedbackType)
 	require.Equal(t, path.area, fb.Area)
 
-	areaMemStat.totalPendingSize.Store(uint64(30))
+	areaMemStat.totalPendingSize.Store(int64(30))
 	areaMemStat.updateAreaPauseState(path)
 	require.False(t, areaMemStat.paused.Load())
 	fb = <-feedbackChan
@@ -279,18 +279,18 @@ func TestUpdatePathPauseState(t *testing.T) {
 	mc.addPathToArea(path, settings, feedbackChan)
 	areaMemStat := path.areaMemStat
 
-	path.pendingSize.Store(uint64(10))
+	path.pendingSize.Store(int64(10))
 	areaMemStat.updatePathPauseState(path)
 	require.False(t, path.paused.Load())
 
-	path.pendingSize.Store(uint64(60))
+	path.pendingSize.Store(int64(60))
 	areaMemStat.updatePathPauseState(path)
 	require.True(t, path.paused.Load())
 	fb := <-feedbackChan
 	require.Equal(t, PausePath, fb.FeedbackType)
 	require.Equal(t, path.area, fb.Area)
 
-	path.pendingSize.Store(uint64(9))
+	path.pendingSize.Store(int64(9))
 	areaMemStat.updatePathPauseState(path)
 	require.True(t, path.paused.Load())
 

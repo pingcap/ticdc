@@ -35,7 +35,7 @@ func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
 	cfg := mysql.New()
 	cfg.WorkerCount = 1
 	cfg.DMLMaxRetry = 1
-	cfg.MaxAllowedPacket = vardef.DefMaxAllowedPacket
+	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
 	sink := newMySQLSink(ctx, changefeedID, cfg, db)
