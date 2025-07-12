@@ -95,7 +95,7 @@ func (b *BatchResolvedEvent) Unmarshal(data []byte) error {
 }
 
 // No one will use this method, just for implementing Event interface.
-func (b *BatchResolvedEvent) GetSize() uint64 {
+func (b *BatchResolvedEvent) GetSize() int64 {
 	return 0
 }
 
@@ -193,10 +193,10 @@ func (e ResolvedEvent) encodeV0() ([]byte, error) {
 	offset := 0
 	data[offset] = e.Version
 	offset += 1
-	binary.BigEndian.PutUint64(data[offset:], e.ResolvedTs)
+	binary.BigEndian.PutUint64(data[offset:], uint64(e.ResolvedTs))
 	offset += 8
 	copy(data[offset:], e.State.encode())
-	offset += int(e.State.GetSize())
+	offset += e.State.GetSize()
 	copy(data[offset:], e.DispatcherID.Marshal())
 	return data, nil
 }
@@ -209,7 +209,7 @@ func (e *ResolvedEvent) decodeV0(data []byte) error {
 	e.ResolvedTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
 	e.State.decode(data[offset:])
-	offset += int(e.State.GetSize())
+	offset += e.State.GetSize()
 	return e.DispatcherID.Unmarshal(data[offset:])
 }
 
@@ -218,8 +218,8 @@ func (e ResolvedEvent) String() string {
 }
 
 // Update GetSize method to reflect the new structure
-func (e ResolvedEvent) GetSize() uint64 {
-	return 1 + 8 + e.State.GetSize() + e.DispatcherID.GetSize() // Version(1) + ResolvedTs(8) + State(1) + DispatcherID(16)
+func (e ResolvedEvent) GetSize() int64 {
+	return int64(1 + 8 + e.State.GetSize() + e.DispatcherID.GetSize()) // Version(1) + ResolvedTs(8) + State(1) + DispatcherID(16)
 }
 
 func (e ResolvedEvent) IsPaused() bool {

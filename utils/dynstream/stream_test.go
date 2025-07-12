@@ -78,7 +78,7 @@ func (h *mockHandler) Handle(dest any, events ...*mockEvent) (await bool) {
 	return false
 }
 
-func (h *mockHandler) GetSize(event *mockEvent) uint64         { return 0 }
+func (h *mockHandler) GetSize(event *mockEvent) int            { return 0 }
 func (h *mockHandler) GetArea(path string, dest any) int       { return 0 }
 func (h *mockHandler) GetTimestamp(event *mockEvent) Timestamp { return 0 }
 func (h *mockHandler) GetType(event *mockEvent) EventType      { return DefaultEventType }
@@ -199,7 +199,7 @@ func TestPathInfo(t *testing.T) {
 	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil)
 	require.Equal(t, 1, pi.area)
 	require.Equal(t, "test/path", pi.path)
-	require.Equal(t, uint64(0), pi.pendingSize.Load())
+	require.Equal(t, int64(0), pi.pendingSize.Load())
 	require.Equal(t, false, pi.paused.Load())
 	require.Equal(t, time.Unix(0, 0), pi.lastSendFeedbackTime.Load())
 }

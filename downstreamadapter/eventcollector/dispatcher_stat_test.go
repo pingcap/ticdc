@@ -123,7 +123,7 @@ type mockEvent struct {
 	dispatcherID common.DispatcherID
 	commitTs     common.Ts
 	startTs      common.Ts
-	size         uint64
+	size         int64
 	isPaused     bool
 	len          int32
 	epoch        uint64
@@ -153,7 +153,7 @@ func (m *mockEvent) GetStartTs() common.Ts {
 	return m.startTs
 }
 
-func (m *mockEvent) GetSize() uint64 {
+func (m *mockEvent) GetSize() int64 {
 	return m.size
 }
 
