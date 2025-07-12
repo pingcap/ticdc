@@ -125,7 +125,7 @@ func newEventBroker(
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		cancel:                  cancel,
 		g:                       g,
-		scanRateLimiter:         rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), 1),
+		scanRateLimiter:         rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), maxScanLimitInBytesPerSecond),
 	}
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
@@ -496,7 +496,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if !c.scanRateLimiter.AllowN(time.Now().Add(time.Millisecond*100), int(task.getCurrentScanLimitInBytes())) {
+	if !c.scanRateLimiter.AllowN(time.Now(), int(task.getCurrentScanLimitInBytes())) {
 		return
 	}
 
