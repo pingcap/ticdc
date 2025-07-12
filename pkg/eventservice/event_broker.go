@@ -496,7 +496,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if !c.scanRateLimiter.AllowN(time.Now(), int(task.getCurrentScanLimitInBytes())) {
+	if !c.scanRateLimiter.AllowN(time.Now().Add(time.Millisecond*100), int(task.getCurrentScanLimitInBytes())) {
 		return
 	}
 
