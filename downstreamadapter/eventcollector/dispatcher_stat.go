@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )
 
@@ -155,32 +154,17 @@ func (d *dispatcherStat) registerTo(serverID node.ID) {
 
 // commitReady is used to notify the event service to start sending events.
 func (d *dispatcherStat) commitReady(serverID node.ID) {
-	log.Info("Send reset dispatcher request to event service to notify the event service to start sending events",
-		zap.Stringer("dispatcher", d.getDispatcherID()),
-		zap.Stringer("eventServiceID", serverID),
-		zap.Uint64("startTs", d.target.GetStartTs()))
-	d.lastEventSeq.Store(0)
-	epoch := d.epoch.Add(1)
-	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.target.GetStartTs(), epoch))
-	d.eventCollector.enqueueMessageForSend(msg)
+	d.doReset(serverID, d.target.GetStartTs())
 }
 
 // reset is used to reset the dispatcher to the specified commitTs,
 // it will remove the dispatcher from the dynamic stream and add it back.
 func (d *dispatcherStat) reset(serverID node.ID) {
-	resetTs := d.getResetTs()
+	d.doReset(serverID, d.getResetTs())
+}
+
+func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	epoch := d.epoch.Add(1)
-	// reset the dispatcher's path in the dynamic stream
-	err := d.eventCollector.ds.RemovePath(d.getDispatcherID())
-	if err != nil {
-		log.Error("failed to remove dispatcher from dynamic stream", zap.Error(err))
-	}
-	setting := dynstream.NewAreaSettingsWithMaxPendingSize(d.memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
-	err = d.eventCollector.ds.AddPath(d.getDispatcherID(), d, setting)
-	if err != nil {
-		log.Error("failed to add dispatcher to dynamic stream", zap.Error(err))
-	}
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs, epoch))
