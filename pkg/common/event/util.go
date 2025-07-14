@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -314,6 +315,59 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk)
 
 	return dmlEvent, raw
+}
+
+// DML2DeleteEvent use a insert event to generate the delete event for this event
+func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, deleteDml string) *DMLEvent {
+	if !strings.Contains(strings.ToLower(dml), "insert") {
+		log.Fatal("event for DML2DeleteEvent must be insert", zap.Any("dml", dml))
+	}
+
+	if !strings.Contains(strings.ToLower(deleteDml), "delete") {
+		log.Fatal("deleteDml for DML2DeleteEvent must be deleteDml", zap.Any("deleteDml", deleteDml))
+	}
+
+	key := toTableInfosKey(schema, table)
+	log.Info("dml2event", zap.String("key", key))
+	tableInfo, ok := s.tableInfos[key]
+	require.True(s.t, ok)
+	did := common.NewDispatcherID()
+	ts := tableInfo.UpdateTS()
+	physicalTableID := tableInfo.TableName.TableID
+	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
+
+	rawKv := s.DML2RawKv(physicalTableID, ts, dml)
+
+	raw := &common.RawKVEntry{
+		OpType:   common.OpTypeDelete,
+		Key:      rawKv[0].Key,
+		Value:    nil,
+		OldValue: rawKv[0].Value,
+		StartTs:  rawKv[0].StartTs,
+		CRTs:     rawKv[0].CRTs,
+	}
+	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk)
+	require.NoError(s.t, err)
+
+	_ = s.DML2RawKv(physicalTableID, ts, deleteDml)
+
+	return dmlEvent
+}
+
+// execute delete dml to clear the data record
+func (s *EventTestHelper) ExecuteDeleteDml(schema, table string, dml string) {
+	if !strings.Contains(strings.ToLower(dml), "delete") {
+		log.Fatal("deleteDml for DML2DeleteEvent must be deleteDml", zap.Any("deleteDml", dml))
+	}
+
+	key := toTableInfosKey(schema, table)
+	tableInfo, ok := s.tableInfos[key]
+	require.True(s.t, ok)
+	ts := tableInfo.UpdateTS()
+	physicalTableID := tableInfo.TableName.TableID
+
+	_ = s.DML2RawKv(physicalTableID, ts, dml)
 }
 
 func (s *EventTestHelper) DML2RawKv(physicalTableID int64, ddlFinishedTs uint64, dmls ...string) []*common.RawKVEntry {
