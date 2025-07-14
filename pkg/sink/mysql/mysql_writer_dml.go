@@ -341,11 +341,11 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 							}
 							// remove the first one, update the second one, then break
 							newRowChange := commonEvent.RowChange{
-								PreRow:  rowLists[i].RowChange.PreRow,
+								PreRow:  rowLists[j].RowChange.PreRow,
 								Row:     rowLists[j].RowChange.Row,
 								RowType: commonEvent.RowTypeUpdate,
 							}
-							rowLists[i] = RowChangeWithKeys{
+							rowLists[j] = RowChangeWithKeys{
 								RowChange:  &newRowChange,
 								PreRowKeys: rowKey,
 								RowKeys:    rowKey,
