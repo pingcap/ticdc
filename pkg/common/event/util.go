@@ -323,7 +323,7 @@ func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, dele
 	}
 
 	if !strings.Contains(strings.ToLower(deleteDml), "delete") {
-		log.Fatal("deleteDml for DML2DeleteEvent must be deleteDml", zap.Any("deleteDml", deleteDml))
+		log.Fatal("the 'deleteDml' parameter for DML2DeleteEvent must be a DELETE statement", zap.Any("deleteDml", deleteDml))
 	}
 
 	key := toTableInfosKey(schema, table)
