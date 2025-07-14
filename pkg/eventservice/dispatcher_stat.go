@@ -34,7 +34,7 @@ const (
 	heartbeatTimeout = time.Second * 180
 
 	minScanLimitInBytes     = 1024 * 1024 * 1 // 1MB
-	maxScanLimitInBytes     = 1024 * 1024 * 1 // 4MB
+	maxScanLimitInBytes     = 1024 * 1024 * 1 // 1MB
 	updateScanLimitInterval = time.Second * 10
 
 	maxScanLimitInBytesPerSecond = 1024 * 1024 * 256 // 256MB/s
