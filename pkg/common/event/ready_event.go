@@ -84,8 +84,8 @@ func (e *ReadyEvent) GetStartTs() common.Ts {
 }
 
 // GetSize returns the approximate size of the event in bytes
-func (e *ReadyEvent) GetSize() uint64 {
-	return 2 + e.DispatcherID.GetSize()
+func (e *ReadyEvent) GetSize() int64 {
+	return int64(2 + e.DispatcherID.GetSize())
 }
 
 func (e *ReadyEvent) IsPaused() bool {
@@ -122,7 +122,7 @@ func (e *ReadyEvent) decode(data []byte) error {
 
 func (e ReadyEvent) encodeV0() ([]byte, error) {
 	data := make([]byte, e.GetSize())
-	var offset uint64
+	offset := 0
 	data[offset] = e.Version
 	offset += 1
 	// Redo

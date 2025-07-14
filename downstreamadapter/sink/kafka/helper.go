@@ -123,6 +123,9 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		options.DeriveTopicConfig(),
 		kafkaComponent.adminClient,
 	)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
 	return kafkaComponent, protocol, nil
 }
 

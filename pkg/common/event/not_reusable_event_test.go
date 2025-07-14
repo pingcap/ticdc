@@ -44,7 +44,7 @@ func TestNotReusableEvent(t *testing.T) {
 	require.Equal(t, event, reverseEvent)
 
 	// 4. Test Other methods
-	require.Equal(t, event.GetSize(), uint64(len(data)))
+	require.Equal(t, event.GetSize(), int64(len(data)))
 	require.Equal(t, event.GetDispatcherID(), dispatcherID)
 	require.Equal(t, event.GetCommitTs(), common.Ts(0))
 	require.Equal(t, event.GetStartTs(), common.Ts(0))

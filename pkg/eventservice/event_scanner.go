@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
 // eventGetter is the interface for getting iterator of events
@@ -38,7 +39,7 @@ type eventGetter interface {
 // schemaGetter is the interface for getting schema info and ddl events
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
-	FetchTableDDLEvents(tableID int64, filter filter.Filter, startTs, endTs uint64) ([]pevent.DDLEvent, error)
+	FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]pevent.DDLEvent, error)
 	GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
@@ -65,6 +66,7 @@ func newEventScanner(
 	schemaStore schemastore.SchemaStore,
 	mounter pevent.Mounter,
 	epoch uint64,
+	rateLimiter *rate.Limiter,
 ) *eventScanner {
 	return &eventScanner{
 		eventGetter:  eventStore,
@@ -140,6 +142,7 @@ func (s *eventScanner) scan(
 // fetchDDLEvents retrieves DDL events for the scan
 func (s *eventScanner) fetchDDLEvents(session *session) ([]pevent.DDLEvent, error) {
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
+		session.dispatcherStat.info.GetID(),
 		session.dataRange.Span.TableID,
 		session.dispatcherStat.filter,
 		session.dataRange.StartTs,
@@ -207,6 +210,7 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		session.addBytes(rawEvent.ApproximateDataSize())
 		session.scannedEntryCount++
+
 		if isNewTxn && checker.checkLimits(session.scannedBytes) {
 			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
 				return s.interruptScan(session, merger, processor)
