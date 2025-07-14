@@ -357,7 +357,7 @@ func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, dele
 // execute delete dml to clear the data record
 func (s *EventTestHelper) ExecuteDeleteDml(schema, table string, dml string) {
 	if !strings.Contains(strings.ToLower(dml), "delete") {
-		log.Fatal("deleteDml for DML2DeleteEvent must be deleteDml", zap.Any("deleteDml", dml))
+		log.Fatal("dml for ExecuteDeleteDml must be a DELETE statement", zap.Any("deleteDml", dml))
 	}
 
 	key := toTableInfosKey(schema, table)
