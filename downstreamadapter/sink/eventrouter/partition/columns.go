@@ -63,8 +63,8 @@ func (r *ColumnsPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEven
 			"columns not found when dispatch event, table: %v, columns: %v", tableInfo.GetTableName(), r.Columns)
 	}
 
-	for idx := 0; idx < len(r.Columns); idx++ {
-		colInfo := tableInfo.GetColumns()[offsets[idx]]
+	for _, idx := range offsets {
+		colInfo := tableInfo.GetColumns()[idx]
 		value := common.ExtractColVal(&rowData, colInfo, idx)
 		if value == nil {
 			continue

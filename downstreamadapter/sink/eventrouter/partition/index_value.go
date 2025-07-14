@@ -73,7 +73,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(
 		}
 		for idx := 0; idx < len(names); idx++ {
 			colInfo := tableInfo.GetColumns()[offsets[idx]]
-			value := common.ExtractColVal(&rowData, colInfo, idx)
+			value := common.ExtractColVal(&rowData, colInfo, offsets[idx])
 			if value == nil {
 				continue
 			}
