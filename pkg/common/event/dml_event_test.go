@@ -70,8 +70,8 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 	require.Equal(t, e, reverseEvent)
 }
 
-// TestDMLEvent test the Marshal and Unmarshal of DMLEvent.
-func TestDMLEvent(t *testing.T) {
+// TestBatchDMLEvent test the Marshal and Unmarshal of BatchDMLEvent.
+func TestBatchDMLEvent(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()
 

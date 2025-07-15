@@ -266,6 +266,8 @@ type DMLEvent struct {
 	// State is the state of sender when sending this event.
 	State EventSenderState `json:"state"`
 	// Length is the number of rows in the transaction.
+	// Note: it is the logic length of the transaction, not the number of physical rows in the Rows chunk.
+	// For an update event, it has two physical rows in the Rows chunk.
 	Length int32 `json:"length"`
 	// ApproximateSize is the approximate size of all rows in the transaction.
 	ApproximateSize int64 `json:"approximate_size"`
@@ -350,7 +352,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	for range count {
 		t.RowTypes = append(t.RowTypes, rowType)
 	}
-	t.Length += int32(count)
+	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
 	if checksum != nil {
 		t.Checksum = append(t.Checksum, checksum)
@@ -503,13 +505,8 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
 		return nil, nil
 	}
-	if t.Length != int32(len(t.RowTypes)) {
-		log.Panic("DMLEvent: Length does not match the number of RowTypes",
-			zap.Int32("length", t.Length), zap.Int("rowTypesLength", len(t.RowTypes)))
-		return nil, errors.ErrEncodeFailed.FastGenByArgs("Length does not match the number of RowTypes")
-	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + int(t.Length)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + len(t.RowTypes)
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
