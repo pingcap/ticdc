@@ -181,6 +181,15 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 		// Only when SafeMode == false and commitTs is larger than replicatingTs,
 		// we think the data status is safe, we can use insert instead of replica sql to avoid the conflict.
 		inDataSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
+
+		if len(events) == 1 {
+			// only one event, we don't need to do batch
+			sql, args := w.generateSQLForSingleEvent(events[0], inDataSafeMode)
+			sqlList = append(sqlList, sql...)
+			argsList = append(argsList, args...)
+			return
+		}
+
 		if inDataSafeMode {
 			sql, args := w.generateBatchSQLInSafeMode(events)
 			sqlList = append(sqlList, sql...)
@@ -209,6 +218,20 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 
 	batchSQL(events[beginIndex:])
 	return sqlList, argsList
+}
+
+func (w *Writer) generateSQLForSingleEvent(event *commonEvent.DMLEvent, inDataSafeMode bool) ([]string, [][]interface{}) {
+	tableInfo := event.TableInfo
+	rowLists := make([]*commonEvent.RowChange, 0, event.Len())
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+		rowLists = append(rowLists, &row)
+	}
+	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode)
 }
 
 func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {

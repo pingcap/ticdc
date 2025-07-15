@@ -14,8 +14,11 @@
 package mysql
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
@@ -247,6 +250,43 @@ func TestGenerateBatchSQL(t *testing.T) {
 		(reflect.DeepEqual(expected6, args[0])),
 		"args[0] should be one of the expected combinations: %v", args[0])
 
+	// Test performance with 1000 rows event
+	// Generate 1000 insert statements
+	var insertStatements []string
+	for i := 1000; i < 2000; i++ {
+		insertStatements = append(insertStatements, fmt.Sprintf("insert into t values (%d, 'test%d')", i, i))
+	}
+
+	// Create a single event with 1000 rows
+	dmlEvent := helper.DML2Event("test", "t", insertStatements...)
+	require.Equal(t, int32(1000), dmlEvent.Length, "Event should contain 1000 rows")
+
+	// Set configuration for batch processing
+	writer.cfg.MaxTxnRow = 1000
+	writer.cfg.SafeMode = false
+
+	// Measure execution time
+	start := time.Now()
+	sql, args = writer.generateBatchSQL([]*commonEvent.DMLEvent{dmlEvent})
+	duration := time.Since(start)
+
+	// Verify performance requirement (should complete within 1 second)
+	require.Less(t, duration, 50*time.Millisecond, "generateBatchSQL should complete within 50ms, took %v", duration)
+
+	// Verify the generated SQL is correct
+	require.Equal(t, 1, len(sql), "Should generate 1 SQL statement for 1000 rows")
+	require.Equal(t, 1, len(args), "Should generate 1 args slice for 1000 rows")
+
+	// Verify SQL statement format
+	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`) VALUES "
+	require.True(t, strings.HasPrefix(sql[0], expectedSQL), "SQL should start with INSERT statement")
+
+	// Count the number of value placeholders
+	valueCount := strings.Count(sql[0], "?")
+	require.Equal(t, 2000, valueCount, "Should have 2000 placeholders (1000 rows * 2 columns)")
+
+	// Verify args length
+	require.Equal(t, 2000, len(args[0]), "Should have 2000 arguments (1000 rows * 2 columns)")
 }
 
 func TestGenerateBatchSQLInSafeMode(t *testing.T) {
