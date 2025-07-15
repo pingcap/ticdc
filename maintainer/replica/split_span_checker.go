@@ -138,7 +138,12 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
 		zap.Any("replica", replica.ID),
-		zap.Any("status", status.GetStatus()))
+		zap.Any("status", status.GetStatus()),
+		zap.Int("status.regionCount", status.regionCount),
+		zap.Any("status.regionCheckTime", status.regionCheckTime),
+		zap.Int("status.trafficScore", status.trafficScore),
+		zap.Any("status.lastThreeTraffic", status.lastThreeTraffic),
+	)
 }
 
 type SplitSpanCheckResult struct {
@@ -527,6 +532,22 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		zap.Any("groupID", s.groupID))
 	results := make([]SplitSpanCheckResult, 0)
 	for _, status := range s.allTasks {
+		// Accumulate statistics for traffic balancing and node distribution
+		totalRegionCount += status.regionCount
+		lastThreeTrafficSum[0] += status.lastThreeTraffic[0]
+		lastThreeTrafficSum[1] += status.lastThreeTraffic[1]
+		lastThreeTrafficSum[2] += status.lastThreeTraffic[2]
+
+		nodeID := status.GetNodeID()
+		if nodeID == "" {
+			log.Panic("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
+		}
+
+		lastThreeTrafficPerNode[nodeID][0] += status.lastThreeTraffic[0]
+		lastThreeTrafficPerNode[nodeID][1] += status.lastThreeTraffic[1]
+		lastThreeTrafficPerNode[nodeID][2] += status.lastThreeTraffic[2]
+		taskMap[nodeID] = append(taskMap[nodeID], status)
+
 		if s.writeThreshold > 0 {
 			if status.trafficScore > trafficScoreThreshold {
 				results = append(results, SplitSpanCheckResult{
@@ -536,21 +557,6 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 				})
 				continue
 			}
-			// Accumulate statistics for traffic balancing and node distribution
-			totalRegionCount += status.regionCount
-			lastThreeTrafficSum[0] += status.lastThreeTraffic[0]
-			lastThreeTrafficSum[1] += status.lastThreeTraffic[1]
-			lastThreeTrafficSum[2] += status.lastThreeTraffic[2]
-
-			nodeID := status.GetNodeID()
-			if nodeID == "" {
-				log.Panic("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
-			}
-
-			lastThreeTrafficPerNode[nodeID][0] += status.lastThreeTraffic[0]
-			lastThreeTrafficPerNode[nodeID][1] += status.lastThreeTraffic[1]
-			lastThreeTrafficPerNode[nodeID][2] += status.lastThreeTraffic[2]
-			taskMap[nodeID] = append(taskMap[nodeID], status)
 		}
 
 		if s.regionThreshold > 0 {
