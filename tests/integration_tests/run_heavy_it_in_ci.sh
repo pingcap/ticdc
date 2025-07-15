@@ -145,7 +145,11 @@ pulsar_groups=(
 	# fail_over_ddl_mix
 	''
 	# G15
-	'debezium'
+	'debezium01'
+	# G16
+	'debezium02'
+	# G17
+	'debezium03'
 )
 
 storage_groups=(
