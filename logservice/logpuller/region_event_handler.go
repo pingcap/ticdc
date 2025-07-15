@@ -164,7 +164,8 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
-	log.Panic("drop region event, it should not happen",
+	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
+	log.Warn("drop region event",
 		zap.Uint64("regionID", event.state.getRegionID()),
 		zap.Uint64("requestID", event.state.requestID),
 		zap.Uint64("workerID", event.worker.workerID),
