@@ -31,7 +31,7 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 		if rawKV.OpType == common.OpTypeDelete {
 			return 1, nil, nil
 		}
-		if len(rawKV.Value) != 0 && len(rawKV.OldValue) != 0 {
+		if rawKV.IsUpdate() {
 			return 2, nil, nil
 		} else {
 			return 1, nil, nil

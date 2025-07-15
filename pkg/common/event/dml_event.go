@@ -342,7 +342,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if raw.OpType == common.OpTypeDelete {
 		rowType = RowTypeDelete
 	}
-	if len(raw.Value) != 0 && len(raw.OldValue) != 0 {
+	if raw.IsUpdate() {
 		rowType = RowTypeUpdate
 	}
 	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
