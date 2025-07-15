@@ -26,7 +26,8 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 	mockDecodeRawKVToChunk := func(
 		rawKV *common.RawKVEntry,
 		tableInfo *common.TableInfo,
-		chk *chunk.Chunk) (int, *integrity.Checksum, error) {
+		chk *chunk.Chunk,
+	) (int, *integrity.Checksum, error) {
 		if rawKV.OpType == common.OpTypeDelete {
 			return 1, nil, nil
 		}
