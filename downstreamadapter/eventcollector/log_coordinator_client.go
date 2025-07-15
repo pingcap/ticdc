@@ -93,7 +93,7 @@ func (l *LogCoordinatorClient) run(ctx context.Context) error {
 	}
 }
 
-func (l *LogCoordinatorClient) requestReusableEventService(dispatcher dispatcher.DispatcherService) {
+func (l *LogCoordinatorClient) requestReusableEventService(dispatcher dispatcher.EventDispatcher) {
 	if dispatcher.GetTableSpan().TableID != 0 {
 		l.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
 			ID:      dispatcher.GetId().ToPB(),

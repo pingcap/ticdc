@@ -35,12 +35,6 @@ type SyncPointEvent struct {
 	// The epoch of the event. It is set by event service.
 	Epoch          uint64   `json:"epoch"`
 	PostTxnFlushed []func() `msg:"-"`
-	// only for redo
-	IsRedo bool `json:"redo"`
-}
-
-func (e *SyncPointEvent) GetIsRedo() bool {
-	return e.IsRedo
 }
 
 func (e *SyncPointEvent) GetType() int {

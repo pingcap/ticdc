@@ -29,48 +29,42 @@ type dispatcherCreateInfo struct {
 	SchemaID  int64
 }
 
-type cleanMap struct {
-	id       common.DispatcherID
-	schemaID int64
-	redo     bool
-}
-
-func (e *DispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.EventDispatcher] {
+func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {
 	return e.dispatcherMap
 }
 
-func (e *DispatcherManager) GetMaintainerID() node.ID {
+func (e *EventDispatcherManager) GetMaintainerID() node.ID {
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	return e.meta.maintainerID
 }
 
-func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
+func (e *EventDispatcherManager) SetMaintainerID(maintainerID node.ID) {
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	e.meta.maintainerID = maintainerID
 }
 
-func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
+func (e *EventDispatcherManager) GetMaintainerEpoch() uint64 {
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	return e.meta.maintainerEpoch
 }
 
-func (e *DispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {
+func (e *EventDispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.Dispatcher {
 	return e.tableTriggerEventDispatcher
 }
 
-func (e *DispatcherManager) SetHeartbeatRequestQueue(heartbeatRequestQueue *HeartbeatRequestQueue) {
+func (e *EventDispatcherManager) SetHeartbeatRequestQueue(heartbeatRequestQueue *HeartbeatRequestQueue) {
 	e.heartbeatRequestQueue = heartbeatRequestQueue
 }
 
-func (e *DispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQueue *BlockStatusRequestQueue) {
+func (e *EventDispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQueue *BlockStatusRequestQueue) {
 	e.blockStatusRequestQueue = blockStatusRequestQueue
 }
 
 // Get all dispatchers id of the specified schemaID. Including the tableTriggerEventDispatcherID if exists.
-func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.DispatcherID {
+func (e *EventDispatcherManager) GetAllDispatchers(schemaID int64) []common.DispatcherID {
 	dispatcherIDs := e.schemaIDToDispatchers.GetDispatcherIDs(schemaID)
 	if e.tableTriggerEventDispatcher != nil {
 		dispatcherIDs = append(dispatcherIDs, e.tableTriggerEventDispatcher.GetId())

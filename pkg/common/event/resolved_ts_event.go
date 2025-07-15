@@ -28,12 +28,6 @@ type BatchResolvedEvent struct {
 	// Version is the version of the BatchResolvedEvent struct.
 	Version byte
 	Events  []ResolvedEvent
-	// only for redo
-	IsRedo bool
-}
-
-func (b BatchResolvedEvent) GetIsRedo() bool {
-	return b.IsRedo
 }
 
 func (b BatchResolvedEvent) GetType() int {
@@ -123,15 +117,12 @@ type ResolvedEvent struct {
 	State        EventSenderState
 	Version      byte
 	Epoch        uint64
-	// only for redo
-	IsRedo bool
 }
 
 func NewResolvedEvent(
 	resolvedTs common.Ts,
 	dispatcherID common.DispatcherID,
 	epoch uint64,
-	isRedo bool,
 ) ResolvedEvent {
 	return ResolvedEvent{
 		DispatcherID: dispatcherID,
@@ -139,12 +130,7 @@ func NewResolvedEvent(
 		State:        EventSenderStateNormal,
 		Version:      ResolvedEventVersion,
 		Epoch:        epoch,
-		IsRedo:       isRedo,
 	}
-}
-
-func (e ResolvedEvent) GetIsRedo() bool {
-	return e.IsRedo
 }
 
 func (e ResolvedEvent) GetType() int {
@@ -207,9 +193,6 @@ func (e ResolvedEvent) encodeV0() ([]byte, error) {
 	offset := 0
 	data[offset] = e.Version
 	offset += 1
-	// Redo
-	data[offset] = bool2byte(e.IsRedo)
-	offset += 1
 	binary.BigEndian.PutUint64(data[offset:], uint64(e.ResolvedTs))
 	offset += 8
 	copy(data[offset:], e.State.encode())
@@ -223,9 +206,6 @@ func (e *ResolvedEvent) decodeV0(data []byte) error {
 		return fmt.Errorf("ResolvedEvent.decodeV0: invalid data length, expected %d, got %d", e.GetSize(), len(data))
 	}
 	offset := 1 // Skip version byte
-	// Redo
-	e.IsRedo = byte2bool(data[1])
-	offset += 1
 	e.ResolvedTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
 	e.State.decode(data[offset:])
@@ -239,7 +219,7 @@ func (e ResolvedEvent) String() string {
 
 // Update GetSize method to reflect the new structure
 func (e ResolvedEvent) GetSize() int64 {
-	return int64(1 + 1 + 8 + e.State.GetSize() + e.DispatcherID.GetSize()) // Version(1) + Redo(1) + ResolvedTs(8) + State(1) + DispatcherID(16)
+	return int64(1 + 8 + e.State.GetSize() + e.DispatcherID.GetSize()) // Version(1) + ResolvedTs(8) + State(1) + DispatcherID(16)
 }
 
 func (e ResolvedEvent) IsPaused() bool {

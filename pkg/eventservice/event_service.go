@@ -54,7 +54,6 @@ type DispatcherInfo interface {
 	GetBdrMode() bool
 	GetIntegrity() *integrity.Config
 	GetTimezone() *time.Location
-	GetIsRedo() bool
 	GetEpoch() uint64
 }
 

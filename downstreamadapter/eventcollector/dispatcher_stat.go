@@ -102,7 +102,7 @@ func (d *dispatcherConnState) clearRemoteCandidates() {
 
 // dispatcherStat is a helper struct to manage the state of a dispatcher.
 type dispatcherStat struct {
-	target         dispatcher.DispatcherService
+	target         dispatcher.EventDispatcher
 	eventCollector *EventCollector
 	readyCallback  func()
 
@@ -129,7 +129,7 @@ type dispatcherStat struct {
 }
 
 func newDispatcherStat(
-	target dispatcher.DispatcherService,
+	target dispatcher.EventDispatcher,
 	eventCollector *EventCollector,
 	readyCallback func(),
 	memoryQuota uint64,
@@ -233,11 +233,7 @@ func (d *dispatcherStat) resume() {
 }
 
 func (d *dispatcherStat) wake() {
-	if dispatcher.IsRedoDispatcher(d.target) {
-		d.eventCollector.redoDs.Wake(d.getDispatcherID())
-	} else {
-		d.eventCollector.ds.Wake(d.getDispatcherID())
-	}
+	d.eventCollector.ds.Wake(d.getDispatcherID())
 }
 
 func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
@@ -627,7 +623,6 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			OnlyReuse:         onlyReuse,
 			BdrMode:           d.target.GetBDRMode(),
-			IsRedo:            dispatcher.IsRedoDispatcher(d.target),
 			Timezone:          d.target.GetTimezone(),
 			Integrity:         d.target.GetIntegrityConfig(),
 		},
@@ -648,8 +643,6 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64)
 			FilterConfig:      d.target.GetFilterConfig(),
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
-			BdrMode:           d.target.GetBDRMode(),
-			IsRedo:            dispatcher.IsRedoDispatcher(d.target),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			Epoch:             epoch,
 		},
@@ -665,7 +658,6 @@ func (d *dispatcherStat) newDispatcherRemoveRequest() *messaging.DispatcherReque
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-			IsRedo:     dispatcher.IsRedoDispatcher(d.target),
 		},
 	}
 }
@@ -679,7 +671,6 @@ func (d *dispatcherStat) newDispatcherPauseRequest() *messaging.DispatcherReques
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
-			IsRedo:     dispatcher.IsRedoDispatcher(d.target),
 		},
 	}
 }
@@ -693,7 +684,6 @@ func (d *dispatcherStat) newDispatcherResumeRequest() *messaging.DispatcherReque
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
-			IsRedo:     dispatcher.IsRedoDispatcher(d.target),
 		},
 	}
 }

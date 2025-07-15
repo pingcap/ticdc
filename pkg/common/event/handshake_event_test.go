@@ -30,7 +30,7 @@ func TestHandshakeEvent(t *testing.T) {
 	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
 	require.NotNil(t, dmlEvent)
 
-	e := NewHandshakeEvent(common.NewDispatcherID(), 456, 100, 789, dmlEvent.TableInfo, false)
+	e := NewHandshakeEvent(common.NewDispatcherID(), 456, 100, 789, dmlEvent.TableInfo)
 	data, err := e.Marshal()
 	require.NoError(t, err)
 
