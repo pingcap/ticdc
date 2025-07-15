@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -26,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
-	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
@@ -125,42 +123,8 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 					}
 				}
 			} else if checkResult.OpType == replica.OpMerge {
-				// TODO(hyy):why we don't just use AddMergeOperator?
-				operators := make([]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(checkResult.MergeSpans))
-				for _, span := range checkResult.MergeSpans {
-					op := operator.NewOccupyDispatcherOperator(s.spanController, span)
-					ret := s.operatorController.AddOperator(op)
-					if ret {
-						operators = append(operators, op)
-					} else {
-						log.Error("failed to add occupy dispatcher operator",
-							zap.String("changefeed", s.changefeedID.String()),
-							zap.Int64("group", int64(group)),
-							zap.String("span", span.Span.String()),
-							zap.String("operator", op.String()))
-						// set prev op taskRemoved
-						for _, op := range operators {
-							op.OnTaskRemoved()
-						}
-						continue
-					}
-				}
-
-				op := operator.NewMergeDispatcherOperator(s.spanController, checkResult.MergeSpans, operators)
-				ret := s.operatorController.AddOperator(op)
-				if ret {
-					availableSize--
-				} else {
-					log.Error("failed to add merge dispatcher operator",
-						zap.String("changefeed", s.changefeedID.String()),
-						zap.Int64("group", int64(group)),
-						zap.Any("mergeSpans", checkResult.MergeSpans),
-						zap.String("operator", op.String()))
-					// set prev op taskRemoved
-					for _, op := range operators {
-						op.OnTaskRemoved()
-					}
-					continue
+				if s.operatorController.AddMergeOperator(checkResult.MergeSpans) != nil {
+					availableSize = availableSize - 1 - len(checkResult.MergeSpans)
 				}
 			}
 		}

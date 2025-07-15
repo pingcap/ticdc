@@ -497,6 +497,10 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 		for _, status := range s.allTasks {
 			ret.MergeSpans = append(ret.MergeSpans, status.SpanReplication)
 		}
+		sort.Slice(ret.MergeSpans, func(i, j int) bool {
+			return bytes.Compare(ret.MergeSpans[i].Span.StartKey, ret.MergeSpans[j].Span.StartKey) < 0
+		})
+
 		results = append(results, ret)
 		return results
 	}

@@ -309,6 +309,34 @@ func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origi
 	}
 }
 
+func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
+	if len(affectedReplicaSets) < 2 {
+		log.Info("affectedReplicaSets is less than 2, skip merge",
+			zap.Any("affectedReplicaSets", affectedReplicaSets))
+		return false
+	}
+
+	affectedSpans := make([]*heartbeatpb.TableSpan, 0, len(affectedReplicaSets))
+	for _, replicaSet := range affectedReplicaSets {
+		affectedSpans = append(affectedSpans, replicaSet.Span)
+	}
+
+	prevTableSpan := affectedSpans[0]
+	nodeID := affectedReplicaSets[0].GetNodeID()
+	for idx := 1; idx < len(affectedSpans); idx++ {
+		currentTableSpan := affectedSpans[idx]
+		if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
+			log.Info("affectedReplicaSets is not consecutive, skip merge", zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)), zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)))
+			return false
+		}
+		prevTableSpan = currentTableSpan
+		if affectedReplicaSets[idx].GetNodeID() != nodeID {
+			log.Info("affectedReplicaSets is not in the same node, skip merge", zap.Any("affectedReplicaSets", affectedReplicaSets))
+			return false
+		}
+	}
+}
+
 // AddMergeOperator creates a merge operator, which merge consecutive replica sets.
 // We need create a mergeOperator for the new replicaset, and create len(affectedReplicaSets) empty operator
 // to occupy these replica set not evolve other scheduling among merging.
@@ -318,38 +346,43 @@ func (oc *Controller) AddMergeOperator(
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
+	if !checkMergeOperator(affectedReplicaSets) {
+		return nil
+	}
+
 	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
 	for _, replicaSet := range affectedReplicaSets {
 		operator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
-		operators = append(operators, operator)
-
-		if _, ok := oc.operators[operator.ID()]; ok {
-			log.Info("add operator failed, operator already exists",
-				zap.String("role", oc.role),
-				zap.String("changefeed", oc.changefeedID.Name()),
+		ret := oc.AddOperatorWithoutLock(operator)
+		if ret {
+			operators = append(operators, operator)
+		} else {
+			log.Error("failed to add occupy dispatcher operator",
+				zap.String("changefeed", oc.changefeedID.String()),
+				zap.Int64("group", int64(replicaSet.GetGroupID())),
+				zap.String("span", replicaSet.Span.String()),
 				zap.String("operator", operator.String()))
+			// set prev op taskRemoved
+			for _, op := range operators {
+				op.OnTaskRemoved()
+			}
 			return nil
 		}
-		oc.pushOperator(operator)
 	}
 
 	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators)
-	if mergeOperator == nil {
-		log.Error("failed to create merge operator",
-			zap.String("changefeed", oc.changefeedID.Name()),
-			zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
-		)
-		return nil
-	}
-	if _, ok := oc.operators[mergeOperator.ID()]; ok {
-		log.Info("add operator failed, operator already exists",
-			zap.String("role", oc.role),
-			zap.String("changefeed", oc.changefeedID.Name()),
+	ret := oc.AddOperatorWithoutLock(mergeOperator)
+	if !ret {
+		log.Error("failed to add merge dispatcher operator",
+			zap.String("changefeed", oc.changefeedID.String()),
+			zap.Any("mergeSpans", affectedReplicaSets),
 			zap.String("operator", mergeOperator.String()))
+		// set prev op taskRemoved
+		for _, op := range operators {
+			op.OnTaskRemoved()
+		}
 		return nil
 	}
-	oc.pushOperator(mergeOperator)
-
 	log.Info("add merge operator",
 		zap.String("role", oc.role),
 		zap.String("changefeed", oc.changefeedID.Name()),
