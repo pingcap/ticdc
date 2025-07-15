@@ -123,6 +123,9 @@ type dispatcherStat struct {
 	gotSyncpointOnTS atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
+	// tableInfoVersion is the latest table info version of the dispatcher's corresponding table.
+	// It is updated by ddl event
+	tableInfoVersion atomic.Uint64
 }
 
 func newDispatcherStat(
@@ -386,9 +389,15 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 					zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()))
 			}
+			// The cloudstorage sink replicate different file according the table version.
+			// If one table is just scheduled to a new processor, the tableInfoVersion should be
+			// greater than or equal to the startTs of dispatcher.
+			// FIXME: more elegant implementation
+			tableInfoVersion := max(d.tableInfoVersion.Load(), d.target.GetStartTs())
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
+				dml.TableInfoVersion = tableInfoVersion
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.filterAndUpdateEventByCommitTs(dmlEvent) {
 					validEvents = append(validEvents, dmlEvent)
@@ -441,9 +450,10 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		if !d.filterAndUpdateEventByCommitTs(events[0]) {
 			return false
 		}
-		tableInfo := events[0].Event.(*event.DDLEvent).TableInfo
-		if tableInfo != nil {
-			d.tableInfo.Store(tableInfo)
+		ddl := events[0].Event.(*event.DDLEvent)
+		d.tableInfoVersion.Store(ddl.FinishedTs)
+		if ddl.TableInfo != nil {
+			d.tableInfo.Store(ddl.TableInfo)
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })
 	} else {

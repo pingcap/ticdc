@@ -216,6 +216,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
+		log.Error("send ddl event failed", zap.Error(ctx.Err()))
 		return
 	case c.getMessageCh(d.messageWorkerIndex) <- ddlEvent:
 		metricEventServiceSendDDLCount.Inc()
@@ -661,6 +662,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	for {
 		select {
 		case <-ctx.Done():
+			log.Error("send message failed", zap.Error(ctx.Err()))
 			return
 		default:
 		}

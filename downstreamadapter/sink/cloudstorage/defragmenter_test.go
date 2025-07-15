@@ -99,9 +99,10 @@ func TestDeframenter(t *testing.T) {
 				vals = append(vals, j+1, "hello world")
 			}
 			frag.event = &commonEvent.DMLEvent{
-				PhysicalTableID: 100,
-				TableInfo:       tableInfo,
-				Rows:            chunk.MutRowFromValues(vals...).ToRow().Chunk(),
+				PhysicalTableID:  100,
+				TableInfo:        tableInfo,
+				TableInfoVersion: 1,
+				Rows:             chunk.MutRowFromValues(vals...).ToRow().Chunk(),
 			}
 			encoder, err := codec.NewTxnEventEncoder(encoderConfig)
 			require.Nil(t, err)

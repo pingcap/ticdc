@@ -276,7 +276,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 ) error {
 	batchedTask := newBatchedTask()
 	ticker := time.NewTicker(d.config.FlushInterval)
-
+	defer ticker.Stop()
 	buffer := make([]eventFragment, 0, 10240)
 	for {
 		// this failpoint is use to pass this ticker once
@@ -289,6 +289,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		default:
+			// TODO: optimize
 			frags, ok := ch.GetMultipleNoGroup(buffer)
 			if !ok {
 				return errors.Trace(ctx.Err())
@@ -321,7 +322,6 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 					log.Info("flush task is emitted successfully when no more event",
 						zap.Int("tablesLength", len(batchedTask.batch)))
 					batchedTask = newBatchedTask()
-				default:
 				}
 			}
 			buffer = buffer[:0]
