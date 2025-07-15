@@ -87,6 +87,7 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 	})
 
 	node.TrySendToTxnCache = func(cacheID int64) bool {
+		log.Info("try send to txn cache", zap.Any("cacheID", cacheID), zap.Any("event", event))
 		// Try sending this txn to related cache as soon as all dependencies are resolved.
 		return d.sendToCache(event, cacheID)
 	}
