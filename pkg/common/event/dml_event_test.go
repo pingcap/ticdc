@@ -23,7 +23,7 @@ import (
 )
 
 func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
-	mockDecodeRawKV := func(
+	mockDecodeRawKVToChunk := func(
 		rawKV *common.RawKVEntry,
 		tableInfo *common.TableInfo,
 		chk *chunk.Chunk) (int, *integrity.Checksum, error) {
@@ -44,33 +44,31 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 		err := e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypePut,
 			Value:  []byte("value1"),
-		}, mockDecodeRawKV)
+		}, mockDecodeRawKVToChunk)
 		require.Nil(t, err)
 		// update
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType:   common.OpTypePut,
 			Value:    []byte("value1"),
 			OldValue: []byte("old_value1"),
-		}, mockDecodeRawKV)
+		}, mockDecodeRawKVToChunk)
 		require.Nil(t, err)
 		// delete
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypeDelete,
-		}, mockDecodeRawKV)
+		}, mockDecodeRawKVToChunk)
 		require.Nil(t, err)
 	}
+	// TableInfo is not encoded, for test comparison purpose, set it to nil.
+	e.TableInfo = nil
 
 	value, err := e.encode()
 	require.Nil(t, err)
 	reverseEvent := &DMLEvent{}
 	err = reverseEvent.decode(value)
 	require.Nil(t, err)
-	require.Equal(t, e.Version, reverseEvent.Version)
-	require.Equal(t, e.DispatcherID, reverseEvent.DispatcherID)
-	require.Equal(t, e.RowTypes, reverseEvent.RowTypes)
+	require.Equal(t, e, reverseEvent)
 }
-
-// TODO: batch dml event encode and decode test
 
 // TestDMLEvent test the Marshal and Unmarshal of DMLEvent.
 func TestDMLEvent(t *testing.T) {
