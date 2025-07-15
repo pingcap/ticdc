@@ -135,8 +135,8 @@ func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
 func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H]) {
 	pause, resume, memoryUsageRatio := as.algorithm.ShouldPausePath(
 		path.paused.Load(),
-		uint64(path.pendingSize.Load()),
-		uint64(as.totalPendingSize.Load()),
+		path.pendingSize.Load(),
+		as.totalPendingSize.Load(),
 		as.settings.Load().maxPendingSize,
 		as.pathCount.Load(),
 	)
@@ -188,7 +188,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {
 	pause, resume, memoryUsageRatio := as.algorithm.ShouldPauseArea(
 		as.paused.Load(),
-		uint64(as.totalPendingSize.Load()),
+		as.totalPendingSize.Load(),
 		as.settings.Load().maxPendingSize,
 	)
 

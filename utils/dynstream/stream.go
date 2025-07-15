@@ -339,7 +339,6 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	if !ok {
 		return eventWrap[A, P, T, D, H]{}, false
 	}
-
 	pi.updatePendingSize(int64(-e.eventSize))
 
 	if pi.areaMemStat != nil {
@@ -351,10 +350,7 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
 	pi.pendingSize.Add(delta)
 	if pi.pendingSize.Load() < 0 {
-<<<<<<< HEAD
-=======
 		log.Warn("pendingSize is negative", zap.Int64("pendingSize", pi.pendingSize.Load()))
->>>>>>> 95c8df1bf9abd313f9b8c11c198555f64a0299a8
 		pi.pendingSize.Store(0)
 	}
 }
