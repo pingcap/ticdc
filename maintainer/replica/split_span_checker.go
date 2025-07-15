@@ -169,7 +169,6 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	aliveNodeIDs := s.nodeManager.GetAliveNodeIDs()
 
 	lastThreeTrafficPerNode := make(map[node.ID][]float64)
-	totalRegionCount := 0
 	lastThreeTrafficSum := make([]float64, 3)
 	// nodeID -> []*splitSpanStatus
 	taskMap := make(map[node.ID][]*splitSpanStatus)
@@ -181,7 +180,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 
 	// step1. check whether the split spans should be split again
 	//        if a span's region count or traffic exceeds threshold, we should split it again
-	results = s.chooseSplitSpans(totalRegionCount, lastThreeTrafficPerNode, lastThreeTrafficSum, taskMap)
+	results, totalRegionCount := s.chooseSplitSpans(lastThreeTrafficPerNode, lastThreeTrafficSum, taskMap)
 	if len(results) > 0 {
 		// If some spans need to split, we just return the results
 		return results
@@ -526,14 +525,14 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 // It returns a list of SplitSpanCheckResult indicating which spans should be split.
 // The function also collects statistics about total region count, traffic per node, and organizes tasks by node.
 func (s *SplitSpanChecker) chooseSplitSpans(
-	totalRegionCount int,
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	lastThreeTrafficSum []float64,
 	taskMap map[node.ID][]*splitSpanStatus,
-) []SplitSpanCheckResult {
+) ([]SplitSpanCheckResult, int) {
 	log.Info("SplitSpanChecker try to choose split spans",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID))
+	totalRegionCount := 0
 	results := make([]SplitSpanCheckResult, 0)
 	for _, status := range s.allTasks {
 		// Accumulate statistics for traffic balancing and node distribution
@@ -574,7 +573,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		}
 	}
 
-	return results
+	return results, totalRegionCount
 }
 
 // checkBalanceTraffic checks whether the traffic is balanced for each node.
