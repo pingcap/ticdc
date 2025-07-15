@@ -600,6 +600,25 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		avgLastThreeTraffic[idx] = traffic / float64(nodeCount)
 	}
 
+	// TODO(hyy): add a unit test for this
+	// If the traffic in each node is quite low, we don't need to balance the traffic
+	needCheckBalance := false
+	for _, lastThreeTraffic := range lastThreeTrafficPerNode {
+		for _, traffic := range lastThreeTraffic {
+			if traffic > 1024*1024 { // 1MB
+				needCheckBalance = true
+				break
+			}
+		}
+		if needCheckBalance {
+			break
+		}
+	}
+
+	if !needCheckBalance {
+		return
+	}
+
 	// check whether we should balance the traffic for each node
 	sort.Slice(aliveNodeIDs, func(i, j int) bool {
 		return lastThreeTrafficPerNode[aliveNodeIDs[i]][0] < lastThreeTrafficPerNode[aliveNodeIDs[j]][0]
