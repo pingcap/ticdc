@@ -33,6 +33,8 @@ type DropEvent struct {
 	DroppedSeq      uint64
 	DroppedCommitTs common.Ts
 	DroppedEpoch    uint64
+	// only for redo
+	IsRedo bool
 }
 
 // NewDropEvent creates a new DropEvent
@@ -49,6 +51,10 @@ func NewDropEvent(
 		DroppedCommitTs: commitTs,
 		DroppedEpoch:    epoch,
 	}
+}
+
+func (e *DropEvent) GetIsRedo() bool {
+	return e.IsRedo
 }
 
 // GetType returns the event type
@@ -82,7 +88,7 @@ func (e *DropEvent) GetStartTs() common.Ts {
 
 // GetSize returns the approximate size of the event in bytes
 func (e *DropEvent) GetSize() int64 {
-	return int64(1 + e.DispatcherID.GetSize() + 8 + 8) // version + dispatcherID + seq + commitTs
+	return int64(2 + e.DispatcherID.GetSize() + 8 + 8) // version + isRedo + dispatcherID + seq + commitTs
 }
 
 // IsPaused returns false as drop events are not pausable
@@ -133,6 +139,10 @@ func (e *DropEvent) encodeV0() ([]byte, error) {
 	data[offset] = e.Version
 	offset += 1
 
+	// Redo
+	data[offset] = bool2byte(e.IsRedo)
+	offset += 1
+
 	// DispatcherID
 	copy(data[offset:], e.DispatcherID.Marshal())
 	offset += e.DispatcherID.GetSize()
@@ -153,6 +163,10 @@ func (e *DropEvent) decodeV0(data []byte) error {
 
 	// Version
 	e.Version = data[offset]
+	offset += 1
+
+	// Redo
+	e.IsRedo = byte2bool(data[offset])
 	offset += 1
 
 	// DispatcherID

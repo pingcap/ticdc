@@ -97,11 +97,17 @@ type DDLEvent struct {
 
 	// for simple protocol
 	IsBootstrap bool `msg:"-"`
+	// only for redo
+	IsRedo bool `json:"redo"`
 }
 
 func (d *DDLEvent) String() string {
 	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, TableID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, FinishedTs: %d, Seq: %d, State: %s, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TableNameInDDLJob: %s, DBNameInDDLJob: %s, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
 		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.TableID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.State, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TableNameInDDLJob, d.DBNameInDDLJob, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
+}
+
+func (d *DDLEvent) GetIsRedo() bool {
+	return d.IsRedo
 }
 
 func (d *DDLEvent) GetType() int {

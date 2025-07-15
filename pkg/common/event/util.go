@@ -421,3 +421,14 @@ func BatchDML(dml *DMLEvent) *BatchDMLEvent {
 		Rows:      dml.Rows,
 	}
 }
+
+func bool2byte(b bool) byte {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func byte2bool(b byte) bool {
+	return b == 1
+}

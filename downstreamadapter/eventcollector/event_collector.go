@@ -74,6 +74,8 @@ type EventCollector struct {
 	// All the events from event service will be sent to ds to handle.
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
+	// redoDs is the dynamicStream for redo dispatcher events.
+	redoDs dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	g      *errgroup.Group
 	cancel context.CancelFunc
@@ -81,6 +83,9 @@ type EventCollector struct {
 	metricDispatcherReceivedKVEventCount         prometheus.Counter
 	metricDispatcherReceivedResolvedTsEventCount prometheus.Counter
 	metricReceiveEventLagDuration                prometheus.Observer
+
+	metricRedoDispatcherReceivedKVEventCount         prometheus.Counter
+	metricRedoDispatcherReceivedResolvedTsEventCount prometheus.Counter
 }
 
 func New(serverId node.ID) *EventCollector {
@@ -94,12 +99,16 @@ func New(serverId node.ID) *EventCollector {
 		dispatcherMessageChan:                chann.NewAutoDrainChann[DispatcherMessage](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		receiveChannels:                      receiveChannels,
-		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
-		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs"),
+		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent", "eventDispatcher"),
+		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "eventDispatcher"),
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
+
+		metricRedoDispatcherReceivedKVEventCount:         metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent", "redoDispatcher"),
+		metricRedoDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "redoDispatcher"),
 	}
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
 	eventCollector.ds = NewEventDynamicStream(eventCollector)
+	eventCollector.redoDs = NewEventDynamicStream(eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)
 
 	return eventCollector
@@ -140,6 +149,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closing")
 	c.cancel()
 	_ = c.g.Wait()
+	c.redoDs.Close()
 	c.ds.Close()
 	c.changefeedIDMap.Range(func(key, value any) bool {
 		cfID := value.(common.ChangeFeedID)
@@ -160,7 +170,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
+func (c *EventCollector) AddDispatcher(target dispatcher.DispatcherService, memoryQuota uint64) {
 	c.PrepareAddDispatcher(target, memoryQuota, nil)
 	c.logCoordinatorClient.requestReusableEventService(target)
 }
@@ -168,13 +178,13 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 // PrepareAddDispatcher is used to prepare the dispatcher to be added to the event collector.
 // It will send a register request to local event service and call `readyCallback` when local event service is ready.
 func (c *EventCollector) PrepareAddDispatcher(
-	target dispatcher.EventDispatcher,
+	target dispatcher.DispatcherService,
 	memoryQuota uint64,
 	readyCallback func(),
 ) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
-		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
+		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()), zap.Int("type", target.GetType()))
 	}()
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
@@ -182,8 +192,9 @@ func (c *EventCollector) PrepareAddDispatcher(
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 
+	ds := c.getDynamicStream(dispatcher.IsRedoDispatcher(target))
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
-	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
+	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
@@ -191,7 +202,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
-func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, startTs uint64) {
+func (c *EventCollector) CommitAddDispatcher(target dispatcher.Dispatcher, startTs uint64) {
 	log.Info("commit add dispatcher", zap.Stringer("dispatcher", target.GetId()), zap.Uint64("startTs", startTs))
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
@@ -204,11 +215,12 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 	stat.commitReady(c.getLocalServerID())
 }
 
-func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
+func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 	log.Info("remove dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
+	isRedo := dispatcher.IsRedoDispatcher(target)
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
 		return
@@ -216,7 +228,8 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 	stat := value.(*dispatcherStat)
 	stat.remove()
 
-	err := c.ds.RemovePath(target.GetId())
+	ds := c.getDynamicStream(isRedo)
+	err := ds.RemovePath(target.GetId())
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 	}
@@ -289,6 +302,15 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case feedback := <-c.ds.Feedback():
+			switch feedback.FeedbackType {
+			case dynstream.PauseArea, dynstream.ResumeArea:
+				// Ignore it, because it is no need to pause and resume an area in event collector.
+			case dynstream.PausePath:
+				feedback.Dest.pause()
+			case dynstream.ResumePath:
+				feedback.Dest.resume()
+			}
+		case feedback := <-c.redoDs.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea, dynstream.ResumeArea:
 				// Ignore it, because it is no need to pause and resume an area in event collector.
@@ -390,20 +412,22 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
+					ds := c.getDynamicStream(e.GetIsRedo())
+					metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(e.GetIsRedo())
 					switch e.GetType() {
 					case event.TypeBatchResolvedEvent:
 						events := e.(*event.BatchResolvedEvent).Events
 						from := &targetMessage.From
 						resolvedTsCount := int32(0)
 						for _, resolvedEvent := range events {
-							c.ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
 							resolvedTsCount += resolvedEvent.Len()
 						}
-						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
+						metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					default:
-						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						dispatcherEvent := dispatcher.NewDispatcherEvent(&targetMessage.From, e)
-						c.ds.Push(e.GetDispatcherID(), dispatcherEvent)
+						ds.Push(e.GetDispatcherID(), dispatcherEvent)
 					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))
@@ -421,6 +445,7 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
+			// FIXME: record ds?
 			dsMetrics := c.ds.GetMetrics()
 			metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector").Set(float64(dsMetrics.EventChanSize))
 			metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector").Set(float64(dsMetrics.PendingQueueLen))
@@ -443,4 +468,18 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (c *EventCollector) getDynamicStream(isRedo bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+	if isRedo {
+		return c.redoDs
+	}
+	return c.ds
+}
+
+func (c *EventCollector) getMetric(isRedo bool) (prometheus.Counter, prometheus.Counter) {
+	if isRedo {
+		return c.metricRedoDispatcherReceivedKVEventCount, c.metricRedoDispatcherReceivedResolvedTsEventCount
+	}
+	return c.metricDispatcherReceivedKVEventCount, c.metricDispatcherReceivedResolvedTsEventCount
 }
