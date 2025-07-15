@@ -16,8 +16,61 @@ package event
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
+	mockDecodeRawKV := func(
+		rawKV *common.RawKVEntry,
+		tableInfo *common.TableInfo,
+		chk *chunk.Chunk) (int, *integrity.Checksum, error) {
+		if rawKV.OpType == common.OpTypeDelete {
+			return 1, nil, nil
+		}
+		if len(rawKV.Value) != 0 && len(rawKV.OldValue) != 0 {
+			return 2, nil, nil
+		} else {
+			return 1, nil, nil
+		}
+	}
+
+	e := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, &common.TableInfo{})
+	// append some rows to the event
+	{
+		// insert
+		err := e.AppendRow(&common.RawKVEntry{
+			OpType: common.OpTypePut,
+			Value:  []byte("value1"),
+		}, mockDecodeRawKV)
+		require.Nil(t, err)
+		// update
+		err = e.AppendRow(&common.RawKVEntry{
+			OpType:   common.OpTypePut,
+			Value:    []byte("value1"),
+			OldValue: []byte("old_value1"),
+		}, mockDecodeRawKV)
+		require.Nil(t, err)
+		// delete
+		err = e.AppendRow(&common.RawKVEntry{
+			OpType: common.OpTypeDelete,
+		}, mockDecodeRawKV)
+		require.Nil(t, err)
+	}
+
+	value, err := e.encode()
+	require.Nil(t, err)
+	reverseEvent := &DMLEvent{}
+	err = reverseEvent.decode(value)
+	require.Nil(t, err)
+	require.Equal(t, e.Version, reverseEvent.Version)
+	require.Equal(t, e.DispatcherID, reverseEvent.DispatcherID)
+	require.Equal(t, e.RowTypes, reverseEvent.RowTypes)
+}
+
+// TODO: batch dml event encode and decode test
 
 // TestDMLEvent test the Marshal and Unmarshal of DMLEvent.
 func TestDMLEvent(t *testing.T) {

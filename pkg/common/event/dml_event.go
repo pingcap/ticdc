@@ -350,7 +350,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	for range count {
 		t.RowTypes = append(t.RowTypes, rowType)
 	}
-	t.Length += 1
+	t.Length += int32(count)
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
 	if checksum != nil {
 		t.Checksum = append(t.Checksum, checksum)
@@ -503,6 +503,11 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
 		return nil, nil
 	}
+	if t.Length != int32(len(t.RowTypes)) {
+		log.Panic("DMLEvent: Length does not match the number of RowTypes",
+			zap.Int32("length", t.Length), zap.Int("rowTypesLength", len(t.RowTypes)))
+		return nil, errors.ErrEncodeFailed.FastGenByArgs("Length does not match the number of RowTypes")
+	}
 	// Calculate the total size needed for the encoded data
 	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + int(t.Length)
 
@@ -572,7 +577,10 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 		return nil
 	}
 	offset := 1
-	t.DispatcherID.Unmarshal(data[offset:])
+	err := t.DispatcherID.Unmarshal(data[offset:])
+	if err != nil {
+		return errors.Trace(err)
+	}
 	offset += t.DispatcherID.GetSize()
 	t.PhysicalTableID = int64(binary.LittleEndian.Uint64(data[offset:]))
 	offset += 8
