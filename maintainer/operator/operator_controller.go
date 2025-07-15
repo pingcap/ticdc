@@ -335,6 +335,7 @@ func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 			return false
 		}
 	}
+	return true
 }
 
 // AddMergeOperator creates a merge operator, which merge consecutive replica sets.
