@@ -94,7 +94,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		}
 	}
 
-	if as.memoryUsageRatio() > 1 && as.settings.Load().algorithm ==
+	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
 		MemoryControlForEventCollector && event.eventType.Droppable {
 		dropEvent := handler.OnDrop(event.event)
 		if dropEvent != nil {
@@ -243,8 +243,12 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	}
 }
 
-func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size uint64) {
-	as.totalPendingSize.Add(-int64(size))
+func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
+	as.totalPendingSize.Add(int64(-size))
+	if as.totalPendingSize.Load() < 0 {
+		log.Warn("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
+		as.totalPendingSize.Store(0)
+	}
 	as.updatePathPauseState(path)
 	as.updateAreaPauseState(path)
 }
@@ -293,7 +297,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.decPendingSize(path, uint64(path.pendingSize.Load()))
+	area.decPendingSize(path, int64(path.pendingSize.Load()))
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -312,8 +316,8 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A] {
 	for _, area := range m.areaStatMap {
 		areaMetric := AreaMemoryMetric[A]{
 			area:       area.area,
-			usedMemory: uint64(area.totalPendingSize.Load()),
-			maxMemory:  area.settings.Load().maxPendingSize,
+			usedMemory: area.totalPendingSize.Load(),
+			maxMemory:  int64(area.settings.Load().maxPendingSize),
 		}
 		metrics.AreaMemoryMetrics = append(metrics.AreaMemoryMetrics, areaMetric)
 	}
@@ -326,19 +330,19 @@ type MemoryMetric[A Area] struct {
 
 type AreaMemoryMetric[A Area] struct {
 	area       A
-	usedMemory uint64
-	maxMemory  uint64
+	usedMemory int64
+	maxMemory  int64
 }
 
 func (a *AreaMemoryMetric[A]) MemoryUsageRatio() float64 {
 	return float64(a.usedMemory) / float64(a.maxMemory)
 }
 
-func (a *AreaMemoryMetric[A]) MemoryUsage() uint64 {
+func (a *AreaMemoryMetric[A]) MemoryUsage() int64 {
 	return a.usedMemory
 }
 
-func (a *AreaMemoryMetric[A]) MaxMemory() uint64 {
+func (a *AreaMemoryMetric[A]) MaxMemory() int64 {
 	return a.maxMemory
 }
 

@@ -339,10 +339,11 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	if !ok {
 		return eventWrap[A, P, T, D, H]{}, false
 	}
-	pi.updatePendingSize(-int64(e.eventSize))
+
+	pi.updatePendingSize(int64(-e.eventSize))
 
 	if pi.areaMemStat != nil {
-		pi.areaMemStat.decPendingSize(pi, e.eventSize)
+		pi.areaMemStat.decPendingSize(pi, int64(e.eventSize))
 	}
 	return e, true
 }
@@ -350,6 +351,10 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
 	pi.pendingSize.Add(delta)
 	if pi.pendingSize.Load() < 0 {
+<<<<<<< HEAD
+=======
+		log.Warn("pendingSize is negative", zap.Int64("pendingSize", pi.pendingSize.Load()))
+>>>>>>> 95c8df1bf9abd313f9b8c11c198555f64a0299a8
 		pi.pendingSize.Store(0)
 	}
 }
@@ -364,7 +369,7 @@ type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	pathInfo *pathInfo[A, P, T, D, H]
 
 	paused    bool
-	eventSize uint64
+	eventSize int
 	eventType EventType
 
 	timestamp Timestamp

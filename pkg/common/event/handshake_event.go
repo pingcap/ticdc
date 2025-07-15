@@ -91,9 +91,9 @@ func (e *HandshakeEvent) GetStartTs() common.Ts {
 }
 
 // GetSize returns the approximate size of the event in bytes
-func (e *HandshakeEvent) GetSize() uint64 {
+func (e *HandshakeEvent) GetSize() int64 {
 	// All fields size except tableInfo
-	return 1 + 8 + 8 + 8 + e.State.GetSize() + e.DispatcherID.GetSize()
+	return int64(1 + 8 + 8 + 8 + e.State.GetSize() + e.DispatcherID.GetSize())
 }
 
 func (e *HandshakeEvent) IsPaused() bool {
@@ -132,7 +132,7 @@ func (e HandshakeEvent) encodeV0() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data := make([]byte, e.GetSize()+uint64(len(tableInfoData)))
+	data := make([]byte, e.GetSize()+int64(len(tableInfoData)))
 	offset := 0
 	data[offset] = e.Version
 	offset += 1
@@ -143,9 +143,9 @@ func (e HandshakeEvent) encodeV0() ([]byte, error) {
 	binary.BigEndian.PutUint64(data[offset:], e.Epoch)
 	offset += 8
 	copy(data[offset:], e.State.encode())
-	offset += int(e.State.GetSize())
+	offset += e.State.GetSize()
 	copy(data[offset:], e.DispatcherID.Marshal())
-	offset += int(e.DispatcherID.GetSize())
+	offset += e.DispatcherID.GetSize()
 	copy(data[offset:], tableInfoData)
 	return data, nil
 }
@@ -161,14 +161,14 @@ func (e *HandshakeEvent) decodeV0(data []byte) error {
 	e.Epoch = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
 	e.State.decode(data[offset:])
-	offset += int(e.State.GetSize())
+	offset += e.State.GetSize()
 	dispatcherIDData := data[offset:]
 	var err error
 	err = e.DispatcherID.Unmarshal(dispatcherIDData)
 	if err != nil {
 		return err
 	}
-	offset += int(e.DispatcherID.GetSize())
+	offset += e.DispatcherID.GetSize()
 	e.TableInfo, err = common.UnmarshalJSONToTableInfo(data[offset:])
 	if err != nil {
 		return err

@@ -28,7 +28,7 @@ type Event interface {
 	GetStartTs() common.Ts
 	// GetSize returns the approximate size of the event in bytes.
 	// It's used for memory control and monitoring.
-	GetSize() uint64
+	GetSize() int64
 	IsPaused() bool
 	// GetLen returns the number of rows in the event.
 	Len() int32
@@ -215,7 +215,7 @@ func (s *EventSenderState) decode(data []byte) {
 	*s = EventSenderState(data[0])
 }
 
-func (s EventSenderState) GetSize() uint64 {
+func (s EventSenderState) GetSize() int {
 	return 1
 }
 

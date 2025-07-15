@@ -122,7 +122,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	_ = s.statistics.RecordBatchExecution(func() (int, uint64, error) {
+	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 		event.Rewind()
 		for {
 			row, ok := event.GetNextRow()
