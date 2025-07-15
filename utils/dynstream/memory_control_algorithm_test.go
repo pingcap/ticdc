@@ -23,8 +23,8 @@ func TestPullerMemoryControl_ShouldPausePath(t *testing.T) {
 	tests := []struct {
 		name            string
 		paused          bool
-		pathPendingSize uint64
-		areaPendingSize uint64
+		pathPendingSize int64
+		areaPendingSize int64
 		maxPendingSize  uint64
 		pathCount       int64
 		wantPause       bool
@@ -100,7 +100,7 @@ func TestPullerMemoryControl_ShouldPauseArea(t *testing.T) {
 	tests := []struct {
 		name           string
 		paused         bool
-		pendingSize    uint64
+		pendingSize    int64
 		maxPendingSize uint64
 		wantPause      bool
 		wantResume     bool
@@ -165,8 +165,8 @@ func TestEventCollectorMemoryControl_ShouldPausePath(t *testing.T) {
 	tests := []struct {
 		name            string
 		paused          bool
-		pathPendingSize uint64
-		areaPendingSize uint64
+		pathPendingSize int64
+		areaPendingSize int64
 		maxPendingSize  uint64
 		pathCount       int64
 		wantPause       bool
@@ -264,7 +264,7 @@ func TestEventCollectorMemoryControl_ShouldPauseArea(t *testing.T) {
 	tests := []struct {
 		name           string
 		paused         bool
-		pendingSize    uint64
+		pendingSize    int64
 		maxPendingSize uint64
 		wantPause      bool
 		wantResume     bool

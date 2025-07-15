@@ -113,10 +113,10 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 			TableID:     event.PhysicalTableID,
 			IsPartition: event.TableInfo.IsPartitionTable(),
 		},
-		TableInfoVersion: event.TableInfo.UpdateTS(),
+		TableInfoVersion: event.TableInfoVersion,
 	}
 	seq := atomic.AddUint64(&d.lastSeqNum, 1)
-	_ = d.statistics.RecordBatchExecution(func() (int, uint64, error) {
+	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
 		d.msgCh.In() <- newEventFragment(seq, tbl, event)
 		return int(event.Len()), event.GetRowsSize(), nil

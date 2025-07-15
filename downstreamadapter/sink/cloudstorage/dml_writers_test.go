@@ -91,6 +91,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
 	}
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
@@ -102,7 +103,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 
-	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d", job.SchemaName, job.TableName, event.TableInfo.UpdateTS()))
+	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d", job.SchemaName, job.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
@@ -118,6 +119,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 
 	// generating another dml file.
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
@@ -186,13 +188,14 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	}
 
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 
-	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, event.TableInfo.UpdateTS()))
+	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
@@ -224,6 +227,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	}()
 
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
@@ -266,13 +270,14 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	}()
 
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 
-	tableDir = path.Join(parentDir, fmt.Sprintf("test/table1/%d/2023-03-09", event.TableInfo.UpdateTS()))
+	tableDir = path.Join(parentDir, fmt.Sprintf("test/table1/%d/2023-03-09", event.TableInfoVersion))
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
@@ -305,6 +310,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	}()
 
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})

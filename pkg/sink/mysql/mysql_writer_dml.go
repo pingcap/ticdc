@@ -504,7 +504,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout, _ := time.ParseDuration(w.cfg.WriteTimeout)
 	writeTimeout += networkDriftDuration
 
-	tryExec := func() (int, uint64, error) {
+	tryExec := func() (int, int64, error) {
 		if fallbackToSeqWay {
 			// use sequence way to execute the dmls
 			tx, err := w.db.BeginTx(w.ctx, nil)

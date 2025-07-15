@@ -39,7 +39,7 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	changefeed_id="test"
-	TOPIC_NAME="column-selector-avro-test"
+	TOPIC_NAME="column-selector-avro-test-$RANDOM"
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=avro&enable-tidb-extension=true&avro-enable-watermark=true"
 	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c ${changefeed_id} --config="$CUR/conf/changefeed.toml" --schema-registry=http://127.0.0.1:8088
 
@@ -52,7 +52,7 @@ function run() {
 	if [ ! -f ./checksum_checker ]; then
 		GO111MODULE=on go build
 	fi
-
+	sleep 10
 	check_table_exists "test.finishmark" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	./checksum_checker --upstream-uri "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/" --downstream-uri "root@tcp(${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT})/" --databases "test" --config="$CUR/conf/changefeed.toml"

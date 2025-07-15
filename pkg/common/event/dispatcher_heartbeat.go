@@ -41,7 +41,7 @@ func NewDispatcherProgress(dispatcherID common.DispatcherID, checkpointTs uint64
 	}
 }
 
-func (dp DispatcherProgress) GetSize() uint64 {
+func (dp DispatcherProgress) GetSize() int {
 	return dp.DispatcherID.GetSize() + 8 + 1 // version
 }
 
@@ -71,7 +71,7 @@ func (dp *DispatcherProgress) decodeV0(data []byte) error {
 	if err != nil {
 		return err
 	}
-	dp.DispatcherID.Unmarshal(buf.Next(int(dp.DispatcherID.GetSize())))
+	dp.DispatcherID.Unmarshal(buf.Next(dp.DispatcherID.GetSize()))
 	dp.CheckpointTs = binary.BigEndian.Uint64(buf.Next(8))
 	return nil
 }
@@ -98,9 +98,8 @@ func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
 	d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
 }
 
-func (d *DispatcherHeartbeat) GetSize() uint64 {
-	var size uint64
-	size += 1 // version
+func (d *DispatcherHeartbeat) GetSize() int {
+	size := 1 // version
 	size += 8 // clusterID
 	size += 4 // dispatcher count
 	for _, dp := range d.DispatcherProgresses {
@@ -144,8 +143,8 @@ func (d *DispatcherHeartbeat) decodeV0(data []byte) error {
 	d.DispatcherProgresses = make([]DispatcherProgress, 0, d.DispatcherCount)
 	for range d.DispatcherCount {
 		var dp DispatcherProgress
-		dpData := buf.Next(int(dp.GetSize()))
-		if err = dp.Unmarshal(dpData); err != nil {
+		dpData := buf.Next(dp.GetSize())
+		if err := dp.Unmarshal(dpData); err != nil {
 			return err
 		}
 		d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
@@ -174,7 +173,7 @@ func NewDispatcherState(dispatcherID common.DispatcherID, state DSState) Dispatc
 	}
 }
 
-func (d *DispatcherState) GetSize() uint64 {
+func (d *DispatcherState) GetSize() int {
 	return d.DispatcherID.GetSize() + 2 // version + state
 }
 
@@ -193,7 +192,7 @@ func (d *DispatcherState) decodeV0(data []byte) error {
 	if err != nil {
 		return err
 	}
-	d.DispatcherID.Unmarshal(buf.Next(int(d.DispatcherID.GetSize())))
+	d.DispatcherID.Unmarshal(buf.Next(d.DispatcherID.GetSize()))
 	state, err := buf.ReadByte()
 	if err != nil {
 		return err
@@ -233,9 +232,8 @@ func (d *DispatcherHeartbeatResponse) Append(ds DispatcherState) {
 	d.DispatcherStates = append(d.DispatcherStates, ds)
 }
 
-func (d *DispatcherHeartbeatResponse) GetSize() uint64 {
-	var size uint64
-	size += 1 // version
+func (d *DispatcherHeartbeatResponse) GetSize() int {
+	size := 1 // version
 	size += 8 // clusterID
 	size += 4 // dispatcher count
 	for _, ds := range d.DispatcherStates {
@@ -264,7 +262,7 @@ func (d *DispatcherHeartbeatResponse) decodeV0(data []byte) error {
 	d.DispatcherStates = make([]DispatcherState, 0, d.DispatcherCount)
 	for range d.DispatcherCount {
 		var ds DispatcherState
-		dsData := buf.Next(int(ds.GetSize()))
+		dsData := buf.Next(ds.GetSize())
 		if err = ds.Unmarshal(dsData); err != nil {
 			return err
 		}
