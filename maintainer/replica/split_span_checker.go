@@ -27,10 +27,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
@@ -51,6 +53,8 @@ type SplitSpanChecker struct {
 	regionCache RegionCache
 	nodeManager *watcher.NodeManager
 	pdClock     pdutil.Clock
+
+	splitSpanCheckDuration prometheus.Observer
 }
 
 type splitSpanStatus struct {
@@ -71,14 +75,15 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 	}
 	regionCache := appcontext.GetService[RegionCache](appcontext.RegionCache)
 	return &SplitSpanChecker{
-		changefeedID:    changefeedID,
-		groupID:         groupID,
-		allTasks:        make(map[common.DispatcherID]*splitSpanStatus),
-		writeThreshold:  schedulerCfg.WriteKeyThreshold,
-		regionThreshold: schedulerCfg.RegionThreshold,
-		regionCache:     regionCache,
-		nodeManager:     appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		pdClock:         appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		changefeedID:           changefeedID,
+		groupID:                groupID,
+		allTasks:               make(map[common.DispatcherID]*splitSpanStatus),
+		writeThreshold:         schedulerCfg.WriteKeyThreshold,
+		regionThreshold:        schedulerCfg.RegionThreshold,
+		regionCache:            regionCache,
+		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), groupID.String()),
 	}
 }
 
@@ -160,6 +165,10 @@ type SplitSpanCheckResult struct {
 
 // return some actions for scheduling the split spans
 func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
+	start := time.Now()
+	defer func() {
+		s.splitSpanCheckDuration.Observe(time.Since(start).Seconds())
+	}()
 	log.Info("SplitSpanChecker try to check",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
@@ -394,10 +403,6 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 	idx := 1
 	for idx < len(spanStatus) {
-		log.Info("idx", zap.Any("idx", idx), zap.Any("len of mergeSpans", len(mergeSpans)))
-		for _, mergeSpan := range mergeSpans {
-			log.Info("mergeSpan", zap.Any("span", common.FormatTableSpan(mergeSpan.Span)))
-		}
 		cur := spanStatus[idx]
 		if !bytes.Equal(prev.Span.EndKey, cur.Span.StartKey) {
 			// just panic for debug

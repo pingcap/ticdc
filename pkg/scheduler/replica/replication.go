@@ -56,6 +56,7 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 
 	// group scheduler interface
 	GetGroups() []GroupID
+	GetGroupSize() int
 	GetAbsentByGroup(groupID GroupID, batch int) []R
 	GetSchedulingByGroup(groupID GroupID) []R
 	GetReplicatingByGroup(groupID GroupID) []R
@@ -124,6 +125,14 @@ func (db *replicationDB[T, R]) GetGroups() []GroupID {
 		}
 	})
 	return groups
+}
+
+func (db *replicationDB[T, R]) GetGroupSize() int {
+	count := 0
+	db.withRLock(func() {
+		count = len(db.taskGroups)
+	})
+	return count
 }
 
 func (db *replicationDB[T, R]) GetGroupsWithoutLock() []GroupID {

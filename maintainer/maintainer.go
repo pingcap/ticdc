@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -143,7 +144,7 @@ type Maintainer struct {
 	changefeedResolvedTsLagGauge   prometheus.Gauge
 	changefeedStatusGauge          prometheus.Gauge
 	scheduledTaskGauge             prometheus.Gauge
-	runningTaskGauge               prometheus.Gauge
+	spanCountGauge                 prometheus.Gauge
 	tableCountGauge                prometheus.Gauge
 	handleEventDuration            prometheus.Observer
 }
@@ -194,8 +195,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		runningTaskGauge:               metrics.RunningScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		tableCountGauge:                metrics.TableGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
 	}
 	m.nodeChanged.changed = false
@@ -370,8 +371,8 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.RunningScheduleTaskGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.TableGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
+	metrics.SpanCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
+	metrics.TableCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 }
 
@@ -851,12 +852,20 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
-		total := m.controller.spanController.TaskSize() - 1
+		totalSpanCount := m.controller.spanController.TaskSize() - 1
+		totalTableCount := 0
+		groupSize := m.controller.spanController.GetGroupSize()
+		if groupSize == 1 {
+			totalTableCount = m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID) - 1
+		} else {
+			totalTableCount = m.controller.spanController.GetGroupSize() - 1 + m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID) - 1
+		}
 		scheduling := m.controller.spanController.GetSchedulingSize()
 		working := m.controller.spanController.GetReplicatingSize()
 		absent := m.controller.spanController.GetAbsentSize()
 
-		m.tableCountGauge.Set(float64(total))
+		m.spanCountGauge.Set(float64(totalSpanCount))
+		m.tableCountGauge.Set(float64(totalTableCount))
 		m.scheduledTaskGauge.Set(float64(scheduling))
 		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent").Set(float64(absent))
 		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working").Set(float64(working))
