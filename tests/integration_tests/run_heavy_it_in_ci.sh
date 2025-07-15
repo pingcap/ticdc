@@ -156,7 +156,8 @@ storage_groups=(
 	# G04
 	' '
 	# G05
-	'move_table drop_many_tables'
+	# move_table
+	'drop_many_tables'
 	# G06
 	'cdc default_value'
 	# G07
