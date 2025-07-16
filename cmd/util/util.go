@@ -115,6 +115,9 @@ func InitSignalHandling(shutdown shutdownNotify, cancel context.CancelFunc) {
 	go func() {
 		sig := <-sc
 		log.Info("got signal, prepare to shutdown", zap.Stringer("signal", sig))
+		log.Info("for test! exit 1")
+		os.Exit(1)
+
 		done := shutdown()
 		select {
 		case <-done:
