@@ -470,8 +470,10 @@ func newTiIndexInfo(indexSchema *IndexSchema, columns []*timodel.ColumnInfo) *ti
 }
 
 func newTableInfo(m *TableSchema) *commonType.TableInfo {
+	var schema string
 	tidbTableInfo := &timodel.TableInfo{}
 	if m != nil {
+		schema = m.Schema
 		tidbTableInfo.ID = m.TableID
 		tidbTableInfo.Name = ast.NewCIStr(m.Table)
 		tidbTableInfo.UpdateTS = m.Version
@@ -486,7 +488,7 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 			tidbTableInfo.Indices = append(tidbTableInfo.Indices, index)
 		}
 	}
-	return commonType.NewTableInfo4Decoder(m.Schema, tidbTableInfo)
+	return commonType.NewTableInfo4Decoder(schema, tidbTableInfo)
 }
 
 type accessKey struct {
@@ -541,9 +543,9 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.TableInfo = tableInfo
 
 	result.FinishedTs = msg.CommitTs
-	result.SchemaName = msg.TableSchema.Schema
-	result.TableName = msg.TableSchema.Table
-	result.TableID = msg.TableSchema.TableID
+	result.SchemaName = tableInfo.TableName.Schema
+	result.TableName = tableInfo.TableName.Table
+	result.TableID = tableInfo.TableName.TableID
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
 		result.ExtraTableName = preTableInfo.GetTableName()
