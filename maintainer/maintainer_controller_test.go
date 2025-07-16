@@ -42,6 +42,7 @@ import (
 
 func TestSchedule(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -77,6 +78,7 @@ func TestSchedule(t *testing.T) {
 
 func TestRemoveAbsentTask(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -101,6 +103,7 @@ func TestRemoveAbsentTask(t *testing.T) {
 // and we can select appropriate split spans to move
 func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 
@@ -190,6 +193,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 // and we should choose span to split.
 func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -283,6 +287,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 // this test is to test the scenario that the split balance scheduler when a node is removed.
 func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -379,6 +384,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 
 func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -781,6 +787,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 
 func TestBalance(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -849,6 +856,7 @@ func TestBalance(t *testing.T) {
 
 func TestDefaultSpanIntoSplit(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -942,6 +950,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 
 func TestStoppedWhenMoving(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -984,6 +993,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 
 func TestFinishBootstrap(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1053,6 +1063,7 @@ func TestFinishBootstrap(t *testing.T) {
 
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -1220,6 +1231,7 @@ func (m *mockThreadPool) SubmitFunc(_ threadpool.FuncTask, _ time.Time) *threadp
 
 func TestLargeTableInitialization(t *testing.T) {
 	testutil.SetUpTestServices()
+	replica.SetMinTrafficBalanceThreshold(1)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}

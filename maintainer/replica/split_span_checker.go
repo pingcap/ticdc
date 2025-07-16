@@ -40,6 +40,8 @@ import (
 
 const latestTrafficIndex = 0
 
+var minTrafficBalanceThreshold = float64(1024 * 1024) // 1MB
+
 type SplitSpanChecker struct {
 	changefeedID common.ChangeFeedID
 	groupID      replica.GroupID
@@ -83,7 +85,7 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 		regionCache:            regionCache,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), groupID.String()),
+		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), replica.GetGroupName(groupID)),
 	}
 }
 
@@ -270,96 +272,220 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		return results
 	}
 
-	return s.chooseMoveSpans(minTrafficNodeID, maxTrafficNodeID, taskMap[minTrafficNodeID], sortedSpans, lastThreeTrafficPerNode)
+	return s.chooseMoveSpans(minTrafficNodeID, maxTrafficNodeID, sortedSpans, lastThreeTrafficPerNode)
 }
 
-// chooseMoveSpans chooses the spans to move to make we can merge the spans later.
-// we try to find some span move to the minTrafficNodeID
-// we each time just choose one span or one pair spans to move.
-func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, nodeSpans []*splitSpanStatus, sortedSpans []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
+// chooseMoveSpans finds either:
+// 1. A single span to move from node A to node B to enable merge with adjacent span in B
+// 2. A pair of spans to swap between nodes to enable merge for at least one span
+// While maintaining traffic balance (min traffic after move >= min traffic before move)
+func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, sortedSpans []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
 	log.Info("chooseMoveSpans try to choose move spans",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
 		zap.Any("minTrafficNodeID", minTrafficNodeID),
 		zap.Any("maxTrafficNodeID", maxTrafficNodeID),
-		zap.Any("lastThreeTrafficPerNode", lastThreeTrafficPerNode))
+		zap.Int("totalSpans", len(sortedSpans)))
+
 	results := make([]SplitSpanCheckResult, 0)
 
-	idx := 0
-	for idx+1 < len(sortedSpans) {
-		cur := sortedSpans[idx]
-		if cur.GetNodeID() != minTrafficNodeID {
-			idx++
-			continue
-		}
+	// Build adjacency map for O(1) lookup of adjacent spans
+	adjacencyMap := s.buildAdjacencyMap(sortedSpans)
 
-		next := sortedSpans[idx+1]
-		if next.GetNodeID() == minTrafficNodeID {
-			idx++
-			continue
-		}
-
-		if s.regionThreshold > 0 && cur.regionCount+next.regionCount > s.regionThreshold/4*3 {
-			idx++
-			continue
-		}
-
-		if s.writeThreshold > 0 && cur.lastThreeTraffic[latestTrafficIndex]+next.lastThreeTraffic[latestTrafficIndex] > float64(s.writeThreshold)/4*3 {
-			idx++
-			continue
-		}
-
-		// we can move the spans to the minTrafficNodeID
-		// these two spans can be merged if they are in the same node
-		nextNodeID := next.GetNodeID()
-		trafficNextSpan := next.lastThreeTraffic[latestTrafficIndex]
-
-		// if the span traffic + minTrafficNodeID's traffic is less than the nextNodeID's traffic - this span traffic, we can move the span to the minTrafficNodeID directly
-		if trafficNextSpan+lastThreeTrafficPerNode[minTrafficNodeID][latestTrafficIndex] <= lastThreeTrafficPerNode[nextNodeID][latestTrafficIndex]-trafficNextSpan {
-			results = append(results, SplitSpanCheckResult{
-				OpType: OpMove,
-				MoveSpans: []*SpanReplication{
-					next.SpanReplication,
-				},
-				TargetNode: minTrafficNodeID,
-			})
-			return results
-		}
-		// we need to also find span in minTrafficNodeID to move to nextNodeID to balance the whole traffic in node.
-		traffic := lastThreeTrafficPerNode[nextNodeID][latestTrafficIndex]
-
-		diffToMaxNode := lastThreeTrafficPerNode[maxTrafficNodeID][latestTrafficIndex] - traffic
-		diffToMinNode := traffic - lastThreeTrafficPerNode[minTrafficNodeID][latestTrafficIndex]
-
-		maxTraffic := next.lastThreeTraffic[latestTrafficIndex] + diffToMaxNode
-		minTraffic := next.lastThreeTraffic[latestTrafficIndex] - diffToMinNode
-
-		for _, span := range nodeSpans {
-			if span.ID == cur.ID {
-				continue
-			}
-			if span.lastThreeTraffic[latestTrafficIndex] >= minTraffic && span.lastThreeTraffic[latestTrafficIndex] <= maxTraffic {
-				results = append(results, SplitSpanCheckResult{
-					OpType: OpMove,
-					MoveSpans: []*SpanReplication{
-						span.SpanReplication,
-					},
-					TargetNode: nextNodeID,
-				})
-				results = append(results, SplitSpanCheckResult{
-					OpType: OpMove,
-					MoveSpans: []*SpanReplication{
-						next.SpanReplication,
-					},
-					TargetNode: minTrafficNodeID,
-				})
-				return results
-			}
-		}
-		idx++
+	// Try to find optimal span moves with compensation if needed
+	if result := s.findOptimalSpanMoves(minTrafficNodeID, maxTrafficNodeID, sortedSpans, adjacencyMap, lastThreeTrafficPerNode); result != nil {
+		results = append(results, result...)
+		return results
 	}
 
 	return results
+}
+
+// buildAdjacencyMap builds a map from span ID to its adjacent spans for O(1) lookup
+func (s *SplitSpanChecker) buildAdjacencyMap(sortedSpans []*splitSpanStatus) map[common.DispatcherID][]*splitSpanStatus {
+	adjacencyMap := make(map[common.DispatcherID][]*splitSpanStatus)
+
+	for i, span := range sortedSpans {
+		adjacents := make([]*splitSpanStatus, 0, 2)
+
+		// Check previous span
+		if i > 0 {
+			prev := sortedSpans[i-1]
+			if bytes.Equal(prev.Span.EndKey, span.Span.StartKey) {
+				adjacents = append(adjacents, prev)
+			}
+		}
+
+		// Check next span
+		if i < len(sortedSpans)-1 {
+			next := sortedSpans[i+1]
+			if bytes.Equal(span.Span.EndKey, next.Span.StartKey) {
+				adjacents = append(adjacents, next)
+			}
+		}
+
+		adjacencyMap[span.ID] = adjacents
+	}
+
+	return adjacencyMap
+}
+
+// findOptimalSpanMoves finds optimal span moves with compensation if needed
+// It first tries to find a single span move, and if that violates traffic balance,
+// it looks for a compensation move to maintain balance
+func (s *SplitSpanChecker) findOptimalSpanMoves(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, sortedSpans []*splitSpanStatus, adjacencyMap map[common.DispatcherID][]*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
+	// Calculate current min and max traffic for balance check
+	currentMinTraffic := lastThreeTrafficPerNode[minTrafficNodeID][latestTrafficIndex]
+	currentMaxTraffic := lastThreeTrafficPerNode[maxTrafficNodeID][latestTrafficIndex]
+
+	// Try to find spans that can be moved to minTrafficNodeID for merge
+	for _, span := range sortedSpans {
+		if span.GetNodeID() == minTrafficNodeID {
+			continue // Skip spans already in minTrafficNodeID
+		}
+
+		// Check if moving this span to minTrafficNodeID would enable merge
+		if s.canMergeAfterMove(span, minTrafficNodeID, adjacencyMap) {
+			// Calculate traffic changes for single move
+			spanTraffic := span.lastThreeTraffic[latestTrafficIndex]
+			trafficChanges := map[node.ID]float64{
+				minTrafficNodeID: spanTraffic,  // target gets +spanTraffic
+				span.GetNodeID(): -spanTraffic, // source gets -spanTraffic
+			}
+
+			// Check if this move maintains balance
+			if s.isTrafficBalanceMaintained(trafficChanges, lastThreeTrafficPerNode, currentMinTraffic, currentMaxTraffic) {
+				// Single move is sufficient
+				return []SplitSpanCheckResult{
+					{
+						OpType: OpMove,
+						MoveSpans: []*SpanReplication{
+							span.SpanReplication,
+						},
+						TargetNode: minTrafficNodeID,
+					},
+				}
+			}
+
+			// Single move violates balance, try to find compensation move
+			if compensationMove := s.findCompensationMove(span, minTrafficNodeID, span.GetNodeID(), sortedSpans, lastThreeTrafficPerNode, currentMinTraffic, currentMaxTraffic); compensationMove != nil {
+				return []SplitSpanCheckResult{
+					{
+						OpType: OpMove,
+						MoveSpans: []*SpanReplication{
+							span.SpanReplication,
+						},
+						TargetNode: minTrafficNodeID,
+					},
+					*compensationMove,
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// findCompensationMove finds a span to move from targetNode to sourceNode to compensate for the traffic imbalance
+func (s *SplitSpanChecker) findCompensationMove(movedSpan *splitSpanStatus, targetNode node.ID, sourceNode node.ID, sortedSpans []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64, currentMinTraffic float64, currentMaxTraffic float64) *SplitSpanCheckResult {
+	movedTraffic := movedSpan.lastThreeTraffic[latestTrafficIndex]
+
+	// Build nodeSpanMap for efficient lookup
+	targetNodeSpans := []*splitSpanStatus{}
+	for _, span := range sortedSpans {
+		if span.GetNodeID() == targetNode {
+			targetNodeSpans = append(targetNodeSpans, span)
+		}
+	}
+
+	// Look for spans in targetNode that can be moved to sourceNode
+	for _, span := range targetNodeSpans {
+		if span.ID == movedSpan.ID {
+			continue // Skip the span we just moved
+		}
+
+		// Try to find a span that can balance traffic
+		// Note: compensation move doesn't need to enable merge, its main purpose is traffic balancing
+		compensationTraffic := span.lastThreeTraffic[latestTrafficIndex]
+
+		// Calculate traffic changes for both moves (main move + compensation move)
+		trafficChanges := map[node.ID]float64{
+			targetNode: movedTraffic - compensationTraffic,  // target: +movedTraffic - compensationTraffic
+			sourceNode: -movedTraffic + compensationTraffic, // source: -movedTraffic + compensationTraffic
+		}
+
+		// Check if both moves together maintain balance
+		if s.isTrafficBalanceMaintained(trafficChanges, lastThreeTrafficPerNode, currentMinTraffic, currentMaxTraffic) {
+			return &SplitSpanCheckResult{
+				OpType: OpMove,
+				MoveSpans: []*SpanReplication{
+					span.SpanReplication,
+				},
+				TargetNode: sourceNode,
+			}
+		}
+	}
+
+	return nil
+}
+
+// canMergeAfterMove checks if a span can merge with adjacent spans after moving to targetNode
+func (s *SplitSpanChecker) canMergeAfterMove(span *splitSpanStatus, targetNode node.ID, adjacencyMap map[common.DispatcherID][]*splitSpanStatus) bool {
+	adjacents := adjacencyMap[span.ID]
+
+	for _, adjacent := range adjacents {
+		if adjacent.GetNodeID() == targetNode {
+			// Check if they can merge based on thresholds
+			totalRegionCount := span.regionCount + adjacent.regionCount
+			totalTraffic := span.lastThreeTraffic[latestTrafficIndex] + adjacent.lastThreeTraffic[latestTrafficIndex]
+
+			// Check region threshold
+			if s.regionThreshold > 0 && totalRegionCount > s.regionThreshold/4*3 {
+				continue
+			}
+
+			// Check traffic threshold
+			if s.writeThreshold > 0 && totalTraffic > float64(s.writeThreshold)/4*3 {
+				continue
+			}
+
+			return true
+		}
+	}
+
+	return false
+}
+
+// isTrafficBalanceMaintained checks if the traffic changes maintain balance
+// It returns true if newMinTraffic >= currentMinTraffic AND newMaxTraffic <= currentMaxTraffic
+func (s *SplitSpanChecker) isTrafficBalanceMaintained(
+	trafficChanges map[node.ID]float64, // nodeID -> traffic change (can be positive or negative)
+	lastThreeTrafficPerNode map[node.ID][]float64,
+	currentMinTraffic float64,
+	currentMaxTraffic float64,
+) bool {
+	// Find new min and max traffic after changes
+	newMinTrafficOverall := currentMinTraffic
+	newMaxTrafficOverall := currentMaxTraffic
+
+	for nodeID, traffic := range lastThreeTrafficPerNode {
+		var nodeTraffic float64
+		if change, exists := trafficChanges[nodeID]; exists {
+			nodeTraffic = traffic[latestTrafficIndex] + change
+		} else {
+			nodeTraffic = traffic[latestTrafficIndex]
+		}
+
+		if nodeTraffic < newMinTrafficOverall {
+			newMinTrafficOverall = nodeTraffic
+		}
+		if nodeTraffic > newMaxTrafficOverall {
+			newMaxTrafficOverall = nodeTraffic
+		}
+	}
+
+	// Ensure balance: new min traffic >= current min traffic AND new max traffic <= current max traffic
+	return newMinTrafficOverall >= currentMinTraffic && newMaxTrafficOverall <= currentMaxTraffic
 }
 
 // The spans can be merged only when satisfy:
@@ -604,12 +730,23 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		avgLastThreeTraffic[idx] = traffic / float64(nodeCount)
 	}
 
+	// check whether we should balance the traffic for each node
+	sort.Slice(aliveNodeIDs, func(i, j int) bool {
+		return lastThreeTrafficPerNode[aliveNodeIDs[i]][0] < lastThreeTrafficPerNode[aliveNodeIDs[j]][0]
+	})
+
+	minTrafficNodeID = aliveNodeIDs[0]
+	maxTrafficNodeID = aliveNodeIDs[nodeCount-1]
+
+	log.Info("minTrafficNodeID", zap.Any("minTrafficNodeID", minTrafficNodeID))
+	log.Info("maxTrafficNodeID", zap.Any("maxTrafficNodeID", maxTrafficNodeID))
+
 	// TODO(hyy): add a unit test for this
 	// If the traffic in each node is quite low, we don't need to balance the traffic
 	needCheckBalance := false
 	for _, lastThreeTraffic := range lastThreeTrafficPerNode {
 		for _, traffic := range lastThreeTraffic {
-			if traffic > 1024*1024 { // 1MB
+			if traffic > minTrafficBalanceThreshold { // 1MB
 				needCheckBalance = true
 				break
 			}
@@ -622,17 +759,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	if !needCheckBalance {
 		return
 	}
-
-	// check whether we should balance the traffic for each node
-	sort.Slice(aliveNodeIDs, func(i, j int) bool {
-		return lastThreeTrafficPerNode[aliveNodeIDs[i]][0] < lastThreeTrafficPerNode[aliveNodeIDs[j]][0]
-	})
-
-	minTrafficNodeID = aliveNodeIDs[0]
-	maxTrafficNodeID = aliveNodeIDs[nodeCount-1]
-
-	log.Info("minTrafficNodeID", zap.Any("minTrafficNodeID", minTrafficNodeID))
-	log.Info("maxTrafficNodeID", zap.Any("maxTrafficNodeID", maxTrafficNodeID))
 
 	// to avoid the fluctuation of traffic, we check traffic in last three time.
 	// only when each time, the min traffic is less than 80% of the avg traffic,
@@ -759,4 +885,9 @@ func (s *SplitSpanChecker) Stat() string {
 
 func (s *SplitSpanChecker) Name() string {
 	return "split_span_checker"
+}
+
+// for test only
+func SetMinTrafficBalanceThreshold(threshold float64) {
+	minTrafficBalanceThreshold = threshold
 }
