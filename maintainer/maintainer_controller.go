@@ -112,7 +112,7 @@ func NewController(changefeedID common.ChangeFeedID,
 // HandleStatus handle the status report from the node
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	for _, status := range statusList {
-		log.Info("HandleStatus",
+		log.Debug("HandleStatus",
 			zap.String("changefeed", c.changefeedID.Name()),
 			zap.String("from", from.String()),
 			zap.Any("status", status))
@@ -150,8 +150,10 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 }
 
 // ScheduleFinished return false if not all task are running in working state
+// We don't count the merge and occupy operator in the operator size,
+// because merge operator is ensure the correct checkpointTs of the dispatchers.
 func (c *Controller) ScheduleFinished() bool {
-	return c.operatorController.OperatorSizeWithLock() == 0 && c.spanController.GetAbsentSize() == 0
+	return c.operatorController.OperatorSizeWithoutMergeAndOccupyWithLock() == 0 && c.spanController.GetAbsentSize() == 0
 }
 
 func (c *Controller) Stop() {

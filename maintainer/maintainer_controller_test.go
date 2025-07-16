@@ -564,6 +564,14 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	spanReplicaID8 := operators[1].ID()
 	spanReplica8 := controller.spanController.GetTaskByID(spanReplicaID8)
 	log.Info("spanReplica8", zap.Any("id", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
+	trafficForSpanReplica7 := 50
+	trafficForSpanReplica8 := 50
+	if spanReplica7.GetNodeID() == "node1" {
+		trafficForSpanReplica8 = 150
+	}
+	if spanReplica8.GetNodeID() == "node1" {
+		trafficForSpanReplica7 = 150
+	}
 	operators[0].Start()
 	operators[0].PostFinish()
 	operators[1].Start()
@@ -594,13 +602,13 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	status7 := &heartbeatpb.TableSpanStatus{
 		ID:                 spanReplicaID7.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
-		EventSizePerSecond: 50,
+		EventSizePerSecond: float32(trafficForSpanReplica7),
 		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
 	}
 	status8 := &heartbeatpb.TableSpanStatus{
 		ID:                 spanReplicaID8.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
-		EventSizePerSecond: 150,
+		EventSizePerSecond: float32(trafficForSpanReplica8),
 		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixNano()), 0),
 	}
 

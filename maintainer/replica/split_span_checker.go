@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -92,7 +93,7 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
 	s.allTasks[replica.ID] = &splitSpanStatus{
 		SpanReplication:  replica,
-		regionCheckTime:  time.Now(),
+		regionCheckTime:  time.Now().Add(-regionCheckInterval), // Ensure the first time update status will calculate the region count
 		regionCount:      0,
 		trafficScore:     0,
 		lastThreeTraffic: make([]float64, 3),
@@ -272,14 +273,14 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		return results
 	}
 
-	return s.chooseMoveSpans(minTrafficNodeID, maxTrafficNodeID, sortedSpans, lastThreeTrafficPerNode)
+	return s.chooseMoveSpans(minTrafficNodeID, maxTrafficNodeID, sortedSpans, lastThreeTrafficPerNode, taskMap)
 }
 
 // chooseMoveSpans finds either:
 // 1. A single span to move from node A to node B to enable merge with adjacent span in B
 // 2. A pair of spans to swap between nodes to enable merge for at least one span
 // While maintaining traffic balance (min traffic after move >= min traffic before move)
-func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, sortedSpans []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
+func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, sortedSpans []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64, taskMap map[node.ID][]*splitSpanStatus) []SplitSpanCheckResult {
 	log.Info("chooseMoveSpans try to choose move spans",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
@@ -288,6 +289,19 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 		zap.Int("totalSpans", len(sortedSpans)))
 
 	results := make([]SplitSpanCheckResult, 0)
+
+	// If no any span in minTrafficNodeID, we random select one span from maxTrafficNodeID for it.
+	if len(taskMap[minTrafficNodeID]) == 0 {
+		randomSpan := taskMap[maxTrafficNodeID][rand.Intn(len(taskMap[maxTrafficNodeID]))]
+		results = append(results, SplitSpanCheckResult{
+			OpType: OpMove,
+			MoveSpans: []*SpanReplication{
+				randomSpan.SpanReplication,
+			},
+			TargetNode: minTrafficNodeID,
+		})
+		return results
+	}
 
 	// Build adjacency map for O(1) lookup of adjacent spans
 	adjacencyMap := s.buildAdjacencyMap(sortedSpans)
@@ -504,9 +518,6 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 	sort.Slice(spanStatus, func(i, j int) bool {
 		return bytes.Compare(spanStatus[i].Span.StartKey, spanStatus[j].Span.StartKey) < 0
 	})
-	for _, spanStatusItem := range spanStatus {
-		log.Info("sorted spanStatus", zap.Any("span", common.FormatTableSpan(spanStatusItem.Span)), zap.Any("nodeID", spanStatusItem.GetNodeID()))
-	}
 
 	mergeSpans := make([]*SpanReplication, 0)
 	prev := spanStatus[0]
