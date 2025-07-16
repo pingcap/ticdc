@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # Common function for executing mixed DML operations (INSERT, UPDATE, DELETE)
-# 
+#
 # This function is designed for tables with the following structure:
 # - id: INT AUTO_INCREMENT PRIMARY KEY (required for UPDATE and DELETE operations)
 # - data: VARCHAR(255) (or similar string field for data manipulation)
-# 
+#
 # Example table structure:
 # CREATE TABLE test.table_name (
 #     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -32,12 +32,12 @@ function execute_mixed_dml() {
 	local table_name="$1"
 	local host="$2"
 	local port="$3"
-	
+
 	echo "DML: Executing mixed operations on $table_name..."
-	
+
 	# Ensure table has some initial data for UPDATE and DELETE operations
 	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('initial_data_1'), ('initial_data_2'), ('initial_data_3');" $host $port || true
-	
+
 	while true; do
 		# Randomly choose between INSERT, UPDATE, and DELETE operations
 		case $((RANDOM % 3)) in
@@ -104,8 +104,8 @@ function execute_mixed_dml() {
 			run_sql_ignore_error "DELETE FROM test.$table_name WHERE id = (SELECT id FROM test.$table_name ORDER BY RAND() LIMIT 1) AND (SELECT COUNT(*) FROM test.$table_name) > 1;" $host $port || true
 			;;
 		esac
-		
+
 		# Add a small delay to prevent overwhelming the database
 		sleep 0.1
 	done
-} 
+}
