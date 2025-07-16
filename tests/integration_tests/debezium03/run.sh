@@ -53,7 +53,7 @@ run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 run_cdc_cli changefeed create -c test --sink-uri="kafka://127.0.0.1:9092/output_ticdc?protocol=debezium&kafka-version=2.4.0" --config "$CUR/changefeed.toml"
 
 cd $CUR
-go run ../debezium01/src
+go run ../debezium01/src/main.go
 
 if [ $? -ne 0 ]; then
 	exit 1
