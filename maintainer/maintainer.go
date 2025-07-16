@@ -852,13 +852,13 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
-		totalSpanCount := m.controller.spanController.TaskSize() - 1
+		totalSpanCount := m.controller.spanController.TaskSize()
 		totalTableCount := 0
 		groupSize := m.controller.spanController.GetGroupSize()
 		if groupSize == 1 {
-			totalTableCount = m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID) - 1
+			totalTableCount = m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
 		} else {
-			totalTableCount = m.controller.spanController.GetGroupSize() - 1 + m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID) - 1
+			totalTableCount = groupSize - 1 + m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
 		}
 		scheduling := m.controller.spanController.GetSchedulingSize()
 		working := m.controller.spanController.GetReplicatingSize()

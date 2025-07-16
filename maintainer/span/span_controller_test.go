@@ -402,27 +402,6 @@ func TestMarkSpanAbsent(t *testing.T) {
 	require.Equal(t, "", replicaSpan.GetNodeID().String())
 }
 
-// TestForceRemove tests the ForceRemove functionality
-func TestForceRemove(t *testing.T) {
-	t.Parallel()
-
-	controller := newControllerWithCheckerForTest(t)
-	// replicating and scheduling will be returned
-	replicaSpanID := common.NewDispatcherID()
-	replicaSpan := replica.NewWorkingSpanReplication(controller.changefeedID, replicaSpanID,
-		1,
-		testutil.GetTableSpanByID(3), &heartbeatpb.TableSpanStatus{
-			ID:              replicaSpanID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		}, "node1")
-	controller.AddReplicatingSpan(replicaSpan)
-	controller.ForceRemove(common.NewDispatcherID())
-	require.Len(t, controller.GetAllTasks(), 2)
-	controller.ForceRemove(replicaSpan.ID)
-	require.Len(t, controller.GetAllTasks(), 1)
-}
-
 // TestRemoveAllTables tests the RemoveAll functionality
 func TestRemoveAllTables(t *testing.T) {
 	t.Parallel()

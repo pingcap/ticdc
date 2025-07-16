@@ -536,26 +536,6 @@ func (c *Controller) addToSchemaAndTableMap(span *replica.SpanReplication) {
 	tableMap[span.ID] = span
 }
 
-// ForceRemove remove the span from the db
-func (c *Controller) ForceRemove(id common.DispatcherID) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	span, ok := c.allTasks[id]
-	if !ok {
-		log.Warn("span not found, ignore remove action",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.String("span", id.String()))
-		return
-	}
-
-	log.Info("remove a span",
-		zap.String("changefeed", c.changefeedID.Name()),
-		zap.String("dispatcher", id.String()),
-		zap.String("span", common.FormatTableSpan(span.Span)))
-
-	c.removeSpanWithoutLock(span)
-}
-
 // GetAbsentForTest returns absent spans for testing
 func (c *Controller) GetAbsentForTest(limit int) []*replica.SpanReplication {
 	ret := c.GetAbsent()
