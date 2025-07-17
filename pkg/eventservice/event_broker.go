@@ -498,6 +498,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if !c.scanRateLimiter.AllowN(time.Now(), int(task.getCurrentScanLimitInBytes())) {
+		interrupted = true
 		return
 	}
 
@@ -506,7 +507,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		c.schemaStore,
 		c.mounter,
 		task.epoch.Load(),
-		c.scanRateLimiter,
 	)
 
 	sl := scanLimit{
