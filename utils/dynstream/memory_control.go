@@ -90,7 +90,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			// If the last event is a periodic signal, we only need to keep the latest one.
 			// And we don't need to add a new signal.
 			*back = event
-			return false
+			return true
 		}
 	}
 
