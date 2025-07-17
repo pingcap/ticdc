@@ -496,9 +496,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	// if !c.scanRateLimiter.AllowN(task.getCurrentScanLimitInBytes()) {
-	// 	return
-	// }
+	if !c.scanRateLimiter.AllowN(task.getCurrentScanLimitInBytes()) {
+		c.sendResolvedTs(task, task.sentResolvedTs.Load())
+		return
+	}
 
 	scanner := newEventScanner(
 		c.eventStore,
