@@ -8,18 +8,20 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
 package eventservice
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 )
 
 // byteRateLimit implements a rate limiter for bytes using atomic operations instead of locks.
-// It allows a certain number of bytes per second and supports burst capacity.
+// It uses a separate goroutine to refill tokens periodically.
 type byteRateLimit struct {
 	// availableBytes represents the current available bytes (atomic)
 	availableBytes int64
@@ -27,86 +29,63 @@ type byteRateLimit struct {
 	bytesPerSecond int64
 	// maxBurstBytes is the maximum burst capacity
 	maxBurstBytes int64
-	// lastUpdateNano is the timestamp of last update in nanoseconds (atomic)
-	lastUpdateNano int64
+	// ctx and cancel for controlling the refill goroutine
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // newByteRateLimit creates a new byte rate limiter.
 // bytesPerSecond: the number of bytes allowed per second
 // maxBurstBytes: the maximum burst capacity (bucket size)
 func newByteRateLimit(bytesPerSecond, maxBurstBytes int64) *byteRateLimit {
-	now := time.Now().UnixNano()
-	return &byteRateLimit{
+	ctx, cancel := context.WithCancel(context.Background())
+
+	b := &byteRateLimit{
 		availableBytes: maxBurstBytes,
 		bytesPerSecond: bytesPerSecond,
 		maxBurstBytes:  maxBurstBytes,
-		lastUpdateNano: now,
+		ctx:            ctx,
+		cancel:         cancel,
+	}
+
+	// Start the token refill goroutine
+	go b.refillLoop()
+
+	return b
+}
+
+// refillLoop runs in a separate goroutine and refills tokens every second
+func (b *byteRateLimit) refillLoop() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-ticker.C:
+			// Refill to maximum burst capacity every second
+			atomic.StoreInt64(&b.availableBytes, b.maxBurstBytes)
+		}
 	}
 }
 
 // AllowN checks if n bytes are available. If yes, it consumes n bytes and returns true.
 // If not enough bytes are available, it returns false without consuming any bytes.
 func (b *byteRateLimit) AllowN(n int64) bool {
-	now := time.Now().UnixNano()
-
-	for {
-		lastUpdate := atomic.LoadInt64(&b.lastUpdateNano)
-		available := atomic.LoadInt64(&b.availableBytes)
-
-		// Calculate how many bytes should be added based on elapsed time
-		elapsed := now - lastUpdate
-		if elapsed > 0 {
-			// Add bytes based on the rate (bytes per second)
-			bytesToAdd := (elapsed * b.bytesPerSecond) / int64(time.Second)
-			newAvailable := available + bytesToAdd
-
-			// Cap at maximum burst capacity
-			if newAvailable > b.maxBurstBytes {
-				newAvailable = b.maxBurstBytes
-			}
-
-			// Try to update both timestamp and available bytes atomically
-			if atomic.CompareAndSwapInt64(&b.lastUpdateNano, lastUpdate, now) {
-				atomic.StoreInt64(&b.availableBytes, newAvailable)
-				available = newAvailable
-			} else {
-				// Another goroutine updated the timestamp, retry
-				continue
-			}
-		}
-
-		// Check if we have enough bytes
-		if available < n {
-			return false
-		}
-
-		// Try to consume n bytes
-		if atomic.CompareAndSwapInt64(&b.availableBytes, available, available-n) {
-			return true
-		}
-
-		// Another goroutine modified availableBytes, retry
+	available := atomic.LoadInt64(&b.availableBytes)
+	// Check if we have enough bytes
+	if available < n {
+		return false
 	}
+	atomic.StoreInt64(&b.availableBytes, available-n)
+	return true
 }
 
 // Available returns the current number of available bytes.
 // This is a snapshot and may change immediately after the call.
 func (b *byteRateLimit) Available() int64 {
-	now := time.Now().UnixNano()
-	lastUpdate := atomic.LoadInt64(&b.lastUpdateNano)
-	available := atomic.LoadInt64(&b.availableBytes)
-
-	// Calculate potential available bytes (without updating the actual state)
-	elapsed := now - lastUpdate
-	if elapsed > 0 {
-		bytesToAdd := (elapsed * b.bytesPerSecond) / int64(time.Second)
-		available += bytesToAdd
-		if available > b.maxBurstBytes {
-			available = b.maxBurstBytes
-		}
-	}
-
-	return available
+	return atomic.LoadInt64(&b.availableBytes)
 }
 
 // Rate returns the configured bytes per second rate.
@@ -117,4 +96,11 @@ func (b *byteRateLimit) Rate() int64 {
 // Burst returns the configured maximum burst capacity.
 func (b *byteRateLimit) Burst() int64 {
 	return b.maxBurstBytes
+}
+
+// Close stops the refill goroutine and cleans up resources.
+func (b *byteRateLimit) Close() {
+	if b.cancel != nil {
+		b.cancel()
+	}
 }
