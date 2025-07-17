@@ -76,7 +76,7 @@ func TestEventScanner(t *testing.T) {
 	}
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
-	events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 1, len(events))
@@ -104,7 +104,7 @@ func TestEventScanner(t *testing.T) {
 		maxScannedBytes: 1000,
 		timeout:         10 * time.Second,
 	}
-	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 2, len(events))
@@ -130,7 +130,7 @@ func TestEventScanner(t *testing.T) {
 		maxScannedBytes: 1000,
 		timeout:         10 * time.Second,
 	}
-	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 4, len(events))
@@ -157,7 +157,7 @@ func TestEventScanner(t *testing.T) {
 		maxScannedBytes: 1,
 		timeout:         10 * time.Second,
 	}
-	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 3, len(events))
@@ -189,7 +189,7 @@ func TestEventScanner(t *testing.T) {
 		maxScannedBytes: 1,
 		timeout:         10 * time.Second,
 	}
-	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 4, len(events))
@@ -223,7 +223,7 @@ func TestEventScanner(t *testing.T) {
 		maxScannedBytes: 1000,
 		timeout:         0 * time.Millisecond,
 	}
-	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 4, len(events))
@@ -246,7 +246,7 @@ func TestEventScanner(t *testing.T) {
 		maxScannedBytes: 1000,
 		timeout:         10 * time.Second,
 	}
-	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 6, len(events))
@@ -344,7 +344,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 		maxScannedBytes: eSize,
 		timeout:         10 * time.Second,
 	}
-	events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 3, len(events))
@@ -372,7 +372,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 		maxScannedBytes: 2 * eSize,
 		timeout:         10 * time.Second,
 	}
-	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 5, len(events))
@@ -428,7 +428,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	ok, dataRange = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
-	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 8, len(events))
