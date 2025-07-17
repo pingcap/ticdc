@@ -35,6 +35,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -80,7 +81,7 @@ type eventBroker struct {
 	// metricsCollector handles all metrics collection and reporting
 	metricsCollector *metricsCollector
 
-	scanRateLimiter *byteRateLimit
+	scanRateLimiter *rate.Limiter
 }
 
 func newEventBroker(
@@ -124,7 +125,7 @@ func newEventBroker(
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		cancel:                  cancel,
 		g:                       g,
-		scanRateLimiter:         newByteRateLimit(maxScanLimitInBytesPerSecond, maxScanLimitInBytesPerSecond),
+		scanRateLimiter:         rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), maxScanLimitInBytesPerSecond),
 	}
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
@@ -496,8 +497,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if !c.scanRateLimiter.AllowN(task.getCurrentScanLimitInBytes()) {
-		c.sendResolvedTs(task, task.sentResolvedTs.Load())
+	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
 		return
 	}
 
@@ -513,11 +513,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		timeout:         time.Millisecond * 1000, // 1 Second
 	}
 
-	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
+
+	task.lastScanBytes.Store(scannedBytes)
 
 	// Check whether the task is ready to receive data events again before sending events.
 	if !task.isReadyRecevingData.Load() {
