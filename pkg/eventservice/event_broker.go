@@ -497,7 +497,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if !c.scanRateLimiter.AllowN(task.getCurrentScanLimitInBytes()) {
-		interrupted = true
 		return
 	}
 
