@@ -201,6 +201,7 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 	}
 	if !a.isReceivedFirstResolvedTs.Load() {
 		log.Info("received first resolved ts from event store", zap.Uint64("resolvedTs", resolvedTs), zap.Stringer("dispatcherID", a.id))
+		a.lastUpdateScanLimitTime.Store(time.Now())
 		a.isReceivedFirstResolvedTs.Store(true)
 	}
 	return util.CompareAndMonotonicIncrease(&a.eventStoreResolvedTs, resolvedTs)
