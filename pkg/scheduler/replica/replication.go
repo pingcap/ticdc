@@ -213,14 +213,15 @@ func (db *replicationDB[T, R]) GetReplicatingWithoutLock() (ret []R) {
 	return
 }
 
-func (db *replicationDB[T, R]) GetReplicatingSize() (size int) {
+func (db *replicationDB[T, R]) GetReplicatingSize() int {
+	size := 0
 	db.withRLock(func() {
 		for _, g := range db.taskGroups {
-			log.Info("hyy GetReplicatingSize group", zap.String("group", g.id), zap.Int("size", g.GetReplicatingSize()))
 			size += g.GetReplicatingSize()
+			log.Info("hyy GetReplicatingSize group", zap.String("group", g.id), zap.Int("GetReplicatingSize", g.GetReplicatingSize()), zap.Any("size", size))
 		}
 	})
-	return
+	return size
 }
 
 func (db *replicationDB[T, R]) GetReplicatingByGroup(id GroupID) (ret []R) {

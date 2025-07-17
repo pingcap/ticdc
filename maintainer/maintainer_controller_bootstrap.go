@@ -194,7 +194,7 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
 		// Process table spans
-		c.processTableSpans(table, workingTaskMap, isMysqlCompatibleBackend)
+		c.processTableSpans(table, workingTaskMap)
 	}
 
 	return schemaInfos
@@ -203,7 +203,6 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 func (c *Controller) processTableSpans(
 	table commonEvent.Table,
 	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-	isMysqlCompatibleBackend bool,
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 
