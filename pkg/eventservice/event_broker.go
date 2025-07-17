@@ -496,9 +496,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if !c.scanRateLimiter.AllowN(task.getCurrentScanLimitInBytes()) {
-		return
-	}
+	// if !c.scanRateLimiter.AllowN(task.getCurrentScanLimitInBytes()) {
+	// 	return
+	// }
 
 	scanner := newEventScanner(
 		c.eventStore,
@@ -905,6 +905,7 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
+	start := time.Now()
 	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
 	if !ok {
 		// The dispatcher is not registered, register it.
@@ -949,7 +950,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("newSeq", stat.seq.Load()),
 		zap.Uint64("newEpoch", newEpoch),
 		zap.Uint64("oldSentResolvedTs", oldSentResolvedTs),
-		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()))
+		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()),
+		zap.Duration("resetTime", time.Since(start)))
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
