@@ -155,6 +155,8 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			}
 		}
 	case commonEvent.InfluenceTypeNormal:
+		// include self
+		tableIDs[ddl.TableID] = struct{}{}
 		for _, item := range ddl.GetBlockedTables().TableIDs {
 			tableIDs[item] = struct{}{}
 		}
