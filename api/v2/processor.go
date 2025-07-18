@@ -25,7 +25,7 @@ import (
 // Note: It is not useful in new arch cdc, we implement it for compatibility with old arch cdc only.
 func (h *OpenAPIV2) ListProcessor(c *gin.Context) {
 	prcInfos := make([]ProcessorCommonInfo, 0)
-
+	panic("for test!")
 	c.JSON(http.StatusOK, toListResponse(c, prcInfos))
 }
 
