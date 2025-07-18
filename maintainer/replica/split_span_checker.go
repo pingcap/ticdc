@@ -143,7 +143,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 		}
 	}
 
-	log.Info("split span checker update status",
+	log.Debug("split span checker update status",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
 		zap.Any("replica", replica.ID),
@@ -816,8 +816,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	diffInMinNode := avgLastThreeTraffic[latestTrafficIndex] - lastThreeTrafficPerNode[minTrafficNodeID][latestTrafficIndex]
 	diffInMaxNode := lastThreeTrafficPerNode[maxTrafficNodeID][latestTrafficIndex] - avgLastThreeTraffic[latestTrafficIndex]
 	diffTraffic := math.Min(diffInMinNode, diffInMaxNode)
-
-	log.Info("diffTraffic", zap.Float64("diffTraffic", diffTraffic))
 
 	sort.Slice(taskMap[maxTrafficNodeID], func(i, j int) bool {
 		return taskMap[maxTrafficNodeID][i].lastThreeTraffic[latestTrafficIndex] < taskMap[maxTrafficNodeID][j].lastThreeTraffic[latestTrafficIndex]

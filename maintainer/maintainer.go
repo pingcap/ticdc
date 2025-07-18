@@ -539,6 +539,12 @@ func (m *Maintainer) calCheckpointTs() {
 		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
 	}
 
+	log.Info("can advance checkpointTs",
+		zap.String("changefeed", m.id.Name()),
+		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
+		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
+	)
+
 	m.setWatermark(*newWatermark)
 }
 
@@ -852,7 +858,7 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
-		totalSpanCount := m.controller.spanController.TaskSize()
+		totalSpanCount := m.controller.spanController.TaskSize() - 1
 		totalTableCount := 0
 		groupSize := m.controller.spanController.GetGroupSize()
 		if groupSize == 1 {

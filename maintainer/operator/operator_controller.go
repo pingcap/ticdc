@@ -261,6 +261,13 @@ func (oc *Controller) pollQueueingOperator() (
 			zap.String("operator", op.String()))
 		return nil, true
 	}
+	if time.Since(item.CreatedAt) > time.Second*30 {
+		log.Warn("operator is still in running queue",
+			zap.String("changefeed", oc.changefeedID.Name()),
+			zap.String("operator", opID.String()),
+			zap.String("operator", op.String()),
+			zap.Any("time since created", time.Since(item.CreatedAt)))
+	}
 	now := time.Now()
 	if now.Before(item.NotifyAt) {
 		heap.Push(&oc.runningQueue, item)
