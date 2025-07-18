@@ -26,11 +26,18 @@ var (
 			Help:      "The total number of scheduler tasks",
 		}, []string{"namespace", "changefeed"})
 
-	TableGauge = prometheus.NewGaugeVec(
+	SpanCountGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
-			Name:      "table",
+			Name:      "span_count",
+			Help:      "The total number of spans",
+		}, []string{"namespace", "changefeed"})
+	TableCountGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "scheduler",
+			Name:      "table_count",
 			Help:      "The total number of tables",
 		}, []string{"namespace", "changefeed"})
 	TableStateGauge = prometheus.NewGaugeVec(
@@ -40,20 +47,6 @@ var (
 			Name:      "table_replication_state",
 			Help:      "The total number of tables in different replication states",
 		}, []string{"namespace", "changefeed", "state"})
-	AcceptScheduleTaskCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "scheduler",
-			Name:      "task_accept",
-			Help:      "The total number of accepted scheduler tasks",
-		}, []string{"namespace", "changefeed", "task"})
-	RunningScheduleTaskGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "scheduler",
-			Name:      "task_running",
-			Help:      "The total number of running scheduler tasks",
-		}, []string{"namespace", "changefeed"})
 	SlowestTableIDGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -74,13 +67,6 @@ var (
 			Subsystem: "scheduler",
 			Name:      "slow_table_resolved_ts",
 			Help:      "The resolved ts of the slowest table",
-		}, []string{"namespace", "changefeed"})
-	SlowestTableStateGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "scheduler",
-			Name:      "slow_table_replication_state",
-			Help:      "The replication state of the slowest table",
 		}, []string{"namespace", "changefeed"})
 	SlowestTableStageCheckpointTsGaugeVec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -148,21 +134,29 @@ var (
 			Name:      "slow_table_puller_resolved_ts_lag",
 			Help:      "Puller Slowest ResolvedTs lag",
 		}, []string{"namespace", "changefeed"})
+
+	// checker related
+	SplitSpanCheckDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "split_span_check_duration",
+			Help:      "Bucketed histogram of split span check time (s).",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
+		}, []string{"namespace", "changefeed", "group_id"})
 )
 
 // InitMetrics registers all metrics used in scheduler
 func InitSchedulerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ScheduleTaskGauge)
 
-	registry.MustRegister(TableGauge)
+	registry.MustRegister(SpanCountGauge)
+	registry.MustRegister(TableCountGauge)
 	registry.MustRegister(TableStateGauge)
-	registry.MustRegister(AcceptScheduleTaskCounter)
-	registry.MustRegister(RunningScheduleTaskGauge)
 
 	registry.MustRegister(SlowestTableIDGauge)
 	registry.MustRegister(SlowestTableCheckpointTsGauge)
 	registry.MustRegister(SlowestTableResolvedTsGauge)
-	registry.MustRegister(SlowestTableStateGauge)
 	registry.MustRegister(SlowestTableStageCheckpointTsGaugeVec)
 	registry.MustRegister(SlowestTableStageResolvedTsGaugeVec)
 	registry.MustRegister(SlowestTableStageCheckpointTsLagGaugeVec)
@@ -173,4 +167,6 @@ func InitSchedulerMetrics(registry *prometheus.Registry) {
 
 	registry.MustRegister(SlowestTablePullerResolvedTs)
 	registry.MustRegister(SlowestTablePullerResolvedTsLag)
+
+	registry.MustRegister(SplitSpanCheckDuration)
 }

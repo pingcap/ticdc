@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -143,7 +144,7 @@ type Maintainer struct {
 	changefeedResolvedTsLagGauge   prometheus.Gauge
 	changefeedStatusGauge          prometheus.Gauge
 	scheduledTaskGauge             prometheus.Gauge
-	runningTaskGauge               prometheus.Gauge
+	spanCountGauge                 prometheus.Gauge
 	tableCountGauge                prometheus.Gauge
 	handleEventDuration            prometheus.Observer
 }
@@ -154,7 +155,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	cfg *config.ChangeFeedInfo,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
-	pdAPI pdutil.PDAPIClient,
 	checkpointTs uint64,
 	newChangefeed bool,
 ) *Maintainer {
@@ -174,7 +174,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		controller: NewController(cfID, checkpointTs, pdAPI, taskScheduler,
+		controller: NewController(cfID, checkpointTs, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
@@ -195,8 +195,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		runningTaskGauge:               metrics.RunningScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		tableCountGauge:                metrics.TableGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
 	}
 	m.nodeChanged.changed = false
@@ -233,14 +233,13 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	conf *config.SchedulerConfig,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
-	pdAPI pdutil.PDAPIClient,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI, 1, false)
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false)
 	m.cascadeRemoving = true
 	return m
 }
@@ -372,8 +371,8 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.RunningScheduleTaskGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.TableGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
+	metrics.SpanCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
+	metrics.TableCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 }
 
@@ -540,6 +539,12 @@ func (m *Maintainer) calCheckpointTs() {
 		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
 	}
 
+	log.Info("can advance checkpointTs",
+		zap.String("changefeed", m.id.Name()),
+		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
+		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
+	)
+
 	m.setWatermark(*newWatermark)
 }
 
@@ -677,12 +682,12 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	if cachedResp == nil {
 		return
 	}
-	isMySQLCompatible, err := isMysqlCompatible(m.config.SinkURI)
+	isMySQLSinkCompatible, err := isMysqlCompatible(m.config.SinkURI)
 	if err != nil {
 		m.handleError(err)
 		return
 	}
-	barrier, msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLCompatible)
+	barrier, msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLSinkCompatible)
 	if err != nil {
 		m.handleError(err)
 		return
@@ -853,12 +858,20 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
-		total := m.controller.spanController.TaskSize() - 1
+		totalSpanCount := m.controller.spanController.TaskSize() - 1
+		totalTableCount := 0
+		groupSize := m.controller.spanController.GetGroupSize()
+		if groupSize == 1 {
+			totalTableCount = m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
+		} else {
+			totalTableCount = groupSize - 1 + m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
+		}
 		scheduling := m.controller.spanController.GetSchedulingSize()
 		working := m.controller.spanController.GetReplicatingSize()
 		absent := m.controller.spanController.GetAbsentSize()
 
-		m.tableCountGauge.Set(float64(total))
+		m.spanCountGauge.Set(float64(totalSpanCount))
+		m.tableCountGauge.Set(float64(totalTableCount))
 		m.scheduledTaskGauge.Set(float64(scheduling))
 		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent").Set(float64(absent))
 		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working").Set(float64(working))

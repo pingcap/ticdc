@@ -174,7 +174,7 @@ func (m *MergeSplitDispatcherOperator) PostFinish() {
 
 	if m.originReplicaSet.ID == m.primary {
 		log.Info("merge-split dispatcher operator finished[primary]", zap.String("id", m.originReplicaSet.ID.String()))
-		m.spanController.ReplaceReplicaSet(m.affectedReplicaSets, m.splitSpans, m.checkpointTs)
+		m.spanController.ReplaceReplicaSet(m.affectedReplicaSets, m.splitSpans, m.checkpointTs, []node.ID{})
 		return
 	}
 	log.Info("merge-split dispatcher operator finished[secondary]", zap.String("id", m.originReplicaSet.ID.String()))
