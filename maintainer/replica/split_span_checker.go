@@ -341,7 +341,7 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 	results := make([]SplitSpanCheckResult, 0)
 
 	// If no any span in minTrafficNodeID, we random select one span from maxTrafficNodeID for it.
-	if len(taskMap[minTrafficNodeID]) == 0 {
+	if len(taskMap[minTrafficNodeID]) == 0 && len(taskMap[maxTrafficNodeID]) > 0 {
 		randomSpan := taskMap[maxTrafficNodeID][rand.Intn(len(taskMap[maxTrafficNodeID]))]
 		results = append(results, SplitSpanCheckResult{
 			OpType: OpMove,
