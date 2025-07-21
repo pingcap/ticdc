@@ -43,6 +43,17 @@ const latestTrafficIndex = 0
 
 var minTrafficBalanceThreshold = float64(1024 * 1024) // 1MB
 var maxMoveSpansCountForTrafficBalance = 4
+var balanceScoreThreshold = 10
+
+// BalanceCondition is the condition of we need to balance the traffic of the span
+// only when the balanceScore exceed the threshold, we will consider to balance the traffic of the span
+// Only when the min/max traffic NodeID is keep the same, we will increase the balanceScore
+// Otherwise, we will reset the balanceScore to 0
+type BalanceCondition struct {
+	minTrafficNodeID node.ID
+	maxTrafficNodeID node.ID
+	balanceScore     int
+}
 
 type SplitSpanChecker struct {
 	changefeedID common.ChangeFeedID
@@ -53,6 +64,8 @@ type SplitSpanChecker struct {
 	writeThreshold int
 	// when regionThreshold is 0, we don't check the region count
 	regionThreshold int
+
+	balanceCondition BalanceCondition
 
 	regionCache RegionCache
 	nodeManager *watcher.NodeManager
@@ -209,8 +222,8 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 
 	// step3. check the traffic of each node. If the traffic is not balanced,
 	//        we try to move some spans from the node with max traffic to the node with min traffic
-	results, minTrafficNodeID, maxTrafficNodeID := s.checkBalanceTraffic(aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap)
-	if len(results) > 0 {
+	results, minTrafficNodeID, maxTrafficNodeID, checkContinue := s.checkBalanceTraffic(aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap)
+	if !checkContinue {
 		return results
 	}
 
@@ -558,8 +571,10 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 			// just panic for debug
 			log.Panic("unexpected error: span is not continuous",
 				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Any("prev", prev.Span.String()),
-				zap.Any("cur", cur.Span.String()),
+				zap.Any("prev.Span", common.FormatTableSpan(prev.Span)),
+				zap.Any("prev.dispatcherID", prev.ID),
+				zap.Any("cur.Span", common.FormatTableSpan(cur.Span)),
+				zap.Any("cur.dispatcherID", cur.ID),
 			)
 		}
 		// not in the same node, can't merge
@@ -739,7 +754,8 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	lastThreeTrafficSum []float64,
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
-) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID) {
+) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID, checkContinue bool) {
+	checkContinue = true
 	log.Info("checkBalanceTraffic try to balance traffic",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
@@ -758,12 +774,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	sort.Slice(aliveNodeIDs, func(i, j int) bool {
 		return lastThreeTrafficPerNode[aliveNodeIDs[i]][0] < lastThreeTrafficPerNode[aliveNodeIDs[j]][0]
 	})
-
-	minTrafficNodeID = aliveNodeIDs[0]
-	maxTrafficNodeID = aliveNodeIDs[nodeCount-1]
-
-	log.Info("minTrafficNodeID", zap.Any("minTrafficNodeID", minTrafficNodeID))
-	log.Info("maxTrafficNodeID", zap.Any("maxTrafficNodeID", maxTrafficNodeID))
 
 	// TODO(hyy): add a unit test for this
 	// If the traffic in each node is quite low, we don't need to balance the traffic
@@ -806,8 +816,34 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		}
 	}
 
+	minTrafficNodeID = aliveNodeIDs[0]
+	maxTrafficNodeID = aliveNodeIDs[nodeCount-1]
+
+	log.Info("minTrafficNodeID", zap.Any("minTrafficNodeID", minTrafficNodeID))
+	log.Info("maxTrafficNodeID", zap.Any("maxTrafficNodeID", maxTrafficNodeID))
+
 	if !shouldBalance {
+		s.balanceCondition.balanceScore = 0
 		return
+	} else {
+		if s.balanceCondition.balanceScore == 0 {
+			s.balanceCondition.minTrafficNodeID = minTrafficNodeID
+			s.balanceCondition.maxTrafficNodeID = maxTrafficNodeID
+			s.balanceCondition.balanceScore = 1
+		} else {
+			if s.balanceCondition.minTrafficNodeID == minTrafficNodeID && s.balanceCondition.maxTrafficNodeID == maxTrafficNodeID {
+				s.balanceCondition.balanceScore += 1
+			} else {
+				s.balanceCondition.balanceScore = 1
+				s.balanceCondition.minTrafficNodeID = minTrafficNodeID
+				s.balanceCondition.maxTrafficNodeID = maxTrafficNodeID
+			}
+		}
+		if s.balanceCondition.balanceScore < balanceScoreThreshold {
+			// now is unbalanced, but we want to check more times to avoid balance too frequently
+			checkContinue = false
+			return
+		}
 	}
 
 	// calculate the diff traffic between the avg traffic and the min/max traffic
@@ -871,6 +907,9 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		SplitSpan:        span.SpanReplication,
 		SplitTargetNodes: []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
 	})
+
+	checkContinue = false
+	s.balanceScore = 0
 	return
 }
 
