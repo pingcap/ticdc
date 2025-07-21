@@ -917,7 +917,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	sortedSpans := taskMap[maxTrafficNodeID]
 	// select spans need to move from maxTrafficNodeID to minTrafficNodeID
-	for len(sortedSpans) > 0 && len(results) < maxMoveSpansCountForTrafficBalance {
+	for len(sortedSpans) > 0 && len(moveSpans) < maxMoveSpansCountForTrafficBalance {
 		idx, span := findClosestSmaller(sortedSpans, diffTraffic)
 		if span != nil {
 			moveSpans = append(moveSpans, span.SpanReplication)
