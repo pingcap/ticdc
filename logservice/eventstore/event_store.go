@@ -428,6 +428,7 @@ func (e *eventStore) RegisterDispatcher(
 			zap.Uint64("startTs", startTs),
 			zap.Uint64("subID", uint64(bestMatch.subID)),
 			zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
+			zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
 			zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
 			zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
 		// when onlyReuse is true, we don't need a exact span match
@@ -546,11 +547,11 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	e.dispatcherMeta.RLock()
 	defer e.dispatcherMeta.RUnlock()
 
-	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
+	dispatcherStat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
 		return
 	}
-	stat.checkpointTs = checkpointTs
+	dispatcherStat.checkpointTs = checkpointTs
 
 	updateSubStatCheckpoint := func(subStat *subscriptionStat) {
 		if subStat == nil {
@@ -585,14 +586,14 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		e.gcManager.addGCItem(
 			subStat.dbIndex,
 			uint64(subStat.subID),
-			stat.tableSpan.TableID,
+			subStat.tableSpan.TableID,
 			subStat.checkpointTs.Load(),
 			newCheckpointTs,
 		)
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
 			ChangeType:   SubscriptionChangeTypeUpdate,
-			SubID:        uint64(stat.subStat.subID),
-			Span:         stat.tableSpan,
+			SubID:        uint64(subStat.subID),
+			Span:         subStat.tableSpan,
 			CheckpointTs: newCheckpointTs,
 			ResolvedTs:   subStat.resolvedTs.Load(),
 		}
@@ -605,8 +606,8 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
 		}
 	}
-	updateSubStatCheckpoint(stat.subStat)
-	updateSubStatCheckpoint(stat.pendingSubStat)
+	updateSubStatCheckpoint(dispatcherStat.subStat)
+	updateSubStatCheckpoint(dispatcherStat.pendingSubStat)
 }
 
 func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error) {

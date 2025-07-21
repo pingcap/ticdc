@@ -102,9 +102,9 @@ kafka_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'avro_basic debezium_basic fail_over_ddl_O'
+	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O'
 	# G15
-	'split_region autorandom gc_safepoint'
+	'kafka_simple_basic_avro split_region autorandom gc_safepoint'
 )
 
 # Resource allocation for pulsar light integration tests in CI pipelines:

@@ -15,7 +15,6 @@ package partition
 
 import (
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -64,13 +63,13 @@ func (r *ColumnsPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEven
 			"columns not found when dispatch event, table: %v, columns: %v", tableInfo.GetTableName(), r.Columns)
 	}
 
-	for idx := 0; idx < len(r.Columns); idx++ {
-		colInfo := tableInfo.GetColumns()[offsets[idx]]
+	for _, idx := range offsets {
+		colInfo := tableInfo.GetColumns()[idx]
 		value := common.ExtractColVal(&rowData, colInfo, idx)
 		if value == nil {
 			continue
 		}
-		r.hasher.Write([]byte(strings.ToLower(r.Columns[idx])), []byte(common.ColumnValueString(value)))
+		r.hasher.Write([]byte(colInfo.Name.O), []byte(common.ColumnValueString(value)))
 	}
 
 	sum32 := r.hasher.Sum32()

@@ -497,7 +497,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if !c.scanRateLimiter.AllowN(time.Now(), int(task.getCurrentScanLimitInBytes())) {
+	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
+	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
+	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
+	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
+	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
+	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
+		log.Debug("scan rate limit exceeded", zap.Stringer("dispatcher", task.id), zap.Int64("lastScanBytes", task.lastScanBytes.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
 		return
 	}
 
@@ -506,7 +512,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		c.schemaStore,
 		c.mounter,
 		task.epoch.Load(),
-		c.scanRateLimiter,
 	)
 
 	sl := scanLimit{
@@ -514,11 +519,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		timeout:         time.Millisecond * 1000, // 1 Second
 	}
 
-	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
+
+	task.lastScanBytes.Store(scannedBytes)
 
 	// Check whether the task is ready to receive data events again before sending events.
 	if !task.isReadyRecevingData.Load() {
@@ -907,6 +914,7 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
+	start := time.Now()
 	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
 	if !ok {
 		// The dispatcher is not registered, register it.
@@ -951,7 +959,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("newSeq", stat.seq.Load()),
 		zap.Uint64("newEpoch", newEpoch),
 		zap.Uint64("oldSentResolvedTs", oldSentResolvedTs),
-		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()))
+		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()),
+		zap.Duration("resetTime", time.Since(start)))
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

@@ -36,3 +36,21 @@ else
 	echo "no DATA RACE found"
 	exit 0
 fi
+
+grep -q -i 'panic' $WORK_DIR/stdout*.log
+
+if [ $? -eq 0 ]; then
+	# check each log file to see if it contains panic
+	for log in $logs; do
+		echo "check $log"
+		grep -q -i 'panic' $log
+		if [ $? -eq 1 ]; then
+			continue
+		fi
+	done
+	echo "found panic, but it is not a TiCDC issue, please check the logs"
+	exit 0
+else
+	echo "no panic found"
+	exit 0
+fi

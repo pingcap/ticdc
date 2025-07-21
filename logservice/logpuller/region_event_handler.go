@@ -164,7 +164,8 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
-	log.Panic("drop region event, it should not happen",
+	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
+	log.Warn("drop region event",
 		zap.Uint64("regionID", event.state.getRegionID()),
 		zap.Uint64("requestID", event.state.requestID),
 		zap.Uint64("workerID", event.worker.workerID),
@@ -190,7 +191,6 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 	}
 }
 
-// func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_, kvEvents []common.RawKVEntry) []common.RawKVEntry {
 func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_) {
 	regionID, _, _ := state.getRegionMeta()
 	assembleRowEvent := func(regionID uint64, entry *cdcpb.Event_Row) common.RawKVEntry {
