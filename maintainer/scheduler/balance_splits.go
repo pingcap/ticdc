@@ -131,9 +131,9 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 
 		if availableSize <= 0 {
 			// too many schedule ops, wait for next tick
-			return time.Now().Add(time.Second * 5)
+			return time.Now().Add(time.Second * 15)
 		}
 	}
 
-	return time.Now().Add(time.Second * 5)
+	return time.Now().Add(time.Second * 15)
 }
