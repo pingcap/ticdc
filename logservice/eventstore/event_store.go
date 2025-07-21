@@ -128,6 +128,10 @@ type subscriptionStat struct {
 	initialized atomic.Bool
 	// the time when the subscription receives latest resolved ts
 	lastAdvanceTime atomic.Int64
+	// the time when the subscription receives latest dml event
+	// it is used to calculate the idle time of the subscription
+	// 0 means the subscription has not received any dml event
+	lastDMLTime atomic.Int64
 	// the resolveTs persisted in the store
 	resolvedTs atomic.Uint64
 	// the max commit ts of dml event in the store
@@ -491,6 +495,7 @@ func (e *eventStore) RegisterDispatcher(
 				maxCommitTs = kv.CRTs
 			}
 		}
+		subStat.lastDMLTime.Store(time.Now().UnixMilli())
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
 			subID:             subStat.subID,
@@ -518,6 +523,7 @@ func (e *eventStore) RegisterDispatcher(
 				notifier(ts, subStat.maxEventCommitTs.Load())
 			}
 			CounterResolved.Inc()
+			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Milliseconds()) / 1000)
 		}
 	}
 
@@ -826,8 +832,9 @@ func (e *eventStore) updateMetricsOnce() {
 					zap.Uint64("subID", uint64(subStat.subID)),
 					zap.Int64("tableID", subStat.tableSpan.TableID),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.Float64("resolvedLag", resolvedLag),
+					zap.Float64("resolvedLag(s)", resolvedLag),
 					zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
+					zap.Stringer("lastDMLTime", time.UnixMilli(subStat.lastDMLTime.Load())),
 					zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
 					zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 					zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
