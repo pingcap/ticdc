@@ -909,7 +909,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	})
 
 	checkContinue = false
-	s.balanceScore = 0
+	s.balanceCondition.balanceScore = 0
 	return
 }
 
