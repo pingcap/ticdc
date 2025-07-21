@@ -761,7 +761,8 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		zap.Any("groupID", s.groupID),
 		zap.Any("aliveNodeIDs", aliveNodeIDs),
 		zap.Any("lastThreeTrafficSum", lastThreeTrafficSum),
-		zap.Any("lastThreeTrafficPerNode", lastThreeTrafficPerNode))
+		zap.Any("lastThreeTrafficPerNode", lastThreeTrafficPerNode),
+		zap.Any("balanceCondition", s.balanceCondition))
 	nodeCount := len(aliveNodeIDs)
 
 	// check whether the traffic is balance for each nodes
