@@ -124,6 +124,10 @@ type subscriptionStat struct {
 	eventCh *chann.UnlimitedChannel[eventWithCallback, uint64]
 	// data <= checkpointTs can be deleted
 	checkpointTs atomic.Uint64
+	// whether the subStat has received any resolved ts
+	initialized atomic.Bool
+	// the time when the subscription receives latest resolved ts
+	lastAdvanceTime atomic.Int64
 	// the resolveTs persisted in the store
 	resolvedTs atomic.Uint64
 	// the max commit ts of dml event in the store
@@ -503,6 +507,9 @@ func (e *eventStore) RegisterDispatcher(
 		if ts <= currentResolvedTs {
 			return
 		}
+		now := time.Now().UnixMilli()
+		subStat.lastAdvanceTime.Store(now)
+		subStat.initialized.Store(true)
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
 			subStat.dispatchers.Lock()
@@ -814,6 +821,17 @@ func (e *eventStore) updateMetricsOnce() {
 			resolvedTs := subStat.resolvedTs.Load()
 			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
 			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
+			if subStat.initialized.Load() && resolvedLag >= 10 {
+				log.Warn("resolved ts lag is too large for initialized subscription",
+					zap.Uint64("subID", uint64(subStat.subID)),
+					zap.Int64("tableID", subStat.tableSpan.TableID),
+					zap.Uint64("resolvedTs", resolvedTs),
+					zap.Float64("resolvedLag", resolvedLag),
+					zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
+					zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
+					zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
+					zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
+			}
 			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
 			if minResolvedTs == 0 || resolvedTs < minResolvedTs {
 				minResolvedTs = resolvedTs
