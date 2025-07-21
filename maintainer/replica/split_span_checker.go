@@ -45,6 +45,15 @@ var minTrafficBalanceThreshold = float64(1024 * 1024) // 1MB
 var maxMoveSpansCountForTrafficBalance = 4
 var balanceScoreThreshold = 10
 
+type BalanceCause string
+
+const (
+	BalanceCauseByMinNode BalanceCause = "minNode"
+	BalanceCauseByMaxNode BalanceCause = "maxNode"
+	BalanceCauseByBoth    BalanceCause = "both"
+	BalanceCauseNone      BalanceCause = "none"
+)
+
 // BalanceCondition is the condition of we need to balance the traffic of the span
 // only when the balanceScore exceed the threshold, we will consider to balance the traffic of the span
 // Only when the min/max traffic NodeID is keep the same, we will increase the balanceScore
@@ -53,6 +62,33 @@ type BalanceCondition struct {
 	minTrafficNodeID node.ID
 	maxTrafficNodeID node.ID
 	balanceScore     int
+	balanceCause     BalanceCause
+}
+
+func (b *BalanceCondition) reset() {
+	b.minTrafficNodeID = ""
+	b.maxTrafficNodeID = ""
+	b.balanceScore = 0
+	b.balanceCause = BalanceCauseNone
+}
+
+func (b *BalanceCondition) initFirstScore(
+	minTrafficNodeID node.ID,
+	maxTrafficNodeID node.ID,
+	balanceCauseByMinNode bool,
+	balanceCauseByMaxNode bool,
+) {
+	b.reset()
+	b.balanceScore = 1
+	if balanceCauseByMaxNode && balanceCauseByMinNode {
+		b.balanceCause = BalanceCauseByBoth
+	} else if balanceCauseByMaxNode {
+		b.balanceCause = BalanceCauseByMaxNode
+	} else if balanceCauseByMinNode {
+		b.balanceCause = BalanceCauseByMinNode
+	}
+	b.minTrafficNodeID = minTrafficNodeID
+	b.maxTrafficNodeID = maxTrafficNodeID
 }
 
 type SplitSpanChecker struct {
@@ -780,7 +816,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	needCheckBalance := false
 	for _, lastThreeTraffic := range lastThreeTrafficPerNode {
 		for _, traffic := range lastThreeTraffic {
-			if traffic > minTrafficBalanceThreshold { // 1MB
+			if traffic > minTrafficBalanceThreshold { // 1MB // TODO:use a better threshold
 				needCheckBalance = true
 				break
 			}
@@ -799,9 +835,12 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	// or the max traffic is larger than 120% of the avg traffic,
 	// we consider the traffic is imbalanced.
 	shouldBalance := true
+	balanceCauseByMaxNode := true
+	balanceCauseByMinNode := true
 	for idx, traffic := range lastThreeTrafficPerNode[minTrafficNodeID] {
 		if traffic > avgLastThreeTraffic[idx]*0.8 {
 			shouldBalance = false
+			balanceCauseByMinNode = false
 			break
 		}
 	}
@@ -811,6 +850,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		for idx, traffic := range lastThreeTrafficPerNode[maxTrafficNodeID] {
 			if traffic < avgLastThreeTraffic[idx]*1.2 {
 				shouldBalance = false
+				balanceCauseByMaxNode = false
 				break
 			}
 		}
@@ -822,21 +862,39 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	log.Info("minTrafficNodeID", zap.Any("minTrafficNodeID", minTrafficNodeID))
 	log.Info("maxTrafficNodeID", zap.Any("maxTrafficNodeID", maxTrafficNodeID))
 
+	// update balanceScore
+	// TODO: make it a single function
 	if !shouldBalance {
 		s.balanceCondition.balanceScore = 0
 		return
 	} else {
 		if s.balanceCondition.balanceScore == 0 {
-			s.balanceCondition.minTrafficNodeID = minTrafficNodeID
-			s.balanceCondition.maxTrafficNodeID = maxTrafficNodeID
-			s.balanceCondition.balanceScore = 1
+			s.balanceCondition.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 		} else {
-			if s.balanceCondition.minTrafficNodeID == minTrafficNodeID && s.balanceCondition.maxTrafficNodeID == maxTrafficNodeID {
-				s.balanceCondition.balanceScore += 1
-			} else {
-				s.balanceCondition.balanceScore = 1
-				s.balanceCondition.minTrafficNodeID = minTrafficNodeID
-				s.balanceCondition.maxTrafficNodeID = maxTrafficNodeID
+			if s.balanceCondition.balanceCause == BalanceCauseByBoth {
+				if s.balanceCondition.minTrafficNodeID == minTrafficNodeID && s.balanceCondition.maxTrafficNodeID == maxTrafficNodeID {
+					s.balanceCondition.balanceScore += 1
+				} else if s.balanceCondition.minTrafficNodeID == minTrafficNodeID {
+					s.balanceCondition.balanceScore += 1
+					s.balanceCondition.balanceCause = BalanceCauseByMinNode
+				} else if s.balanceCondition.maxTrafficNodeID == maxTrafficNodeID {
+					s.balanceCondition.balanceScore += 1
+					s.balanceCondition.balanceCause = BalanceCauseByMaxNode
+				} else {
+					s.balanceCondition.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
+				}
+			} else if s.balanceCondition.balanceCause == BalanceCauseByMaxNode {
+				if s.balanceCondition.maxTrafficNodeID == maxTrafficNodeID {
+					s.balanceCondition.balanceScore += 1
+				} else {
+					s.balanceCondition.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
+				}
+			} else if s.balanceCondition.balanceCause == BalanceCauseByMinNode {
+				if s.balanceCondition.minTrafficNodeID == minTrafficNodeID {
+					s.balanceCondition.balanceScore += 1
+				} else {
+					s.balanceCondition.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
+				}
 			}
 		}
 		if s.balanceCondition.balanceScore < balanceScoreThreshold {
@@ -907,7 +965,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		SplitTargetNodes: []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
 	})
 
-	s.balanceCondition.balanceScore = 0
+	s.balanceCondition.reset()
 	return
 }
 

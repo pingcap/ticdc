@@ -25,11 +25,11 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.01 /* 10 ms */, 2, 18),
 		}, []string{"namespace", "changefeed"})
 
-	CreatedOperatorCount = prometheus.NewGaugeVec(
+	OperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
-			Name:      "operator_created_count",
+			Name:      "created_count",
 			Help:      "number of created operators",
 		}, []string{"namespace", "changefeed", "type"})
 
@@ -53,7 +53,7 @@ var (
 
 func InitMaintainerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerHandleEventDuration)
-	registry.MustRegister(CreatedOperatorCount)
+	registry.MustRegister(OperatorCount)
 	registry.MustRegister(FinishedOperatorCount)
 	registry.MustRegister(OperatorDuration)
 }
