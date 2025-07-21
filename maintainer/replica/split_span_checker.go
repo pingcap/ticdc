@@ -222,8 +222,8 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 
 	// step3. check the traffic of each node. If the traffic is not balanced,
 	//        we try to move some spans from the node with max traffic to the node with min traffic
-	results, minTrafficNodeID, maxTrafficNodeID, checkContinue := s.checkBalanceTraffic(aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap)
-	if !checkContinue {
+	results, minTrafficNodeID, maxTrafficNodeID := s.checkBalanceTraffic(aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap)
+	if len(results) > 0 {
 		return results
 	}
 
@@ -754,15 +754,14 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	lastThreeTrafficSum []float64,
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
-) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID, checkContinue bool) {
-	checkContinue = true
+) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID) {
 	log.Info("checkBalanceTraffic try to balance traffic",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
 		zap.Any("aliveNodeIDs", aliveNodeIDs),
 		zap.Any("lastThreeTrafficSum", lastThreeTrafficSum),
 		zap.Any("lastThreeTrafficPerNode", lastThreeTrafficPerNode),
-		zap.Any("balanceCondition", s.balanceCondition))
+		zap.Any("balanceConditionScore", s.balanceCondition.balanceScore))
 	nodeCount := len(aliveNodeIDs)
 
 	// check whether the traffic is balance for each nodes
@@ -842,7 +841,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		}
 		if s.balanceCondition.balanceScore < balanceScoreThreshold {
 			// now is unbalanced, but we want to check more times to avoid balance too frequently
-			checkContinue = false
 			return
 		}
 	}
@@ -909,7 +907,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		SplitTargetNodes: []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
 	})
 
-	checkContinue = false
 	s.balanceCondition.balanceScore = 0
 	return
 }
