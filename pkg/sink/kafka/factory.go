@@ -19,6 +19,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -254,6 +255,14 @@ func (p *saramaAsyncProducer) AsyncSend(
 	if p.closed.Load() {
 		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
+	failpoint.Inject("KafkaSinkAsyncSendError", func() {
+		// simulate sending message to input channel successfully but flushing
+		// message to Kafka meets error
+		log.Info("KafkaSinkAsyncSendError error injected", zap.String("namespace", p.changefeedID.Namespace()),
+			zap.String("changefeed", p.changefeedID.Name()))
+		p.failpointCh <- errors.New("kafka sink injected error")
+		failpoint.Return(nil)
+	})
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,

@@ -24,8 +24,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/hash"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"go.uber.org/zap"
@@ -115,7 +115,7 @@ func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
 	}
 
 	col.ID = colID
-	col.Name = pmodel.NewCIStr(t.Name)
+	col.Name = ast.NewCIStr(t.Name)
 	tp := types.StrToType(strings.ToLower(strings.TrimSuffix(t.Tp, " UNSIGNED")))
 	col.FieldType = *types.NewFieldType(tp)
 	if strings.Contains(t.Tp, "UNSIGNED") {
@@ -205,14 +205,7 @@ type tableDefWithoutQuery struct {
 
 // FromDDLEvent converts from DDLEvent to TableDefinition.
 func (t *TableDefinition) FromDDLEvent(event *commonEvent.DDLEvent, outputColumnID bool) {
-	// if event.GetCommitTs() != event.TableInfo.UpdateTS() {
-	// 	log.Warn("commit ts and table info version should be equal",
-	// 		zap.Uint64("tableInfoVersion", event.TableInfo.UpdateTS()),
-	// 		zap.Any("commitTs", event.GetCommitTs()),
-	// 		zap.Any("tableInfo", event.TableInfo),
-	// 	)
-	// }
-	t.FromTableInfo(event.SchemaName, event.TableName, event.TableInfo, event.GetCommitTs(), outputColumnID)
+	t.FromTableInfo(event.SchemaName, event.TableName, event.TableInfo, event.FinishedTs, outputColumnID)
 	t.Query = event.Query
 	t.Type = event.Type
 }
@@ -254,7 +247,7 @@ func (t *TableDefinition) FromTableInfo(
 // ToTableInfo converts from TableDefinition to DDLEvent.
 func (t *TableDefinition) ToTableInfo() (*common.TableInfo, error) {
 	tidbTableInfo := &timodel.TableInfo{
-		Name: pmodel.NewCIStr(t.Table),
+		Name: ast.NewCIStr(t.Table),
 	}
 	nextMockID := int64(100) // 100 is an arbitrary number
 	for _, col := range t.Columns {

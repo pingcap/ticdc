@@ -73,7 +73,7 @@ main() {
 	sleep 10
 
 	# restart node2 to disable failpoint
-	cdc_pid_1=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
 	kill_cdc_pid $cdc_pid_1
 	sleep 5
 	export GO_FAILPOINTS=''

@@ -75,6 +75,10 @@ func (m *mockEventDispatcher) GetResolvedTs() uint64 {
 	return 0
 }
 
+func (m *mockEventDispatcher) GetCheckpointTs() uint64 {
+	return 0
+}
+
 func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	for _, dispatcherEvent := range dispatcherEvents {
 		m.handle(dispatcherEvent.Event)
@@ -130,15 +134,17 @@ func TestProcessMessage(t *testing.T) {
 	require.NotNil(t, dmls)
 
 	readyEvent := commonEvent.NewReadyEvent(did)
-	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, ddl.TableInfo)
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, 1, ddl.TableInfo)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
 	handshakeEvent.Seq = seq.Add(1)
 	ddl.Seq = seq.Add(1)
+	ddl.Epoch = 1
 	events[ddl.Seq] = ddl
 	for i, dml := range dmls.DMLEvents {
 		dml.DispatcherID = did
 		dml.Seq = seq.Add(1)
+		dml.Epoch = 1
 		dml.CommitTs = ddl.FinishedTs + uint64(i)
 		events[dml.Seq] = dml
 	}

@@ -110,7 +110,7 @@ func TestSplitRangeByRandom(t *testing.T) {
 		},
 	}
 
-	for i, testCase := range testCases {
+	for _, testCase := range testCases {
 		tableInfo, err := dbutiltest.GetTableInfoBySQL(testCase.createTableSQL, parser.New())
 		require.NoError(t, err)
 
@@ -196,7 +196,7 @@ func TestRandomSplitter(t *testing.T) {
 		},
 	}
 
-	for i, testCase := range testCases {
+	for _, testCase := range testCases {
 		tableInfo, err := dbutiltest.GetTableInfoBySQL(testCase.createTableSQL, parser.New())
 		require.NoError(t, err)
 

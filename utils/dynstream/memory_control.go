@@ -90,11 +90,12 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			// If the last event is a periodic signal, we only need to keep the latest one.
 			// And we don't need to add a new signal.
 			*back = event
-			return false
+			return true
 		}
 	}
 
-	if as.memoryUsageRatio() > 1 && as.settings.Load().algorithm == MemoryControlForEventCollector && event.eventType.Droppable {
+	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
+		MemoryControlForEventCollector && event.eventType.Droppable {
 		dropEvent := handler.OnDrop(event.event)
 		if dropEvent != nil {
 			event.eventType = handler.GetType(dropEvent.(T))
@@ -115,18 +116,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			}
 		}
 	})
-
-	// Remove this after testing.
-	// if testCounter.Add(1)%10 == 0 && as.settings.Load().algorithm == MemoryControlForEventCollector {
-	// 	log.Info("fizz drop event", zap.Any("event", event.event))
-	// 	dropEvent := handler.OnDrop(event.event)
-	// 	if dropEvent != nil {
-	// 		event.eventType = handler.GetType(dropEvent.(T))
-	// 		event.event = dropEvent.(T)
-	// 		path.pendingQueue.PushBack(event)
-	// 		return true
-	// 	}
-	// }
 
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)

@@ -30,7 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -115,6 +115,7 @@ func TestBasicFunctionality(t *testing.T) {
 	}
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
+	dmlEvent.TableInfoVersion = job.BinlogInfo.FinishedTS
 	dmlEvent.PostTxnFlushed = []func(){
 		func() {
 			count.Add(1)
@@ -156,14 +157,14 @@ func TestWriteDDLEvent(t *testing.T) {
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
-		Name: pmodel.NewCIStr("table1"),
+		Name: ast.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
 			{
-				Name:      pmodel.NewCIStr("col1"),
+				Name:      ast.NewCIStr("col1"),
 				FieldType: *types.NewFieldType(mysql.TypeLong),
 			},
 			{
-				Name:      pmodel.NewCIStr("col2"),
+				Name:      ast.NewCIStr("col2"),
 				FieldType: *types.NewFieldType(mysql.TypeVarchar),
 			},
 		},

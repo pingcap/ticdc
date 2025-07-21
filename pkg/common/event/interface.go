@@ -22,6 +22,7 @@ import (
 type Event interface {
 	GetType() int
 	GetSeq() uint64
+	GetEpoch() uint64
 	GetDispatcherID() common.DispatcherID
 	GetCommitTs() common.Ts
 	GetStartTs() common.Ts
@@ -150,16 +151,18 @@ func ToTablesPB(tables []Table) []*heartbeatpb.Table {
 	res := make([]*heartbeatpb.Table, len(tables))
 	for i, t := range tables {
 		res[i] = &heartbeatpb.Table{
-			TableID:  t.TableID,
-			SchemaID: t.SchemaID,
+			TableID:   t.TableID,
+			SchemaID:  t.SchemaID,
+			Splitable: t.Splitable,
 		}
 	}
 	return res
 }
 
 type Table struct {
-	SchemaID int64
-	TableID  int64
+	SchemaID  int64
+	TableID   int64
+	Splitable bool // whether the table is eligible for split
 	*SchemaTableName
 }
 

@@ -136,10 +136,11 @@ function checkDiff() {
 				"is recorded in a DDL event(${check_in_ddl[0]}), skip the check of it"
 			continue
 		fi
+		echo "check syncpoint primary_ts: ${primaryArr[$i]}, secondary_ts: ${secondaryArr[$i]}"
 		deployConfig ${primaryArr[$i]} ${secondaryArr[$i]}
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	done
-	rm $CUR/conf/diff_config.toml
+	rm -f $CUR/conf/diff_config.toml
 }
 
 function run() {
@@ -173,7 +174,7 @@ function run() {
 	check_table_exists "testSync.simple2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	run_sql "SET GLOBAL tidb_enable_external_ts_read = off;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	sleep 60
+	sleep 90
 
 	run_sql "SELECT primary_ts, secondary_ts FROM tidb_cdc.syncpoint_v1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	echo "____________________________________"

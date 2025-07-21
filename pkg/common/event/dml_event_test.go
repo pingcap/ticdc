@@ -16,11 +16,63 @@ package event
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
-// TestDMLEvent test the Marshal and Unmarshal of DMLEvent.
-func TestDMLEvent(t *testing.T) {
+func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
+	mockDecodeRawKVToChunk := func(
+		rawKV *common.RawKVEntry,
+		tableInfo *common.TableInfo,
+		chk *chunk.Chunk,
+	) (int, *integrity.Checksum, error) {
+		if rawKV.OpType == common.OpTypeDelete {
+			return 1, nil, nil
+		}
+		if rawKV.IsUpdate() {
+			return 2, nil, nil
+		} else {
+			return 1, nil, nil
+		}
+	}
+
+	e := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, &common.TableInfo{})
+	// append some rows to the event
+	{
+		// insert
+		err := e.AppendRow(&common.RawKVEntry{
+			OpType: common.OpTypePut,
+			Value:  []byte("value1"),
+		}, mockDecodeRawKVToChunk)
+		require.Nil(t, err)
+		// update
+		err = e.AppendRow(&common.RawKVEntry{
+			OpType:   common.OpTypePut,
+			Value:    []byte("value1"),
+			OldValue: []byte("old_value1"),
+		}, mockDecodeRawKVToChunk)
+		require.Nil(t, err)
+		// delete
+		err = e.AppendRow(&common.RawKVEntry{
+			OpType: common.OpTypeDelete,
+		}, mockDecodeRawKVToChunk)
+		require.Nil(t, err)
+	}
+	// TableInfo is not encoded, for test comparison purpose, set it to nil.
+	e.TableInfo = nil
+
+	value, err := e.encode()
+	require.Nil(t, err)
+	reverseEvent := &DMLEvent{}
+	err = reverseEvent.decode(value)
+	require.Nil(t, err)
+	require.Equal(t, e, reverseEvent)
+}
+
+// TestBatchDMLEvent test the Marshal and Unmarshal of BatchDMLEvent.
+func TestBatchDMLEvent(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()
 

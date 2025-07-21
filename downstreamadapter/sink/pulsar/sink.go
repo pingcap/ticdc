@@ -277,6 +277,9 @@ func (s *sink) sendDMLEvent(ctx context.Context) error {
 	g.Go(func() error {
 		return s.sendMessages(ctx)
 	})
+	g.Go(func() error {
+		return s.dmlProducer.run(ctx)
+	})
 	return g.Wait()
 }
 

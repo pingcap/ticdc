@@ -117,11 +117,11 @@ UT_PACKAGES_DISPATCHER := ./pkg/sink/cloudstorage/... ./pkg/sink/mysql/... ./pkg
 UT_PACKAGES_MAINTAINER := ./maintainer/...
 UT_PACKAGES_COORDINATOR := ./coordinator/...
 UT_PACKAGES_LOGSERVICE := ./logservice/...
-UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/... 
+UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/...
 
 include tools/Makefile
 
-generate-protobuf: 
+generate-protobuf:
 	@echo "generate-protobuf"
 	./scripts/generate-protobuf.sh
 
@@ -146,6 +146,9 @@ oauth2_server:
 
 filter_helper:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
+
+config-converter:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_config_converter ./cmd/config-converter/main.go
 
 fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "run gci (format imports)"
@@ -219,7 +222,7 @@ unit_test_in_verify_ci: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	$(FAILPOINT_ENABLE)
 	@echo "Running unit tests..."
 	@export log_level=error;\
-	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 180s -p $(P) --race --tags=intest \
+	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest \
 	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
 	$(UT_PACKAGES_DISPATCHER) \

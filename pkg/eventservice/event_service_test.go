@@ -434,7 +434,7 @@ func (m *mockSchemaStore) UnregisterTable(tableID int64) error {
 }
 
 // GetNextDDLEvents returns the next ddl event which finishedTs is within the range (start, end]
-func (m *mockSchemaStore) FetchTableDDLEvents(tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
+func (m *mockSchemaStore) FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
 	events := m.DDLEvents[tableID]
 	if len(events) == 0 {
 		return nil, nil
@@ -605,6 +605,10 @@ func (m *mockDispatcherInfo) GetIntegrity() *integrity.Config {
 
 func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
+}
+
+func (m *mockDispatcherInfo) GetEpoch() uint64 {
+	return 0
 }
 
 func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {

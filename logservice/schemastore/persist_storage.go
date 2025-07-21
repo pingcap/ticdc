@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -355,7 +356,7 @@ func (p *persistentStorage) getMaxEventCommitTs(tableID int64, ts uint64) uint64
 }
 
 // TODO: not all ddl in p.tablesDDLHistory should be sent to the dispatcher, verify dispatcher will set the right range
-func (p *persistentStorage) fetchTableDDLEvents(tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
+func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
 	// TODO: check a dispatcher won't fetch the ddl events that create it(create table/rename table)
 	p.mu.RLock()
 	// fast check
@@ -399,10 +400,12 @@ func (p *persistentStorage) fetchTableDDLEvents(tableID int64, tableFilter filte
 		}
 	}
 	log.Debug("fetchTableDDLEvents",
+		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Int64("tableID", tableID),
 		zap.Uint64("start", start),
 		zap.Uint64("end", end),
-		zap.Any("allTargetTs", allTargetTs))
+		zap.Int("eventsLen", len(events)),
+		zap.Uint64s("allTargetTs", allTargetTs))
 
 	return events, nil
 }
@@ -648,6 +651,12 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	if shouldSkipDDL(job, p.tableMap) {
 		p.mu.Unlock()
 		return nil
+	}
+
+	// ALTER TABLE t2 ADD FULLTEXT INDEX (b) WITH PARSER standard;
+	// TODO: remove this after ADD FULLTEXT INDEX has a dedicated action type in tidb repo
+	if strings.Contains(strings.ToUpper(job.Query), "ADD FULLTEXT INDEX") {
+		job.Type = filter.ActionAddFullTextIndex
 	}
 
 	handler, ok := allDDLHandlers[job.Type]

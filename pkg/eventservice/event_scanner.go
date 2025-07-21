@@ -38,7 +38,7 @@ type eventGetter interface {
 // schemaGetter is the interface for getting schema info and ddl events
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
-	FetchTableDDLEvents(tableID int64, filter filter.Filter, startTs, endTs uint64) ([]pevent.DDLEvent, error)
+	FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]pevent.DDLEvent, error)
 	GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
@@ -59,6 +59,7 @@ type eventScanner struct {
 	eventGetter  eventGetter
 	schemaGetter schemaGetter
 	mounter      pevent.Mounter
+	epoch        uint64
 }
 
 // newEventScanner creates a new EventScanner
@@ -66,11 +67,13 @@ func newEventScanner(
 	eventStore eventstore.EventStore,
 	schemaStore schemastore.SchemaStore,
 	mounter pevent.Mounter,
+	epoch uint64,
 ) *eventScanner {
 	return &eventScanner{
 		eventGetter:  eventStore,
 		schemaGetter: schemaStore,
 		mounter:      mounter,
+		epoch:        epoch,
 	}
 }
 
@@ -113,7 +116,7 @@ func (s *eventScanner) scan(
 	dispatcherStat *dispatcherStat,
 	dataRange common.DataRange,
 	limit scanLimit,
-) ([]event.Event, bool, error) {
+) (int64, []event.Event, bool, error) {
 	// Initialize scan session
 	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
@@ -121,26 +124,28 @@ func (s *eventScanner) scan(
 	// Fetch DDL events
 	ddlEvents, err := s.fetchDDLEvents(sess)
 	if err != nil {
-		return nil, false, err
+		return 0, nil, false, err
 	}
 
 	// Get event iterator
 	iter, err := s.getEventIterator(sess)
 	if err != nil {
-		return nil, false, err
+		return 0, nil, false, err
 	}
 	if iter == nil {
-		return s.handleEmptyIterator(ddlEvents, sess), false, nil
+		return 0, s.handleEmptyIterator(ddlEvents, sess), false, nil
 	}
 	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
-	return s.scanAndMergeEvents(sess, ddlEvents, iter)
+	events, interrupted, err := s.scanAndMergeEvents(sess, ddlEvents, iter)
+	return sess.scannedBytes, events, interrupted, err
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
 func (s *eventScanner) fetchDDLEvents(session *session) ([]pevent.DDLEvent, error) {
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
+		session.dispatcherStat.info.GetID(),
 		session.dataRange.Span.TableID,
 		session.dispatcherStat.filter,
 		session.dataRange.StartTs,
@@ -166,7 +171,7 @@ func (s *eventScanner) getEventIterator(session *session) (eventstore.EventItera
 
 // handleEmptyIterator handles the case when there are no DML events
 func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, session *session) []event.Event {
-	merger := newEventMerger(ddlEvents, session.dispatcherStat.id)
+	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
 	events := merger.appendRemainingDDLs(session.dataRange.EndTs)
 	return events
 }
@@ -187,7 +192,7 @@ func (s *eventScanner) scanAndMergeEvents(
 	ddlEvents []pevent.DDLEvent,
 	iter eventstore.EventIterator,
 ) ([]event.Event, bool, error) {
-	merger := newEventMerger(ddlEvents, session.dispatcherStat.id)
+	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
 	// todo: can we remove this checker, use session to check limits, or let the limit check itself ?
 	checker := newLimitChecker(session.limit.maxScannedBytes, session.limit.timeout, session.limit.maxDMLBytes, session.startTime)
@@ -210,6 +215,13 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		session.addBytes(rawEntry.Size())
 		session.scannedEntryCount++
+
+		if isNewTxn && checker.checkLimits(session.scannedBytes) {
+			if canInterrupt(rawEntry.CRTs, session.lastCommitTs, session.dmlCount) {
+				return s.interruptScan(session, merger, processor)
+			}
+		}
+
 		if isNewTxn {
 			if checker.checkLimits(session.scannedBytes) {
 				// if the first entry's size is larger than the limit, this may interrupt the scan,
@@ -350,8 +362,8 @@ type session struct {
 
 	// State tracking
 	startTime         time.Time
-	scannedBytes      int64
 	lastCommitTs      uint64
+	scannedBytes      int64
 	scannedEntryCount int
 	// dmlCount is the count of transactions.
 	dmlCount int
@@ -395,8 +407,7 @@ func (s *session) isContextDone() bool {
 // recordMetrics records the scan duration metrics
 func (s *session) recordMetrics() {
 	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
-	metrics.EventServiceScannedBytes.Observe(float64(s.scannedBytes))
-	metrics.EventServiceScannedCount.Observe(float64(s.dmlCount))
+	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
 }
 
 // limitChecker manages scan limits and interruption logic
@@ -432,14 +443,20 @@ type eventMerger struct {
 	ddlEvents    []pevent.DDLEvent
 	ddlIndex     int
 	dispatcherID common.DispatcherID
+	epoch        uint64
 }
 
 // newEventMerger creates a new event merger
-func newEventMerger(ddlEvents []pevent.DDLEvent, dispatcherID common.DispatcherID) *eventMerger {
+func newEventMerger(
+	ddlEvents []pevent.DDLEvent,
+	dispatcherID common.DispatcherID,
+	epoch uint64,
+) *eventMerger {
 	return &eventMerger{
 		ddlEvents:    ddlEvents,
 		ddlIndex:     0,
 		dispatcherID: dispatcherID,
+		epoch:        epoch,
 	}
 }
 
@@ -473,7 +490,7 @@ func (m *eventMerger) appendRemainingDDLs(endTs uint64) []event.Event {
 		m.ddlIndex++
 	}
 
-	events = append(events, pevent.NewResolvedEvent(endTs, m.dispatcherID))
+	events = append(events, pevent.NewResolvedEvent(endTs, m.dispatcherID, m.epoch))
 
 	return events
 }

@@ -61,9 +61,9 @@ func newDMLWriters(
 	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh.Out(), encodedOutCh)
 
 	writers := make([]*writer, config.WorkerCount)
-	writerInputChs := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
+	writerInputChs := make([]*chann.UnlimitedChannel[eventFragment, any], config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		inputCh := chann.NewAutoDrainChann[eventFragment]()
+		inputCh := chann.NewUnlimitedChannel[eventFragment, any](nil, nil)
 		writerInputChs[i] = inputCh
 		writers[i] = newWriter(i, changefeedID, storage, config, extension, inputCh, statistics)
 	}
@@ -113,7 +113,7 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 			TableID:     event.PhysicalTableID,
 			IsPartition: event.TableInfo.IsPartitionTable(),
 		},
-		TableInfoVersion: event.TableInfo.UpdateTS(),
+		TableInfoVersion: event.TableInfoVersion,
 	}
 	seq := atomic.AddUint64(&d.lastSeqNum, 1)
 	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {

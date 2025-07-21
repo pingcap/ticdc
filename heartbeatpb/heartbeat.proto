@@ -214,6 +214,7 @@ message InfluencedTables {
 message Table {
     int64 TableID = 1;
     int64 SchemaID = 2;
+    bool Splitable = 3;
 }
 
 message SchemaIDChange {

@@ -33,9 +33,11 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 180
 
-	minScanLimitInBytes     = 1024 * 1024 * 2  // 2MB
-	maxScanLimitInBytes     = 1024 * 1024 * 10 // 10MB
+	minScanLimitInBytes     = 1024 * 128      // 128KB
+	maxScanLimitInBytes     = 1024 * 1024 * 4 // 4MB
 	updateScanLimitInterval = time.Second * 10
+
+	maxScanLimitInBytesPerSecond = 1024 * 1024 * 256 // 256MB/s
 )
 
 // Store the progress of the dispatcher, and the incremental events stats.
@@ -72,6 +74,9 @@ type dispatcherStat struct {
 	// It start from 1, and increase by 1 for each event.
 	// If the dispatcher is reset, the seq should be set to 1.
 	seq atomic.Uint64
+
+	// The epoch of the dispatcher.
+	epoch atomic.Uint64
 
 	// isReadyRecevingData is used to indicate whether the dispatcher is ready to receive data events.
 	// It will be set to false, after it receives the pause event from the dispatcher.
@@ -110,6 +115,8 @@ type dispatcherStat struct {
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
+
+	lastScanBytes atomic.Int64
 }
 
 func newDispatcherStat(
@@ -128,6 +135,10 @@ func newDispatcherStat(
 		info:               info,
 		filter:             filter,
 	}
+
+	// A small value to avoid too many scan tasks at the first place.
+	dispStat.lastScanBytes.Store(1024)
+
 	changefeedStatus.addDispatcher()
 
 	if info.SyncPointEnabled() {
@@ -185,11 +196,12 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
 func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
-	if resolvedTs < a.eventStoreResolvedTs.Load() {
-		log.Panic("resolved ts should not fallback")
+	if resolvedTs <= a.eventStoreResolvedTs.Load() {
+		return false
 	}
 	if !a.isReceivedFirstResolvedTs.Load() {
-		log.Info("received first resolved ts from event service", zap.Uint64("resolvedTs", resolvedTs), zap.Stringer("dispatcherID", a.id))
+		log.Info("received first resolved ts from event store", zap.Uint64("resolvedTs", resolvedTs), zap.Stringer("dispatcherID", a.id))
+		a.lastUpdateScanLimitTime.Store(time.Now())
 		a.isReceivedFirstResolvedTs.Store(true)
 	}
 	return util.CompareAndMonotonicIncrease(&a.eventStoreResolvedTs, resolvedTs)

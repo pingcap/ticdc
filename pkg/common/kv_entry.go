@@ -104,7 +104,7 @@ func (v *RawKVEntry) String() string {
 // Size return the accurate size of the RawKVEntry
 // todo: add unit test to cover this method
 func (v *RawKVEntry) Size() int64 {
-	return int64(len(v.Key)+len(v.Value)+len(v.OldValue)) + 40
+	return int64(len(v.Key)+len(v.Value)+len(v.OldValue)) + 40 // 4*uint32 + 3*uint64
 }
 
 // Encode serializes the RawKVEntry into a byte slice

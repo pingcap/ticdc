@@ -37,6 +37,7 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -83,6 +84,7 @@ type eventBroker struct {
 	metricsCollector *metricsCollector
 
 	changefeedAvailables sync.Map
+	scanRateLimiter      *rate.Limiter
 }
 
 func newEventBroker(
@@ -127,6 +129,7 @@ func newEventBroker(
 		changefeedAvailables:    sync.Map{},
 		cancel:                  cancel,
 		g:                       g,
+		scanRateLimiter:         rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), maxScanLimitInBytesPerSecond),
 	}
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
@@ -181,8 +184,6 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 			break
 		}
 		dml := batchEvent.DMLEvents[i]
-		// Set sequence number for the event
-		dml.Seq = d.seq.Add(1)
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(i)
 			doSendDML(events)
@@ -193,6 +194,10 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 		} else {
 			i++
 		}
+		// Set sequence number for the event
+		dml.Seq = d.seq.Add(1)
+		dml.Epoch = d.epoch.Load()
+		log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(dml.GetType())), zap.Uint64("commitTs", dml.GetCommitTs()), zap.Uint64("seq", dml.GetSeq()))
 	}
 	doSendDML(batchEvent)
 }
@@ -201,6 +206,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
+	e.Epoch = d.epoch.Load()
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
@@ -211,6 +217,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
+		log.Error("send ddl event failed", zap.Error(ctx.Err()))
 		return
 	case c.getMessageCh(d.messageWorkerIndex) <- ddlEvent:
 		metricEventServiceSendDDLCount.Inc()
@@ -220,7 +227,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
-	re := pevent.NewResolvedEvent(watermark, d.id)
+	re := pevent.NewResolvedEvent(watermark, d.id, d.epoch.Load())
 	resolvedEvent := newWrapResolvedEvent(
 		remoteID,
 		re,
@@ -417,7 +424,10 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		task.id,
 		task.resetTs.Load(),
 		task.seq.Add(1),
+		task.epoch.Load(),
 		task.startTableInfo.Load())
+	log.Debug("send handshake event to dispatcher",
+		zap.Stringer("dispatcher", task.id), zap.String("eventType", pevent.TypeToString(event.GetType())), zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
 	c.getMessageCh(task.messageWorkerIndex) <- newWrapHandshakeEvent(remoteID, handshake)
 	metricEventServiceSendCommandCount.Inc()
 }
@@ -437,20 +447,21 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		commitTsList = append(commitTsList, d.nextSyncPoint)
 		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
 	}
-
 	for len(commitTsList) > 0 {
 		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
 		newCommitTsList := commitTsList
 		if len(commitTsList) > 16 {
 			newCommitTsList = commitTsList[:16]
 		}
-		syncPointEvent := newWrapSyncPointEvent(
-			remoteID,
-			&pevent.SyncPointEvent{
-				DispatcherID: d.id,
-				CommitTsList: newCommitTsList,
-			},
-			d.getEventSenderState())
+		e := &pevent.SyncPointEvent{
+			DispatcherID: d.id,
+			CommitTsList: newCommitTsList,
+			Seq:          d.seq.Add(1),
+			Epoch:        d.epoch.Load(),
+		}
+		log.Debug("send syncpoint event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(e.GetType())), zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
+
+		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
 		c.getMessageCh(d.messageWorkerIndex) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
@@ -525,10 +536,35 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	// interrupted means scan too many entries hits the limit, still ok to send scanned events.
 	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
+	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
+	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
+	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
+	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
+	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
+		log.Debug("scan rate limit exceeded", zap.Stringer("dispatcher", task.id), zap.Int64("lastScanBytes", task.lastScanBytes.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
+		return
+	}
+
+	scanner := newEventScanner(
+		c.eventStore,
+		c.schemaStore,
+		c.mounter,
+		task.epoch.Load(),
+	)
+
+	sl := scanLimit{
+		maxScannedBytes: task.getCurrentScanLimitInBytes(),
+		timeout:         time.Millisecond * 1000, // 1 Second
+	}
+
+	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
+
+	task.lastScanBytes.Store(scannedBytes)
 
 	// Check whether the task is ready to receive data events again before sending events.
 	if !task.isReadyRecevingData.Load() {
@@ -586,7 +622,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 			return context.Cause(ctx)
 		case m := <-messageCh:
 			batchM = append(batchM, m)
-
 		LOOP:
 			for {
 				select {
@@ -599,7 +634,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 					break LOOP
 				}
 			}
-
 			for _, m = range batchM {
 				if m.msgType == pevent.TypeResolvedEvent {
 					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
@@ -662,6 +696,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	for {
 		select {
 		case <-ctx.Done():
+			log.Error("send message failed", zap.Error(ctx.Err()))
 			return
 		default:
 		}
@@ -919,6 +954,7 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
+	start := time.Now()
 	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
 	if !ok {
 		// The dispatcher is not registered, register it.
@@ -943,6 +979,16 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	oldSeq := stat.seq.Load()
 	oldSentResolvedTs := stat.sentResolvedTs.Load()
 	stat.resetState(dispatcherInfo.GetStartTs())
+	newEpoch := dispatcherInfo.GetEpoch()
+	for {
+		oldEpoch := stat.epoch.Load()
+		if oldEpoch >= newEpoch {
+			break
+		}
+		if stat.epoch.CompareAndSwap(oldEpoch, newEpoch) {
+			break
+		}
+	}
 
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
@@ -951,8 +997,10 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("originStartTs", stat.info.GetStartTs()),
 		zap.Uint64("oldSeq", oldSeq),
 		zap.Uint64("newSeq", stat.seq.Load()),
+		zap.Uint64("newEpoch", newEpoch),
 		zap.Uint64("oldSentResolvedTs", oldSentResolvedTs),
-		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()))
+		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()),
+		zap.Duration("resetTime", time.Since(start)))
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
