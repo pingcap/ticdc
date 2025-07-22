@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -313,12 +314,41 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 				zap.Uint64("resolvedTs", ts))
 		}
 		lastResolvedTs := span.resolvedTs.Load()
+		curTime := time.Now()
+		curPhyTs := oracle.GetPhysical(curTime)
+		resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
+		resolvedLag := float64(curPhyTs-resolvedPhyTs) / 1e3
+		if resolvedLag > 10 {
+			log.Warn("last resolved ts lag is too large",
+				zap.Uint64("subID", uint64(span.subID)),
+				zap.Int64("tableID", span.span.TableID),
+				zap.Uint64("resolvedTs", lastResolvedTs),
+				zap.Float64("resolvedLag(s)", resolvedLag))
+		}
+		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
+		nextResolvedLag := float64(curPhyTs-nextResolvedPhyTs) / 1e3
+		if nextResolvedLag > 10 {
+			log.Warn("next resolved ts lag is too large",
+				zap.Uint64("subID", uint64(span.subID)),
+				zap.Int64("tableID", span.span.TableID),
+				zap.Uint64("resolvedTs", ts),
+				zap.Float64("resolvedLag(s)", nextResolvedLag))
+		}
 		// Generally, we don't want to send duplicate resolved ts,
 		// so we check whether `ts` is larger than `lastResolvedTs` before send it.
 		// but when `ts` == `lastResolvedTs` == `span.startTs`,
 		// the span may just be initialized and have not receive any resolved ts before,
 		// so we also send ts in this case for quick notification to downstream.
 		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
+			if decreaseLag > 10 {
+				log.Warn("resolved ts advance step is too large",
+					zap.Uint64("subID", uint64(span.subID)),
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("resolvedTs", ts),
+					zap.Uint64("lastResolvedTs", lastResolvedTs),
+					zap.Float64("decreaseLag(s)", decreaseLag))
+			}
 			span.resolvedTs.Store(ts)
 			span.resolvedTsUpdated.Store(time.Now().Unix())
 			return ts
