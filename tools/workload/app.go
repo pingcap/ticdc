@@ -175,10 +175,10 @@ func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.
 	wg := &sync.WaitGroup{}
 	for _, db := range app.DBManager.GetDBs() {
 		wg.Add(1)
-		go func() {
+		go func(db *DBWrapper) {
 			defer wg.Done()
 			app.initTables(db.DB)
-		}()
+		}(db)
 	}
 	wg.Wait()
 	plog.Info("All dbs create tables finished")
