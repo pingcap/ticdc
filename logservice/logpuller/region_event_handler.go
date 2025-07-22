@@ -322,6 +322,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			log.Warn("last resolved ts lag is too large",
 				zap.Uint64("subID", uint64(span.subID)),
 				zap.Int64("tableID", span.span.TableID),
+				zap.Uint64("regionID", regionID),
 				zap.Uint64("resolvedTs", lastResolvedTs),
 				zap.Float64("resolvedLag(s)", resolvedLag))
 		}
@@ -331,6 +332,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			log.Warn("next resolved ts lag is too large",
 				zap.Uint64("subID", uint64(span.subID)),
 				zap.Int64("tableID", span.span.TableID),
+				zap.Uint64("regionID", regionID),
 				zap.Uint64("resolvedTs", ts),
 				zap.Float64("resolvedLag(s)", nextResolvedLag))
 		}
@@ -345,6 +347,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 				log.Warn("resolved ts advance step is too large",
 					zap.Uint64("subID", uint64(span.subID)),
 					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", regionID),
 					zap.Uint64("resolvedTs", ts),
 					zap.Uint64("lastResolvedTs", lastResolvedTs),
 					zap.Float64("decreaseLag(s)", decreaseLag))
