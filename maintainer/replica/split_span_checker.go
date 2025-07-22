@@ -811,6 +811,12 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		return lastThreeTrafficPerNode[aliveNodeIDs[i]][0] < lastThreeTrafficPerNode[aliveNodeIDs[j]][0]
 	})
 
+	minTrafficNodeID = aliveNodeIDs[0]
+	maxTrafficNodeID = aliveNodeIDs[nodeCount-1]
+
+	log.Info("minTrafficNodeID", zap.Any("minTrafficNodeID", minTrafficNodeID))
+	log.Info("maxTrafficNodeID", zap.Any("maxTrafficNodeID", maxTrafficNodeID))
+
 	// TODO(hyy): add a unit test for this
 	// If the traffic in each node is quite low, we don't need to balance the traffic
 	needCheckBalance := false
@@ -855,12 +861,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 			}
 		}
 	}
-
-	minTrafficNodeID = aliveNodeIDs[0]
-	maxTrafficNodeID = aliveNodeIDs[nodeCount-1]
-
-	log.Info("minTrafficNodeID", zap.Any("minTrafficNodeID", minTrafficNodeID))
-	log.Info("maxTrafficNodeID", zap.Any("maxTrafficNodeID", maxTrafficNodeID))
 
 	// update balanceScore
 	// TODO: make it a single function
