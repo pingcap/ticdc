@@ -22,9 +22,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"workload/schema"
+
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 const createTable = `
@@ -176,8 +177,6 @@ func (c *SysbenchWorkload) fetchSortedIDs(conn *sql.Conn, tableIndex, limit int)
 	}
 	defer rows.Close()
 
-	tableName := fmt.Sprintf("sbtest%d", tableIndex)
-
 	ids := make([]int, 0, limit)
 	for rows.Next() {
 		var id int
@@ -186,10 +185,6 @@ func (c *SysbenchWorkload) fetchSortedIDs(conn *sql.Conn, tableIndex, limit int)
 			return nil, err
 		}
 		ids = append(ids, id)
-	}
-
-	if len(ids) == 0 {
-		log.Panic("no records found in table", zap.String("tableName", tableName))
 	}
 
 	return ids, nil

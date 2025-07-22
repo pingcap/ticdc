@@ -22,9 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
@@ -34,6 +31,10 @@ import (
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
+
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -138,7 +139,12 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 // Execute executes the workload
 func (app *WorkloadApp) Execute() error {
 	wg := &sync.WaitGroup{}
-	return app.executeWorkload(wg)
+	err := app.executeWorkload(wg)
+	if err != nil {
+		return err
+	}
+	wg.Wait()
+	return nil
 }
 
 // executeWorkload executes the workload
@@ -169,7 +175,10 @@ func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.
 	wg := &sync.WaitGroup{}
 	for _, db := range app.DBManager.GetDBs() {
 		wg.Add(1)
-		go app.initTables(wg, db.DB)
+		go func() {
+			defer wg.Done()
+			app.initTables(db.DB)
+		}()
 	}
 	wg.Wait()
 	plog.Info("All dbs create tables finished")
@@ -198,8 +207,7 @@ func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurr
 }
 
 // initTables initializes tables
-func (app *WorkloadApp) initTables(wg *sync.WaitGroup, db *sql.DB) {
-	defer wg.Done()
+func (app *WorkloadApp) initTables(db *sql.DB) {
 	for tableIndex := 0; tableIndex < app.Config.TableCount; tableIndex++ {
 		sql := app.Workload.BuildCreateTableStatement(tableIndex + app.Config.TableStartIndex)
 		if _, err := db.Exec(sql); err != nil {
