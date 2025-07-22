@@ -975,11 +975,13 @@ func (s *subscriptionClient) logSlowSpan(ctx context.Context) error {
 			resolvedTs := rt.rangeLock.GetHeapMinTs()
 			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
 			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
-			log.Warn("resolved ts lag is too large for initialized subscription",
-				zap.Uint64("subID", uint64(subID)),
-				zap.Int64("tableID", rt.span.TableID),
-				zap.Uint64("resolvedTs", resolvedTs),
-				zap.Float64("resolvedLag(s)", resolvedLag))
+			if resolvedLag > 10 {
+				log.Warn("resolved ts lag is too large for initialized span",
+					zap.Uint64("subID", uint64(subID)),
+					zap.Int64("tableID", rt.span.TableID),
+					zap.Uint64("resolvedTs", resolvedTs),
+					zap.Float64("resolvedLag(s)", resolvedLag))
+			}
 		}
 		s.totalSpans.RUnlock()
 	}
