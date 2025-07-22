@@ -261,15 +261,17 @@ func (l *RangeLock) Len() int {
 
 // ResolvedTs calculates and returns the minimum resolvedTs
 // of all ranges in the RangeLock.
-func (l *RangeLock) ResolvedTs() uint64 {
+func (l *RangeLock) ResolvedTs() (uint64, uint64) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
 	var minTs uint64 = math.MaxUint64
+	var regionID uint64
 	l.lockedRanges.Ascend(func(item *rangeLockEntry) bool {
 		ts := item.lockedRangeState.ResolvedTs.Load()
 		if ts < minTs {
 			minTs = ts
+			regionID = item.regionID
 		}
 		return true
 	})
@@ -277,9 +279,10 @@ func (l *RangeLock) ResolvedTs() uint64 {
 	unlockedMinTs := l.unlockedRanges.getMinTs()
 	if unlockedMinTs < minTs {
 		minTs = unlockedMinTs
+		regionID = 0
 	}
 
-	return minTs
+	return minTs, regionID
 }
 
 // RangeLockStatistics represents some statistics of a RangeLock.
