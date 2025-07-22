@@ -33,14 +33,6 @@ var (
 			Help:      "number of created operators",
 		}, []string{"namespace", "changefeed", "type"})
 
-	FinishedOperatorCount = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "operator_finished_count",
-			Help:      "number of finished operators",
-		}, []string{"namespace", "changefeed", "type"})
-
 	OperatorDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -54,6 +46,5 @@ var (
 func InitMaintainerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerHandleEventDuration)
 	registry.MustRegister(OperatorCount)
-	registry.MustRegister(FinishedOperatorCount)
 	registry.MustRegister(OperatorDuration)
 }

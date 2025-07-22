@@ -948,6 +948,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 			MoveSpans:  moveSpans,
 			TargetNode: minTrafficNodeID,
 		})
+		s.balanceCondition.reset()
 		return
 	}
 
