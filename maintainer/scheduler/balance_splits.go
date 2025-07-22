@@ -68,7 +68,6 @@ func (s *balanceSplitsScheduler) Name() string {
 
 func (s *balanceSplitsScheduler) Execute() time.Time {
 	availableSize := s.batchSize - s.operatorController.OperatorSize()
-	nextTimeInterval := time.Second * 5
 	// We check the state of each group as following. Since each step has dependencies before and after,
 	// at most one operation step can be performed in each group.
 	// The main function please refer to check() in split_span_checker.go
@@ -128,16 +127,13 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 					availableSize = availableSize - 1 - len(checkResult.MergeSpans)
 				}
 			}
-			if checkResult.NextCheckTimeInterval < nextTimeInterval {
-				nextTimeInterval = checkResult.NextCheckTimeInterval
-			}
 		}
 
 		if availableSize <= 0 {
 			// too many schedule ops, wait for next tick
-			return time.Now().Add(5 * time.Second) // use default nextTimeInterval
+			return time.Now().Add(5 * time.Second)
 		}
 	}
 
-	return time.Now().Add(nextTimeInterval)
+	return time.Now().Add(5 * time.Second)
 }

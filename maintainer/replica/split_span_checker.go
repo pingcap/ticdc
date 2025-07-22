@@ -44,8 +44,6 @@ const latestTrafficIndex = 0
 var minTrafficBalanceThreshold = float64(1024 * 1024) // 1MB
 var maxMoveSpansCountForTrafficBalance = 4
 var balanceScoreThreshold = 10
-var longNextTimeInterval = time.Second * 5
-var shortNextTimeInterval = time.Second * 1
 
 type BalanceCause string
 
@@ -257,8 +255,6 @@ type SplitSpanCheckResult struct {
 
 	MoveSpans  []*SpanReplication
 	TargetNode node.ID
-
-	NextCheckTimeInterval time.Duration
 }
 
 // return some actions for scheduling the split spans
@@ -372,10 +368,11 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	return s.chooseMoveSpans(minTrafficNodeID, maxTrafficNodeID, sortedSpans, lastThreeTrafficPerNode, taskMap)
 }
 
-// chooseMoveSpans finds either:
-// 1. A single span to move from node A to node B to enable merge with adjacent span in B
-// 2. A pair of spans to swap between nodes to enable merge for at least one span
-// While maintaining traffic balance (min traffic after move >= min traffic before move)
+// chooseMoveSpans finds multiple optimal span moves using a multi-priority search strategy:
+// 1. Priority 1: Direct merge moves that maintain traffic balance
+// 2. Priority 2: Merge moves with compensation to maintain balance
+// 3. Priority 3: Pure traffic balance moves
+// Returns multiple move plans sorted by priority and effectiveness
 func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, sortedSpans []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64, taskMap map[node.ID][]*splitSpanStatus) []SplitSpanCheckResult {
 	log.Info("chooseMoveSpans try to choose move spans",
 		zap.Any("changefeedID", s.changefeedID),
@@ -394,8 +391,7 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 			MoveSpans: []*SpanReplication{
 				randomSpan.SpanReplication,
 			},
-			TargetNode:            minTrafficNodeID,
-			NextCheckTimeInterval: shortNextTimeInterval,
+			TargetNode: minTrafficNodeID,
 		})
 		return results
 	}
@@ -403,9 +399,14 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 	// Build adjacency map for O(1) lookup of adjacent spans
 	adjacencyMap := s.buildAdjacencyMap(sortedSpans)
 
-	// Try to find optimal span moves with compensation if needed
-	if result := s.findOptimalSpanMoves(minTrafficNodeID, maxTrafficNodeID, sortedSpans, adjacencyMap, lastThreeTrafficPerNode); result != nil {
+	// Try to find optimal span moves using multi-priority strategy
+	if result := s.findOptimalSpanMoves(minTrafficNodeID, maxTrafficNodeID, sortedSpans, adjacencyMap, lastThreeTrafficPerNode); len(result) > 0 {
 		results = append(results, result...)
+		log.Info("chooseMoveSpans found multiple move plans",
+			zap.Any("changefeedID", s.changefeedID),
+			zap.Any("groupID", s.groupID),
+			zap.Int("moveCount", len(result)),
+			zap.Any("moves", result))
 		return results
 	}
 
@@ -442,8 +443,7 @@ func (s *SplitSpanChecker) buildAdjacencyMap(sortedSpans []*splitSpanStatus) map
 }
 
 // findOptimalSpanMoves finds optimal span moves with compensation if needed
-// It first tries to find a single span move, and if that violates traffic balance,
-// it looks for a compensation move to maintain balance
+// It tries to find multiple move plans instead of just the first one
 func (s *SplitSpanChecker) findOptimalSpanMoves(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, sortedSpans []*splitSpanStatus, adjacencyMap map[common.DispatcherID][]*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
 	// Calculate current min and max traffic for balance check
 	currentMinTraffic := lastThreeTrafficPerNode[minTrafficNodeID][latestTrafficIndex]
@@ -458,12 +458,31 @@ func (s *SplitSpanChecker) findOptimalSpanMoves(minTrafficNodeID node.ID, maxTra
 		return lastThreeTrafficPerNode[availableNodes[i]][latestTrafficIndex] < lastThreeTrafficPerNode[availableNodes[j]][latestTrafficIndex]
 	})
 
+	results := make([]SplitSpanCheckResult, 0)
+	maxMoves := 10 // Limit to 4 moves to avoid too many changes at once
+
+	// Track spans that have been selected to avoid duplicates
+	selectedSpans := make(map[common.DispatcherID]bool)
+
 	// Try to find spans that can be moved to any available node for merge
 	// Prioritize nodes with lower traffic for better balance
 	for _, targetNodeID := range availableNodes {
+		if len(results) >= maxMoves {
+			break
+		}
+
 		for _, span := range sortedSpans {
+			if len(results) >= maxMoves {
+				break
+			}
+
 			if span.GetNodeID() == targetNodeID {
 				continue // Skip spans already in targetNodeID
+			}
+
+			// Skip spans that have already been selected
+			if selectedSpans[span.ID] {
+				continue
 			}
 
 			// Check if moving this span to targetNodeID would enable merge
@@ -478,41 +497,44 @@ func (s *SplitSpanChecker) findOptimalSpanMoves(minTrafficNodeID node.ID, maxTra
 				// Check if this move maintains balance
 				if s.isTrafficBalanceMaintained(trafficChanges, lastThreeTrafficPerNode, currentMinTraffic, currentMaxTraffic) {
 					// Single move is sufficient
-					return []SplitSpanCheckResult{
-						{
-							OpType: OpMove,
-							MoveSpans: []*SpanReplication{
-								span.SpanReplication,
-							},
-							TargetNode:            targetNodeID,
-							NextCheckTimeInterval: shortNextTimeInterval,
+					results = append(results, SplitSpanCheckResult{
+						OpType: OpMove,
+						MoveSpans: []*SpanReplication{
+							span.SpanReplication,
 						},
-					}
+						TargetNode: targetNodeID,
+					})
+					selectedSpans[span.ID] = true // Mark this span as selected
+					continue                      // Move to next span
 				}
 
 				// Single move violates balance, try to find compensation move
-				if compensationMove := s.findCompensationMove(span, targetNodeID, span.GetNodeID(), sortedSpans, lastThreeTrafficPerNode, currentMinTraffic, currentMaxTraffic); compensationMove != nil {
-					return []SplitSpanCheckResult{
-						{
-							OpType: OpMove,
-							MoveSpans: []*SpanReplication{
-								span.SpanReplication,
-							},
-							TargetNode:            targetNodeID,
-							NextCheckTimeInterval: shortNextTimeInterval,
+				if compensationMove := s.findCompensationMove(span, targetNodeID, span.GetNodeID(), sortedSpans, lastThreeTrafficPerNode, currentMinTraffic, currentMaxTraffic, selectedSpans); compensationMove != nil {
+					results = append(results, SplitSpanCheckResult{
+						OpType: OpMove,
+						MoveSpans: []*SpanReplication{
+							span.SpanReplication,
 						},
-						*compensationMove,
+						TargetNode: targetNodeID,
+					})
+					results = append(results, *compensationMove)
+
+					// Mark both spans as selected
+					selectedSpans[span.ID] = true
+					for _, compSpan := range compensationMove.MoveSpans {
+						selectedSpans[compSpan.ID] = true
 					}
+					continue // Move to next span
 				}
 			}
 		}
 	}
 
-	return nil
+	return results
 }
 
 // findCompensationMove finds a span to move from targetNode to sourceNode to compensate for the traffic imbalance
-func (s *SplitSpanChecker) findCompensationMove(movedSpan *splitSpanStatus, targetNode node.ID, sourceNode node.ID, sortedSpans []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64, currentMinTraffic float64, currentMaxTraffic float64) *SplitSpanCheckResult {
+func (s *SplitSpanChecker) findCompensationMove(movedSpan *splitSpanStatus, targetNode node.ID, sourceNode node.ID, sortedSpans []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64, currentMinTraffic float64, currentMaxTraffic float64, selectedSpans map[common.DispatcherID]bool) *SplitSpanCheckResult {
 	movedTraffic := movedSpan.lastThreeTraffic[latestTrafficIndex]
 
 	// Build nodeSpanMap for efficient lookup
@@ -527,6 +549,11 @@ func (s *SplitSpanChecker) findCompensationMove(movedSpan *splitSpanStatus, targ
 	for _, span := range targetNodeSpans {
 		if span.ID == movedSpan.ID {
 			continue // Skip the span we just moved
+		}
+
+		// Skip spans that have already been selected
+		if selectedSpans[span.ID] {
+			continue
 		}
 
 		// Try to find a span that can balance traffic
@@ -546,8 +573,7 @@ func (s *SplitSpanChecker) findCompensationMove(movedSpan *splitSpanStatus, targ
 				MoveSpans: []*SpanReplication{
 					span.SpanReplication,
 				},
-				TargetNode:            sourceNode,
-				NextCheckTimeInterval: shortNextTimeInterval,
+				TargetNode: sourceNode,
 			}
 		}
 	}
@@ -640,9 +666,8 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 	submitAndClear := func(cur *splitSpanStatus) {
 		if len(mergeSpans) > 1 {
 			results = append(results, SplitSpanCheckResult{
-				OpType:                OpMerge,
-				MergeSpans:            append([]*SpanReplication{}, mergeSpans...),
-				NextCheckTimeInterval: shortNextTimeInterval,
+				OpType:     OpMerge,
+				MergeSpans: append([]*SpanReplication{}, mergeSpans...),
 			})
 		}
 		mergeSpans = mergeSpans[:0]
@@ -702,9 +727,8 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 	if len(mergeSpans) > 1 {
 		results = append(results, SplitSpanCheckResult{
-			OpType:                OpMerge,
-			MergeSpans:            mergeSpans,
-			NextCheckTimeInterval: shortNextTimeInterval,
+			OpType:     OpMerge,
+			MergeSpans: mergeSpans,
 		})
 	}
 
@@ -748,9 +772,8 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 	if nodeCount == 1 {
 		// all spans are in the same node, we can merge directly
 		ret := SplitSpanCheckResult{
-			OpType:                OpMerge,
-			MergeSpans:            make([]*SpanReplication, 0, len(s.allTasks)),
-			NextCheckTimeInterval: longNextTimeInterval,
+			OpType:     OpMerge,
+			MergeSpans: make([]*SpanReplication, 0, len(s.allTasks)),
 		}
 		for _, status := range s.allTasks {
 			ret.MergeSpans = append(ret.MergeSpans, status.SpanReplication)
@@ -765,10 +788,9 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 
 	// move all spans to the targetNode
 	ret := SplitSpanCheckResult{
-		OpType:                OpMove,
-		MoveSpans:             make([]*SpanReplication, 0, len(s.allTasks)),
-		TargetNode:            targetNode,
-		NextCheckTimeInterval: longNextTimeInterval,
+		OpType:     OpMove,
+		MoveSpans:  make([]*SpanReplication, 0, len(s.allTasks)),
+		TargetNode: targetNode,
 	}
 
 	for _, status := range s.allTasks {
@@ -814,10 +836,9 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		if s.writeThreshold > 0 {
 			if status.trafficScore > trafficScoreThreshold {
 				results = append(results, SplitSpanCheckResult{
-					OpType:                OpSplit,
-					SplitSpan:             status.SpanReplication,
-					SplitTargetNodes:      []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
-					NextCheckTimeInterval: longNextTimeInterval,
+					OpType:           OpSplit,
+					SplitSpan:        status.SpanReplication,
+					SplitTargetNodes: []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
 				})
 				continue
 			}
@@ -826,10 +847,9 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		if s.regionThreshold > 0 {
 			if status.regionCount > s.regionThreshold {
 				results = append(results, SplitSpanCheckResult{
-					OpType:                OpSplit,
-					SplitSpan:             status.SpanReplication,
-					SplitTargetNodes:      []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
-					NextCheckTimeInterval: longNextTimeInterval,
+					OpType:           OpSplit,
+					SplitSpan:        status.SpanReplication,
+					SplitTargetNodes: []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
 				})
 			}
 		}
@@ -978,10 +998,9 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	if len(moveSpans) > 0 {
 		results = append(results, SplitSpanCheckResult{
-			OpType:                OpMove,
-			MoveSpans:             moveSpans,
-			TargetNode:            minTrafficNodeID,
-			NextCheckTimeInterval: longNextTimeInterval,
+			OpType:     OpMove,
+			MoveSpans:  moveSpans,
+			TargetNode: minTrafficNodeID,
 		})
 		s.balanceCondition.reset()
 		return
@@ -996,10 +1015,9 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	results = append(results, SplitSpanCheckResult{
-		OpType:                OpSplit,
-		SplitSpan:             span.SpanReplication,
-		SplitTargetNodes:      []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
-		NextCheckTimeInterval: longNextTimeInterval,
+		OpType:           OpSplit,
+		SplitSpan:        span.SpanReplication,
+		SplitTargetNodes: []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
 	})
 
 	s.balanceCondition.reset()
