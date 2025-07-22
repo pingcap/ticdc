@@ -33,8 +33,8 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 180
 
-	minScanLimitInBytes     = 1024 * 1024 * 1  // 1MB
-	maxScanLimitInBytes     = 1024 * 1024 * 10 // 1MB
+	minScanLimitInBytes     = 1024 * 128      // 128KB
+	maxScanLimitInBytes     = 1024 * 1024 * 4 // 4MB
 	updateScanLimitInterval = time.Second * 10
 
 	maxScanLimitInBytesPerSecond = 1024 * 1024 * 256 // 256MB/s
@@ -115,6 +115,8 @@ type dispatcherStat struct {
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
+
+	lastScanBytes atomic.Int64
 }
 
 func newDispatcherStat(
@@ -133,6 +135,10 @@ func newDispatcherStat(
 		info:               info,
 		filter:             filter,
 	}
+
+	// A small value to avoid too many scan tasks at the first place.
+	dispStat.lastScanBytes.Store(1024)
+
 	changefeedStatus.addDispatcher()
 
 	if info.SyncPointEnabled() {
@@ -195,6 +201,7 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 	}
 	if !a.isReceivedFirstResolvedTs.Load() {
 		log.Info("received first resolved ts from event store", zap.Uint64("resolvedTs", resolvedTs), zap.Stringer("dispatcherID", a.id))
+		a.lastUpdateScanLimitTime.Store(time.Now())
 		a.isReceivedFirstResolvedTs.Store(true)
 	}
 	return util.CompareAndMonotonicIncrease(&a.eventStoreResolvedTs, resolvedTs)

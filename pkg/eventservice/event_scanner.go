@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
 )
 
 // eventGetter is the interface for getting iterator of events
@@ -66,7 +65,6 @@ func newEventScanner(
 	schemaStore schemastore.SchemaStore,
 	mounter pevent.Mounter,
 	epoch uint64,
-	rateLimiter *rate.Limiter,
 ) *eventScanner {
 	return &eventScanner{
 		eventGetter:  eventStore,
@@ -114,7 +112,7 @@ func (s *eventScanner) scan(
 	dispatcherStat *dispatcherStat,
 	dataRange common.DataRange,
 	limit scanLimit,
-) ([]event.Event, bool, error) {
+) (int64, []event.Event, bool, error) {
 	// Initialize scan session
 	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
@@ -122,21 +120,22 @@ func (s *eventScanner) scan(
 	// Fetch DDL events
 	ddlEvents, err := s.fetchDDLEvents(sess)
 	if err != nil {
-		return nil, false, err
+		return 0, nil, false, err
 	}
 
 	// Get event iterator
 	iter, err := s.getEventIterator(sess)
 	if err != nil {
-		return nil, false, err
+		return 0, nil, false, err
 	}
 	if iter == nil {
-		return s.handleEmptyIterator(ddlEvents, sess), false, nil
+		return 0, s.handleEmptyIterator(ddlEvents, sess), false, nil
 	}
 	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
-	return s.scanAndMergeEvents(sess, ddlEvents, iter)
+	events, interrupted, err := s.scanAndMergeEvents(sess, ddlEvents, iter)
+	return sess.scannedBytes, events, interrupted, err
 }
 
 // fetchDDLEvents retrieves DDL events for the scan

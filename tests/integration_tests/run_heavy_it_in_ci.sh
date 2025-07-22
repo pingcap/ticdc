@@ -91,18 +91,19 @@ kafka_groups=(
 	'mq_sink_error_resume'
 	# G10
 	'kafka_column_selector kafka_column_selector_avro'
-	# G11
-	#fail_over_ddl_mix_with_syncpoint
-	# G12
+	# fail_over_ddl_mix_with_syncpoint
 	# ddl_with_random_move_table
+	# fail_over_ddl_mix
+	# G11
+	'fail_over region_merge'
+	# G12
 	''
 	# G13
-	'fail_over region_merge'
+	'debezium01'
 	# G14
-	# fail_over_ddl_mix
-	''
+	'debezium02'
 	# G15
-	'debezium'
+	'debezium03'
 )
 
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
@@ -130,18 +131,18 @@ pulsar_groups=(
 	# G09
 	'mq_sink_error_resume'
 	# G10
-	''
-	# G11
 	fail_over_ddl_mix_with_syncpoint
-	# G12
+	# G11
 	'ddl_with_random_move_table'
-	# G13
+	# G12
 	'fail_over region_merge'
-	# G14
+	# G13
 	# fail_over_ddl_mix
-	''
+	'debezium01'
+	# G14
+	'debezium02'
 	# G15
-	'debezium'
+	'debezium03'
 )
 
 storage_groups=(

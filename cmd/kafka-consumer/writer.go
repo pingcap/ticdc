@@ -155,6 +155,8 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			}
 		}
 	case commonEvent.InfluenceTypeNormal:
+		// include self
+		tableIDs[ddl.TableID] = struct{}{}
 		for _, item := range ddl.GetBlockedTables().TableIDs {
 			tableIDs[item] = struct{}{}
 		}
@@ -170,6 +172,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	)
 
 	commitTs := ddl.GetCommitTs()
+	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	for tableID := range tableIDs {
 		for _, progress := range w.progresses {
 			g, ok := progress.eventGroups[tableID]
@@ -181,21 +184,22 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			if resolvedCount == 0 {
 				continue
 			}
+			resolvedEvents = append(resolvedEvents, events...)
 			total += resolvedCount
-			for _, e := range events {
-				e.AddPostFlushFunc(func() {
-					flushed.Inc()
-					if int(flushed.Load()) == total {
-						close(done)
-					}
-				})
-				w.mysqlSink.AddDMLEvent(e)
-			}
 		}
 	}
 
 	if total == 0 {
 		return w.mysqlSink.WriteBlockEvent(ddl)
+	}
+	for _, e := range resolvedEvents {
+		e.AddPostFlushFunc(func() {
+			flushed.Inc()
+			if int(flushed.Load()) == total {
+				close(done)
+			}
+		})
+		w.mysqlSink.AddDMLEvent(e)
 	}
 
 	log.Info("flush DML events before DDL", zap.Uint64("DDLCommitTs", commitTs), zap.Int("total", total))
@@ -236,6 +240,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	)
 
 	watermark := w.globalWatermark()
+	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	for _, p := range w.progresses {
 		for _, group := range p.eventGroups {
 			events := group.Resolve(watermark)
@@ -243,20 +248,21 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			if resolvedCount == 0 {
 				continue
 			}
+			resolvedEvents = append(resolvedEvents, events...)
 			total += resolvedCount
-			for _, e := range events {
-				e.AddPostFlushFunc(func() {
-					flushed.Inc()
-					if int(flushed.Load()) == total {
-						close(done)
-					}
-				})
-				w.mysqlSink.AddDMLEvent(e)
-			}
 		}
 	}
 	if total == 0 {
 		return nil
+	}
+	for _, e := range resolvedEvents {
+		e.AddPostFlushFunc(func() {
+			flushed.Inc()
+			if int(flushed.Load()) == total {
+				close(done)
+			}
+		})
+		w.mysqlSink.AddDMLEvent(e)
 	}
 
 	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))

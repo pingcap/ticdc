@@ -359,7 +359,7 @@ func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 	names := make([]string, 0, len(index.Columns))
 	offset := make([]int, 0, len(index.Columns))
 	for _, col := range index.Columns {
-		names = append(names, col.Name.L)
+		names = append(names, col.Name.O)
 		offset = append(offset, col.Offset)
 	}
 	return names, offset, true
@@ -373,9 +373,9 @@ func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
 	// todo: optimize it
 	columnOffsets := make(map[string]int, len(ti.columnSchema.Columns))
-	for _, col := range ti.columnSchema.Columns {
+	for idx, col := range ti.columnSchema.Columns {
 		if col != nil {
-			columnOffsets[col.Name.L] = ti.MustGetColumnOffsetByID(col.ID)
+			columnOffsets[col.Name.L] = idx
 		}
 	}
 
