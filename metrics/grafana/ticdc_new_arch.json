@@ -13029,20 +13029,6 @@
       "id": 528,
       "panels": [
         {
-          "collapsed": false,
-          "datasource": null,
-          "gridPos": {
-            "h": 1,
-            "w": 24,
-            "x": 0,
-            "y": 0
-          },
-          "id": 528,
-          "panels": [],
-          "title": "Scheduler",
-          "type": "row"
-        },
-        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -13371,133 +13357,6 @@
         },
         {
           "aliasColors": {},
-          "dashLength": 10,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of current operator count",
-          "fieldConfig": {
-            "defaults": {
-              "links": []
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 6,
-            "w": 12,
-            "x": 0,
-            "y": 117
-          },
-          "id": 22283,
-          "legend": {
-            "alignAsTable": false,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": false,
-            "show": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": false
-          },
-          "paceLength": 10,
-          "pluginVersion": "7.5.17",
-          "pointradius": 0.5,
-          "points": true,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "targets": [
-            {
-              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", type=\"add\"}) by (namespace,changefeed)",
-              "legendFormat": "add-operator-{{namespace}}-{{changefeed}}",
-              "interval": "",
-              "exemplar": true,
-              "format": "time_series",
-              "intervalFactor": 1,
-              "refId": "A"
-            },
-            {
-              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", type=\"move\"}) by (namespace,changefeed)",
-              "legendFormat": "move-operator-{{namespace}}-{{changefeed}}",
-              "interval": "",
-              "exemplar": true,
-              "refId": "B",
-              "hide": false
-            },
-            {
-              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", type=\"split\"}) by (namespace,changefeed)",
-              "legendFormat": "split-operator-{{namespace}}-{{changefeed}}",
-              "interval": "",
-              "exemplar": true,
-              "refId": "C",
-              "hide": false
-            },
-            {
-              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", type=\"merge\"}) by (namespace,changefeed)",
-              "legendFormat": "merge-operator-{{namespace}}-{{changefeed}}",
-              "interval": "",
-              "exemplar": true,
-              "refId": "D",
-              "hide": false
-            }
-          ],
-          "thresholds": [],
-          "timeRegions": [],
-          "title": "Operator Count",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          },
-          "bars": false,
-          "dashes": false,
-          "fill": 0,
-          "fillGradient": 0,
-          "hiddenSeries": false,
-          "percentage": false,
-          "stack": false,
-          "steppedLine": false,
-          "timeFrom": null,
-          "timeShift": null
-        },
-        {
-          "aliasColors": {},
           "bars": false,
           "dashLength": 10,
           "dashes": false,
@@ -13730,6 +13589,110 @@
           "aliasColors": {},
           "dashLength": 10,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of finished operator count in each min",
+          "fieldConfig": {
+            "defaults": {
+              "links": []
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 12,
+            "x": 12,
+            "y": 13
+          },
+          "id": 22295,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": false
+          },
+          "paceLength": 10,
+          "pluginVersion": "7.5.17",
+          "pointradius": 0.5,
+          "points": true,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "targets": [
+            {
+              "expr": "sum(rate(ticdc_maintainer_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,type) * 60",
+              "legendFormat": "{{type}}-{{namespace}}-{{changefeed}}",
+              "interval": "",
+              "exemplar": true,
+              "format": "time_series",
+              "intervalFactor": 1,
+              "refId": "A",
+              "hide": false
+            }
+          ],
+          "thresholds": [],
+          "timeRegions": [],
+          "title": "Operator Count / min",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          },
+          "bars": false,
+          "dashes": false,
+          "fill": 0,
+          "fillGradient": 0,
+          "hiddenSeries": false,
+          "percentage": false,
+          "stack": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null
+        },
+        {
+          "aliasColors": {},
+          "dashLength": 10,
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "duration for each operator",
           "fieldConfig": {
             "defaults": {},
@@ -13740,7 +13703,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 13
+            "y": 19
           },
           "id": 22284,
           "legend": {
@@ -13959,7 +13922,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 19
+            "y": 25
           },
           "hiddenSeries": false,
           "id": 543,
@@ -14189,7 +14152,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 25
+            "y": 31
           },
           "hiddenSeries": false,
           "id": 590,

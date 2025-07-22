@@ -44,6 +44,8 @@ const latestTrafficIndex = 0
 var minTrafficBalanceThreshold = float64(1024 * 1024) // 1MB
 var maxMoveSpansCountForTrafficBalance = 4
 var balanceScoreThreshold = 10
+var longNextTimeInterval = time.Second * 5
+var shortNextTimeInterval = time.Second * 1
 
 type BalanceCause string
 
@@ -63,6 +65,7 @@ type BalanceCondition struct {
 	maxTrafficNodeID node.ID
 	balanceScore     int
 	balanceCause     BalanceCause
+	statusUpdated    bool
 }
 
 func (b *BalanceCondition) reset() {
@@ -70,6 +73,7 @@ func (b *BalanceCondition) reset() {
 	b.maxTrafficNodeID = ""
 	b.balanceScore = 0
 	b.balanceCause = BalanceCauseNone
+	b.statusUpdated = false
 }
 
 func (b *BalanceCondition) initFirstScore(
@@ -89,6 +93,43 @@ func (b *BalanceCondition) initFirstScore(
 	}
 	b.minTrafficNodeID = minTrafficNodeID
 	b.maxTrafficNodeID = maxTrafficNodeID
+}
+
+func (b *BalanceCondition) updateScore(minTrafficNodeID node.ID,
+	maxTrafficNodeID node.ID,
+	balanceCauseByMinNode bool,
+	balanceCauseByMaxNode bool,
+) {
+	if b.balanceScore == 0 {
+		b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
+	} else {
+		if b.balanceCause == BalanceCauseByBoth {
+			if b.minTrafficNodeID == minTrafficNodeID && b.maxTrafficNodeID == maxTrafficNodeID {
+				b.balanceScore += 1
+			} else if b.minTrafficNodeID == minTrafficNodeID {
+				b.balanceScore += 1
+				b.balanceCause = BalanceCauseByMinNode
+			} else if b.maxTrafficNodeID == maxTrafficNodeID {
+				b.balanceScore += 1
+				b.balanceCause = BalanceCauseByMaxNode
+			} else {
+				b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
+			}
+		} else if b.balanceCause == BalanceCauseByMaxNode {
+			if b.maxTrafficNodeID == maxTrafficNodeID {
+				b.balanceScore += 1
+			} else {
+				b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
+			}
+		} else if b.balanceCause == BalanceCauseByMinNode {
+			if b.minTrafficNodeID == minTrafficNodeID {
+				b.balanceScore += 1
+			} else {
+				b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
+			}
+		}
+	}
+	b.statusUpdated = false // reset
 }
 
 type SplitSpanChecker struct {
@@ -192,6 +233,8 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 		}
 	}
 
+	s.balanceCondition.statusUpdated = true
+
 	log.Debug("split span checker update status",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
@@ -214,6 +257,8 @@ type SplitSpanCheckResult struct {
 
 	MoveSpans  []*SpanReplication
 	TargetNode node.ID
+
+	NextCheckTimeInterval time.Duration
 }
 
 // return some actions for scheduling the split spans
@@ -323,6 +368,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		return results
 	}
 
+	// when we try to move span to make merge, we choose to check more frequently
 	return s.chooseMoveSpans(minTrafficNodeID, maxTrafficNodeID, sortedSpans, lastThreeTrafficPerNode, taskMap)
 }
 
@@ -348,7 +394,8 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 			MoveSpans: []*SpanReplication{
 				randomSpan.SpanReplication,
 			},
-			TargetNode: minTrafficNodeID,
+			TargetNode:            minTrafficNodeID,
+			NextCheckTimeInterval: shortNextTimeInterval,
 		})
 		return results
 	}
@@ -437,7 +484,8 @@ func (s *SplitSpanChecker) findOptimalSpanMoves(minTrafficNodeID node.ID, maxTra
 							MoveSpans: []*SpanReplication{
 								span.SpanReplication,
 							},
-							TargetNode: targetNodeID,
+							TargetNode:            targetNodeID,
+							NextCheckTimeInterval: shortNextTimeInterval,
 						},
 					}
 				}
@@ -450,7 +498,8 @@ func (s *SplitSpanChecker) findOptimalSpanMoves(minTrafficNodeID node.ID, maxTra
 							MoveSpans: []*SpanReplication{
 								span.SpanReplication,
 							},
-							TargetNode: targetNodeID,
+							TargetNode:            targetNodeID,
+							NextCheckTimeInterval: shortNextTimeInterval,
 						},
 						*compensationMove,
 					}
@@ -497,7 +546,8 @@ func (s *SplitSpanChecker) findCompensationMove(movedSpan *splitSpanStatus, targ
 				MoveSpans: []*SpanReplication{
 					span.SpanReplication,
 				},
-				TargetNode: sourceNode,
+				TargetNode:            sourceNode,
+				NextCheckTimeInterval: shortNextTimeInterval,
 			}
 		}
 	}
@@ -590,8 +640,9 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 	submitAndClear := func(cur *splitSpanStatus) {
 		if len(mergeSpans) > 1 {
 			results = append(results, SplitSpanCheckResult{
-				OpType:     OpMerge,
-				MergeSpans: append([]*SpanReplication{}, mergeSpans...),
+				OpType:                OpMerge,
+				MergeSpans:            append([]*SpanReplication{}, mergeSpans...),
+				NextCheckTimeInterval: shortNextTimeInterval,
 			})
 		}
 		mergeSpans = mergeSpans[:0]
@@ -651,8 +702,9 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 	if len(mergeSpans) > 1 {
 		results = append(results, SplitSpanCheckResult{
-			OpType:     OpMerge,
-			MergeSpans: mergeSpans,
+			OpType:                OpMerge,
+			MergeSpans:            mergeSpans,
+			NextCheckTimeInterval: shortNextTimeInterval,
 		})
 	}
 
@@ -696,8 +748,9 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 	if nodeCount == 1 {
 		// all spans are in the same node, we can merge directly
 		ret := SplitSpanCheckResult{
-			OpType:     OpMerge,
-			MergeSpans: make([]*SpanReplication, 0, len(s.allTasks)),
+			OpType:                OpMerge,
+			MergeSpans:            make([]*SpanReplication, 0, len(s.allTasks)),
+			NextCheckTimeInterval: longNextTimeInterval,
 		}
 		for _, status := range s.allTasks {
 			ret.MergeSpans = append(ret.MergeSpans, status.SpanReplication)
@@ -712,9 +765,10 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 
 	// move all spans to the targetNode
 	ret := SplitSpanCheckResult{
-		OpType:     OpMove,
-		MoveSpans:  make([]*SpanReplication, 0, len(s.allTasks)),
-		TargetNode: targetNode,
+		OpType:                OpMove,
+		MoveSpans:             make([]*SpanReplication, 0, len(s.allTasks)),
+		TargetNode:            targetNode,
+		NextCheckTimeInterval: longNextTimeInterval,
 	}
 
 	for _, status := range s.allTasks {
@@ -760,9 +814,10 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		if s.writeThreshold > 0 {
 			if status.trafficScore > trafficScoreThreshold {
 				results = append(results, SplitSpanCheckResult{
-					OpType:           OpSplit,
-					SplitSpan:        status.SpanReplication,
-					SplitTargetNodes: []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
+					OpType:                OpSplit,
+					SplitSpan:             status.SpanReplication,
+					SplitTargetNodes:      []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
+					NextCheckTimeInterval: longNextTimeInterval,
 				})
 				continue
 			}
@@ -771,9 +826,10 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		if s.regionThreshold > 0 {
 			if status.regionCount > s.regionThreshold {
 				results = append(results, SplitSpanCheckResult{
-					OpType:           OpSplit,
-					SplitSpan:        status.SpanReplication,
-					SplitTargetNodes: []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
+					OpType:                OpSplit,
+					SplitSpan:             status.SpanReplication,
+					SplitTargetNodes:      []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
+					NextCheckTimeInterval: longNextTimeInterval,
 				})
 			}
 		}
@@ -797,7 +853,9 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		zap.Any("aliveNodeIDs", aliveNodeIDs),
 		zap.Any("lastThreeTrafficSum", lastThreeTrafficSum),
 		zap.Any("lastThreeTrafficPerNode", lastThreeTrafficPerNode),
-		zap.Any("balanceConditionScore", s.balanceCondition.balanceScore))
+		zap.Any("balanceConditionScore", s.balanceCondition.balanceScore),
+		zap.Any("balanceConditionStatusUpdated", s.balanceCondition.statusUpdated))
+
 	nodeCount := len(aliveNodeIDs)
 
 	// check whether the traffic is balance for each nodes
@@ -816,6 +874,11 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	log.Info("minTrafficNodeID", zap.Any("minTrafficNodeID", minTrafficNodeID))
 	log.Info("maxTrafficNodeID", zap.Any("maxTrafficNodeID", maxTrafficNodeID))
+
+	// no status updated, no need to do check balance
+	if !s.balanceCondition.statusUpdated {
+		return
+	}
 
 	// TODO(hyy): add a unit test for this
 	// If the traffic in each node is quite low, we don't need to balance the traffic
@@ -863,40 +926,11 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	// update balanceScore
-	// TODO: make it a single function
 	if !shouldBalance {
-		s.balanceCondition.balanceScore = 0
+		s.balanceCondition.reset()
 		return
 	} else {
-		if s.balanceCondition.balanceScore == 0 {
-			s.balanceCondition.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
-		} else {
-			if s.balanceCondition.balanceCause == BalanceCauseByBoth {
-				if s.balanceCondition.minTrafficNodeID == minTrafficNodeID && s.balanceCondition.maxTrafficNodeID == maxTrafficNodeID {
-					s.balanceCondition.balanceScore += 1
-				} else if s.balanceCondition.minTrafficNodeID == minTrafficNodeID {
-					s.balanceCondition.balanceScore += 1
-					s.balanceCondition.balanceCause = BalanceCauseByMinNode
-				} else if s.balanceCondition.maxTrafficNodeID == maxTrafficNodeID {
-					s.balanceCondition.balanceScore += 1
-					s.balanceCondition.balanceCause = BalanceCauseByMaxNode
-				} else {
-					s.balanceCondition.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
-				}
-			} else if s.balanceCondition.balanceCause == BalanceCauseByMaxNode {
-				if s.balanceCondition.maxTrafficNodeID == maxTrafficNodeID {
-					s.balanceCondition.balanceScore += 1
-				} else {
-					s.balanceCondition.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
-				}
-			} else if s.balanceCondition.balanceCause == BalanceCauseByMinNode {
-				if s.balanceCondition.minTrafficNodeID == minTrafficNodeID {
-					s.balanceCondition.balanceScore += 1
-				} else {
-					s.balanceCondition.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
-				}
-			}
-		}
+		s.balanceCondition.updateScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 		if s.balanceCondition.balanceScore < balanceScoreThreshold {
 			// now is unbalanced, but we want to check more times to avoid balance too frequently
 			return
@@ -944,9 +978,10 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	if len(moveSpans) > 0 {
 		results = append(results, SplitSpanCheckResult{
-			OpType:     OpMove,
-			MoveSpans:  moveSpans,
-			TargetNode: minTrafficNodeID,
+			OpType:                OpMove,
+			MoveSpans:             moveSpans,
+			TargetNode:            minTrafficNodeID,
+			NextCheckTimeInterval: longNextTimeInterval,
 		})
 		s.balanceCondition.reset()
 		return
@@ -961,9 +996,10 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	results = append(results, SplitSpanCheckResult{
-		OpType:           OpSplit,
-		SplitSpan:        span.SpanReplication,
-		SplitTargetNodes: []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
+		OpType:                OpSplit,
+		SplitSpan:             span.SpanReplication,
+		SplitTargetNodes:      []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
+		NextCheckTimeInterval: longNextTimeInterval,
 	})
 
 	s.balanceCondition.reset()
