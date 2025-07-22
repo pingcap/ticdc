@@ -167,10 +167,6 @@ func (be *BarrierEvent) createRangeCheckerForTypeDB() {
 
 func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) *heartbeatpb.DispatcherStatus {
 	if !be.allDispatcherReported() {
-		log.Error("checkEventAction", zap.Any("checker", be.rangeChecker), zap.Any("id", dispatcherID))
-		if be.rangeChecker != nil {
-			log.Error("checkEventAction Detail", zap.Any("Detail", be.rangeChecker.Detail()))
-		}
 		return nil
 	}
 	return be.onAllDispatcherReportedBlockEvent(dispatcherID)
