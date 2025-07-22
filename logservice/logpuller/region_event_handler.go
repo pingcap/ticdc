@@ -306,7 +306,8 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	now := time.Now().UnixMilli()
 	lastAdvance := span.lastAdvanceTime.Load()
 	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
-		ts := span.rangeLock.GetHeapMinTs()
+		// ts := span.rangeLock.GetHeapMinTs()
+		ts := span.rangeLock.ResolvedTs()
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
 			log.Info("subscription client is initialized",
 				zap.Uint64("subscriptionID", uint64(span.subID)),
@@ -316,16 +317,6 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		lastResolvedTs := span.resolvedTs.Load()
 		curTime := time.Now()
 		curPhyTs := oracle.GetPhysical(curTime)
-		resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
-		resolvedLag := float64(curPhyTs-resolvedPhyTs) / 1e3
-		if resolvedLag > 10 {
-			log.Warn("last resolved ts lag is too large",
-				zap.Uint64("subID", uint64(span.subID)),
-				zap.Int64("tableID", span.span.TableID),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", lastResolvedTs),
-				zap.Float64("resolvedLag(s)", resolvedLag))
-		}
 		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
 		nextResolvedLag := float64(curPhyTs-nextResolvedPhyTs) / 1e3
 		if nextResolvedLag > 10 {
