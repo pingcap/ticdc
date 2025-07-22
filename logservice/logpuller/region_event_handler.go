@@ -333,6 +333,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		// the span may just be initialized and have not receive any resolved ts before,
 		// so we also send ts in this case for quick notification to downstream.
 		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
 			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
 			if decreaseLag > 10 {
 				log.Warn("resolved ts advance step is too large",
