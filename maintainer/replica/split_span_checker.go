@@ -257,6 +257,7 @@ type SplitSpanCheckResult struct {
 
 	SplitSpan        *SpanReplication
 	SplitTargetNodes []node.ID
+	SpanNum          int
 
 	MergeSpans []*SpanReplication
 
@@ -886,10 +887,17 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 					zap.String("splitSpan", status.SpanReplication.ID.String()),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
+				spanNum := int(math.Ceil(status.lastThreeTraffic[latestTrafficIndex] / float64(s.writeThreshold)))
+				splitTargetNodes := make([]node.ID, 0, spanNum)
+				for i := 0; i < spanNum; i++ {
+					splitTargetNodes = append(splitTargetNodes, status.GetNodeID())
+				}
+
 				results = append(results, SplitSpanCheckResult{
 					OpType:           OpSplit,
 					SplitSpan:        status.SpanReplication,
-					SplitTargetNodes: []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
+					SpanNum:          spanNum,
+					SplitTargetNodes: splitTargetNodes,
 				})
 				continue
 			}
@@ -903,10 +911,18 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 					zap.String("splitSpan", status.SpanReplication.ID.String()),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
+
+				spanNum := int(math.Ceil(float64(status.regionCount) / float64(s.regionThreshold)))
+				splitTargetNodes := make([]node.ID, 0, spanNum)
+				for i := 0; i < spanNum; i++ {
+					splitTargetNodes = append(splitTargetNodes, status.GetNodeID())
+				}
+
 				results = append(results, SplitSpanCheckResult{
 					OpType:           OpSplit,
 					SplitSpan:        status.SpanReplication,
-					SplitTargetNodes: []node.ID{status.GetNodeID(), status.GetNodeID()}, // split span to two spans, and store them in the same node
+					SpanNum:          spanNum,
+					SplitTargetNodes: splitTargetNodes,
 				})
 			}
 		}
@@ -1086,6 +1102,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	results = append(results, SplitSpanCheckResult{
 		OpType:           OpSplit,
 		SplitSpan:        span.SpanReplication,
+		SpanNum:          2,
 		SplitTargetNodes: []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
 	})
 

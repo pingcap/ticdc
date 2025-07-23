@@ -104,7 +104,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 		checkResults := s.spanController.CheckByGroup(group, availableSize)
 		for _, checkResult := range checkResults.([]replica.SplitSpanCheckResult) {
 			if checkResult.OpType == replica.OpSplit {
-				splitSpans := s.splitter.Split(context.Background(), checkResult.SplitSpan.Span, 2)
+				splitSpans := s.splitter.Split(context.Background(), checkResult.SplitSpan.Span, checkResult.SpanNum)
 				if len(splitSpans) > 1 {
 					op := operator.NewSplitDispatcherOperator(s.spanController, checkResult.SplitSpan, splitSpans, checkResult.SplitTargetNodes, func(span *replica.SpanReplication, node node.ID) bool {
 						return s.operatorController.AddOperatorWithoutLock(operator.NewAddDispatcherOperator(s.spanController, span, node))
