@@ -305,6 +305,7 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 	op.Start()
 	heap.Push(&oc.runningQueue, withTime)
 	metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
+	metrics.TotalOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 }
 
 func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
