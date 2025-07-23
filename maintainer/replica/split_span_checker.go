@@ -266,8 +266,10 @@ type SplitSpanCheckResult struct {
 
 func (s *SplitSpanChecker) checkAllTaskAvailable() bool {
 	for _, task := range s.allTasks {
-		if task.lastThreeTraffic[latestTrafficIndex] == 0 {
-			return false
+		for _, traffic := range task.lastThreeTraffic {
+			if traffic == 0 {
+				return false
+			}
 		}
 	}
 	return true
