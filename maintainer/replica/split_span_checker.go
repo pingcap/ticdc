@@ -730,6 +730,10 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 		// prev and cur can merged together
 		regionCount += cur.regionCount
+		log.Info("traffic",
+			zap.Any("total traffic", traffic),
+			zap.Any("cur traffic", cur.lastThreeTraffic[latestTrafficIndex]),
+		)
 		traffic += cur.lastThreeTraffic[latestTrafficIndex]
 		mergeSpans = append(mergeSpans, cur.SpanReplication)
 
