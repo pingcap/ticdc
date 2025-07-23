@@ -835,6 +835,12 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 
 		if s.writeThreshold > 0 {
 			if status.trafficScore > trafficScoreThreshold {
+				log.Info("chooseSplitSpans split span by traffic",
+					zap.String("changefeed", s.changefeedID.String()),
+					zap.Int64("group", int64(s.groupID)),
+					zap.String("splitSpan", status.SpanReplication.ID.String()),
+					zap.Any("splitTargetNodes", status.GetNodeID()),
+				)
 				results = append(results, SplitSpanCheckResult{
 					OpType:           OpSplit,
 					SplitSpan:        status.SpanReplication,
@@ -846,6 +852,12 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 
 		if s.regionThreshold > 0 {
 			if status.regionCount > s.regionThreshold {
+				log.Info("chooseSplitSpans split span by region",
+					zap.String("changefeed", s.changefeedID.String()),
+					zap.Int64("group", int64(s.groupID)),
+					zap.String("splitSpan", status.SpanReplication.ID.String()),
+					zap.Any("splitTargetNodes", status.GetNodeID()),
+				)
 				results = append(results, SplitSpanCheckResult{
 					OpType:           OpSplit,
 					SplitSpan:        status.SpanReplication,
@@ -997,6 +1009,12 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	if len(moveSpans) > 0 {
+		log.Info("checkBalanceTraffic move spans",
+			zap.String("changefeed", s.changefeedID.String()),
+			zap.Int64("group", int64(s.groupID)),
+			zap.Any("moveSpans", moveSpans),
+			zap.Any("minTrafficNodeID", minTrafficNodeID),
+		)
 		results = append(results, SplitSpanCheckResult{
 			OpType:     OpMove,
 			MoveSpans:  moveSpans,
@@ -1014,6 +1032,12 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		span = taskMap[maxTrafficNodeID][0]
 	}
 
+	log.Info("checkBalanceTraffic split span",
+		zap.String("changefeed", s.changefeedID.String()),
+		zap.Int64("group", int64(s.groupID)),
+		zap.String("splitSpan", span.SpanReplication.ID.String()),
+		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
+	)
 	results = append(results, SplitSpanCheckResult{
 		OpType:           OpSplit,
 		SplitSpan:        span.SpanReplication,
