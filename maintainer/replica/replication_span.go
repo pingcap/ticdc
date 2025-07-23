@@ -146,6 +146,15 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 //  2. The new status is only stored if its checkpointTs is greater than or equal to
 //     the current status's checkpointTs.
 func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
+	log.Info("update status", zap.String("changefeedID", r.ChangefeedID.Name()),
+		zap.Any("newStatus", newStatus),
+		zap.String("id", r.ID.String()),
+		zap.Uint64("checkpointTs", newStatus.CheckpointTs),
+		zap.Uint64("oldCheckpointTs", r.status.Load().CheckpointTs),
+		zap.String("componentStatus", newStatus.ComponentStatus.String()),
+		zap.Int64("schemaID", r.schemaID),
+		zap.Int64("tableID", r.Span.TableID),
+	)
 	if newStatus != nil {
 		blockState := r.blockState.Load()
 		if blockState != nil && blockState.Stage == heartbeatpb.BlockStage_WAITING && blockState.BlockTs <= newStatus.CheckpointTs {
