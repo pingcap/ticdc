@@ -160,6 +160,8 @@ else
 	echo "no cluster type specified, using default configuration."
 fi
 
+rm -rf $workdir/pulsar-bookie
+rm -rf $workdir/pulsar-metadata
 echo "[$(date)] <<<<<< START pulsar cluster in $cluster_type mode in $TEST_NAME case >>>>>>"
 $pulsar_dir/bin/pulsar standalone --config $workdir/pulsar_standalone.conf -nfw --metadata-dir $workdir/pulsar-metadata --bookkeeper-dir $workdir/pulsar-bookie >>$workdir/pulsar_stdout.log 2>&1 &
 echo "Waiting for pulsar port to be ready..."
