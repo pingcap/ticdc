@@ -177,7 +177,7 @@ func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
 
 			results = append(results, DefaultSpanSplitCheckResult{
 				Span:    status.SpanReplication,
-				SpanNum: spanNum,
+				SpanNum: spanNum * 2,
 			})
 		}
 		if len(results) >= batch {

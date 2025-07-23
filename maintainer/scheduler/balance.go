@@ -117,7 +117,7 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 	checkResults := results.([]replica.DefaultSpanSplitCheckResult)
 	splitCount := 0
 	for _, result := range checkResults {
-		spansNum := max(result.SpanNum, len(s.nodeManager.GetAliveNodes()))
+		spansNum := max(result.SpanNum, len(s.nodeManager.GetAliveNodes())*2)
 		splitSpans := s.splitter.Split(context.Background(), result.Span.Span, spansNum)
 		if len(splitSpans) > 1 {
 			op := operator.NewSplitDispatcherOperator(s.spanController, result.Span, splitSpans, []node.ID{}, nil)
