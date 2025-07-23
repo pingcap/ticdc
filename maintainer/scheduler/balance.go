@@ -117,10 +117,7 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 	checkResults := results.([]replica.DefaultSpanSplitCheckResult)
 	splitCount := 0
 	for _, result := range checkResults {
-		// split in balance means the throughput or region count is growing in the span
-		// so we just split the span to 2 * cdc-nodes
-		// TODO: consider to make 2 a config
-		spansNum := len(s.nodeManager.GetAliveNodes()) * 2
+		spansNum := max(result.SpanNum, len(s.nodeManager.GetAliveNodes()))
 		splitSpans := s.splitter.Split(context.Background(), result.Span.Span, spansNum)
 		if len(splitSpans) > 1 {
 			op := operator.NewSplitDispatcherOperator(s.spanController, result.Span, splitSpans, []node.ID{}, nil)

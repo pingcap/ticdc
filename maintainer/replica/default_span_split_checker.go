@@ -15,6 +15,7 @@ package replica
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -85,6 +86,7 @@ func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *
 type spanSplitStatus struct {
 	*SpanReplication
 	trafficScore    int
+	latestTraffic   float64
 	regionCount     int
 	regionCheckTime time.Time
 }
@@ -101,6 +103,7 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 		SpanReplication: replica,
 		trafficScore:    0,
 		regionCount:     0,
+		latestTraffic:   0,
 		regionCheckTime: time.Now(),
 	}
 }
@@ -128,6 +131,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 			status.trafficScore = 0
 		} else {
 			status.trafficScore++
+			status.latestTraffic = float64(status.GetStatus().EventSizePerSecond)
 		}
 	}
 	log.Info("default span split checker: update status", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
@@ -155,7 +159,8 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 }
 
 type DefaultSpanSplitCheckResult struct {
-	Span *SpanReplication
+	Span    *SpanReplication
+	SpanNum int
 }
 
 func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
@@ -163,8 +168,16 @@ func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
 	for _, status := range s.splitReadyTasks {
 		// for default span to do split, we use splitByTraffic to make the split more balanced
 		if status.trafficScore >= trafficScoreThreshold || status.regionCount >= s.regionThreshold {
+			var spanNum int
+			if status.trafficScore >= trafficScoreThreshold {
+				spanNum = int(math.Ceil(status.latestTraffic / float64(s.writeThreshold)))
+			} else {
+				spanNum = int(math.Ceil(float64(status.regionCount) / float64(s.regionThreshold)))
+			}
+
 			results = append(results, DefaultSpanSplitCheckResult{
-				Span: status.SpanReplication,
+				Span:    status.SpanReplication,
+				SpanNum: spanNum,
 			})
 		}
 		if len(results) >= batch {
