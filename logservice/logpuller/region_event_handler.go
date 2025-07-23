@@ -179,7 +179,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 	stepsToRemoved := state.markRemoved()
 	err := state.takeError()
 	if err != nil {
-		log.Debug("region event handler get a region error",
+		log.Info("region event handler get a region error",
 			zap.Uint64("workerID", worker.workerID),
 			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
 			zap.Uint64("regionID", state.region.verID.GetID()),
@@ -219,7 +219,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
-			log.Debug("region is initialized",
+			log.Info("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),

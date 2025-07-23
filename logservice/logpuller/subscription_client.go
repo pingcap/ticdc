@@ -552,7 +552,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			worker := store.getRequestWorker()
 			worker.requestsCh <- region
 
-			log.Debug("subscription client will request a region",
+			log.Info("subscription client will request a region",
 				zap.Uint64("workID", worker.workerID),
 				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 				zap.Uint64("regionID", region.verID.GetID()),
@@ -569,7 +569,7 @@ func (s *subscriptionClient) attachRPCContextForRegion(ctx context.Context, regi
 		return region, true
 	}
 	if err != nil {
-		log.Debug("subscription client get rpc context fail",
+		log.Info("subscription client get rpc context fail",
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.Error(err))
@@ -616,7 +616,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			}
 			backoffBeforeLoad = false
 		}
-		log.Debug("subscription client is going to load regions",
+		log.Info("subscription client is going to load regions",
 			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
 			zap.Any("span", nextSpan))
 
@@ -734,7 +734,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 	switch eerr := err.(type) {
 	case *eventError:
 		innerErr := eerr.err
-		log.Debug("cdc region error",
+		log.Info("cdc region error",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 
@@ -931,7 +931,7 @@ func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
 			if attr.SlowestRegion.Initialized {
 				if currTime.Sub(ckptTime) > 2*resolveLockMinInterval {
-					log.Debug("subscription client finds a initialized slow region",
+					log.Info("subscription client finds a initialized slow region",
 						zap.Uint64("subscriptionID", uint64(subscriptionID)),
 						zap.Any("slowRegion", attr.SlowestRegion))
 				}
@@ -1047,7 +1047,7 @@ func (s *subscriptionClient) GetResolvedTsLag() float64 {
 func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	util.MustCompareAndMonotonicIncrease(&r.staleLocksTargetTs, targetTs)
 	res := r.rangeLock.IterAll(r.tryResolveLock)
-	log.Debug("subscription client finds slow locked ranges",
+	log.Info("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(r.subID)),
 		zap.Any("ranges", res))
 }
