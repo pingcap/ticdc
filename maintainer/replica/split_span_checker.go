@@ -264,6 +264,15 @@ type SplitSpanCheckResult struct {
 	TargetNode node.ID
 }
 
+func (s *SplitSpanChecker) checkAllTaskAvailable() bool {
+	for _, task := range s.allTasks {
+		if task.lastThreeTraffic[latestTrafficIndex] == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // return some actions for scheduling the split spans
 func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	start := time.Now()
@@ -275,6 +284,14 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		zap.Any("groupID", s.groupID),
 		zap.Any("batch", batch))
 	results := make([]SplitSpanCheckResult, 0)
+
+	if !s.checkAllTaskAvailable() {
+		log.Info("some task is not available, skip check",
+			zap.String("changefeed", s.changefeedID.String()),
+			zap.Int64("group", int64(s.groupID)),
+		)
+		return results
+	}
 
 	aliveNodeIDs := s.nodeManager.GetAliveNodeIDs()
 
