@@ -355,14 +355,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		return results
 	}
 
-	// sortedSpans is the sorted spans by the start key
-	results, sortedSpans := s.chooseMergedSpans(batch)
-	if len(results) > 0 {
-		return results
-	}
-
-	// step5. try to check whether we need move dispatchers to make merge possible
-	//        if the span count is smaller than the upper limit, we don't need merge anymore.
+	// if the span count is smaller than the upper limit, we don't need merge anymore.
 	upperSpanCount := 0
 	if s.writeThreshold > 0 {
 		upperSpanCount = int(math.Ceil(lastThreeTrafficSum[latestTrafficIndex] / float64(s.writeThreshold)))
@@ -391,7 +384,13 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		return results
 	}
 
-	// when we try to move span to make merge, we choose to check more frequently
+	// sortedSpans is the sorted spans by the start key
+	results, sortedSpans := s.chooseMergedSpans(batch)
+	if len(results) > 0 {
+		return results
+	}
+
+	// step5. try to check whether we need move dispatchers to make merge possible
 	return s.chooseMoveSpans(minTrafficNodeID, maxTrafficNodeID, sortedSpans, lastThreeTrafficPerNode, taskMap)
 }
 
