@@ -431,7 +431,10 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	log.Info("dispatcher is not ready to close",
 		zap.Stringer("dispatcher", d.id),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
-		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()))
+		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
+		zap.Int("tableProgressLen", d.tableProgress.Len()),
+		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs()), // check whether continue receive new events.
+	)
 	return w, false
 }
 

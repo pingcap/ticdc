@@ -103,6 +103,18 @@ func (p *TableProgress) Empty() bool {
 	return p.list.Len() == 0
 }
 
+func (p *TableProgress) Len() int {
+	p.rwMutex.RLock()
+	defer p.rwMutex.RUnlock()
+	return p.list.Len()
+}
+
+func (p *TableProgress) MaxCommitTs() uint64 {
+	p.rwMutex.RLock()
+	defer p.rwMutex.RUnlock()
+	return p.maxCommitTs
+}
+
 // Pass updates the maxCommitTs with the given event's commit timestamp.
 func (p *TableProgress) Pass(event commonEvent.BlockEvent) {
 	p.rwMutex.Lock()

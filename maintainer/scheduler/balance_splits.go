@@ -93,7 +93,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 
 		replications := s.spanController.GetReplicatingByGroup(group)
 		if len(replications) != s.spanController.GetTaskSizeByGroup(group) {
-			log.Debug("here is some spans in the group is not in the replicating state; skip this balance check",
+			log.Info("here is some spans in the group is not in the replicating state; skip this balance check",
 				zap.String("changefeed", s.changefeedID.String()),
 				zap.Int64("group", int64(group)),
 				zap.Int("replicatingSize", len(replications)),
