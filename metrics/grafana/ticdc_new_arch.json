@@ -13589,7 +13589,7 @@
           "aliasColors": {},
           "dashLength": 10,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of finished operator count in each min",
+          "description": "The number of total operator count ",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -13630,7 +13630,7 @@
           "spaceLength": 10,
           "targets": [
             {
-              "expr": "sum(rate(ticdc_maintainer_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,type) * 60",
+              "expr": "sum(ticdc_maintainer_total_operator_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type!=\"occupy\"}) by (namespace,changefeed,type)",
               "legendFormat": "{{type}}-{{namespace}}-{{changefeed}}",
               "interval": "",
               "exemplar": true,
@@ -13642,7 +13642,7 @@
           ],
           "thresholds": [],
           "timeRegions": [],
-          "title": "Operator Count / min",
+          "title": "Total Operator Count",
           "tooltip": {
             "shared": true,
             "sort": 0,

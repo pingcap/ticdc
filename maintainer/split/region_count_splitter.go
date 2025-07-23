@@ -69,8 +69,8 @@ func (m *regionCountSplitter) split(
 		return []*heartbeatpb.TableSpan{span}
 	}
 
-	if spansNum == 0 && len(regions) <= m.regionThreshold {
-		log.Info("skip split span because region count is less than region threshold",
+	if spansNum == 0 && (m.regionThreshold == 0 || len(regions) <= m.regionThreshold) {
+		log.Info("skip split span because region count is less than region threshold or region threshold is 0",
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
 			zap.Int("regionCount", len(regions)),
