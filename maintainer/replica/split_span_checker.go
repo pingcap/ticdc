@@ -211,6 +211,13 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 			status.trafficScore = 0
 		} else {
 			status.trafficScore++
+			log.Info("update traffic score",
+				zap.String("changefeed", s.changefeedID.String()),
+				zap.Int64("group", int64(s.groupID)),
+				zap.String("span", status.SpanReplication.ID.String()),
+				zap.Any("trafficScore", status.trafficScore),
+				zap.Any("eventSizePerSecond", status.GetStatus().EventSizePerSecond),
+			)
 		}
 
 		status.lastThreeTraffic[2] = status.lastThreeTraffic[1]
@@ -712,6 +719,9 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		}
 
 		if s.writeThreshold > 0 && traffic+cur.lastThreeTraffic[latestTrafficIndex] > float64(s.writeThreshold)/4*3 {
+			log.Info("choose Merged Spans",
+				zap.Any("total traffic", traffic),
+				zap.Any("cur traffic", cur.lastThreeTraffic[latestTrafficIndex]))
 			submitAndClear(cur)
 			prev = cur
 			idx++
