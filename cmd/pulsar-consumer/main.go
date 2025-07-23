@@ -116,36 +116,3 @@ func run(_ *cobra.Command, _ []string) {
 		log.Info("pulsar consumer exited")
 	}
 }
-
-// partitionSinks maintained for each partition, it may sync data for multiple tables.
-// type partitionSinks struct {
-// 	decoder codec.RowEventDecoder
-
-// 	tablesCommitTsMap sync.Map
-// 	tableSinksMap     sync.Map
-// 	// resolvedTs record the maximum timestamp of the received event
-// 	resolvedTs uint64
-// }
-
-// Consumer represents a local pulsar consumer
-// type Consumer struct {
-// 	eventGroups     map[int64]*eventsGroup
-// 	ddlList         []*model.DDLEvent
-// 	ddlListMu       sync.Mutex
-// 	lastReceivedDDL *model.DDLEvent
-// 	ddlSink         ddlsink.Sink
-
-// 	// sinkFactory is used to create table sink for each table.
-// 	sinkFactory *eventsinkfactory.SinkFactory
-// 	sinks       []*partitionSinks
-// 	sinksMu     sync.Mutex
-
-// 	// initialize to 0 by default
-// 	globalResolvedTs uint64
-
-// 	tz *time.Location
-
-// 	codecConfig *common.Config
-
-// 	option *ConsumerOption
-// }

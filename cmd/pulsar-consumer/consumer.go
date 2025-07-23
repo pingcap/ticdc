@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
@@ -101,8 +100,8 @@ func newConsumer(ctx context.Context, option *option) *consumer {
 func (c *consumer) readMessage(ctx context.Context) error {
 	msgChan := c.pulsarConsumer.Chan()
 	defer func() {
-		c.client.Close()
 		c.pulsarConsumer.Close()
+		c.client.Close()
 	}()
 	for {
 		select {
@@ -110,9 +109,7 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			log.Info("terminating: context cancelled")
 			return errors.Trace(ctx.Err())
 		case consumerMsg := <-msgChan:
-			log.Debug(fmt.Sprintf("Received message msgId: %#v -- content: '%s'\n",
-				consumerMsg.ID(),
-				string(consumerMsg.Payload())))
+			log.Debug("Received message", zap.Stringer("msgId", consumerMsg.ID()), zap.ByteString("content", consumerMsg.Payload()))
 			needCommit := c.writer.WriteMessage(ctx, consumerMsg)
 			if !needCommit {
 				continue
