@@ -92,6 +92,10 @@ func newWriter(ctx context.Context, o *option) *writer {
 	codecConfig := common.NewConfig(o.protocol)
 	codecConfig.TimeZone = tz
 	codecConfig.EnableTiDBExtension = o.enableTiDBExtension
+	// the TiDB source ID should never be set to 0
+	o.replicaConfig.Sink.TiDBSourceID = 1
+	o.replicaConfig.Sink.Protocol = putil.AddressOf(o.protocol.String())
+
 	for i := 0; i < int(o.partitionNum); i++ {
 		decoder, err := codec.NewEventDecoder(ctx, i, codecConfig, o.topic, db)
 		if err != nil {

@@ -110,7 +110,7 @@ type Config struct {
 
 	// EnableDDLTs can be set in the sink URI to enable the DDL ts.
 	// it's default to true to make the mysql sink write DDL-ts
-	// for the kafka-consumer, set this to false.
+	// for the consumer, set this to false.
 	EnableDDLTs bool
 
 	SourceID        uint64
