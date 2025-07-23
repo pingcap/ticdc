@@ -665,6 +665,12 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 	submitAndClear := func(cur *splitSpanStatus) {
 		if len(mergeSpans) > 1 {
+			log.Info("chooseMergedSpans merge spans",
+				zap.String("changefeed", s.changefeedID.String()),
+				zap.Int64("group", int64(s.groupID)),
+				zap.Any("mergeSpans", mergeSpans),
+				zap.Any("node", mergeSpans[0].GetNodeID()),
+			)
 			results = append(results, SplitSpanCheckResult{
 				OpType:     OpMerge,
 				MergeSpans: append([]*SpanReplication{}, mergeSpans...),
@@ -726,6 +732,12 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 	}
 
 	if len(mergeSpans) > 1 {
+		log.Info("chooseMergedSpans merge spans",
+			zap.String("changefeed", s.changefeedID.String()),
+			zap.Int64("group", int64(s.groupID)),
+			zap.Any("mergeSpans", mergeSpans),
+			zap.Any("node", mergeSpans[0].GetNodeID()),
+		)
 		results = append(results, SplitSpanCheckResult{
 			OpType:     OpMerge,
 			MergeSpans: mergeSpans,
