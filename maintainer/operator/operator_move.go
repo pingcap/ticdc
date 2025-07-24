@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -37,6 +38,7 @@ type MoveDispatcherOperator struct {
 	originNodeStopped bool
 	finished          bool
 	bind              bool
+	removed           atomic.Bool
 
 	noPostFinishNeed bool
 
@@ -101,6 +103,8 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 	m.lck.Lock()
 	defer m.lck.Unlock()
+
+	m.removed.Store(true)
 
 	if m.finished {
 		log.Info("move dispatcher operator is finished, no need to handle node remove",
@@ -201,6 +205,16 @@ func (m *MoveDispatcherOperator) String() string {
 
 func (m *MoveDispatcherOperator) Type() string {
 	return "move"
+}
+
+func (m *MoveDispatcherOperator) BlockTsForward() bool {
+	if m.removed.Load() {
+		return true
+	}
+	if m.originNodeStopped {
+		return true
+	}
+	return false
 }
 
 // just for test.

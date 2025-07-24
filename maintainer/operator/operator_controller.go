@@ -218,14 +218,13 @@ func (oc *Controller) OperatorSizeWithLock() int {
 	return len(oc.operators)
 }
 
-func (oc *Controller) OperatorSizeWithoutMergeAndOccupyWithLock() int {
-	count := 0
+func (oc *Controller) OperatorBlockTsForward() bool {
 	for _, op := range oc.operators {
-		if op.OP.Type() != "merge" && op.OP.Type() != "occupy" {
-			count++
+		if op.OP.BlockTsForward() {
+			return true
 		}
 	}
-	return count
+	return false
 }
 
 // pollQueueingOperator returns the operator need to be executed,

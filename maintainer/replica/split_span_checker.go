@@ -44,6 +44,9 @@ const latestTrafficIndex = 0
 var minTrafficBalanceThreshold = float64(1024 * 1024) // 1MB
 var maxMoveSpansCountForTrafficBalance = 4
 var balanceScoreThreshold = 10
+var maxMoveSpansCountForMerge = 16
+var minTrafficPercentage = 0.9
+var maxTrafficPercentage = 1.1
 
 type BalanceCause string
 
@@ -485,7 +488,6 @@ func (s *SplitSpanChecker) findOptimalSpanMoves(minTrafficNodeID node.ID, maxTra
 	})
 
 	results := make([]SplitSpanCheckResult, 0)
-	maxMoves := 10 // Limit to 4 moves to avoid too many changes at once
 
 	// Track spans that have been selected to avoid duplicates
 	selectedSpans := make(map[common.DispatcherID]bool)
@@ -493,12 +495,12 @@ func (s *SplitSpanChecker) findOptimalSpanMoves(minTrafficNodeID node.ID, maxTra
 	// Try to find spans that can be moved to any available node for merge
 	// Prioritize nodes with lower traffic for better balance
 	for _, targetNodeID := range availableNodes {
-		if len(results) >= maxMoves {
+		if len(results) >= maxMoveSpansCountForMerge {
 			break
 		}
 
 		for _, span := range sortedSpans {
-			if len(results) >= maxMoves {
+			if len(results) >= maxMoveSpansCountForMerge {
 				break
 			}
 
@@ -999,7 +1001,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	balanceCauseByMaxNode := true
 	balanceCauseByMinNode := true
 	for idx, traffic := range lastThreeTrafficPerNode[minTrafficNodeID] {
-		if traffic > avgLastThreeTraffic[idx]*0.8 {
+		if traffic > avgLastThreeTraffic[idx]*minTrafficPercentage {
 			shouldBalance = false
 			balanceCauseByMinNode = false
 			break
@@ -1009,7 +1011,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	if !shouldBalance {
 		shouldBalance = true
 		for idx, traffic := range lastThreeTrafficPerNode[maxTrafficNodeID] {
-			if traffic < avgLastThreeTraffic[idx]*1.2 {
+			if traffic < avgLastThreeTraffic[idx]*maxTrafficPercentage {
 				shouldBalance = false
 				balanceCauseByMaxNode = false
 				break

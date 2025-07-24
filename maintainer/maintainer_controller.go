@@ -149,11 +149,9 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	}
 }
 
-// ScheduleFinished return false if not all task are running in working state
-// We don't count the merge and occupy operator in the operator size,
-// because merge operator is ensure the correct checkpointTs of the dispatchers.
+// ScheduleFinished return false if no absent task and no block ts operator
 func (c *Controller) ScheduleFinished() bool {
-	return c.operatorController.OperatorSizeWithoutMergeAndOccupyWithLock() == 0 && c.spanController.GetAbsentSize() == 0
+	return c.spanController.GetAbsentSize() == 0 && c.operatorController.OperatorBlockTsForward()
 }
 
 func (c *Controller) Stop() {

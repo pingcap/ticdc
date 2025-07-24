@@ -178,3 +178,13 @@ func (m *SplitDispatcherOperator) String() string {
 func (m *SplitDispatcherOperator) Type() string {
 	return "split"
 }
+
+func (m *SplitDispatcherOperator) BlockTsForward() bool {
+	if m.removed.Load() {
+		return true
+	}
+	if m.finished.Load() {
+		return true
+	}
+	return false
+}
