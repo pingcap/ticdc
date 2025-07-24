@@ -24,6 +24,8 @@ import (
 const (
 	DispatcherHeartbeatVersion         = 1
 	DispatcherHeartbeatResponseVersion = 1
+
+	CongestionControlVersion = 1
 )
 
 // DispatcherProgress is used to report the progress of a dispatcher to the EventService
@@ -76,35 +78,6 @@ func (dp *DispatcherProgress) decodeV1(data []byte) error {
 	return nil
 }
 
-type AvailableMemory struct {
-	Gid       common.GID // GID is the internal representation of ChangeFeedID
-	Available uint64     // in bytes, used to report the Available memory
-}
-
-func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
-	return AvailableMemory{
-		Gid:       gid,
-		Available: available,
-	}
-}
-
-func (m AvailableMemory) Marshal() []byte {
-	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.Write(m.Gid.Marshal())
-	binary.Write(buf, binary.BigEndian, m.Available)
-	return buf.Bytes()
-}
-
-func (m *AvailableMemory) Unmarshal(data []byte) {
-	buf := bytes.NewBuffer(data)
-	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
-	m.Available = binary.BigEndian.Uint64(buf.Next(8))
-}
-
-func (m AvailableMemory) GetSize() int {
-	return m.Gid.GetSize() + 8
-}
-
 // DispatcherHeartbeat is used to report the progress of a dispatcher to the EventService
 type DispatcherHeartbeat struct {
 	Version   byte
@@ -112,9 +85,6 @@ type DispatcherHeartbeat struct {
 
 	DispatcherCount      uint32
 	DispatcherProgresses []DispatcherProgress
-
-	changefeedCount uint32
-	AvailableMemory []AvailableMemory
 }
 
 func NewDispatcherHeartbeat() *DispatcherHeartbeat {
@@ -131,11 +101,6 @@ func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
 	d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
 }
 
-func (d *DispatcherHeartbeat) AppendAvailableMemory(available []AvailableMemory) {
-	d.changefeedCount += uint32(len(d.AvailableMemory))
-	d.AvailableMemory = available
-}
-
 func (d *DispatcherHeartbeat) GetSize() int {
 	size := 1 // version
 	size += 8 // clusterID
@@ -143,12 +108,6 @@ func (d *DispatcherHeartbeat) GetSize() int {
 	for _, dp := range d.DispatcherProgresses {
 		size += dp.GetSize()
 	}
-
-	size += 4 // changefeed count
-	for _, mem := range d.AvailableMemory {
-		size += mem.GetSize()
-	}
-
 	return size
 }
 
@@ -172,13 +131,6 @@ func (d *DispatcherHeartbeat) encodeV1() ([]byte, error) {
 		}
 		buf.Write(dpData)
 	}
-
-	_ = binary.Write(buf, binary.BigEndian, d.changefeedCount)
-	for _, item := range d.AvailableMemory {
-		data := item.Marshal()
-		buf.Write(data)
-	}
-
 	return buf.Bytes(), nil
 }
 
@@ -199,14 +151,6 @@ func (d *DispatcherHeartbeat) decodeV1(data []byte) error {
 			return err
 		}
 		d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
-	}
-
-	d.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
-	d.AvailableMemory = make([]AvailableMemory, 0, d.changefeedCount)
-	for range d.changefeedCount {
-		var item AvailableMemory
-		item.Unmarshal(buf.Next(item.GetSize()))
-		d.AvailableMemory = append(d.AvailableMemory, item)
 	}
 	return nil
 }
@@ -343,4 +287,94 @@ func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
 		buf.Write(dsData)
 	}
 	return buf.Bytes(), nil
+}
+
+type AvailableMemory struct {
+	Gid       common.GID // GID is the internal representation of ChangeFeedID
+	Available uint64     // in bytes, used to report the Available memory
+}
+
+func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
+	return AvailableMemory{
+		Gid:       gid,
+		Available: available,
+	}
+}
+
+func (m AvailableMemory) Marshal() []byte {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	buf.Write(m.Gid.Marshal())
+	binary.Write(buf, binary.BigEndian, m.Available)
+	return buf.Bytes()
+}
+
+func (m *AvailableMemory) Unmarshal(data []byte) {
+	buf := bytes.NewBuffer(data)
+	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
+	m.Available = binary.BigEndian.Uint64(buf.Next(8))
+}
+
+func (m AvailableMemory) GetSize() int {
+	return m.Gid.GetSize() + 8
+}
+
+type CongestionControl struct {
+	Version   byte
+	ClusterID uint64
+
+	changefeedCount uint32
+	AvailableMemory []AvailableMemory
+}
+
+func NewCongestionControl() *CongestionControl {
+	return &CongestionControl{
+		Version: CongestionControlVersion,
+	}
+}
+
+func (c *CongestionControl) GetSize() int {
+	size := 1 // version
+	size += 8 // clusterID
+
+	size += 4 // changefeed count
+	for _, mem := range c.AvailableMemory {
+		size += mem.GetSize()
+	}
+	return size
+}
+
+func (c *CongestionControl) Marshal() ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	buf.WriteByte(c.Version)
+	_ = binary.Write(buf, binary.BigEndian, c.ClusterID)
+
+	_ = binary.Write(buf, binary.BigEndian, c.changefeedCount)
+	for _, item := range c.AvailableMemory {
+		data := item.Marshal()
+		buf.Write(data)
+	}
+	return buf.Bytes(), nil
+}
+
+func (c *CongestionControl) Unmarshal(data []byte) error {
+	buf := bytes.NewBuffer(data)
+	var err error
+	c.Version, err = buf.ReadByte()
+	if err != nil {
+		return err
+	}
+	c.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
+	c.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
+	c.AvailableMemory = make([]AvailableMemory, 0, c.changefeedCount)
+	for range c.changefeedCount {
+		var item AvailableMemory
+		item.Unmarshal(buf.Next(item.GetSize()))
+		c.AvailableMemory = append(c.AvailableMemory, item)
+	}
+	return nil
+}
+
+func (c *CongestionControl) AppendAvailableMemory(available []AvailableMemory) {
+	c.changefeedCount += uint32(len(c.AvailableMemory))
+	c.AvailableMemory = append(c.AvailableMemory, available...)
 }
