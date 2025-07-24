@@ -151,7 +151,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 
 // ScheduleFinished return false if no absent task and no block ts operator
 func (c *Controller) ScheduleFinished() bool {
-	return c.spanController.GetAbsentSize() == 0 && c.operatorController.OperatorBlockTsForward()
+	return c.spanController.GetAbsentSize() == 0 && !c.operatorController.OperatorBlockTsForward()
 }
 
 func (c *Controller) Stop() {
