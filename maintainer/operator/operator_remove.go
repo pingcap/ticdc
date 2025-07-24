@@ -33,6 +33,7 @@ type removeDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
 	finished       atomic.Bool
 	spanController *span.Controller
+	repeat         bool
 }
 
 func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
@@ -93,10 +94,18 @@ func (m *removeDispatcherOperator) PostFinish() {
 }
 
 func (m *removeDispatcherOperator) String() string {
-	return fmt.Sprintf("remove dispatcher operator: %s, dest %s",
+	return fmt.Sprintf("remove dispatcher operator: %s, dest: %s",
 		m.replicaSet.ID, m.replicaSet.GetNodeID())
 }
 
 func (m *removeDispatcherOperator) Type() string {
 	return "remove"
+}
+
+func (m *removeDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *removeDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

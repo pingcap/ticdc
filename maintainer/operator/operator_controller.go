@@ -17,6 +17,7 @@ import (
 	"container/heap"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -58,6 +59,8 @@ type Controller struct {
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+
+	ops int64
 }
 
 // NewOperatorController creates a new operator controller
@@ -88,6 +91,15 @@ func (oc *Controller) Execute() time.Time {
 		}
 		if op == nil {
 			continue
+		}
+
+		if !op.IsRepeat() {
+			switch op.Type() {
+			case "occupy", "merge", "split", "remove":
+			default:
+				atomic.AddInt64(&oc.ops, 1)
+			}
+			op.SetRepeat(true)
 		}
 
 		msg := op.Schedule()
@@ -226,16 +238,32 @@ func (oc *Controller) pollQueueingOperator() (
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
-	if item.IsRemoved {
-		return nil, true
-	}
 	op := item.OP
 	opID := op.ID()
+	if item.IsRemoved {
+		// avoid op not being executed
+		if op.IsRepeat() {
+			switch op.Type() {
+			case "occupy", "merge", "split", "remove":
+			default:
+				atomic.AddInt64(&oc.ops, -1)
+			}
+		}
+		return nil, true
+	}
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
 		item.IsRemoved = true
 		delete(oc.operators, opID)
+		// avoid op not being executed
+		if op.IsRepeat() {
+			switch op.Type() {
+			case "occupy", "merge", "split", "remove":
+			default:
+				atomic.AddInt64(&oc.ops, -1)
+			}
+		}
 		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
@@ -258,7 +286,7 @@ func (oc *Controller) pollQueueingOperator() (
 
 func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 	if old, ok := oc.operators[op.ID()]; ok {
-		log.Info("replica set is removed , replace the old one",
+		log.Info("replica set is removed, replace the old one",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("replicaSet", old.OP.ID().String()),
@@ -337,12 +365,14 @@ func (oc *Controller) AddMergeOperator(
 	for _, replicaSet := range affectedReplicaSets {
 		operator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
 		operators = append(operators, operator)
-
 		if _, ok := oc.operators[operator.ID()]; ok {
 			log.Info("add operator failed, operator already exists",
 				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
 				zap.String("operator", operator.String()))
+			for _, op := range operators {
+				op.OnTaskRemoved()
+			}
 			return nil
 		}
 		oc.pushOperator(operator)
@@ -354,6 +384,9 @@ func (oc *Controller) AddMergeOperator(
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
 		)
+		for _, op := range operators {
+			op.OnTaskRemoved()
+		}
 		return nil
 	}
 	if _, ok := oc.operators[mergeOperator.ID()]; ok {
@@ -361,6 +394,9 @@ func (oc *Controller) AddMergeOperator(
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("operator", mergeOperator.String()))
+		for _, op := range operators {
+			op.OnTaskRemoved()
+		}
 		return nil
 	}
 	oc.pushOperator(mergeOperator)
@@ -424,6 +460,10 @@ func (oc *Controller) AddMergeSplitOperator(
 		zap.Int("newSpans", len(splitSpans)),
 	)
 	return true
+}
+
+func (oc *Controller) GetOps() int64 {
+	return atomic.LoadInt64(&oc.ops)
 }
 
 func (oc *Controller) GetLock() *sync.RWMutex {

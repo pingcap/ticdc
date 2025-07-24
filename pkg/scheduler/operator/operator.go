@@ -60,4 +60,7 @@ type Operator[T replica.ReplicationID, S replica.ReplicationStatus] interface {
 	OnTaskRemoved()
 	// String returns the string representation of the operator
 	String() string
+
+	IsRepeat() bool
+	SetRepeat(bool)
 }

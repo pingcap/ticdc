@@ -48,6 +48,7 @@ type MergeSplitDispatcherOperator struct {
 	affectedReplicaSets []*replica.SpanReplication
 	splitSpans          []*heartbeatpb.TableSpan
 	splitSpanInfo       string
+	repeat              bool
 }
 
 // NewMergeSplitDispatcherOperator creates a new MergeSplitDispatcherOperator
@@ -182,7 +183,7 @@ func (m *MergeSplitDispatcherOperator) PostFinish() {
 
 func (m *MergeSplitDispatcherOperator) String() string {
 	if m.originReplicaSet.ID == m.primary {
-		return fmt.Sprintf("merge-split dispatcher operator[primary]: %s, totalAffected: %d, finished: %d, splitSpans:%s",
+		return fmt.Sprintf("merge-split dispatcher operator[primary]: %s, totalAffected: %d, finished: %d, splitSpans: %s",
 			m.originReplicaSet.ID, len(m.affectedReplicaSets), m.totalRemoved.Load(), m.splitSpanInfo)
 	}
 	return fmt.Sprintf("merge-split dispatcher operator[secondary]: %s, primary: %s", m.originReplicaSet.ID, m.primary)
@@ -194,4 +195,12 @@ func (m *MergeSplitDispatcherOperator) Type() string {
 
 func (m *MergeSplitDispatcherOperator) GetOnFinished() func() {
 	return m.onFinished
+}
+
+func (m *MergeSplitDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *MergeSplitDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

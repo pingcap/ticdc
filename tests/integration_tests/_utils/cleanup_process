@@ -2,7 +2,7 @@
 # parameter 1: process name
 
 process=$1
-retry_count=60
+retry_count=120
 
 killall $process || true
 
