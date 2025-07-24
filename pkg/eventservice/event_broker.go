@@ -646,9 +646,7 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 	if cache == nil || cache.len == 0 {
 		return
 	}
-	msg := &pevent.BatchResolvedEvent{
-		IsRedo: isRedo,
-	}
+	msg := &pevent.BatchResolvedEvent{}
 	msg.Events = append(msg.Events, cache.getAll(isRedo)...)
 	if len(msg.Events) == 0 {
 		return

@@ -184,7 +184,7 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 	return common.NewChangefeedGIDFromPB(scheduleDispatcherRequest.ChangefeedID)
 }
 
-func (h *SchedulerDispatcherRequestHandler) Handle(DispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
+func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	// If req is about remove dispatcher, then there will only be one request in reqs.
 	infos := make([]dispatcherCreateInfo, 0, len(reqs))
 	redoInfos := make([]dispatcherCreateInfo, 0, len(reqs))
@@ -213,31 +213,31 @@ func (h *SchedulerDispatcherRequestHandler) Handle(DispatcherManager *Dispatcher
 				log.Error("invalid remove dispatcher request count in one batch", zap.Int("count", len(reqs)))
 			}
 			if config.IsRedo {
-				removeDispatcher(DispatcherManager, dispatcherID, DispatcherManager.redoDispatcherMap, DispatcherManager.redoSink.SinkType())
+				removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.redoDispatcherMap, dispatcherManager.redoSink.SinkType())
 			} else {
-				removeDispatcher(DispatcherManager, dispatcherID, DispatcherManager.dispatcherMap, DispatcherManager.sink.SinkType())
+				removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.dispatcherMap, dispatcherManager.sink.SinkType())
 			}
 		}
 	}
 	handleErr := func(err error) {
 		select {
-		case DispatcherManager.errCh <- err:
-			log.Error("new redo dispatcher meet error", zap.String("ChangefeedID", DispatcherManager.changefeedID.String()),
+		case dispatcherManager.errCh <- err:
+			log.Error("new redo dispatcher meet error", zap.String("ChangefeedID", dispatcherManager.changefeedID.String()),
 				zap.Error(err))
 		default:
 			log.Error("error channel is full, discard error",
-				zap.Any("ChangefeedID", DispatcherManager.changefeedID.String()),
+				zap.Any("ChangefeedID", dispatcherManager.changefeedID.String()),
 				zap.Error(err))
 		}
 	}
 	if len(redoInfos) > 0 {
-		err := DispatcherManager.newRedoDispatchers(redoInfos, false)
+		err := dispatcherManager.newRedoDispatchers(redoInfos, false)
 		if err != nil {
 			handleErr(err)
 		}
 	}
 	if len(infos) > 0 {
-		err := DispatcherManager.newEventDispatchers(infos, false)
+		err := dispatcherManager.newEventDispatchers(infos, false)
 		if err != nil {
 			handleErr(err)
 		}
@@ -303,7 +303,7 @@ func (h *HeartBeatResponseHandler) Path(HeartbeatResponse HeartBeatResponse) com
 	return common.NewChangefeedGIDFromPB(HeartbeatResponse.ChangefeedID)
 }
 
-func (h *HeartBeatResponseHandler) Handle(DispatcherManager *DispatcherManager, resps ...HeartBeatResponse) bool {
+func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, resps ...HeartBeatResponse) bool {
 	if len(resps) != 1 {
 		// TODO: Support batch
 		panic("invalid response count")
@@ -325,9 +325,9 @@ func (h *HeartBeatResponseHandler) Handle(DispatcherManager *DispatcherManager, 
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			var dispatcherIds []common.DispatcherID
 			if heartbeatResponse.IsRedo {
-				dispatcherIds = DispatcherManager.GetAllRedoDispatchers(schemaID)
+				dispatcherIds = dispatcherManager.GetAllRedoDispatchers(schemaID)
 			} else {
-				dispatcherIds = DispatcherManager.GetAllDispatchers(schemaID)
+				dispatcherIds = dispatcherManager.GetAllDispatchers(schemaID)
 			}
 			for _, id := range dispatcherIds {
 				if id != excludeDispatcherID {
@@ -337,13 +337,13 @@ func (h *HeartBeatResponseHandler) Handle(DispatcherManager *DispatcherManager, 
 		case heartbeatpb.InfluenceType_All:
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			if heartbeatResponse.IsRedo {
-				DispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
+				dispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
 					if id != excludeDispatcherID {
 						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 					}
 				})
 			} else {
-				DispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.EventDispatcher) {
+				dispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.EventDispatcher) {
 					if id != excludeDispatcherID {
 						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 					}
@@ -395,14 +395,14 @@ func (h *CheckpointTsMessageHandler) Path(checkpointTsMessage CheckpointTsMessag
 	return common.NewChangefeedGIDFromPB(checkpointTsMessage.ChangefeedID)
 }
 
-func (h *CheckpointTsMessageHandler) Handle(DispatcherManager *DispatcherManager, messages ...CheckpointTsMessage) bool {
+func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...CheckpointTsMessage) bool {
 	if len(messages) != 1 {
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	if DispatcherManager.tableTriggerEventDispatcher != nil {
+	if dispatcherManager.tableTriggerEventDispatcher != nil {
 		checkpointTsMessage := messages[0]
-		DispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
+		dispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }
@@ -452,15 +452,15 @@ func (h *RedoTsMessageHandler) Path(redoTsMessage RedoTsMessage) common.GID {
 	return common.NewChangefeedGIDFromPB(redoTsMessage.ChangefeedID)
 }
 
-func (h *RedoTsMessageHandler) Handle(DispatcherManager *DispatcherManager, messages ...RedoTsMessage) bool {
+func (h *RedoTsMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoTsMessage) bool {
 	if len(messages) != 1 {
 		// TODO: Support batch
 		panic("invalid message count")
 	}
 	msg := messages[0]
-	ok := DispatcherManager.SetGlobalRedoTs(msg.CheckpointTs, msg.ResolvedTs)
+	ok := dispatcherManager.SetGlobalRedoTs(msg.CheckpointTs, msg.ResolvedTs)
 	if ok {
-		DispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
+		dispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
 			dispatcher.HandleCacheEvents()
 		})
 	}
@@ -507,7 +507,7 @@ func (h *MergeDispatcherRequestHandler) Path(mergeDispatcherRequest MergeDispatc
 	return common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID)
 }
 
-func (h *MergeDispatcherRequestHandler) Handle(DispatcherManager *DispatcherManager, reqs ...MergeDispatcherRequest) bool {
+func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...MergeDispatcherRequest) bool {
 	if len(reqs) != 1 {
 		panic("invalid request count")
 	}
@@ -517,7 +517,7 @@ func (h *MergeDispatcherRequestHandler) Handle(DispatcherManager *DispatcherMana
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))
 	}
-	DispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID), mergeDispatcherRequest.IsRedo)
+	dispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID), mergeDispatcherRequest.IsRedo)
 	return false
 }
 

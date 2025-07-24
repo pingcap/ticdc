@@ -28,12 +28,13 @@ type BatchResolvedEvent struct {
 	// Version is the version of the BatchResolvedEvent struct.
 	Version byte
 	Events  []ResolvedEvent
-	// only for redo
-	IsRedo bool
 }
 
 func (b BatchResolvedEvent) GetIsRedo() bool {
-	return b.IsRedo
+	if len(b.Events) > 0 {
+		return b.Events[0].GetIsRedo()
+	}
+	return false
 }
 
 func (b BatchResolvedEvent) GetType() int {
