@@ -126,6 +126,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 	})
 
 	g.Go(func() error {
+		return c.controlCongestion(ctx)
+	})
+
+	g.Go(func() error {
 		return c.sendDispatcherRequests(ctx)
 	})
 
@@ -244,27 +248,11 @@ func (c *EventCollector) getDispatcherStatByID(dispatcherID common.DispatcherID)
 	return value.(*dispatcherStat)
 }
 
-func (c *EventCollector) collectMemory() []event.AvailableMemory {
-	var result []event.AvailableMemory
-	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
-		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
-		if !ok {
-			continue
-		}
-		gid := changefeedID.(common.ChangeFeedID).ID()
-		result = append(result, event.NewAvailableMemory(gid, uint64(quota.AvailableMemory())))
-	}
-	return result
-}
-
 func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
 	groupedHeartbeats := c.groupHeartbeat(heartbeat)
-	available := c.collectMemory()
 	for serverID, hb := range groupedHeartbeats {
-		hb.AppendAvailableMemory(available)
 		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, hb)
 		c.enqueueMessageForSend(msg)
-		log.Info("event collector send dispatcher heartbeat", zap.Any("serverID", serverID), zap.Any("heartbeat", hb))
 	}
 }
 
@@ -422,6 +410,66 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 			}
 		}
 	}
+}
+
+func (c *EventCollector) controlCongestion(ctx context.Context) error {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			messages := c.newCongestionControlMessages()
+			for serverID, m := range messages {
+				msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, m)
+				c.enqueueMessageForSend(msg)
+			}
+		}
+	}
+}
+
+func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
+	availables := make(map[common.ChangeFeedID]uint64)
+	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
+		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
+		if !ok {
+			continue
+		}
+		availables[changefeedID.(common.ChangeFeedID)] = uint64(quota.AvailableMemory())
+	}
+	if len(availables) == 0 {
+		return nil
+	}
+
+	result := make(map[node.ID]*event.CongestionControl)
+	for changefeedID, total := range availables {
+		var sum uint32
+		proportion := make(map[node.ID]uint32)
+		c.dispatcherMap.Range(func(key, value interface{}) bool {
+			// this is not efficient, we should group dispatchers by the changefeedID
+			stat := value.(*dispatcherStat)
+			if stat.target.GetChangefeedID().ID() == changefeedID.ID() {
+				eventServiceID := stat.connState.getEventServiceID()
+				proportion[eventServiceID]++
+				sum++
+			}
+			return true
+		})
+
+		for nodeID, portion := range proportion {
+			ratio := float32(portion) / float32(sum)
+			quota := uint64(float32(total) * ratio)
+
+			m, ok := result[nodeID]
+			if !ok {
+				m = event.NewCongestionControl()
+			}
+			m.AddAvailableMemory(changefeedID.ID(), quota)
+		}
+	}
+	return result
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) error {

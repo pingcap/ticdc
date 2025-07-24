@@ -374,7 +374,12 @@ func (c *CongestionControl) Unmarshal(data []byte) error {
 	return nil
 }
 
-func (c *CongestionControl) AppendAvailableMemory(available []AvailableMemory) {
-	c.changefeedCount += uint32(len(c.AvailableMemory))
-	c.AvailableMemory = append(c.AvailableMemory, available...)
+func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64) {
+	c.changefeedCount++
+	c.AvailableMemory = append(c.AvailableMemory, NewAvailableMemory(gid, available))
 }
+
+//func (c *CongestionControl) AppendAvailableMemory(available []AvailableMemory) {
+//	c.changefeedCount += uint32(len(c.AvailableMemory))
+//	c.AvailableMemory = append(c.AvailableMemory, available...)
+//}
