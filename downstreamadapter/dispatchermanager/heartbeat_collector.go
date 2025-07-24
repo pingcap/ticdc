@@ -236,7 +236,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 	case messaging.TypeRedoTsMessage:
 		redoTsMessage := msg.Message[0].(*heartbeatpb.RedoTsMessage)
 		c.redoTsMessageDynamicStream.Push(
-			common.NewChangefeedIDFromPB(redoTsMessage.ChangefeedID).Id,
+			common.NewChangefeedGIDFromPB(redoTsMessage.ChangefeedID),
 			NewRedoTsMessage(redoTsMessage))
 	case messaging.TypeMergeDispatcherRequest:
 		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
@@ -256,6 +256,7 @@ func (c *HeartBeatCollector) Close() {
 	c.wg.Wait()
 
 	c.checkpointTsMessageDynamicStream.Close()
+	c.redoTsMessageDynamicStream.Close()
 	c.heartBeatResponseDynamicStream.Close()
 	c.schedulerDispatcherRequestDynamicStream.Close()
 	c.dispatcherStatusDynamicStream.Close()
