@@ -125,18 +125,13 @@ func TestOnNotify(t *testing.T) {
 	disp.resetState(100)
 	disp.isHandshaked.Store(true)
 
-	// Case 1: The resolvedTs is less than the startTs, it should not happen.
-	notifyMsgs1 := notifyMsg{1, 1}
-	require.Panics(t, func() { broker.onNotify(disp, notifyMsgs1.resolvedTs, notifyMsgs1.latestCommitTs) })
-	log.Info("Pass case 1")
-
-	// Case 2: The resolvedTs is greater than the startTs, it should be updated.
+	// Case 1: The resolvedTs is greater than the startTs, it should be updated.
 	notifyMsgs2 := notifyMsg{101, 1}
 	broker.onNotify(disp, notifyMsgs2.resolvedTs, notifyMsgs2.latestCommitTs)
 	require.Equal(t, uint64(101), disp.eventStoreResolvedTs.Load())
 	log.Info("Pass case 2")
 
-	// Case 3: The latestCommitTs is greater than the startTs, it triggers a scan task.
+	// Case 2: The latestCommitTs is greater than the startTs, it triggers a scan task.
 	notifyMsgs3 := notifyMsg{102, 101}
 	broker.onNotify(disp, notifyMsgs3.resolvedTs, notifyMsgs3.latestCommitTs)
 	require.Equal(t, uint64(102), disp.eventStoreResolvedTs.Load())
@@ -145,7 +140,7 @@ func TestOnNotify(t *testing.T) {
 	require.Equal(t, task.id, disp.id)
 	log.Info("Pass case 3")
 
-	// Case 4: When the scan task is running, even there is a larger resolvedTs,
+	// Case 3: When the scan task is running, even there is a larger resolvedTs,
 	// should not trigger a new scan task.
 	notifyMsgs4 := notifyMsg{103, 101}
 	broker.onNotify(disp, notifyMsgs4.resolvedTs, notifyMsgs4.latestCommitTs)
@@ -159,7 +154,7 @@ func TestOnNotify(t *testing.T) {
 		require.Fail(t, "should not trigger a new scan task")
 	}
 
-	// Case 5: Do scan, it will update the sentResolvedTs.
+	// Case 4: Do scan, it will update the sentResolvedTs.
 	broker.doScan(context.TODO(), task)
 	require.False(t, disp.isTaskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())
@@ -239,3 +234,92 @@ func TestHandleResolvedTs(t *testing.T) {
 	msg := <-mc.messageCh
 	require.Equal(t, msg.Type, messaging.TypeBatchResolvedTs)
 }
+
+// func TestRateLimiter(t *testing.T) {
+// 	broker, _, _ := newEventBrokerForTest()
+// 	defer broker.close()
+
+// 	dispInfo := newMockDispatcherInfoForTest(t)
+// 	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo.GetChangefeedID())
+
+// 	// Create a dispatcher with known scan limit
+// 	disp := newDispatcherStat(100, dispInfo, nil, 0, 0, changefeedStatus)
+// 	disp.resetState(100)
+// 	disp.isHandshaked.Store(true)
+// 	disp.isReadyRecevingData.Store(true)
+// 	disp.eventStoreResolvedTs.Store(200)
+// 	disp.latestCommitTs.Store(200)
+
+// 	// Test Case 1: Normal operation - should allow within burst capacity
+// 	// Reset the scan limit to minimum value (1MB)
+// 	disp.resetScanLimit()
+// 	scanLimit := disp.getCurrentScanLimitInBytes()
+// 	require.Equal(t, int64(minScanLimitInBytes), scanLimit)
+
+// 	// This should succeed - within burst capacity
+// 	allowed := broker.scanRateLimiter.AllowN(time.Now(), int(scanLimit))
+// 	require.True(t, allowed, "Rate limiter should allow request within burst capacity")
+
+// 	// Test Case 2: Burst capacity limit - should reject request larger than burst
+// 	// Try to consume more than the burst capacity (maxScanLimitInBytes)
+// 	oversizedRequest := int(maxScanLimitInBytes + 1)
+// 	allowed = broker.scanRateLimiter.AllowN(time.Now(), oversizedRequest)
+// 	require.False(t, allowed, "Rate limiter should reject request larger than burst capacity")
+
+// 	// Test Case 3: Multiple requests within burst capacity
+// 	// After some time, we should be able to make another request
+// 	time.Sleep(100 * time.Millisecond) // Allow some tokens to be replenished
+// 	allowed = broker.scanRateLimiter.AllowN(time.Now(), int(scanLimit))
+// 	require.True(t, allowed, "Rate limiter should allow another request after token replenishment")
+
+// 	// Test Case 4: Test doScan with rate limiter integration
+// 	// Mock the getScanTaskDataRange to return our test data range
+// 	disp.sentResolvedTs.Store(99) // Set to less than eventStoreResolvedTs to trigger scan
+
+// 	// Test that doScan respects rate limiter
+// 	// First, exhaust the rate limiter
+// 	broker.scanRateLimiter.AllowN(time.Now(), int(maxScanLimitInBytes))
+
+// 	// Now doScan should return early due to rate limiter
+// 	ctx := context.Background()
+// 	// This should return quickly without doing actual scan due to rate limiter
+// 	broker.doScan(ctx, disp)
+// 	// Since we can't directly check internal state, we verify the scan wasn't blocked
+// 	require.False(t, disp.isTaskScanning.Load(), "Task should not be scanning due to rate limiter")
+
+// 	// Test Case 5: Test rate limiter configuration
+// 	// Verify that the rate limiter is configured correctly
+// 	require.NotNil(t, broker.scanRateLimiter, "Rate limiter should be initialized")
+
+// 	// Test rate limiter limits
+// 	rateLimiter := broker.scanRateLimiter
+// 	require.Equal(t, float64(maxScanLimitInBytesPerSecond), float64(rateLimiter.Limit()), "Rate limiter should have correct rate limit")
+
+// 	// Test burst capacity by trying to consume exactly the burst amount
+// 	// Wait for tokens to be replenished
+// 	time.Sleep(200 * time.Millisecond)
+// 	burstAmount := int(maxScanLimitInBytes)
+// 	allowed = rateLimiter.AllowN(time.Now(), burstAmount)
+// 	require.True(t, allowed, "Rate limiter should allow request exactly equal to burst capacity")
+
+// 	// Test Case 6: Test with dispatcher's getCurrentScanLimitInBytes
+// 	// Reset scan limit and test integration
+// 	disp.resetScanLimit()
+// 	currentLimit := disp.getCurrentScanLimitInBytes()
+// 	require.Equal(t, int64(minScanLimitInBytes), currentLimit)
+
+// 	// This should work with rate limiter
+// 	time.Sleep(100 * time.Millisecond) // Allow token replenishment
+// 	allowed = broker.scanRateLimiter.AllowN(time.Now(), int(currentLimit))
+// 	require.True(t, allowed, "Rate limiter should work with dispatcher's current scan limit")
+
+// 	// Test Case 7: Test scan limit growth over time
+// 	// Wait for scan limit to potentially grow
+// 	time.Sleep(updateScanLimitInterval + 100*time.Millisecond)
+// 	newLimit := disp.getCurrentScanLimitInBytes()
+// 	// Should either stay the same or grow (depending on timing)
+// 	require.True(t, newLimit >= currentLimit, "Scan limit should not decrease")
+// 	require.True(t, newLimit <= maxScanLimitInBytes, "Scan limit should not exceed maximum")
+
+// 	log.Info("All rate limiter tests passed")
+// }

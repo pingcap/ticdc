@@ -40,7 +40,6 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
-	"github.com/tikv/pd/client/pkg/caller"
 )
 
 func main() {
@@ -116,7 +115,7 @@ func addLock(ctx context.Context, cfg *util.Config) error {
 	}
 
 	pdcli, err := pd.NewClientWithContext(
-		ctx, caller.Component("ticdc"), strings.Split(cfg.PDAddr, ","), pd.SecurityOption{})
+		ctx, "cdc-test-resolve-lock", strings.Split(cfg.PDAddr, ","), pd.SecurityOption{})
 	if err != nil {
 		return errors.Trace(err)
 	}

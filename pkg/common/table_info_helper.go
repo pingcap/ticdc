@@ -347,7 +347,8 @@ type columnSchema struct {
 	// enabled and the primary key is not a single integer column.
 	IsCommonHandle bool `json:"is_common_handle"`
 	// UpdateTS is used to record the timestamp of updating the table's schema information.
-	// These changing schema operations don't include 'truncate table' and 'rename table'.
+	// These changing schema operations don't include 'truncate table', 'rename table',
+	// 'truncate partition' and 'exchange partition'.
 	UpdateTS uint64 `json:"update_timestamp"`
 
 	// rest fields are generated
@@ -482,7 +483,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 
 	colSchema.initRowColInfosWithoutVirtualCols()
 	colSchema.InitPreSQLs(tableInfo.Name.O)
-	colSchema.initIndex(tableInfo.Name.O)
+	colSchema.initIndexColumns()
 	return colSchema
 }
 
@@ -585,7 +586,7 @@ func (s *columnSchema) initRowColInfosWithoutVirtualCols() {
 // 1. if the table has primary key, it's the handle key.
 // 2. If the table has not null unique key, it's the handle key.
 // 3. If the table has no primary key and no not null unique key, it has no handleKey.
-func (s *columnSchema) initIndex(tableName string) {
+func (s *columnSchema) initIndexColumns() {
 	handleIndexOffset := -1
 	hasPrimary := len(s.HandleKeyIDs) != 0
 	for i, idx := range s.Indices {
@@ -643,9 +644,9 @@ func (s *columnSchema) initIndex(tableName string) {
 		}
 	}
 	if handleIndexOffset < 0 {
-		log.Info("not find handle index", zap.String("table", tableName), zap.Any("handleKeyIDs", s.HandleKeyIDs))
 		return
 	}
+
 	selectCols := s.Indices[handleIndexOffset].Columns
 	for _, col := range selectCols {
 		s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}

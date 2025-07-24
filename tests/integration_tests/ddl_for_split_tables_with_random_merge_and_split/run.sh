@@ -11,6 +11,7 @@ set -eu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
+source $CUR/../_utils/execute_mixed_dml
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
@@ -83,10 +84,7 @@ function execute_ddls() {
 
 function execute_dml() {
 	table_name="table_$1"
-	echo "DML: Inserting data into $table_name..."
-	while true; do
-		run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
-	done
+	execute_mixed_dml "$table_name" "${UP_TIDB_HOST}" "${UP_TIDB_PORT}"
 }
 
 function merge_and_split_table() {

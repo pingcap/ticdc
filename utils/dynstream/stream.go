@@ -326,7 +326,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 		// If the last event is a periodic signal, we only need to keep the latest one.
 		// And we don't need to add a new signal.
 		*back = event
-		return false
+		return true
 	} else {
 		pi.pendingQueue.PushBack(event)
 		pi.updatePendingSize(int64(event.eventSize))

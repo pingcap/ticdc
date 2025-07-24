@@ -52,7 +52,6 @@ type EventDispatcher interface {
 	GetSyncPointInterval() time.Duration
 	GetStartTsIsSyncpoint() bool
 	GetResolvedTs() uint64
-	HandleEvents(events []DispatcherEvent, wakeCallback func()) bool
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
 	GetComponentStatus() heartbeatpb.ComponentState
@@ -63,6 +62,8 @@ type EventDispatcher interface {
 	SetStartTsIsSyncpoint(bool)
 	// GetType returns the dispatcher type
 	GetType() int
+	GetCheckpointTs() uint64
+	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 }
 
 /*

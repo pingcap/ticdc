@@ -25,7 +25,7 @@ func TestColumnsDispatcher(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table t1(col1 int, col2 int, col3 int)")
+	job := helper.DDL2Job("create table t1(COL2 int, Col1 int, col3 int)")
 	require.NotNil(t, job)
 	tableInfo := helper.GetTableInfo(job)
 	dml := helper.DML2Event("test", "t1", "insert into t1 values(22, 11, 33)")
@@ -39,10 +39,10 @@ func TestColumnsDispatcher(t *testing.T) {
 	p = newColumnsPartitionGenerator([]string{"col2", "col1"})
 	index, _, err := p.GeneratePartitionIndexAndKey(&row, 16, tableInfo, 1)
 	require.NoError(t, err)
-	require.Equal(t, int32(15), index)
+	require.Equal(t, int32(5), index)
 
 	p = newColumnsPartitionGenerator([]string{"COL2", "Col1"})
 	index, _, err = p.GeneratePartitionIndexAndKey(&row, 16, tableInfo, 1)
 	require.NoError(t, err)
-	require.Equal(t, int32(15), index)
+	require.Equal(t, int32(5), index)
 }

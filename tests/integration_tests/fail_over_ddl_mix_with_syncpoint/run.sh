@@ -15,6 +15,7 @@ set -eu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
+source $CUR/../_utils/execute_mixed_dml
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
@@ -34,7 +35,6 @@ function prepare() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	TOPIC_NAME="ticdc-failover-ddl-test-mix-with-syncpoint-$RANDOM"
-	SINK_URI="mysql://root@127.0.0.1:3306/"
 
 	case $SINK_TYPE in
 	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=3" ;;
@@ -43,7 +43,7 @@ function prepare() {
 		run_pulsar_cluster $WORK_DIR normal
 		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
 		;;
-	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
+	*) SINK_URI="mysql://root@127.0.0.1:3306/" ;;
 	esac
 	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
 	case $SINK_TYPE in
@@ -90,17 +90,14 @@ function execute_ddl() {
 
 function execute_dml() {
 	table_name="table_$1"
-	echo "DML: Inserting data into $table_name..."
-	while true; do
-		run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
-	done
+	execute_mixed_dml "$table_name" "${UP_TIDB_HOST}" "${UP_TIDB_PORT}"
 }
 
 function kill_server() {
 	for count in {1..10}; do
 		case $((RANDOM % 2)) in
 		0)
-			cdc_pid_1=$(ps aux | grep cdc | grep 8300 | awk '{print $2}')
+			cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
 			if [ -z "$cdc_pid_1" ]; then
 				continue
 			fi
@@ -110,7 +107,7 @@ function kill_server() {
 			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
 			;;
 		1)
-			cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+			cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
 			if [ -z "$cdc_pid_2" ]; then
 				continue
 			fi

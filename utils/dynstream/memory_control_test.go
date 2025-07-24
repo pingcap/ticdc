@@ -109,7 +109,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventType: EventType{Property: PeriodicSignal},
 	}
 	ok = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
-	require.False(t, ok)
+	require.True(t, ok)
 	// Size should remain the same as the signal was replaced
 	require.Equal(t, int64(2), path1.areaMemStat.totalPendingSize.Load())
 	// The pending queue should only have 2 events

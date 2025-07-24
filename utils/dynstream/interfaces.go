@@ -240,7 +240,7 @@ func (o *Option) fix() {
 
 type AreaSettings struct {
 	component        string
-	maxPendingSize   uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 128 MB.
+	maxPendingSize   uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 1GB.
 	feedbackInterval time.Duration // The interval of the feedback. By default 1000ms.
 	// Remove it when we determine the v2 is working well.
 	algorithm int // The algorithm of the memory control.

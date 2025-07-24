@@ -43,12 +43,10 @@ var baseSpanNumberCoefficient = replica.MinSpanNumberCoefficient + 1
 // RegionCache is a simplified interface of tikv.RegionCache.
 // It is useful to restrict RegionCache usage and mocking in tests.
 type RegionCache interface {
-	// ListRegionIDsInKeyRange lists ids of regions in [startKey,endKey].
-	ListRegionIDsInKeyRange(
+	// LoadRegionsInKeyRange loads regions in [startKey,endKey].
+	LoadRegionsInKeyRange(
 		bo *tikv.Backoffer, startKey, endKey []byte,
-	) (regionIDs []uint64, err error)
-	// LocateRegionByID searches for the region with ID.
-	LocateRegionByID(bo *tikv.Backoffer, regionID uint64) (*tikv.KeyLocation, error)
+	) (regions []*tikv.Region, err error)
 }
 
 type splitter interface {

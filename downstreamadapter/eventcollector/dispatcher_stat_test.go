@@ -41,6 +41,7 @@ type mockDispatcher struct {
 	changefeedID common.ChangeFeedID
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
 	events       []dispatcher.DispatcherEvent
+	checkPointTs uint64
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -48,6 +49,7 @@ func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
 		id:           id,
 		startTs:      startTs,
 		changefeedID: mockChangefeedID,
+		checkPointTs: startTs,
 	}
 }
 
@@ -97,11 +99,16 @@ func (m *mockDispatcher) GetResolvedTs() uint64 {
 	return m.startTs
 }
 
+func (m *mockDispatcher) GetCheckpointTs() uint64 {
+	return m.checkPointTs
+}
+
 func (m *mockDispatcher) HandleEvents(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	if m.handleEvents == nil {
 		return false
 	}
 	m.events = append(m.events, events...)
+	m.checkPointTs = m.events[len(m.events)-1].GetCommitTs()
 	return m.handleEvents(m.events, wakeCallback)
 }
 
@@ -167,32 +174,6 @@ func newTestEventCollector(localServerID node.ID) *EventCollector {
 	mc := messaging.NewMessageCenter(context.TODO(), localServerID, config.NewDefaultMessageCenterConfig("127.0.0.1:18300"), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	return New(localServerID)
-}
-
-func TestGetResetTs(t *testing.T) {
-	// Test case 1: lastEventCommitTs is greater than startTs
-	// Expected: resetTs should be lastEventCommitTs - 1
-	stat := &dispatcherStat{
-		target: &mockDispatcher{},
-	}
-	stat.lastEventCommitTs.Store(100)
-	stat.target.(*mockDispatcher).startTs = 50
-	resetTs := stat.getResetTs()
-	require.Equal(t, uint64(99), resetTs)
-
-	// Test case 2: lastEventCommitTs is equal to startTs
-	// Expected: resetTs should be startTs
-	stat.lastEventCommitTs.Store(50)
-	stat.target.(*mockDispatcher).startTs = 50
-	resetTs = stat.getResetTs()
-	require.Equal(t, uint64(50), resetTs)
-
-	// Test case 3: lastEventCommitTs is less than startTs
-	// Expected: resetTs should be startTs
-	stat.lastEventCommitTs.Store(30)
-	stat.target.(*mockDispatcher).startTs = 50
-	resetTs = stat.getResetTs()
-	require.Equal(t, uint64(50), resetTs)
 }
 
 func TestVerifyEventSequence(t *testing.T) {

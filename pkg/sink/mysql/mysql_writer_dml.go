@@ -32,11 +32,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-// for the events, we try to batch the events of the same table into single update / insert / delete query,
+// for multiple events, we try to batch the events of the same table into limited update / insert / delete query,
 // to enhance the performance of the sink.
 // While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
 // the process is as follows:
@@ -45,7 +46,7 @@ import (
 //     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.(TODO: support the case without pk but have uk)
 //     Otherwise,
 //     if there is only one rows of the whole group, we generate the sqls for the row.
-//     Otherwise, we batch all the event rows for the same dispatcherID to a single delete / update/ insert query(in order)
+//     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
 func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
@@ -154,23 +155,83 @@ func allRowInSameSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
 //     if the previous row is Insert A, and the next row is Delete A -- Romove the `Insert A` one.
 //
 // 2. if all the events are in safe mode:
+// Consider we will split the event if PK is changed, so the Update will not change the PK
 // for the rows comparation, there are six situations:
 // 1. the previous row is Delete A, the next row is Insert A. --- we don't need to combine the rows.
-// 2. the previous row is Delete A, the next row is Update B to A. --- we don't need to combine the rows.
+// 2. the previous row is Delete A, the next row is Update xx where A . --- we don't need to combine the rows.
 // 3. the previous row is Insert A, the next row is Delete A. --- remove the row of `Insert A`
-// 4. the previous row is Insert A, the next row is Update A to C --  remove the row of `Insert A`, change the row `Update A to C` to `Insert C`
-// 5. the previous row is Update A to B, the next row is Delete B. --- remove the row `Delete B`, change the row `Update A to B` to `Delete A`
-// 6. the previous row is Update A to B, the next row is Update B to C. --- we don't need to combine the rows.
-// 7. the previous row is Update A to B, the next row is Update A to C. --- remove the row `Update A to B`
+// 4. the previous row is Insert A, the next row is Update xx where A --  remove the row of `Insert A`, change the row `Update A` to `Insert A`
+// 5. the previous row is Update xx where A, the next row is Delete A. --- remove the row `Update xx where A`
+// 6. the previous row is Update xx where A, the next row is Update xx where A. --- we need to remove the row, and change the second Update's preRows = first Update's preRows
 //
 // For these all changes to row, we will continue to compare from the beginnning to the end, until there is no change.
 // Then we can generate the final sql of delete/update/insert.
+//
+// Considering the batch algorithm in safe mode is O(n^3), which n is the number of rows.
+// So we need to limit the number of rows in one batch to avoid performance issues.
 func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	inSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
-	if inSafeMode {
-		return w.generateBatchSQLInSafeMode(events)
+	if len(events) == 0 {
+		return []string{}, [][]interface{}{}
 	}
-	return w.generateBatchSQLInUnsafeMode(events)
+
+	sqlList := make([]string, 0)
+	argsList := make([][]interface{}, 0)
+
+	batchSQL := func(events []*commonEvent.DMLEvent) {
+		// Only when SafeMode == false and commitTs is larger than replicatingTs,
+		// we think the data status is safe, we can use insert instead of replica sql to avoid the conflict.
+		inDataSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
+
+		if len(events) == 1 {
+			// only one event, we don't need to do batch
+			sql, args := w.generateSQLForSingleEvent(events[0], inDataSafeMode)
+			sqlList = append(sqlList, sql...)
+			argsList = append(argsList, args...)
+			return
+		}
+
+		if inDataSafeMode {
+			sql, args := w.generateBatchSQLInSafeMode(events)
+			sqlList = append(sqlList, sql...)
+			argsList = append(argsList, args...)
+		} else {
+			// Insert will translate to Replace
+			sql, args := w.generateBatchSQLInUnsafeMode(events)
+			sqlList = append(sqlList, sql...)
+			argsList = append(argsList, args...)
+		}
+	}
+
+	beginIndex := 0
+	rowsCount := events[0].Len()
+	for i := 1; i < len(events); i++ {
+		if rowsCount+events[i].Len() > int32(w.cfg.MaxTxnRow) {
+			// batch events[beginIndex:i]
+			batchSQL(events[beginIndex:i])
+			// reset beginIndex and rowsCount
+			beginIndex = i
+			rowsCount = events[i].Len()
+		} else {
+			rowsCount += events[i].Len()
+		}
+	}
+
+	batchSQL(events[beginIndex:])
+	return sqlList, argsList
+}
+
+func (w *Writer) generateSQLForSingleEvent(event *commonEvent.DMLEvent, inDataSafeMode bool) ([]string, [][]interface{}) {
+	tableInfo := event.TableInfo
+	rowLists := make([]*commonEvent.RowChange, 0, event.Len())
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+		rowLists = append(rowLists, &row)
+	}
+	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode)
 }
 
 func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
@@ -180,7 +241,8 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 		RowKeys    []byte
 		PreRowKeys []byte
 	}
-	// step 1. loop to combine the rows until there is no change
+
+	// Step 1 extract all rows in these events to rowLists, and calcuate row key for each row(based on pk value)
 	rowLists := make([]RowChangeWithKeys, 0)
 	for _, event := range events {
 		for {
@@ -202,6 +264,15 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 		}
 	}
 
+	// Step 2 combine the rows until there is no change
+	// Consider we will split the event if PK is changed, so the Update will not change the PK
+	// for the rows comparation, there are six situations:
+	// 1. the previous row is Delete A, the next row is Insert A. --- we don't need to combine the rows.
+	// 2. the previous row is Delete A, the next row is Update xx where A . --- we don't need to combine the rows.
+	// 3. the previous row is Insert A, the next row is Delete A. --- remove the row of `Insert A`
+	// 4. the previous row is Insert A, the next row is Update xx where A --  remove the row of `Insert A`, change the row `Update A` to `Insert A`
+	// 5. the previous row is Update xx where A, the next row is Delete A. --- remove the row `Update xx where A`
+	// 6. the previous row is Update xx where A, the next row is Update xx where A. --- we need to remove the row, and change the second Update's preRows = first Update's preRows
 	for {
 		// hasUpdate to determine whether we can break the combine logic
 		hasUpdate := false
@@ -238,6 +309,9 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 							break innerLoop
 						}
 					} else if nextRowType == commonEvent.RowTypeUpdate {
+						if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
+							log.Panic("The Update Row have different Row Key", zap.Any("Events", events))
+						}
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
 							// remove insert one, and break the inner loop for row i
 							flagList[i] = false
@@ -257,7 +331,9 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 					}
 				case commonEvent.RowTypeUpdate:
 					rowKey := rowLists[i].RowKeys
-					preRowKey := rowLists[i].PreRowKeys
+					if !compareKeys(rowKey, rowLists[i].PreRowKeys) {
+						log.Panic("The Update Row have different Row Key", zap.Any("Events", events))
+					}
 					if nextRowType == commonEvent.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
 							sql, values := w.generateNormalSQLs(events)
@@ -276,14 +352,27 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 							}
 							rowLists[i] = RowChangeWithKeys{
 								RowChange:  &newRowChange,
-								PreRowKeys: rowLists[i].PreRowKeys,
+								PreRowKeys: rowKey,
 							}
 							hasUpdate = true
 							break innerLoop
 						}
 					} else if nextRowType == commonEvent.RowTypeUpdate {
-						if compareKeys(preRowKey, rowLists[j].PreRowKeys) {
-							// remove the first one, and break the loop
+						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+							if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
+								log.Panic("The Update Row have different Row Key", zap.Any("Events", events))
+							}
+							// remove the first one, update the second one, then break
+							newRowChange := commonEvent.RowChange{
+								PreRow:  rowLists[j].RowChange.PreRow,
+								Row:     rowLists[j].RowChange.Row,
+								RowType: commonEvent.RowTypeUpdate,
+							}
+							rowLists[j] = RowChangeWithKeys{
+								RowChange:  &newRowChange,
+								PreRowKeys: rowKey,
+								RowKeys:    rowKey,
+							}
 							flagList[i] = false
 							hasUpdate = true
 							break innerLoop
@@ -314,17 +403,34 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 		finalRowLists = append(finalRowLists, rowLists[i].RowChange)
 	}
 
-	// step 2. generate sqls
+	// Step 3. generate sqls based on finalRowLists
 	return w.batchSingleTxnDmls(finalRowLists, tableInfo, true)
 }
 
 func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	tableInfo := events[0].TableInfo
+
 	// step 1. divide update row to delete row and insert row, and set into map based on the key hash
 	rowsMap := make(map[uint64][]*commonEvent.RowChange)
 	hashToKeyMap := make(map[uint64][]byte)
 
-	// TODO: extract a function here to clean code
+	addRowToMap := func(row *commonEvent.RowChange, rowData *chunk.Row, event *commonEvent.DMLEvent) ([]string, [][]interface{}, bool) {
+		hashValue, keyValue := genKeyAndHash(rowData, tableInfo)
+		if _, ok := hashToKeyMap[hashValue]; !ok {
+			hashToKeyMap[hashValue] = keyValue
+		} else {
+			if !compareKeys(hashToKeyMap[hashValue], keyValue) {
+				log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
+				event.Rewind() // reset event
+				// use normal sql instead
+				sql, args := w.generateNormalSQLs(events)
+				return sql, args, false
+			}
+		}
+		rowsMap[hashValue] = append(rowsMap[hashValue], row)
+		return nil, nil, true
+	}
+
 	for _, event := range events {
 		for {
 			row, ok := event.GetNextRow()
@@ -336,62 +442,29 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 			case commonEvent.RowTypeUpdate:
 				{
 					deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, PreRow: row.PreRow}
-					hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
-					if _, ok = hashToKeyMap[hashValue]; !ok {
-						hashToKeyMap[hashValue] = keyValue
-					} else {
-						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
-							log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-							event.Rewind() // reset event
-							// use normal sql instead
-							return w.generateNormalSQLs(events)
-						}
+					sql, args, ok := addRowToMap(&deleteRow, &row.PreRow, event)
+					if !ok {
+						return sql, args
 					}
-					rowsMap[hashValue] = append(rowsMap[hashValue], &deleteRow)
 				}
 
 				{
 					insertRow := commonEvent.RowChange{RowType: commonEvent.RowTypeInsert, Row: row.Row}
-					hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
-					if _, ok = hashToKeyMap[hashValue]; !ok {
-						hashToKeyMap[hashValue] = keyValue
-					} else {
-						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
-							log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-							event.Rewind() // reset event
-							// use normal sql instead
-							return w.generateNormalSQLs(events)
-						}
+					sql, args, ok := addRowToMap(&insertRow, &row.Row, event)
+					if !ok {
+						return sql, args
 					}
-
-					rowsMap[hashValue] = append(rowsMap[hashValue], &insertRow)
 				}
 			case commonEvent.RowTypeDelete:
-				hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
-				if _, ok = hashToKeyMap[hashValue]; !ok {
-					hashToKeyMap[hashValue] = keyValue
-				} else {
-					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
-						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-						event.Rewind() // reset event
-						// use normal sql instead
-						return w.generateNormalSQLs(events)
-					}
+				sql, args, ok := addRowToMap(&row, &row.PreRow, event)
+				if !ok {
+					return sql, args
 				}
-				rowsMap[hashValue] = append(rowsMap[hashValue], &row)
 			case commonEvent.RowTypeInsert:
-				hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
-				if _, ok = hashToKeyMap[hashValue]; !ok {
-					hashToKeyMap[hashValue] = keyValue
-				} else {
-					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
-						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-						event.Rewind() // reset event
-						// use normal sql instead
-						return w.generateNormalSQLs(events)
-					}
+				sql, args, ok := addRowToMap(&row, &row.Row, event)
+				if !ok {
+					return sql, args
 				}
-				rowsMap[hashValue] = append(rowsMap[hashValue], &row)
 			}
 		}
 	}
@@ -423,7 +496,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		}
 		rowsList = append(rowsList, rowChanges[len(rowChanges)-1])
 	}
-	// step 3. generate sqls
+	// step 3. generate sqls based on rowsList
 	return w.batchSingleTxnDmls(rowsList, tableInfo, false)
 }
 

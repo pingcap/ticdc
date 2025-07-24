@@ -266,6 +266,8 @@ type DMLEvent struct {
 	// State is the state of sender when sending this event.
 	State EventSenderState `json:"state"`
 	// Length is the number of rows in the transaction.
+	// Note: it is the logic length of the transaction, not the number of physical rows in the Rows chunk.
+	// For an update event, it has two physical rows in the Rows chunk.
 	Length int32 `json:"length"`
 	// ApproximateSize is the approximate size of all rows in the transaction.
 	ApproximateSize int64 `json:"approximate_size"`
@@ -277,6 +279,10 @@ type DMLEvent struct {
 	// TableInfo is the table info of the transaction.
 	// If the DMLEvent is send from a remote eventService, the TableInfo is nil.
 	TableInfo *common.TableInfo `json:"table_info"`
+	// TableInfoVersion record the table info version from last ddl event.
+	// include 'truncate table', 'rename table', 'rename tables', 'truncate partition' and 'exchange partition'.
+	TableInfoVersion uint64 `json:"-"`
+
 	// The following fields are set and used by dispatcher.
 	ReplicatingTs uint64 `json:"replicating_ts"`
 	// PostTxnFlushed is the functions to be executed after the transaction is flushed.
@@ -336,7 +342,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if raw.OpType == common.OpTypeDelete {
 		rowType = RowTypeDelete
 	}
-	if len(raw.Value) != 0 && len(raw.OldValue) != 0 {
+	if raw.IsUpdate() {
 		rowType = RowTypeUpdate
 	}
 	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
@@ -500,7 +506,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + int(t.Length)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + len(t.RowTypes)
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -568,7 +574,10 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 		return nil
 	}
 	offset := 1
-	t.DispatcherID.Unmarshal(data[offset:])
+	err := t.DispatcherID.Unmarshal(data[offset:])
+	if err != nil {
+		return errors.Trace(err)
+	}
 	offset += t.DispatcherID.GetSize()
 	t.PhysicalTableID = int64(binary.LittleEndian.Uint64(data[offset:]))
 	offset += 8

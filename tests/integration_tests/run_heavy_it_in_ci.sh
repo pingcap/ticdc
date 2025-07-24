@@ -60,8 +60,7 @@ mysql_groups=(
 	# G14
 	'consistent_fail_over_ddl_mix fail_over_ddl_mix'
 	# G15
-	# fail_over_ddl_mix_with_syncpoint
-	'consistent_fail_over_ddl_mix_with_syncpoint'
+	'fail_over_ddl_mix_with_syncpoint'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
@@ -72,7 +71,7 @@ kafka_groups=(
 	# ddl_for_split_tables_with_random_move_table
 	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
 	# G02
-	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table'
+	'canal_json_handle_key_only'
 	# G03
 	'canal_json_adapter_compatibility'
 	# G04
@@ -91,20 +90,20 @@ kafka_groups=(
 	# G09
 	'mq_sink_error_resume'
 	# G10
-	''
-	# G11
-	''
-	# G12
+	'kafka_column_selector kafka_column_selector_avro'
+	# fail_over_ddl_mix_with_syncpoint
 	# ddl_with_random_move_table
+	# fail_over_ddl_mix
+	# G11
+	'fail_over region_merge'
+	# G12
 	''
 	# G13
-	'fail_over region_merge'
+	'debezium01'
 	# G14
-	# fail_over_ddl_mix
-	''
+	'debezium02'
 	# G15
-	# fail_over_ddl_mix_with_syncpoint
-	'debezium'
+	'debezium03'
 )
 
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
@@ -132,40 +131,40 @@ pulsar_groups=(
 	# G09
 	'mq_sink_error_resume'
 	# G10
-	''
+	fail_over_ddl_mix_with_syncpoint
 	# G11
-	''
-	# G12
 	'ddl_with_random_move_table'
-	# G13
+	# G12
 	'fail_over region_merge'
-	# G14
+	# G13
 	# fail_over_ddl_mix
-	''
+	'debezium01'
+	# G14
+	'debezium02'
 	# G15
-	# fail_over_ddl_mix_with_syncpoint
-	'debezium'
+	'debezium03'
 )
 
 storage_groups=(
 	# G00
-	''
+	'many_pk_or_uk generate_column multi_source'
 	# G01
 	''
 	# G02
-	''
+	'canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
 	''
 	# G04
-	''
+	' '
 	# G05
-	''
+	# 'move_table drop_many_tables'
+	'drop_many_tables'
 	# G06
-	''
+	'cdc default_value'
 	# G07
-	''
+	'resolve_lock force_replicate_table'
 	# G08
-	''
+	'tidb_mysql_test'
 	# G09
 	''
 	# G10
@@ -175,7 +174,7 @@ storage_groups=(
 	# G12
 	''
 	# G13
-	''
+	'fail_over region_merge'
 	# G14
 	''
 	# G15
