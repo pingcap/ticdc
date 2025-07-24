@@ -422,15 +422,14 @@ func (c *resolvedTsCache) isFull(isRedo bool) bool {
 	return c.len >= c.limit
 }
 
-func (c *resolvedTsCache) getAll(isRedo bool) []pevent.ResolvedEvent {
+func (c *resolvedTsCache) getAll(isRedo bool) (res []pevent.ResolvedEvent) {
 	if isRedo {
-		res := c.redoCache[:c.redoLen]
-		c.reset(isRedo)
-		return res
+		res = c.redoCache[:c.redoLen]
+	} else {
+		res = c.cache[:c.len]
 	}
-	res := c.cache[:c.len]
 	c.reset(isRedo)
-	return res
+	return
 }
 
 func (c *resolvedTsCache) reset(isRedo bool) {
