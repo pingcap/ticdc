@@ -185,3 +185,8 @@ func IsBlackHoleScheme(scheme string) bool {
 func GetScheme(url *url.URL) string {
 	return strings.ToLower(url.Scheme)
 }
+
+// IsPulsarSupportedProtocols returns whether the protocol is supported by pulsar.
+func IsPulsarSupportedProtocols(p config.Protocol) bool {
+	return p == config.ProtocolCanalJSON
+}
