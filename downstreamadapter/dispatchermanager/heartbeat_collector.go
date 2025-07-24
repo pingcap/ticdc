@@ -256,6 +256,7 @@ func (c *HeartBeatCollector) Close() {
 	c.wg.Wait()
 
 	c.checkpointTsMessageDynamicStream.Close()
+	c.redoTsMessageDynamicStream.Close()
 	c.heartBeatResponseDynamicStream.Close()
 	c.schedulerDispatcherRequestDynamicStream.Close()
 	c.dispatcherStatusDynamicStream.Close()
