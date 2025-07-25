@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,17 +19,16 @@ import (
 	"math"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -38,10 +37,8 @@ import (
 )
 
 type partitionProgress struct {
-	partition       int32
-	watermark       uint64
-	watermarkOffset kafka.Offset
-
+	partition   int32
+	watermark   uint64
 	eventGroups map[int64]*eventsGroup
 	decoder     common.Decoder
 }
@@ -54,24 +51,16 @@ func newPartitionProgress(partition int32, decoder common.Decoder) *partitionPro
 	}
 }
 
-func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Offset) {
+func (p *partitionProgress) updateWatermark(newWatermark uint64) {
 	if newWatermark >= p.watermark {
 		p.watermark = newWatermark
-		p.watermarkOffset = offset
-		log.Info("watermark received", zap.Int32("partition", p.partition), zap.Any("offset", offset),
+		log.Info("watermark received",
 			zap.Uint64("watermark", newWatermark))
 		return
 	}
-	if offset > p.watermarkOffset {
-		log.Panic("partition resolved ts fallback",
-			zap.Int32("partition", p.partition),
-			zap.Uint64("newWatermark", newWatermark), zap.Any("offset", offset),
-			zap.Uint64("watermark", p.watermark), zap.Any("watermarkOffset", p.watermarkOffset))
-	}
-	log.Warn("partition resolved ts fall back, ignore it, since consumer read old offset message",
-		zap.Int32("partition", p.partition),
-		zap.Uint64("newWatermark", newWatermark), zap.Any("offset", offset),
-		zap.Uint64("watermark", p.watermark), zap.Any("watermarkOffset", p.watermarkOffset))
+	log.Warn("partition resolved ts fall back, ignore it, since consumer read old  message",
+		zap.Uint64("newWatermark", newWatermark),
+		zap.Uint64("watermark", p.watermark), zap.Any("watermark", p.watermark))
 }
 
 type writer struct {
@@ -80,18 +69,14 @@ type writer struct {
 	// this should only be used by the canal-json protocol
 	partitionTableAccessor *partitionTableAccessor
 
-	eventRouter     *eventrouter.EventRouter
-	protocol        config.Protocol
-	maxMessageBytes int
-	maxBatchSize    int
-	mysqlSink       sink.Sink
+	eventRouter *eventrouter.EventRouter
+	protocol    config.Protocol
+	mysqlSink   sink.Sink
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
 	w := &writer{
 		protocol:               o.protocol,
-		maxMessageBytes:        o.maxMessageBytes,
-		maxBatchSize:           o.maxBatchSize,
 		progresses:             make([]*partitionProgress, o.partitionNum),
 		partitionTableAccessor: newPartitionTableAccessor(),
 	}
@@ -99,36 +84,41 @@ func newWriter(ctx context.Context, o *option) *writer {
 		db  *sql.DB
 		err error
 	)
-	if o.upstreamTiDBDSN != "" {
-		db, err = openDB(ctx, o.upstreamTiDBDSN)
-		if err != nil {
-			log.Panic("cannot open the upstream TiDB, handle key only enabled",
-				zap.String("dsn", o.upstreamTiDBDSN))
-		}
+	tz, err := putil.GetTimezone(o.timezone)
+	if err != nil {
+		log.Panic("can not load timezone", zap.Error(err))
 	}
+
+	codecConfig := common.NewConfig(o.protocol)
+	codecConfig.TimeZone = tz
+	codecConfig.EnableTiDBExtension = o.enableTiDBExtension
+	// the TiDB source ID should never be set to 0
+	o.replicaConfig.Sink.TiDBSourceID = 1
+	o.replicaConfig.Sink.Protocol = putil.AddressOf(o.protocol.String())
+
 	for i := 0; i < int(o.partitionNum); i++ {
-		decoder, err := codec.NewEventDecoder(ctx, i, o.codecConfig, o.topic, db)
+		decoder, err := codec.NewEventDecoder(ctx, i, codecConfig, o.topic, db)
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))
 		}
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, o.protocol == config.ProtocolAvro)
+	eventRouter, err := eventrouter.NewEventRouter(o.replicaConfig.Sink, o.topic, false, o.protocol == config.ProtocolAvro)
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),
-			zap.Any("dispatcherRules", o.sinkConfig.DispatchRules), zap.Error(err))
+			zap.Any("dispatcherRules", o.replicaConfig.Sink.DispatchRules), zap.Error(err))
 	}
 	w.eventRouter = eventRouter
 	log.Info("event router created", zap.Any("protocol", o.protocol),
-		zap.Any("topic", o.topic), zap.Any("dispatcherRules", o.sinkConfig.DispatchRules))
+		zap.Any("topic", o.topic), zap.Any("dispatcherRules", o.replicaConfig.Sink.DispatchRules))
 
-	changefeedID := commonType.NewChangeFeedIDWithName("kafka-consumer")
+	changefeedID := commonType.NewChangeFeedIDWithName("pulsar-consumer")
 	cfg := &config.ChangefeedConfig{
 		ChangefeedID: changefeedID,
 		SinkURI:      o.downstreamURI,
-		SinkConfig:   o.sinkConfig,
+		SinkConfig:   o.replicaConfig.Sink,
 	}
 	w.mysqlSink, err = sink.New(ctx, cfg, changefeedID)
 	if err != nil {
@@ -282,25 +272,12 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	return nil
 }
 
-// WriteMessage is to decode kafka message to event.
+// WriteMessage is to decode pulsar message to event.
 // return true if the message is flushed to the downstream.
 // return error if flush messages failed.
-func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool {
-	var (
-		partition = message.TopicPartition.Partition
-		offset    = message.TopicPartition.Offset
-	)
-
-	// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
-	if len(message.Key)+len(message.Value) > w.maxMessageBytes {
-		log.Panic("kafka max-messages-bytes exceeded",
-			zap.Int32("partition", partition), zap.Any("offset", offset),
-			zap.Int("max-message-bytes", w.maxMessageBytes),
-			zap.Int("receivedBytes", len(message.Key)+len(message.Value)))
-	}
-
-	progress := w.progresses[partition]
-	progress.decoder.AddKeyValue(message.Key, message.Value)
+func (w *writer) WriteMessage(ctx context.Context, message pulsar.Message) bool {
+	progress := w.progresses[0]
+	progress.decoder.AddKeyValue([]byte(message.Key()), message.Payload())
 
 	messageType, hasNext := progress.decoder.HasNext()
 	if !hasNext {
@@ -310,7 +287,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	switch messageType {
 	case common.MessageTypeResolved:
 		newWatermark := progress.decoder.NextResolvedEvent()
-		progress.updateWatermark(newWatermark, offset)
+		progress.updateWatermark(newWatermark)
 
 		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
 		err := w.flushDMLEventsByWatermark(ctx)
@@ -327,22 +304,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		// but all DDL event messages should be consumed.
 		ddl := progress.decoder.NextDDLEvent()
 
-		if dec, ok := progress.decoder.(*simple.Decoder); ok {
-			cachedEvents := dec.GetCachedEvents()
-			for _, row := range cachedEvents {
-				log.Info("simple protocol cached event resolved, append to the group",
-					zap.Int64("tableID", row.GetTableID()), zap.Uint64("commitTs", row.CommitTs),
-					zap.Int32("partition", partition), zap.Any("offset", offset))
-				w.appendRow2Group(row, progress, offset)
-			}
-		}
-
 		w.onDDL(ddl)
-
-		// DDL is broadcast to all partitions, but only handle the DDL from partition-0.
-		if partition != 0 {
-			return false
-		}
 
 		// the Query maybe empty if using simple protocol, it's comes from `bootstrap` event, no need to handle it.
 		if ddl.Query == "" {
@@ -350,7 +312,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		}
 
 		log.Info("DDL event received",
-			zap.Int32("partition", partition), zap.Any("offset", offset),
 			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
 			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
 			zap.Any("blockedTables", ddl.GetBlockedTables()))
@@ -364,15 +325,10 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		var counter int
 		row := progress.decoder.NextDMLEvent()
 		if row == nil {
-			if w.protocol != config.ProtocolSimple {
-				log.Panic("DML event is nil, it's not expected",
-					zap.Int32("partition", partition), zap.Any("offset", offset))
-			}
-			log.Warn("DML event is nil, it's cached ", zap.Int32("partition", partition), zap.Any("offset", offset))
-			break
+			log.Panic("DML event is nil, it's not expected")
 		}
 
-		w.appendRow2Group(row, progress, offset)
+		w.appendRow2Group(row, progress)
 		counter++
 		for {
 			_, hasNext = progress.decoder.HasNext()
@@ -380,17 +336,11 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 				break
 			}
 			row = progress.decoder.NextDMLEvent()
-			w.appendRow2Group(row, progress, offset)
+			w.appendRow2Group(row, progress)
 			counter++
 		}
-		if counter > w.maxBatchSize {
-			log.Panic("Open Protocol max-batch-size exceeded",
-				zap.Int("maxBatchSize", w.maxBatchSize), zap.Int("actualBatchSize", counter),
-				zap.Int32("partition", partition), zap.Any("offset", offset))
-		}
 	default:
-		log.Panic("unknown message type", zap.Any("messageType", messageType),
-			zap.Int32("partition", partition), zap.Any("offset", offset))
+		log.Panic("unknown message type", zap.Any("messageType", messageType))
 	}
 	return false
 }
@@ -402,6 +352,65 @@ type tableKey struct {
 
 type partitionTableAccessor struct {
 	memo map[tableKey]struct{}
+}
+
+func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
+	if w.protocol != config.ProtocolCanalJSON {
+		return
+	}
+	if ddl.Type != byte(timodel.ActionCreateTable) {
+		return
+	}
+	stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
+	if err != nil {
+		log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
+	}
+	if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
+		w.partitionTableAccessor.add(ddl.GetSchemaName(), ddl.GetTableName())
+	}
+}
+
+func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionProgress) {
+	var (
+		tableID  = dml.GetTableID()
+		schema   = dml.TableInfo.GetSchemaName()
+		table    = dml.TableInfo.GetTableName()
+		commitTs = dml.GetCommitTs()
+	)
+	group := progress.eventGroups[tableID]
+	if group == nil {
+		group = NewEventsGroup(progress.partition, tableID)
+		progress.eventGroups[tableID] = group
+	}
+	if commitTs >= group.highWatermark {
+		group.Append(dml, false)
+		log.Info("DML event append to the group",
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]))
+		return
+	}
+	switch w.protocol {
+	case config.ProtocolCanalJSON:
+		// for partition table, the canal-json message cannot assign physical table id to each dml message,
+		// we cannot distinguish whether it's a real fallback event or not, still append it.
+		if w.partitionTableAccessor.isPartitionTable(schema, table) {
+			log.Warn("DML events fallback, but it's canal-json and partition table, still append it",
+				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
+				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+				zap.Stringer("eventType", dml.RowTypes[0]))
+			group.Append(dml, true)
+			return
+		}
+		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
+			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermark", progress.watermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]),
+			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
+	default:
+		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
+	}
 }
 
 func newPartitionTableAccessor() *partitionTableAccessor {
@@ -424,134 +433,4 @@ func (m *partitionTableAccessor) isPartitionTable(schema, table string) bool {
 	key := tableKey{schema: schema, table: table}
 	_, ok := m.memo[key]
 	return ok
-}
-
-func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
-	if w.protocol != config.ProtocolCanalJSON {
-		return
-	}
-	if ddl.Type != byte(timodel.ActionCreateTable) {
-		return
-	}
-	stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
-	if err != nil {
-		log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
-	}
-	if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
-		w.partitionTableAccessor.add(ddl.GetSchemaName(), ddl.GetTableName())
-	}
-}
-
-func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offset kafka.Offset) {
-	var (
-		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetTableName())
-		partitionNum = int32(len(w.progresses))
-	)
-	for {
-		change, ok := row.GetNextRow()
-		if !ok {
-			break
-		}
-
-		target, _, err := partitioner.GeneratePartitionIndexAndKey(&change, partitionNum, row.TableInfo, row.GetCommitTs())
-		if err != nil {
-			log.Panic("generate partition index and key failed", zap.Error(err))
-		}
-
-		if partition != target {
-			log.Panic("dml event dispatched to the wrong partition",
-				zap.Int32("partition", partition), zap.Int32("expected", target),
-				zap.Int("partitionNum", len(w.progresses)), zap.Any("offset", offset),
-				zap.Int64("tableID", row.GetTableID()), zap.Any("row", row),
-			)
-		}
-	}
-	row.Rewind()
-}
-
-func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionProgress, offset kafka.Offset) {
-	w.checkPartition(dml, progress.partition, offset)
-	// if the kafka cluster is normal, this should not hit.
-	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
-	var (
-		tableID  = dml.GetTableID()
-		schema   = dml.TableInfo.GetSchemaName()
-		table    = dml.TableInfo.GetTableName()
-		commitTs = dml.GetCommitTs()
-	)
-	group := progress.eventGroups[tableID]
-	if group == nil {
-		group = NewEventsGroup(progress.partition, tableID)
-		progress.eventGroups[tableID] = group
-	}
-	if commitTs >= group.highWatermark {
-		group.Append(dml, false)
-		log.Info("DML event append to the group",
-			zap.Int32("partition", group.partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]))
-		// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns))
-		return
-	}
-	switch w.protocol {
-	case config.ProtocolSimple, config.ProtocolOpen, config.ProtocolDebezium:
-		// simple protocol set the table id for all row message, it can be known which table the row message belongs to,
-		// also consider the table partition.
-		// open protocol set the partition table id if the table is partitioned.
-		// for normal table, the table id is generated by the fake table id generator by using schema and table name.
-		// so one event group for one normal table or one table partition, replayed messages can be ignored.
-		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
-			zap.Int32("partition", progress.partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
-			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]),
-			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-		return
-	case config.ProtocolCanalJSON:
-		// for partition table, the canal-json message cannot assign physical table id to each dml message,
-		// we cannot distinguish whether it's a real fallback event or not, still append it.
-		if w.partitionTableAccessor.isPartitionTable(schema, table) {
-			log.Warn("DML events fallback, but it's canal-json and partition table, still append it",
-				zap.Int32("partition", group.partition), zap.Any("offset", offset),
-				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
-				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-				zap.Stringer("eventType", dml.RowTypes[0]))
-			group.Append(dml, true)
-			return
-		}
-		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
-			zap.Int32("partition", progress.partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
-			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]),
-			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-	default:
-		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
-	}
-}
-
-func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		log.Error("open db failed", zap.Error(err))
-		return nil, errors.Trace(err)
-	}
-
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(10)
-	db.SetConnMaxLifetime(10 * time.Minute)
-
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err = db.PingContext(ctx); err != nil {
-		log.Error("ping db failed", zap.String("dsn", dsn), zap.Error(err))
-		return nil, errors.Trace(err)
-	}
-	log.Info("open db success", zap.String("dsn", dsn))
-	return db, nil
 }
