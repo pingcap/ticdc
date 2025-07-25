@@ -263,7 +263,8 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
-				IsRedo:          dispatcher.IsRedoDispatcher(dispatcherItem),
+				// If the dispatcherItem is not existed, we use sinkType to check
+				IsRedo: sinkType == common.RedoSinkType,
 			},
 			Seq: dispatcherMap.GetSeq(),
 		}
