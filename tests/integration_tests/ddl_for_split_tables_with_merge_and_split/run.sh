@@ -66,6 +66,16 @@ main() {
 	sleep 10
 
 	## merge and split make the dispatcher id changed
+	# first merge 5 times to merge all dispatchers to one
+	# then split
+	merge_table_with_retry $table_id "test" 10 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 || true
+	sleep 10
 	merge_table_with_retry $table_id "test" 10 || true
 	sleep 10
 	split_table_with_retry $table_id "test" 10 || true

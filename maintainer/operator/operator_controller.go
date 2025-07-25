@@ -15,7 +15,6 @@ package operator
 
 import (
 	"container/heap"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -97,7 +96,8 @@ func (oc *Controller) Execute() time.Time {
 			log.Info("send command to dispatcher",
 				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
-				zap.String("operator", op.String()))
+				zap.String("operator", op.String()),
+				zap.Any("msg", msg.Message))
 		}
 		executedCounter++
 		if executedCounter >= oc.batchSize {
@@ -142,6 +142,11 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
+	return oc.AddOperatorWithoutLock(op)
+}
+
+// AddOperator adds an operator to the controller, if the operator already exists, return false.
+func (oc *Controller) AddOperatorWithoutLock(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
 	if _, ok := oc.operators[op.ID()]; ok {
 		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
@@ -213,6 +218,15 @@ func (oc *Controller) OperatorSizeWithLock() int {
 	return len(oc.operators)
 }
 
+func (oc *Controller) OperatorBlockTsForward() bool {
+	for _, op := range oc.operators {
+		if op.OP.BlockTsForward() {
+			return true
+		}
+	}
+	return false
+}
+
 // pollQueueingOperator returns the operator need to be executed,
 // "next" is true to indicate that it may exist in next attempt,
 // and false is the end for the poll.
@@ -236,7 +250,7 @@ func (oc *Controller) pollQueueingOperator() (
 		op.PostFinish()
 		item.IsRemoved = true
 		delete(oc.operators, opID)
-		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
+		metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Dec()
 		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
@@ -244,6 +258,13 @@ func (oc *Controller) pollQueueingOperator() (
 			zap.String("operator", opID.String()),
 			zap.String("operator", op.String()))
 		return nil, true
+	}
+	if time.Since(item.CreatedAt) > time.Second*30 {
+		log.Warn("operator is still in running queue",
+			zap.String("changefeed", oc.changefeedID.Name()),
+			zap.String("operator", opID.String()),
+			zap.String("operator", op.String()),
+			zap.Any("time since created", time.Since(item.CreatedAt)))
 	}
 	now := time.Now()
 	if now.Before(item.NotifyAt) {
@@ -282,7 +303,8 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 	oc.operators[op.ID()] = withTime
 	op.Start()
 	heap.Push(&oc.runningQueue, withTime)
-	metrics.CreatedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
+	metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
+	metrics.TotalOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 }
 
 func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
@@ -291,14 +313,6 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherI
 		if _, ok := aliveNodes[nodeID]; !ok {
 			op.OnNodeRemove(nodeID)
 		}
-	}
-}
-
-func (oc *Controller) NewAddOperator(replicaSet *replica.SpanReplication, id node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return &AddDispatcherOperator{
-		replicaSet:     replicaSet,
-		dest:           id,
-		spanController: oc.spanController,
 	}
 }
 
@@ -311,17 +325,33 @@ func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origi
 	}
 }
 
-func (oc *Controller) NewRemoveOperator(replicaSet *replica.SpanReplication) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		spanController: oc.spanController,
+func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
+	if len(affectedReplicaSets) < 2 {
+		log.Info("affectedReplicaSets is less than 2, skip merge",
+			zap.Any("affectedReplicaSets", affectedReplicaSets))
+		return false
 	}
-}
 
-func (oc *Controller) NewSplitOperator(
-	replicaSet *replica.SpanReplication, originNode node.ID, splitSpans []*heartbeatpb.TableSpan,
-) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return NewSplitDispatcherOperator(oc.spanController, replicaSet, originNode, splitSpans)
+	affectedSpans := make([]*heartbeatpb.TableSpan, 0, len(affectedReplicaSets))
+	for _, replicaSet := range affectedReplicaSets {
+		affectedSpans = append(affectedSpans, replicaSet.Span)
+	}
+
+	prevTableSpan := affectedSpans[0]
+	nodeID := affectedReplicaSets[0].GetNodeID()
+	for idx := 1; idx < len(affectedSpans); idx++ {
+		currentTableSpan := affectedSpans[idx]
+		if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
+			log.Info("affectedReplicaSets is not consecutive, skip merge", zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)), zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)))
+			return false
+		}
+		prevTableSpan = currentTableSpan
+		if affectedReplicaSets[idx].GetNodeID() != nodeID {
+			log.Info("affectedReplicaSets is not in the same node, skip merge", zap.Any("affectedReplicaSets", affectedReplicaSets))
+			return false
+		}
+	}
+	return true
 }
 
 // AddMergeOperator creates a merge operator, which merge consecutive replica sets.
@@ -333,97 +363,49 @@ func (oc *Controller) AddMergeOperator(
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
+	if !checkMergeOperator(affectedReplicaSets) {
+		return nil
+	}
+
 	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
 	for _, replicaSet := range affectedReplicaSets {
 		operator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
-		operators = append(operators, operator)
-
-		if _, ok := oc.operators[operator.ID()]; ok {
-			log.Info("add operator failed, operator already exists",
-				zap.String("role", oc.role),
-				zap.String("changefeed", oc.changefeedID.Name()),
+		ret := oc.AddOperatorWithoutLock(operator)
+		if ret {
+			operators = append(operators, operator)
+		} else {
+			log.Error("failed to add occupy dispatcher operator",
+				zap.String("changefeed", oc.changefeedID.String()),
+				zap.Int64("group", int64(replicaSet.GetGroupID())),
+				zap.String("span", replicaSet.Span.String()),
 				zap.String("operator", operator.String()))
+			// set prev op taskRemoved
+			for _, op := range operators {
+				op.OnTaskRemoved()
+			}
 			return nil
 		}
-		oc.pushOperator(operator)
 	}
 
 	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators)
-	if mergeOperator == nil {
-		log.Error("failed to create merge operator",
-			zap.String("changefeed", oc.changefeedID.Name()),
-			zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
-		)
-		return nil
-	}
-	if _, ok := oc.operators[mergeOperator.ID()]; ok {
-		log.Info("add operator failed, operator already exists",
-			zap.String("role", oc.role),
-			zap.String("changefeed", oc.changefeedID.Name()),
+	ret := oc.AddOperatorWithoutLock(mergeOperator)
+	if !ret {
+		log.Error("failed to add merge dispatcher operator",
+			zap.String("changefeed", oc.changefeedID.String()),
+			zap.Any("mergeSpans", affectedReplicaSets),
 			zap.String("operator", mergeOperator.String()))
+		// set prev op taskRemoved
+		for _, op := range operators {
+			op.OnTaskRemoved()
+		}
 		return nil
 	}
-	oc.pushOperator(mergeOperator)
-
 	log.Info("add merge operator",
 		zap.String("role", oc.role),
 		zap.String("changefeed", oc.changefeedID.Name()),
 		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
 	)
 	return mergeOperator
-}
-
-// AddMergeSplitOperator adds a merge split operator to the controller.
-//  1. Merge Operator: len(affectedReplicaSets) > 1, len(splitSpans) == 1
-//  2. Split Operator: len(affectedReplicaSets) == 1, len(splitSpans) > 1
-//  3. MergeAndSplit Operator: len(affectedReplicaSets) > 1, len(splitSpans) > 1
-func (oc *Controller) AddMergeSplitOperator(
-	affectedReplicaSets []*replica.SpanReplication,
-	splitSpans []*heartbeatpb.TableSpan,
-) bool {
-	oc.mu.Lock()
-	defer oc.mu.Unlock()
-	// TODO: check if there are some intersection between `ret.Replications` and `spans`.
-	// Ignore the intersection spans to prevent meaningless split operation.
-	for _, replicaSet := range affectedReplicaSets {
-		if _, ok := oc.operators[replicaSet.ID]; ok {
-			log.Info("add operator failed, operator already exists",
-				zap.String("role", oc.role),
-				zap.String("changefeed", oc.changefeedID.Name()),
-				zap.String("dispatcherID", replicaSet.ID.String()),
-			)
-			return false
-		}
-		span := oc.spanController.GetTaskByID(replicaSet.ID)
-		if span == nil {
-			log.Warn("add operator failed, span not found",
-				zap.String("role", oc.role),
-				zap.String("changefeed", oc.changefeedID.Name()),
-				zap.String("dispatcherID", replicaSet.ID.String()))
-			return false
-		}
-	}
-	randomIdx := rand.Intn(len(affectedReplicaSets))
-	primaryID := affectedReplicaSets[randomIdx].ID
-	primaryOp := NewMergeSplitDispatcherOperator(oc.spanController, primaryID, affectedReplicaSets[randomIdx], affectedReplicaSets, splitSpans, nil)
-	for _, replicaSet := range affectedReplicaSets {
-		var op *MergeSplitDispatcherOperator
-		if replicaSet.ID == primaryID {
-			op = primaryOp
-		} else {
-			op = NewMergeSplitDispatcherOperator(oc.spanController, primaryID, replicaSet, nil, nil, primaryOp.onFinished)
-		}
-		oc.pushOperator(op)
-	}
-	log.Info("add merge split operator",
-		zap.String("role", oc.role),
-		zap.String("changefeed", oc.changefeedID.Name()),
-		zap.String("primary", primaryID.String()),
-		zap.Int64("tableID", splitSpans[0].TableID),
-		zap.Int("oldSpans", len(affectedReplicaSets)),
-		zap.Int("newSpans", len(splitSpans)),
-	)
-	return true
 }
 
 func (oc *Controller) GetLock() *sync.RWMutex {
@@ -433,4 +415,22 @@ func (oc *Controller) GetLock() *sync.RWMutex {
 
 func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
 	mutex.Unlock()
+}
+
+// =========== following func only for test ===========
+func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(oc.operators))
+	for _, op := range oc.operators {
+		operators = append(operators, op.OP)
+	}
+	return operators
+}
+
+func (oc *Controller) RemoveOp(id common.DispatcherID) {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	delete(oc.operators, id)
 }

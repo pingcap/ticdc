@@ -103,6 +103,18 @@ func (p *TableProgress) Empty() bool {
 	return p.list.Len() == 0
 }
 
+func (p *TableProgress) Len() int {
+	p.rwMutex.RLock()
+	defer p.rwMutex.RUnlock()
+	return p.list.Len()
+}
+
+func (p *TableProgress) MaxCommitTs() uint64 {
+	p.rwMutex.RLock()
+	defer p.rwMutex.RUnlock()
+	return p.maxCommitTs
+}
+
 // Pass updates the maxCommitTs with the given event's commit timestamp.
 func (p *TableProgress) Pass(event commonEvent.BlockEvent) {
 	p.rwMutex.Lock()
@@ -153,7 +165,7 @@ func (p *TableProgress) GetEventSizePerSecond() float32 {
 	if eventSizePerSecond == 0 {
 		// The event size will only send to maintainer once per second.
 		// So if no data is write, we use a tiny value instead of 0 to distinguish it from the status without eventSize
-		return 0.1
+		return 1
 	}
 
 	return eventSizePerSecond
