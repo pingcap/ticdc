@@ -729,7 +729,7 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
-	ttlInMs := int64(5 * 60 * 1000) // 5min
+	ttlInMs := int64(60 * 1000) // 1min
 	for {
 		select {
 		case <-ctx.Done():
