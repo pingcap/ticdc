@@ -664,6 +664,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
+			dispatcherCount--
 			if m.redo {
 				e.cleanRedoDispatcher(m.id, m.schemaID)
 			} else {
