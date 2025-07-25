@@ -35,6 +35,10 @@ func (s ID) GetSize() int64 {
 	return int64(len(s))
 }
 
+func (s ID) IsEmpty() bool {
+	return s == ""
+}
+
 func NewID() ID {
 	return ID(uuid.New().String())
 }

@@ -66,7 +66,7 @@ func (d *dispatcherConnState) isCurrentEventService(serverID node.ID) bool {
 func (d *dispatcherConnState) isReceivingDataEvent() bool {
 	d.RLock()
 	defer d.RUnlock()
-	return d.eventServiceID != "" && d.readyEventReceived.Load()
+	return !d.eventServiceID.IsEmpty() && d.readyEventReceived.Load()
 }
 
 func (d *dispatcherConnState) trySetRemoteCandidates(nodes []string) bool {

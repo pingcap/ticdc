@@ -275,7 +275,9 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 		if !ok {
 			continue
 		}
-		group(stat.(*dispatcherStat).connState.getEventServiceID(), dp)
+		if stat.(*dispatcherStat).connState.isReceivingDataEvent() {
+			group(stat.(*dispatcherStat).connState.getEventServiceID(), dp)
+		}
 	}
 
 	return groupedHeartbeats
