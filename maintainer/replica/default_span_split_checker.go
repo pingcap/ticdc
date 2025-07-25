@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -104,7 +105,7 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 		trafficScore:    0,
 		regionCount:     0,
 		latestTraffic:   0,
-		regionCheckTime: time.Now(),
+		regionCheckTime: time.Now().Add(-regionCheckInterval),
 	}
 }
 
@@ -159,8 +160,9 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 }
 
 type DefaultSpanSplitCheckResult struct {
-	Span    *SpanReplication
-	SpanNum int
+	Span     *SpanReplication
+	SpanNum  int
+	SpanType split.SplitType
 }
 
 func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
@@ -169,15 +171,23 @@ func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
 		// for default span to do split, we use splitByTraffic to make the split more balanced
 		if status.trafficScore >= trafficScoreThreshold || status.regionCount >= s.regionThreshold {
 			var spanNum int
+			var spanType split.SplitType
 			if status.trafficScore >= trafficScoreThreshold {
 				spanNum = int(math.Ceil(status.latestTraffic / float64(s.writeThreshold)))
+				if status.regionCount < split.MaxRegionCountForWriteBytesSplit {
+					spanType = split.SplitTypeWriteBytes
+				} else {
+					spanType = split.SplitTypeRegionCount
+				}
 			} else {
 				spanNum = int(math.Ceil(float64(status.regionCount) / float64(s.regionThreshold)))
+				spanType = split.SplitTypeRegionCount
 			}
 
 			results = append(results, DefaultSpanSplitCheckResult{
-				Span:    status.SpanReplication,
-				SpanNum: spanNum * 2,
+				Span:     status.SpanReplication,
+				SpanNum:  spanNum * 2,
+				SpanType: spanType,
 			})
 		}
 		if len(results) >= batch {

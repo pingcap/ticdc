@@ -156,7 +156,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes && c.splitter != nil {
 		if table.Splitable || !c.isMysqlCompatibleBackend {
-			tableSpans = c.splitter.Split(context.Background(), tableSpan, 0)
+			tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
 		}
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs)

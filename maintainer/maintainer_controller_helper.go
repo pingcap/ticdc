@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -146,7 +147,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		StartKey: span.StartKey,
 		EndKey:   span.EndKey,
 	}
-	splitTableSpans := c.spanController.GetSplitter().Split(context.Background(), wholeSpan, 0)
+	splitTableSpans := c.spanController.GetSplitter().Split(context.Background(), wholeSpan, 0, split.SplitTypeRegionCount)
 
 	op := operator.NewSplitDispatcherOperator(c.spanController, replications[0], splitTableSpans, []node.ID{}, nil)
 	ret := c.operatorController.AddOperator(op)

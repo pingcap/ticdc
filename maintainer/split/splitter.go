@@ -22,6 +22,15 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 )
 
+const MaxRegionCountForWriteBytesSplit = 5000
+
+type SplitType string
+
+const (
+	SplitTypeWriteBytes  SplitType = "write_bytes"
+	SplitTypeRegionCount SplitType = "region_count"
+)
+
 type splitter interface {
 	split(
 		ctx context.Context, span *heartbeatpb.TableSpan, spansNum int,
@@ -30,6 +39,7 @@ type splitter interface {
 
 type Splitter struct {
 	regionCounterSplitter *regionCountSplitter
+	writeBytesSplitter    *writeBytesSplitter
 	changefeedID          common.ChangeFeedID
 }
 
@@ -41,13 +51,20 @@ func NewSplitter(
 	return &Splitter{
 		changefeedID:          changefeedID,
 		regionCounterSplitter: newRegionCountSplitter(changefeedID, config.RegionCountPerSpan, config.RegionThreshold),
+		writeBytesSplitter:    newWriteBytesSplitter(changefeedID),
 	}
 }
 
 func (s *Splitter) Split(ctx context.Context,
-	span *heartbeatpb.TableSpan, spansNum int,
+	span *heartbeatpb.TableSpan, spansNum int, splitType SplitType,
 ) []*heartbeatpb.TableSpan {
-	return s.regionCounterSplitter.split(ctx, span, spansNum)
+	switch splitType {
+	case SplitTypeWriteBytes:
+		return s.writeBytesSplitter.split(ctx, span, spansNum)
+	case SplitTypeRegionCount:
+		return s.regionCounterSplitter.split(ctx, span, spansNum)
+	}
+	return nil
 }
 
 // RegionCache is a simplified interface of tikv.RegionCache.
@@ -57,4 +74,11 @@ type RegionCache interface {
 	LoadRegionsInKeyRange(
 		bo *tikv.Backoffer, startKey, endKey []byte,
 	) (regions []*tikv.Region, err error)
+}
+
+func GetSplitType(regionCount int) SplitType {
+	if regionCount < MaxRegionCountForWriteBytesSplit {
+		return SplitTypeWriteBytes
+	}
+	return SplitTypeRegionCount
 }

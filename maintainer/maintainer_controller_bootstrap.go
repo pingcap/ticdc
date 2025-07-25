@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -239,7 +240,7 @@ func (c *Controller) handleTableHoles(
 	holes := findHoles(tableSpans, tableSpan)
 	if c.splitter != nil {
 		for _, hole := range holes {
-			spans := c.splitter.Split(context.Background(), hole, 0)
+			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
 			c.spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
 		}
 	} else {

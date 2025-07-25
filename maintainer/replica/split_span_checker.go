@@ -25,6 +25,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -261,6 +262,7 @@ type SplitSpanCheckResult struct {
 	SplitSpan        *SpanReplication
 	SplitTargetNodes []node.ID
 	SpanNum          int
+	SpanType         split.SplitType
 
 	MergeSpans []*SpanReplication
 
@@ -898,6 +900,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 					OpType:           OpSplit,
 					SplitSpan:        status.SpanReplication,
 					SpanNum:          spanNum,
+					SpanType:         split.GetSplitType(status.regionCount),
 					SplitTargetNodes: splitTargetNodes,
 				})
 				continue
@@ -923,6 +926,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 					OpType:           OpSplit,
 					SplitSpan:        status.SpanReplication,
 					SpanNum:          spanNum,
+					SpanType:         split.SplitTypeRegionCount,
 					SplitTargetNodes: splitTargetNodes,
 				})
 			}
@@ -1100,10 +1104,12 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		zap.String("splitSpan", span.SpanReplication.ID.String()),
 		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
 	)
+
 	results = append(results, SplitSpanCheckResult{
 		OpType:           OpSplit,
 		SplitSpan:        span.SpanReplication,
 		SpanNum:          2,
+		SpanType:         split.GetSplitType(span.regionCount),
 		SplitTargetNodes: []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
 	})
 
