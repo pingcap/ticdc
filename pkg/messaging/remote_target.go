@@ -587,7 +587,7 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 				zap.String("localAddr", s.localAddr),
 				zap.Stringer("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr))
-			return
+			return nil
 		}
 
 		gs := session.(*streamSession).stream
