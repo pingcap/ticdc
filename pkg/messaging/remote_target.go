@@ -167,17 +167,17 @@ func newRemoteMessageTarget(
 	cfg *config.MessageCenterConfig,
 	security *security.Credential,
 ) *remoteMessageTarget {
-	log.Info("Create remote target",
-		zap.Stringer("localID", localID),
-		zap.String("localAddr", localAddr),
-		zap.Stringer("remoteID", targetId),
-		zap.String("remoteAddr", targetAddr))
-
 	ctx, cancel := context.WithCancel(ctx)
 
 	// Determine if this node should initiate the connection based on node address
 	// If the local address is less than the target address, this node should initiate the connection.
 	shouldInitiate := localAddr < targetAddr
+	log.Info("Create remote target",
+		zap.Stringer("localID", localID),
+		zap.String("localAddr", localAddr),
+		zap.Stringer("remoteID", targetId),
+		zap.String("remoteAddr", targetAddr),
+		zap.Bool("shouldInitiate", shouldInitiate))
 
 	rt := &remoteMessageTarget{
 		messageCenterID: localID,
@@ -519,7 +519,9 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 						zap.Stringer("localID", s.messageCenterID),
 						zap.String("localAddr", s.localAddr),
 						zap.Stringer("remoteID", s.targetId),
-						zap.String("remoteAddr", s.targetAddr))
+						zap.String("remoteAddr", s.targetAddr),
+						zap.String("streamType", streamType),
+						zap.Stringer("message", msg))
 					err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
 					return err
 				}
