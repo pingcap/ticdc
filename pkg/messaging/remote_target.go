@@ -320,7 +320,7 @@ func (s *remoteMessageTarget) connect() error {
 			return false
 		}
 		session := &streamSession{
-			stream: stream,
+			stream: gs,
 			cancel: streamCancel,
 		}
 
