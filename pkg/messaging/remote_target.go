@@ -373,10 +373,10 @@ func (s *remoteMessageTarget) connect() error {
 	s.setConn(conn)
 
 	// Start goroutines for sending messages
-	eg, _ := errgroup.WithContext(s.ctx)
+	eg, egCtx := errgroup.WithContext(s.ctx)
 	s.streams.Range(func(key, value interface{}) bool {
 		streamType := key.(string)
-		s.run(eg, s.ctx, streamType)
+		s.run(eg, egCtx, streamType)
 		return true
 	})
 
@@ -705,7 +705,7 @@ func (s *remoteMessageTarget) closeConn() {
 		if value != nil {
 			value.(*streamSession).cancel()
 		}
-		s.streams.Delete(key)
+		s.streams.Store(key, nil)
 		return true
 	})
 }
