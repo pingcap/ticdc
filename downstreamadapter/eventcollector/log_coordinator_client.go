@@ -75,19 +75,24 @@ func (l *LogCoordinatorClient) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case req := <-l.logCoordinatorRequestChan.Out():
-			coordinatorID := l.getCoordinatorInfo()
-			if coordinatorID == "" {
+			if l.getCoordinatorInfo() == "" {
 				log.Info("coordinator info is empty, try send request later")
 				l.logCoordinatorRequestChan.In() <- req
-				time.Sleep(10 * time.Millisecond)
+				// Since the log coordinator isn't ready and won't be available soon, processing later requests would be pointless.
+				// Thus, we apply a longer sleep interval here.
+				time.Sleep(1 * time.Second)
 				continue
 			}
-			msg := messaging.NewSingleTargetMessage(coordinatorID, logCoordinatorTopic, req)
-			err := l.mc.SendCommand(msg)
-			if err != nil {
-				log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
-				l.logCoordinatorRequestChan.In() <- req
-				time.Sleep(10 * time.Millisecond)
+			retryNum := 20 // 20 * 100ms = 2s
+			sleepInterval := 100 * time.Millisecond
+			for i := 0; i < retryNum; i++ {
+				coordinatorID := l.getCoordinatorInfo()
+				msg := messaging.NewSingleTargetMessage(coordinatorID, logCoordinatorTopic, req)
+				err := l.mc.SendCommand(msg)
+				if err != nil {
+					log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
+					time.Sleep(sleepInterval)
+				}
 			}
 		}
 	}
