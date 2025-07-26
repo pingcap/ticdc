@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -36,7 +37,7 @@ import (
 
 const (
 	receiveChanSize = 1024 * 8
-	retryLimit      = 3 // The maximum number of retries for sending dispatcher requests and heartbeats.
+	retryLimit      = 5 // The maximum number of retries for sending most dispatcher requests.
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -45,9 +46,9 @@ type DispatcherMessage struct {
 	RetryCount int
 }
 
-func (d *DispatcherMessage) incrAndCheckRetry() bool {
-	d.RetryCount++
-	return d.RetryCount < retryLimit
+func (d *DispatcherMessage) decrAndCheckRetry() bool {
+	d.RetryCount--
+	return d.RetryCount > 0
 }
 
 /*
@@ -225,11 +226,11 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 
 // Queues a message for sending (best-effort, no delivery guarantee)
 // Messages may be dropped if errors occur. For reliable delivery, implement retry/ack logic at caller side
-func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
+func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage, retryCount int) {
 	if msg != nil {
 		c.dispatcherMessageChan.In() <- DispatcherMessage{
 			Message:    msg,
-			RetryCount: 0,
+			RetryCount: retryCount,
 		}
 	}
 }
@@ -250,7 +251,8 @@ func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHear
 	groupedHeartbeats := c.groupHeartbeat(heartbeat)
 	for serverID, heartbeat := range groupedHeartbeats {
 		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, heartbeat)
-		c.enqueueMessageForSend(msg)
+		// it is meaningless to retry heartbeat messages, so we set retry count to 1
+		c.enqueueMessageForSend(msg, 1)
 	}
 }
 
@@ -311,10 +313,15 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 		case req := <-c.dispatcherMessageChan.Out():
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
+				sleepInterval := 10 * time.Millisecond
+				// if the error is Congested, sleep a larger interval
+				if appErr, ok := err.(apperror.AppError); ok && appErr.Type == apperror.ErrorTypeMessageCongested {
+					sleepInterval = 1 * time.Second
+				}
 				log.Info("failed to send dispatcher request message, try again later",
 					zap.String("message", req.Message.String()),
 					zap.Error(err))
-				if !req.incrAndCheckRetry() {
+				if !req.decrAndCheckRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
 						zap.String("message", req.Message.String()))
 					continue
@@ -323,7 +330,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 				c.dispatcherMessageChan.In() <- req
 				// Sleep a short time to avoid too many requests in a short time.
 				// TODO: requests can to different EventService, so we should improve the logic here.
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(sleepInterval)
 			}
 		}
 	}

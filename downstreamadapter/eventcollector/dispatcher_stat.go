@@ -152,7 +152,7 @@ func (d *dispatcherStat) run() {
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(false))
-	d.eventCollector.enqueueMessageForSend(msg)
+	d.eventCollector.enqueueMessageForSend(msg, retryLimit)
 }
 
 // commitReady is used to notify the event service to start sending events.
@@ -171,7 +171,7 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs, epoch))
-	d.eventCollector.enqueueMessageForSend(msg)
+	d.eventCollector.enqueueMessageForSend(msg, retryLimit)
 	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
@@ -201,7 +201,7 @@ func (d *dispatcherStat) removeFrom(serverID node.ID) {
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID))
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRemoveRequest())
-	d.eventCollector.enqueueMessageForSend(msg)
+	d.eventCollector.enqueueMessageForSend(msg, retryLimit)
 }
 
 func (d *dispatcherStat) pause() {
@@ -215,7 +215,7 @@ func (d *dispatcherStat) pause() {
 	}
 	eventServiceID := d.connState.getEventServiceID()
 	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherPauseRequest())
-	d.eventCollector.enqueueMessageForSend(msg)
+	d.eventCollector.enqueueMessageForSend(msg, retryLimit)
 }
 
 func (d *dispatcherStat) resume() {
@@ -229,7 +229,7 @@ func (d *dispatcherStat) resume() {
 	}
 	eventServiceID := d.connState.getEventServiceID()
 	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherResumeRequest())
-	d.eventCollector.enqueueMessageForSend(msg)
+	d.eventCollector.enqueueMessageForSend(msg, retryLimit)
 }
 
 func (d *dispatcherStat) wake() {
