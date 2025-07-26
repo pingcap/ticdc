@@ -119,7 +119,7 @@ func (m *StopChangefeedOperator) PostFinish() {
 }
 
 func (m *StopChangefeedOperator) String() string {
-	return fmt.Sprintf("stop maintainer operator: %s, dest %s, remove %t",
+	return fmt.Sprintf("stop maintainer operator: %s, dest: %s, remove: %t",
 		m.cfID, m.nodeID, m.changefeedIsRemoved)
 }
 
