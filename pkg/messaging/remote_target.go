@@ -78,7 +78,6 @@ type remoteMessageTarget struct {
 
 	errCh chan error
 
-	eg     *errgroup.Group
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -212,7 +211,6 @@ func newRemoteMessageTarget(
 
 		errorCounter: metrics.MessagingErrorCounter.WithLabelValues("message", "error"),
 	}
-	rt.eg, _ = errgroup.WithContext(rt.ctx)
 
 	// initialize streams placeholder
 	rt.streams.Store(streamTypeEvent, nil)
@@ -237,12 +235,6 @@ func (s *remoteMessageTarget) close() {
 
 	s.closeConn()
 	s.cancel()
-
-	// If this node is the initiator, wait for all the streams to be closed.
-	// If this node is not the initiator, we just close the connection and return, the remote target will handle the cleanup.
-	if s.isInitiator {
-		s.eg.Wait()
-	}
 
 	log.Info("Close remote target done",
 		zap.Stringer("localID", s.messageCenterID),
@@ -309,7 +301,8 @@ func (s *remoteMessageTarget) connect() error {
 				zap.String("streamType", streamType))
 		}
 
-		gs, err := client.StreamMessages(s.ctx)
+		streamCtx, streamCancel := context.WithCancel(s.ctx)
+		gs, err := client.StreamMessages(streamCtx)
 		if err != nil {
 			log.Info("Cannot establish bidirectional grpc stream",
 				zap.Any("localID", s.messageCenterID),
@@ -323,7 +316,12 @@ func (s *remoteMessageTarget) connect() error {
 				Reason: fmt.Sprintf("Cannot open bidirectional grpc stream, error: %s", errors.Trace(err).Error()),
 			}
 			outerErr = err
+			streamCancel()
 			return false
+		}
+		session := &streamSession{
+			stream: stream,
+			cancel: streamCancel,
 		}
 
 		handshake := &HandshakeMessage{
@@ -363,7 +361,7 @@ func (s *remoteMessageTarget) connect() error {
 			return false
 		}
 
-		s.streams.Store(streamType, gs)
+		s.streams.Store(streamType, session)
 		return true
 	})
 
@@ -375,9 +373,10 @@ func (s *remoteMessageTarget) connect() error {
 	s.setConn(conn)
 
 	// Start goroutines for sending messages
+	eg, _ := errgroup.WithContext(s.ctx)
 	s.streams.Range(func(key, value interface{}) bool {
 		streamType := key.(string)
-		s.run(s.eg, s.ctx, streamType)
+		s.run(eg, s.ctx, streamType)
 		return true
 	})
 
