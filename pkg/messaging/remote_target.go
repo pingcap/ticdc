@@ -603,13 +603,11 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 	}
 
 	// Process the received message
-	if err := s.handleReceivedMessage(ctx, gs, recvCh); err != nil {
-		return err
-	}
+	return s.handleIncomingMessage(ctx, gs, recvCh)
 }
 
 // Process a received message
-func (s *remoteMessageTarget) handleReceivedMessage(ctx context.Context, stream grpcStream, ch chan *TargetMessage) error {
+func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream grpcStream, ch chan *TargetMessage) error {
 	for {
 		select {
 		case <-ctx.Done():
