@@ -528,21 +528,23 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 		if streamType == streamTypeCommand {
 			sendCh = s.sendCmdCh
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case msg := <-sendCh:
-			if err := gs.Send(msg); err != nil {
-				log.Error("Error sending message",
-					zap.Error(err),
-					zap.Stringer("localID", s.messageCenterID),
-					zap.String("localAddr", s.localAddr),
-					zap.Stringer("remoteID", s.targetId),
-					zap.String("remoteAddr", s.targetAddr),
-					zap.String("streamType", streamType),
-					zap.Stringer("message", msg))
-				err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
-				return err
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case msg := <-sendCh:
+				if err := gs.Send(msg); err != nil {
+					log.Error("Error sending message",
+						zap.Error(err),
+						zap.Stringer("localID", s.messageCenterID),
+						zap.String("localAddr", s.localAddr),
+						zap.Stringer("remoteID", s.targetId),
+						zap.String("remoteAddr", s.targetAddr),
+						zap.String("streamType", streamType),
+						zap.Stringer("message", msg))
+					err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
+					return err
+				}
 			}
 		}
 	}
