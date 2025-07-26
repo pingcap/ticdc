@@ -372,7 +372,7 @@ func (s *remoteMessageTarget) connect() error {
 	// Start goroutines for sending messages
 	s.streams.Range(func(key, value interface{}) bool {
 		streamType := key.(string)
-		s.run(s.eg, streamType)
+		s.run(s.eg, s.ctx, streamType)
 		return true
 	})
 
