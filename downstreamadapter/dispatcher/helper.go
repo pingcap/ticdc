@@ -46,7 +46,7 @@ func (r *ResendTaskMap) Get(identifier BlockEventIdentifier) *ResendTask {
 }
 
 func (r *ResendTaskMap) Set(identifier BlockEventIdentifier, task *ResendTask) {
-	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("taskDispatcherID", task.dispatcher.id))
+	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("taskDispatcherID", task.dispatcher.GetId()))
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.m[identifier] = task
@@ -230,9 +230,7 @@ func (s *ComponentStateWithMutex) Get() heartbeatpb.ComponentState {
 
 type TableSpanStatusWithSeq struct {
 	*heartbeatpb.TableSpanStatus
-	CheckpointTs uint64
-	ResolvedTs   uint64
-	Seq          uint64
+	Seq uint64
 }
 
 /*
@@ -251,12 +249,12 @@ type HeartBeatInfo struct {
 // The task will be cancelled when the the dispatcher received the ack message from the maintainer
 type ResendTask struct {
 	message    *heartbeatpb.TableSpanBlockStatus
-	dispatcher *Dispatcher
+	dispatcher Dispatcher
 	callback   func() // function need to be called when the task is cancelled
 	taskHandle *threadpool.TaskHandle
 }
 
-func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher *Dispatcher, callback func()) *ResendTask {
+func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatcher, callback func()) *ResendTask {
 	taskScheduler := GetDispatcherTaskScheduler()
 	t := &ResendTask{
 		message:    message,
@@ -269,7 +267,7 @@ func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher *Dispat
 
 func (t *ResendTask) Execute() time.Time {
 	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.GetId()))
-	t.dispatcher.blockStatusesChan <- t.message
+	t.dispatcher.GetBlockStatusesChan() <- t.message
 	return time.Now().Add(200 * time.Millisecond)
 }
 
@@ -347,7 +345,7 @@ func (h *DispatcherStatusHandler) Path(event DispatcherStatusWithID) common.Disp
 	return event.GetDispatcherID()
 }
 
-func (h *DispatcherStatusHandler) Handle(dispatcher *Dispatcher, events ...DispatcherStatusWithID) (await bool) {
+func (h *DispatcherStatusHandler) Handle(dispatcher Dispatcher, events ...DispatcherStatusWithID) (await bool) {
 	for _, event := range events {
 		dispatcher.HandleDispatcherStatus(event.GetDispatcherStatus())
 	}
@@ -356,7 +354,7 @@ func (h *DispatcherStatusHandler) Handle(dispatcher *Dispatcher, events ...Dispa
 
 func (h *DispatcherStatusHandler) GetSize(event DispatcherStatusWithID) int   { return 0 }
 func (h *DispatcherStatusHandler) IsPaused(event DispatcherStatusWithID) bool { return false }
-func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest *Dispatcher) common.GID {
+func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest Dispatcher) common.GID {
 	return dest.GetChangefeedID().ID()
 }
 
@@ -380,11 +378,11 @@ func (h *DispatcherStatusHandler) OnDrop(event DispatcherStatusWithID) interface
 // dispatcherStatusDS is the dynamic stream for dispatcher status.
 // It's a server level singleton, so we use a sync.Once to ensure the instance is created only once.
 var (
-	dispatcherStatusDS     dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler]
+	dispatcherStatusDS     dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, Dispatcher, *DispatcherStatusHandler]
 	dispatcherStatusDSOnce sync.Once
 )
 
-func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler] {
+func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, Dispatcher, *DispatcherStatusHandler] {
 	dispatcherStatusDSOnce.Do(func() {
 		dispatcherStatusDS = dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
 		dispatcherStatusDS.Start()
@@ -407,4 +405,25 @@ func storeBootstrapState(addr *bootstrapState, state bootstrapState) {
 
 func loadBootstrapState(addr *bootstrapState) bootstrapState {
 	return bootstrapState(atomic.LoadInt32((*int32)(addr)))
+}
+
+const (
+	TypeDispatcherEvent int = iota
+	TypeDispatcherRedo
+)
+
+func IsRedoDispatcher(d DispatcherService) bool {
+	return d.GetType() == TypeDispatcherRedo
+}
+
+// addToDynamicStream add self to dynamic stream
+func addToStatusDynamicStream(d Dispatcher) {
+	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	err := dispatcherStatusDS.AddPath(d.GetId(), d)
+	if err != nil {
+		log.Error("add dispatcher to dynamic stream failed",
+			zap.Stringer("changefeedID", d.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.GetId()),
+			zap.Error(err))
+	}
 }

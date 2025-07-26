@@ -37,6 +37,8 @@ type HandshakeEvent struct {
 	State        EventSenderState    `json:"state"`
 	DispatcherID common.DispatcherID `json:"-"`
 	TableInfo    *common.TableInfo   `json:"table_info"`
+	// only for redo
+	IsRedo bool
 }
 
 func NewHandshakeEvent(
@@ -45,6 +47,7 @@ func NewHandshakeEvent(
 	seq uint64,
 	epoch uint64,
 	tableInfo *common.TableInfo,
+	isRedo bool,
 ) HandshakeEvent {
 	return HandshakeEvent{
 		Version:      HandshakeEventVersion,
@@ -53,12 +56,17 @@ func NewHandshakeEvent(
 		Epoch:        epoch,
 		DispatcherID: dispatcherID,
 		TableInfo:    tableInfo,
+		IsRedo:       isRedo,
 	}
 }
 
 func (e *HandshakeEvent) String() string {
 	return fmt.Sprintf("HandshakeEvent{Version: %d, ResolvedTs: %d, Seq: %d, State: %s, DispatcherID: %s, TableInfo: %v}",
 		e.Version, e.ResolvedTs, e.Seq, e.State, e.DispatcherID, e.TableInfo)
+}
+
+func (e *HandshakeEvent) GetIsRedo() bool {
+	return e.IsRedo
 }
 
 // GetType returns the event type
@@ -93,7 +101,7 @@ func (e *HandshakeEvent) GetStartTs() common.Ts {
 // GetSize returns the approximate size of the event in bytes
 func (e *HandshakeEvent) GetSize() int64 {
 	// All fields size except tableInfo
-	return int64(1 + 8 + 8 + 8 + e.State.GetSize() + e.DispatcherID.GetSize())
+	return int64(1 + 1 + 8 + 8 + 8 + e.State.GetSize() + e.DispatcherID.GetSize())
 }
 
 func (e *HandshakeEvent) IsPaused() bool {
@@ -136,6 +144,9 @@ func (e HandshakeEvent) encodeV0() ([]byte, error) {
 	offset := 0
 	data[offset] = e.Version
 	offset += 1
+	// Redo
+	data[offset] = bool2byte(e.IsRedo)
+	offset += 1
 	binary.BigEndian.PutUint64(data[offset:], e.ResolvedTs)
 	offset += 8
 	binary.BigEndian.PutUint64(data[offset:], e.Seq)
@@ -153,6 +164,9 @@ func (e HandshakeEvent) encodeV0() ([]byte, error) {
 func (e *HandshakeEvent) decodeV0(data []byte) error {
 	offset := 0
 	e.Version = data[offset]
+	offset += 1
+	// Redo
+	e.IsRedo = byte2bool(data[offset])
 	offset += 1
 	e.ResolvedTs = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
