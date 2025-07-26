@@ -165,6 +165,8 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 			heartbeat: heartbeat,
 		}:
 		}
+	case messaging.TypeCongestionControl:
+		log.Panic("not implemented yet", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	default:
 		log.Panic("unknown message type", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	}

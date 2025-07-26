@@ -49,6 +49,9 @@ type scanLimit struct {
 	maxScannedBytes int64
 	// timeout is the maximum time to spend scanning
 	timeout time.Duration
+
+	// maxDMLBytes is the maximum number of bytes for DML events
+	maxDMLBytes uint64
 }
 
 // eventScanner scans events from eventStore and schemaStore
@@ -96,12 +99,13 @@ func newEventScanner(
 // - At TS40, DML4 is processed first, then DML5, then DDL2 (same timestamp)
 //
 // The scan operation may be interrupted when ANY of these limits are reached:
-// - Maximum bytes processed (limit.MaxBytes)
+// - Maximum bytes scanned (limit.MaxScannedBytes)
 // - Timeout duration (limit.Timeout)
+// - The bytes of the DML events exceeds the limit.MaxDMLBytes
 //
 // A scan interruption is ONLY allowed when both conditions are met:
 // 1. The current event's commit timestamp is greater than the lastCommitTs (a commit TS boundary is reached)
-// 2. At least one DML event has been successfully scanned
+// 2. At least one DML event has been successfully scanned, indicates at least one transaction has been processed
 //
 // Returns:
 // - events: The scanned events in commitTs order
@@ -158,7 +162,8 @@ func (s *eventScanner) fetchDDLEvents(session *session) ([]pevent.DDLEvent, erro
 func (s *eventScanner) getEventIterator(session *session) (eventstore.EventIterator, error) {
 	iter, err := s.eventGetter.GetIterator(session.dispatcherStat.id, session.dataRange)
 	if err != nil {
-		log.Error("read events failed", zap.Error(err), zap.Stringer("dispatcherID", session.dispatcherStat.id))
+		log.Error("cannot get the iterator to read events",
+			zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Error(err))
 		return nil, err
 	}
 	return iter, nil
@@ -189,7 +194,8 @@ func (s *eventScanner) scanAndMergeEvents(
 ) ([]event.Event, bool, error) {
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
-	checker := newLimitChecker(session.limit.maxScannedBytes, session.limit.timeout, session.startTime)
+	// todo: can we remove this checker, use session to check limits, or let the limit check itself ?
+	checker := newLimitChecker(session.limit.maxScannedBytes, session.limit.timeout, session.limit.maxDMLBytes, session.startTime)
 
 	tableID := session.dataRange.Span.TableID
 	for {
@@ -201,34 +207,45 @@ func (s *eventScanner) scanAndMergeEvents(
 			return nil, false, nil
 		}
 
-		rawEvent, isNewTxn := iter.Next()
-		if rawEvent == nil {
+		rawEntry, isNewTxn := iter.Next()
+		if rawEntry == nil {
 			events, err := s.finalizeScan(session, merger, processor)
 			return events, false, err
 		}
 
-		session.addBytes(rawEvent.ApproximateDataSize())
+		session.addBytes(rawEntry.Size())
 		session.scannedEntryCount++
 
 		if isNewTxn && checker.checkLimits(session.scannedBytes) {
-			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
+			if canInterrupt(rawEntry.CRTs, session.lastCommitTs, session.dmlCount) {
 				return s.interruptScan(session, merger, processor)
 			}
 		}
 
 		if isNewTxn {
-			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
+			if checker.checkLimits(session.scannedBytes) {
+				// if the first entry's size is larger than the limit, this may interrupt the scan,
+				// then return only one entry.
+				if canInterrupt(rawEntry.CRTs, session.lastCommitTs, session.dmlCount) {
+					return s.interruptScan(session, merger, processor)
+				}
+			}
+			if err = s.handleNewTransaction(session, merger, processor, rawEntry, tableID); err != nil {
 				return nil, false, err
 			}
-			continue
+
+			//if processor.dmlSize() > session.limit.maxDMLBytes {
+			//	log.Info("interrupt the scan since the DML size exceeds the limit",
+			//		zap.Uint64("dmlSize", processor.dmlSize()),
+			//		zap.Uint64("limit", session.limit.maxDMLBytes))
+			//	return s.interruptScan(session, merger, processor)
+			//}
 		}
 
-		if err = processor.appendRow(rawEvent); err != nil {
+		if err = processor.appendRow(rawEntry); err != nil {
 			log.Error("append row failed", zap.Error(err),
-				zap.Stringer("dispatcherID", session.dispatcherStat.id),
-				zap.Int64("tableID", tableID),
-				zap.Uint64("startTs", rawEvent.StartTs),
-				zap.Uint64("commitTs", rawEvent.CRTs))
+				zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Int64("tableID", tableID),
+				zap.Uint64("startTs", rawEntry.StartTs), zap.Uint64("commitTs", rawEntry.CRTs))
 			return nil, false, err
 		}
 	}
@@ -245,7 +262,6 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 	if !session.dispatcherStat.isReadyRecevingData.Load() {
 		return true, nil
 	}
-
 	return false, nil
 }
 
@@ -396,27 +412,29 @@ func (s *session) recordMetrics() {
 
 // limitChecker manages scan limits and interruption logic
 type limitChecker struct {
-	maxBytes  int64
-	timeout   time.Duration
-	startTime time.Time
+	maxScannedBytes int64
+	timeout         time.Duration
+	maxDMLBytes     uint64
+	startTime       time.Time
 }
 
 // newLimitChecker creates a new limit checker
-func newLimitChecker(maxBytes int64, timeout time.Duration, startTime time.Time) *limitChecker {
+func newLimitChecker(maxBytes int64, timeout time.Duration, maxDMLBytes uint64, startTime time.Time) *limitChecker {
 	return &limitChecker{
-		maxBytes:  maxBytes,
-		timeout:   timeout,
-		startTime: startTime,
+		maxScannedBytes: maxBytes,
+		timeout:         timeout,
+		maxDMLBytes:     maxDMLBytes,
+		startTime:       startTime,
 	}
 }
 
 // checkLimits returns true if any limit has been reached
 func (c *limitChecker) checkLimits(totalBytes int64) bool {
-	return totalBytes > c.maxBytes || time.Since(c.startTime) > c.timeout
+	return totalBytes > c.maxScannedBytes || time.Since(c.startTime) > c.timeout
 }
 
 // canInterrupt checks if scan can be interrupted at current position
-func (c *limitChecker) canInterrupt(currentTs, lastCommitTs uint64, dmlCount int) bool {
+func canInterrupt(currentTs, lastCommitTs uint64, dmlCount int) bool {
 	return currentTs > lastCommitTs && dmlCount > 0
 }
 
@@ -612,6 +630,17 @@ func (p *dmlProcessor) shouldFlushBatch(tableInfoUpdateTs uint64, hasNewDDL bool
 func (p *dmlProcessor) flushBatch(tableInfoUpdateTs uint64) {
 	p.lastTableInfoUpdateTs = tableInfoUpdateTs
 	p.batchDML = pevent.NewBatchDMLEvent()
+}
+
+func (p *dmlProcessor) dmlSize() uint64 {
+	var result uint64
+	if p.batchDML != nil {
+		result += uint64(p.batchDML.GetSize())
+	}
+	if p.currentDML != nil {
+		result += uint64(p.currentDML.GetSize())
+	}
+	return result
 }
 
 // errorHandler manages error handling for different scenarios

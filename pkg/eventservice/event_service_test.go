@@ -499,17 +499,18 @@ var _ DispatcherInfo = &mockDispatcherInfo{}
 
 // mockDispatcherInfo is a mock implementation of the AcceptorInfo interface
 type mockDispatcherInfo struct {
-	clusterID  uint64
-	serverID   string
-	id         common.DispatcherID
-	topic      string
-	span       *heartbeatpb.TableSpan
-	startTs    uint64
-	actionType eventpb.ActionType
-	filter     filter.Filter
-	bdrMode    bool
-	integrity  *integrity.Config
-	tz         *time.Location
+	clusterID    uint64
+	serverID     string
+	changefeedID common.ChangeFeedID
+	id           common.DispatcherID
+	topic        string
+	span         *heartbeatpb.TableSpan
+	startTs      uint64
+	actionType   eventpb.ActionType
+	filter       filter.Filter
+	bdrMode      bool
+	integrity    *integrity.Config
+	tz           *time.Location
 }
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -517,10 +518,11 @@ func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, table
 	filter, err := filter.NewFilter(cfg, "", false, false)
 	require.NoError(t, err)
 	return &mockDispatcherInfo{
-		clusterID: 1,
-		serverID:  "server1",
-		id:        dispatcherID,
-		topic:     "topic1",
+		clusterID:    1,
+		serverID:     "server1",
+		id:           dispatcherID,
+		changefeedID: common.NewChangefeedID4Test("default", "test"),
+		topic:        "topic1",
 		span: &heartbeatpb.TableSpan{
 			TableID:  tableID,
 			StartKey: []byte("a"),
@@ -564,7 +566,7 @@ func (m *mockDispatcherInfo) GetActionType() eventpb.ActionType {
 }
 
 func (m *mockDispatcherInfo) GetChangefeedID() common.ChangeFeedID {
-	return common.NewChangefeedID4Test("default", "test")
+	return m.changefeedID
 }
 
 func (m *mockDispatcherInfo) GetFilterConfig() *config.FilterConfig {

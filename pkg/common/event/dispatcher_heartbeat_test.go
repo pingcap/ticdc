@@ -24,11 +24,7 @@ func TestDispatcherProgress(t *testing.T) {
 	t.Parallel()
 	// Test GetSize function
 	dispatcherID := common.NewDispatcherID()
-	progress := DispatcherProgress{
-		Version:      0,
-		DispatcherID: dispatcherID,
-		CheckpointTs: 123456789,
-	}
+	progress := NewDispatcherProgress(dispatcherID, 123456789)
 	expectedSize := dispatcherID.GetSize() + 8 + 1 // dispatcherID size + checkpointTs size + version size
 	require.Equal(t, expectedSize, progress.GetSize())
 
@@ -46,12 +42,8 @@ func TestDispatcherProgress(t *testing.T) {
 	require.Equal(t, progress.DispatcherID, unmarshalledProgress.DispatcherID)
 
 	// Test invalid version
-	invalidProgress := DispatcherProgress{
-		Version:      1, // Invalid version
-		DispatcherID: dispatcherID,
-		CheckpointTs: 123456789,
-	}
-	_, err = invalidProgress.Marshal()
+	progress.Version = 0
+	_, err = progress.Marshal()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid version")
 }
@@ -59,39 +51,38 @@ func TestDispatcherProgress(t *testing.T) {
 func TestDispatcherHeartbeat(t *testing.T) {
 	t.Parallel()
 	// Test NewDispatcherHeartbeat
-	dispatcherCount := 3
-	heartbeat := NewDispatcherHeartbeat(dispatcherCount)
+	heartbeat := NewDispatcherHeartbeat()
 	require.Equal(t, byte(DispatcherHeartbeatVersion), heartbeat.Version)
 	require.Empty(t, heartbeat.DispatcherProgresses)
-	require.Equal(t, dispatcherCount, cap(heartbeat.DispatcherProgresses))
+	require.Empty(t, heartbeat.AvailableMemory)
 
 	// Test Append
-	dispatcherID1 := common.NewDispatcherID()
-	progress1 := DispatcherProgress{
-		Version:      0,
-		DispatcherID: dispatcherID1,
-		CheckpointTs: 100,
-	}
+	progress1 := NewDispatcherProgress(common.NewDispatcherID(), 100)
 	heartbeat.Append(progress1)
+	require.Equal(t, heartbeat.DispatcherCount, uint32(1))
 	require.Len(t, heartbeat.DispatcherProgresses, 1)
 	require.Equal(t, progress1, heartbeat.DispatcherProgresses[0])
 
-	dispatcherID2 := common.NewDispatcherID()
-	progress2 := DispatcherProgress{
-		Version:      0,
-		DispatcherID: dispatcherID2,
-		CheckpointTs: 200,
-	}
+	progress2 := NewDispatcherProgress(common.NewDispatcherID(), 200)
 	heartbeat.Append(progress2)
+	require.Equal(t, heartbeat.DispatcherCount, uint32(2))
 	require.Len(t, heartbeat.DispatcherProgresses, 2)
 	require.Equal(t, progress2, heartbeat.DispatcherProgresses[1])
 
+	available := make([]AvailableMemory, 0, 2)
+	available = append(available, AvailableMemory{Gid: common.NewGID(), Available: 1024})
+	available = append(available, AvailableMemory{Gid: common.NewGID(), Available: 2048})
+
+	heartbeat.AppendAvailableMemory(available)
+	require.Equal(t, heartbeat.changefeedCount, uint32(2))
+	require.Len(t, heartbeat.AvailableMemory, 2)
+
 	// Test GetSize
-	expectedSize := 1 + 4 + 8 + progress1.GetSize() + progress2.GetSize() // version(byte) + clusterID(uint64) + dispatcher count(uint32) + progress1 size + progress2 size
+	// version(byte) + clusterID(uint64) + dispatcher count(uint32) + progress1 size + progress2 size + changefeed count(uint32) + Add size for Available memory entries
+	expectedSize := 1 + 4 + 8 + progress1.GetSize() + progress2.GetSize() + 4 + 48
 	require.Equal(t, expectedSize, heartbeat.GetSize())
 
 	// Test Marshal and Unmarshal
-	heartbeat.DispatcherCount = uint32(len(heartbeat.DispatcherProgresses))
 	data, err := heartbeat.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, heartbeat.GetSize())
@@ -103,6 +94,8 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	require.Equal(t, heartbeat.Version, unmarshalledResponse.Version)
 	require.Equal(t, heartbeat.DispatcherCount, unmarshalledResponse.DispatcherCount)
 	require.Equal(t, len(heartbeat.DispatcherProgresses), len(unmarshalledResponse.DispatcherProgresses))
+	require.Equal(t, heartbeat.changefeedCount, unmarshalledResponse.changefeedCount)
+	require.Equal(t, len(heartbeat.AvailableMemory), len(unmarshalledResponse.AvailableMemory))
 
 	for i, progress := range heartbeat.DispatcherProgresses {
 		require.Equal(t, progress.Version, unmarshalledResponse.DispatcherProgresses[i].Version)
@@ -110,8 +103,13 @@ func TestDispatcherHeartbeat(t *testing.T) {
 		require.Equal(t, progress.DispatcherID, unmarshalledResponse.DispatcherProgresses[i].DispatcherID)
 	}
 
+	for i, entry := range heartbeat.AvailableMemory {
+		require.Equal(t, entry.Gid, unmarshalledResponse.AvailableMemory[i].Gid)
+		require.Equal(t, entry.Available, unmarshalledResponse.AvailableMemory[i].Available)
+	}
+
 	// Test with invalid progress version
-	heartbeat.DispatcherProgresses[0].Version = 1 // Invalid version
+	heartbeat.DispatcherProgresses[0].Version = 0 // Invalid version
 	_, err = heartbeat.Marshal()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid version")
@@ -120,21 +118,16 @@ func TestDispatcherHeartbeat(t *testing.T) {
 func TestDispatcherHeartbeatWithMultipleDispatchers(t *testing.T) {
 	t.Parallel()
 	// Create multiple dispatchers
-	dispatcherCount := 5
-	heartbeat := NewDispatcherHeartbeat(dispatcherCount)
+	heartbeat := NewDispatcherHeartbeat()
 
 	// Add progress for each dispatcher
+	dispatcherCount := 5
 	for i := 0; i < dispatcherCount; i++ {
-		progress := DispatcherProgress{
-			Version:      0,
-			DispatcherID: common.NewDispatcherID(),
-			CheckpointTs: uint64(i * 100),
-		}
-		heartbeat.Append(progress)
+		heartbeat.Append(NewDispatcherProgress(common.NewDispatcherID(), uint64(i*100)))
 	}
 
 	require.Len(t, heartbeat.DispatcherProgresses, dispatcherCount)
-	heartbeat.DispatcherCount = uint32(len(heartbeat.DispatcherProgresses))
+	require.Equal(t, heartbeat.DispatcherCount, uint32(dispatcherCount))
 
 	// Test Marshal and Unmarshal
 	data, err := heartbeat.Marshal()
@@ -174,13 +167,13 @@ func TestDispatcherState(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, data, ds.GetSize())
 
-	var unmarshaledState DispatcherState
-	err = unmarshaledState.Unmarshal(data)
+	var unmarshalledState DispatcherState
+	err = unmarshalledState.Unmarshal(data)
 	require.NoError(t, err)
 
-	require.Equal(t, ds.Version, unmarshaledState.Version)
-	require.Equal(t, ds.State, unmarshaledState.State)
-	require.Equal(t, ds.DispatcherID, unmarshaledState.DispatcherID)
+	require.Equal(t, ds.Version, unmarshalledState.Version)
+	require.Equal(t, ds.State, unmarshalledState.State)
+	require.Equal(t, ds.DispatcherID, unmarshalledState.DispatcherID)
 }
 
 func TestDispatcherHeartbeatResponse(t *testing.T) {

@@ -281,7 +281,7 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 	return e.tableTriggerEventDispatcher.GetStartTs(), nil
 }
 
-func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
+func (e *EventDispatcherManager) InitializeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
 	if e.tableTriggerEventDispatcher == nil {
 		return nil
 	}
@@ -658,11 +658,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			e.tableTriggerEventDispatcher.GetHeartBeatInfo(heartBeatInfo)
 		}
 
-		eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
-			Version:              event.DispatcherHeartbeatVersion,
-			DispatcherCount:      0,
-			DispatcherProgresses: make([]event.DispatcherProgress, 0, dispatcherCount),
-		}
+		eventServiceDispatcherHeartbeat := event.NewDispatcherHeartbeat()
 		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
 			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 		})
