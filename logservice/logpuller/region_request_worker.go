@@ -249,7 +249,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				// ignore
 				continue
 			case *cdcpb.Event_Error:
-				log.Debug("region request worker receives a region error",
+				log.Info("region request worker receives a region error",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId),
@@ -269,7 +269,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
 				// it is normal to receive region error after deregister a subscription
-				log.Debug("region request worker receives an error for a stale region, ignore it",
+				log.Info("region request worker receives an error for a stale region, ignore it",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId))
@@ -348,7 +348,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 	for {
 		// TODO: can region be nil?
 		subID := region.subscribedSpan.subID
-		log.Debug("region request worker gets a singleRegionInfo",
+		log.Info("region request worker gets a singleRegionInfo",
 			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
