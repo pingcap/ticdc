@@ -495,56 +495,57 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 			zap.Error(err))
 	}()
 
+	// wait stream ready
 	for {
-		if !s.isReadyToSend() {
-			// If stream is not ready, wait and check again
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-				log.Warn("remote target stream is not ready, wait and check again",
-					zap.Stringer("localID", s.messageCenterID),
-					zap.String("localAddr", s.localAddr),
-					zap.Stringer("remoteID", s.targetId),
-					zap.String("remoteAddr", s.targetAddr))
-				continue
-			}
+		if s.isReadyToSend() {
+			break
 		}
-
-		// Get the stream (it might have changed due to reconnection)
-		session, _ := s.streams.Load(streamType)
-		if session == nil {
-			log.Info("Stream is nil, it might have been closed by new connection, exit",
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			log.Warn("remote target stream is not ready, wait and check again",
 				zap.Stringer("localID", s.messageCenterID),
 				zap.String("localAddr", s.localAddr),
 				zap.Stringer("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr))
-			return nil
+			continue
 		}
+	}
 
-		gs := session.(*streamSession).stream
+	// Get the stream (it might have changed due to reconnection)
+	session, _ := s.streams.Load(streamType)
+	if session == nil {
+		log.Info("Stream is nil, it might have been closed by new connection, exit",
+			zap.Stringer("localID", s.messageCenterID),
+			zap.String("localAddr", s.localAddr),
+			zap.Stringer("remoteID", s.targetId),
+			zap.String("remoteAddr", s.targetAddr))
+		return nil
+	}
 
-		sendCh := s.sendEventCh
-		if streamType == streamTypeCommand {
-			sendCh = s.sendCmdCh
-		}
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case msg := <-sendCh:
-				if err := gs.Send(msg); err != nil {
-					log.Error("Error sending message",
-						zap.Error(err),
-						zap.Stringer("localID", s.messageCenterID),
-						zap.String("localAddr", s.localAddr),
-						zap.Stringer("remoteID", s.targetId),
-						zap.String("remoteAddr", s.targetAddr),
-						zap.String("streamType", streamType),
-						zap.Stringer("message", msg))
-					err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
-					return err
-				}
+	gs := session.(*streamSession).stream
+
+	sendCh := s.sendEventCh
+	if streamType == streamTypeCommand {
+		sendCh = s.sendCmdCh
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case msg := <-sendCh:
+			if err := gs.Send(msg); err != nil {
+				log.Error("Error sending message",
+					zap.Error(err),
+					zap.Stringer("localID", s.messageCenterID),
+					zap.String("localAddr", s.localAddr),
+					zap.Stringer("remoteID", s.targetId),
+					zap.String("remoteAddr", s.targetAddr),
+					zap.String("streamType", streamType),
+					zap.Stringer("message", msg))
+				err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
+				return err
 			}
 		}
 	}
@@ -565,44 +566,45 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 			zap.Error(err))
 	}()
 
+	// wait stream ready
 	for {
-		if !s.isReadyToSend() {
-			// If stream is not ready, wait and check again
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-				log.Warn("remote target stream is not ready, wait and check again",
-					zap.Stringer("localID", s.messageCenterID),
-					zap.String("localAddr", s.localAddr),
-					zap.Stringer("remoteID", s.targetId),
-					zap.String("remoteAddr", s.targetAddr))
-				continue
-			}
+		if s.isReadyToSend() {
+			break
 		}
-
-		// Get the stream (it might have changed due to reconnection)
-		session, _ := s.streams.Load(streamType)
-		if session == nil {
-			log.Info("Stream is nil, it might have been closed by new connection, exit",
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			log.Warn("remote target stream is not ready, wait and check again",
 				zap.Stringer("localID", s.messageCenterID),
 				zap.String("localAddr", s.localAddr),
 				zap.Stringer("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr))
-			return nil
+			continue
 		}
+	}
 
-		gs := session.(*streamSession).stream
+	// Get the stream (it might have changed due to reconnection)
+	session, _ := s.streams.Load(streamType)
+	if session == nil {
+		log.Info("Stream is nil, it might have been closed by new connection, exit",
+			zap.Stringer("localID", s.messageCenterID),
+			zap.String("localAddr", s.localAddr),
+			zap.Stringer("remoteID", s.targetId),
+			zap.String("remoteAddr", s.targetAddr))
+		return nil
+	}
 
-		recvCh := s.recvEventCh
-		if streamType == streamTypeCommand {
-			recvCh = s.recvCmdCh
-		}
+	gs := session.(*streamSession).stream
 
-		// Process the received message
-		if err := s.handleReceivedMessage(ctx, gs, recvCh); err != nil {
-			return err
-		}
+	recvCh := s.recvEventCh
+	if streamType == streamTypeCommand {
+		recvCh = s.recvCmdCh
+	}
+
+	// Process the received message
+	if err := s.handleReceivedMessage(ctx, gs, recvCh); err != nil {
+		return err
 	}
 }
 
