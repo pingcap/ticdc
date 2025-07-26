@@ -46,6 +46,11 @@ const (
 	commandSendCh = "commandSendCh"
 )
 
+type streamSession struct {
+	stream grpcStream
+	cancel context.CancelFunc
+}
+
 // remoteMessageTarget represents a connection to a remote message center node.
 // It handles bidirectional message streaming for both events and commands.
 type remoteMessageTarget struct {
@@ -55,7 +60,7 @@ type remoteMessageTarget struct {
 	targetAddr      string
 	security        *security.Credential
 
-	streams sync.Map // string(streamType) -> *streamWrapper
+	streams sync.Map // string(streamType) -> *streamSession
 
 	// GRPC client connection to the remote target
 	conn struct {
@@ -191,7 +196,6 @@ func newRemoteMessageTarget(
 		sendCmdCh:       make(chan *proto.Message, cfg.CacheChannelSize),
 		recvEventCh:     recvEventCh,
 		recvCmdCh:       recvCmdCh,
-		eg:              &errgroup.Group{},
 		isInitiator:     shouldInitiate,
 		errCh:           make(chan error, 32),
 
@@ -208,6 +212,7 @@ func newRemoteMessageTarget(
 
 		errorCounter: metrics.MessagingErrorCounter.WithLabelValues("message", "error"),
 	}
+	rt.eg, _ = errgroup.WithContext(rt.ctx)
 
 	// initialize streams placeholder
 	rt.streams.Store(streamTypeEvent, nil)
@@ -435,21 +440,37 @@ func (s *remoteMessageTarget) handleIncomingStream(stream proto.MessageService_S
 		return fmt.Errorf("connection policy violation: local node should initiate connection")
 	}
 
-	s.streams.Store(handshake.StreamType, stream)
-	eg, _ := errgroup.WithContext(s.ctx)
+	// Cancel the old stream session if it exists.
+	if old, ok := s.streams.Load(handshake.StreamType); ok && old != nil {
+		log.Info("Canceling old stream session",
+			zap.Stringer("localID", s.messageCenterID),
+			zap.Stringer("remoteID", s.targetId),
+			zap.String("streamType", handshake.StreamType))
+		old.(*streamSession).cancel()
+	}
+
+	// Create a new context for this stream session that can be cancelled independently.
+	streamCtx, streamCancel := context.WithCancel(s.ctx)
+	session := &streamSession{
+		stream: stream,
+		cancel: streamCancel,
+	}
+	s.streams.Store(handshake.StreamType, session)
+
+	eg, egCtx := errgroup.WithContext(streamCtx)
 	// Start goroutines for sending and receiving messages
-	s.run(eg, handshake.StreamType)
+	s.run(eg, egCtx, handshake.StreamType)
 	// Block until the there is an error or the context is done
 	return eg.Wait()
 }
 
 // run spawn two goroutines to handle message sending and receiving
-func (s *remoteMessageTarget) run(eg *errgroup.Group, streamType string) {
+func (s *remoteMessageTarget) run(eg *errgroup.Group, ctx context.Context, streamType string) {
 	eg.Go(func() error {
-		return s.runReceiveMessages(streamType)
+		return s.runReceiveMessages(ctx, streamType)
 	})
 	eg.Go(func() error {
-		return s.runSendMessages(streamType)
+		return s.runSendMessages(ctx, streamType)
 	})
 
 	log.Info("Start running remote target to process messages",
@@ -461,7 +482,7 @@ func (s *remoteMessageTarget) run(eg *errgroup.Group, streamType string) {
 }
 
 // Run goroutine to handle message sending
-func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
+func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType string) (err error) {
 	defer func() {
 		if err != nil {
 			s.collectErr(err)
@@ -479,8 +500,8 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 		if !s.isReadyToSend() {
 			// If stream is not ready, wait and check again
 			select {
-			case <-s.ctx.Done():
-				return s.ctx.Err()
+			case <-ctx.Done():
+				return ctx.Err()
 			case <-time.After(500 * time.Millisecond):
 				log.Warn("remote target stream is not ready, wait and check again",
 					zap.Stringer("localID", s.messageCenterID),
@@ -492,46 +513,44 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 		}
 
 		// Get the stream (it might have changed due to reconnection)
-		stream, _ := s.streams.Load(streamType)
-		if stream == nil {
-			log.Warn("Stream is nil, wait and check again",
+		session, _ := s.streams.Load(streamType)
+		if session == nil {
+			log.Info("Stream is nil, it might have been closed by new connection, exit",
 				zap.Stringer("localID", s.messageCenterID),
 				zap.String("localAddr", s.localAddr),
 				zap.Stringer("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr))
-			continue
+			return nil
 		}
 
-		gs := stream.(grpcStream)
+		gs := session.(*streamSession).stream
 
 		sendCh := s.sendEventCh
 		if streamType == streamTypeCommand {
 			sendCh = s.sendCmdCh
 		}
-		for {
-			select {
-			case <-s.ctx.Done():
-				return s.ctx.Err()
-			case msg := <-sendCh:
-				if err := gs.Send(msg); err != nil {
-					log.Error("Error sending message",
-						zap.Error(err),
-						zap.Stringer("localID", s.messageCenterID),
-						zap.String("localAddr", s.localAddr),
-						zap.Stringer("remoteID", s.targetId),
-						zap.String("remoteAddr", s.targetAddr),
-						zap.String("streamType", streamType),
-						zap.Stringer("message", msg))
-					err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
-					return err
-				}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case msg := <-sendCh:
+			if err := gs.Send(msg); err != nil {
+				log.Error("Error sending message",
+					zap.Error(err),
+					zap.Stringer("localID", s.messageCenterID),
+					zap.String("localAddr", s.localAddr),
+					zap.Stringer("remoteID", s.targetId),
+					zap.String("remoteAddr", s.targetAddr),
+					zap.String("streamType", streamType),
+					zap.Stringer("message", msg))
+				err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
+				return err
 			}
 		}
 	}
 }
 
 // Run goroutine to handle message receiving
-func (s *remoteMessageTarget) runReceiveMessages(streamType string) (err error) {
+func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType string) (err error) {
 	defer func() {
 		if err != nil {
 			s.collectErr(err)
@@ -549,8 +568,8 @@ func (s *remoteMessageTarget) runReceiveMessages(streamType string) (err error) 
 		if !s.isReadyToSend() {
 			// If stream is not ready, wait and check again
 			select {
-			case <-s.ctx.Done():
-				return s.ctx.Err()
+			case <-ctx.Done():
+				return ctx.Err()
 			case <-time.After(500 * time.Millisecond):
 				log.Warn("remote target stream is not ready, wait and check again",
 					zap.Stringer("localID", s.messageCenterID),
@@ -562,17 +581,17 @@ func (s *remoteMessageTarget) runReceiveMessages(streamType string) (err error) 
 		}
 
 		// Get the stream (it might have changed due to reconnection)
-		stream, _ := s.streams.Load(streamType)
-		if stream == nil {
-			log.Warn("Stream is nil, wait and check again",
+		session, _ := s.streams.Load(streamType)
+		if session == nil {
+			log.Info("Stream is nil, it might have been closed by new connection, exit",
 				zap.Stringer("localID", s.messageCenterID),
 				zap.String("localAddr", s.localAddr),
 				zap.Stringer("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr))
-			continue
+			return
 		}
 
-		gs := stream.(grpcStream)
+		gs := session.(*streamSession).stream
 
 		recvCh := s.recvEventCh
 		if streamType == streamTypeCommand {
@@ -580,18 +599,18 @@ func (s *remoteMessageTarget) runReceiveMessages(streamType string) (err error) 
 		}
 
 		// Process the received message
-		if err := s.handleReceivedMessage(gs, recvCh); err != nil {
+		if err := s.handleReceivedMessage(ctx, gs, recvCh); err != nil {
 			return err
 		}
 	}
 }
 
 // Process a received message
-func (s *remoteMessageTarget) handleReceivedMessage(stream grpcStream, ch chan *TargetMessage) error {
+func (s *remoteMessageTarget) handleReceivedMessage(ctx context.Context, stream grpcStream, ch chan *TargetMessage) error {
 	for {
 		select {
-		case <-s.ctx.Done():
-			return s.ctx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
 		default:
 		}
 		message, err := stream.Recv()
@@ -684,7 +703,10 @@ func (s *remoteMessageTarget) closeConn() {
 	}
 
 	s.streams.Range(func(key, value interface{}) bool {
-		s.streams.Store(key, nil)
+		if value != nil {
+			value.(*streamSession).cancel()
+		}
+		s.streams.Delete(key)
 		return true
 	})
 }
