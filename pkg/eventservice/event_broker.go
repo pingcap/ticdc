@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
@@ -82,9 +81,7 @@ type eventBroker struct {
 
 	// metricsCollector handles all metrics collection and reporting
 	metricsCollector *metricsCollector
-
-	changefeedAvailables sync.Map
-	scanRateLimiter      *rate.Limiter
+	scanRateLimiter  *rate.Limiter
 }
 
 func newEventBroker(
@@ -126,7 +123,6 @@ func newEventBroker(
 		msgSender:               mc,
 		taskChan:                make([]chan scanTask, scanWorkerCount),
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
-		changefeedAvailables:    sync.Map{},
 		cancel:                  cancel,
 		g:                       g,
 		scanRateLimiter:         rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), maxScanLimitInBytesPerSecond),
@@ -427,7 +423,8 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		task.epoch.Load(),
 		task.startTableInfo.Load())
 	log.Debug("send handshake event to dispatcher",
-		zap.Stringer("dispatcher", task.id), zap.String("eventType", pevent.TypeToString(event.GetType())), zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
+		zap.Stringer("dispatcher", task.id), zap.String("eventType", pevent.TypeToString(handshake.GetType())),
+		zap.Uint64("commitTs", handshake.GetCommitTs()), zap.Uint64("seq", handshake.GetSeq()))
 	c.getMessageCh(task.messageWorkerIndex) <- newWrapHandshakeEvent(remoteID, handshake)
 	metricEventServiceSendCommandCount.Inc()
 }
@@ -491,30 +488,17 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 	}()
 
-	remoteID := node.ID(task.info.GetServerID())
+	var (
+		remoteID     = node.ID(task.info.GetServerID())
+		changefeedID = task.info.GetChangefeedID()
+	)
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
 		log.Info("The remote target is not ready, skip scan",
-			zap.String("changefeed", task.info.GetChangefeedID().String()),
+			zap.String("changefeed", changefeedID.String()),
 			zap.String("dispatcher", task.id.String()),
 			zap.String("remote", remoteID.String()))
-		return
-	}
-
-	quota, ok := c.changefeedAvailables.Load(task.info.GetChangefeedID().ID())
-	if !ok {
-		log.Panic("cannot found the changefeed available memory quota",
-			zap.Any("changefeed", task.info.GetChangefeedID().ID()))
-	}
-
-	available := quota.(*atomic.Uint64).Load()
-	if available <= 1024*1024*128 {
-		log.Info("scan quota is not enough, skip scan",
-			zap.String("changefeed", task.info.GetChangefeedID().String()),
-			zap.String("dispatcher", task.id.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Uint64("available", available))
 		return
 	}
 
@@ -523,19 +507,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	var count uint64
-	c.dispatchers.Range(func(key, value interface{}) bool {
-		if value.(*dispatcherStat).isReadyRecevingData.Load() {
-			count++
-		}
-		return true
-	})
-	// available = max(1024*1024*8, available/count)
-	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
-	sl := calculateScanLimit(task, 1024*1024*8)
-
-	// interrupted means scan too many entries hits the limit, still ok to send scanned events.
-	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
 	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
 	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
@@ -546,24 +517,36 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	scanner := newEventScanner(
-		c.eventStore,
-		c.schemaStore,
-		c.mounter,
-		task.epoch.Load(),
-	)
-
-	sl := scanLimit{
-		maxScannedBytes: task.getCurrentScanLimitInBytes(),
-		timeout:         time.Millisecond * 1000, // 1 Second
+	item, ok := c.changefeedMap.Load(changefeedID)
+	if !ok {
+		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
 	}
 
+	status := item.(*changefeedStatus)
+	item, ok = status.availableMemoryQuota.Load(remoteID)
+	if !ok {
+		log.Panic("The remote target is ready, but available is not set",
+			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+	}
+	available := item.(uint64)
+	if available <= 1024*1024*32 {
+		log.Info("scan quota is not enough, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("dispatcher", task.id.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available))
+		return
+	}
+
+	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.epoch.Load())
+	sl := calculateScanLimit(task, 1024*1024*8)
+
+	// interrupted means scan too many entries hits the limit, still ok to send scanned events.
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
-
 	task.lastScanBytes.Store(scannedBytes)
 
 	// Check whether the task is ready to receive data events again before sending events.
@@ -818,7 +801,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	workerIndex := (common.GID)(id).Hash(uint64(len(c.messageCh)))
 	scanWorkerIndex := (common.GID)(id).Hash(uint64(len(c.taskChan)))
 
-	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, c.getOrSetChangefeedStatus(changefeedID))
+	status := c.getOrSetChangefeedStatus(changefeedID)
+	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, status)
 	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
@@ -896,16 +880,15 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		}
 		c.tableTriggerDispatchers.Delete(id)
 	}
-
 	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
 
+	changefeedID := dispatcherInfo.GetChangefeedID()
 	if stat.(*dispatcherStat).changefeedStat.dispatcherCount.Load() == 0 {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
-			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("changefeedID", changefeedID),
 		)
-		c.changefeedMap.Delete(dispatcherInfo.GetChangefeedID())
-		c.changefeedAvailables.Delete(dispatcherInfo.GetChangefeedID().ID())
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(dispatcherInfo.GetChangefeedID().ID().String())
+		c.changefeedMap.Delete(changefeedID)
+		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 	}
 
 	stat.(*dispatcherStat).isRemoved.Store(true)
@@ -917,7 +900,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
 		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
@@ -1012,24 +995,31 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 			zap.Bool("isRunning", stat.(*changefeedStatus).isReadyRecevingData.Load()),
 		)
 		c.changefeedMap.Store(changefeedID, stat)
-		c.changefeedAvailables.Store(changefeedID.ID(), atomic.NewUint64(uint64(config.DefaultChangefeedMemoryQuota)))
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.ID().String()).Set(float64(config.DefaultChangefeedMemoryQuota))
 	}
 	return stat.(*changefeedStatus)
 }
 
-func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
-	changefeedAvailables := heartbeat.heartbeat.AvailableMemory
-	for _, item := range changefeedAvailables {
-		quota, ok := c.changefeedAvailables.Load(item.Gid)
-		if !ok {
-			quota = atomic.NewUint64(item.Available)
-			c.changefeedAvailables.Store(item.Gid, quota)
-
-		}
-		quota.(*atomic.Uint64).Store(item.Available)
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(item.Gid.String()).Set(float64(item.Available))
+func (c *eventBroker) handleCongestionControl(from node.ID, m *pevent.CongestionControl) {
+	holder := make(map[common.GID]uint64, len(m.AvailableMemory))
+	for _, item := range m.AvailableMemory {
+		holder[item.Gid] = item.Available
 	}
+
+	c.changefeedMap.Range(func(k, v interface{}) bool {
+		changefeedID := k.(common.ChangeFeedID)
+		changefeed := v.(*changefeedStatus)
+
+		available, ok := holder[changefeedID.ID()]
+		if !ok {
+			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
+		}
+		changefeed.availableMemoryQuota.Store(from, available)
+		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		return true
+	})
+}
+
+func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcher, ok := c.getDispatcher(dp.DispatcherID)

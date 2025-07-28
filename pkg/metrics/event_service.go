@@ -37,7 +37,7 @@ var (
 		Namespace: "ticdc",
 		Subsystem: "event_service",
 		Name:      "available_memory_quota",
-	}, []string{"gid"})
+	}, []string{"changefeedID"})
 
 	// EventServiceSendEventDuration is the metric that records the duration of sending events by the event service.
 	EventServiceSendEventDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{

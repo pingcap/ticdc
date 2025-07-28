@@ -413,7 +413,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 }
 
 func (c *EventCollector) controlCongestion(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -424,7 +424,9 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 			messages := c.newCongestionControlMessages()
 			for serverID, m := range messages {
 				msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, m)
-				c.enqueueMessageForSend(msg)
+				if err := c.mc.SendCommand(msg); err != nil {
+					log.Warn("send congestion control message failed", zap.Error(err))
+				}
 			}
 		}
 	}
@@ -443,28 +445,37 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		return nil
 	}
 
+	proportions := make(map[common.ChangeFeedID]map[node.ID]uint64)
+	c.dispatcherMap.Range(func(k, v interface{}) bool {
+		stat := v.(*dispatcherStat)
+		eventServiceID := stat.connState.getEventServiceID()
+		changefeedID := stat.target.GetChangefeedID()
+
+		holder, ok := proportions[changefeedID]
+		if !ok {
+			holder = make(map[node.ID]uint64)
+			proportions[changefeedID] = holder
+		}
+		holder[eventServiceID]++
+		return true
+	})
+
 	result := make(map[node.ID]*event.CongestionControl)
 	for changefeedID, total := range availables {
-		var sum uint32
-		proportion := make(map[node.ID]uint32)
-		c.dispatcherMap.Range(func(key, value interface{}) bool {
-			// this is not efficient, we should group dispatchers by the changefeedID
-			stat := value.(*dispatcherStat)
-			if stat.target.GetChangefeedID().ID() == changefeedID.ID() {
-				eventServiceID := stat.connState.getEventServiceID()
-				proportion[eventServiceID]++
-				sum++
-			}
-			return true
-		})
+		proportion := proportions[changefeedID]
+		var sum uint64
+		for _, portion := range proportion {
+			sum += portion
+		}
 
 		for nodeID, portion := range proportion {
-			ratio := float32(portion) / float32(sum)
-			quota := uint64(float32(total) * ratio)
+			ratio := float64(portion) / float64(sum)
+			quota := uint64(float64(total) * ratio)
 
 			m, ok := result[nodeID]
 			if !ok {
 				m = event.NewCongestionControl()
+				result[nodeID] = m
 			}
 			m.AddAvailableMemory(changefeedID.ID(), quota)
 		}
