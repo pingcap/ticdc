@@ -1018,7 +1018,7 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *pevent.Congestion
 			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
 		}
 		changefeed.availableMemoryQuota.Store(from, available)
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String(), from.String()).Set(float64(available))
 		return true
 	})
 }
