@@ -469,12 +469,10 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
-// todo: how to set the scan limit?
-func calculateScanLimit(task scanTask, available uint64) scanLimit {
+func calculateScanLimit(task scanTask) scanLimit {
 	return scanLimit{
 		maxScannedBytes: task.getCurrentScanLimitInBytes(),
-		timeout:         time.Millisecond * 1000, // 1 Second
-		maxDMLBytes:     available,
+		timeout:         time.Second,
 	}
 }
 
@@ -525,8 +523,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	status := item.(*changefeedStatus)
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
-		log.Panic("The remote target is ready, but available is not set",
+		log.Warn("The available memory quota is not set",
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+		return
 	}
 	available := item.(uint64)
 	if available <= 1024*1024*32 {
@@ -539,7 +538,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.epoch.Load())
-	sl := calculateScanLimit(task, 1024*1024*8)
+	sl := calculateScanLimit(task)
 
 	// interrupted means scan too many entries hits the limit, still ok to send scanned events.
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
@@ -872,27 +871,32 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	defer c.metricsCollector.metricDispatcherCount.Dec()
 	id := dispatcherInfo.GetID()
 
-	stat, ok := c.dispatchers.Load(id)
+	item, ok := c.dispatchers.Load(id)
 	if !ok {
-		stat, ok = c.tableTriggerDispatchers.Load(id)
+		item, ok = c.tableTriggerDispatchers.Load(id)
 		if !ok {
 			return
 		}
 		c.tableTriggerDispatchers.Delete(id)
 	}
-	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
 
+	dispatcher := item.(*dispatcherStat)
+	dispatcher.changefeedStat.removeDispatcher()
 	changefeedID := dispatcherInfo.GetChangefeedID()
-	if stat.(*dispatcherStat).changefeedStat.dispatcherCount.Load() == 0 {
+	if dispatcher.changefeedStat.dispatcherCount.Load() == 0 {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
 		)
+		dispatcher.changefeedStat.availableMemoryQuota.Range(func(k, _ interface{}) bool {
+			from := k.(node.ID)
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String(), from.String())
+			return true
+		})
 		c.changefeedMap.Delete(changefeedID)
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 	}
 
-	stat.(*dispatcherStat).isRemoved.Store(true)
-	stat.(*dispatcherStat).isReadyRecevingData.Store(false)
+	dispatcher.isRemoved.Store(true)
+	dispatcher.isReadyRecevingData.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
 	// todo: how to handle this error?
 	_ = c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
