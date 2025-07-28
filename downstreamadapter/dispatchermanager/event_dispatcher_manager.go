@@ -996,7 +996,7 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 				)
 			}
 		}
-
+		dispatcher.TryClose()
 		dispatcher.Remove()
 	})
 }
