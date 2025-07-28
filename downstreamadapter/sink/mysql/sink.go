@@ -173,24 +173,20 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			}
 
 			start := time.Now()
-			rowCount := txnEvents[0].Len()
-			beginIndex := 0
+			beginIndex, rowCount := 0, txnEvents[0].Len()
 
 			for i := 1; i < len(txnEvents); i++ {
 				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
-					err := flushEvent(beginIndex, i, rowCount)
-					if err != nil {
+					if err := flushEvent(beginIndex, i, rowCount); err != nil {
 						return errors.Trace(err)
 					}
-					beginIndex = i
-					rowCount = txnEvents[i].Len()
+					beginIndex, rowCount = i, txnEvents[i].Len()
 				} else {
 					rowCount += txnEvents[i].Len()
 				}
 			}
-
-			err := flushEvent(beginIndex, len(txnEvents), rowCount)
-			if err != nil {
+			// flush last batch
+			if err := flushEvent(beginIndex, len(txnEvents), rowCount); err != nil {
 				return errors.Trace(err)
 			}
 			workerFlushDuration.Observe(time.Since(start).Seconds())
