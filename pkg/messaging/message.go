@@ -74,6 +74,7 @@ const (
 	TypeDispatcherHeartbeat
 	TypeDispatcherHeartbeatResponse
 	TypeMergeDispatcherRequest
+	TypeCongestionControl
 
 	// Coordinator related
 	TypeCoordinatorBootstrapRequest
@@ -155,6 +156,8 @@ func (t IOType) String() string {
 		return "DispatcherHeartbeat"
 	case TypeDispatcherHeartbeatResponse:
 		return "DispatcherHeartbeatResponse"
+	case TypeCongestionControl:
+		return "CongestionControl"
 	case TypeMergeDispatcherRequest:
 		return "MergeDispatcherRequest"
 	default:
@@ -326,6 +329,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &commonEvent.DispatcherHeartbeat{}
 	case TypeDispatcherHeartbeatResponse:
 		m = &commonEvent.DispatcherHeartbeatResponse{}
+	case TypeCongestionControl:
+		m = &commonEvent.CongestionControl{}
 	case TypeMergeDispatcherRequest:
 		m = &heartbeatpb.MergeDispatcherRequest{}
 	default:
@@ -419,6 +424,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeDispatcherHeartbeat
 	case *commonEvent.DispatcherHeartbeatResponse:
 		ioType = TypeDispatcherHeartbeatResponse
+	case *commonEvent.CongestionControl:
+		ioType = TypeCongestionControl
 	case *heartbeatpb.MergeDispatcherRequest:
 		ioType = TypeMergeDispatcherRequest
 	default:

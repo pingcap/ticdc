@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"strings"
 	"sync"
 	"time"
@@ -61,7 +62,7 @@ type eventBroker struct {
 	pdClock   pdutil.Clock
 
 	// changefeedMap is used to track the changefeed status.
-	changefeedMap sync.Map
+	changefeedMap sync.Map // common.ChangeFeedID -> *changefeedStatus
 	// All the dispatchers that register to the eventBroker.
 	dispatchers sync.Map
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
@@ -481,12 +482,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 	}()
 
-	remoteID := node.ID(task.info.GetServerID())
+	var (
+		remoteID     = node.ID(task.info.GetServerID())
+		changefeedID = task.info.GetChangefeedID()
+	)
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
 		log.Info("The remote target is not ready, skip scan",
-			zap.String("changefeed", task.info.GetChangefeedID().String()),
+			zap.String("changefeed", changefeedID.String()),
 			zap.String("dispatcher", task.id.String()),
 			zap.String("remote", remoteID.String()))
 		return
@@ -507,6 +511,28 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
+	item, ok := c.changefeedMap.Load(changefeedID)
+	if !ok {
+		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
+	}
+
+	status := item.(*changefeedStatus)
+	item, ok = status.availableMemoryQuota.Load(remoteID)
+	if !ok {
+		log.Warn("The available memory quota is not set",
+			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+		return
+	}
+	available := item.(uint64)
+	if available <= 1024*1024*32 {
+		log.Info("scan quota is not enough, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("dispatcher", task.id.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available))
+		return
+	}
+
 	scanner := newEventScanner(
 		c.eventStore,
 		c.schemaStore,
@@ -516,7 +542,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	sl := scanLimit{
 		maxScannedBytes: task.getCurrentScanLimitInBytes(),
-		timeout:         time.Millisecond * 1000, // 1 Second
+		timeout:         time.Second,
 	}
 
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
@@ -860,12 +886,14 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
+	changefeedID := dispatcherInfo.GetChangefeedID()
 
 	if stat.(*dispatcherStat).changefeedStat.dispatcherCount.Load() == 0 {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
-			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("changefeedID", changefeedID),
 		)
-		c.changefeedMap.Delete(dispatcherInfo.GetChangefeedID())
+		c.changefeedMap.Delete(changefeedID)
+		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 	}
 
 	stat.(*dispatcherStat).isRemoved.Store(true)
@@ -877,7 +905,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
 		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
@@ -998,6 +1026,26 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 	}
 	c.sendDispatcherResponse(responseMap)
+}
+
+func (c *eventBroker) handleCongestionControl(from node.ID, m *pevent.CongestionControl) {
+	holder := make(map[common.GID]uint64, len(m.AvailableMemory))
+	for _, item := range m.AvailableMemory {
+		holder[item.Gid] = item.Available
+	}
+
+	c.changefeedMap.Range(func(k, v interface{}) bool {
+		changefeedID := k.(common.ChangeFeedID)
+		changefeed := v.(*changefeedStatus)
+
+		available, ok := holder[changefeedID.ID()]
+		if !ok {
+			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
+		}
+		changefeed.availableMemoryQuota.Store(from, available)
+		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		return true
+	})
 }
 
 func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {

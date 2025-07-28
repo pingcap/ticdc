@@ -346,6 +346,13 @@ func (a *AreaMemoryMetric[A]) MaxMemory() int64 {
 	return a.maxMemory
 }
 
+func (a *AreaMemoryMetric[A]) AvailableMemory() int64 {
+	if a.usedMemory > a.maxMemory {
+		return 0
+	}
+	return a.maxMemory - a.usedMemory
+}
+
 func (a *AreaMemoryMetric[A]) Area() A {
 	return a.area
 }
