@@ -164,16 +164,15 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			}
 
 			flushEvent := func(beginIndex, endIndex int, rowCount int32) error {
-				start := time.Now()
 				workerHandledRows.Add(float64(rowCount))
 				err := writer.Flush(txnEvents[beginIndex:endIndex])
 				if err != nil {
 					return errors.Trace(err)
 				}
-				workerFlushDuration.Observe(time.Since(start).Seconds())
 				return nil
 			}
 
+			start := time.Now()
 			rowCount := txnEvents[0].Len()
 			beginIndex := 0
 
@@ -194,6 +193,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			if err != nil {
 				return errors.Trace(err)
 			}
+			workerFlushDuration.Observe(time.Since(start).Seconds())
 
 			// we record total time to calculate the worker busy ratio.
 			// so we record the total time after flushing, to unified statistics on
