@@ -434,6 +434,7 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 				if err := c.mc.SendCommand(msg); err != nil {
 					log.Warn("send congestion control message failed", zap.Error(err))
 				}
+				log.Info("congestion control message sent", zap.Any("msg", m))
 			}
 		}
 	}
@@ -460,7 +461,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 		holder, ok := proportions[changefeedID]
 		if !ok {
-			holder = make(map[node.ID]uint64)
+			holder = make(map[node.ID]uint64, len(availables))
 			proportions[changefeedID] = holder
 		}
 		holder[eventServiceID]++
