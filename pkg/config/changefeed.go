@@ -357,6 +357,10 @@ func (info *ChangeFeedInfo) GetTargetTs() uint64 {
 
 // Marshal returns the json marshal format of a ChangeFeedInfo
 func (info *ChangeFeedInfo) Marshal() (string, error) {
+	if info.Error != nil && len(info.Error.Message) > 100 {
+		// we cut down error message to 100 characters to avoid the whole message too long to send to etcd
+		info.Error.Message = info.Error.Message[:100] + "..."
+	}
 	data, err := json.Marshal(info)
 	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
 }
