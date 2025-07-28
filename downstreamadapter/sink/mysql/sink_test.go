@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
+func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
@@ -40,8 +40,20 @@ func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
 	cfg.CachePrepStmts = false
 
 	sink := newMySQLSink(ctx, changefeedID, cfg, db)
+	return ctx, sink, mock
+}
+
+func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
+	ctx, sink, mock := getMysqlSink()
 	go sink.Run(ctx)
 
+	return sink, mock
+}
+
+func MysqlSinkForTestWithMaxTxnRows(maxTxnRows int) (*Sink, sqlmock.Sqlmock) {
+	ctx, sink, mock := getMysqlSink()
+	sink.maxTxnRows = maxTxnRows
+	go sink.Run(ctx)
 	return sink, mock
 }
 
@@ -223,10 +235,7 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 }
 
 func TestMysqlSinkFlushLargeBatchEvent(t *testing.T) {
-	sink, mock := MysqlSinkForTest()
-
-	// Set MaxTxnRow to a small value to test batch splitting behavior
-	sink.maxTxnRows = 4
+	sink, mock := MysqlSinkForTestWithMaxTxnRows(4)
 
 	var count atomic.Int64
 
