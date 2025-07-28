@@ -889,7 +889,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		)
 		dispatcher.changefeedStat.availableMemoryQuota.Range(func(k, _ interface{}) bool {
 			from := k.(node.ID)
-			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String(), from.String())
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 			return true
 		})
 		c.changefeedMap.Delete(changefeedID)
@@ -1018,7 +1018,7 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *pevent.Congestion
 			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
 		}
 		changefeed.availableMemoryQuota.Store(from, available)
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String(), from.String()).Set(float64(available))
+		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String())
 		return true
 	})
 }
