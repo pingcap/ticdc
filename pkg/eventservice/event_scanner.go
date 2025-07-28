@@ -390,7 +390,8 @@ func (s *session) isContextDone() bool {
 
 // recordMetrics records the scan duration metrics
 func (s *session) recordMetrics() {
-	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
+	takes := time.Since(s.startTime)
+	metrics.EventServiceScanDuration.Observe(takes.Seconds())
 	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
 	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
 	var dmlSize int64
@@ -398,6 +399,12 @@ func (s *session) recordMetrics() {
 		dmlSize += e.GetSize()
 	}
 	metrics.EventServiceScannedDMLSize.Observe(float64(dmlSize))
+	if takes > time.Second {
+		log.Warn("scan takes too long",
+			zap.Duration("duration", takes), zap.Int("txnCount", s.dmlCount),
+			zap.Int("entryCount", s.scannedEntryCount), zap.Int64("scannedBytes", s.scannedBytes),
+			zap.Int64("dmlSize", dmlSize))
+	}
 }
 
 // limitChecker manages scan limits and interruption logic
