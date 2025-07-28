@@ -129,6 +129,13 @@ var (
 		Help:      "The size of scanned DML events from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 16), // 1KB to 64MB
 	})
+	EventServiceScannedTxnCount = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "scanned_txn_count",
+		Help:      "The number of transactions scanned from eventStore",
+		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
+	})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
@@ -148,4 +155,5 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceSkipResolvedTsCount)
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
+	registry.MustRegister(EventServiceScannedTxnCount)
 }

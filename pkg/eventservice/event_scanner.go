@@ -392,7 +392,7 @@ func (s *session) isContextDone() bool {
 func (s *session) recordMetrics() {
 	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
 	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
-
+	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
 	var dmlSize int64
 	for _, e := range s.events {
 		dmlSize += e.GetSize()
