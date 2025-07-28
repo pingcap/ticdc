@@ -887,8 +887,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
 		)
-		dispatcher.changefeedStat.availableMemoryQuota.Range(func(k, _ interface{}) bool {
-			from := k.(node.ID)
+		dispatcher.changefeedStat.availableMemoryQuota.Range(func(_, _ interface{}) bool {
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 			return true
 		})
