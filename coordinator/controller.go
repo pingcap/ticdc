@@ -510,8 +510,21 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if old != nil {
 		return errors.New("changefeed already exists")
 	}
-	if ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName); ok {
-		return errors.New("changefeed is in scheduling")
+
+	// remove changefeed is async action, so when we create the same changefeed just when we remove the changefeed
+	// the remove changefeed may not finished, so we need to wait a moment
+	count := 0
+	for count < 10 {
+		if ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName); ok {
+			log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
+			time.Sleep(time.Second * 5)
+			count += 1
+		} else {
+			break
+		}
+	}
+	if count >= 10 {
+		return errors.New("changefeed is still in scheduling, please try again later")
 	}
 
 	// generate a unique changefeed epoch
