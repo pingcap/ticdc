@@ -33,12 +33,6 @@ var (
 		Help:      "The number of events sent by the event service",
 	}, []string{"type"})
 
-	EventServiceAvailableMemoryQuotaGaugeVec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "ticdc",
-		Subsystem: "event_service",
-		Name:      "available_memory_quota",
-	}, []string{"changefeedID"})
-
 	// EventServiceSendEventDuration is the metric that records the duration of sending events by the event service.
 	EventServiceSendEventDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
@@ -121,6 +115,20 @@ var (
 			Name:      "skip_resolved_ts_count",
 			Help:      "The number of skipped resolved ts",
 		})
+
+	EventServiceAvailableMemoryQuotaGaugeVec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "available_memory_quota",
+	}, []string{"changefeedID"})
+
+	EventServiceScannedDMLSize = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "scanned_dml_size",
+		Help:      "The size of scanned DML events from eventStore",
+		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 16), // 1KB to 64MB
+	})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
@@ -128,7 +136,6 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceChannelSizeGauge)
 	registry.MustRegister(EventServiceSendEventCount)
 	registry.MustRegister(EventServiceSendEventDuration)
-	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceResolvedTsGauge)
 	registry.MustRegister(EventServiceResolvedTsLagGauge)
 	registry.MustRegister(EventServiceScanDuration)
@@ -139,4 +146,6 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServicePendingScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
 	registry.MustRegister(EventServiceSkipResolvedTsCount)
+	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
+	registry.MustRegister(EventServiceScannedDMLSize)
 }
