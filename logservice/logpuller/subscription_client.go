@@ -736,6 +736,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		innerErr := eerr.err
 		log.Info("cdc region error",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
+			zap.Uint64("regionID", errInfo.verID.GetID()),
 			zap.Stringer("error", innerErr))
 
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
