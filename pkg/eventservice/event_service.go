@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/pkg/node"
 	"time"
 
 	"github.com/pingcap/log"
@@ -30,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
 )
 

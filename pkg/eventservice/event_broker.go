@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
@@ -472,6 +472,14 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
+func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
+	result := scanLimit{
+		maxScannedBytes: task.getCurrentScanLimitInBytes(),
+		timeout:         time.Second,
+	}
+	return result
+}
+
 func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	var interrupted bool
 	defer func() {
@@ -524,7 +532,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 	available := item.(uint64)
-	if available <= 1024*1024*32 {
+	if available <= 1024*1024*128 {
 		log.Info("scan quota is not enough, skip scan",
 			zap.String("changefeed", changefeedID.String()),
 			zap.String("dispatcher", task.id.String()),
@@ -540,11 +548,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		task.epoch.Load(),
 	)
 
-	sl := scanLimit{
-		maxScannedBytes: task.getCurrentScanLimitInBytes(),
-		timeout:         time.Second,
-	}
-
+	sl := c.calculateScanLimit(task)
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
