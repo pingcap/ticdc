@@ -473,6 +473,30 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
+	remoteID := node.ID(task.info.GetServerID())
+	changefeedID := task.info.GetChangefeedID()
+	item, ok := c.changefeedMap.Load(changefeedID)
+	if !ok {
+		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
+	}
+
+	status := item.(*changefeedStatus)
+	item, ok = status.availableMemoryQuota.Load(remoteID)
+	if !ok {
+		log.Panic("The available memory quota is not set",
+			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+	}
+	available := item.(uint64)
+	if available <= 1024*1024*128 {
+		log.Info("scan quota is not enough, reset max scan limit",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("dispatcher", task.id.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available))
+		task.currentScanLimitInBytes.Store(minScanLimitInBytes)
+		task.lastUpdateScanLimitTime.Store(time.Now())
+	}
+
 	result := scanLimit{
 		maxScannedBytes: task.getCurrentScanLimitInBytes(),
 		timeout:         time.Second,
@@ -519,36 +543,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	item, ok := c.changefeedMap.Load(changefeedID)
-	if !ok {
-		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
-	}
-
-	status := item.(*changefeedStatus)
-	item, ok = status.availableMemoryQuota.Load(remoteID)
-	if !ok {
-		log.Warn("The available memory quota is not set",
-			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
-		return
-	}
-	available := item.(uint64)
-	if available <= 1024*1024*128 {
-		log.Info("scan quota is not enough, skip scan",
-			zap.String("changefeed", changefeedID.String()),
-			zap.String("dispatcher", task.id.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Uint64("available", available))
-		return
-	}
-
+	sl := c.calculateScanLimit(task)
 	scanner := newEventScanner(
 		c.eventStore,
 		c.schemaStore,
 		c.mounter,
 		task.epoch.Load(),
 	)
-
-	sl := c.calculateScanLimit(task)
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
