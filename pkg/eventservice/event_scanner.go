@@ -210,12 +210,12 @@ func (s *eventScanner) scanAndMergeEvents(
 		session.observeRawEntry(rawEvent)
 		if isNewTxn {
 			if checker.checkLimits(session.events) {
-				if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
+				if canInterrupt(rawEvent.StartTs, session.lastStartTS, session.dmlCount) {
 					return s.interruptScan(session, merger, processor)
 				} else {
 					log.Warn("hit limit, but cannot interrupt scan", zap.Int("txnCount", session.dmlCount),
-						zap.Bool("newCRT > lastCommitTs", rawEvent.CRTs > session.lastCommitTs),
-						zap.Uint64("newCRT", rawEvent.CRTs), zap.Uint64("lastCommitTs", session.lastCommitTs))
+						zap.Bool("newCRT > lastStartTS", rawEvent.CRTs > session.lastStartTS),
+						zap.Uint64("newCRT", rawEvent.CRTs), zap.Uint64("lastStartTS", session.lastStartTS))
 				}
 			}
 			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
@@ -258,15 +258,16 @@ func (s *eventScanner) handleNewTransaction(
 	rawEvent *common.RawKVEntry,
 	tableID int64,
 ) error {
+	dispatcher := session.dispatcherStat
 	// Get table info
 	tableInfo, err := s.schemaGetter.GetTableInfo(tableID, rawEvent.CRTs-1)
 	if err != nil {
-		errorHandler := newErrorHandler(session.dispatcherStat.id)
-		shouldReturn, returnErr := errorHandler.handleSchemaError(err, session.dispatcherStat)
+		errorHandler := newErrorHandler(dispatcher.id)
+		shouldReturn, returnErr := errorHandler.handleSchemaError(err, dispatcher)
 		if shouldReturn {
 			if returnErr != nil {
 				log.Error("get table info failed, unknown reason", zap.Error(err),
-					zap.Stringer("dispatcherID", session.dispatcherStat.id),
+					zap.Stringer("dispatcherID", dispatcher.id),
 					zap.Int64("tableID", tableID),
 					zap.Uint64("getTableInfoStartTs", rawEvent.CRTs-1))
 				return returnErr
@@ -289,11 +290,11 @@ func (s *eventScanner) handleNewTransaction(
 	}
 
 	// Process new transaction
-	if err = processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id); err != nil {
+	if err = processor.processNewTransaction(rawEvent, tableID, tableInfo, dispatcher.id); err != nil {
 		return err
 	}
 
-	session.lastCommitTs = rawEvent.CRTs
+	session.lastStartTS = rawEvent.StartTs
 	session.dmlCount++
 	return nil
 }
@@ -346,8 +347,9 @@ type session struct {
 	limit          scanLimit
 
 	// State tracking
-	startTime         time.Time
-	lastCommitTs      uint64
+	startTime   time.Time
+	lastStartTS uint64
+
 	scannedBytes      int64
 	scannedEntryCount int
 	// dmlCount is the count of transactions.
@@ -452,8 +454,8 @@ func (c *limitChecker) checkLimits(events []event.Event) bool {
 
 // canInterrupt checks if scan can be interrupted at current position
 // at least one transaction (DML event) has been processed
-func (c *limitChecker) canInterrupt(currentTs, lastCommitTs uint64, dmlCount int) bool {
-	return dmlCount > 0 && currentTs > lastCommitTs
+func canInterrupt(currentTs, lastStartTs uint64, dmlCount int) bool {
+	return dmlCount > 0 && currentTs > lastStartTs
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
@@ -551,14 +553,12 @@ func newDMLProcessor(mounter pevent.Mounter, schemaGetter schemaGetter) *dmlProc
 }
 
 func (p *dmlProcessor) clearCache() error {
-	if len(p.insertRowCache) > 0 {
-		for _, insertRow := range p.insertRowCache {
-			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
-				return err
-			}
+	for _, insertRow := range p.insertRowCache {
+		if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
+			return err
 		}
-		p.insertRowCache = make([]*common.RawKVEntry, 0)
 	}
+	p.insertRowCache = make([]*common.RawKVEntry, 0)
 	return nil
 }
 

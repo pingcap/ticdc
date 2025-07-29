@@ -953,18 +953,18 @@ func TestLimitChecker(t *testing.T) {
 		currentTs := uint64(100)
 		lastCommitTs := uint64(100)
 		dmlCount := 5
-		require.False(t, checker.canInterrupt(currentTs, lastCommitTs, dmlCount))
+		require.False(t, canInterrupt(currentTs, lastCommitTs, dmlCount))
 
 		// Test cannot interrupt when currentTs < lastCommitTs
 		currentTs = uint64(99)
 		lastCommitTs = uint64(100)
-		require.False(t, checker.canInterrupt(currentTs, lastCommitTs, dmlCount))
+		require.False(t, canInterrupt(currentTs, lastCommitTs, dmlCount))
 
 		// Test cannot interrupt when dmlCount = 0
 		currentTs = uint64(101)
 		lastCommitTs = uint64(100)
 		dmlCount = 0
-		require.False(t, checker.canInterrupt(currentTs, lastCommitTs, dmlCount))
+		require.False(t, canInterrupt(currentTs, lastCommitTs, dmlCount))
 
 		// Test can interrupt when currentTs > lastCommitTs and dmlCount > 0
 		currentTs = uint64(101)
