@@ -207,19 +207,15 @@ func (s *eventScanner) scanAndMergeEvents(
 			return events, false, err
 		}
 
-		session.addBytes(rawEvent.GetSize())
-		session.scannedEntryCount++
-		//
-		//if isNewTxn && checker.checkLimits(session.scannedBytes) {
-		//	if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
-		//		return s.interruptScan(session, merger, processor)
-		//	}
-		//}
-
+		session.observeRawEntry(rawEvent)
 		if isNewTxn {
 			if checker.checkLimits(session.events) {
 				if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
 					return s.interruptScan(session, merger, processor)
+				} else {
+					log.Warn("hit limit, but cannot interrupt scan", zap.Int("txnCount", session.dmlCount),
+						zap.Bool("newCRT > lastCommitTs", rawEvent.CRTs > session.lastCommitTs),
+						zap.Uint64("newCRT", rawEvent.CRTs), zap.Uint64("lastCommitTs", session.lastCommitTs))
 				}
 			}
 			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
@@ -378,9 +374,10 @@ func (s *eventScanner) newSession(
 	}
 }
 
-// addBytes adds to the total bytes scanned
-func (s *session) addBytes(size int64) {
-	s.scannedBytes += size
+// observeRawEntry adds to the total bytes scanned
+func (s *session) observeRawEntry(entry *common.RawKVEntry) {
+	s.scannedBytes += entry.GetSize()
+	s.scannedEntryCount++
 }
 
 // isContextDone checks if the context is cancelled
@@ -435,12 +432,28 @@ func newLimitChecker(maxBytes int64, timeout time.Duration, startTime time.Time)
 
 // checkLimits returns true if any limit has been reached
 func (c *limitChecker) checkLimits(events []event.Event) bool {
-	return dmlSize(events) > c.maxBytes || time.Since(c.startTime) > c.timeout
+	var (
+		bytes    = dmlSize(events)
+		duration = time.Since(c.startTime)
+	)
+	if bytes > c.maxBytes {
+		log.Info("limit exceeded, hit max bytes", zap.Int64("bytes", bytes),
+			zap.Int64("maxBytes", c.maxBytes), zap.Duration("duration", duration))
+		return true
+	}
+	if duration > c.timeout {
+		log.Info("limit exceeded, hit timeout", zap.Int64("bytes", bytes),
+			zap.Int64("maxBytes", c.maxBytes), zap.Duration("duration", duration))
+		return true
+	}
+	return false
+	// return dmlSize(events) > c.maxBytes || time.Since(c.startTime) > c.timeout
 }
 
 // canInterrupt checks if scan can be interrupted at current position
+// at least one transaction (DML event) has been processed
 func (c *limitChecker) canInterrupt(currentTs, lastCommitTs uint64, dmlCount int) bool {
-	return currentTs > lastCommitTs && dmlCount > 0
+	return dmlCount > 0 && currentTs > lastCommitTs
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order

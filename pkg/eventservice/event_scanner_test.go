@@ -767,7 +767,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 }
 
 func TestScanSession(t *testing.T) {
-	// Test addBytes method
+	// Test observeRawEntry method
 	t.Run("TestAddBytes", func(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
@@ -781,19 +781,19 @@ func TestScanSession(t *testing.T) {
 		require.Equal(t, int64(0), session.scannedBytes)
 
 		// Test adding bytes
-		session.addBytes(100)
+		session.observeRawEntry(100)
 		require.Equal(t, int64(100), session.scannedBytes)
 
 		// Test adding more bytes
-		session.addBytes(250)
+		session.observeRawEntry(250)
 		require.Equal(t, int64(350), session.scannedBytes)
 
 		// Test adding negative bytes (edge case)
-		session.addBytes(-50)
+		session.observeRawEntry(-50)
 		require.Equal(t, int64(300), session.scannedBytes)
 
 		// Test adding zero bytes
-		session.addBytes(0)
+		session.observeRawEntry(0)
 		require.Equal(t, int64(300), session.scannedBytes)
 	})
 
