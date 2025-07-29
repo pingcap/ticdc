@@ -144,6 +144,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	// TODO: use a better way to avoid may block
 	s.eventChan <- event
 }
 

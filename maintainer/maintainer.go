@@ -588,7 +588,7 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 		}
 	}
 	if req.Err != nil {
-		log.Warn("dispatcher report an error",
+		log.Error("dispatcher report an error",
 			zap.Stringer("changefeed", m.id),
 			zap.Stringer("sourceNode", msg.From),
 			zap.String("error", req.Err.Message))
