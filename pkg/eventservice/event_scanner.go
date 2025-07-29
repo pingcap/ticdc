@@ -113,61 +113,61 @@ func (s *eventScanner) scan(
 	dataRange common.DataRange,
 	limit scanLimit,
 ) (int64, []event.Event, bool, error) {
-	// Initialize scan session
-	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
-	defer sess.recordMetrics()
-
 	// Fetch DDL events
-	ddlEvents, err := s.fetchDDLEvents(sess)
+	ddlEvents, err := s.fetchDDLEvents(dispatcherStat, dataRange)
 	if err != nil {
 		return 0, nil, false, err
 	}
 
 	// Get event iterator
-	iter, err := s.getEventIterator(sess)
+	iter, err := s.getEventIterator(dispatcherStat, dataRange)
 	if err != nil {
 		return 0, nil, false, err
 	}
 	if iter == nil {
-		return 0, s.handleEmptyIterator(ddlEvents, sess), false, nil
+		return 0, s.handleEmptyIterator(ddlEvents, dispatcherStat, dataRange), false, nil
 	}
 	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
+	// Initialize scan session
+	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
+	defer sess.recordMetrics()
+
 	events, interrupted, err := s.scanAndMergeEvents(sess, ddlEvents, iter)
 	return sess.scannedBytes, events, interrupted, err
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
-func (s *eventScanner) fetchDDLEvents(session *session) ([]pevent.DDLEvent, error) {
+func (s *eventScanner) fetchDDLEvents(
+	dispatcherStat *dispatcherStat, dataRange common.DataRange,
+) ([]pevent.DDLEvent, error) {
+	dispatcherID := dispatcherStat.info.GetID()
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
-		session.dispatcherStat.info.GetID(),
-		session.dataRange.Span.TableID,
-		session.dispatcherStat.filter,
-		session.dataRange.StartTs,
-		session.dataRange.EndTs,
+		dispatcherID, dataRange.Span.TableID, dispatcherStat.filter, dataRange.StartTs, dataRange.EndTs,
 	)
 	if err != nil {
-		log.Error("get ddl events failed", zap.Error(err), zap.Stringer("dispatcherID", session.dispatcherStat.id))
+		log.Error("get ddl events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 		return nil, err
 	}
 	return ddlEvents, nil
 }
 
 // getEventIterator gets the event iterator for DML events
-func (s *eventScanner) getEventIterator(session *session) (eventstore.EventIterator, error) {
-	iter, err := s.eventGetter.GetIterator(session.dispatcherStat.id, session.dataRange)
+func (s *eventScanner) getEventIterator(dispatcherStat *dispatcherStat, dataRange common.DataRange) (eventstore.EventIterator, error) {
+	iter, err := s.eventGetter.GetIterator(dispatcherStat.id, dataRange)
 	if err != nil {
-		log.Error("read events failed", zap.Error(err), zap.Stringer("dispatcherID", session.dispatcherStat.id))
+		log.Error("read events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherStat.id))
 		return nil, err
 	}
+
 	return iter, nil
 }
 
 // handleEmptyIterator handles the case when there are no DML events
-func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, session *session) []event.Event {
-	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
-	events := merger.appendRemainingDDLs(session.dataRange.EndTs)
+func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, dispatcherStat *dispatcherStat, dataRange common.DataRange) []event.Event {
+	merger := newEventMerger(ddlEvents, dispatcherStat.id, s.epoch)
+	events := merger.appendRemainingDDLs(dataRange.EndTs)
 	return events
 }
 
