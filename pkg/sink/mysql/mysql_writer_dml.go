@@ -58,7 +58,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 		if len(dmls.startTs) == 0 || dmls.startTs[len(dmls.startTs)-1] != event.StartTs {
 			dmls.startTs = append(dmls.startTs, event.StartTs)
 		}
-		dmls.approximateSize += event.GetRowsSize()
+		dmls.approximateSize += event.GetSize()
 		tableID := event.GetTableID()
 		if _, ok := eventsGroup[tableID]; !ok {
 			eventsGroup[tableID] = make([]*commonEvent.DMLEvent, 0)

@@ -42,8 +42,10 @@ import (
 )
 
 const (
-	bootstrapperID      = "coordinator"
-	nodeChangeHandlerID = "coordinator-controller"
+	bootstrapperID                = "coordinator"
+	nodeChangeHandlerID           = "coordinator-controller"
+	createChangefeedMaxRetry      = 10
+	createChangefeedRetryInterval = 5 * time.Second
 )
 
 // Controller schedules and balance changefeeds, there are 3 main components:
@@ -510,8 +512,21 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if old != nil {
 		return errors.New("changefeed already exists")
 	}
-	if ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName); ok {
-		return errors.New("changefeed is in scheduling")
+
+	// remove changefeed is async action, so when we create the same changefeed just when we remove the changefeed
+	// the remove changefeed may not finished, so we need to wait a moment
+	count := 0
+	for count < createChangefeedMaxRetry {
+		if ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName); ok {
+			log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
+			time.Sleep(createChangefeedRetryInterval)
+			count += 1
+		} else {
+			break
+		}
+	}
+	if count >= createChangefeedMaxRetry {
+		return errors.New("changefeed is still in scheduling, please try again later")
 	}
 
 	// generate a unique changefeed epoch

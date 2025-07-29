@@ -330,7 +330,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
-	eSize := kvEvents[0].ApproximateDataSize()
+	eSize := kvEvents[0].GetSize()
 
 	// case 1: Scanning interrupted at dml1
 	// Tests interruption at first DML due to size limit

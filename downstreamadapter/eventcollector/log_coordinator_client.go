@@ -92,6 +92,8 @@ func (l *LogCoordinatorClient) run(ctx context.Context) error {
 				if err != nil {
 					log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
 					time.Sleep(sleepInterval)
+				} else {
+					break
 				}
 			}
 		}

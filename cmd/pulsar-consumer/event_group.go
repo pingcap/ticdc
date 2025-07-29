@@ -61,7 +61,6 @@ func (g *eventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
 		lastDMLEvent.Length += row.Length
 		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
-		lastDMLEvent.ApproximateSize += row.ApproximateSize
 		return
 	}
 
