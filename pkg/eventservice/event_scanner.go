@@ -418,18 +418,7 @@ func newLimitChecker(maxBytes int64, timeout time.Duration, startTime time.Time)
 
 // checkLimits returns true if any limit has been reached
 func (c *limitChecker) checkLimits(bytes int64) bool {
-	duration := time.Since(c.startTime)
-	if bytes > c.maxBytes {
-		log.Info("limit exceeded, hit max bytes", zap.Int64("bytes", bytes),
-			zap.Int64("maxBytes", c.maxBytes), zap.Duration("duration", duration))
-		return true
-	}
-	if duration > c.timeout {
-		log.Info("limit exceeded, hit timeout", zap.Int64("bytes", bytes),
-			zap.Int64("maxBytes", c.maxBytes), zap.Duration("duration", duration))
-		return true
-	}
-	return false
+	return bytes > c.maxBytes || time.Since(c.startTime) > c.timeout
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
