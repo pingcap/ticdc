@@ -983,7 +983,6 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 
 // closeAllDispatchers is called when the event dispatcher manager is closing
 func (e *EventDispatcherManager) closeAllDispatchers() {
-	leftToCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
 	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
@@ -997,39 +996,9 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 				)
 			}
 		}
-
-		_, ok := dispatcher.TryClose()
-		if !ok {
-			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcher)
-		} else {
-			dispatcher.Remove()
-		}
-	})
-	// wait all dispatchers finish syncing the data to sink
-	for _, dispatcher := range leftToCloseDispatchers {
-		log.Info("closing dispatcher",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Stringer("dispatcherID", dispatcher.GetId()),
-			zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
-		)
-		ok := false
-		count := 0
-		for !ok {
-			_, ok = dispatcher.TryClose()
-			time.Sleep(10 * time.Millisecond)
-			count += 1
-			if count%100 == 0 {
-				log.Info("waiting for dispatcher to close",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Stringer("dispatcherID", dispatcher.GetId()),
-					zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
-					zap.Int("count", count),
-				)
-			}
-		}
-		// Remove should be called after dispatcher is closed
+		dispatcher.TryClose()
 		dispatcher.Remove()
-	}
+	})
 }
 
 // removeDispatcher is called when the dispatcher is scheduled
