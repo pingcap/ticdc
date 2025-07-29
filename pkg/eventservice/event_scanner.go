@@ -207,7 +207,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			return events, false, err
 		}
 
-		session.addBytes(rawEvent.ApproximateDataSize())
+		session.addBytes(rawEvent.GetSize())
 		session.scannedEntryCount++
 
 		if isNewTxn && checker.checkLimits(session.scannedBytes) {
