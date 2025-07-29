@@ -45,6 +45,7 @@ var (
 
 type ddlJobFetcher struct {
 	ctx               context.Context
+	subClient         logpuller.SubscriptionClient
 	resolvedTsTracker struct {
 		sync.Mutex
 		resolvedTsItemMap map[logpuller.SubscriptionID]*resolvedTsItem
@@ -63,12 +64,12 @@ func newDDLJobFetcher(
 	ctx context.Context,
 	subClient logpuller.SubscriptionClient,
 	kvStorage kv.Storage,
-	startTs uint64,
 	cacheDDLEvent func(ddlEvent DDLJobWithCommitTs),
 	advanceResolvedTs func(resolvedTS uint64),
 ) *ddlJobFetcher {
 	ddlJobFetcher := &ddlJobFetcher{
 		ctx:               ctx,
+		subClient:         subClient,
 		cacheDDLEvent:     cacheDDLEvent,
 		advanceResolvedTs: advanceResolvedTs,
 		kvStorage:         kvStorage,
@@ -76,20 +77,22 @@ func newDDLJobFetcher(
 	ddlJobFetcher.resolvedTsTracker.resolvedTsItemMap = make(map[logpuller.SubscriptionID]*resolvedTsItem)
 	ddlJobFetcher.resolvedTsTracker.resolvedTsHeap = heap.NewHeap[*resolvedTsItem]()
 
+	return ddlJobFetcher
+}
+
+func (p *ddlJobFetcher) run(startTs uint64) {
 	for _, span := range getAllDDLSpan() {
-		subID := subClient.AllocSubscriptionID()
+		subID := p.subClient.AllocSubscriptionID()
 		item := &resolvedTsItem{
 			resolvedTs: 0,
 		}
-		ddlJobFetcher.resolvedTsTracker.resolvedTsItemMap[subID] = item
-		ddlJobFetcher.resolvedTsTracker.resolvedTsHeap.AddOrUpdate(item)
+		p.resolvedTsTracker.resolvedTsItemMap[subID] = item
+		p.resolvedTsTracker.resolvedTsHeap.AddOrUpdate(item)
 		advanceSubSpanResolvedTs := func(ts uint64) {
-			ddlJobFetcher.tryAdvanceResolvedTs(subID, ts)
+			p.tryAdvanceResolvedTs(subID, ts)
 		}
-		subClient.Subscribe(subID, span, startTs, ddlJobFetcher.input, advanceSubSpanResolvedTs, 0, ddlPullerFilterLoop)
+		p.subClient.Subscribe(subID, span, startTs, p.input, advanceSubSpanResolvedTs, 0, ddlPullerFilterLoop)
 	}
-
-	return ddlJobFetcher
 }
 
 func (p *ddlJobFetcher) tryAdvanceResolvedTs(subID logpuller.SubscriptionID, newResolvedTs uint64) {
