@@ -234,7 +234,7 @@ func (b *BatchDMLEvent) GetSize() int64 {
 	var size int64
 	for _, e := range b.DMLEvents {
 		size += e.Rows.MemoryUsage()
-		//size += e.GetSize()
+		// size += e.GetSize()
 	}
 	return size
 }

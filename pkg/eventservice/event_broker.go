@@ -45,6 +45,8 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
+
+	memoryQuotaHighWatermark = 1024 * 1024 * 128
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -473,35 +475,10 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
-	remoteID := node.ID(task.info.GetServerID())
-	changefeedID := task.info.GetChangefeedID()
-	item, ok := c.changefeedMap.Load(changefeedID)
-	if !ok {
-		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
-	}
-
-	status := item.(*changefeedStatus)
-	item, ok = status.availableMemoryQuota.Load(remoteID)
-	if !ok {
-		log.Panic("The available memory quota is not set",
-			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
-	}
-	available := item.(uint64)
-	if available <= 1024*1024*128 {
-		log.Info("scan quota is not enough, reset max scan limit",
-			zap.String("changefeed", changefeedID.String()),
-			zap.String("dispatcher", task.id.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Uint64("available", available))
-		task.currentScanLimitInBytes.Store(minScanLimitInBytes)
-		task.lastUpdateScanLimitTime.Store(time.Now())
-	}
-
-	result := scanLimit{
+	return scanLimit{
 		maxScannedBytes: task.getCurrentScanLimitInBytes(),
 		timeout:         time.Second,
 	}
-	return result
 }
 
 func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
@@ -540,6 +517,29 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
 	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
 		log.Debug("scan rate limit exceeded", zap.Stringer("dispatcher", task.id), zap.Int64("lastScanBytes", task.lastScanBytes.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
+		return
+	}
+
+	item, ok := c.changefeedMap.Load(changefeedID)
+	if !ok {
+		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
+	}
+
+	status := item.(*changefeedStatus)
+	item, ok = status.availableMemoryQuota.Load(remoteID)
+	if !ok {
+		log.Panic("The available memory quota is not set",
+			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+	}
+	available := item.(uint64)
+	if available <= memoryQuotaHighWatermark {
+		log.Info("scan quota is not enough, reset max scan limit",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("dispatcher", task.id.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available))
+		task.currentScanLimitInBytes.Store(minScanLimitInBytes)
+		task.lastUpdateScanLimitTime.Store(time.Now())
 		return
 	}
 

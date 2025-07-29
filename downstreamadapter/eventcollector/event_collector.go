@@ -420,7 +420,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 }
 
 func (c *EventCollector) controlCongestion(ctx context.Context) error {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -440,6 +440,7 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 }
 
 func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
+	// collect all changefeeds' available memory quota
 	availables := make(map[common.ChangeFeedID]uint64)
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
 		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
@@ -452,6 +453,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		return nil
 	}
 
+	// calculate each changefeed's available memory quota for each node
+	// by the proportion of the dispatcher on each node.
+	// this is not accurate, we should also consider each node's workload distribution.
 	proportions := make(map[common.ChangeFeedID]map[node.ID]uint64)
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
@@ -467,6 +471,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		return true
 	})
 
+	// group the available memory quota by nodeID
 	result := make(map[node.ID]*event.CongestionControl)
 	for changefeedID, total := range availables {
 		proportion := proportions[changefeedID]
