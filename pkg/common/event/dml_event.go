@@ -265,6 +265,9 @@ type DMLEvent struct {
 	// Note: it is the logic length of the transaction, not the number of physical rows in the Rows chunk.
 	// For an update event, it has two physical rows in the Rows chunk.
 	Length int32 `json:"length"`
+	// ApproximateSize is the approximate size of all rows in the transaction.
+	// it's based on the raw entry size, use for the sink throughput calculation.
+	ApproximateSize int64 `json:"approximate_size"`
 	// RowTypes is the types of every row in the transaction.
 	RowTypes []RowType `json:"row_types"`
 	// Rows shares BatchDMLEvent rows
@@ -347,6 +350,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		t.RowTypes = append(t.RowTypes, rowType)
 	}
 	t.Length += 1
+	t.ApproximateSize += raw.GetSize()
 	if checksum != nil {
 		t.Checksum = append(t.Checksum, checksum)
 	}
@@ -469,9 +473,11 @@ func (t *DMLEvent) Unmarshal(data []byte) error {
 	return t.decode(data)
 }
 
-// GetSize returns the size of the event in bytes, including all fields.
+// GetSize returns the approximate size of the rows in the transaction.
 func (t *DMLEvent) GetSize() int64 {
-	return t.Rows.MemoryUsage()
+	// Notice: events send from local channel will not have the size field.
+	// return t.eventSize
+	return t.ApproximateSize
 }
 
 func (t *DMLEvent) IsPaused() bool {
@@ -492,7 +498,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 4*8 + 4*3 + t.State.GetSize() + len(t.RowTypes)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + len(t.RowTypes)
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -526,6 +532,9 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	// Length
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.Length))
 	offset += 4
+	// ApproximateSize
+	binary.LittleEndian.PutUint64(buf[offset:], uint64(t.ApproximateSize))
+	offset += 8
 	// PreviousTotalOffset
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.PreviousTotalOffset))
 	offset += 4
@@ -549,7 +558,7 @@ func (t *DMLEvent) decode(data []byte) error {
 }
 
 func (t *DMLEvent) decodeV0(data []byte) error {
-	if len(data) < 1+16+8*4+4*3 {
+	if len(data) < 1+16+8*5+4*3 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
 	if t.Version != DMLEventVersion {
@@ -574,6 +583,8 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	offset += t.State.GetSize()
 	t.Length = int32(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4
+	t.ApproximateSize = int64(binary.LittleEndian.Uint64(data[offset:]))
+	offset += 8
 	t.PreviousTotalOffset = int(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4
 	length := int32(binary.LittleEndian.Uint32(data[offset:]))
