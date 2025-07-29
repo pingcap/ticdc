@@ -392,6 +392,12 @@ func (s *session) isContextDone() bool {
 func (s *session) recordMetrics() {
 	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
 	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
+	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
+	var size int64
+	for _, item := range s.events {
+		size += item.GetSize()
+	}
+	metrics.EventServiceScannedDMLSize.Observe(float64(size))
 }
 
 // limitChecker manages scan limits and interruption logic

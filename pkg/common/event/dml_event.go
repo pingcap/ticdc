@@ -232,8 +232,8 @@ func (b *BatchDMLEvent) GetStartTs() common.Ts {
 
 func (b *BatchDMLEvent) GetSize() int64 {
 	var size int64
-	for _, dml := range b.DMLEvents {
-		size += dml.GetSize()
+	for _, e := range b.DMLEvents {
+		size += e.Rows.MemoryUsage()
 	}
 	return size
 }
