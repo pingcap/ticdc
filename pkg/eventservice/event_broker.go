@@ -471,9 +471,8 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
-func (c *eventBroker) calculateScanLimit(task scanTask, available *atomic.Uint64) scanLimit {
+func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
 	return scanLimit{
-		available:   available,
 		maxDMLBytes: task.getCurrentScanLimitInBytes(),
 		timeout:     time.Second,
 	}
@@ -519,18 +518,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Panic("The available memory quota is not set",
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 	}
-	available := item.(*atomic.Uint64)
-	if available.Load() <= memoryQuotaLowThreshold {
-		log.Info("scan quota is not enough, reset max scan limit",
-			zap.String("changefeed", changefeedID.String()),
-			zap.String("dispatcher", task.id.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Uint64("available", available.Load()))
-		task.resetScanLimit()
-		return
-	}
 
-	sl := c.calculateScanLimit(task, available)
+	available := item.(*atomic.Uint64)
+	sl := c.calculateScanLimit(task)
+	allocQuota(available, uint64(sl.maxDMLBytes))
+
 	scanner := newEventScanner(
 		c.eventStore,
 		c.schemaStore,
@@ -586,6 +578,18 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
+}
+
+func allocQuota(quota *atomic.Uint64, nBytes uint64) {
+	for {
+		available := quota.Load()
+		if available < nBytes {
+			return
+		}
+		if quota.CompareAndSwap(available, available-nBytes) {
+			return
+		}
+	}
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) error {
