@@ -121,6 +121,15 @@ var (
 		Subsystem: "event_service",
 		Name:      "available_memory_quota",
 	}, []string{"changefeedID"})
+
+	EventServiceScannedDMLSize = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "scanned_dml_size",
+		Help:      "The size of scanned DML events from eventStore",
+		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 16), // 1KB to 64MB
+	})
+
 	EventServiceScannedTxnCount = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_service",
@@ -146,5 +155,6 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
 	registry.MustRegister(EventServiceSkipResolvedTsCount)
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
+	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
 }
