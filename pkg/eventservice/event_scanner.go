@@ -201,29 +201,29 @@ func (s *eventScanner) scanAndMergeEvents(
 			return nil, false, nil
 		}
 
-		rawEvent, isNewTxn := iter.Next()
-		if rawEvent == nil {
+		rawEntry, isNewTxn := iter.Next()
+		if rawEntry == nil {
 			events, err := s.finalizeScan(session, merger, processor)
 			return events, false, err
 		}
 
-		session.observeRawEntry(rawEvent)
+		session.observeRawEntry(rawEntry)
 		if isNewTxn {
-			if checker.checkLimits(session.events) && session.dmlCount > 0 {
-				return s.interruptScan(session, merger, processor)
-			}
-			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
+			if err = s.handleNewTransaction(session, merger, processor, rawEntry, tableID); err != nil {
 				return nil, false, err
+			}
+			if checker.checkLimits(processor.batchDML.GetSize()) && session.dmlCount > 0 {
+				return s.interruptScan(session, merger, processor)
 			}
 			continue
 		}
 
-		if err = processor.appendRow(rawEvent); err != nil {
+		if err = processor.appendRow(rawEntry); err != nil {
 			log.Error("append row failed", zap.Error(err),
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
-				zap.Uint64("startTs", rawEvent.StartTs),
-				zap.Uint64("commitTs", rawEvent.CRTs))
+				zap.Uint64("startTs", rawEntry.StartTs),
+				zap.Uint64("commitTs", rawEntry.CRTs))
 			return nil, false, err
 		}
 	}
@@ -289,6 +289,7 @@ func (s *eventScanner) handleNewTransaction(
 	}
 
 	session.lastStartTS = rawEvent.StartTs
+	session.lastCommitTs = rawEvent.CRTs
 	session.dmlCount++
 	return nil
 }
@@ -341,8 +342,9 @@ type session struct {
 	limit          scanLimit
 
 	// State tracking
-	startTime   time.Time
-	lastStartTS uint64
+	startTime    time.Time
+	lastStartTS  uint64
+	lastCommitTs uint64
 
 	scannedBytes      int64
 	scannedEntryCount int
@@ -427,11 +429,8 @@ func newLimitChecker(maxBytes int64, timeout time.Duration, startTime time.Time)
 }
 
 // checkLimits returns true if any limit has been reached
-func (c *limitChecker) checkLimits(events []event.Event) bool {
-	var (
-		bytes    = dmlSize(events)
-		duration = time.Since(c.startTime)
-	)
+func (c *limitChecker) checkLimits(bytes int64) bool {
+	duration := time.Since(c.startTime)
 	if bytes > c.maxBytes {
 		log.Info("limit exceeded, hit max bytes", zap.Int64("bytes", bytes),
 			zap.Int64("maxBytes", c.maxBytes), zap.Duration("duration", duration))
@@ -443,7 +442,6 @@ func (c *limitChecker) checkLimits(events []event.Event) bool {
 		return true
 	}
 	return false
-	// return dmlSize(events) > c.maxBytes || time.Since(c.startTime) > c.timeout
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
@@ -541,12 +539,14 @@ func newDMLProcessor(mounter pevent.Mounter, schemaGetter schemaGetter) *dmlProc
 }
 
 func (p *dmlProcessor) clearCache() error {
-	for _, insertRow := range p.insertRowCache {
-		if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
-			return err
+	if len(p.insertRowCache) > 0 {
+		for _, insertRow := range p.insertRowCache {
+			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
+				return err
+			}
 		}
+		p.insertRowCache = make([]*common.RawKVEntry, 0)
 	}
-	p.insertRowCache = make([]*common.RawKVEntry, 0)
 	return nil
 }
 
@@ -610,16 +610,17 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if err != nil {
 		return err
 	}
-	if shouldSplit {
-		deleteRow, insertRow, err := rawEvent.SplitUpdate()
-		if err != nil {
-			return err
-		}
-		p.insertRowCache = append(p.insertRowCache, insertRow)
-		return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
+
+	if !shouldSplit {
+		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
 	}
 
-	return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
+	deleteRow, insertRow, err := rawEvent.SplitUpdate()
+	if err != nil {
+		return err
+	}
+	p.insertRowCache = append(p.insertRowCache, insertRow)
+	return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
 }
 
 // getCurrentBatch returns the current batch DML event

@@ -871,7 +871,9 @@ type eventStoreIter struct {
 	// (e.g. subscription span is not the same as dispatcher span)
 	needCheckSpan bool
 	innerIter     *pebble.Iterator
-	prevStartTs   uint64
+
+	// prevStartTs is used to determine whether the current kv belongs to a new transaction.
+	prevStartTs uint64
 
 	// for debug
 	startTs  uint64
