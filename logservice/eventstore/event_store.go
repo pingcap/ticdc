@@ -901,6 +901,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 			break
 		}
+		// todo: take this into the monitoring, also consider skipped entry count, since it also takes time
 		log.Debug("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
 			zap.String("key", hex.EncodeToString(rawKV.Key)),

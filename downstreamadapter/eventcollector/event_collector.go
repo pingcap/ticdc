@@ -94,12 +94,12 @@ func New(serverId node.ID) *EventCollector {
 		dispatcherMessageChan:                chann.NewAutoDrainChann[DispatcherMessage](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		receiveChannels:                      receiveChannels,
+		ds:                                   NewEventDynamicStream(),
 		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
 		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs"),
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 	}
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
-	eventCollector.ds = NewEventDynamicStream(eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)
 
 	return eventCollector
@@ -123,6 +123,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 
 	g.Go(func() error {
 		return c.processDSFeedback(ctx)
+	})
+
+	g.Go(func() error {
+		return c.controlCongestion(ctx)
 	})
 
 	g.Go(func() error {
@@ -226,11 +230,9 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 // Queues a message for sending (best-effort, no delivery guarantee)
 // Messages may be dropped if errors occur. For reliable delivery, implement retry/ack logic at caller side
 func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
-	if msg != nil {
-		c.dispatcherMessageChan.In() <- DispatcherMessage{
-			Message:    msg,
-			RetryCount: 0,
-		}
+	c.dispatcherMessageChan.In() <- DispatcherMessage{
+		Message:    msg,
+		RetryCount: 0,
 	}
 }
 
@@ -248,8 +250,8 @@ func (c *EventCollector) getDispatcherStatByID(dispatcherID common.DispatcherID)
 
 func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
 	groupedHeartbeats := c.groupHeartbeat(heartbeat)
-	for serverID, heartbeat := range groupedHeartbeats {
-		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, heartbeat)
+	for serverID, hb := range groupedHeartbeats {
+		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, hb)
 		c.enqueueMessageForSend(msg)
 	}
 }
@@ -259,15 +261,12 @@ func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHear
 func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) map[node.ID]*event.DispatcherHeartbeat {
 	groupedHeartbeats := make(map[node.ID]*event.DispatcherHeartbeat)
 	group := func(target node.ID, dp event.DispatcherProgress) {
-		heartbeat, ok := groupedHeartbeats[target]
+		hb, ok := groupedHeartbeats[target]
 		if !ok {
-			heartbeat = &event.DispatcherHeartbeat{
-				Version:              event.DispatcherHeartbeatVersion,
-				DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
-			}
-			groupedHeartbeats[target] = heartbeat
+			hb = event.NewDispatcherHeartbeat()
+			groupedHeartbeats[target] = hb
 		}
-		heartbeat.Append(dp)
+		hb.Append(dp)
 	}
 
 	for _, dp := range heartbeat.DispatcherProgresses {
@@ -413,6 +412,77 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 			}
 		}
 	}
+}
+
+func (c *EventCollector) controlCongestion(ctx context.Context) error {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			messages := c.newCongestionControlMessages()
+			for serverID, m := range messages {
+				msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, m)
+				if err := c.mc.SendCommand(msg); err != nil {
+					log.Warn("send congestion control message failed", zap.Error(err))
+				}
+			}
+		}
+	}
+}
+
+func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
+	availables := make(map[common.ChangeFeedID]uint64)
+	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
+		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
+		if !ok {
+			continue
+		}
+		availables[changefeedID.(common.ChangeFeedID)] = uint64(quota.AvailableMemory())
+	}
+	if len(availables) == 0 {
+		return nil
+	}
+
+	proportions := make(map[common.ChangeFeedID]map[node.ID]uint64)
+	c.dispatcherMap.Range(func(k, v interface{}) bool {
+		stat := v.(*dispatcherStat)
+		eventServiceID := stat.connState.getEventServiceID()
+		changefeedID := stat.target.GetChangefeedID()
+
+		holder, ok := proportions[changefeedID]
+		if !ok {
+			holder = make(map[node.ID]uint64)
+			proportions[changefeedID] = holder
+		}
+		holder[eventServiceID]++
+		return true
+	})
+
+	result := make(map[node.ID]*event.CongestionControl)
+	for changefeedID, total := range availables {
+		proportion := proportions[changefeedID]
+		var sum uint64
+		for _, portion := range proportion {
+			sum += portion
+		}
+
+		for nodeID, portion := range proportion {
+			ratio := float64(portion) / float64(sum)
+			quota := uint64(float64(total) * ratio)
+
+			m, ok := result[nodeID]
+			if !ok {
+				m = event.NewCongestionControl()
+				result[nodeID] = m
+			}
+			m.AddAvailableMemory(changefeedID.ID(), quota)
+		}
+	}
+	return result
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) error {
