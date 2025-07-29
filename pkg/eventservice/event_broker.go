@@ -472,8 +472,8 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
 	return scanLimit{
-		maxScannedBytes: task.getCurrentScanLimitInBytes(),
-		timeout:         time.Second,
+		maxDMLBytes: task.getCurrentScanLimitInBytes(),
+		timeout:     time.Second,
 	}
 }
 

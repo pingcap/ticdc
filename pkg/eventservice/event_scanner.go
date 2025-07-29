@@ -45,8 +45,8 @@ type schemaGetter interface {
 // ScanLimit defines the limits for a scan operation
 // todo: should consider the bytes of decoded events.
 type scanLimit struct {
-	// maxScannedBytes is the maximum number of bytes to scan
-	maxScannedBytes int64
+	// maxDMLBytes is the maximum number of bytes to scan
+	maxDMLBytes int64
 	// timeout is the maximum time to spend scanning
 	timeout time.Duration
 }
@@ -189,7 +189,7 @@ func (s *eventScanner) scanAndMergeEvents(
 ) ([]event.Event, bool, error) {
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
-	checker := newLimitChecker(session.limit.maxScannedBytes, session.limit.timeout, session.startTime)
+	checker := newLimitChecker(session.limit.maxDMLBytes, session.limit.timeout, session.startTime)
 
 	tableID := session.dataRange.Span.TableID
 	for {
@@ -209,13 +209,19 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		session.addBytes(rawEvent.GetSize())
 		session.scannedEntryCount++
-		if isNewTxn && checker.checkLimits(session.scannedBytes) {
-			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
-				return s.interruptScan(session, merger, processor)
-			}
-		}
+		//
+		//if isNewTxn && checker.checkLimits(session.scannedBytes) {
+		//	if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
+		//		return s.interruptScan(session, merger, processor)
+		//	}
+		//}
 
 		if isNewTxn {
+			if checker.checkLimits(session.events) {
+				if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
+					return s.interruptScan(session, merger, processor)
+				}
+			}
 			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
 				return nil, false, err
 			}
@@ -387,16 +393,21 @@ func (s *session) isContextDone() bool {
 	}
 }
 
+func dmlSize(events []event.Event) int64 {
+	var size int64
+	for _, item := range events {
+		size += item.GetSize()
+	}
+	return size
+}
+
 // recordMetrics records the scan duration metrics
 func (s *session) recordMetrics() {
 	takes := time.Since(s.startTime)
 	metrics.EventServiceScanDuration.Observe(takes.Seconds())
 	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
 	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
-	var size int64
-	for _, item := range s.events {
-		size += item.GetSize()
-	}
+	size := dmlSize(s.events)
 	metrics.EventServiceScannedDMLSize.Observe(float64(size))
 	if takes > time.Second {
 		log.Warn("scan takes too long",
@@ -423,8 +434,8 @@ func newLimitChecker(maxBytes int64, timeout time.Duration, startTime time.Time)
 }
 
 // checkLimits returns true if any limit has been reached
-func (c *limitChecker) checkLimits(totalBytes int64) bool {
-	return totalBytes > c.maxBytes || time.Since(c.startTime) > c.timeout
+func (c *limitChecker) checkLimits(events []event.Event) bool {
+	return dmlSize(events) > c.maxBytes || time.Since(c.startTime) > c.timeout
 }
 
 // canInterrupt checks if scan can be interrupted at current position

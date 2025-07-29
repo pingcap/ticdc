@@ -71,8 +71,8 @@ func TestEventScanner(t *testing.T) {
 	// [Resolved(ts=102)]
 	disp.eventStoreResolvedTs.Store(102)
 	sl := scanLimit{
-		maxScannedBytes: 1000,
-		timeout:         10 * time.Second,
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
 	}
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
@@ -101,8 +101,8 @@ func TestEventScanner(t *testing.T) {
 	require.True(t, ok)
 
 	sl = scanLimit{
-		maxScannedBytes: 1000,
-		timeout:         10 * time.Second,
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
 	}
 	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -127,8 +127,8 @@ func TestEventScanner(t *testing.T) {
 	ok, dataRange = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 	sl = scanLimit{
-		maxScannedBytes: 1000,
-		timeout:         10 * time.Second,
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
 	}
 	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -154,8 +154,8 @@ func TestEventScanner(t *testing.T) {
 	//               ▲
 	//               └── Scanning interrupted here
 	sl = scanLimit{
-		maxScannedBytes: 1,
-		timeout:         10 * time.Second,
+		maxDMLBytes: 1,
+		timeout:     10 * time.Second,
 	}
 	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -186,8 +186,8 @@ func TestEventScanner(t *testing.T) {
 		kvEvents[i].CRTs = firstCommitTs
 	}
 	sl = scanLimit{
-		maxScannedBytes: 1,
-		timeout:         10 * time.Second,
+		maxDMLBytes: 1,
+		timeout:     10 * time.Second,
 	}
 	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -220,8 +220,8 @@ func TestEventScanner(t *testing.T) {
 	//                               ▲
 	//                               └── Scanning interrupted due to timeout
 	sl = scanLimit{
-		maxScannedBytes: 1000,
-		timeout:         0 * time.Millisecond,
+		maxDMLBytes: 1000,
+		timeout:     0 * time.Millisecond,
 	}
 	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -243,8 +243,8 @@ func TestEventScanner(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
 	sl = scanLimit{
-		maxScannedBytes: 1000,
-		timeout:         10 * time.Second,
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
 	}
 	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -341,8 +341,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//             ▲
 	//             └── Scanning interrupted at DML1
 	sl := scanLimit{
-		maxScannedBytes: eSize,
-		timeout:         10 * time.Second,
+		maxDMLBytes: eSize,
+		timeout:     10 * time.Second,
 	}
 	_, events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -369,8 +369,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//                                               ▲
 	//                                               └── Events with same commitTs must be returned together
 	sl = scanLimit{
-		maxScannedBytes: 2 * eSize,
-		timeout:         10 * time.Second,
+		maxDMLBytes: 2 * eSize,
+		timeout:     10 * time.Second,
 	}
 	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -406,8 +406,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	// Expected result:
 	// [..., fakeDDL2(x+5), fakeDDL3(x+6), Resolved(x+7)]
 	sl = scanLimit{
-		maxScannedBytes: 100 * eSize,
-		timeout:         10 * time.Second,
+		maxDMLBytes: 100 * eSize,
+		timeout:     10 * time.Second,
 	}
 
 	// Add more fake DDL events
@@ -772,7 +772,7 @@ func TestScanSession(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
 		dataRange := common.DataRange{}
-		limit := scanLimit{maxScannedBytes: 1000, timeout: time.Second}
+		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
 
 		scanner := &eventScanner{}
 		session := scanner.newSession(ctx, dispStat, dataRange, limit)
@@ -803,7 +803,7 @@ func TestScanSession(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
 		dataRange := common.DataRange{}
-		limit := scanLimit{maxScannedBytes: 1000, timeout: time.Second}
+		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
 
 		scanner := &eventScanner{}
 		session := scanner.newSession(ctx, dispStat, dataRange, limit)
@@ -848,7 +848,7 @@ func TestScanSession(t *testing.T) {
 			StartTs: 100,
 			EndTs:   200,
 		}
-		limit := scanLimit{maxScannedBytes: 1000, timeout: time.Second}
+		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
 
 		scanner := &eventScanner{}
 		session := scanner.newSession(ctx, dispStat, dataRange, limit)
@@ -871,7 +871,7 @@ func TestScanSession(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
 		dataRange := common.DataRange{}
-		limit := scanLimit{maxScannedBytes: 1000, timeout: time.Second}
+		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
 
 		scanner := &eventScanner{}
 		session := scanner.newSession(ctx, dispStat, dataRange, limit)
@@ -1264,8 +1264,8 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	}
 
 	limit := scanLimit{
-		maxScannedBytes: 1000,
-		timeout:         10 * time.Second,
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
 	}
 
 	sess := &session{
