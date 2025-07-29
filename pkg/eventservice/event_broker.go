@@ -45,7 +45,7 @@ const (
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
-	memoryQuotaHighWatermark = 1024 * 1024 * 128
+	memoryQuotaLowThreshold = 1024 * 1024 * 256
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -518,14 +518,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 	}
 	available := item.(uint64)
-	if available <= memoryQuotaHighWatermark {
+	if available <= memoryQuotaLowThreshold {
 		log.Info("scan quota is not enough, reset max scan limit",
 			zap.String("changefeed", changefeedID.String()),
 			zap.String("dispatcher", task.id.String()),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available))
-		task.currentScanLimitInBytes.Store(minScanLimitInBytes)
-		task.lastUpdateScanLimitTime.Store(time.Now())
+		task.resetScanLimit()
 		return
 	}
 
