@@ -212,7 +212,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			if err = s.handleNewTransaction(session, merger, processor, rawEntry, tableID); err != nil {
 				return nil, false, err
 			}
-			if checker.checkLimits(processor.batchDML.GetSize()) && session.dmlCount > 0 {
+			if checker.checkLimits(processor.batchDML.GetSize()) {
 				return s.interruptScan(session, merger, processor)
 			}
 			continue
@@ -388,28 +388,16 @@ func (s *session) isContextDone() bool {
 	}
 }
 
-func dmlSize(events []event.Event) int64 {
-	var size int64
-	for _, item := range events {
-		size += item.GetSize()
-	}
-	return size
-}
-
 // recordMetrics records the scan duration metrics
 func (s *session) recordMetrics() {
-	takes := time.Since(s.startTime)
-	metrics.EventServiceScanDuration.Observe(takes.Seconds())
+	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
 	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
 	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
-	size := dmlSize(s.events)
-	metrics.EventServiceScannedDMLSize.Observe(float64(size))
-	if takes > time.Second {
-		log.Warn("scan takes too long",
-			zap.Duration("duration", takes), zap.Int("txnCount", s.dmlCount),
-			zap.Int("entryCount", s.scannedEntryCount), zap.Int64("scannedBytes", s.scannedBytes),
-			zap.Int64("dmlBytes", size))
+	var size int64
+	for _, item := range s.events {
+		size += item.GetSize()
 	}
+	metrics.EventServiceScannedDMLSize.Observe(float64(size))
 }
 
 // limitChecker manages scan limits and interruption logic
