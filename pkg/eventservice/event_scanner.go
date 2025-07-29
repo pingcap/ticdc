@@ -209,14 +209,8 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		session.observeRawEntry(rawEvent)
 		if isNewTxn {
-			if checker.checkLimits(session.events) {
-				if canInterrupt(rawEvent.StartTs, session.lastStartTS, session.dmlCount) {
-					return s.interruptScan(session, merger, processor)
-				} else {
-					log.Warn("hit limit, but cannot interrupt scan", zap.Int("txnCount", session.dmlCount),
-						zap.Bool("newCRT > lastStartTS", rawEvent.CRTs > session.lastStartTS),
-						zap.Uint64("newCRT", rawEvent.CRTs), zap.Uint64("lastStartTS", session.lastStartTS))
-				}
+			if checker.checkLimits(session.events) && session.dmlCount > 0 {
+				return s.interruptScan(session, merger, processor)
 			}
 			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
 				return nil, false, err
@@ -450,12 +444,6 @@ func (c *limitChecker) checkLimits(events []event.Event) bool {
 	}
 	return false
 	// return dmlSize(events) > c.maxBytes || time.Since(c.startTime) > c.timeout
-}
-
-// canInterrupt checks if scan can be interrupted at current position
-// at least one transaction (DML event) has been processed
-func canInterrupt(currentTs, lastStartTs uint64, dmlCount int) bool {
-	return dmlCount > 0 && currentTs > lastStartTs
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
