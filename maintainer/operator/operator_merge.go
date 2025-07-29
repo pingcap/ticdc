@@ -196,8 +196,5 @@ func (m *MergeDispatcherOperator) Type() string {
 
 // dispatcher manager ensure the checkpointTs calculation correctly during the merge operation
 func (m *MergeDispatcherOperator) BlockTsForward() bool {
-	if m.removed.Load() {
-		return true
-	}
 	return false
 }

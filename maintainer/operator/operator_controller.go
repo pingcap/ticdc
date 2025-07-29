@@ -15,6 +15,7 @@ package operator
 
 import (
 	"container/heap"
+	"math"
 	"sync"
 	"time"
 
@@ -219,13 +220,21 @@ func (oc *Controller) OperatorSizeWithLock() int {
 	return len(oc.operators)
 }
 
-func (oc *Controller) OperatorBlockTsForward() bool {
+func (oc *Controller) GetMinCheckpointTs() uint64 {
+	minCheckpointTs := uint64(math.MaxUint64)
 	for _, op := range oc.operators {
 		if op.OP.BlockTsForward() {
-			return true
+			spanReplication := oc.spanController.GetTaskByID(op.OP.ID())
+			if spanReplication == nil {
+				// for test
+				log.Panic("span replication is nil", zap.String("operator", op.OP.String()))
+			}
+			if spanReplication.GetStatus().CheckpointTs < minCheckpointTs {
+				minCheckpointTs = spanReplication.GetStatus().CheckpointTs
+			}
 		}
 	}
-	return false
+	return minCheckpointTs
 }
 
 // pollQueueingOperator returns the operator need to be executed,

@@ -504,22 +504,9 @@ func (m *Maintainer) calCheckpointTs() {
 		m.barrier.ReleaseLock(barrierLock)
 	}()
 
-	if !m.controller.ScheduleFinished() {
-		log.Warn("can not advance checkpointTs since schedule is not finished",
-			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
-		)
-		return
-	}
-	if m.barrier.ShouldBlockCheckpointTs() {
-		log.Warn("can not advance checkpointTs since barrier is blocking",
-			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
-		)
-		return
-	}
+	minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
+	minCheckpointTsForBarrier := m.barrier.GetMinBlockedCheckpointTsForNewTables()
+
 	newWatermark := heartbeatpb.NewMaxWatermark()
 	// if there is no tables, there must be a table trigger dispatcher
 	for id := range m.bootstrapper.GetAllNodes() {
@@ -537,6 +524,13 @@ func (m *Maintainer) calCheckpointTs() {
 			return
 		}
 		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
+	}
+
+	if minCheckpointTsForBarrier != uint64(math.MaxUint64) {
+		newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
+	}
+	if minCheckpointTsForScheduler != 0 {
+		newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
 	}
 
 	log.Info("can advance checkpointTs",

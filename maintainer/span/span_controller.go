@@ -15,6 +15,7 @@ package span
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -178,6 +179,16 @@ func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
+}
+
+func (c *Controller) GetMinCheckpointTsForAbsentSpans() uint64 {
+	minCheckpointTs := uint64(math.MaxUint64)
+	for _, span := range c.GetAbsent() {
+		if span.GetStatus().CheckpointTs < minCheckpointTs {
+			minCheckpointTs = span.GetStatus().CheckpointTs
+		}
+	}
+	return minCheckpointTs
 }
 
 // GetTaskByID returns the replica set by the id, it will search the replicating, scheduling and absent map
