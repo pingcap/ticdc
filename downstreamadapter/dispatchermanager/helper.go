@@ -163,9 +163,11 @@ func (w *Watermark) Set(watermark *heartbeatpb.Watermark) {
 }
 
 func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler] {
+	option := dynstream.NewOption()
+	option.BatchCount = 1024
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
-		&SchedulerDispatcherRequestHandler{}, dynstream.NewOption())
+		&SchedulerDispatcherRequestHandler{}, option)
 	ds.Start()
 	return ds
 }
@@ -397,12 +399,9 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 }
 
 func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *EventDispatcherManager, *MergeDispatcherRequestHandler] {
-	option := dynstream.NewOption()
-	option.BatchCount = 1024
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
 		&MergeDispatcherRequestHandler{},
-		option,
 	)
 	ds.Start()
 	return ds
