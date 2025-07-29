@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -470,8 +471,9 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
-func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
+func (c *eventBroker) calculateScanLimit(task scanTask, available *atomic.Uint64) scanLimit {
 	return scanLimit{
+		available:   available,
 		maxDMLBytes: task.getCurrentScanLimitInBytes(),
 		timeout:     time.Second,
 	}
@@ -517,18 +519,18 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Panic("The available memory quota is not set",
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 	}
-	available := item.(uint64)
-	if available <= memoryQuotaLowThreshold {
+	available := item.(*atomic.Uint64)
+	if available.Load() <= memoryQuotaLowThreshold {
 		log.Info("scan quota is not enough, reset max scan limit",
 			zap.String("changefeed", changefeedID.String()),
 			zap.String("dispatcher", task.id.String()),
 			zap.String("remote", remoteID.String()),
-			zap.Uint64("available", available))
+			zap.Uint64("available", available.Load()))
 		task.resetScanLimit()
 		return
 	}
 
-	sl := c.calculateScanLimit(task)
+	sl := c.calculateScanLimit(task, available)
 	scanner := newEventScanner(
 		c.eventStore,
 		c.schemaStore,
@@ -1032,7 +1034,7 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *pevent.Congestion
 		if !ok {
 			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
 		}
-		changefeed.availableMemoryQuota.Store(from, available)
+		changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		return true
 	})

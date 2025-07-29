@@ -421,7 +421,7 @@ type changefeedStatus struct {
 
 	dispatcherStatMap sync.Map // nodeID -> dispatcherID -> dispatcherStat
 
-	availableMemoryQuota sync.Map // nodeID -> uint64 (memory quota in bytes)
+	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

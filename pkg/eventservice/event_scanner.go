@@ -26,6 +26,7 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -45,6 +46,7 @@ type schemaGetter interface {
 // ScanLimit defines the limits for a scan operation
 // todo: should consider the bytes of decoded events.
 type scanLimit struct {
+	available *atomic.Uint64
 	// maxDMLBytes is the maximum number of bytes to scan
 	maxDMLBytes int64
 	// timeout is the maximum time to spend scanning
@@ -212,7 +214,16 @@ func (s *eventScanner) scanAndMergeEvents(
 			if err = s.handleNewTransaction(session, merger, processor, rawEntry, tableID); err != nil {
 				return nil, false, err
 			}
-			if checker.checkLimits(processor.batchDML.GetSize()) {
+
+			nBytes := processor.batchDML.GetSize()
+			if checker.checkLimits(nBytes) {
+				return s.interruptScan(session, merger, processor)
+			}
+			available := session.limit.available.Load()
+			if available < memoryQuotaLowThreshold {
+				log.Warn("scan interrupted since memory quota is low",
+					zap.Uint64("available", available), zap.Int("txnCount", session.dmlCount),
+					zap.Int64("scannedBytes", session.scannedBytes), zap.Int64("nBytes", nBytes))
 				return s.interruptScan(session, merger, processor)
 			}
 			continue
