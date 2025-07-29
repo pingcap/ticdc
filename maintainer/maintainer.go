@@ -504,6 +504,7 @@ func (m *Maintainer) calCheckpointTs() {
 		m.barrier.ReleaseLock(barrierLock)
 	}()
 
+	// TODO: consider how can we simplify the logic better
 	minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
 	minCheckpointTsForBarrier := m.barrier.GetMinBlockedCheckpointTsForNewTables()
 
