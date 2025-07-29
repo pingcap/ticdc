@@ -518,7 +518,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Panic("The available memory quota is not set",
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 	}
-
 	available := item.(*atomic.Uint64)
 	sl := c.calculateScanLimit(task)
 	allocQuota(available, uint64(sl.maxDMLBytes))
@@ -584,7 +583,7 @@ func allocQuota(quota *atomic.Uint64, nBytes uint64) {
 	for {
 		available := quota.Load()
 		if available < nBytes {
-			return
+			continue
 		}
 		if quota.CompareAndSwap(available, available-nBytes) {
 			return
