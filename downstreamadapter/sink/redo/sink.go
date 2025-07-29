@@ -139,7 +139,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			}
 		}
 		// batchSize, batchWriteBytes, err
-		return int(event.Len()), event.GetRowsSize(), nil
+		return int(event.Len()), event.GetSize(), nil
 	})
 }
 
