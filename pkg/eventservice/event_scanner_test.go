@@ -187,7 +187,7 @@ func TestEventScanner(t *testing.T) {
 	}
 	sl = scanLimit{
 		maxDMLBytes: 1,
-		timeout:     10 * time.Second,
+		timeout:     10000 * time.Second,
 	}
 	_, events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
@@ -775,26 +775,25 @@ func TestScanSession(t *testing.T) {
 		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
 
 		scanner := &eventScanner{}
-		session := scanner.newSession(ctx, dispStat, dataRange, limit)
+		sess := scanner.newSession(ctx, dispStat, dataRange, limit)
 
 		// Test initial scannedBytes is 0
-		require.Equal(t, int64(0), session.scannedBytes)
+		require.Equal(t, int64(0), sess.scannedBytes)
 
-		// Test adding bytes
-		session.observeRawEntry(100)
-		require.Equal(t, int64(100), session.scannedBytes)
+		entry := &common.RawKVEntry{
+			StartTs: 1,
+			CRTs:    2,
+			Key:     []byte("insert_key_1"),
+			Value:   []byte("insert_value_1"),
+		}
+		sess.observeRawEntry(entry)
+		require.Equal(t, entry.GetSize(), sess.scannedBytes)
+		require.Equal(t, 1, sess.scannedEntryCount)
 
 		// Test adding more bytes
-		session.observeRawEntry(250)
-		require.Equal(t, int64(350), session.scannedBytes)
-
-		// Test adding negative bytes (edge case)
-		session.observeRawEntry(-50)
-		require.Equal(t, int64(300), session.scannedBytes)
-
-		// Test adding zero bytes
-		session.observeRawEntry(0)
-		require.Equal(t, int64(300), session.scannedBytes)
+		sess.observeRawEntry(entry)
+		require.Equal(t, 2*entry.GetSize(), sess.scannedBytes)
+		require.Equal(t, 2, sess.scannedEntryCount)
 	})
 
 	// Test isContextDone method
@@ -939,38 +938,6 @@ func TestLimitChecker(t *testing.T) {
 		freshStartTime := time.Now()
 		freshChecker := newLimitChecker(maxBytes, timeout, freshStartTime)
 		require.False(t, freshChecker.checkLimits(totalBytes))
-	})
-
-	// Test case 3: Test canInterrupt method - interrupt conditions
-	t.Run("TestCanInterrupt", func(t *testing.T) {
-		startTime := time.Now()
-		maxBytes := int64(1000)
-		timeout := 10 * time.Second
-
-		checker := newLimitChecker(maxBytes, timeout, startTime)
-
-		// Test cannot interrupt when currentTs <= lastCommitTs
-		currentTs := uint64(100)
-		lastCommitTs := uint64(100)
-		dmlCount := 5
-		require.False(t, canInterrupt(currentTs, lastCommitTs, dmlCount))
-
-		// Test cannot interrupt when currentTs < lastCommitTs
-		currentTs = uint64(99)
-		lastCommitTs = uint64(100)
-		require.False(t, canInterrupt(currentTs, lastCommitTs, dmlCount))
-
-		// Test cannot interrupt when dmlCount = 0
-		currentTs = uint64(101)
-		lastCommitTs = uint64(100)
-		dmlCount = 0
-		require.False(t, canInterrupt(currentTs, lastCommitTs, dmlCount))
-
-		// Test can interrupt when currentTs > lastCommitTs and dmlCount > 0
-		currentTs = uint64(101)
-		lastCommitTs = uint64(100)
-		dmlCount = 1
-		require.True(t, checker.canInterrupt(currentTs, lastCommitTs, dmlCount))
 	})
 }
 

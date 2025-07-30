@@ -15,6 +15,8 @@ package eventservice
 
 import (
 	"context"
+	"go.uber.org/atomic"
+	"go.uber.org/zap"
 	"testing"
 	"time"
 
@@ -29,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 func newTableSpan(tableID int64, start, end string) *heartbeatpb.TableSpan {
@@ -115,50 +116,57 @@ func TestOnNotify(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
-	startTs := uint64(100)
-	workerIndex := 0
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	disInfo.startTs = 100
 
-	disp := newDispatcherStat(startTs, disInfo, nil, workerIndex, workerIndex, changefeedStatus)
-	broker.addDispatcher(disInfo)
-	// Make the dispatcher is reset.
+	err := broker.addDispatcher(disInfo)
+	require.NoError(t, err)
+
+	disp, ok := broker.getDispatcher(disInfo.GetID())
+	require.True(t, ok)
+	require.Equal(t, disp.id, disInfo.GetID())
+
+	broker.resetDispatcher(disInfo)
+
 	disp.resetState(100)
 	disp.isHandshaked.Store(true)
 
 	// Case 1: The resolvedTs is greater than the startTs, it should be updated.
-	notifyMsgs2 := notifyMsg{101, 1}
-	broker.onNotify(disp, notifyMsgs2.resolvedTs, notifyMsgs2.latestCommitTs)
+	notifyMsgs := notifyMsg{101, 1}
+	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
 	require.Equal(t, uint64(101), disp.eventStoreResolvedTs.Load())
-	log.Info("Pass case 2")
+	log.Info("Pass case 1")
 
 	// Case 2: The latestCommitTs is greater than the startTs, it triggers a scan task.
-	notifyMsgs3 := notifyMsg{102, 101}
-	broker.onNotify(disp, notifyMsgs3.resolvedTs, notifyMsgs3.latestCommitTs)
+	notifyMsgs = notifyMsg{102, 101}
+	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
 	require.Equal(t, uint64(102), disp.eventStoreResolvedTs.Load())
 	require.True(t, disp.isTaskScanning.Load())
 	task := <-broker.taskChan[disp.scanWorkerIndex]
 	require.Equal(t, task.id, disp.id)
-	log.Info("Pass case 3")
+	log.Info("Pass case 2")
 
 	// Case 3: When the scan task is running, even there is a larger resolvedTs,
 	// should not trigger a new scan task.
-	notifyMsgs4 := notifyMsg{103, 101}
-	broker.onNotify(disp, notifyMsgs4.resolvedTs, notifyMsgs4.latestCommitTs)
+	notifyMsgs = notifyMsg{103, 101}
+	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
 	require.Equal(t, uint64(103), disp.eventStoreResolvedTs.Load())
 	after := time.After(50 * time.Millisecond)
 	select {
 	case <-after:
-		log.Info("Pass case 4")
+		log.Info("Pass case 3")
 	case task := <-broker.taskChan[disp.scanWorkerIndex]:
 		log.Info("trigger a new scan task", zap.Any("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("latestCommitTs", task.latestCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
 		require.Fail(t, "should not trigger a new scan task")
 	}
 
 	// Case 4: Do scan, it will update the sentResolvedTs.
+	status := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	status.availableMemoryQuota.Store(node.ID(task.info.GetServerID()), atomic.NewUint64(memoryQuotaLowThreshold))
+
 	broker.doScan(context.TODO(), task)
 	require.False(t, disp.isTaskScanning.Load())
-	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())
-	log.Info("pass case 5")
+	require.Equal(t, notifyMsgs.resolvedTs, disp.sentResolvedTs.Load())
+	log.Info("pass case 4")
 
 	notifyMsgs5 := notifyMsg{104, 101}
 	// Set the schemaStore's maxDDLCommitTs to the sentResolvedTs, so the broker will not scan the schemaStore.
