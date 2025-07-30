@@ -60,7 +60,7 @@ func NewTableProgress() *TableProgress {
 	}
 }
 
-func getEventFinalCommitTs(event commonEvent.Event) uint64 {
+func getFinalCommitTs(event commonEvent.Event) uint64 {
 	commitTs := event.GetCommitTs()
 	if event.GetType() == commonEvent.TypeSyncPointEvent {
 		// if the event is a sync point event, we use the last commitTs(the largest commitTs in the event) to calculate the progress.
@@ -74,7 +74,7 @@ func getEventFinalCommitTs(event commonEvent.Event) uint64 {
 
 // Add inserts a new event into the TableProgress.
 func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
-	commitTs := getEventFinalCommitTs(event)
+	commitTs := getFinalCommitTs(event)
 	ts := Ts{startTs: event.GetStartTs(), commitTs: commitTs}
 
 	p.rwMutex.Lock()
@@ -91,7 +91,7 @@ func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
 // Remove deletes an event from the TableProgress.
 // Note: Consider implementing batch removal in the future if needed.
 func (p *TableProgress) Remove(event commonEvent.FlushableEvent) {
-	ts := Ts{startTs: event.GetStartTs(), commitTs: getEventFinalCommitTs(event)}
+	ts := Ts{startTs: event.GetStartTs(), commitTs: getFinalCommitTs(event)}
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 
@@ -114,7 +114,7 @@ func (p *TableProgress) Pass(event commonEvent.FlushableEvent) {
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 
-	p.maxCommitTs = getEventFinalCommitTs(event)
+	p.maxCommitTs = getFinalCommitTs(event)
 }
 
 // GetCheckpointTs returns the current checkpoint timestamp for the table span.
