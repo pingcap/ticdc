@@ -532,7 +532,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	sl := c.calculateScanLimit(task)
-	allocQuota(available, uint64(sl.maxDMLBytes))
+	ok = allocQuota(available, uint64(sl.maxDMLBytes))
+	if !ok {
+		return
+	}
 
 	scanner := newEventScanner(
 		c.eventStore,
@@ -591,16 +594,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	metricEventBrokerScanTaskCount.Inc()
 }
 
-func allocQuota(quota *atomic.Uint64, nBytes uint64) {
-	for {
-		available := quota.Load()
-		if available < nBytes {
-			continue
-		}
-		if quota.CompareAndSwap(available, available-nBytes) {
-			return
-		}
+func allocQuota(quota *atomic.Uint64, nBytes uint64) bool {
+	available := quota.Load()
+	if available < nBytes {
+		return false
 	}
+	return quota.CompareAndSwap(available, available-nBytes)
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) error {

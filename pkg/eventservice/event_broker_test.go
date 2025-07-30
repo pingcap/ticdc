@@ -15,8 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"go.uber.org/atomic"
-	"go.uber.org/zap"
 	"testing"
 	"time"
 
@@ -31,6 +29,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
+	"go.uber.org/zap"
 )
 
 func newTableSpan(tableID int64, start, end string) *heartbeatpb.TableSpan {
