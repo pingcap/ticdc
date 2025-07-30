@@ -137,12 +137,6 @@ var (
 		Help:      "The number of transactions scanned from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
 	})
-	EventServiceInFlightEventSize = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: "ticdc",
-		Subsystem: "event_service",
-		Name:      "in_flight_event_size",
-		Help:      "The size of in-flight events in the event service",
-	})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
@@ -163,5 +157,4 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
-	registry.MustRegister(EventServiceInFlightEventSize)
 }

@@ -125,12 +125,6 @@ var (
 		Name:      "dropped_event_count",
 		Help:      "The number of events dropped by the event collector",
 	})
-	EventCollectorReceivedInFlightEventSize = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: "ticdc",
-		Subsystem: "event_collector",
-		Name:      "received_in_flight_event_size",
-		Help:      "The size of in-flight events in the event service",
-	})
 )
 
 func InitDispatcherMetrics(registry *prometheus.Registry) {
@@ -148,5 +142,4 @@ func InitDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorHandleEventDuration)
 	registry.MustRegister(EventCollectorDroppedEventCount)
-	registry.MustRegister(EventCollectorReceivedInFlightEventSize)
 }

@@ -716,13 +716,6 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 			postSendMsg()
 		}
 		metricEventServiceSendEventDuration.Observe(time.Since(start).Seconds())
-		if tMsg.Type == messaging.TypeBatchDMLEvent {
-			var size int64
-			for _, item := range tMsg.Message {
-				size += item.(*pevent.BatchDMLEvent).GetSize()
-			}
-			metrics.EventServiceInFlightEventSize.Add(float64(size))
-		}
 		return
 	}
 }
