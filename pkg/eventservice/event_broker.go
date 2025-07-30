@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -516,8 +515,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	status := item.(*changefeedStatus)
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
-		log.Panic("The available memory quota is not set",
+		log.Info("The available memory quota is not set, skip scan",
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+		return
 	}
 	available := item.(*atomic.Uint64)
 
@@ -607,13 +607,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 	ticker := time.NewTicker(defaultFlushResolvedTsInterval)
 	defer ticker.Stop()
 
-	index := strconv.Itoa(workerIndex)
-	metricsTicker := time.NewTicker(5 * time.Second)
-	defer func() {
-		metricsTicker.Stop()
-		metrics.EventServiceSendMessageChanSize.DeleteLabelValues(index)
-	}()
-
 	resolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
 	messageCh := c.messageCh[workerIndex]
 	batchM := make([]*wrapEvent, 0, defaultMaxBatchSize)
@@ -621,8 +614,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case <-metricsTicker.C:
-			metrics.EventServiceSendMessageChanSize.WithLabelValues(index).Set(float64(len(messageCh)))
 		case m := <-messageCh:
 			batchM = append(batchM, m)
 		LOOP:
@@ -725,6 +716,13 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 			postSendMsg()
 		}
 		metricEventServiceSendEventDuration.Observe(time.Since(start).Seconds())
+		if tMsg.Type == messaging.TypeBatchDMLEvent {
+			var size int64
+			for _, item := range tMsg.Message {
+				size += item.(*pevent.BatchDMLEvent).GetSize()
+			}
+			metrics.EventServiceInFlightEventSize.Add(float64(size))
+		}
 		return
 	}
 }

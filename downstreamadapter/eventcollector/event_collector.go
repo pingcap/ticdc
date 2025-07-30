@@ -370,6 +370,14 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 	// corresponding channel to handle it in multi-thread.
 	if targetMessage.Type.IsLogServiceEvent() {
 		c.receiveChannels[targetMessage.GetGroup()%uint64(len(c.receiveChannels))] <- targetMessage
+		if targetMessage.Type == messaging.TypeBatchDMLEvent {
+			var size int64
+			for _, item := range targetMessage.Message {
+				size += item.(*event.BatchDMLEvent).GetSize()
+			}
+			metrics.EventServiceInFlightEventSize.Sub(float64(size))
+			metrics.EventCollectorReceivedInFlightEventSize.Add(float64(size))
+		}
 		return nil
 	}
 
@@ -407,6 +415,10 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					default:
+						if e.GetType() == event.TypeBatchDMLEvent {
+							size := e.(*event.BatchDMLEvent).GetSize()
+							metrics.EventCollectorReceivedInFlightEventSize.Sub(float64(size))
+						}
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						dispatcherEvent := dispatcher.NewDispatcherEvent(&targetMessage.From, e)
 						c.ds.Push(e.GetDispatcherID(), dispatcherEvent)
