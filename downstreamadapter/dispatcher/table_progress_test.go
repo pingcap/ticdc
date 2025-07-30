@@ -79,10 +79,9 @@ func TestSyncPointEventWithMultipleCommitTs(t *testing.T) {
 		CommitTsList: []uint64{10, 20, 30, 40},
 	}
 
-	// Test getEventFinalCommitTs function behavior
 	// Should return the last (largest) commitTs from the list
-	finalCommitTs := getEventFinalCommitTs(syncPointEvent)
-	assert.Equal(t, uint64(40), finalCommitTs, "getEventFinalCommitTs should return the largest commitTs")
+	finalCommitTs := getFinalCommitTs(syncPointEvent)
+	assert.Equal(t, uint64(40), finalCommitTs, "getFinalCommitTs should return the largest commitTs")
 
 	// Test Add method with SyncPointEvent containing multiple commitTs
 	tp.Add(syncPointEvent)
