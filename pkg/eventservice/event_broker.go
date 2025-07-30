@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -606,6 +607,13 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 	ticker := time.NewTicker(defaultFlushResolvedTsInterval)
 	defer ticker.Stop()
 
+	index := strconv.Itoa(workerIndex)
+	metricsTicker := time.NewTicker(5 * time.Second)
+	defer func() {
+		metricsTicker.Stop()
+		metrics.EventServiceSendMessageChanSize.DeleteLabelValues(index)
+	}()
+
 	resolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
 	messageCh := c.messageCh[workerIndex]
 	batchM := make([]*wrapEvent, 0, defaultMaxBatchSize)
@@ -613,6 +621,8 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
+		case <-metricsTicker.C:
+			metrics.EventServiceSendMessageChanSize.WithLabelValues(index).Set(float64(len(messageCh)))
 		case m := <-messageCh:
 			batchM = append(batchM, m)
 		LOOP:

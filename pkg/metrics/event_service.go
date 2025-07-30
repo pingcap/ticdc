@@ -137,6 +137,13 @@ var (
 		Help:      "The number of transactions scanned from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
 	})
+
+	EventServiceSendMessageChanSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "send_message_chan_size",
+		Help:      "The size of the send message channel in event service",
+	}, []string{"index"})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
@@ -157,4 +164,5 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
+	registry.MustRegister(EventServiceSendMessageChanSize)
 }

@@ -420,7 +420,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 }
 
 func (c *EventCollector) controlCongestion(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for {
