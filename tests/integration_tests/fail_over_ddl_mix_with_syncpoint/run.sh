@@ -15,7 +15,6 @@ set -eu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
-source $CUR/../_utils/execute_mixed_dml
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
@@ -90,7 +89,64 @@ function execute_ddl() {
 
 function execute_dml() {
 	table_name="table_$1"
-	execute_mixed_dml "$table_name" "${UP_TIDB_HOST}" "${UP_TIDB_PORT}"
+	echo "DML: Executing mixed operations on $table_name..."
+	
+	# Ensure table has some initial data for UPDATE and DELETE operations
+	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('initial_data_1'), ('initial_data_2'), ('initial_data_3');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+	
+	while true; do
+		# Randomly choose between INSERT, UPDATE, and DELETE operations
+		case $((RANDOM % 3)) in
+		0)
+			# INSERT operation
+			echo "DML: Inserting data into $table_name..."
+			run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_$RANDOM');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+			;;
+		1)
+			# UPDATE operations - randomly choose different types of updates
+			case $((RANDOM % 6)) in
+			0)
+				# Update data field based on random id
+				echo "DML: Updating data field in $table_name..."
+				run_sql_ignore_error "UPDATE test.$table_name SET data = 'updated_data_$(date +%s)_$RANDOM' WHERE id = (SELECT id FROM test.$table_name ORDER BY RAND() LIMIT 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+				;;
+			1)
+				# Update id field based on data pattern (this will fail due to auto_increment, but good for testing)
+				echo "DML: Attempting to update id field in $table_name..."
+				run_sql_ignore_error "UPDATE test.$table_name SET id = id + 1000 WHERE data LIKE '%initial_data%';" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+				;;
+			2)
+				# Update multiple records based on data pattern
+				echo "DML: Updating multiple records in $table_name..."
+				run_sql_ignore_error "UPDATE test.$table_name SET data = 'batch_updated_$(date +%s)_$RANDOM' WHERE data LIKE '%insert_%';" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+				;;
+			3)
+				# Update with complex condition
+				echo "DML: Complex update in $table_name..."
+				run_sql_ignore_error "UPDATE test.$table_name SET data = 'complex_$(date +%s)_$RANDOM' WHERE id > (SELECT MIN(id) FROM test.$table_name) AND data NOT LIKE '%complex_%';" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+				;;
+			4)
+				# Update based on data field containing specific pattern
+				echo "DML: Update based on data pattern in $table_name..."
+				run_sql_ignore_error "UPDATE test.$table_name SET data = 'data_based_update_$(date +%s)_$RANDOM' WHERE data LIKE '%updated_%' OR data LIKE '%batch_%';" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+				;;
+			5)
+				# Update with arithmetic operation on id
+				echo "DML: Update with arithmetic operation in $table_name..."
+				run_sql_ignore_error "UPDATE test.$table_name SET data = CONCAT('arithmetic_', id, '_', '$(date +%s)') WHERE id % 2 = 0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+				;;
+			esac
+			;;
+		2)
+			# DELETE operation - delete a random existing record (but keep at least one record)
+			echo "DML: Deleting data from $table_name..."
+			run_sql_ignore_error "DELETE FROM test.$table_name WHERE id = (SELECT id FROM test.$table_name ORDER BY RAND() LIMIT 1) AND (SELECT COUNT(*) FROM test.$table_name) > 1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+			;;
+		esac
+		
+		# Add a small delay to prevent overwhelming the database
+		sleep 0.1
+	done
 }
 
 function kill_server() {
@@ -149,6 +205,15 @@ main() {
 	sleep 15
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+
+	checkpoint1=$(cdc cli changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+	sleep 5
+	checkpoint2=$(cdc cli changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+
+	if [[ "$checkpoint1" -eq "$checkpoint2" ]]; then
+		echo "checkpoint is not changed"
+		exit 1
+	fi
 
 	cleanup_process $CDC_BINARY
 }
