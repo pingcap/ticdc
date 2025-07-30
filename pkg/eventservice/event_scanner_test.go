@@ -172,8 +172,8 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
 
 	// case 5: Tests transaction atomicity during scanning
-	// Tests that transactions with same commitTs are scanned atomically (not split even when limit is reached)
-	// Modified events: first 3 DMLs have same commitTs=x:
+	// Tests that transactions with same startTs are scanned atomically (not split even when limit is reached)
+	// Modified events: first 3 DMLs have same startTs=x:
 	//   DDL(x) -> DML-1(x+1) -> DML-2(x+1) -> DML-3(x+1) -> DML-4(x+4)
 	// Expected result (MaxBytes=1):
 	// [DDL(x), BatchDML_1[DML-1(x+1)], BatchDML_2[DML-2(x+1), DML-3(x+1)], Resolved(x+1)]
@@ -181,9 +181,9 @@ func TestEventScanner(t *testing.T) {
 	//                               └── Scanning interrupted here
 	// The length of the result here is 4.
 	// The DML-1(x+1) will appear separately because it encounters DDL(x), which will immediately append it.
-	firstCommitTs := kvEvents[0].CRTs
+	firstStartTs := kvEvents[0].CRTs
 	for i := 0; i < 3; i++ {
-		kvEvents[i].CRTs = firstCommitTs
+		kvEvents[i].StartTs = firstStartTs
 	}
 	sl = scanLimit{
 		maxDMLBytes: 1,
@@ -202,16 +202,16 @@ func TestEventScanner(t *testing.T) {
 	e = events[1]
 	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
 	require.Equal(t, len(e.(*pevent.BatchDMLEvent).DMLEvents), 1)
-	require.Equal(t, firstCommitTs, e.GetCommitTs())
+	require.Equal(t, firstStartTs, e.GetStartTs())
 	// DML-2, DML-3
 	e = events[2]
 	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
 	require.Equal(t, len(e.(*pevent.BatchDMLEvent).DMLEvents), 2)
-	require.Equal(t, firstCommitTs, e.GetCommitTs())
+	require.Equal(t, firstStartTs, e.GetStartTs())
 	// resolvedTs
 	e = events[3]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
-	require.Equal(t, firstCommitTs, e.GetCommitTs())
+	require.Equal(t, firstStartTs, e.GetStartTs())
 
 	// case 6: Tests timeout behavior
 	// Tests that with Timeout=0, the scanner immediately returns scanned events
