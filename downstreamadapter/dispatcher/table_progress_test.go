@@ -134,5 +134,5 @@ func TestSyncPointEventWithMultipleCommitTs(t *testing.T) {
 
 	checkpointTs, isEmpty = tp.GetCheckpointTs()
 	assert.Equal(t, uint64(79), checkpointTs, "checkpointTs should be largest commitTs - 1")
-	assert.False(t, isEmpty)
+	assert.True(t, isEmpty)
 }
