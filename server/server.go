@@ -153,7 +153,7 @@ func (c *server) initialize(ctx context.Context) error {
 	conf := config.GetGlobalServerConfig()
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
-			RegionRequestWorkerPerStore: 1,
+			RegionRequestWorkerPerStore: 8,
 		}, c.pdClient,
 		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), c.security,
 	)
