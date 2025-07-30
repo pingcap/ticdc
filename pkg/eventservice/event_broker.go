@@ -543,13 +543,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		c.mounter,
 		task.epoch.Load(),
 	)
-	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
-
-	task.lastScanBytes.Store(scannedBytes)
 
 	// Check whether the task is ready to receive data events again before sending events.
 	if !task.isReadyRecevingData.Load() {

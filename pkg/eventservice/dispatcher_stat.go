@@ -113,8 +113,6 @@ type dispatcherStat struct {
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
-
-	lastScanBytes atomic.Int64
 }
 
 func newDispatcherStat(

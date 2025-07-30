@@ -107,25 +107,20 @@ func newEventScanner(
 // - events: The scanned events in commitTs order
 // - isBroken: true if the scan was interrupted due to reaching a limit, false otherwise
 // - error: Any error that occurred during the scan operation
-func (s *eventScanner) scan(
-	ctx context.Context,
-	dispatcherStat *dispatcherStat,
-	dataRange common.DataRange,
-	limit scanLimit,
-) (int64, []event.Event, bool, error) {
+func (s *eventScanner) scan(ctx context.Context, dispatcherStat *dispatcherStat, dataRange common.DataRange, limit scanLimit) ([]pevent.Event, bool, error) {
 	// Fetch DDL events
 	ddlEvents, err := s.fetchDDLEvents(dispatcherStat, dataRange)
 	if err != nil {
-		return 0, nil, false, err
+		return nil, false, err
 	}
 
 	// Get event iterator
 	iter, err := s.getEventIterator(dispatcherStat, dataRange)
 	if err != nil {
-		return 0, nil, false, err
+		return nil, false, err
 	}
 	if iter == nil {
-		return 0, s.handleEmptyIterator(ddlEvents, dispatcherStat, dataRange), false, nil
+		return s.handleEmptyIterator(ddlEvents, dispatcherStat, dataRange), false, nil
 	}
 	defer s.closeIterator(iter)
 
@@ -135,7 +130,7 @@ func (s *eventScanner) scan(
 	defer sess.recordMetrics()
 
 	events, interrupted, err := s.scanAndMergeEvents(sess, ddlEvents, iter)
-	return sess.scannedBytes, events, interrupted, err
+	return events, interrupted, err
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
