@@ -302,7 +302,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 	msgsBuf := make([]*commonEvent.MQRowEvent, 0, batchSize)
 	for {
 		start := time.Now()
-		msgCount, err := s.batch(ctx, msgsBuf)
+		msgs, err := s.batch(ctx, msgsBuf)
 		if err != nil {
 			log.Error("kafka sink batch dml events failed",
 				zap.String("namespace", s.changefeedID.Namespace()),
@@ -310,14 +310,13 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 				zap.Error(err))
 			return err
 		}
-		if msgCount == 0 {
+		if len(msgs) == 0 {
 			continue
 		}
 
-		metricBatchSize.Observe(float64(msgCount))
+		metricBatchSize.Observe(float64(len(msgs)))
 		metricBatchDuration.Observe(time.Since(start).Seconds())
 
-		msgs := msgsBuf[:msgCount]
 		// Group messages by its TopicPartitionKey before adding them to the encoder group.
 		groupedMsgs := s.group(msgs)
 		for key, msg := range groupedMsgs {
@@ -331,19 +330,19 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 // batch collects a batch of messages from w.msgChan into buffer.
 // It returns the number of messages collected.
 // Note: It will block until at least one message is received.
-func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) (int, error) {
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*commonEvent.MQRowEvent, error) {
 	select {
 	case <-ctx.Done():
-		return 0, ctx.Err()
+		return nil, ctx.Err()
 	default:
 		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
 			log.Info("kafka sink event channel closed",
 				zap.String("namespace", s.changefeedID.Namespace()),
 				zap.String("changefeed", s.changefeedID.Name()))
-			return 0, nil
+			return nil, nil
 		}
-		return len(msgs), nil
+		return msgs, nil
 	}
 }
 
