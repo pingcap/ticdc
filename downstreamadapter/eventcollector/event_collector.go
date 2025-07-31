@@ -491,8 +491,7 @@ func (c *congestionController) removeDispatcher(dispatcher *dispatcherStat) {
 
 func (c *congestionController) queryAvailable(changefeedID common.ChangeFeedID) int64 {
 	for _, quota := range c.collector.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
-		gid, ok := c.collector.changefeedIDMap.Load(quota.Area())
-		if ok && gid == changefeedID.ID() {
+		if quota.Area() == changefeedID.ID() {
 			return quota.AvailableMemory()
 		}
 	}
@@ -525,7 +524,7 @@ func (c *congestionController) newCongestionControlMessage(
 	available = int64(float64(available) * ratio)
 	quota := c.slidingWindows[changefeedID][nodeID].next(available)
 
-	log.Info("send quota ", zap.Stringer("changefeedID", changefeedID), zap.Stringer("nodeID", nodeID),
+	log.Info("send quota", zap.Stringer("changefeedID", changefeedID), zap.Stringer("nodeID", nodeID),
 		zap.Int64("quota", quota), zap.Int64("available", available))
 
 	m := event.NewCongestionControl()
