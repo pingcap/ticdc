@@ -549,7 +549,7 @@ func (c *congestionController) Acknowledge(from node.ID, item *event.BatchDMLEve
 
 const (
 	quotaUnit               = 1024 * 1024      // 1MB
-	quotaSlowStartThreshold = 1024 * 1024 * 32 // 32MB
+	quotaSlowStartThreshold = 1024 * 1024 * 16 // 32MB
 	quotaHighThreshold      = 1024 * 1024 * 64 // 64MB
 )
 
