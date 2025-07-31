@@ -131,10 +131,6 @@ func newDispatcherStat(
 		info:               info,
 		filter:             filter,
 	}
-
-	// A small value to avoid too many scan tasks at the first place.
-	dispStat.lastScanBytes.Store(1024)
-
 	changefeedStatus.addDispatcher()
 
 	if info.SyncPointEnabled() {
