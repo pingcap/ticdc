@@ -191,7 +191,6 @@ func (c *EventCollector) PrepareAddDispatcher(
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 	stat.run()
-	c.congestionController.addDispatcher(stat)
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
