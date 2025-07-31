@@ -379,12 +379,17 @@ func (s *sink) sendMessages(ctx context.Context) error {
 	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	var err error
 	outCh := s.comp.encoderGroup.Output()
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			s.dmlProducer.Heartbeat()
 		case future, ok := <-outCh:
 			if !ok {
 				log.Info("kafka sink encoder's output channel closed",

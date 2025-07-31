@@ -79,6 +79,8 @@ type AsyncProducer interface {
 	// wish to send.
 	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
 
+	Heartbeat()
+
 	// AsyncRunCallback process the messages that has sent to kafka,
 	// and run tha attached callback. the caller should call this
 	// method in a background goroutine
@@ -259,6 +261,13 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			}
 			return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
 		}
+	}
+}
+
+func (p *saramaAsyncProducer) Heartbeat() {
+	brokers := p.client.Brokers()
+	for _, b := range brokers {
+		_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
 	}
 }
 

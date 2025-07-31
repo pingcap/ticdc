@@ -169,6 +169,10 @@ func (p *MockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, p
 	return nil
 }
 
+func (p *MockSaramaAsyncProducer) Heartbeat() {
+	return
+}
+
 // Close implement the AsyncProducer interface.
 func (p *MockSaramaAsyncProducer) Close() {
 	if p.closed {
