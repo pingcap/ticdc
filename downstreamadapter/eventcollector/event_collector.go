@@ -450,7 +450,6 @@ func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 
 	c.lock.Lock()
 	defer c.lock.Unlock()
-
 	if _, ok := c.distributions[changefeedID]; !ok {
 		c.distributions[changefeedID] = make(map[node.ID]uint64)
 	}
@@ -504,22 +503,20 @@ func (c *congestionController) queryAvailable(changefeedID common.ChangeFeedID) 
 			return quota.AvailableMemory()
 		}
 	}
-	log.Panic("no available memory found", zap.String("changefeedID", changefeedID.String()))
 	return 0
 }
 
 func (c *congestionController) newCongestionControlMessage(
 	changefeedID common.ChangeFeedID, nodeID node.ID,
 ) *messaging.TargetMessage {
-	available := c.queryAvailable(changefeedID)
-
 	c.lock.Lock()
-	defer c.lock.Unlock()
 	proportion, ok := c.distributions[changefeedID]
 	if !ok {
 		log.Panic("no distribution found for changefeed, this should never happen",
 			zap.String("changefeedID", changefeedID.String()))
 	}
+	defer c.lock.Unlock()
+
 	var sum uint64
 	for _, portion := range proportion {
 		sum += portion
@@ -529,6 +526,7 @@ func (c *congestionController) newCongestionControlMessage(
 			zap.String("changefeedID", changefeedID.String()))
 	}
 
+	available := c.queryAvailable(changefeedID)
 	portion := proportion[nodeID]
 	ratio := float64(portion) / float64(sum)
 	available = int64(float64(available) * ratio)
