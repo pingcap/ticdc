@@ -521,7 +521,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	available := item.(*atomic.Uint64)
 
-	if uint64(task.getCurrentScanLimitInBytes()) < available.Load() {
+	if available.Load() <= maxScanLimitInBytes {
 		log.Info("scan quota is not enough, reset max scan limit",
 			zap.String("changefeed", changefeedID.String()),
 			zap.String("dispatcher", task.id.String()),
