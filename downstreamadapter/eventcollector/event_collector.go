@@ -524,9 +524,6 @@ func (c *congestionController) newCongestionControlMessage(
 	available = int64(float64(available) * ratio)
 	quota := c.slidingWindows[changefeedID][nodeID].next(available)
 
-	log.Info("send quota", zap.Stringer("changefeedID", changefeedID), zap.Stringer("nodeID", nodeID),
-		zap.Int64("quota", quota), zap.Int64("available", available))
-
 	m := event.NewCongestionControl()
 	m.AddAvailableMemory(changefeedID.ID(), uint64(quota))
 	message := messaging.NewSingleTargetMessage(nodeID, messaging.EventServiceTopic, m)
@@ -549,9 +546,8 @@ func (c *congestionController) Acknowledge(from node.ID, item *event.BatchDMLEve
 }
 
 const (
-	quotaUnit               = 1024 * 1024       // 1MB
-	quotaSlowStartThreshold = 1024 * 1024 * 64  // 64MB
-	quotaHighThreshold      = 1024 * 1024 * 128 // 128MB
+	quotaUnit               = 1024 * 1024      // 1MB
+	quotaSlowStartThreshold = 1024 * 1024 * 64 // 64MB
 )
 
 type slidingWindow struct {
@@ -568,18 +564,17 @@ func newSlidingWindow() slidingWindow {
 func (s slidingWindow) next(available int64) int64 {
 	s.confirmed = 0
 	if s.requested >= available {
+		log.Warn("requested quota is larger than available memory, set to 1MB")
 		s.requested = quotaUnit
 		return s.requested
 	}
 
 	if s.requested < quotaSlowStartThreshold {
 		s.requested *= 2
+		log.Info("requested quota less than threshold, double the requested quota", zap.Int64("requested", s.requested))
 	} else {
 		s.requested += quotaUnit
-	}
-
-	if s.requested >= quotaHighThreshold {
-		s.requested /= 2
+		log.Info("requested quota is larger than threshold, increase by 1MB", zap.Int64("requested", s.requested))
 	}
 	return s.requested
 }
