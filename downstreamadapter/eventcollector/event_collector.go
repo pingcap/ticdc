@@ -549,9 +549,9 @@ func (c *congestionController) Acknowledge(from node.ID, item *event.BatchDMLEve
 }
 
 const (
-	quotaUnit               = 1024 * 1024      // 1MB
-	quotaSlowStartThreshold = 1024 * 1024 * 32 // 32MB
-	quotaHighThreshold      = 1024 * 1024 * 64 // 64MB
+	quotaUnit               = 1024 * 1024       // 1MB
+	quotaSlowStartThreshold = 1024 * 1024 * 64  // 64MB
+	quotaHighThreshold      = 1024 * 1024 * 128 // 128MB
 )
 
 type slidingWindow struct {
@@ -567,7 +567,7 @@ func newSlidingWindow() slidingWindow {
 
 func (s slidingWindow) next(available int64) int64 {
 	s.confirmed = 0
-	if s.requested < available {
+	if s.requested >= available {
 		s.requested = quotaUnit
 		return s.requested
 	}

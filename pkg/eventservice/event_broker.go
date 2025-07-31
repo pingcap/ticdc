@@ -1040,13 +1040,11 @@ func (c *eventBroker) handleCongestionControl(nodeID node.ID, m *pevent.Congesti
 	c.changefeedMap.Range(func(k, v interface{}) bool {
 		changefeedID := k.(common.ChangeFeedID)
 		changefeed := v.(*changefeedStatus)
-
 		available, ok := holder[changefeedID.ID()]
-		if !ok {
-			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
+		if ok {
+			changefeed.availableMemoryQuota.Store(nodeID, atomic.NewUint64(available))
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		}
-		changefeed.availableMemoryQuota.Store(nodeID, atomic.NewUint64(available))
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		return true
 	})
 }
