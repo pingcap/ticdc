@@ -473,6 +473,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	}()
 
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	var (
 		msg          *common.Message
 		partitionNum int32
@@ -482,6 +485,8 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			s.ddlProducer.Heartbeat()
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
 				log.Warn("kafka sink checkpoint channel closed",
