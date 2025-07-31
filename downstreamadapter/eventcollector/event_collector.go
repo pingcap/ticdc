@@ -452,18 +452,22 @@ func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	if _, ok := c.distributions[changefeedID]; !ok {
+		c.distributions[changefeedID] = make(map[node.ID]uint64)
+	}
+	c.distributions[changefeedID][eventServiceID]++
+
 	if _, ok := c.slidingWindows[changefeedID]; !ok {
 		c.slidingWindows[changefeedID] = make(map[node.ID]slidingWindow)
 	}
 
 	if _, ok := c.slidingWindows[changefeedID][eventServiceID]; !ok {
 		c.slidingWindows[changefeedID][eventServiceID] = newSlidingWindow()
+		message := c.newCongestionControlMessage(changefeedID, eventServiceID)
+		if err := c.collector.mc.SendCommand(message); err != nil {
+			log.Warn("send congestion control message failed", zap.Error(err))
+		}
 	}
-
-	if _, ok := c.distributions[changefeedID]; !ok {
-		c.distributions[changefeedID] = make(map[node.ID]uint64)
-	}
-	c.distributions[changefeedID][eventServiceID]++
 }
 
 func (c *congestionController) removeDispatcher(dispatcher *dispatcherStat) {
@@ -479,8 +483,7 @@ func (c *congestionController) removeDispatcher(dispatcher *dispatcherStat) {
 	defer c.lock.Unlock()
 	proportion, ok := c.distributions[changefeedID]
 	if !ok {
-		log.Panic("no distribution found for changefeed, this should never happen",
-			zap.String("changefeedID", changefeedID.String()))
+		return
 	}
 
 	proportion[eventServiceID]--
@@ -500,6 +503,7 @@ func (c *congestionController) queryAvailable(changefeedID common.ChangeFeedID) 
 			return quota.AvailableMemory()
 		}
 	}
+	log.Panic("no available memory found", zap.String("changefeedID", changefeedID.String()))
 	return 0
 }
 
@@ -507,9 +511,6 @@ func (c *congestionController) newCongestionControlMessage(
 	changefeedID common.ChangeFeedID, nodeID node.ID,
 ) *messaging.TargetMessage {
 	available := c.queryAvailable(changefeedID)
-	if available == 0 {
-		return nil
-	}
 
 	c.lock.Lock()
 	defer c.lock.Unlock()
