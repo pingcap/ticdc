@@ -184,7 +184,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	stat := newDispatcherStat(target, c, readyCallback, memoryQuota)
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
-
+	c.congestionController.addDispatcher(stat)
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
@@ -461,12 +461,6 @@ func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 
 	if _, ok := c.slidingWindows[changefeedID][eventServiceID]; !ok {
 		c.slidingWindows[changefeedID][eventServiceID] = newSlidingWindow()
-		message := c.newCongestionControlMessage(changefeedID, eventServiceID)
-		if err := c.collector.mc.SendCommand(message); err != nil {
-			log.Warn("send congestion control message failed", zap.Error(err))
-		} else {
-			log.Info("congestion control message sent", zap.Any("message", message))
-		}
 	}
 }
 
