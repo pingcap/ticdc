@@ -184,7 +184,6 @@ func (c *EventCollector) PrepareAddDispatcher(
 	stat := newDispatcherStat(target, c, readyCallback, memoryQuota)
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
-	c.congestionController.addDispatcher(stat)
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
@@ -445,7 +444,7 @@ func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 	eventServiceID := dispatcher.connState.getEventServiceID()
 	// nodeID is not set yet, just skip it temporarily.
 	if eventServiceID == "" {
-		return
+		log.Panic("event service is not set", zap.Stringer("changefeedID", changefeedID))
 	}
 
 	c.lock.Lock()

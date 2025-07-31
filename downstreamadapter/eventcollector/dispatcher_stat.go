@@ -170,7 +170,9 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	epoch := d.epoch.Add(1)
 	d.lastEventSeq.Store(0)
 
+	d.eventCollector.congestionController.addDispatcher(d)
 	message := d.eventCollector.congestionController.newCongestionControlMessage(d.target.GetChangefeedID(), serverID)
+
 	d.eventCollector.enqueueMessageForSend(message)
 	// remove the dispatcher from the dynamic stream
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs, epoch))
