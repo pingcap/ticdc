@@ -191,6 +191,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 	stat.run()
+	c.congestionController.addDispatcher(stat)
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
@@ -205,7 +206,6 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 	}
 	stat := value.(*dispatcherStat)
 	stat.commitReady(c.getLocalServerID())
-	c.congestionController.addDispatcher(stat)
 }
 
 func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
@@ -466,8 +466,6 @@ func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 		message := c.newCongestionControlMessage(changefeedID, eventServiceID)
 		if err := c.collector.mc.SendCommand(message); err != nil {
 			log.Warn("send congestion control message failed", zap.Error(err))
-		} else {
-			log.Info("congestion control message sent", zap.Any("message", message))
 		}
 	}
 }
