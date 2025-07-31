@@ -466,6 +466,8 @@ func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 		message := c.newCongestionControlMessage(changefeedID, eventServiceID)
 		if err := c.collector.mc.SendCommand(message); err != nil {
 			log.Warn("send congestion control message failed", zap.Error(err))
+		} else {
+			log.Info("congestion control message sent", zap.Any("message", message))
 		}
 	}
 }
@@ -526,7 +528,6 @@ func (c *congestionController) newCongestionControlMessage(
 	if sum == 0 {
 		log.Panic("there is no active dispatcher for the changefeed, this should never happen",
 			zap.String("changefeedID", changefeedID.String()))
-		return nil
 	}
 
 	portion := proportion[nodeID]

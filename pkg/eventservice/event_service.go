@@ -171,7 +171,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 			log.Panic("invalid control message", zap.Any("msg", msg))
 		}
 		m := msg.Message[0].(*event.CongestionControl)
-		s.handleCongestionControl(msg.From, m)
+		s.handleCongestionControl(msg.To, m)
 	default:
 		log.Panic("unknown message type", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	}
@@ -238,13 +238,13 @@ func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatW
 	c.handleDispatcherHeartbeat(heartbeat)
 }
 
-func (s *eventService) handleCongestionControl(from node.ID, m *event.CongestionControl) {
+func (s *eventService) handleCongestionControl(nodeID node.ID, m *event.CongestionControl) {
 	clusterID := m.ClusterID
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		return
 	}
-	c.handleCongestionControl(from, m)
+	c.handleCongestionControl(nodeID, m)
 }
 
 func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {

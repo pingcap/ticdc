@@ -515,21 +515,20 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	status := item.(*changefeedStatus)
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
-		log.Info("The available memory quota is not set, skip scan",
-			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+		//log.Info("The available memory quota is not set, skip scan",
+		//	zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 		return
 	}
 	available := item.(*atomic.Uint64)
 
-	// if available.Load() < memoryQuotaLowThreshold {
-	// 	log.Info("scan quota is not enough, reset max scan limit",
-	// 		zap.String("changefeed", changefeedID.String()),
-	// 		zap.String("dispatcher", task.id.String()),
-	// 		zap.String("remote", remoteID.String()),
-	// 		zap.Uint64("available", available.Load()))
-	// 	task.resetScanLimit()
-	// 	return
-	// }
+	if available.Load() < available.Load() {
+		log.Info("scan quota is not enough, reset max scan limit",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("dispatcher", task.id.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available.Load()))
+		task.resetScanLimit()
+	}
 
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
@@ -1032,7 +1031,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 	c.sendDispatcherResponse(responseMap)
 }
 
-func (c *eventBroker) handleCongestionControl(from node.ID, m *pevent.CongestionControl) {
+func (c *eventBroker) handleCongestionControl(nodeID node.ID, m *pevent.CongestionControl) {
 	holder := make(map[common.GID]uint64, len(m.AvailableMemory))
 	for _, item := range m.AvailableMemory {
 		holder[item.Gid] = item.Available
@@ -1046,8 +1045,10 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *pevent.Congestion
 		if !ok {
 			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
 		}
-		changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
+		changefeed.availableMemoryQuota.Store(nodeID, atomic.NewUint64(available))
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		log.Info("available memory quota set", zap.Stringer("changefeedID", changefeedID),
+			zap.Uint64("available", available), zap.Stringer("from", from))
 		return true
 	})
 }
