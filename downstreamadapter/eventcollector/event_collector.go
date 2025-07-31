@@ -425,7 +425,7 @@ type congestionController struct {
 	collector *EventCollector
 
 	lock           sync.Mutex
-	slidingWindows map[common.ChangeFeedID]map[node.ID]slidingWindow
+	slidingWindows map[common.ChangeFeedID]map[node.ID]*slidingWindow
 	distributions  map[common.ChangeFeedID]map[node.ID]uint64
 }
 
@@ -434,7 +434,7 @@ func newCongestionController(
 ) *congestionController {
 	return &congestionController{
 		collector:      collector,
-		slidingWindows: make(map[common.ChangeFeedID]map[node.ID]slidingWindow),
+		slidingWindows: make(map[common.ChangeFeedID]map[node.ID]*slidingWindow),
 		distributions:  make(map[common.ChangeFeedID]map[node.ID]uint64),
 	}
 }
@@ -455,7 +455,7 @@ func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 	c.distributions[changefeedID][eventServiceID]++
 
 	if _, ok := c.slidingWindows[changefeedID]; !ok {
-		c.slidingWindows[changefeedID] = make(map[node.ID]slidingWindow)
+		c.slidingWindows[changefeedID] = make(map[node.ID]*slidingWindow)
 	}
 
 	if _, ok := c.slidingWindows[changefeedID][eventServiceID]; !ok {
@@ -557,31 +557,28 @@ type slidingWindow struct {
 	confirmed int64
 }
 
-func newSlidingWindow() slidingWindow {
-	return slidingWindow{
+func newSlidingWindow() *slidingWindow {
+	return &slidingWindow{
 		requested: quotaUnit,
 	}
 }
 
-func (s slidingWindow) next(available int64) int64 {
+func (s *slidingWindow) next(available int64) int64 {
 	s.confirmed = 0
 	if s.requested >= available {
-		log.Warn("requested quota is larger than available memory, set to 1MB")
 		s.requested = quotaUnit
 		return s.requested
 	}
 
 	if s.requested < quotaSlowStartThreshold {
 		s.requested *= 2
-		log.Info("requested quota less than threshold, double the requested quota", zap.Int64("requested", s.requested))
 	} else {
 		s.requested += quotaUnit
-		log.Info("requested quota is larger than threshold, increase by 1MB", zap.Int64("requested", s.requested))
 	}
 	return s.requested
 }
 
-func (s slidingWindow) ack(nBytes int64) bool {
+func (s *slidingWindow) ack(nBytes int64) bool {
 	s.confirmed += nBytes
 	return s.confirmed >= s.requested
 }
