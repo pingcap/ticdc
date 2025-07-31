@@ -129,10 +129,6 @@ func (c *EventCollector) Run(ctx context.Context) {
 	})
 
 	g.Go(func() error {
-		return c.controlCongestion(ctx)
-	})
-
-	g.Go(func() error {
 		return c.sendDispatcherRequests(ctx)
 	})
 
@@ -415,6 +411,9 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						dispatcherEvent := dispatcher.NewDispatcherEvent(&targetMessage.From, e)
 						c.ds.Push(e.GetDispatcherID(), dispatcherEvent)
+						if e.GetType() == event.TypeBatchDMLEvent {
+							c.congestionController.Acknowledge(targetMessage.From, e.(*event.BatchDMLEvent))
+						}
 					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))
@@ -424,49 +423,23 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 	}
 }
 
-func (c *EventCollector) controlCongestion(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-ticker.C:
-			messages := c.congestionController.calculateQuota()
-			for _, m := range messages {
-				if err := c.mc.SendCommand(m); err != nil {
-					log.Warn("send congestion control message failed", zap.Error(err))
-				}
-			}
-		}
-	}
-}
-
 type congestionController struct {
 	collector *EventCollector
 
-	lock          sync.Mutex
-	maximum       map[common.ChangeFeedID]uint64
-	distributions map[common.ChangeFeedID]map[node.ID]uint64
-
-	availables map[common.ChangeFeedID]map[node.ID]uint64 // changefeedID -> nodeID -> quota
+	lock           sync.Mutex
+	slidingWindows map[common.ChangeFeedID]map[node.ID]slidingWindow
+	distributions  map[common.ChangeFeedID]map[node.ID]uint64
 }
 
 func newCongestionController(
 	collector *EventCollector,
 ) *congestionController {
 	return &congestionController{
-		collector:     collector,
-		maximum:       make(map[common.ChangeFeedID]uint64),
-		distributions: make(map[common.ChangeFeedID]map[node.ID]uint64),
-		availables:    make(map[common.ChangeFeedID]map[node.ID]uint64),
+		collector:      collector,
+		slidingWindows: make(map[common.ChangeFeedID]map[node.ID]slidingWindow),
+		distributions:  make(map[common.ChangeFeedID]map[node.ID]uint64),
 	}
 }
-
-const (
-	quotaUnit = 1024 * 1024 // 1MB
-)
 
 func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 	changefeedID := dispatcher.target.GetChangefeedID()
@@ -478,21 +451,19 @@ func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 
 	c.lock.Lock()
 	defer c.lock.Unlock()
+
+	if _, ok := c.slidingWindows[changefeedID]; !ok {
+		c.slidingWindows[changefeedID] = make(map[node.ID]slidingWindow)
+	}
+
+	if _, ok := c.slidingWindows[changefeedID][eventServiceID]; !ok {
+		c.slidingWindows[changefeedID][eventServiceID] = newSlidingWindow()
+	}
+
 	if _, ok := c.distributions[changefeedID]; !ok {
 		c.distributions[changefeedID] = make(map[node.ID]uint64)
 	}
 	c.distributions[changefeedID][eventServiceID]++
-
-	if _, ok := c.maximum[changefeedID]; !ok {
-		c.maximum[changefeedID] = 0
-	}
-
-	if _, ok := c.availables[changefeedID]; !ok {
-		c.availables[changefeedID] = make(map[node.ID]uint64)
-	}
-	if _, ok := c.availables[changefeedID][eventServiceID]; !ok {
-		c.availables[changefeedID][eventServiceID] = quotaUnit
-	}
 }
 
 func (c *congestionController) removeDispatcher(dispatcher *dispatcherStat) {
@@ -517,67 +488,109 @@ func (c *congestionController) removeDispatcher(dispatcher *dispatcherStat) {
 		delete(proportion, eventServiceID)
 	}
 	if len(proportion) == 0 {
+		delete(c.slidingWindows, changefeedID)
 		delete(c.distributions, changefeedID)
-		delete(c.maximum, changefeedID)
-		delete(c.availables, changefeedID)
 	}
 }
 
-func (c *congestionController) calculateQuota() []*messaging.TargetMessage {
+func (c *congestionController) queryAvailable(changefeedID common.ChangeFeedID) int64 {
+	for _, quota := range c.collector.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
+		gid, ok := c.collector.changefeedIDMap.Load(quota.Area())
+		if ok && gid == changefeedID.ID() {
+			return quota.AvailableMemory()
+		}
+	}
+	return 0
+}
+
+func (c *congestionController) newCongestionControlMessage(
+	changefeedID common.ChangeFeedID, nodeID node.ID,
+) *messaging.TargetMessage {
+	available := c.queryAvailable(changefeedID)
+	if available == 0 {
+		return nil
+	}
+
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	// collect all changefeeds' available memory quota
-	for _, quota := range c.collector.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
-		changefeedID, ok := c.collector.changefeedIDMap.Load(quota.Area())
-		if !ok {
-			continue
-		}
-		c.maximum[changefeedID.(common.ChangeFeedID)] = uint64(quota.AvailableMemory())
+	proportion, ok := c.distributions[changefeedID]
+	if !ok {
+		log.Panic("no distribution found for changefeed, this should never happen",
+			zap.String("changefeedID", changefeedID.String()))
+	}
+	var sum uint64
+	for _, portion := range proportion {
+		sum += portion
+	}
+	if sum == 0 {
+		return nil
 	}
 
-	control := make(map[node.ID]*event.CongestionControl)
-	for changefeedID, maximum := range c.maximum {
-		proportion, ok := c.distributions[changefeedID]
-		if !ok {
-			log.Panic("no distribution found for changefeed, this should never happen",
-				zap.String("changefeedID", changefeedID.String()),
-				zap.Uint64("maximum", maximum))
-		}
+	portion := proportion[nodeID]
+	ratio := float64(portion) / float64(sum)
+	available = int64(float64(available) * ratio)
+	quota := c.slidingWindows[changefeedID][nodeID].next(available)
 
-		var sum uint64
-		for _, portion := range proportion {
-			sum += portion
-		}
-		if sum == 0 {
-			continue
-		}
-		for nodeID, portion := range proportion {
-			ratio := float64(portion) / float64(sum)
-			maximum := uint64(float64(maximum) * ratio)
+	m := event.NewCongestionControl()
+	m.AddAvailableMemory(changefeedID.ID(), uint64(quota))
+	message := messaging.NewSingleTargetMessage(nodeID, messaging.EventServiceTopic, m)
+	return message
+}
 
-			quota := c.availables[changefeedID][nodeID]
-			if quota < maximum {
-				quota += quotaUnit
-			} else {
-				quota = quotaUnit
-			}
-			c.availables[changefeedID][nodeID] = quota
+func (c *congestionController) Acknowledge(from node.ID, item *event.BatchDMLEvent) {
+	dispatcherID := item.GetDispatcherID()
+	changefeedID := c.collector.getDispatcherStatByID(dispatcherID).target.GetChangefeedID()
 
-			m, ok := control[nodeID]
-			if !ok {
-				m = event.NewCongestionControl()
-				control[nodeID] = m
-			}
-			m.AddAvailableMemory(changefeedID.ID(), quota)
-		}
+	acked := c.slidingWindows[changefeedID][from].ack(item.GetSize())
+	if !acked {
+		return
 	}
 
-	result := make([]*messaging.TargetMessage, 0, len(control))
-	for nodeID, m := range control {
-		msg := messaging.NewSingleTargetMessage(nodeID, messaging.EventServiceTopic, m)
-		result = append(result, msg)
+	message := c.newCongestionControlMessage(changefeedID, from)
+	if err := c.collector.mc.SendCommand(message); err != nil {
+		log.Warn("send congestion control message failed", zap.Error(err))
 	}
-	return result
+}
+
+const (
+	quotaUnit               = 1024 * 1024      // 1MB
+	quotaSlowStartThreshold = 1024 * 1024 * 32 // 32MB
+	quotaHighThreshold      = 1024 * 1024 * 64 // 64MB
+)
+
+type slidingWindow struct {
+	requested int64
+	confirmed int64
+}
+
+func newSlidingWindow() slidingWindow {
+	return slidingWindow{
+		requested: quotaUnit,
+	}
+}
+
+func (s slidingWindow) next(available int64) int64 {
+	s.confirmed = 0
+	if s.requested < available {
+		s.requested = quotaUnit
+		return s.requested
+	}
+
+	if s.requested < quotaSlowStartThreshold {
+		s.requested *= 2
+	} else {
+		s.requested += quotaUnit
+	}
+
+	if s.requested >= quotaHighThreshold {
+		s.requested /= 2
+	}
+	return s.requested
+}
+
+func (s slidingWindow) ack(nBytes int64) bool {
+	s.confirmed += nBytes
+	return s.confirmed >= s.requested
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) error {
