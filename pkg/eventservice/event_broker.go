@@ -1048,7 +1048,7 @@ func (c *eventBroker) handleCongestionControl(nodeID node.ID, m *pevent.Congesti
 		changefeed.availableMemoryQuota.Store(nodeID, atomic.NewUint64(available))
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		log.Info("available memory quota set", zap.Stringer("changefeedID", changefeedID),
-			zap.Uint64("available", available), zap.Stringer("from", from))
+			zap.Uint64("available", available), zap.Stringer("eventServiceID", nodeID))
 		return true
 	})
 }
