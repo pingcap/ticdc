@@ -525,6 +525,9 @@ func (c *congestionController) newCongestionControlMessage(
 	available = int64(float64(available) * ratio)
 	quota := c.slidingWindows[changefeedID][nodeID].next(available)
 
+	log.Info("send quota ", zap.Stringer("changefeedID", changefeedID), zap.Stringer("nodeID", nodeID),
+		zap.Int64("quota", quota), zap.Int64("available", available))
+
 	m := event.NewCongestionControl()
 	m.AddAvailableMemory(changefeedID.ID(), uint64(quota))
 	message := messaging.NewSingleTargetMessage(nodeID, messaging.EventServiceTopic, m)
