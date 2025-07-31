@@ -171,7 +171,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 			log.Panic("invalid control message", zap.Any("msg", msg))
 		}
 		m := msg.Message[0].(*event.CongestionControl)
-		s.handleCongestionControl(msg.To, m)
+		s.handleCongestionControl(msg.From, m)
 	default:
 		log.Panic("unknown message type", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	}

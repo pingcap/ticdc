@@ -515,13 +515,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	status := item.(*changefeedStatus)
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
-		//log.Info("The available memory quota is not set, skip scan",
-		//	zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+		log.Info("The available memory quota is not set, skip scan",
+			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 		return
 	}
 	available := item.(*atomic.Uint64)
 
-	if available.Load() < available.Load() {
+	if uint64(task.getCurrentScanLimitInBytes()) < available.Load() {
 		log.Info("scan quota is not enough, reset max scan limit",
 			zap.String("changefeed", changefeedID.String()),
 			zap.String("dispatcher", task.id.String()),
@@ -1047,8 +1047,6 @@ func (c *eventBroker) handleCongestionControl(nodeID node.ID, m *pevent.Congesti
 		}
 		changefeed.availableMemoryQuota.Store(nodeID, atomic.NewUint64(available))
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
-		log.Info("available memory quota set", zap.Stringer("changefeedID", changefeedID),
-			zap.Uint64("available", available), zap.Stringer("eventServiceID", nodeID))
 		return true
 	})
 }
