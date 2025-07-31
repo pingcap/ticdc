@@ -75,6 +75,8 @@ type EventCollector struct {
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
+	congestionController *congestionController
+
 	g      *errgroup.Group
 	cancel context.CancelFunc
 
@@ -100,6 +102,7 @@ func New(serverId node.ID) *EventCollector {
 	}
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
 	eventCollector.ds = NewEventDynamicStream(eventCollector)
+	eventCollector.congestionController = newCongestionController(eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)
 
 	return eventCollector
@@ -206,6 +209,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, 
 	}
 	stat := value.(*dispatcherStat)
 	stat.commitReady(c.getLocalServerID())
+	c.congestionController.addDispatcher(stat)
 }
 
 func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
@@ -225,6 +229,7 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 	}
 	c.dispatcherMap.Delete(target.GetId())
+	c.congestionController.removeDispatcher(stat)
 }
 
 // Queues a message for sending (best-effort, no delivery guarantee)
@@ -428,10 +433,9 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
-			messages := c.newCongestionControlMessages()
-			for serverID, m := range messages {
-				msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, m)
-				if err := c.mc.SendCommand(msg); err != nil {
+			messages := c.congestionController.calculateQuota()
+			for _, m := range messages {
+				if err := c.mc.SendCommand(m); err != nil {
 					log.Warn("send congestion control message failed", zap.Error(err))
 				}
 			}
@@ -439,62 +443,139 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 	}
 }
 
-func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
+type congestionController struct {
+	collector *EventCollector
+
+	lock          sync.Mutex
+	maximum       map[common.ChangeFeedID]uint64
+	distributions map[common.ChangeFeedID]map[node.ID]uint64
+
+	availables map[common.ChangeFeedID]map[node.ID]uint64 // changefeedID -> nodeID -> quota
+}
+
+func newCongestionController(
+	collector *EventCollector,
+) *congestionController {
+	return &congestionController{
+		collector:     collector,
+		maximum:       make(map[common.ChangeFeedID]uint64),
+		distributions: make(map[common.ChangeFeedID]map[node.ID]uint64),
+		availables:    make(map[common.ChangeFeedID]map[node.ID]uint64),
+	}
+}
+
+const (
+	quotaUnit = 1024 * 1024 // 1MB
+)
+
+func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
+	changefeedID := dispatcher.target.GetChangefeedID()
+	eventServiceID := dispatcher.connState.getEventServiceID()
+	// nodeID is not set yet, just skip it temporarily.
+	if eventServiceID == "" {
+		return
+	}
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if _, ok := c.distributions[changefeedID]; !ok {
+		c.distributions[changefeedID] = make(map[node.ID]uint64)
+	}
+	c.distributions[changefeedID][eventServiceID]++
+
+	if _, ok := c.maximum[changefeedID]; !ok {
+		c.maximum[changefeedID] = 0
+	}
+
+	if _, ok := c.availables[changefeedID]; !ok {
+		c.availables[changefeedID] = make(map[node.ID]uint64)
+	}
+	if _, ok := c.availables[changefeedID][eventServiceID]; !ok {
+		c.availables[changefeedID][eventServiceID] = quotaUnit
+	}
+}
+
+func (c *congestionController) removeDispatcher(dispatcher *dispatcherStat) {
+	changefeedID := dispatcher.target.GetChangefeedID()
+	eventServiceID := dispatcher.connState.getEventServiceID()
+
+	// nodeID is not set yet, just skip it temporarily.
+	if eventServiceID == "" {
+		return
+	}
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	proportion, ok := c.distributions[changefeedID]
+	if !ok {
+		log.Panic("no distribution found for changefeed, this should never happen",
+			zap.String("changefeedID", changefeedID.String()))
+	}
+
+	proportion[eventServiceID]--
+	if proportion[eventServiceID] == 0 {
+		delete(proportion, eventServiceID)
+	}
+	if len(proportion) == 0 {
+		delete(c.distributions, changefeedID)
+		delete(c.maximum, changefeedID)
+		delete(c.availables, changefeedID)
+	}
+}
+
+func (c *congestionController) calculateQuota() []*messaging.TargetMessage {
+	c.lock.Lock()
+	defer c.lock.Unlock()
 	// collect all changefeeds' available memory quota
-	availables := make(map[common.ChangeFeedID]uint64)
-	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
-		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
+	for _, quota := range c.collector.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
+		changefeedID, ok := c.collector.changefeedIDMap.Load(quota.Area())
 		if !ok {
 			continue
 		}
-		availables[changefeedID.(common.ChangeFeedID)] = uint64(quota.AvailableMemory())
-	}
-	if len(availables) == 0 {
-		return nil
+		c.maximum[changefeedID.(common.ChangeFeedID)] = uint64(quota.AvailableMemory())
 	}
 
-	// calculate each changefeed's available memory quota for each node
-	// by the proportion of the dispatcher on each node.
-	// this is not accurate, we should also consider each node's workload distribution.
-	proportions := make(map[common.ChangeFeedID]map[node.ID]uint64)
-	c.dispatcherMap.Range(func(k, v interface{}) bool {
-		stat := v.(*dispatcherStat)
-		eventServiceID := stat.connState.getEventServiceID()
-		changefeedID := stat.target.GetChangefeedID()
-
-		holder, ok := proportions[changefeedID]
+	control := make(map[node.ID]*event.CongestionControl)
+	for changefeedID, maximum := range c.maximum {
+		proportion, ok := c.distributions[changefeedID]
 		if !ok {
-			holder = make(map[node.ID]uint64, len(availables))
-			proportions[changefeedID] = holder
+			log.Panic("no distribution found for changefeed, this should never happen",
+				zap.String("changefeedID", changefeedID.String()),
+				zap.Uint64("maximum", maximum))
 		}
-		holder[eventServiceID]++
-		return true
-	})
 
-	// group the available memory quota by nodeID
-	result := make(map[node.ID]*event.CongestionControl)
-	for changefeedID, total := range availables {
-		proportion := proportions[changefeedID]
 		var sum uint64
 		for _, portion := range proportion {
 			sum += portion
 		}
-
+		if sum == 0 {
+			continue
+		}
 		for nodeID, portion := range proportion {
-			// nodeID is not set yet, just skip it temporarily.
-			if nodeID == "" {
-				continue
-			}
 			ratio := float64(portion) / float64(sum)
-			quota := uint64(float64(total) * ratio)
+			maximum := uint64(float64(maximum) * ratio)
 
-			m, ok := result[nodeID]
+			quota := c.availables[changefeedID][nodeID]
+			if quota < maximum {
+				quota += quotaUnit
+			} else {
+				quota = quotaUnit
+			}
+			c.availables[changefeedID][nodeID] = quota
+
+			m, ok := control[nodeID]
 			if !ok {
 				m = event.NewCongestionControl()
-				result[nodeID] = m
+				control[nodeID] = m
 			}
 			m.AddAvailableMemory(changefeedID.ID(), quota)
 		}
+	}
+
+	result := make([]*messaging.TargetMessage, 0, len(control))
+	for nodeID, m := range control {
+		msg := messaging.NewSingleTargetMessage(nodeID, messaging.EventServiceTopic, m)
+		result = append(result, msg)
 	}
 	return result
 }

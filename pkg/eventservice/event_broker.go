@@ -521,15 +521,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	available := item.(*atomic.Uint64)
 
-	if available.Load() < memoryQuotaLowThreshold {
-		log.Info("scan quota is not enough, reset max scan limit",
-			zap.String("changefeed", changefeedID.String()),
-			zap.String("dispatcher", task.id.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Uint64("available", available.Load()))
-		task.resetScanLimit()
-		return
-	}
+	// if available.Load() < memoryQuotaLowThreshold {
+	// 	log.Info("scan quota is not enough, reset max scan limit",
+	// 		zap.String("changefeed", changefeedID.String()),
+	// 		zap.String("dispatcher", task.id.String()),
+	// 		zap.String("remote", remoteID.String()),
+	// 		zap.Uint64("available", available.Load()))
+	// 	task.resetScanLimit()
+	// 	return
+	// }
 
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
