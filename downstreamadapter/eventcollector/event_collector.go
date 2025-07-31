@@ -460,6 +460,7 @@ func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
 
 	if _, ok := c.slidingWindows[changefeedID][eventServiceID]; !ok {
 		c.slidingWindows[changefeedID][eventServiceID] = newSlidingWindow()
+		log.Info("set sliding window", zap.Stringer("changefeedID", changefeedID), zap.Any("nodeID", eventServiceID))
 	}
 }
 
@@ -486,6 +487,7 @@ func (c *congestionController) removeDispatcher(dispatcher *dispatcherStat) {
 	if len(proportion) == 0 {
 		delete(c.slidingWindows, changefeedID)
 		delete(c.distributions, changefeedID)
+		log.Info("remove sliding window and distribution for changefeed", zap.Stringer("changefeedID", changefeedID))
 	}
 }
 
