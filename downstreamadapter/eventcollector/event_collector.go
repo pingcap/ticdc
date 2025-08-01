@@ -66,6 +66,9 @@ func newDispatcherMessage(msg *messaging.TargetMessage, droppable bool) Dispatch
 }
 
 func (d *DispatcherMessage) decrAndCheckRetry() bool {
+	if !d.Droppable {
+		return true
+	}
 	d.RetryQuota--
 	return d.RetryQuota > 0
 }
