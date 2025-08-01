@@ -270,7 +270,7 @@ type DMLEvent struct {
 	ApproximateSize int64 `json:"approximate_size"`
 	// RowTypes is the types of every row in the transaction.
 	RowTypes []RowType `json:"row_types"`
-
+	// RowKeys is the keys of every row in the transaction.
 	RowKeys [][]byte `json:"row_keys"`
 
 	// Rows shares BatchDMLEvent rows
@@ -431,6 +431,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		t.checksumOffset++
 	}
 	rowType := t.RowTypes[t.offset]
+	// RowKeys is available only when the event is created from RawKVEntry.
 	var rowKey []byte
 	if len(t.RowKeys) > t.offset {
 		rowKey = t.RowKeys[t.offset]
