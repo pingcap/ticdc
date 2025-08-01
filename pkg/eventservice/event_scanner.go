@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
@@ -38,7 +37,7 @@ type eventGetter interface {
 // schemaGetter is the interface for getting schema info and ddl events
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
-	FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]pevent.DDLEvent, error)
+	FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
 	GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
@@ -55,7 +54,7 @@ type scanLimit struct {
 type eventScanner struct {
 	eventGetter  eventGetter
 	schemaGetter schemaGetter
-	mounter      pevent.Mounter
+	mounter      event.Mounter
 	epoch        uint64
 }
 
@@ -63,7 +62,7 @@ type eventScanner struct {
 func newEventScanner(
 	eventStore eventstore.EventStore,
 	schemaStore schemastore.SchemaStore,
-	mounter pevent.Mounter,
+	mounter event.Mounter,
 	epoch uint64,
 ) *eventScanner {
 	return &eventScanner{
@@ -112,7 +111,7 @@ func (s *eventScanner) scan(
 	dispatcherStat *dispatcherStat,
 	dataRange common.DataRange,
 	limit scanLimit,
-) ([]pevent.Event, bool, error) {
+) ([]event.Event, bool, error) {
 	// Initialize scan session
 	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
@@ -139,7 +138,7 @@ func (s *eventScanner) scan(
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
-func (s *eventScanner) fetchDDLEvents(session *session) ([]pevent.DDLEvent, error) {
+func (s *eventScanner) fetchDDLEvents(session *session) ([]event.DDLEvent, error) {
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
 		session.dispatcherStat.info.GetID(),
 		session.dataRange.Span.TableID,
@@ -166,9 +165,9 @@ func (s *eventScanner) getEventIterator(session *session) (eventstore.EventItera
 }
 
 // handleEmptyIterator handles the case when there are no DML events
-func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, session *session) []event.Event {
+func (s *eventScanner) handleEmptyIterator(ddlEvents []event.DDLEvent, session *session) []event.Event {
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
-	events := merger.appendRemainingDDLs(session.dataRange.EndTs)
+	events := merger.resolveDDLEvents(session.dataRange.EndTs)
 	return events
 }
 
@@ -185,7 +184,7 @@ func (s *eventScanner) closeIterator(iter eventstore.EventIterator) {
 // scanAndMergeEvents performs the main scanning and merging logic
 func (s *eventScanner) scanAndMergeEvents(
 	session *session,
-	ddlEvents []pevent.DDLEvent,
+	ddlEvents []event.DDLEvent,
 	iter eventstore.EventIterator,
 ) ([]event.Event, bool, error) {
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
@@ -216,20 +215,22 @@ func (s *eventScanner) scanAndMergeEvents(
 				return nil, false, err
 			}
 			if tableInfo == nil {
-				log.Warn("table info not found, skipping event", zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID))
+				log.Warn("table info not found, stop scanning, return nothing",
+					zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID))
 				return nil, false, nil
 			}
 
-			s.flushPrevTxn(merger, processor, session, rawEvent, tableInfo)
+			s.tryFlushBatch(merger, processor, session, rawEvent, tableInfo)
 
-			if checker.checkLimits(processor.batchDML.GetSize()) {
+			var nBytes int64
+			for _, item := range session.events {
+				nBytes += item.GetSize()
+			}
+			if checker.checkLimits(nBytes) {
 				return s.interruptScan(session, merger, processor)
 			}
 
-			if err := s.startNewTxn(session, processor, rawEvent, tableInfo, tableID); err != nil {
-				return nil, false, err
-			}
-			continue
+			s.startNewTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
 		}
 
 		if err = processor.appendRow(rawEvent); err != nil {
@@ -266,57 +267,52 @@ func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int6
 
 	if dispatcher.isRemoved.Load() {
 		log.Warn("get table info failed, since the dispatcher is removed",
-			zap.Stringer("dispatcherID", dispatcher.id),
-			zap.Int64("tableID", tableID), zap.Uint64("ts", ts), zap.Error(err))
+			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
+			zap.Uint64("ts", ts), zap.Error(err))
 		return nil, nil
 	}
 
 	if errors.Is(err, &schemastore.TableDeletedError{}) {
-		log.Warn("get table info failed, since the table is deleted", zap.Error(err),
-			zap.Stringer("dispatcherID", dispatcher.id),
-			zap.Int64("tableID", tableID),
-			zap.Uint64("getTableInfoStartTs", ts))
+		log.Warn("get table info failed, since the table is deleted",
+			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
+			zap.Uint64("ts", ts), zap.Error(err))
 		return nil, nil
 	}
 
-	log.Error("get table info failed, unknown reason", zap.Error(err),
-		zap.Stringer("dispatcherID", dispatcher.id),
-		zap.Int64("tableID", tableID),
-		zap.Uint64("ts", ts))
+	log.Error("get table info failed, unknown reason",
+		zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
+		zap.Uint64("ts", ts), zap.Error(err))
 	return nil, err
 }
 
-func (s *eventScanner) flushPrevTxn(
+func (s *eventScanner) tryFlushBatch(
 	merger *eventMerger,
 	processor *dmlProcessor,
 	session *session,
 	rawEvent *common.RawKVEntry,
 	tableInfo *common.TableInfo,
 ) {
+	resolvedBatch := processor.getResolvedBatchDML()
 	// Check if batch should be flushed
-	hasNewDDL := merger.hasMoreDDLs() && rawEvent.CRTs > merger.nextDDLFinishedTs()
-	if processor.shouldFlushBatch(tableInfo.UpdateTS(), hasNewDDL) {
-		events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
-		session.events = append(session.events, events...)
-		processor.flushBatch(tableInfo.UpdateTS())
+	tableUpdated := resolvedBatch != nil && resolvedBatch.TableInfo.UpdateTS() != tableInfo.UpdateTS()
+	hasNewDDL := merger.hasMoreDDLs(rawEvent.CRTs)
+	if hasNewDDL || tableUpdated {
+		events := merger.appendDMLEvent(resolvedBatch, &session.lastCommitTs)
+		session.appendEvents(events)
+		processor.batchDML = nil
 	}
 }
 
 func (s *eventScanner) startNewTxn(
 	session *session,
 	processor *dmlProcessor,
-	rawEvent *common.RawKVEntry,
+	startTs, commitTs uint64,
 	tableInfo *common.TableInfo,
 	tableID int64,
-) error {
-	// Process new transaction
-	if err := processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id); err != nil {
-		return err
-	}
-
-	session.lastCommitTs = rawEvent.CRTs
+) {
+	processor.startNewTxn(session.dispatcherStat.id, tableID, startTs, commitTs, tableInfo)
+	session.lastCommitTs = commitTs
 	session.dmlCount++
-	return nil
 }
 
 // finalizeScan finalizes the scan when all events have been processed
@@ -329,12 +325,12 @@ func (s *eventScanner) finalizeScan(
 		return nil, err
 	}
 	// Append final batch
-	events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
-	session.events = append(session.events, events...)
+	events := merger.appendDMLEvent(processor.getResolvedBatchDML(), &session.lastCommitTs)
+	session.appendEvents(events)
 
 	// Append remaining DDLs
-	remainingEvents := merger.appendRemainingDDLs(session.dataRange.EndTs)
-	session.events = append(session.events, remainingEvents...)
+	remainingEvents := merger.resolveDDLEvents(session.dataRange.EndTs)
+	session.appendEvents(remainingEvents)
 
 	return session.events, nil
 }
@@ -349,12 +345,12 @@ func (s *eventScanner) interruptScan(
 		return nil, false, err
 	}
 	// Append current batch
-	events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
-	session.events = append(session.events, events...)
+	events := merger.appendDMLEvent(processor.getResolvedBatchDML(), &session.lastCommitTs)
+	session.appendEvents(events)
 
 	// Append DDLs up to last commit timestamp
-	remainingEvents := merger.appendRemainingDDLs(session.lastCommitTs)
-	session.events = append(session.events, remainingEvents...)
+	remainingEvents := merger.resolveDDLEvents(session.lastCommitTs)
+	session.appendEvents(remainingEvents)
 
 	return session.events, true, nil
 }
@@ -374,8 +370,9 @@ type session struct {
 	// dmlCount is the count of transactions.
 	dmlCount int
 
-	// Result collection
-	events []event.Event
+	// Result collection, including DDL, BatchedDML, ResolvedTs events in the timestamp order.
+	events     []event.Event
+	eventBytes int64
 }
 
 // newSession creates a new scan session
@@ -416,11 +413,16 @@ func (s *session) recordMetrics() {
 	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
 	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
 	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
-	var size int64
-	for _, item := range s.events {
-		size += item.GetSize()
+	metrics.EventServiceScannedDMLSize.Observe(float64(s.eventBytes))
+}
+
+func (s *session) appendEvents(events []event.Event) {
+	s.events = append(s.events, events...)
+	var nBytes int64
+	for _, item := range events {
+		nBytes += item.GetSize()
 	}
-	metrics.EventServiceScannedDMLSize.Observe(float64(size))
+	s.eventBytes += nBytes
 }
 
 // limitChecker manages scan limits and interruption logic
@@ -446,7 +448,7 @@ func (c *limitChecker) checkLimits(totalBytes int64) bool {
 
 // eventMerger handles merging of DML and DDL events in timestamp order
 type eventMerger struct {
-	ddlEvents    []pevent.DDLEvent
+	ddlEvents    []event.DDLEvent
 	ddlIndex     int
 	dispatcherID common.DispatcherID
 	epoch        uint64
@@ -454,7 +456,7 @@ type eventMerger struct {
 
 // newEventMerger creates a new event merger
 func newEventMerger(
-	ddlEvents []pevent.DDLEvent,
+	ddlEvents []event.DDLEvent,
 	dispatcherID common.DispatcherID,
 	epoch uint64,
 ) *eventMerger {
@@ -467,7 +469,7 @@ func newEventMerger(
 }
 
 // appendDMLEvent appends a DML event and any preceding DDL events
-func (m *eventMerger) appendDMLEvent(dml *pevent.BatchDMLEvent, lastCommitTs *uint64) []event.Event {
+func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent, lastCommitTs *uint64) []event.Event {
 	if dml == nil || dml.Len() == 0 {
 		return nil
 	}
@@ -487,8 +489,8 @@ func (m *eventMerger) appendDMLEvent(dml *pevent.BatchDMLEvent, lastCommitTs *ui
 	return events
 }
 
-// appendRemainingDDLs appends all remaining DDL events up to endTs
-func (m *eventMerger) appendRemainingDDLs(endTs uint64) []event.Event {
+// resolveDDLEvents return all remaining DDL events up to endTs
+func (m *eventMerger) resolveDDLEvents(endTs uint64) []event.Event {
 	var events []event.Event
 
 	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].FinishedTs <= endTs {
@@ -496,79 +498,69 @@ func (m *eventMerger) appendRemainingDDLs(endTs uint64) []event.Event {
 		m.ddlIndex++
 	}
 
-	events = append(events, pevent.NewResolvedEvent(endTs, m.dispatcherID, m.epoch))
-
+	events = append(events, event.NewResolvedEvent(endTs, m.dispatcherID, m.epoch))
 	return events
 }
 
-// hasMoreDDLs returns true if there are more DDL events to process
-func (m *eventMerger) hasMoreDDLs() bool {
-	return m.ddlIndex < len(m.ddlEvents)
-}
-
-// nextDDLFinishedTs returns the finished timestamp of the next DDL event
-func (m *eventMerger) nextDDLFinishedTs() uint64 {
-	if !m.hasMoreDDLs() {
-		return 0
-	}
-	return m.ddlEvents[m.ddlIndex].FinishedTs
+// hasMoreDDLs return true if there are DDLs
+func (m *eventMerger) hasMoreDDLs(commitTs uint64) bool {
+	return m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].FinishedTs < commitTs
 }
 
 // dmlProcessor handles DML event processing and batching
 type dmlProcessor struct {
-	mounter      pevent.Mounter
+	mounter      event.Mounter
 	schemaGetter schemaGetter
 
 	// insertRowCache is used to cache the split update event's insert part of the current transaction.
 	// It will be used to append to the current DML event when the transaction is finished.
 	// And it will be cleared when the transaction is finished.
-	insertRowCache        []*common.RawKVEntry
-	currentDML            *pevent.DMLEvent
-	batchDML              *pevent.BatchDMLEvent
-	lastTableInfoUpdateTs uint64
+	insertRowCache []*common.RawKVEntry
+
+	// currentDML is the transaction that is handling now
+	currentDML *event.DMLEvent
+
+	batchDML *event.BatchDMLEvent
 }
 
 // newDMLProcessor creates a new DML processor
-func newDMLProcessor(mounter pevent.Mounter, schemaGetter schemaGetter) *dmlProcessor {
+func newDMLProcessor(mounter event.Mounter, schemaGetter schemaGetter) *dmlProcessor {
 	return &dmlProcessor{
 		mounter:        mounter,
 		schemaGetter:   schemaGetter,
-		batchDML:       pevent.NewBatchDMLEvent(),
 		insertRowCache: make([]*common.RawKVEntry, 0),
 	}
 }
 
-func (p *dmlProcessor) clearCache() error {
-	if len(p.insertRowCache) > 0 {
-		for _, insertRow := range p.insertRowCache {
-			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
-				return err
-			}
-		}
-		p.insertRowCache = make([]*common.RawKVEntry, 0)
+// startNewTxn should be called after flush the current transaction
+func (p *dmlProcessor) startNewTxn(
+	dispatcherID common.DispatcherID,
+	tableID int64,
+	startTs uint64, commitTs uint64,
+	tableInfo *common.TableInfo,
+) {
+	if p.currentDML != nil {
+		log.Panic("there is a transaction not flushed yet")
 	}
-	return nil
+	if p.batchDML == nil {
+		p.batchDML = event.NewBatchDMLEvent()
+	}
+	p.currentDML = event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
+	p.batchDML.AppendDMLEvent(p.currentDML)
 }
 
-// processNewTransaction processes a new transaction event
-func (p *dmlProcessor) processNewTransaction(
-	rawEvent *common.RawKVEntry,
-	tableID int64,
-	tableInfo *common.TableInfo,
-	dispatcherID common.DispatcherID,
-) error {
+func (p *dmlProcessor) flushCurrentTxn() error {
 	if p.currentDML != nil && len(p.insertRowCache) > 0 {
 		for _, insertRow := range p.insertRowCache {
+			// currentDML and batchDML share the same chunk.
 			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
 				return err
 			}
 		}
 		p.insertRowCache = make([]*common.RawKVEntry, 0)
 	}
-	// Create a new DMLEvent for the current transaction
-	p.currentDML = pevent.NewDMLEvent(dispatcherID, tableID, rawEvent.StartTs, rawEvent.CRTs, tableInfo)
-	p.batchDML.AppendDMLEvent(p.currentDML)
-	return p.appendRow(rawEvent)
+	p.currentDML = nil
+	return nil
 }
 
 // appendRow appends a row to the current DML event.
@@ -582,7 +574,6 @@ func (p *dmlProcessor) processNewTransaction(
 //
 // Returns:
 //   - error: Returns an error if:
-//   - No current DML event exists to append to
 //   - Unique key change detection fails
 //   - Update split operation fails
 //   - Row append operation fails
@@ -599,42 +590,43 @@ func (p *dmlProcessor) processNewTransaction(
 // 4. For normal updates (no unique key changes), appends the row directly
 func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if p.currentDML == nil {
-		return errors.New("no current DML event to append to")
+		log.Panic("no current DML event to append to")
 	}
 
 	if !rawEvent.IsUpdate() {
 		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
 	}
 
-	shouldSplit, err := pevent.IsUKChanged(rawEvent, p.currentDML.TableInfo)
+	shouldSplit, err := event.IsUKChanged(rawEvent, p.currentDML.TableInfo)
 	if err != nil {
 		return err
 	}
 
-	if shouldSplit {
-		deleteRow, insertRow, err := rawEvent.SplitUpdate()
-		if err != nil {
-			return err
-		}
-		p.insertRowCache = append(p.insertRowCache, insertRow)
-		return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
+	if !shouldSplit {
+		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
 	}
 
-	return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
+	deleteRow, insertRow, err := rawEvent.SplitUpdate()
+	if err != nil {
+		return err
+	}
+	p.insertRowCache = append(p.insertRowCache, insertRow)
+	return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
 }
 
-// getCurrentBatch returns the current batch DML event
-func (p *dmlProcessor) getCurrentBatch() *pevent.BatchDMLEvent {
+// getResolvedBatchDML returns the current batch DML event
+func (p *dmlProcessor) getResolvedBatchDML() *event.BatchDMLEvent {
 	return p.batchDML
 }
 
-// shouldFlushBatch determines if the current batch should be flushed
-func (p *dmlProcessor) shouldFlushBatch(tableInfoUpdateTs uint64, hasNewDDL bool) bool {
-	return tableInfoUpdateTs != p.lastTableInfoUpdateTs || hasNewDDL
-}
-
-// flushBatch flushes the current batch and creates a new one
-func (p *dmlProcessor) flushBatch(tableInfoUpdateTs uint64) {
-	p.lastTableInfoUpdateTs = tableInfoUpdateTs
-	p.batchDML = pevent.NewBatchDMLEvent()
+func (p *dmlProcessor) clearCache() error {
+	if len(p.insertRowCache) > 0 {
+		for _, insertRow := range p.insertRowCache {
+			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
+				return err
+			}
+		}
+		p.insertRowCache = make([]*common.RawKVEntry, 0)
+	}
+	return nil
 }

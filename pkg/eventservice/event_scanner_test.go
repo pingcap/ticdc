@@ -966,9 +966,9 @@ func TestEventMerger(t *testing.T) {
 		require.Equal(t, kvEvents[0].CRTs, events[0].GetCommitTs())
 		require.Equal(t, kvEvents[0].CRTs, lastCommitTs)
 
-		// appendRemainingDDLs should only return resolvedTs event
+		// resolveDDLEvents should only return resolvedTs event
 		endTs := uint64(200)
-		remainingEvents := merger.appendRemainingDDLs(endTs)
+		remainingEvents := merger.resolveDDLEvents(endTs)
 		require.Equal(t, 1, len(remainingEvents))
 		require.Equal(t, pevent.TypeResolvedEvent, remainingEvents[0].GetType())
 		require.Equal(t, endTs, remainingEvents[0].GetCommitTs())
@@ -1028,9 +1028,9 @@ func TestEventMerger(t *testing.T) {
 		require.Equal(t, pevent.TypeBatchDMLEvent, events2[2].GetType())
 		require.Equal(t, kvEvents1[0].CRTs+50, events2[2].GetCommitTs())
 
-		// Test appendRemainingDDLs, should only return resolvedTs (all DDLs are processed)
+		// Test resolveDDLEvents, should only return resolvedTs (all DDLs are processed)
 		endTs := uint64(300)
-		remainingEvents := merger.appendRemainingDDLs(endTs)
+		remainingEvents := merger.resolveDDLEvents(endTs)
 		require.Equal(t, 1, len(remainingEvents))
 		require.Equal(t, pevent.TypeResolvedEvent, remainingEvents[0].GetType())
 		require.Equal(t, endTs, remainingEvents[0].GetCommitTs())
@@ -1064,7 +1064,7 @@ func TestEventMerger(t *testing.T) {
 
 		// Test endTs is exactly equal to some DDL's FinishedTs
 		endTs := uint64(200)
-		events1 := merger.appendRemainingDDLs(endTs)
+		events1 := merger.resolveDDLEvents(endTs)
 		require.Equal(t, 3, len(events1)) // DDL2 + DDL3 + ResolvedEvent
 		require.Equal(t, pevent.TypeDDLEvent, events1[0].GetType())
 		require.Equal(t, uint64(100), events1[0].GetCommitTs())
@@ -1076,7 +1076,7 @@ func TestEventMerger(t *testing.T) {
 		// Recreate merger to test endTs is less than all DDLs
 		merger2 := newEventMerger(ddlEvents, dispatcherID, 0)
 		endTs2 := uint64(50)
-		events2 := merger2.appendRemainingDDLs(endTs2)
+		events2 := merger2.resolveDDLEvents(endTs2)
 		require.Equal(t, 1, len(events2)) // Only ResolvedEvent
 		require.Equal(t, pevent.TypeResolvedEvent, events2[0].GetType())
 		require.Equal(t, endTs2, events2[0].GetCommitTs())
@@ -1084,7 +1084,7 @@ func TestEventMerger(t *testing.T) {
 		// Recreate merger to test endTs is greater than all DDLs
 		merger3 := newEventMerger(ddlEvents, dispatcherID, 0)
 		endTs3 := uint64(500)
-		events3 := merger3.appendRemainingDDLs(endTs3)
+		events3 := merger3.resolveDDLEvents(endTs3)
 		require.Equal(t, 4, len(events3)) // all DDLs + ResolvedEvent
 		require.Equal(t, pevent.TypeDDLEvent, events3[0].GetType())
 		require.Equal(t, uint64(100), events3[0].GetCommitTs())
