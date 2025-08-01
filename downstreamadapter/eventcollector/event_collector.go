@@ -36,18 +36,38 @@ import (
 
 const (
 	receiveChanSize = 1024 * 8
-	retryLimit      = 3 // The maximum number of retries for sending dispatcher requests and heartbeats.
+	retryQuota      = 5 // The number of retries for most droppable dispatcher requests.
 )
 
 // DispatcherMessage is the message send to EventService.
 type DispatcherMessage struct {
-	Message    *messaging.TargetMessage
-	RetryCount int
+	Message *messaging.TargetMessage
+	// Droppable indicates whether the message can be dropped after repeated delivery failures.
+	//
+	// This is based on the assumption that:
+	// - Most dispatcher requests target local event services (safe to retry indefinitely)
+	// - Remote requests can be dropped (system can progress without them, may cause temporary delays)
+	//
+	// Why not retry all messages indefinitely?
+	// Permanently unavailable remote targets would cause messages
+	// to accumulate in the queue permanently.
+	//
+	// TODO: Implement application-level retry logic for better architectural flexibility.
+	Droppable  bool
+	RetryQuota int
 }
 
-func (d *DispatcherMessage) incrAndCheckRetry() bool {
-	d.RetryCount++
-	return d.RetryCount < retryLimit
+func newDispatcherMessage(msg *messaging.TargetMessage, droppable bool) DispatcherMessage {
+	return DispatcherMessage{
+		Message:    msg,
+		Droppable:  droppable,
+		RetryQuota: retryQuota,
+	}
+}
+
+func (d *DispatcherMessage) decrAndCheckRetry() bool {
+	d.RetryQuota--
+	return d.RetryQuota > 0
 }
 
 /*
@@ -227,9 +247,10 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 // Messages may be dropped if errors occur. For reliable delivery, implement retry/ack logic at caller side
 func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
 	if msg != nil {
-		c.dispatcherMessageChan.In() <- DispatcherMessage{
-			Message:    msg,
-			RetryCount: 0,
+		if msg.To == c.serverId {
+			c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, false)
+		} else {
+			c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, true)
 		}
 	}
 }
@@ -314,7 +335,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 				log.Info("failed to send dispatcher request message, try again later",
 					zap.String("message", req.Message.String()),
 					zap.Error(err))
-				if !req.incrAndCheckRetry() {
+				if !req.decrAndCheckRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
 						zap.String("message", req.Message.String()))
 					continue
