@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -335,8 +336,14 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 		case req := <-c.dispatcherMessageChan.Out():
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
+				sleepInterval := 10 * time.Millisecond
+				// if the error is Congested, sleep a larger interval
+				if appErr, ok := err.(apperror.AppError); ok && appErr.Type == apperror.ErrorTypeMessageCongested {
+					sleepInterval = 1 * time.Second
+				}
 				log.Info("failed to send dispatcher request message, try again later",
 					zap.String("message", req.Message.String()),
+					zap.Duration("sleepInterval(s)", sleepInterval),
 					zap.Error(err))
 				if !req.decrAndCheckRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
@@ -347,7 +354,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 				c.dispatcherMessageChan.In() <- req
 				// Sleep a short time to avoid too many requests in a short time.
 				// TODO: requests can to different EventService, so we should improve the logic here.
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(sleepInterval)
 			}
 		}
 	}
