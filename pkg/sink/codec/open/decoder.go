@@ -494,7 +494,6 @@ func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 		data := collectAllColumnsValue(value.Delete, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
-		result.RowKeys = append(result.RowKeys, []byte{})
 	} else if len(value.Update) != 0 && len(value.PreColumns) != 0 {
 		previous := collectAllColumnsValue(value.PreColumns, columns)
 		data := collectAllColumnsValue(value.Update, columns)
@@ -507,13 +506,10 @@ func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
-		result.RowKeys = append(result.RowKeys, []byte{})
-		result.RowKeys = append(result.RowKeys, []byte{})
 	} else if len(value.Update) != 0 {
 		data := collectAllColumnsValue(value.Update, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
-		result.RowKeys = append(result.RowKeys, []byte{})
 	} else {
 		log.Panic("unknown event type")
 	}
