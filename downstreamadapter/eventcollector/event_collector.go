@@ -548,7 +548,7 @@ func (c *congestionController) Acknowledge(from node.ID, item *event.BatchDMLEve
 }
 
 const (
-	quotaUnit               = 1024 * 1024      // 1MB
+	quotaUnit               = 1024 * 1024 * 4  // 1MB
 	quotaSlowStartThreshold = 1024 * 1024 * 16 // 32MB
 	quotaHighThreshold      = 1024 * 1024 * 64 // 64MB
 )
@@ -566,20 +566,21 @@ func newSlidingWindow() *slidingWindow {
 
 func (s *slidingWindow) next(available int64) int64 {
 	s.confirmed = 0
-	if s.requested >= available {
-		s.requested = quotaUnit
-		return s.requested
-	}
 
-	if s.requested >= quotaHighThreshold {
-		s.requested /= 2
-	}
-
-	if s.requested < quotaSlowStartThreshold {
-		s.requested *= 2
-	} else {
-		s.requested += quotaUnit
-	}
+	//if s.requested >= available {
+	//	s.requested = quotaUnit
+	//	return s.requested
+	//}
+	//
+	//if s.requested >= quotaHighThreshold {
+	//	s.requested /= 2
+	//}
+	//
+	//if s.requested < quotaSlowStartThreshold {
+	//	s.requested *= 2
+	//} else {
+	//	s.requested += quotaUnit
+	//}
 	return s.requested
 }
 
