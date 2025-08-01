@@ -343,7 +343,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 				}
 				log.Info("failed to send dispatcher request message, try again later",
 					zap.String("message", req.Message.String()),
-					zap.Duration("sleepInterval(s)", sleepInterval),
+					zap.Duration("sleepInterval", sleepInterval),
 					zap.Error(err))
 				if !req.decrAndCheckRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
