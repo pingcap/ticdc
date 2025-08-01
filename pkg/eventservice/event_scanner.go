@@ -220,16 +220,14 @@ func (s *eventScanner) scanAndMergeEvents(
 				return nil, false, nil
 			}
 
+			if err := processor.flushCurrentTxn(); err != nil {
+				return nil, false, err
+			}
 			s.tryFlushBatch(merger, processor, session, rawEvent, tableInfo)
 
-			var nBytes int64
-			for _, item := range session.events {
-				nBytes += item.GetSize()
-			}
-			if checker.checkLimits(nBytes) {
+			if checker.checkLimits(session.eventBytes) {
 				return s.interruptScan(session, merger, processor)
 			}
-
 			s.startNewTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
 		}
 
@@ -241,6 +239,7 @@ func (s *eventScanner) scanAndMergeEvents(
 				zap.Uint64("commitTs", rawEvent.CRTs))
 			return nil, false, err
 		}
+
 	}
 }
 
@@ -550,14 +549,12 @@ func (p *dmlProcessor) startNewTxn(
 }
 
 func (p *dmlProcessor) flushCurrentTxn() error {
-	if p.currentDML != nil && len(p.insertRowCache) > 0 {
-		for _, insertRow := range p.insertRowCache {
-			// currentDML and batchDML share the same chunk.
-			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
-				return err
-			}
-		}
-		p.insertRowCache = make([]*common.RawKVEntry, 0)
+	if p.currentDML == nil {
+		log.Panic("no current DML event to flush")
+	}
+	err := p.clearCache()
+	if err != nil {
+		return err
 	}
 	p.currentDML = nil
 	return nil
