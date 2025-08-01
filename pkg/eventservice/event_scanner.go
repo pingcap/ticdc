@@ -219,13 +219,13 @@ func (s *eventScanner) scanAndMergeEvents(
 				return nil, false, nil
 			}
 
-			if err := processor.flushCurrentTxn(); err != nil {
+			if err = processor.flushCurrentTxn(); err != nil {
 				return nil, false, err
 			}
 			s.tryFlushBatch(merger, processor, session, rawEvent, tableInfo)
 
-			// todo: this is buggy.
-			if time.Since(session.startTime) > session.limit.timeout || session.eventBytes > session.limit.maxDMLBytes {
+			if (session.eventBytes+processor.batchDML.GetSize()) > session.limit.maxDMLBytes ||
+				time.Since(session.startTime) > session.limit.timeout {
 				return s.interruptScan(session, merger, processor)
 			}
 			s.startNewTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
@@ -292,9 +292,11 @@ func (s *eventScanner) tryFlushBatch(
 	tableInfo *common.TableInfo,
 ) {
 	resolvedBatch := processor.getResolvedBatchDML()
-
+	if resolvedBatch == nil {
+		return
+	}
 	// Check if batch should be flushed
-	tableUpdated := resolvedBatch != nil && resolvedBatch.TableInfo.UpdateTS() != tableInfo.UpdateTS()
+	tableUpdated := resolvedBatch.TableInfo.UpdateTS() != tableInfo.UpdateTS()
 	hasNewDDL := merger.hasMoreDDLs(rawEvent.CRTs)
 	if hasNewDDL || tableUpdated {
 		events := merger.appendDMLEvent(resolvedBatch, &session.lastCommitTs)
@@ -340,6 +342,7 @@ func (s *eventScanner) interruptScan(
 	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
+	newCommitTs uint64,
 ) ([]event.Event, bool, error) {
 	if err := processor.clearCache(); err != nil {
 		return nil, false, err
@@ -352,6 +355,9 @@ func (s *eventScanner) interruptScan(
 	remainingEvents := merger.resolveDDLEvents(session.lastCommitTs)
 	session.appendEvents(remainingEvents)
 
+	if newCommitTs != session.lastCommitTs {
+		events = append(events, event.NewResolvedEvent(session.lastCommitTs, merger.dispatcherID, merger.epoch))
+	}
 	return session.events, true, nil
 }
 
@@ -474,7 +480,6 @@ func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent, lastCommitTs *uin
 // resolveDDLEvents return all remaining DDL events up to endTs
 func (m *eventMerger) resolveDDLEvents(endTs uint64) []event.Event {
 	events := m.popDDLEvents(endTs)
-	events = append(events, event.NewResolvedEvent(endTs, m.dispatcherID, m.epoch))
 	return events
 }
 

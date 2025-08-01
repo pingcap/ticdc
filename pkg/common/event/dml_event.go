@@ -241,8 +241,8 @@ func (b *BatchDMLEvent) IsPaused() bool {
 // Len returns the number of DML events in the batch.
 func (b *BatchDMLEvent) Len() int32 {
 	var length int32
-	for _, dml := range b.DMLEvents {
-		length += dml.Len()
+	for _, item := range b.DMLEvents {
+		length += item.Len()
 	}
 	return length
 }
