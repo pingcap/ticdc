@@ -107,23 +107,29 @@ func newEventScanner(
 // - events: The scanned events in commitTs order
 // - isBroken: true if the scan was interrupted due to reaching a limit, false otherwise
 // - error: Any error that occurred during the scan operation
-func (s *eventScanner) scan(ctx context.Context, dispatcherStat *dispatcherStat, dataRange common.DataRange, limit scanLimit) ([]pevent.Event, bool, error) {
+func (s *eventScanner) scan(
+	ctx context.Context,
+	dispatcherStat *dispatcherStat,
+	dataRange common.DataRange,
+	limit scanLimit,
+) ([]pevent.Event, bool, error) {
 	// Initialize scan session
 	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
+
 	// Fetch DDL events
-	ddlEvents, err := s.fetchDDLEvents(dispatcherStat, dataRange)
+	ddlEvents, err := s.fetchDDLEvents(sess)
 	if err != nil {
 		return nil, false, err
 	}
 
 	// Get event iterator
-	iter, err := s.getEventIterator(dispatcherStat, dataRange)
+	iter, err := s.getEventIterator(sess)
 	if err != nil {
 		return nil, false, err
 	}
 	if iter == nil {
-		return s.handleEmptyIterator(ddlEvents, dispatcherStat, dataRange), false, nil
+		return s.handleEmptyIterator(ddlEvents, sess), false, nil
 	}
 	defer s.closeIterator(iter)
 
@@ -133,25 +139,26 @@ func (s *eventScanner) scan(ctx context.Context, dispatcherStat *dispatcherStat,
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
-func (s *eventScanner) fetchDDLEvents(
-	dispatcherStat *dispatcherStat, dataRange common.DataRange,
-) ([]pevent.DDLEvent, error) {
-	dispatcherID := dispatcherStat.info.GetID()
+func (s *eventScanner) fetchDDLEvents(session *session) ([]pevent.DDLEvent, error) {
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
-		dispatcherID, dataRange.Span.TableID, dispatcherStat.filter, dataRange.StartTs, dataRange.EndTs,
+		session.dispatcherStat.info.GetID(),
+		session.dataRange.Span.TableID,
+		session.dispatcherStat.filter,
+		session.dataRange.StartTs,
+		session.dataRange.EndTs,
 	)
 	if err != nil {
-		log.Error("get ddl events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+		log.Error("get ddl events failed", zap.Error(err), zap.Stringer("dispatcherID", session.dispatcherStat.id))
 		return nil, err
 	}
 	return ddlEvents, nil
 }
 
 // getEventIterator gets the event iterator for DML events
-func (s *eventScanner) getEventIterator(dispatcherStat *dispatcherStat, dataRange common.DataRange) (eventstore.EventIterator, error) {
-	iter, err := s.eventGetter.GetIterator(dispatcherStat.id, dataRange)
+func (s *eventScanner) getEventIterator(session *session) (eventstore.EventIterator, error) {
+	iter, err := s.eventGetter.GetIterator(session.dispatcherStat.id, session.dataRange)
 	if err != nil {
-		log.Error("read events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherStat.id))
+		log.Error("read events failed", zap.Error(err), zap.Stringer("dispatcherID", session.dispatcherStat.id))
 		return nil, err
 	}
 
@@ -159,9 +166,9 @@ func (s *eventScanner) getEventIterator(dispatcherStat *dispatcherStat, dataRang
 }
 
 // handleEmptyIterator handles the case when there are no DML events
-func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, dispatcherStat *dispatcherStat, dataRange common.DataRange) []event.Event {
-	merger := newEventMerger(ddlEvents, dispatcherStat.id, s.epoch)
-	events := merger.appendRemainingDDLs(dataRange.EndTs)
+func (s *eventScanner) handleEmptyIterator(ddlEvents []pevent.DDLEvent, session *session) []event.Event {
+	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
+	events := merger.appendRemainingDDLs(session.dataRange.EndTs)
 	return events
 }
 
@@ -195,15 +202,15 @@ func (s *eventScanner) scanAndMergeEvents(
 			return nil, false, nil
 		}
 
-		rawEntry, isNewTxn := iter.Next()
-		if rawEntry == nil {
+		rawEvent, isNewTxn := iter.Next()
+		if rawEvent == nil {
 			events, err := s.finalizeScan(session, merger, processor)
 			return events, false, err
 		}
 
-		session.observeRawEntry(rawEntry)
+		session.observeRawEntry(rawEvent)
 		if isNewTxn {
-			if err = s.handleNewTransaction(session, merger, processor, rawEntry, tableID); err != nil {
+			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
 				return nil, false, err
 			}
 			if checker.checkLimits(processor.batchDML.GetSize()) {
@@ -212,12 +219,12 @@ func (s *eventScanner) scanAndMergeEvents(
 			continue
 		}
 
-		if err = processor.appendRow(rawEntry); err != nil {
+		if err = processor.appendRow(rawEvent); err != nil {
 			log.Error("append row failed", zap.Error(err),
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
-				zap.Uint64("startTs", rawEntry.StartTs),
-				zap.Uint64("commitTs", rawEntry.CRTs))
+				zap.Uint64("startTs", rawEvent.StartTs),
+				zap.Uint64("commitTs", rawEvent.CRTs))
 			return nil, false, err
 		}
 	}
@@ -282,7 +289,6 @@ func (s *eventScanner) handleNewTransaction(
 		return err
 	}
 
-	session.lastStartTS = rawEvent.StartTs
 	session.lastCommitTs = rawEvent.CRTs
 	session.dmlCount++
 	return nil
@@ -337,7 +343,6 @@ type session struct {
 
 	// State tracking
 	startTime    time.Time
-	lastStartTS  uint64
 	lastCommitTs uint64
 
 	scannedBytes      int64
@@ -411,8 +416,8 @@ func newLimitChecker(maxBytes int64, timeout time.Duration, startTime time.Time)
 }
 
 // checkLimits returns true if any limit has been reached
-func (c *limitChecker) checkLimits(bytes int64) bool {
-	return bytes > c.maxBytes || time.Since(c.startTime) > c.timeout
+func (c *limitChecker) checkLimits(totalBytes int64) bool {
+	return totalBytes > c.maxBytes || time.Since(c.startTime) > c.timeout
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
@@ -582,16 +587,16 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		return err
 	}
 
-	if !shouldSplit {
-		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
+	if shouldSplit {
+		deleteRow, insertRow, err := rawEvent.SplitUpdate()
+		if err != nil {
+			return err
+		}
+		p.insertRowCache = append(p.insertRowCache, insertRow)
+		return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
 	}
 
-	deleteRow, insertRow, err := rawEvent.SplitUpdate()
-	if err != nil {
-		return err
-	}
-	p.insertRowCache = append(p.insertRowCache, insertRow)
-	return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
+	return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
 }
 
 // getCurrentBatch returns the current batch DML event

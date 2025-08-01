@@ -318,10 +318,8 @@ func (m AvailableMemory) GetSize() int {
 }
 
 type CongestionControl struct {
-	Version   byte
-	ClusterID uint64
-
-	changefeedCount uint32
+	Version         byte
+	ClusterID       uint64
 	AvailableMemory []AvailableMemory
 }
 
@@ -347,7 +345,7 @@ func (c *CongestionControl) Marshal() ([]byte, error) {
 	buf.WriteByte(c.Version)
 	_ = binary.Write(buf, binary.BigEndian, c.ClusterID)
 
-	_ = binary.Write(buf, binary.BigEndian, c.changefeedCount)
+	_ = binary.Write(buf, binary.BigEndian, len(c.AvailableMemory))
 	for _, item := range c.AvailableMemory {
 		data := item.Marshal()
 		buf.Write(data)
@@ -363,9 +361,9 @@ func (c *CongestionControl) Unmarshal(data []byte) error {
 		return err
 	}
 	c.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
-	c.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
-	c.AvailableMemory = make([]AvailableMemory, 0, c.changefeedCount)
-	for range c.changefeedCount {
+	length := binary.BigEndian.Uint32(buf.Next(4))
+	c.AvailableMemory = make([]AvailableMemory, 0, length)
+	for i := 0; i < int(length); i++ {
 		var item AvailableMemory
 		item.Unmarshal(buf.Next(item.GetSize()))
 		c.AvailableMemory = append(c.AvailableMemory, item)
@@ -374,6 +372,5 @@ func (c *CongestionControl) Unmarshal(data []byte) error {
 }
 
 func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64) {
-	c.changefeedCount++
 	c.AvailableMemory = append(c.AvailableMemory, NewAvailableMemory(gid, available))
 }
