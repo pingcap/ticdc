@@ -36,8 +36,8 @@ import (
 )
 
 const (
-	receiveChanSize = 1024 * 8
-	retryQuota      = 5 // The number of retries for most droppable dispatcher requests.
+	receiveChanSize     = 1024 * 8
+	commonMsgRetryQuota = 3 // The number of retries for most droppable dispatcher requests.
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -58,7 +58,7 @@ type DispatcherMessage struct {
 	RetryQuota int
 }
 
-func newDispatcherMessage(msg *messaging.TargetMessage, droppable bool) DispatcherMessage {
+func newDispatcherMessage(msg *messaging.TargetMessage, droppable bool, retryQuota int) DispatcherMessage {
 	return DispatcherMessage{
 		Message:    msg,
 		Droppable:  droppable,
@@ -247,14 +247,33 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 	c.dispatcherMap.Delete(target.GetId())
 }
 
+// isRepeatedMsgType returns true when the message is heartbeat like message.
+// this kind of message can be dropped quickly when send failure.
+func isRepeatedMsgType(msg *messaging.TargetMessage) bool {
+	// only handle len(msg.Message) == 1 for simplicity
+	if len(msg.Message) != 1 {
+		return false
+	}
+	switch msg.Message[0].(type) {
+	case *event.DispatcherHeartbeat:
+		return true
+	default:
+		return false
+	}
+}
+
 // Queues a message for sending (best-effort, no delivery guarantee)
 // Messages may be dropped if errors occur. For reliable delivery, implement retry/ack logic at caller side
 func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
 	if msg != nil {
-		if msg.To == c.serverId {
-			c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, false)
+		if isRepeatedMsgType(msg) {
+			c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, true, 1)
 		} else {
-			c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, true)
+			if msg.To == c.serverId {
+				c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, false, 0)
+			} else {
+				c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, true, commonMsgRetryQuota)
+			}
 		}
 	}
 }
