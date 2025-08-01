@@ -60,20 +60,26 @@ func NewTableProgress() *TableProgress {
 	}
 }
 
-// Add inserts a new event into the TableProgress.
-func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
+func getFinalCommitTs(event commonEvent.Event) uint64 {
 	commitTs := event.GetCommitTs()
 	if event.GetType() == commonEvent.TypeSyncPointEvent {
 		// if the event is a sync point event, we use the last commitTs(the largest commitTs in the event) to calculate the progress.
-		// because a sync point event with multiple commitTs means there is no ddl / dmls between these commitTses.
+		// because a sync point event with multiple commitTs means there is no ddl / dmls between these commitTs.
 		// So we can just use the largest commitTs in the sync point event to calculate the progress.
 		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
 		commitTs = commitTsList[len(commitTsList)-1]
 	}
+	return commitTs
+}
 
+// Add inserts a new event into the TableProgress.
+func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
+	commitTs := getFinalCommitTs(event)
 	ts := Ts{startTs: event.GetStartTs(), commitTs: commitTs}
+
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
+
 	elem := p.list.PushBack(ts)
 	p.elemMap[ts] = elem
 	p.maxCommitTs = commitTs
@@ -84,8 +90,8 @@ func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
 
 // Remove deletes an event from the TableProgress.
 // Note: Consider implementing batch removal in the future if needed.
-func (p *TableProgress) Remove(event commonEvent.Event) {
-	ts := Ts{startTs: event.GetStartTs(), commitTs: event.GetCommitTs()}
+func (p *TableProgress) Remove(event commonEvent.FlushableEvent) {
+	ts := Ts{startTs: event.GetStartTs(), commitTs: getFinalCommitTs(event)}
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 
@@ -104,19 +110,11 @@ func (p *TableProgress) Empty() bool {
 }
 
 // Pass updates the maxCommitTs with the given event's commit timestamp.
-func (p *TableProgress) Pass(event commonEvent.BlockEvent) {
+func (p *TableProgress) Pass(event commonEvent.FlushableEvent) {
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 
-	p.maxCommitTs = event.GetCommitTs()
-
-	if event.GetType() == commonEvent.TypeSyncPointEvent {
-		// if the event is a sync point event, we use the last commitTs(the largest commitTs in the event) to calculate the progress.
-		// because a sync point event with multiple commitTs means there is no ddl / dmls between these commitTses.
-		// So we can just use the largest commitTs in the sync point event to calculate the progress.
-		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
-		p.maxCommitTs = commitTsList[len(commitTsList)-1]
-	}
+	p.maxCommitTs = getFinalCommitTs(event)
 }
 
 // GetCheckpointTs returns the current checkpoint timestamp for the table span.

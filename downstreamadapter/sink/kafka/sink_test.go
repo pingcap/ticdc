@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -81,8 +82,8 @@ func newKafkaSinkForTest() (*sink, error) {
 		statistics:    statistics,
 
 		checkpointChan: make(chan uint64, 16),
-		eventChan:      make(chan *commonEvent.DMLEvent, 32),
-		rowChan:        make(chan *commonEvent.MQRowEvent, 32),
+		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		rowChan:        chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
 
 		isNormal: atomic.NewBool(true),
 		ctx:      ctx,
