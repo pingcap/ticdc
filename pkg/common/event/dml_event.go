@@ -431,7 +431,10 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		t.checksumOffset++
 	}
 	rowType := t.RowTypes[t.offset]
-	rowKey := t.RowKeys[t.offset]
+	var rowKey []byte
+	if len(t.RowKeys) > t.offset {
+		rowKey = t.RowKeys[t.offset]
+	}
 	switch rowType {
 	case RowTypeInsert:
 		row := RowChange{
