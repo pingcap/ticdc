@@ -342,9 +342,8 @@ type session struct {
 	limit          scanLimit
 
 	// State tracking
-	startTime    time.Time
-	lastCommitTs uint64
-
+	startTime         time.Time
+	lastCommitTs      uint64
 	scannedBytes      int64
 	scannedEntryCount int
 	// dmlCount is the count of transactions.

@@ -460,8 +460,11 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
 		eventServiceID := stat.connState.getEventServiceID()
-		changefeedID := stat.target.GetChangefeedID()
+		if eventServiceID == "" {
+			return true
+		}
 
+		changefeedID := stat.target.GetChangefeedID()
 		holder, ok := proportions[changefeedID]
 		if !ok {
 			holder = make(map[node.ID]uint64, len(availables))
