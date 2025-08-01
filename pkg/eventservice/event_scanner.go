@@ -193,6 +193,7 @@ func (s *eventScanner) scanAndMergeEvents(
 	checker := newLimitChecker(session.limit.maxDMLBytes, session.limit.timeout, session.startTime)
 
 	tableID := session.dataRange.Span.TableID
+	dispatcher := session.dispatcherStat
 	for {
 		shouldStop, err := s.checkScanConditions(session)
 		if err != nil {
@@ -210,11 +211,23 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		session.observeRawEntry(rawEvent)
 		if isNewTxn {
-			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
+			tableInfo, err := s.getTableInfo4Txn(dispatcher, tableID, rawEvent.CRTs-1)
+			if err != nil {
 				return nil, false, err
 			}
+			if tableInfo == nil {
+				log.Warn("table info not found, skipping event", zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID))
+				return nil, false, nil
+			}
+
+			s.flushPrevTxn(merger, processor, session, rawEvent, tableInfo)
+
 			if checker.checkLimits(processor.batchDML.GetSize()) {
 				return s.interruptScan(session, merger, processor)
+			}
+
+			if err := s.startNewTxn(session, processor, rawEvent, tableInfo, tableID); err != nil {
+				return nil, false, err
 			}
 			continue
 		}
@@ -245,37 +258,41 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 	return false, nil
 }
 
-// handleNewTransaction processes a new transaction event, and append the rawEvent to it.
-func (s *eventScanner) handleNewTransaction(
-	session *session,
-	merger *eventMerger,
-	processor *dmlProcessor,
-	rawEvent *common.RawKVEntry,
-	tableID int64,
-) error {
-	dispatcher := session.dispatcherStat
-	// Get table info
-	tableInfo, err := s.schemaGetter.GetTableInfo(tableID, rawEvent.CRTs-1)
-	if err != nil {
-		errorHandler := newErrorHandler(dispatcher.id)
-		shouldReturn, returnErr := errorHandler.handleSchemaError(err, dispatcher)
-		if shouldReturn {
-			if returnErr != nil {
-				log.Error("get table info failed, unknown reason", zap.Error(err),
-					zap.Stringer("dispatcherID", dispatcher.id),
-					zap.Int64("tableID", tableID),
-					zap.Uint64("getTableInfoStartTs", rawEvent.CRTs-1))
-				return returnErr
-			}
-			// For table deleted case, we need to append remaining DDLs
-			if errors.Is(err, &schemastore.TableDeletedError{}) {
-				remainingEvents := merger.appendRemainingDDLs(session.dataRange.EndTs)
-				session.events = append(session.events, remainingEvents...)
-			}
-			return nil
-		}
+func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
+	tableInfo, err := s.schemaGetter.GetTableInfo(tableID, ts)
+	if err == nil {
+		return tableInfo, nil
 	}
 
+	if dispatcher.isRemoved.Load() {
+		log.Warn("get table info failed, since the dispatcher is removed",
+			zap.Stringer("dispatcherID", dispatcher.id),
+			zap.Int64("tableID", tableID), zap.Uint64("ts", ts), zap.Error(err))
+		return nil, nil
+	}
+
+	if errors.Is(err, &schemastore.TableDeletedError{}) {
+		log.Warn("get table info failed, since the table is deleted", zap.Error(err),
+			zap.Stringer("dispatcherID", dispatcher.id),
+			zap.Int64("tableID", tableID),
+			zap.Uint64("getTableInfoStartTs", ts))
+		return nil, nil
+	}
+
+	log.Error("get table info failed, unknown reason", zap.Error(err),
+		zap.Stringer("dispatcherID", dispatcher.id),
+		zap.Int64("tableID", tableID),
+		zap.Uint64("ts", ts))
+	return nil, err
+}
+
+func (s *eventScanner) flushPrevTxn(
+	merger *eventMerger,
+	processor *dmlProcessor,
+	session *session,
+	rawEvent *common.RawKVEntry,
+	tableInfo *common.TableInfo,
+) {
 	// Check if batch should be flushed
 	hasNewDDL := merger.hasMoreDDLs() && rawEvent.CRTs > merger.nextDDLFinishedTs()
 	if processor.shouldFlushBatch(tableInfo.UpdateTS(), hasNewDDL) {
@@ -283,9 +300,17 @@ func (s *eventScanner) handleNewTransaction(
 		session.events = append(session.events, events...)
 		processor.flushBatch(tableInfo.UpdateTS())
 	}
+}
 
+func (s *eventScanner) startNewTxn(
+	session *session,
+	processor *dmlProcessor,
+	rawEvent *common.RawKVEntry,
+	tableInfo *common.TableInfo,
+	tableID int64,
+) error {
 	// Process new transaction
-	if err = processor.processNewTransaction(rawEvent, tableID, tableInfo, dispatcher.id); err != nil {
+	if err := processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id); err != nil {
 		return err
 	}
 
@@ -612,31 +637,4 @@ func (p *dmlProcessor) shouldFlushBatch(tableInfoUpdateTs uint64, hasNewDDL bool
 func (p *dmlProcessor) flushBatch(tableInfoUpdateTs uint64) {
 	p.lastTableInfoUpdateTs = tableInfoUpdateTs
 	p.batchDML = pevent.NewBatchDMLEvent()
-}
-
-// errorHandler manages error handling for different scenarios
-type errorHandler struct {
-	dispatcherID common.DispatcherID
-}
-
-// newErrorHandler creates a new error handler
-func newErrorHandler(dispatcherID common.DispatcherID) *errorHandler {
-	return &errorHandler{
-		dispatcherID: dispatcherID,
-	}
-}
-
-// handleSchemaError handles schema-related errors
-func (h *errorHandler) handleSchemaError(err error, dispatcherStat *dispatcherStat) (shouldReturn bool, returnErr error) {
-	if dispatcherStat.isRemoved.Load() {
-		log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err), zap.Stringer("dispatcherID", h.dispatcherID))
-		return true, nil
-	}
-
-	if errors.Is(err, &schemastore.TableDeletedError{}) {
-		log.Warn("get table info failed, since the table is deleted", zap.Error(err), zap.Stringer("dispatcherID", h.dispatcherID))
-		return true, nil
-	}
-
-	return true, err
 }
