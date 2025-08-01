@@ -153,10 +153,15 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 	for {
 		var err error
 		gcSafePoint, err = gc.SetServiceGCSafepoint(ctx, p.pdCli, "cdc-new-store", 0, 0)
-		if err != nil {
-			log.Warn("get ts failed", zap.Error(err))
-		} else {
+		if err == nil {
 			break
+		}
+
+		log.Warn("get ts failed, will retry in 1s", zap.Error(err))
+		select {
+		case <-ctx.Done():
+			log.Panic("context is canceled during getting gc safepoint", zap.Error(ctx.Err()))
+		case <-time.After(time.Second):
 		}
 	}
 
