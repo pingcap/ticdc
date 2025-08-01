@@ -189,7 +189,6 @@ func (s *eventScanner) scanAndMergeEvents(
 ) ([]event.Event, bool, error) {
 	merger := newEventMerger(ddlEvents, session.dispatcherStat.id, s.epoch)
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
-	checker := newLimitChecker(session.limit.maxDMLBytes, session.limit.timeout, session.startTime)
 
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
@@ -225,7 +224,8 @@ func (s *eventScanner) scanAndMergeEvents(
 			}
 			s.tryFlushBatch(merger, processor, session, rawEvent, tableInfo)
 
-			if checker.checkLimits(session.eventBytes) {
+			// todo: this is buggy.
+			if time.Since(session.startTime) > session.limit.timeout || session.eventBytes > session.limit.maxDMLBytes {
 				return s.interruptScan(session, merger, processor)
 			}
 			s.startNewTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
@@ -298,7 +298,7 @@ func (s *eventScanner) tryFlushBatch(
 	if hasNewDDL || tableUpdated {
 		events := merger.appendDMLEvent(resolvedBatch, &session.lastCommitTs)
 		session.appendEvents(events)
-		processor.batchDML = nil
+		processor.resetBatchDML()
 	}
 }
 
@@ -422,27 +422,6 @@ func (s *session) appendEvents(events []event.Event) {
 		nBytes += item.GetSize()
 	}
 	s.eventBytes += nBytes
-}
-
-// limitChecker manages scan limits and interruption logic
-type limitChecker struct {
-	maxBytes  int64
-	timeout   time.Duration
-	startTime time.Time
-}
-
-// newLimitChecker creates a new limit checker
-func newLimitChecker(maxBytes int64, timeout time.Duration, startTime time.Time) *limitChecker {
-	return &limitChecker{
-		maxBytes:  maxBytes,
-		timeout:   timeout,
-		startTime: startTime,
-	}
-}
-
-// checkLimits returns true if any limit has been reached
-func (c *limitChecker) checkLimits(totalBytes int64) bool {
-	return totalBytes > c.maxBytes || time.Since(c.startTime) > c.timeout
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
@@ -614,6 +593,10 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 // getResolvedBatchDML returns the current batch DML event
 func (p *dmlProcessor) getResolvedBatchDML() *event.BatchDMLEvent {
 	return p.batchDML
+}
+
+func (p *dmlProcessor) resetBatchDML() {
+	p.batchDML = nil
 }
 
 func (p *dmlProcessor) clearCache() error {
