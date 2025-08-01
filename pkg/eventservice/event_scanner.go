@@ -108,6 +108,9 @@ func newEventScanner(
 // - isBroken: true if the scan was interrupted due to reaching a limit, false otherwise
 // - error: Any error that occurred during the scan operation
 func (s *eventScanner) scan(ctx context.Context, dispatcherStat *dispatcherStat, dataRange common.DataRange, limit scanLimit) ([]pevent.Event, bool, error) {
+	// Initialize scan session
+	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
+	defer sess.recordMetrics()
 	// Fetch DDL events
 	ddlEvents, err := s.fetchDDLEvents(dispatcherStat, dataRange)
 	if err != nil {
@@ -125,10 +128,6 @@ func (s *eventScanner) scan(ctx context.Context, dispatcherStat *dispatcherStat,
 	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
-	// Initialize scan session
-	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
-	defer sess.recordMetrics()
-
 	events, interrupted, err := s.scanAndMergeEvents(sess, ddlEvents, iter)
 	return events, interrupted, err
 }
