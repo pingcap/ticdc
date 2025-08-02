@@ -220,15 +220,15 @@ func (s *eventScanner) scanAndMergeEvents(
 				return nil, false, nil
 			}
 
-			if err = processor.commitTxn(); err != nil {
+			if err = s.commitTxn(session, merger, processor, rawEvent.CRTs, tableInfo.UpdateTS()); err != nil {
 				return nil, false, err
 			}
-			s.tryFlushBatch(merger, processor, session, rawEvent, tableInfo)
 
 			if session.limitCheck(processor.batchDML.GetSize()) {
 				return s.interruptScan(session, merger, processor, rawEvent.CRTs)
 			}
-			s.startNewTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
+
+			s.startTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
 		}
 
 		if err = processor.appendRow(rawEvent); err != nil {
@@ -283,28 +283,7 @@ func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int6
 	return nil, err
 }
 
-func (s *eventScanner) tryFlushBatch(
-	merger *eventMerger,
-	processor *dmlProcessor,
-	session *session,
-	rawEvent *common.RawKVEntry,
-	tableInfo *common.TableInfo,
-) {
-	resolvedBatch := processor.getResolvedBatchDML()
-	if resolvedBatch == nil {
-		return
-	}
-	// Check if batch should be flushed
-	tableUpdated := resolvedBatch.TableInfo.UpdateTS() != tableInfo.UpdateTS()
-	hasNewDDL := merger.hasMoreDDLs(rawEvent.CRTs)
-	if hasNewDDL || tableUpdated {
-		events := merger.appendDMLEvent(resolvedBatch, &session.lastCommitTs)
-		session.appendEvents(events)
-		processor.resetBatchDML()
-	}
-}
-
-func (s *eventScanner) startNewTxn(
+func (s *eventScanner) startTxn(
 	session *session,
 	processor *dmlProcessor,
 	startTs, commitTs uint64,
@@ -314,6 +293,30 @@ func (s *eventScanner) startNewTxn(
 	processor.startTxn(session.dispatcherStat.id, tableID, tableInfo, startTs, commitTs)
 	session.lastCommitTs = commitTs
 	session.dmlCount++
+}
+
+func (s *eventScanner) commitTxn(
+	session *session,
+	merger *eventMerger,
+	processor *dmlProcessor,
+	untilTs, updateTs uint64,
+) error {
+	if err := processor.commitTxn(); err != nil {
+		return err
+	}
+	resolvedBatch := processor.getResolvedBatchDML()
+	if resolvedBatch == nil {
+		return nil
+	}
+	// Check if batch should be flushed
+	tableUpdated := resolvedBatch.TableInfo.UpdateTS() != updateTs
+	hasNewDDL := merger.hasMoreDDLs(untilTs)
+	if hasNewDDL || tableUpdated {
+		events := merger.appendDMLEvent(resolvedBatch, &session.lastCommitTs)
+		session.appendEvents(events)
+		processor.resetBatchDML()
+	}
+	return nil
 }
 
 // finalizeScan finalizes the scan when all events have been processed
@@ -593,6 +596,7 @@ func (p *dmlProcessor) getResolvedBatchDML() *event.BatchDMLEvent {
 	return p.batchDML
 }
 
+// this should be called after the previous batchDML is flushed.
 func (p *dmlProcessor) resetBatchDML() {
-	p.batchDML = nil
+	p.batchDML = event.NewBatchDMLEvent()
 }
