@@ -513,8 +513,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.Equal(t, resolvedTs, e.GetCommitTs())
 }
 
-// TestDMLProcessorProcessNewTransaction tests the processNewTransaction method of dmlProcessor
-func TestDMLProcessorProcessNewTransaction(t *testing.T) {
+// TestDMLProcessor tests the processNewTransaction method of dmlProcessor
+func TestDMLProcessor(t *testing.T) {
 	// Setup helper and table info
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -597,43 +597,28 @@ func TestDMLProcessorProcessNewTransaction(t *testing.T) {
 		}
 		processor.insertRowCache = append(processor.insertRowCache, insertRow1, insertRow2)
 
-		// Process second transaction
-		secondEvent := kvEvents[1]
-		err = processor.processNewTransaction(secondEvent, tableID, tableInfo, dispatcherID)
-		require.NoError(t, err)
-
+		processor.commitTxn()
 		// Verify that insert cache has been processed and cleared
 		require.Empty(t, processor.insertRowCache)
+		require.Equal(t, 1, len(processor.batchDML.DMLEvents))
+		require.Equal(t, 2, processor.batchDML.Len())
+
+		// Process second transaction
+		secondEvent := kvEvents[1]
+		processor.startTxn(dispatcherID, tableID, tableInfo, secondEvent.StartTs, secondEvent.CRTs)
 
 		// Verify new DML event was created for second transaction
 		require.NotNil(t, processor.currentDML)
 		require.Equal(t, secondEvent.StartTs, processor.currentDML.GetStartTs())
 		require.Equal(t, secondEvent.CRTs, processor.currentDML.GetCommitTs())
 
+		processor.commitTxn()
 		// Verify batch now contains two DML events
 		require.Equal(t, 2, len(processor.batchDML.DMLEvents))
 		require.Equal(t, int32(4), processor.batchDML.Len())
 	})
 
-	// Test case 3: Process transaction with different table info
-	t.Run("TransactionWithDifferentTableInfo", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
-
-		// Create a different table info by cloning and using it directly
-		// (In real scenarios, this would come from schema store with different updateTS)
-		differentTableInfo := tableInfo
-
-		rawEvent := kvEvents[0]
-		err := processor.processNewTransaction(rawEvent, tableID, differentTableInfo, dispatcherID)
-		require.NoError(t, err)
-
-		// Verify that the DML event uses the correct table info
-		require.NotNil(t, processor.currentDML)
-		require.Equal(t, differentTableInfo, processor.currentDML.TableInfo)
-		require.Equal(t, differentTableInfo.UpdateTS(), processor.currentDML.TableInfo.UpdateTS())
-	})
-
-	// Test case 4: Multiple consecutive transactions
+	// Test case 3: Multiple consecutive transactions
 	t.Run("ConsecutiveTransactions", func(t *testing.T) {
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
 
