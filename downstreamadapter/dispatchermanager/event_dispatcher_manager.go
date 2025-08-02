@@ -218,6 +218,10 @@ func NewEventDispatcherManager(
 		defer manager.wg.Done()
 		err = manager.sink.Run(ctx)
 		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+			log.Error("sink run failed",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Error(err),
+			)
 			select {
 			case <-ctx.Done():
 				return

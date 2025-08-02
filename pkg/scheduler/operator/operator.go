@@ -60,4 +60,7 @@ type Operator[T replica.ReplicationID, S replica.ReplicationStatus] interface {
 	OnTaskRemoved()
 	// String returns the string representation of the operator
 	String() string
+	// BlockTsForward returns true if the global checkpointTs should be blocked by the operator
+	// BlockTsForward is not thread safe, so you should obtain lock before calling this method
+	BlockTsForward() bool
 }

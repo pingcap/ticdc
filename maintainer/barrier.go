@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"math"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -257,6 +258,18 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 		}
 	}
 	return msgs
+}
+
+// GetMinBlockedCheckpointTsForNewTables returns the minimum checkpoint ts for the new tables
+func (b *Barrier) GetMinBlockedCheckpointTsForNewTables() uint64 {
+	minCheckpointTs := uint64(math.MaxUint64)
+	b.blockedEvents.RangeWoLock(func(key eventKey, barrierEvent *BarrierEvent) bool {
+		if barrierEvent.hasNewTable && minCheckpointTs > barrierEvent.commitTs {
+			minCheckpointTs = barrierEvent.commitTs
+		}
+		return true
+	})
+	return minCheckpointTs
 }
 
 // ShouldBlockCheckpointTs returns ture if there is a block event need block the checkpoint ts forwarding
