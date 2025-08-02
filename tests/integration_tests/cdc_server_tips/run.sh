@@ -17,7 +17,9 @@ function prepare_tidb_cluster() {
 	cd $WORK_DIR
 
 	# record tso before we create tables to skip the system table DDLs
-	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+	# TODO tenfyzhong 2025-07-31 17:44:06 Can't get tsos from pd if the cdc
+	# server is not started on next gen cluster
+	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${GLOBAL_PD_PORT})
 
 	run_sql "CREATE table test.simple1(id int primary key, val int);"
 }
@@ -55,7 +57,7 @@ function try_to_run_cdc() {
 		;;
 	*) SINK_URI="mysql+ssl://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	create_changefeed --start-ts=$start_ts --sink-uri="$SINK_URI"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;

@@ -11,6 +11,7 @@ SINK_TYPE=$1
 function run_with_fast_create_table() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
+	stop_tidb_cluster --workdir $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
 
 	cd $WORK_DIR
@@ -29,7 +30,7 @@ function run_with_fast_create_table() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	create_changefeed --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -84,7 +85,7 @@ function run_without_fast_create_table() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI"
+	create_changefeed --sink-uri="$SINK_URI"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -104,6 +105,7 @@ function run_without_fast_create_table() {
 trap stop_tidb_cluster EXIT
 run_without_fast_create_table $*
 stop_tidb_cluster
+sleep 10
 run_with_fast_create_table $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

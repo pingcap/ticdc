@@ -4,9 +4,9 @@ set -eu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
-WORK_DIR=$OUT_DIR/$TEST_NAME
-CDC_BINARY=cdc.test
-SINK_TYPE=$1
+export WORK_DIR=$OUT_DIR/$TEST_NAME
+export CDC_BINARY=cdc.test
+export SINK_TYPE=$1
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
@@ -39,7 +39,7 @@ EOF
 	else
 		echo "" >$WORK_DIR/pulsar_test.toml
 	fi
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml
+	create_changefeed --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
