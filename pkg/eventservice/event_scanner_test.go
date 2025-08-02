@@ -580,6 +580,16 @@ func TestDMLProcessor(t *testing.T) {
 		firstEvent := kvEvents[0]
 		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs)
 
+		err := processor.appendRow(firstEvent)
+		require.NoError(t, err)
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+		// Verify that insert cache has been processed and cleared
+		require.Empty(t, processor.insertRowCache)
+		require.Equal(t, 1, len(processor.batchDML.DMLEvents))
+		require.Equal(t, int32(1), processor.batchDML.Len())
+
 		// Add some insert rows to cache (simulating split update)
 		insertRow1 := &common.RawKVEntry{
 			StartTs: firstEvent.StartTs,
@@ -595,13 +605,6 @@ func TestDMLProcessor(t *testing.T) {
 		}
 		processor.insertRowCache = append(processor.insertRowCache, insertRow1, insertRow2)
 
-		err := processor.commitTxn()
-		require.NoError(t, err)
-		// Verify that insert cache has been processed and cleared
-		require.Empty(t, processor.insertRowCache)
-		require.Equal(t, 1, len(processor.batchDML.DMLEvents))
-		require.Equal(t, int32(2), processor.batchDML.Len())
-
 		// Process second transaction
 		secondEvent := kvEvents[1]
 		processor.startTxn(dispatcherID, tableID, tableInfo, secondEvent.StartTs, secondEvent.CRTs)
@@ -611,8 +614,12 @@ func TestDMLProcessor(t *testing.T) {
 		require.Equal(t, secondEvent.StartTs, processor.currentDML.GetStartTs())
 		require.Equal(t, secondEvent.CRTs, processor.currentDML.GetCommitTs())
 
+		err = processor.appendRow(secondEvent)
+		require.NoError(t, err)
+
 		err = processor.commitTxn()
 		require.NoError(t, err)
+
 		// Verify batch now contains two DML events
 		require.Equal(t, 2, len(processor.batchDML.DMLEvents))
 		require.Equal(t, int32(4), processor.batchDML.Len())
@@ -747,14 +754,14 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 	mockSchemaGetter := newMockSchemaStore()
 	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
-	// Test case 1: appendRow when no current DML event exists - should return error
+	// Test case 1: appendRow before txn started, illegal usage.
 	t.Run("NoCurrentDMLEvent", func(t *testing.T) {
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
 		rawEvent := kvEvents[0]
 
-		err := processor.appendRow(rawEvent)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "no current DML event to append to")
+		require.Panics(t, func() {
+			_ = processor.appendRow(rawEvent)
+		})
 	})
 
 	// Test case 2: appendRow for insert operation (non-update)
