@@ -55,7 +55,6 @@ type eventScanner struct {
 	eventGetter  eventGetter
 	schemaGetter schemaGetter
 	mounter      event.Mounter
-	epoch        uint64
 }
 
 // newEventScanner creates a new EventScanner
@@ -63,13 +62,11 @@ func newEventScanner(
 	eventStore eventstore.EventStore,
 	schemaStore schemastore.SchemaStore,
 	mounter event.Mounter,
-	epoch uint64,
 ) *eventScanner {
 	return &eventScanner{
 		eventGetter:  eventStore,
 		schemaGetter: schemaStore,
 		mounter:      mounter,
-		epoch:        epoch,
 	}
 }
 
@@ -168,7 +165,7 @@ func (s *eventScanner) getEventIterator(session *session) (eventstore.EventItera
 func (s *eventScanner) handleEmptyIterator(ddlEvents []event.DDLEvent, session *session) []event.Event {
 	merger := newEventMerger(ddlEvents)
 	events := merger.resolveDDLEvents(session.dataRange.EndTs)
-	events = append(events, event.NewResolvedEvent(session.dataRange.EndTs, session.dispatcherStat.id, s.epoch))
+	events = append(events, event.NewResolvedEvent(session.dataRange.EndTs, session.dispatcherStat.id, session.epoch))
 	return events
 }
 
@@ -204,7 +201,7 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			events, err := s.finalizeScan(session, merger, processor)
+			events, err := finalizeScan(session, merger, processor)
 			return events, false, err
 		}
 
@@ -225,7 +222,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			}
 
 			if session.limitCheck(processor.batchDML.GetSize()) {
-				return s.interruptScan(session, merger, processor, rawEvent.CRTs)
+				return interruptScan(session, merger, processor, rawEvent.CRTs)
 			}
 
 			s.startTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
@@ -320,7 +317,7 @@ func (s *eventScanner) commitTxn(
 }
 
 // finalizeScan finalizes the scan when all events have been processed
-func (s *eventScanner) finalizeScan(
+func finalizeScan(
 	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
@@ -334,13 +331,13 @@ func (s *eventScanner) finalizeScan(
 
 	// Append remaining DDLs
 	remainingEvents := merger.resolveDDLEvents(session.dataRange.EndTs)
-	remainingEvents = append(remainingEvents, event.NewResolvedEvent(session.lastCommitTs, session.dispatcherStat.id, s.epoch))
+	remainingEvents = append(remainingEvents, event.NewResolvedEvent(session.lastCommitTs, session.dispatcherStat.id, session.epoch))
 	session.appendEvents(remainingEvents)
 	return session.events, nil
 }
 
 // interruptScan handles scan interruption due to limits
-func (s *eventScanner) interruptScan(
+func interruptScan(
 	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
@@ -356,7 +353,7 @@ func (s *eventScanner) interruptScan(
 	// Append DDLs up to last commit timestamp
 	remainingEvents := merger.resolveDDLEvents(session.lastCommitTs)
 	if newCommitTs != session.lastCommitTs {
-		remainingEvents = append(remainingEvents, event.NewResolvedEvent(session.lastCommitTs, session.dispatcherStat.id, s.epoch))
+		remainingEvents = append(remainingEvents, event.NewResolvedEvent(session.lastCommitTs, session.dispatcherStat.id, session.epoch))
 	}
 	session.appendEvents(remainingEvents)
 	return session.events, true, nil
@@ -367,8 +364,9 @@ type session struct {
 	ctx            context.Context
 	dispatcherStat *dispatcherStat
 	dataRange      common.DataRange
-	limit          scanLimit
+	epoch          uint64
 
+	limit scanLimit
 	// State tracking
 	startTime         time.Time
 	lastCommitTs      uint64
@@ -393,6 +391,7 @@ func (s *eventScanner) newSession(
 		ctx:            ctx,
 		dispatcherStat: dispatcherStat,
 		dataRange:      dataRange,
+		epoch:          dispatcherStat.epoch.Load(),
 		limit:          limit,
 		startTime:      time.Now(),
 		events:         make([]event.Event, 0),

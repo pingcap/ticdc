@@ -537,15 +537,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	scanner := newEventScanner(
-		c.eventStore,
-		c.schemaStore,
-		c.mounter,
-		task.epoch.Load(),
-	)
+	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
 	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
-		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
+		log.Error("scan events failed", zap.Stringer("dispatcher", task.id),
+			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()),
+			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
 
