@@ -403,7 +403,7 @@ func (m *mockSchemaStore) AppendDDLEvent(id common.TableID, ddls ...commonEvent.
 func (m *mockSchemaStore) GetTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	infos := m.TableInfo[tableID]
 	idx := sort.Search(len(infos), func(i int) bool {
-		return infos[i].UpdateTS() > uint64(ts)
+		return infos[i].UpdateTS() > ts
 	})
 	if idx == 0 {
 		return nil, nil

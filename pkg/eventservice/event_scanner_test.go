@@ -71,14 +71,14 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	defer helper.Close()
 	ddlEvent, _ := genEvents(helper, `create table test.t(id int primary key, c char(50))`)
 	mockSS.AppendDDLEvent(tableID, ddlEvent)
+	ts := ddlEvent.TableInfo.UpdateTS()
 
 	schemaStore := &schemaStoreWithErr{mockSchemaStore: mockSS}
 	scanner := newEventScanner(broker.eventStore, schemaStore, &mockMounter{})
 
 	// Case 1: Success
 	t.Run("Success", func(t *testing.T) {
-		schemaStore.getTableInfoError = nil
-		info, err := scanner.getTableInfo4Txn(disp, tableID, 110)
+		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
 		require.NoError(t, err)
 		require.NotNil(t, info)
 		require.Equal(t, ddlEvent.TableInfo, info)
@@ -90,7 +90,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 		disp.isRemoved.Store(true)
 		defer disp.isRemoved.Store(false) // reset state
 
-		info, err := scanner.getTableInfo4Txn(disp, tableID, 110)
+		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
 		require.NoError(t, err)
 		require.Nil(t, info)
 	})
@@ -99,7 +99,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	t.Run("TableDeleted", func(t *testing.T) {
 		schemaStore.getTableInfoError = &schemastore.TableDeletedError{}
 
-		info, err := scanner.getTableInfo4Txn(disp, tableID, 110)
+		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
 		require.NoError(t, err)
 		require.Nil(t, info)
 	})
@@ -109,7 +109,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 		otherErr := errors.New("other error")
 		schemaStore.getTableInfoError = otherErr
 
-		info, err := scanner.getTableInfo4Txn(disp, tableID, 110)
+		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
 		require.Error(t, err)
 		require.Equal(t, otherErr, err)
 		require.Nil(t, info)
@@ -547,7 +547,7 @@ func TestDMLProcessor(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, processor.currentDML)
 		require.Empty(t, processor.insertRowCache)
-		require.Equal(t, 0, processor.batchDML.Len())
+		require.Equal(t, int32(0), processor.batchDML.Len())
 	})
 
 	// Test case 1: start the first transaction
@@ -565,7 +565,7 @@ func TestDMLProcessor(t *testing.T) {
 		require.Equal(t, rawEvent.CRTs, processor.currentDML.GetCommitTs())
 
 		// Verify that the DML was added to the batch
-		require.Equal(t, 1, len(processor.batchDML.DMLEvents))
+		require.Len(t, processor.batchDML.DMLEvents, 1)
 		require.Equal(t, processor.currentDML, processor.batchDML.DMLEvents[0])
 
 		// Verify insert cache is empty
@@ -600,7 +600,7 @@ func TestDMLProcessor(t *testing.T) {
 		// Verify that insert cache has been processed and cleared
 		require.Empty(t, processor.insertRowCache)
 		require.Equal(t, 1, len(processor.batchDML.DMLEvents))
-		require.Equal(t, 2, processor.batchDML.Len())
+		require.Equal(t, int32(2), processor.batchDML.Len())
 
 		// Process second transaction
 		secondEvent := kvEvents[1]
@@ -632,7 +632,14 @@ func TestDMLProcessor(t *testing.T) {
 			require.Equal(t, item.CRTs, processor.currentDML.GetCommitTs())
 
 			// Verify batch size increases
+
+			err := processor.appendRow(item)
+			require.NoError(t, err)
+
 			require.Equal(t, int32(i+1), processor.batchDML.Len())
+
+			err = processor.commitTxn()
+			require.NoError(t, err)
 		}
 
 		// Verify all events are in the batch
@@ -652,6 +659,19 @@ func TestDMLProcessor(t *testing.T) {
 		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs)
 		require.Empty(t, processor.insertRowCache)
 
+		err := processor.appendRow(firstEvent)
+		require.NoError(t, err)
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+
+		// Second transaction - should process and clear cache
+		secondEvent := kvEvents[1]
+		processor.startTxn(dispatcherID, tableID, tableInfo, secondEvent.StartTs, secondEvent.CRTs)
+
+		err = processor.appendRow(secondEvent)
+		require.NoError(t, err)
+
 		// Add insert rows to cache
 		insertRow := &common.RawKVEntry{
 			StartTs: firstEvent.StartTs,
@@ -661,11 +681,7 @@ func TestDMLProcessor(t *testing.T) {
 		}
 		processor.insertRowCache = append(processor.insertRowCache, insertRow)
 
-		// Second transaction - should process and clear cache
-		secondEvent := kvEvents[1]
-		processor.startTxn(dispatcherID, tableID, tableInfo, secondEvent.StartTs, secondEvent.CRTs)
-
-		err := processor.commitTxn()
+		err = processor.commitTxn()
 		require.NoError(t, err)
 
 		// Verify cache was cleared
@@ -685,16 +701,28 @@ func TestDMLProcessor(t *testing.T) {
 		tableInfo := ddlEvent.TableInfo
 		tableID := ddlEvent.TableID
 
-		_, updateEvent := helper.DML2UpdateEvent("test", "t2", "insert into test.t2(id,a,b) values (0, 1, 'b0')", "update test.t2 set a = 2 where id = 0")
+		_, updateEvent := helper.DML2UpdateEvent("test", "t2",
+			"insert into test.t2(id, a, b) values (0, 1, 'b0')",
+			"update test.t2 set a = 2 where id = 0")
 		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs)
 
 		require.NotNil(t, processor.currentDML)
 		require.Equal(t, updateEvent.StartTs, processor.currentDML.GetStartTs())
 		require.Equal(t, updateEvent.CRTs, processor.currentDML.GetCommitTs())
 
+		err := processor.appendRow(updateEvent)
+		require.NoError(t, err)
+
 		require.Equal(t, 1, len(processor.insertRowCache))
 		require.Equal(t, common.OpTypePut, processor.insertRowCache[0].OpType)
 		require.False(t, processor.insertRowCache[0].IsUpdate())
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+
+		require.Empty(t, processor.insertRowCache)
+		require.Equal(t, 1, len(processor.batchDML.DMLEvents))
+		require.Equal(t, int32(2), processor.batchDML.Len())
 	})
 }
 
