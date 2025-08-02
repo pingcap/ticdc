@@ -412,12 +412,10 @@ func (s *session) recordMetrics() {
 }
 
 func (s *session) appendEvents(events []event.Event) {
-	s.events = append(s.events, events...)
-	var nBytes int64
 	for _, item := range events {
-		nBytes += item.GetSize()
+		s.events = append(s.events, item)
+		s.eventBytes += item.GetSize()
 	}
-	s.eventBytes += nBytes
 }
 
 func (s *session) limitCheck(nBytes int64) bool {

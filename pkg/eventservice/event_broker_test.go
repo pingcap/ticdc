@@ -20,7 +20,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -32,14 +31,6 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
-
-func newTableSpan(tableID int64, start, end string) *heartbeatpb.TableSpan {
-	return &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: []byte(start),
-		EndKey:   []byte(end),
-	}
-}
 
 func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore) {
 	mockPDClock := pdutil.NewClock4Test()
