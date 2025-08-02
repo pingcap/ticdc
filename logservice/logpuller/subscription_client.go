@@ -497,6 +497,19 @@ func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
 	return rs.requestWorkers[index]
 }
 
+// store represent one TiKV store
+type store struct {
+	storeAddr string
+	stream
+}
+
+// todo: establish grpc stream here.
+func newStore(storeAddr string) *store {
+	return &store{
+		storeAddr: storeAddr,
+	}
+}
+
 // handleRegions receives regionInfo from regionCh and attch rpcCtx to them,
 // then send them to corresponding requestedStore.
 func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
