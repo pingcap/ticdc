@@ -118,20 +118,9 @@ func (s *eventScanner) scan(
 	if err != nil {
 		return nil, false, err
 	}
-
-	// Get event iterator
-	iter, err := s.getEventIterator(sess)
-	if err != nil {
-		return nil, false, err
-	}
-	if iter == nil {
-		return s.handleEmptyIterator(ddlEvents, sess), false, nil
-	}
-	defer s.closeIterator(iter)
-
+	merger := newEventMerger(ddlEvents)
 	// Execute event scanning and merging
-	events, interrupted, err := s.scanAndMergeEvents(sess, ddlEvents, iter)
-	return events, interrupted, err
+	return s.scanAndMergeEvents(sess, merger)
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
@@ -162,8 +151,7 @@ func (s *eventScanner) getEventIterator(session *session) (eventstore.EventItera
 }
 
 // handleEmptyIterator handles the case when there are no DML events
-func (s *eventScanner) handleEmptyIterator(ddlEvents []event.DDLEvent, session *session) []event.Event {
-	merger := newEventMerger(ddlEvents)
+func (s *eventScanner) handleEmptyIterator(merger *eventMerger, session *session) []event.Event {
 	events := merger.resolveDDLEvents(session.dataRange.EndTs)
 	events = append(events, event.NewResolvedEvent(session.dataRange.EndTs, session.dispatcherStat.id, session.epoch))
 	return events
@@ -182,10 +170,17 @@ func (s *eventScanner) closeIterator(iter eventstore.EventIterator) {
 // scanAndMergeEvents performs the main scanning and merging logic
 func (s *eventScanner) scanAndMergeEvents(
 	session *session,
-	ddlEvents []event.DDLEvent,
-	iter eventstore.EventIterator,
+	merger *eventMerger,
 ) ([]event.Event, bool, error) {
-	merger := newEventMerger(ddlEvents)
+	iter, err := s.getEventIterator(session)
+	if err != nil {
+		return nil, false, err
+	}
+	if iter == nil {
+		return s.handleEmptyIterator(merger, session), false, nil
+	}
+	defer s.closeIterator(iter)
+
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
 
 	tableID := session.dataRange.Span.TableID
@@ -353,7 +348,8 @@ func interruptScan(
 	// Append DDLs up to last commit timestamp
 	remainingEvents := merger.resolveDDLEvents(session.lastCommitTs)
 	if newCommitTs != session.lastCommitTs {
-		remainingEvents = append(remainingEvents, event.NewResolvedEvent(session.lastCommitTs, session.dispatcherStat.id, session.epoch))
+		resolve := event.NewResolvedEvent(session.lastCommitTs, session.dispatcherStat.id, session.epoch)
+		remainingEvents = append(remainingEvents, resolve)
 	}
 	session.appendEvents(remainingEvents)
 	return session.events, true, nil
