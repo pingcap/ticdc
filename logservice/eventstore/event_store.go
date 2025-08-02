@@ -921,6 +921,10 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		iter.innerIter.Next()
 	}
 	isNewTxn := false
+	// 2 PC transactions have different startTs and commitTs.
+	// async-commit transactions have different startTs and may have the same commitTs.
+	// at the moment, use commit-ts determine whether it is a new transaction, even though multiple
+	// different transactions may be grouped together, to satisfy the resolved-ts semantics.
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
 	}
