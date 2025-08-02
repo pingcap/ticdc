@@ -716,7 +716,6 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		needCheckSpan: needCheckSpan,
 		innerIter:     iter,
 		prevStartTs:   0,
-		prevCommitTs:  0,
 		startTs:       dataRange.StartTs,
 		endTs:         dataRange.EndTs,
 		rowCount:      0,
@@ -884,8 +883,9 @@ type eventStoreIter struct {
 	// (e.g. subscription span is not the same as dispatcher span)
 	needCheckSpan bool
 	innerIter     *pebble.Iterator
-	prevStartTs   uint64
-	prevCommitTs  uint64
+
+	// prevStartTs is used to determine whether the current kv belongs to a new transaction.
+	prevStartTs uint64
 
 	// for debug
 	startTs  uint64
@@ -921,10 +921,12 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		iter.innerIter.Next()
 	}
 	isNewTxn := false
-	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
+	// 2 PC transactions have different startTs and commitTs.
+	// async-commit transactions have different startTs and may have the same commitTs.
+	// so use the startTs to determine whether it is a new transaction.
+	if iter.prevStartTs == 0 || rawKV.StartTs != iter.prevStartTs {
 		isNewTxn = true
 	}
-	iter.prevCommitTs = rawKV.CRTs
 	iter.prevStartTs = rawKV.StartTs
 	iter.rowCount++
 	startTime := time.Now()
