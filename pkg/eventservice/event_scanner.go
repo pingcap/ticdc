@@ -110,7 +110,7 @@ func (s *eventScanner) scan(
 	limit scanLimit,
 ) ([]event.Event, bool, error) {
 	// Initialize scan session
-	sess := s.newSession(ctx, dispatcherStat, dataRange, limit)
+	sess := newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
 
 	// Fetch DDL events
@@ -371,7 +371,7 @@ type session struct {
 }
 
 // newSession creates a new scan session
-func (s *eventScanner) newSession(
+func newSession(
 	ctx context.Context,
 	dispatcherStat *dispatcherStat,
 	dataRange common.DataRange,

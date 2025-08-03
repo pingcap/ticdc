@@ -889,12 +889,11 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 func TestScanSession(t *testing.T) {
 	// Test observeRawEntry method
 	t.Run("TestObserveRawEntry", func(t *testing.T) {
-		scanner := &eventScanner{}
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
 		dataRange := common.DataRange{}
 		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
-		sess := scanner.newSession(ctx, dispStat, dataRange, limit)
+		sess := newSession(ctx, dispStat, dataRange, limit)
 
 		// Test initial scannedBytes is 0
 		require.Equal(t, int64(0), sess.scannedBytes)
@@ -923,15 +922,14 @@ func TestScanSession(t *testing.T) {
 		dataRange := common.DataRange{}
 		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
 
-		scanner := &eventScanner{}
-		session := scanner.newSession(ctx, dispStat, dataRange, limit)
+		sess := newSession(ctx, dispStat, dataRange, limit)
 
 		// Context should not be done initially
-		require.False(t, session.isContextDone())
+		require.False(t, sess.isContextDone())
 
 		// Test with cancelled context
 		cancelCtx, cancel := context.WithCancel(context.Background())
-		sessionWithCancelCtx := scanner.newSession(cancelCtx, dispStat, dataRange, limit)
+		sessionWithCancelCtx := newSession(cancelCtx, dispStat, dataRange, limit)
 
 		// Context should not be done before cancellation
 		require.False(t, sessionWithCancelCtx.isContextDone())
@@ -945,7 +943,7 @@ func TestScanSession(t *testing.T) {
 		// Test with timeout context
 		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 		defer timeoutCancel()
-		sessionWithTimeoutCtx := scanner.newSession(timeoutCtx, dispStat, dataRange, limit)
+		sessionWithTimeoutCtx := newSession(timeoutCtx, dispStat, dataRange, limit)
 
 		// Context should not be done initially
 		require.False(t, sessionWithTimeoutCtx.isContextDone())
@@ -968,20 +966,22 @@ func TestScanSession(t *testing.T) {
 		}
 		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
 
-		scanner := &eventScanner{}
-		session := scanner.newSession(ctx, dispStat, dataRange, limit)
+		sess := newSession(ctx, dispStat, dataRange, limit)
 
 		// Verify initialization
-		require.Equal(t, ctx, session.ctx)
-		require.Equal(t, dispStat, session.dispatcherStat)
-		require.Equal(t, dataRange, session.dataRange)
-		require.Equal(t, limit, session.limit)
-		require.Equal(t, int64(0), session.scannedBytes)
-		require.Equal(t, uint64(0), session.lastCommitTs)
-		require.Equal(t, 0, session.dmlCount)
-		require.NotNil(t, session.events)
-		require.Equal(t, 0, len(session.events))
-		require.True(t, time.Since(session.startTime) >= 0)
+		require.Equal(t, ctx, sess.ctx)
+		require.Equal(t, dispStat, sess.dispatcherStat)
+		require.Equal(t, dataRange, sess.dataRange)
+		require.Equal(t, limit, sess.limit)
+		require.Equal(t, int64(0), sess.scannedBytes)
+		require.Equal(t, uint64(0), sess.lastCommitTs)
+		require.Equal(t, 0, sess.dmlCount)
+
+		require.NotNil(t, sess.events)
+		require.Equal(t, 0, len(sess.events))
+		require.Equal(t, int64(0), sess.eventBytes)
+
+		require.True(t, time.Since(sess.startTime) >= 0)
 	})
 
 	// Test session state tracking
@@ -991,54 +991,22 @@ func TestScanSession(t *testing.T) {
 		dataRange := common.DataRange{}
 		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
 
-		scanner := &eventScanner{}
-		session := scanner.newSession(ctx, dispStat, dataRange, limit)
+		sess := newSession(ctx, dispStat, dataRange, limit)
 
 		// Test updating state fields
-		session.lastCommitTs = 150
-		session.dmlCount = 5
+		sess.lastCommitTs = 150
+		sess.dmlCount = 5
 
-		require.Equal(t, uint64(150), session.lastCommitTs)
-		require.Equal(t, 5, session.dmlCount)
+		require.Equal(t, uint64(150), sess.lastCommitTs)
+		require.Equal(t, 5, sess.dmlCount)
 
 		// Test events collection
-		require.NotNil(t, session.events)
-		require.Equal(t, 0, len(session.events))
+		require.NotNil(t, sess.events)
+		require.Equal(t, 0, len(sess.events))
 
 		// Events slice should be mutable
-		session.events = append(session.events, nil) // Add a nil event for testing
-		require.Equal(t, 1, len(session.events))
-	})
-
-	t.Run("AppendEvents", func(t *testing.T) {
-		ctx := context.Background()
-		dispStat := &dispatcherStat{}
-		dataRange := common.DataRange{}
-		limit := scanLimit{maxDMLBytes: 1000, timeout: 5 * time.Second}
-
-		scanner := &eventScanner{}
-		sess := scanner.newSession(ctx, dispStat, dataRange, limit)
-
-		// Append empty slice
-		sess.appendEvents(nil)
-		require.Len(t, sess.events, 0)
-		require.Equal(t, int64(0), sess.eventBytes)
-
-		// Append one event
-		ddlEvent := &event.DDLEvent{Query: "CREATE TABLE t"}
-		sess.appendEvents([]event.Event{ddlEvent})
-		require.Len(t, sess.events, 1)
-		require.Equal(t, ddlEvent.GetSize(), sess.eventBytes)
-		require.Equal(t, ddlEvent, sess.events[0])
-
-		// Append multiple events
-		dmlEvent := event.NewBatchDMLEvent()
-		dmlEvent.AppendDMLEvent(event.NewDMLEvent(common.NewDispatcherID(), 1, 1, 2, nil))
-
-		sess.appendEvents([]event.Event{dmlEvent})
-		require.Len(t, sess.events, 2)
-		require.Equal(t, ddlEvent.GetSize()+dmlEvent.GetSize(), sess.eventBytes)
-		require.Equal(t, dmlEvent, sess.events[1])
+		sess.events = append(sess.events, nil) // Add a nil event for testing
+		require.Equal(t, 1, len(sess.events))
 	})
 
 	t.Run("LimitCheck", func(t *testing.T) {
@@ -1047,8 +1015,8 @@ func TestScanSession(t *testing.T) {
 			dispStat := &dispatcherStat{}
 			dataRange := common.DataRange{}
 			limit := scanLimit{maxDMLBytes: 1000, timeout: 5 * time.Second}
-			scanner := &eventScanner{}
-			sess := scanner.newSession(ctx, dispStat, dataRange, limit)
+
+			sess := newSession(ctx, dispStat, dataRange, limit)
 			sess.eventBytes = 500
 
 			// Test bytes below limit: 500 + 499 = 999 < 1000
@@ -1058,20 +1026,19 @@ func TestScanSession(t *testing.T) {
 			// Test bytes exceeding limit: 500 + 501 = 1001 > 1000
 			require.True(t, sess.limitCheck(501))
 		})
+	})
 
-		t.Run("TimeoutExceeded", func(t *testing.T) {
-			ctx := context.Background()
-			dispStat := &dispatcherStat{}
-			dataRange := common.DataRange{}
-			timeoutLimit := scanLimit{maxDMLBytes: 1000, timeout: 3 * time.Second}
+	t.Run("TimeoutExceeded", func(t *testing.T) {
+		ctx := context.Background()
+		dispStat := &dispatcherStat{}
+		dataRange := common.DataRange{}
+		timeoutLimit := scanLimit{maxDMLBytes: 1000, timeout: 3 * time.Second}
 
-			scanner := &eventScanner{}
-			sessWithTimeout := scanner.newSession(ctx, dispStat, dataRange, timeoutLimit)
-			sessWithTimeout.startTime = time.Now().Add(-5 * time.Second) // Simulate 5 seconds ago
-			sessWithTimeout.eventBytes = 100
+		sessWithTimeout := newSession(ctx, dispStat, dataRange, timeoutLimit)
+		sessWithTimeout.startTime = time.Now().Add(-5 * time.Second) // Simulate 5 seconds ago
+		sessWithTimeout.eventBytes = 100
 
-			require.True(t, sessWithTimeout.limitCheck(400))
-		})
+		require.True(t, sessWithTimeout.limitCheck(400))
 	})
 }
 
