@@ -71,6 +71,7 @@ type Maintainer struct {
 	pdClock pdutil.Clock
 
 	eventCh *chann.DrainableChann[*Event]
+	msgCh   *chann.UnlimitedChannel[*messaging.TargetMessage, any]
 
 	mc messaging.MessageCenter
 
@@ -137,7 +138,7 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
-	cancelUpdateMetrics            context.CancelFunc
+	cancel                         context.CancelFunc
 	changefeedCheckpointTsGauge    prometheus.Gauge
 	changefeedCheckpointTsLagGauge prometheus.Gauge
 	changefeedResolvedTsGauge      prometheus.Gauge
@@ -173,6 +174,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
+		msgCh:             chann.NewUnlimitedChannel[*messaging.TargetMessage, any](nil, nil),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
@@ -214,10 +216,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelUpdateMetrics = cancel
+	m.cancel = cancel
 
 	go m.runUpdateMetrics(ctx)
 	go m.runHandleEvents(ctx)
+	go m.runHandleMessage(ctx)
 
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.String("state", string(cfg.State)),
@@ -249,10 +252,6 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 // note: the EventPeriod is a special event that submitted when initializing maintainer
 // , and it will be re-submitted at the end of onPeriodTask
 func (m *Maintainer) HandleEvent(event *Event) bool {
-	log.Info("Maintainer HandleEvent",
-		zap.String("changefeed", m.id.String()),
-		zap.Int("eventType", event.eventType),
-	)
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
@@ -277,15 +276,34 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 	// first check the online/offline nodes
 	m.checkNodeChanged()
 
+	// TODO:use a better way
 	switch event.eventType {
 	case EventInit:
 		return m.onInit()
-	case EventMessage:
-		m.onMessage(event.message)
 	case EventPeriod:
 		m.onPeriodTask()
 	}
 	return false
+}
+
+func (m *Maintainer) runHandleMessage(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			msg, ok := m.msgCh.Get()
+			if !ok {
+				log.Error("msgCh is closed", zap.String("changefeed", m.id.String()))
+				return nil
+			}
+			// first check the online/offline nodes
+			// TODO:not sure whether we need check nodeChanged first
+			m.checkNodeChanged()
+
+			m.onMessage(msg)
+		}
+	}
 }
 
 func (m *Maintainer) checkNodeChanged() {
@@ -299,8 +317,9 @@ func (m *Maintainer) checkNodeChanged() {
 
 // Close cleanup resources
 func (m *Maintainer) Close() {
-	m.cancelUpdateMetrics()
+	m.cancel()
 	m.cleanupMetrics()
+	m.msgCh.Close()
 	m.controller.Stop()
 	log.Info("changefeed maintainer closed",
 		zap.String("changefeed", m.id.String()),
@@ -849,7 +868,7 @@ func (m *Maintainer) onPeriodTask() {
 	// send scheduling messages
 	m.handleResendMessage()
 	m.collectMetrics()
-	// m.calCheckpointTs()
+	m.calCheckpointTs()
 }
 
 func (m *Maintainer) collectMetrics() {

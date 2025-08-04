@@ -342,11 +342,7 @@ func (m *Manager) dispatcherMaintainerMessage(
 		return ctx.Err()
 	default:
 		maintainer := c.(*Maintainer)
-		maintainer.pushEvent(&Event{
-			changefeedID: changefeed,
-			eventType:    EventMessage,
-			message:      msg,
-		})
+		maintainer.msgCh.Push(msg)
 	}
 	return nil
 }
