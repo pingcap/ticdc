@@ -578,6 +578,13 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
+			log.Info("collectComponentStatusWhenChanged",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Any("statusMessage", statusMessage),
+				zap.Any("newWatermark", newWatermark),
+				zap.Int("statusCount", len(statusMessage)),
+				zap.Any("message", message),
+			)
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}
