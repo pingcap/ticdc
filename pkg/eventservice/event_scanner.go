@@ -114,29 +114,27 @@ func (s *eventScanner) scan(
 	defer sess.recordMetrics()
 
 	// Fetch DDL events
-	ddlEvents, err := s.fetchDDLEvents(dispatcherStat, dataRange)
+	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
 	if err != nil {
 		return nil, false, err
 	}
 
-	merger := newEventMerger(ddlEvents)
 	iter, err := s.getEventIterator(dispatcherStat, dataRange)
 	if err != nil {
 		return nil, false, err
 	}
 	if iter == nil {
-		events := merger.resolveDDLEvents(dataRange.EndTs)
 		events = append(events, event.NewResolvedEvent(dataRange.EndTs, dispatcherStat.id, dispatcherStat.epoch.Load()))
 		return events, false, nil
 	}
 	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
-	return s.scanAndMergeEvents(sess, merger, iter)
+	return s.scanAndMergeEvents(sess, events, iter)
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
-func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.DataRange) ([]event.DDLEvent, error) {
+func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.DataRange) ([]event.Event, error) {
 	dispatcherID := stat.info.GetID()
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
 		dispatcherID, dataRange.Span.TableID, stat.filter, dataRange.StartTs, dataRange.EndTs)
@@ -144,7 +142,12 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 		log.Error("get ddl events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 		return nil, err
 	}
-	return ddlEvents, nil
+
+	result := make([]event.Event, 0, len(ddlEvents))
+	for _, item := range ddlEvents {
+		result = append(result, &item)
+	}
+	return result, nil
 }
 
 // getEventIterator gets the event iterator for DML events
@@ -172,9 +175,10 @@ func (s *eventScanner) closeIterator(iter eventstore.EventIterator) {
 // scanAndMergeEvents performs the main scanning and merging logic
 func (s *eventScanner) scanAndMergeEvents(
 	session *session,
-	merger *eventMerger,
+	events []event.Event,
 	iter eventstore.EventIterator,
 ) ([]event.Event, bool, error) {
+	merger := newEventMerger(events)
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
 
 	tableID := session.dataRange.Span.TableID
@@ -190,7 +194,7 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			events, err := finalizeScan(merger, processor, session.dispatcherStat, session.dataRange.EndTs)
+			events, err = finalizeScan(merger, processor, session.dispatcherStat, session.dataRange.EndTs)
 			return events, false, err
 		}
 
@@ -298,7 +302,7 @@ func (s *eventScanner) commitTxn(
 	tableUpdated := resolvedBatch.TableInfo.UpdateTS() != updateTs
 	hasNewDDL := merger.hasMoreDDLs(untilTs)
 	if hasNewDDL || tableUpdated {
-		events := merger.appendDMLEvent(resolvedBatch, &session.lastCommitTs)
+		events := merger.appendDMLEvent(resolvedBatch)
 		session.appendEvents(events)
 		processor.resetBatchDML()
 	}
@@ -318,21 +322,13 @@ func finalizeScan(
 		return nil, err
 	}
 
-	var events []event.Event
-	// Append final batch
 	resolvedBatch := processor.getResolvedBatchDML()
-	if resolvedBatch != nil && resolvedBatch.Len() > 0 {
-		commitTs := resolvedBatch.GetCommitTs()
-		events = merger.
-			resolveDDLEvents(commitTs)
-		events = append(events, resolvedBatch)
-	}
+	events := merger.appendDMLEvent(resolvedBatch, &endTs)
+	events = append(events, merger.remainingDDLEvents()...)
 
-	// Append remaining DDLs
-	remainingEvents := merger.resolveDDLEvents(endTs)
 	resolveTs := event.NewResolvedEvent(endTs, stat.id, stat.epoch.Load())
 	events = append(events, resolveTs)
-	events = append(events, remainingEvents...)
+
 	return events, nil
 }
 
@@ -354,7 +350,7 @@ func interruptScan(
 	session.appendEvents(events)
 
 	// Append DDLs up to last commit timestamp
-	remainingEvents := merger.resolveDDLEvents(session.lastCommitTs)
+	remainingEvents := merger.remainingDDLEvents()
 	if newCommitTs != session.lastCommitTs {
 		resolve := event.NewResolvedEvent(session.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
 		remainingEvents = append(remainingEvents, resolve)
@@ -443,13 +439,13 @@ func (s *session) limitCheck(nBytes int64) bool {
 
 // eventMerger handles merging of DML and DDL events in timestamp order
 type eventMerger struct {
-	ddlEvents []event.DDLEvent
+	ddlEvents []event.Event
 	ddlIndex  int
 }
 
 // newEventMerger creates a new event merger
 func newEventMerger(
-	ddlEvents []event.DDLEvent,
+	ddlEvents []event.Event,
 ) *eventMerger {
 	return &eventMerger{
 		ddlEvents: ddlEvents,
@@ -458,32 +454,33 @@ func newEventMerger(
 }
 
 // appendDMLEvent appends a DML event and any preceding DDL events
-func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent, lastCommitTs *uint64) []event.Event {
+func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent) []event.Event {
 	if dml == nil || dml.Len() == 0 {
 		return nil
 	}
 
 	commitTs := dml.GetCommitTs()
-	events := m.resolveDDLEvents(commitTs)
+	var events []event.Event
+	// Add all DDL events that are before the given timestamp
+	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].GetCommitTs() <= commitTs {
+		events = append(events, m.ddlEvents[m.ddlIndex])
+		m.ddlIndex++
+	}
 	events = append(events, dml)
-	*lastCommitTs = commitTs
 	return events
 }
 
-// resolveDDLEvents return all remaining DDL events up to endTs
-func (m *eventMerger) resolveDDLEvents(endTs uint64) []event.Event {
-	var events []event.Event
-	// Add all DDL events that are before the given timestamp
-	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].FinishedTs <= endTs {
-		events = append(events, &m.ddlEvents[m.ddlIndex])
-		m.ddlIndex++
+func (m *eventMerger) remainingDDLEvents() []event.Event {
+	// Return all remaining DDL events
+	if m.ddlIndex >= len(m.ddlEvents) {
+		return nil
 	}
-	return events
+	return m.ddlEvents[m.ddlIndex:]
 }
 
 // hasMoreDDLs return true if there are DDLs
 func (m *eventMerger) hasMoreDDLs(commitTs uint64) bool {
-	return m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].FinishedTs < commitTs
+	return m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].GetCommitTs() < commitTs
 }
 
 // dmlProcessor handles DML event processing and batching
