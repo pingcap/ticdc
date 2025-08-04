@@ -584,7 +584,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int,
 	defer ticker.Stop()
 
 	resolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
-	messageCh := c.messageCh[workerIndex]
+	messageCh := c.getMessageCh(workerIndex, topic == messaging.RedoEventCollectorTopic)
 	batchM := make([]*wrapEvent, 0, defaultMaxBatchSize)
 	for {
 		select {
