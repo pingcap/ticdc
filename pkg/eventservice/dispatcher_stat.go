@@ -294,10 +294,9 @@ type wrapEvent struct {
 	msgType int
 	// postSendFunc should be called after the message is sent to message center
 	postSendFunc func()
-	isRedo       bool
 }
 
-func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState, isRedo bool) *wrapEvent {
+func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState) *wrapEvent {
 	for _, dml := range e.DMLEvents {
 		dml.State = state
 	}
@@ -305,7 +304,6 @@ func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state peven
 	w.serverID = serverID
 	w.e = e
 	w.msgType = e.GetType()
-	w.isRedo = isRedo
 	return w
 }
 
@@ -315,7 +313,6 @@ func (w *wrapEvent) reset() {
 	w.resolvedTsEvent = zeroResolvedEvent
 	w.serverID = ""
 	w.msgType = -1
-	w.isRedo = false
 	wrapEventPool.Put(w)
 }
 
@@ -327,60 +324,54 @@ func (w *wrapEvent) getDispatcherID() common.DispatcherID {
 	return e.GetDispatcherID()
 }
 
-func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent, isRedo bool) *wrapEvent {
+func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = &e
 	w.msgType = pevent.TypeHandshakeEvent
-	w.isRedo = isRedo
 	return w
 }
 
-func newWrapReadyEvent(serverID node.ID, e pevent.ReadyEvent, isRedo bool) *wrapEvent {
+func newWrapReadyEvent(serverID node.ID, e pevent.ReadyEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = &e
 	w.msgType = pevent.TypeReadyEvent
-	w.isRedo = isRedo
 	return w
 }
 
-func newWrapNotReusableEvent(serverID node.ID, e pevent.NotReusableEvent, isRedo bool) *wrapEvent {
+func newWrapNotReusableEvent(serverID node.ID, e pevent.NotReusableEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = &e
 	w.msgType = pevent.TypeNotReusableEvent
-	w.isRedo = isRedo
 	return w
 }
 
-func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent, state pevent.EventSenderState, isRedo bool) *wrapEvent {
+func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent, state pevent.EventSenderState) *wrapEvent {
 	e.State = state
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.resolvedTsEvent = e
 	w.msgType = pevent.TypeResolvedEvent
-	w.isRedo = isRedo
 	return w
 }
 
-func newWrapDDLEvent(serverID node.ID, e *pevent.DDLEvent, state pevent.EventSenderState, isRedo bool) *wrapEvent {
+func newWrapDDLEvent(serverID node.ID, e *pevent.DDLEvent, state pevent.EventSenderState) *wrapEvent {
 	e.State = state
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
 	w.msgType = pevent.TypeDDLEvent
-	w.isRedo = isRedo
 	return w
 }
 
-func newWrapSyncPointEvent(serverID node.ID, e *pevent.SyncPointEvent, state pevent.EventSenderState, isRedo bool) *wrapEvent {
+func newWrapSyncPointEvent(serverID node.ID, e *pevent.SyncPointEvent, state pevent.EventSenderState) *wrapEvent {
 	e.State = state
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
 	w.msgType = pevent.TypeSyncPointEvent
-	w.isRedo = isRedo
 	return w
 }
 
@@ -388,55 +379,36 @@ func newWrapSyncPointEvent(serverID node.ID, e *pevent.SyncPointEvent, state pev
 // We use it instead of a primitive slice to reduce the allocation
 // of the memory and reduce the GC pressure.
 type resolvedTsCache struct {
-	cache     []pevent.ResolvedEvent
-	redoCache []pevent.ResolvedEvent
+	cache []pevent.ResolvedEvent
 	// len is the number of the events in the cache.
-	len     int
-	redoLen int
+	len int
 	// limit is the max number of the events that the cache can store.
 	limit int
 }
 
 func newResolvedTsCache(limit int) *resolvedTsCache {
 	return &resolvedTsCache{
-		cache:     make([]pevent.ResolvedEvent, limit),
-		redoCache: make([]pevent.ResolvedEvent, limit),
-		limit:     limit,
+		cache: make([]pevent.ResolvedEvent, limit),
+		limit: limit,
 	}
 }
 
-func (c *resolvedTsCache) add(e pevent.ResolvedEvent, isRedo bool) {
-	if isRedo {
-		c.redoCache[c.redoLen] = e
-		c.redoLen++
-		return
-	}
+func (c *resolvedTsCache) add(e pevent.ResolvedEvent) {
 	c.cache[c.len] = e
 	c.len++
 }
 
-func (c *resolvedTsCache) isFull(isRedo bool) bool {
-	if isRedo {
-		return c.redoLen >= c.limit
-	}
+func (c *resolvedTsCache) isFull() bool {
 	return c.len >= c.limit
 }
 
-func (c *resolvedTsCache) getAll(isRedo bool) (res []pevent.ResolvedEvent) {
-	if isRedo {
-		res = c.redoCache[:c.redoLen]
-	} else {
-		res = c.cache[:c.len]
-	}
-	c.reset(isRedo)
+func (c *resolvedTsCache) getAll() (res []pevent.ResolvedEvent) {
+	res = c.cache[:c.len]
+	c.reset()
 	return
 }
 
-func (c *resolvedTsCache) reset(isRedo bool) {
-	if isRedo {
-		c.redoLen = 0
-		return
-	}
+func (c *resolvedTsCache) reset() {
 	c.len = 0
 }
 

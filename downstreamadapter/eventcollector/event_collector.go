@@ -471,7 +471,7 @@ func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessa
 		c.redoReceiveChannels[targetMessage.GetGroup()%uint64(len(c.redoReceiveChannels))] <- targetMessage
 		return nil
 	}
-
+	log.Panic("unknown message type", zap.Any("type", targetMessage.Type))
 	return nil
 }
 
