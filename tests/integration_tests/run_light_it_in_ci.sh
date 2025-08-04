@@ -184,7 +184,7 @@ storage_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'csv_storage_basic csv_storage_multi_tables_ddl fail_over_ddl_O'
+	'csv_storage_multi_tables_ddl fail_over_ddl_O'
 	# G15
 	'split_region autorandom gc_safepoint'
 )
