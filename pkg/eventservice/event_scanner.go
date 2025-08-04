@@ -190,7 +190,7 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			events, err := finalizeScan(session, merger, processor)
+			events, err := finalizeScan(merger, processor, session.dispatcherStat, session.dataRange.EndTs)
 			return events, false, err
 		}
 
@@ -309,23 +309,30 @@ func (s *eventScanner) commitTxn(
 // it's called when the iterator is nil, always indicates that all entries
 // with the same commit-ts is processed, so it's ok to append resolved-ts event
 func finalizeScan(
-	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
+	stat *dispatcherStat,
+	endTs uint64,
 ) ([]event.Event, error) {
 	if err := processor.commitTxn(); err != nil {
 		return nil, err
 	}
+
+	var events []event.Event
 	// Append final batch
-	events := merger.appendDMLEvent(processor.getResolvedBatchDML(), &session.lastCommitTs)
-	session.appendEvents(events)
+	resolvedBatch := processor.getResolvedBatchDML()
+	if resolvedBatch != nil && resolvedBatch.Len() > 0 {
+		commitTs := resolvedBatch.GetCommitTs()
+		events = merger.popDDLEvents(commitTs)
+		events = append(events, resolvedBatch)
+	}
 
 	// Append remaining DDLs
-	remainingEvents := merger.resolveDDLEvents(session.dataRange.EndTs)
-	resolveTs := event.NewResolvedEvent(session.dataRange.EndTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
-	remainingEvents = append(remainingEvents, resolveTs)
-	session.appendEvents(remainingEvents)
-	return session.events, nil
+	remainingEvents := merger.resolveDDLEvents(endTs)
+	resolveTs := event.NewResolvedEvent(endTs, stat.id, stat.epoch.Load())
+	events = append(events, resolveTs)
+	events = append(events, remainingEvents...)
+	return events, nil
 }
 
 // interruptScan handles scan interruption due to limits
@@ -413,6 +420,12 @@ func (s *session) recordMetrics() {
 	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
 	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
 	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
+
+	var nBytes int64
+	for _, item := range s.events {
+		nBytes += item.GetSize()
+	}
+
 	metrics.EventServiceScannedDMLSize.Observe(float64(s.eventBytes))
 }
 
