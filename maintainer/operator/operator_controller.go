@@ -250,8 +250,8 @@ func (oc *Controller) pollQueueingOperator() (
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
+	oc.mu.Unlock()
 	if item.IsRemoved {
-		oc.mu.Unlock()
 		return nil, true
 	}
 	op := item.OP
