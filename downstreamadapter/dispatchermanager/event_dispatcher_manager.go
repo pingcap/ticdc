@@ -578,13 +578,6 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
-			log.Info("collectComponentStatusWhenChanged",
-				zap.Stringer("changefeedID", e.changefeedID),
-				zap.Any("statusMessage", statusMessage),
-				zap.Any("newWatermark", newWatermark),
-				zap.Int("statusCount", len(statusMessage)),
-				zap.Any("message", message),
-			)
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}
@@ -643,6 +636,15 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 
 		message.Watermark.UpdateMin(heartBeatInfo.Watermark)
 		if needCompleteStatus {
+			if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Initializing {
+				log.Debug("dispatcher is initializing",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Stringer("dispatcherID", id),
+					zap.String("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
+					zap.Any("componentStatus", dispatcherItem.GetComponentStatus()),
+				)
+				return
+			}
 			message.Statuses = append(message.Statuses, &heartbeatpb.TableSpanStatus{
 				ID:                 id.ToPB(),
 				ComponentStatus:    heartBeatInfo.ComponentStatus,
