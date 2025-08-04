@@ -242,11 +242,7 @@ func (b *BatchDMLEvent) GetStartTs() common.Ts {
 }
 
 func (b *BatchDMLEvent) GetSize() int64 {
-	var size int64
-	for _, dml := range b.DMLEvents {
-		size += dml.GetSize()
-	}
-	return size
+	return b.Rows.MemoryUsage()
 }
 
 func (b *BatchDMLEvent) IsPaused() bool {
@@ -281,6 +277,7 @@ type DMLEvent struct {
 	// For an update event, it has two physical rows in the Rows chunk.
 	Length int32 `json:"length"`
 	// ApproximateSize is the approximate size of all rows in the transaction.
+	// it's based on the raw entry size, use for the sink throughput calculation.
 	ApproximateSize int64 `json:"approximate_size"`
 	// RowTypes is the types of every row in the transaction.
 	RowTypes []RowType `json:"row_types"`
@@ -335,8 +332,8 @@ func NewDMLEvent(
 }
 
 func (t *DMLEvent) String() string {
-	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, ApproximateSize: %d}",
-		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName, t.Checksum, t.Length, t.ApproximateSize)
+	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, Size: %d}",
+		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName, t.Checksum, t.Length, t.GetSize())
 }
 
 func (t *DMLEvent) GetIsRedo() bool {
@@ -369,7 +366,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		t.RowTypes = append(t.RowTypes, rowType)
 	}
 	t.Length += 1
-	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
+	t.ApproximateSize += raw.GetSize()
 	if checksum != nil {
 		t.Checksum = append(t.Checksum, checksum)
 	}
@@ -492,15 +489,10 @@ func (t *DMLEvent) Unmarshal(data []byte) error {
 	return t.decode(data)
 }
 
-// GetSize returns the size of the event in bytes, including all fields.
+// GetSize returns the approximate size of the rows in the transaction.
 func (t *DMLEvent) GetSize() int64 {
 	// Notice: events send from local channel will not have the size field.
 	// return t.eventSize
-	return t.GetRowsSize()
-}
-
-// GetRowsSize returns the approximate size of the rows in the transaction.
-func (t *DMLEvent) GetRowsSize() int64 {
 	return t.ApproximateSize
 }
 

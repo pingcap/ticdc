@@ -50,7 +50,4 @@ func main() {
 	if err := app.Execute(); err != nil {
 		plog.Error("Error executing workload", zap.Error(err))
 	}
-
-	// prevent program exit
-	select {}
 }

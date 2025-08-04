@@ -350,7 +350,7 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
 	pi.pendingSize.Add(delta)
 	if pi.pendingSize.Load() < 0 {
-		log.Warn("pendingSize is negative", zap.Int64("pendingSize", pi.pendingSize.Load()))
+		log.Debug("pendingSize is negative", zap.Int64("pendingSize", pi.pendingSize.Load()))
 		pi.pendingSize.Store(0)
 	}
 }

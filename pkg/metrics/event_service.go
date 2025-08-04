@@ -61,7 +61,7 @@ var (
 			Subsystem: "event_service",
 			Name:      "scan_duration",
 			Help:      "The duration of scanning a data range from eventStore",
-			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+			Buckets:   prometheus.ExponentialBuckets(0.00128, 2.0, 14), // 1.28ms to 10s
 		})
 	EventServiceScannedCount = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

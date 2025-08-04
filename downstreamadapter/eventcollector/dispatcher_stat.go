@@ -66,7 +66,7 @@ func (d *dispatcherConnState) isCurrentEventService(serverID node.ID) bool {
 func (d *dispatcherConnState) isReceivingDataEvent() bool {
 	d.RLock()
 	defer d.RUnlock()
-	return d.eventServiceID != "" && d.readyEventReceived.Load()
+	return !d.eventServiceID.IsEmpty() && d.readyEventReceived.Load()
 }
 
 func (d *dispatcherConnState) trySetRemoteCandidates(nodes []string) bool {
@@ -175,6 +175,7 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
+		zap.Uint64("epoch", epoch),
 		zap.Uint64("resetTs", resetTs))
 }
 

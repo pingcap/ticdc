@@ -101,9 +101,8 @@ func (v *RawKVEntry) String() string {
 		v.OpType, string(v.Key), string(v.Value), string(v.OldValue), v.StartTs, v.CRTs, v.RegionID)
 }
 
-// ApproximateDataSize calculate the approximate size of protobuf binary
-// representation of this event.
-func (v *RawKVEntry) ApproximateDataSize() int64 {
+// GetSize return the size of the RawKVEntry in bytes
+func (v *RawKVEntry) GetSize() int64 {
 	return int64(len(v.Key)+len(v.Value)+len(v.OldValue)) + 40 // 4*uint32 + 3*uint64
 }
 
