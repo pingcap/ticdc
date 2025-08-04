@@ -124,13 +124,17 @@ func (s *eventScanner) scan(
 		return nil, false, err
 	}
 	if iter == nil {
-		events = append(events, event.NewResolvedEvent(dataRange.EndTs, dispatcherStat.id, dispatcherStat.epoch.Load()))
-		return events, false, nil
+		resolved := event.NewResolvedEvent(dataRange.EndTs, dispatcherStat.id, dispatcherStat.epoch.Load())
+		events = append(events, resolved)
+		sess.appendEvents(events)
+		return sess.events, false, nil
 	}
 	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
-	return s.scanAndMergeEvents(sess, events, iter)
+	merger := newEventMerger(events)
+	interrupted, err := s.scanAndMergeEvents(sess, merger, iter)
+	return sess.events, interrupted, err
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
@@ -175,10 +179,9 @@ func (s *eventScanner) closeIterator(iter eventstore.EventIterator) {
 // scanAndMergeEvents performs the main scanning and merging logic
 func (s *eventScanner) scanAndMergeEvents(
 	session *session,
-	events []event.Event,
+	merger *eventMerger,
 	iter eventstore.EventIterator,
-) ([]event.Event, bool, error) {
-	merger := newEventMerger(events)
+) (bool, error) {
 	processor := newDMLProcessor(s.mounter, s.schemaGetter)
 
 	tableID := session.dataRange.Span.TableID
@@ -186,36 +189,37 @@ func (s *eventScanner) scanAndMergeEvents(
 	for {
 		shouldStop, err := s.checkScanConditions(session)
 		if err != nil {
-			return nil, false, err
+			return false, err
 		}
 		if shouldStop {
-			return nil, false, nil
+			return false, nil
 		}
 
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			events, err = finalizeScan(merger, processor, session.dispatcherStat, session.dataRange.EndTs)
-			return events, false, err
+			err := finalizeScan(merger, processor, session)
+			return false, err
 		}
 
 		session.observeRawEntry(rawEvent)
 		if isNewTxn {
 			tableInfo, err := s.getTableInfo4Txn(dispatcher, tableID, rawEvent.CRTs-1)
 			if err != nil {
-				return nil, false, err
+				return false, err
 			}
 			if tableInfo == nil {
 				log.Warn("table info not found, stop scanning, return nothing",
 					zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID))
-				return nil, false, nil
+				return false, nil
 			}
 
 			if err = s.commitTxn(session, merger, processor, rawEvent.CRTs, tableInfo.UpdateTS()); err != nil {
-				return nil, false, err
+				return false, err
 			}
 
 			if session.limitCheck(processor.batchDML.GetSize()) {
-				return interruptScan(session, merger, processor, rawEvent.CRTs)
+				interruptScan(session, merger, processor, rawEvent.CRTs)
+				return true, nil
 			}
 
 			s.startTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
@@ -227,7 +231,7 @@ func (s *eventScanner) scanAndMergeEvents(
 				zap.Int64("tableID", tableID),
 				zap.Uint64("startTs", rawEvent.StartTs),
 				zap.Uint64("commitTs", rawEvent.CRTs))
-			return nil, false, err
+			return false, err
 		}
 	}
 }
@@ -314,21 +318,21 @@ func (s *eventScanner) commitTxn(
 func finalizeScan(
 	merger *eventMerger,
 	processor *dmlProcessor,
-	stat *dispatcherStat,
-	endTs uint64,
-) ([]event.Event, error) {
+	sess *session,
+) error {
 	if err := processor.commitTxn(); err != nil {
-		return nil, err
+		return err
 	}
 
 	resolvedBatch := processor.getResolvedBatchDML()
 	events := merger.appendDMLEvent(resolvedBatch)
-	events = append(events, merger.remainingDDLEvents()...)
+	events = append(events, merger.remainingEvents()...)
 
-	resolveTs := event.NewResolvedEvent(endTs, stat.id, stat.epoch.Load())
+	resolveTs := event.NewResolvedEvent(sess.dataRange.EndTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch.Load())
 	events = append(events, resolveTs)
 
-	return events, nil
+	sess.appendEvents(events)
+	return nil
 }
 
 // interruptScan handles scan interruption due to limits
@@ -340,17 +344,16 @@ func interruptScan(
 	merger *eventMerger,
 	processor *dmlProcessor,
 	newCommitTs uint64,
-) ([]event.Event, bool, error) {
+) {
 	// Append current batch
 	events := merger.appendDMLEvent(processor.getResolvedBatchDML())
-	events = append(events, merger.remainingDDLEvents()...)
+	events = append(events, merger.remainingEvents()...)
 
 	if newCommitTs != merger.lastCommitTs {
 		resolve := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
 		events = append(events, resolve)
 	}
 	session.appendEvents(events)
-	return session.events, true, nil
 }
 
 // session manages the state and context of a scan operation
@@ -411,12 +414,6 @@ func (s *session) recordMetrics() {
 	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
 	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
 	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
-
-	var nBytes int64
-	for _, item := range s.events {
-		nBytes += item.GetSize()
-	}
-
 	metrics.EventServiceScannedDMLSize.Observe(float64(s.eventBytes))
 }
 
@@ -458,7 +455,7 @@ func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent) []event.Event {
 	commitTs := dml.GetCommitTs()
 	var events []event.Event
 	// Add all DDL events that are before the given timestamp
-	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].GetCommitTs() <= commitTs {
+	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].GetCommitTs() < commitTs {
 		events = append(events, m.ddlEvents[m.ddlIndex])
 		m.ddlIndex++
 	}
@@ -467,8 +464,8 @@ func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent) []event.Event {
 	return events
 }
 
-// remainingDDLEvents return all remaining DDL events that have not been processed yet.
-func (m *eventMerger) remainingDDLEvents() []event.Event {
+// remainingEvents return all remaining DDL events that have not been processed yet.
+func (m *eventMerger) remainingEvents() []event.Event {
 	// Return all remaining DDL events
 	if m.ddlIndex >= len(m.ddlEvents) {
 		return nil
