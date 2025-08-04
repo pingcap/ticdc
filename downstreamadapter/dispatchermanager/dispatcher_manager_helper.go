@@ -276,7 +276,6 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 	dispatcherMap *DispatcherMap[T],
 	sinkType common.SinkType,
 ) {
-	leftToCloseDispatchers := make([]T, 0)
 	dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem T) {
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
@@ -290,39 +289,7 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 				)
 			}
 		}
-
-		_, ok := dispatcherItem.TryClose()
-		if !ok {
-			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcherItem)
-		} else {
-			dispatcherItem.Remove()
-		}
-	})
-
-	for _, dispatcherItem := range leftToCloseDispatchers {
-		log.Info("closing dispatcher",
-			zap.Stringer("changefeedID", changefeedID),
-			zap.Stringer("dispatcherID", dispatcherItem.GetId()),
-			zap.Bool("isRedo", dispatcher.IsRedoDispatcher(dispatcherItem)),
-			zap.Any("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
-		)
-		ok := false
-		count := 0
-		for !ok {
-			_, ok = dispatcherItem.TryClose()
-			time.Sleep(10 * time.Millisecond)
-			count += 1
-			if count%100 == 0 {
-				log.Info("waiting for dispatcher to close",
-					zap.Stringer("changefeedID", changefeedID),
-					zap.Stringer("dispatcherID", dispatcherItem.GetId()),
-					zap.Bool("isRedo", dispatcher.IsRedoDispatcher(dispatcherItem)),
-					zap.Any("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
-					zap.Int("count", count),
-				)
-			}
-		}
-		// Remove should be called after dispatcher is closed
+		dispatcherItem.TryClose()
 		dispatcherItem.Remove()
-	}
+	})
 }
