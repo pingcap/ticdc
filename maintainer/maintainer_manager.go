@@ -254,11 +254,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler)
 		m.maintainers.Store(cfID, cf)
 	}
-	cf.(*Maintainer).pushEvent(&Event{
-		changefeedID: cfID,
-		eventType:    EventMessage,
-		message:      msg,
-	})
+	cf.(*Maintainer).msgCh.Push(msg)
 	log.Info("received remove maintainer request",
 		zap.Stringer("changefeed", cfID))
 	return nil

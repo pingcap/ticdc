@@ -170,9 +170,9 @@ func (oc *Controller) AddOperatorWithoutLock(op operator.Operator[common.Dispatc
 
 func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
 	oc.mu.RLock()
-	defer oc.mu.RUnlock()
-
 	op, ok := oc.operators[id]
+	oc.mu.RUnlock()
+
 	if ok {
 		op.OP.Check(from, status)
 	}
@@ -245,12 +245,13 @@ func (oc *Controller) pollQueueingOperator() (
 	bool,
 ) {
 	oc.mu.Lock()
-	defer oc.mu.Unlock()
 	if oc.runningQueue.Len() == 0 {
+		oc.mu.Unlock()
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
 	if item.IsRemoved {
+		oc.mu.Unlock()
 		return nil, true
 	}
 	op := item.OP
@@ -277,6 +278,8 @@ func (oc *Controller) pollQueueingOperator() (
 			zap.Any("time since created", time.Since(item.CreatedAt)))
 	}
 	now := time.Now()
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
 	if now.Before(item.NotifyAt) {
 		heap.Push(&oc.runningQueue, item)
 		return nil, false
