@@ -278,6 +278,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		Epoch:              info.Epoch,
 		BDRMode:            util.GetOrZero(info.Config.BDRMode),
 		TimeZone:           GetGlobalServerConfig().TZ,
+		Consistent:         info.Config.Consistent,
 		// other fields are not necessary for dispatcherManager
 	}
 }
