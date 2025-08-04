@@ -306,6 +306,8 @@ func (s *eventScanner) commitTxn(
 }
 
 // finalizeScan finalizes the scan when all events have been processed
+// it's called when the iterator is nil, always indicates that all entries
+// with the same commit-ts is processed, so it's ok to append resolved-ts event
 func finalizeScan(
 	session *session,
 	merger *eventMerger,
@@ -327,6 +329,9 @@ func finalizeScan(
 }
 
 // interruptScan handles scan interruption due to limits
+// it's called when the scan exceeds the limit, and it commits the current transaction,
+// but other there may have some entries with the same commit-ts not processed yet,
+// so only append the resolved-ts event if the new commit-ts is different from the last commit-ts.
 func interruptScan(
 	session *session,
 	merger *eventMerger,
