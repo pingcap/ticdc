@@ -53,13 +53,13 @@ type defragmenter struct {
 	lastDispatchedSeq uint64
 	future            map[uint64]eventFragment
 	inputCh           <-chan eventFragment
-	outputChs         []*chann.UnlimitedChannel[eventFragment, any]
+	outputChs         []*chann.DrainableChann[eventFragment]
 	hasher            *hash.PositionInertia
 }
 
 func newDefragmenter(
 	inputCh <-chan eventFragment,
-	outputChs []*chann.UnlimitedChannel[eventFragment, any],
+	outputChs []*chann.DrainableChann[eventFragment],
 ) *defragmenter {
 	return &defragmenter{
 		future:    make(map[uint64]eventFragment),
@@ -121,12 +121,12 @@ func (d *defragmenter) dispatchFragToDMLWorker(frag eventFragment) {
 	d.hasher.Reset()
 	d.hasher.Write([]byte(tableName.Schema), []byte(tableName.Table))
 	workerID := d.hasher.Sum32() % uint32(len(d.outputChs))
-	d.outputChs[workerID].Push(frag)
+	d.outputChs[workerID].In() <- frag
 	d.lastDispatchedSeq = frag.seqNumber
 }
 
 func (d *defragmenter) close() {
 	for _, ch := range d.outputChs {
-		ch.Close()
+		ch.CloseAndDrain()
 	}
 }
