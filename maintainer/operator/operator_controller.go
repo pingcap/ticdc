@@ -260,7 +260,11 @@ func (oc *Controller) pollQueueingOperator() (
 	if op.IsFinished() {
 		op.PostFinish()
 		item.IsRemoved = true
+
+		oc.mu.Lock()
 		delete(oc.operators, opID)
+		oc.mu.Unlock()
+
 		metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Dec()
 		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
