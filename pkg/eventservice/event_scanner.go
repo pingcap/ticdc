@@ -291,7 +291,7 @@ func (s *eventScanner) commitTxn(
 		return err
 	}
 	resolvedBatch := processor.getResolvedBatchDML()
-	if resolvedBatch == nil {
+	if resolvedBatch == nil || resolvedBatch.Len() == 0 {
 		return nil
 	}
 	// Check if batch should be flushed
@@ -322,7 +322,7 @@ func finalizeScan(
 
 	// Append remaining DDLs
 	remainingEvents := merger.resolveDDLEvents(session.dataRange.EndTs)
-	resolveTs := event.NewResolvedEvent(session.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
+	resolveTs := event.NewResolvedEvent(session.dataRange.EndTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
 	remainingEvents = append(remainingEvents, resolveTs)
 	session.appendEvents(remainingEvents)
 	return session.events, nil

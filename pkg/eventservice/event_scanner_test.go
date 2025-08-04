@@ -1288,7 +1288,6 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	helper.Tk().MustExec("use test")
 	ddlEvent := helper.DDL2Event("create table t_uk (id int primary key, a int, b char(50), unique key uk_a(a))")
 	tableID := ddlEvent.TableID
-	dispatcherID := common.NewDispatcherID()
 
 	// Generate update event that changes UK
 	_, updateEvent := helper.DML2UpdateEvent("test", "t_uk",
@@ -1309,15 +1308,16 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 		mounter:      event.NewMounter(time.UTC, &integrity.Config{}),
 		schemaGetter: mockSchemaGetter,
 	}
+	dispatcherID := common.NewDispatcherID()
 
 	// Create scan session
 	ctx := context.Background()
-	dispatcherStat := &dispatcherStat{
+	stat := &dispatcherStat{
 		id:                  dispatcherID,
 		isReadyRecevingData: atomic.Bool{},
 		isRemoved:           atomic.Bool{},
 	}
-	dispatcherStat.isReadyRecevingData.Store(true)
+	stat.isReadyRecevingData.Store(true)
 
 	dataRange := common.DataRange{
 		Span: &heartbeatpb.TableSpan{
@@ -1334,7 +1334,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 
 	sess := &session{
 		ctx:            ctx,
-		dispatcherStat: dispatcherStat,
+		dispatcherStat: stat,
 		dataRange:      dataRange,
 		limit:          limit,
 		startTime:      time.Now(),
