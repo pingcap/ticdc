@@ -281,7 +281,6 @@ func (s *eventScanner) startTxn(
 	tableID int64,
 ) {
 	processor.startTxn(session.dispatcherStat.id, tableID, tableInfo, startTs, commitTs)
-	session.lastCommitTs = commitTs
 	session.dmlCount++
 }
 
@@ -300,7 +299,7 @@ func (s *eventScanner) commitTxn(
 	}
 	// Check if batch should be flushed
 	tableUpdated := resolvedBatch.TableInfo.UpdateTS() != updateTs
-	hasNewDDL := merger.hasMoreDDLs(untilTs)
+	hasNewDDL := merger.hasPendingDDLs(untilTs)
 	if hasNewDDL || tableUpdated {
 		events := merger.appendDMLEvent(resolvedBatch)
 		session.appendEvents(events)
@@ -323,7 +322,7 @@ func finalizeScan(
 	}
 
 	resolvedBatch := processor.getResolvedBatchDML()
-	events := merger.appendDMLEvent(resolvedBatch, &endTs)
+	events := merger.appendDMLEvent(resolvedBatch)
 	events = append(events, merger.remainingDDLEvents()...)
 
 	resolveTs := event.NewResolvedEvent(endTs, stat.id, stat.epoch.Load())
@@ -342,20 +341,15 @@ func interruptScan(
 	processor *dmlProcessor,
 	newCommitTs uint64,
 ) ([]event.Event, bool, error) {
-	if err := processor.commitTxn(); err != nil {
-		return nil, false, err
-	}
 	// Append current batch
-	events := merger.appendDMLEvent(processor.getResolvedBatchDML(), &session.lastCommitTs)
-	session.appendEvents(events)
+	events := merger.appendDMLEvent(processor.getResolvedBatchDML())
+	events = append(events, merger.remainingDDLEvents()...)
 
-	// Append DDLs up to last commit timestamp
-	remainingEvents := merger.remainingDDLEvents()
-	if newCommitTs != session.lastCommitTs {
-		resolve := event.NewResolvedEvent(session.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
-		remainingEvents = append(remainingEvents, resolve)
+	if newCommitTs != merger.lastCommitTs {
+		resolve := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
+		events = append(events, resolve)
 	}
-	session.appendEvents(remainingEvents)
+	session.appendEvents(events)
 	return session.events, true, nil
 }
 
@@ -367,8 +361,8 @@ type session struct {
 
 	limit scanLimit
 	// State tracking
-	startTime         time.Time
-	lastCommitTs      uint64
+	startTime time.Time
+
 	scannedBytes      int64
 	scannedEntryCount int
 	// dmlCount is the count of transactions.
@@ -439,8 +433,9 @@ func (s *session) limitCheck(nBytes int64) bool {
 
 // eventMerger handles merging of DML and DDL events in timestamp order
 type eventMerger struct {
-	ddlEvents []event.Event
-	ddlIndex  int
+	ddlEvents    []event.Event
+	ddlIndex     int
+	lastCommitTs uint64
 }
 
 // newEventMerger creates a new event merger
@@ -453,7 +448,8 @@ func newEventMerger(
 	}
 }
 
-// appendDMLEvent appends a DML event and any preceding DDL events
+// appendDMLEvent appends the given DML event after all DDL events
+// that have a commit timestamp less than or equal to the DML event's commit timestamp.
 func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent) []event.Event {
 	if dml == nil || dml.Len() == 0 {
 		return nil
@@ -467,9 +463,11 @@ func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent) []event.Event {
 		m.ddlIndex++
 	}
 	events = append(events, dml)
+	m.lastCommitTs = commitTs
 	return events
 }
 
+// remainingDDLEvents return all remaining DDL events that have not been processed yet.
 func (m *eventMerger) remainingDDLEvents() []event.Event {
 	// Return all remaining DDL events
 	if m.ddlIndex >= len(m.ddlEvents) {
@@ -478,8 +476,8 @@ func (m *eventMerger) remainingDDLEvents() []event.Event {
 	return m.ddlEvents[m.ddlIndex:]
 }
 
-// hasMoreDDLs return true if there are DDLs
-func (m *eventMerger) hasMoreDDLs(commitTs uint64) bool {
+// hasPendingDDLs return true if there are DDLs
+func (m *eventMerger) hasPendingDDLs(commitTs uint64) bool {
 	return m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].GetCommitTs() < commitTs
 }
 
