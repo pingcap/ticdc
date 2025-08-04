@@ -99,6 +99,8 @@ type EventCollector struct {
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
+	congestionController *congestionController
+
 	g      *errgroup.Group
 	cancel context.CancelFunc
 
@@ -124,6 +126,7 @@ func New(serverId node.ID) *EventCollector {
 	}
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
 	eventCollector.ds = NewEventDynamicStream(eventCollector)
+	eventCollector.congestionController = newCongestionController(eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)
 
 	return eventCollector
@@ -205,7 +208,6 @@ func (c *EventCollector) PrepareAddDispatcher(
 	stat := newDispatcherStat(target, c, readyCallback, memoryQuota)
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
-
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
@@ -245,6 +247,7 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 	}
 	c.dispatcherMap.Delete(target.GetId())
+	c.congestionController.removeDispatcher(stat)
 }
 
 // isRepeatedMsgType returns true when the message is heartbeat like message.
@@ -456,6 +459,9 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						dispatcherEvent := dispatcher.NewDispatcherEvent(&targetMessage.From, e)
 						c.ds.Push(e.GetDispatcherID(), dispatcherEvent)
+						if e.GetType() == event.TypeBatchDMLEvent {
+							c.congestionController.Acknowledge(targetMessage.From, e.(*event.BatchDMLEvent))
+						}
 					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))
@@ -463,6 +469,172 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 			}
 		}
 	}
+}
+
+type congestionController struct {
+	collector *EventCollector
+
+	lock           sync.Mutex
+	slidingWindows map[common.ChangeFeedID]map[node.ID]*slidingWindow
+	distributions  map[common.ChangeFeedID]map[node.ID]uint64
+}
+
+func newCongestionController(
+	collector *EventCollector,
+) *congestionController {
+	return &congestionController{
+		collector:      collector,
+		slidingWindows: make(map[common.ChangeFeedID]map[node.ID]*slidingWindow),
+		distributions:  make(map[common.ChangeFeedID]map[node.ID]uint64),
+	}
+}
+
+func (c *congestionController) addDispatcher(dispatcher *dispatcherStat) {
+	changefeedID := dispatcher.target.GetChangefeedID()
+	eventServiceID := dispatcher.connState.getEventServiceID()
+	// nodeID is not set yet, just skip it temporarily.
+	if eventServiceID == "" {
+		log.Panic("event service is not set", zap.Stringer("changefeedID", changefeedID))
+	}
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if _, ok := c.distributions[changefeedID]; !ok {
+		c.distributions[changefeedID] = make(map[node.ID]uint64)
+	}
+	c.distributions[changefeedID][eventServiceID]++
+
+	if _, ok := c.slidingWindows[changefeedID]; !ok {
+		c.slidingWindows[changefeedID] = make(map[node.ID]*slidingWindow)
+	}
+
+	if _, ok := c.slidingWindows[changefeedID][eventServiceID]; !ok {
+		c.slidingWindows[changefeedID][eventServiceID] = newSlidingWindow()
+		log.Info("set sliding window", zap.Stringer("changefeedID", changefeedID), zap.Any("nodeID", eventServiceID))
+	}
+}
+
+func (c *congestionController) removeDispatcher(dispatcher *dispatcherStat) {
+	changefeedID := dispatcher.target.GetChangefeedID()
+	eventServiceID := dispatcher.connState.getEventServiceID()
+
+	// nodeID is not set yet, just skip it temporarily.
+	if eventServiceID == "" {
+		return
+	}
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	proportion, ok := c.distributions[changefeedID]
+	if !ok {
+		return
+	}
+
+	proportion[eventServiceID]--
+	if proportion[eventServiceID] == 0 {
+		delete(proportion, eventServiceID)
+	}
+	if len(proportion) == 0 {
+		delete(c.slidingWindows, changefeedID)
+		delete(c.distributions, changefeedID)
+		log.Info("remove sliding window and distribution for changefeed", zap.Stringer("changefeedID", changefeedID))
+	}
+}
+
+func (c *congestionController) queryAvailable(changefeedID common.ChangeFeedID) int64 {
+	for _, quota := range c.collector.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
+		if quota.Area() == changefeedID.ID() {
+			return quota.AvailableMemory()
+		}
+	}
+	return 0
+}
+
+func (c *congestionController) newCongestionControlMessage(
+	changefeedID common.ChangeFeedID, nodeID node.ID,
+) *messaging.TargetMessage {
+	c.lock.Lock()
+	proportion, ok := c.distributions[changefeedID]
+	if !ok {
+		log.Panic("no distribution found for changefeed, this should never happen",
+			zap.String("changefeedID", changefeedID.String()))
+	}
+	defer c.lock.Unlock()
+
+	var sum uint64
+	for _, portion := range proportion {
+		sum += portion
+	}
+	if sum == 0 {
+		log.Panic("there is no active dispatcher for the changefeed, this should never happen",
+			zap.String("changefeedID", changefeedID.String()))
+	}
+
+	available := c.queryAvailable(changefeedID)
+	portion := proportion[nodeID]
+	ratio := float64(portion) / float64(sum)
+	available = int64(float64(available) * ratio)
+	quota := c.slidingWindows[changefeedID][nodeID].next(available)
+
+	m := event.NewCongestionControl()
+	m.AddAvailableMemory(changefeedID.ID(), uint64(quota))
+	message := messaging.NewSingleTargetMessage(nodeID, messaging.EventServiceTopic, m)
+	return message
+}
+
+func (c *congestionController) Acknowledge(from node.ID, item *event.BatchDMLEvent) {
+	dispatcherID := item.GetDispatcherID()
+	changefeedID := c.collector.getDispatcherStatByID(dispatcherID).target.GetChangefeedID()
+
+	acked := c.slidingWindows[changefeedID][from].ack(item.GetSize())
+	if !acked {
+		return
+	}
+
+	message := c.newCongestionControlMessage(changefeedID, from)
+	if err := c.collector.mc.SendCommand(message); err != nil {
+		log.Warn("send congestion control message failed", zap.Error(err))
+	}
+}
+
+const (
+	quotaUnit               = 1024 * 1024 * 1  // 1MB
+	quotaSlowStartThreshold = 1024 * 1024 * 8  // 32MB
+	quotaHighThreshold      = 1024 * 1024 * 16 // 64MB
+
+	availableLowThreshold = 1024 * 1024 * 256 // 256MB
+)
+
+type slidingWindow struct {
+	requested int64
+	confirmed int64
+}
+
+func newSlidingWindow() *slidingWindow {
+	return &slidingWindow{
+		requested: quotaUnit,
+	}
+}
+
+func (s *slidingWindow) next(available int64) int64 {
+	s.confirmed = 0
+
+	if available < availableLowThreshold {
+		s.requested = quotaUnit
+		return s.requested
+	}
+
+	if s.requested < quotaSlowStartThreshold {
+		s.requested *= 2
+	} else if s.requested < quotaHighThreshold {
+		s.requested += quotaUnit
+	}
+	return s.requested
+}
+
+func (s *slidingWindow) ack(nBytes int64) bool {
+	s.confirmed += nBytes
+	return s.confirmed >= s.requested
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) error {
