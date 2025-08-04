@@ -848,7 +848,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 func (m *Maintainer) onPeriodTask() {
 	// send scheduling messages
 	m.handleResendMessage()
-	// m.collectMetrics()
+	m.collectMetrics()
 	// m.calCheckpointTs()
 }
 
