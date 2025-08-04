@@ -219,7 +219,7 @@ func GetBlockedTables(
 	case timodel.ActionAddTablePartition, timodel.ActionDropTablePartition,
 		timodel.ActionTruncateTablePartition, timodel.ActionReorganizePartition,
 		timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning,
-		timodel.ActionExchangeTablePartition:
+		timodel.ActionExchangeTablePartition, timodel.ActionAlterTTLInfo, timodel.ActionAlterTTLRemove:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      blockedTableIDs,
