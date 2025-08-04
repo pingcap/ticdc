@@ -97,28 +97,16 @@ func New(
 	kvStorage kv.Storage,
 ) SchemaStore {
 	dataStorage := newPersistentStorage(ctx, root, pdCli, kvStorage)
-	upperBound := dataStorage.getUpperBound()
-
 	s := &schemaStore{
 		pdClock:       appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		unsortedCache: newDDLCache(),
 		dataStorage:   dataStorage,
 		notifyCh:      make(chan interface{}, 4),
-		finishedDDLTs: upperBound.FinishedDDLTs,
-		schemaVersion: upperBound.SchemaVersion,
 	}
-	s.pendingResolvedTs.Store(upperBound.ResolvedTs)
-	s.resolvedTs.Store(upperBound.ResolvedTs)
-
-	log.Info("new schema store",
-		zap.Uint64("resolvedTs", s.resolvedTs.Load()),
-		zap.Uint64("finishedDDLTS", s.finishedDDLTs),
-		zap.Int64("schemaVersion", s.schemaVersion))
 	s.ddlJobFetcher = newDDLJobFetcher(
 		ctx,
 		subClient,
 		kvStorage,
-		upperBound.ResolvedTs,
 		s.writeDDLEvent,
 		s.advancePendingResolvedTs)
 	return s
@@ -128,11 +116,28 @@ func (s *schemaStore) Name() string {
 	return appcontext.SchemaStore
 }
 
+func (s *schemaStore) initialize(ctx context.Context) {
+	s.dataStorage.initialize(ctx)
+
+	upperBound := s.dataStorage.getUpperBound()
+	s.finishedDDLTs = upperBound.FinishedDDLTs
+	s.schemaVersion = upperBound.SchemaVersion
+	s.pendingResolvedTs.Store(upperBound.ResolvedTs)
+	s.resolvedTs.Store(upperBound.ResolvedTs)
+	s.ddlJobFetcher.run(upperBound.ResolvedTs)
+	log.Info("schema store initialized",
+		zap.Uint64("resolvedTs", s.resolvedTs.Load()),
+		zap.Uint64("finishedDDLTS", s.finishedDDLTs),
+		zap.Int64("schemaVersion", s.schemaVersion))
+}
+
 func (s *schemaStore) Run(ctx context.Context) error {
 	log.Info("schema store begin to run")
 	defer func() {
 		log.Info("schema store exited")
 	}()
+
+	s.initialize(ctx)
 
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {

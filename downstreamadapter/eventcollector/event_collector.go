@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -35,19 +36,42 @@ import (
 )
 
 const (
-	receiveChanSize = 1024 * 8
-	retryLimit      = 3 // The maximum number of retries for sending dispatcher requests and heartbeats.
+	receiveChanSize     = 1024 * 8
+	commonMsgRetryQuota = 3 // The number of retries for most droppable dispatcher requests.
 )
 
 // DispatcherMessage is the message send to EventService.
 type DispatcherMessage struct {
-	Message    *messaging.TargetMessage
-	RetryCount int
+	Message *messaging.TargetMessage
+	// Droppable indicates whether the message can be dropped after repeated delivery failures.
+	//
+	// This is based on the assumption that:
+	// - Most dispatcher requests target local event services (safe to retry indefinitely)
+	// - Remote requests can be dropped (system can progress without them, may cause temporary delays)
+	//
+	// Why not retry all messages indefinitely?
+	// Permanently unavailable remote targets would cause messages
+	// to accumulate in the queue permanently.
+	//
+	// TODO: Implement application-level retry logic for better architectural flexibility.
+	Droppable  bool
+	RetryQuota int
 }
 
-func (d *DispatcherMessage) incrAndCheckRetry() bool {
-	d.RetryCount++
-	return d.RetryCount < retryLimit
+func newDispatcherMessage(msg *messaging.TargetMessage, droppable bool, retryQuota int) DispatcherMessage {
+	return DispatcherMessage{
+		Message:    msg,
+		Droppable:  droppable,
+		RetryQuota: retryQuota,
+	}
+}
+
+func (d *DispatcherMessage) decrAndCheckRetry() bool {
+	if !d.Droppable {
+		return true
+	}
+	d.RetryQuota--
+	return d.RetryQuota > 0
 }
 
 /*
@@ -223,13 +247,33 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 	c.dispatcherMap.Delete(target.GetId())
 }
 
+// isRepeatedMsgType returns true when the message is heartbeat like message.
+// this kind of message can be dropped quickly when send failure.
+func isRepeatedMsgType(msg *messaging.TargetMessage) bool {
+	// only handle len(msg.Message) == 1 for simplicity
+	if len(msg.Message) != 1 {
+		return false
+	}
+	switch msg.Message[0].(type) {
+	case *event.DispatcherHeartbeat:
+		return true
+	default:
+		return false
+	}
+}
+
 // Queues a message for sending (best-effort, no delivery guarantee)
 // Messages may be dropped if errors occur. For reliable delivery, implement retry/ack logic at caller side
 func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
 	if msg != nil {
-		c.dispatcherMessageChan.In() <- DispatcherMessage{
-			Message:    msg,
-			RetryCount: 0,
+		if isRepeatedMsgType(msg) {
+			c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, true, 1)
+		} else {
+			if msg.To == c.serverId {
+				c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, false, 0)
+			} else {
+				c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, true, commonMsgRetryQuota)
+			}
 		}
 	}
 }
@@ -311,10 +355,16 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 		case req := <-c.dispatcherMessageChan.Out():
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
+				sleepInterval := 10 * time.Millisecond
+				// if the error is Congested, sleep a larger interval
+				if appErr, ok := err.(apperror.AppError); ok && appErr.Type == apperror.ErrorTypeMessageCongested {
+					sleepInterval = 1 * time.Second
+				}
 				log.Info("failed to send dispatcher request message, try again later",
 					zap.String("message", req.Message.String()),
+					zap.Duration("sleepInterval", sleepInterval),
 					zap.Error(err))
-				if !req.incrAndCheckRetry() {
+				if !req.decrAndCheckRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
 						zap.String("message", req.Message.String()))
 					continue
@@ -323,7 +373,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 				c.dispatcherMessageChan.In() <- req
 				// Sleep a short time to avoid too many requests in a short time.
 				// TODO: requests can to different EventService, so we should improve the logic here.
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(sleepInterval)
 			}
 		}
 	}
