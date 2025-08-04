@@ -323,7 +323,8 @@ func finalizeScan(
 	resolvedBatch := processor.getResolvedBatchDML()
 	if resolvedBatch != nil && resolvedBatch.Len() > 0 {
 		commitTs := resolvedBatch.GetCommitTs()
-		events = merger.popDDLEvents(commitTs)
+		events = merger.
+			resolveDDLEvents(commitTs)
 		events = append(events, resolvedBatch)
 	}
 
@@ -456,17 +457,6 @@ func newEventMerger(
 	}
 }
 
-func (m *eventMerger) popDDLEvents(until uint64) []event.Event {
-	var events []event.Event
-
-	// Add all DDL events that are before the given timestamp
-	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].FinishedTs <= until {
-		events = append(events, &m.ddlEvents[m.ddlIndex])
-		m.ddlIndex++
-	}
-	return events
-}
-
 // appendDMLEvent appends a DML event and any preceding DDL events
 func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent, lastCommitTs *uint64) []event.Event {
 	if dml == nil || dml.Len() == 0 {
@@ -474,7 +464,7 @@ func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent, lastCommitTs *uin
 	}
 
 	commitTs := dml.GetCommitTs()
-	events := m.popDDLEvents(commitTs)
+	events := m.resolveDDLEvents(commitTs)
 	events = append(events, dml)
 	*lastCommitTs = commitTs
 	return events
@@ -482,7 +472,12 @@ func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent, lastCommitTs *uin
 
 // resolveDDLEvents return all remaining DDL events up to endTs
 func (m *eventMerger) resolveDDLEvents(endTs uint64) []event.Event {
-	events := m.popDDLEvents(endTs)
+	var events []event.Event
+	// Add all DDL events that are before the given timestamp
+	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].FinishedTs <= endTs {
+		events = append(events, &m.ddlEvents[m.ddlIndex])
+		m.ddlIndex++
+	}
 	return events
 }
 

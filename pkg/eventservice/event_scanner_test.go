@@ -1054,6 +1054,40 @@ func TestEventMerger(t *testing.T) {
 		require.Equal(t, 0, merger.ddlIndex)
 	})
 
+	t.Run("appendDMLEventNoDDL", func(t *testing.T) {
+		merger := newEventMerger(nil)
+
+		helper := event.NewEventTestHelper(t)
+		defer helper.Close()
+		ddlEvent, kvEvents := genEvents(helper,
+			`create table test.t(id int primary key, c char(50))`,
+			[]string{
+				`insert into test.t(id,c) values (0, "c0")`,
+			}...)
+
+		tableID := ddlEvent.TableID
+		mockSchemaGetter := newMockSchemaStore()
+		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
+
+		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter)
+		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs)
+
+		err := processor.appendRow(kvEvents[0])
+		require.NoError(t, err)
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+
+		var lastCommitTs uint64
+		events := merger.appendDMLEvent(processor.getResolvedBatchDML(), &lastCommitTs)
+
+		// Only return DML event
+		require.Equal(t, 1, len(events))
+		require.Equal(t, event.TypeBatchDMLEvent, events[0].GetType())
+		require.Equal(t, kvEvents[0].CRTs, events[0].GetCommitTs())
+		require.Equal(t, kvEvents[0].CRTs, lastCommitTs)
+	})
+
 	t.Run("appendDMLEventWithDDL", func(t *testing.T) {
 		helper := event.NewEventTestHelper(t)
 		defer helper.Close()
@@ -1066,10 +1100,9 @@ func TestEventMerger(t *testing.T) {
 		merger := newEventMerger([]event.DDLEvent{ddlEvent})
 
 		tableID := ddlEvent.TableID
-		mockMounter := &mockMounter{}
 		mockSchemaGetter := newMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter)
 
 		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs)
 
@@ -1087,51 +1120,9 @@ func TestEventMerger(t *testing.T) {
 		require.Equal(t, event.TypeDDLEvent, events[0].GetType())
 
 		require.Equal(t, event.TypeBatchDMLEvent, events[1].GetType())
-		require.Equal(t, kvEvents[0].CRTs, events[0].GetCommitTs())
+		require.Equal(t, kvEvents[0].CRTs, events[1].GetCommitTs())
 
 		require.Equal(t, lastCommitTs, kvEvents[0].CRTs)
-	})
-
-	t.Run("appendDMLEventNoDDL", func(t *testing.T) {
-		merger := newEventMerger(nil)
-
-		helper := event.NewEventTestHelper(t)
-		defer helper.Close()
-		ddlEvent, kvEvents := genEvents(helper,
-			`create table test.t(id int primary key, c char(50))`,
-			[]string{
-				`insert into test.t(id,c) values (0, "c0")`,
-			}...)
-
-		tableID := ddlEvent.TableID
-		mockMounter := &mockMounter{}
-		mockSchemaGetter := newMockSchemaStore()
-		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
-
-		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs)
-
-		err := processor.appendRow(kvEvents[0])
-		require.NoError(t, err)
-
-		err = processor.commitTxn()
-		require.NoError(t, err)
-
-		var lastCommitTs uint64
-		events := merger.appendDMLEvent(processor.getResolvedBatchDML(), &lastCommitTs)
-
-		// Only return DML event
-		require.Equal(t, 1, len(events))
-		require.Equal(t, event.TypeBatchDMLEvent, events[0].GetType())
-		require.Equal(t, kvEvents[0].CRTs, events[0].GetCommitTs())
-		require.Equal(t, kvEvents[0].CRTs, lastCommitTs)
-
-		// resolveDDLEvents should only return resolvedTs event
-		//endTs := uint64(200)
-		//remainingEvents := merger.resolveDDLEvents(endTs)
-		//require.Equal(t, 1, len(remainingEvents))
-		//require.Equal(t, event.TypeResolvedEvent, remainingEvents[0].GetType())
-		//require.Equal(t, endTs, remainingEvents[0].GetCommitTs())
 	})
 
 	t.Run("MixedDMLAndDDLEvents", func(t *testing.T) {
@@ -1182,8 +1173,10 @@ func TestEventMerger(t *testing.T) {
 
 		// Should return DDL1 + DML1
 		require.Equal(t, 2, len(events1))
+
 		require.Equal(t, event.TypeDDLEvent, events1[0].GetType())
 		require.Equal(t, ddlEvent1.FinishedTs, events1[0].GetCommitTs())
+
 		require.Equal(t, event.TypeBatchDMLEvent, events1[1].GetType())
 		require.Equal(t, kvEvents1[0].CRTs, events1[1].GetCommitTs())
 
@@ -1200,19 +1193,15 @@ func TestEventMerger(t *testing.T) {
 
 		// Should return DDL2 + DDL3 + DML2
 		require.Equal(t, 3, len(events2))
+
 		require.Equal(t, event.TypeDDLEvent, events2[0].GetType())
 		require.Equal(t, ddlEvent2.FinishedTs, events2[0].GetCommitTs())
+
 		require.Equal(t, event.TypeDDLEvent, events2[1].GetType())
 		require.Equal(t, ddlEvent3.FinishedTs, events2[1].GetCommitTs())
+
 		require.Equal(t, event.TypeBatchDMLEvent, events2[2].GetType())
 		require.Equal(t, kvEvents1[0].CRTs+50, events2[2].GetCommitTs())
-
-		// Test resolveDDLEvents, should only return resolvedTs (all DDLs are processed)
-		endTs := uint64(300)
-		remainingEvents := merger.resolveDDLEvents(endTs)
-		require.Equal(t, 1, len(remainingEvents))
-		require.Equal(t, event.TypeResolvedEvent, remainingEvents[0].GetType())
-		require.Equal(t, endTs, remainingEvents[0].GetCommitTs())
 	})
 
 	t.Run("AppendRemainingDDLsBoundary", func(t *testing.T) {
@@ -1224,6 +1213,7 @@ func TestEventMerger(t *testing.T) {
 			[]string{
 				`insert into test.t1(id,c) values (1, "c1")`,
 			}...)
+
 		ddlEvent2 := event.DDLEvent{
 			FinishedTs: 100,
 			TableInfo:  ddlEvent1.TableInfo,
@@ -1244,37 +1234,32 @@ func TestEventMerger(t *testing.T) {
 		merger := newEventMerger(ddlEvents)
 
 		// Test endTs is exactly equal to some DDL's FinishedTs
-		endTs := uint64(200)
-		events1 := merger.resolveDDLEvents(endTs)
-		require.Equal(t, 3, len(events1)) // DDL2 + DDL3 + ResolvedEvent
+		events1 := merger.resolveDDLEvents(ddlEvent3.GetCommitTs())
+		require.Equal(t, 2, len(events1)) // DDL2 + DDL3
+
 		require.Equal(t, event.TypeDDLEvent, events1[0].GetType())
 		require.Equal(t, uint64(100), events1[0].GetCommitTs())
+
 		require.Equal(t, event.TypeDDLEvent, events1[1].GetType())
 		require.Equal(t, uint64(200), events1[1].GetCommitTs())
-		require.Equal(t, event.TypeResolvedEvent, events1[2].GetType())
-		require.Equal(t, endTs, events1[2].GetCommitTs())
 
 		// Recreate merger to test endTs is less than all DDLs
 		merger2 := newEventMerger(ddlEvents)
 		endTs2 := uint64(50)
 		events2 := merger2.resolveDDLEvents(endTs2)
-		require.Equal(t, 1, len(events2)) // Only ResolvedEvent
-		require.Equal(t, event.TypeResolvedEvent, events2[0].GetType())
-		require.Equal(t, endTs2, events2[0].GetCommitTs())
+		require.Equal(t, 0, len(events2))
 
 		// Recreate merger to test endTs is greater than all DDLs
 		merger3 := newEventMerger(ddlEvents)
 		endTs3 := uint64(500)
 		events3 := merger3.resolveDDLEvents(endTs3)
-		require.Equal(t, 4, len(events3)) // all DDLs + ResolvedEvent
+		require.Equal(t, 3, len(events3)) // all DDLs
 		require.Equal(t, event.TypeDDLEvent, events3[0].GetType())
 		require.Equal(t, uint64(100), events3[0].GetCommitTs())
 		require.Equal(t, event.TypeDDLEvent, events3[1].GetType())
 		require.Equal(t, uint64(200), events3[1].GetCommitTs())
 		require.Equal(t, event.TypeDDLEvent, events3[2].GetType())
 		require.Equal(t, uint64(300), events3[2].GetCommitTs())
-		require.Equal(t, event.TypeResolvedEvent, events3[3].GetType())
-		require.Equal(t, endTs3, events3[3].GetCommitTs())
 	})
 }
 
