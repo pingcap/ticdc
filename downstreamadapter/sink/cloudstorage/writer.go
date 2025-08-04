@@ -288,6 +288,19 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			if atomic.LoadUint64(&d.isClosed) == 1 {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return errors.Trace(ctx.Err())
+			case d.toBeFlushedCh <- batchedTask:
+				log.Debug("flush task is emitted successfully when flush interval exceeds",
+					zap.Int("tablesLength", len(batchedTask.batch)))
+				batchedTask = newBatchedTask()
+			default:
+			}
 		default:
 			// TODO: optimize
 			frags, ok := ch.GetMultipleNoGroup(buffer)
@@ -312,16 +325,6 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 							zap.Any("table", table),
 							zap.Int("eventsLenth", len(task.batch[table].msgs)))
 					}
-				}
-			}
-			if len(batchedTask.batch) > 0 {
-				select {
-				case <-ctx.Done():
-					return errors.Trace(ctx.Err())
-				case d.toBeFlushedCh <- batchedTask:
-					log.Info("flush task is emitted successfully when no more event",
-						zap.Int("tablesLength", len(batchedTask.batch)))
-					batchedTask = newBatchedTask()
 				}
 			}
 			buffer = buffer[:0]
