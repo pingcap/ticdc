@@ -123,7 +123,7 @@ func TestProcessMessage(t *testing.T) {
 	did := common.NewDispatcherID()
 	ch := make(chan *messaging.TargetMessage, receiveChanSize)
 	go func() {
-		c.runDispatchMessage(ctx, ch)
+		c.runDispatchMessage(ctx, ch, false)
 	}()
 
 	var seq atomic.Uint64
@@ -141,8 +141,8 @@ func TestProcessMessage(t *testing.T) {
 	)
 	require.NotNil(t, dmls)
 
-	readyEvent := commonEvent.NewReadyEvent(did, false)
-	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, 1, ddl.TableInfo, false)
+	readyEvent := commonEvent.NewReadyEvent(did)
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, 1, ddl.TableInfo)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
 	handshakeEvent.Seq = seq.Add(1)

@@ -224,7 +224,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	cacheMap := make(map[node.ID]*resolvedTsCache)
 	wrapEvent := &wrapEvent{
 		serverID:        "test",
-		resolvedTsEvent: event.NewResolvedEvent(100, dispInfo.GetID(), 0, false),
+		resolvedTsEvent: event.NewResolvedEvent(100, dispInfo.GetID(), 0),
 	}
 	// handle resolvedTsCacheSize resolvedTs events, so the cache is full.
 	for i := 0; i < resolvedTsCacheSize+1; i++ {

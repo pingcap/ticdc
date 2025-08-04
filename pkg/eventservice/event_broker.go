@@ -166,11 +166,10 @@ func newEventBroker(
 }
 
 func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
-	batchEvent.IsRedo = d.info.GetIsRedo()
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
-			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState(), d.info.GetIsRedo())
 			metricEventServiceSendKvCount.Add(float64(e.Len()))
 		}
 	}
@@ -204,7 +203,6 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
 	e.Epoch = d.epoch.Load()
-	e.IsRedo = d.info.GetIsRedo()
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
@@ -212,8 +210,8 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 		zap.Int64("eventTableID", e.TableID),
 		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq),
-		zap.Bool("isRedo", e.GetIsRedo()))
-	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
+		zap.Bool("isRedo", d.info.GetIsRedo()))
+	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState(), d.info.GetIsRedo())
 	select {
 	case <-ctx.Done():
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
@@ -226,11 +224,12 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
-	re := pevent.NewResolvedEvent(watermark, d.id, d.epoch.Load(), d.info.GetIsRedo())
+	re := pevent.NewResolvedEvent(watermark, d.id, d.epoch.Load())
 	resolvedEvent := newWrapResolvedEvent(
 		remoteID,
 		re,
-		d.getEventSenderState())
+		d.getEventSenderState(),
+		d.info.GetIsRedo())
 	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	metricEventServiceSendResolvedTsCount.Inc()
@@ -240,8 +239,8 @@ func (c *eventBroker) sendNotReusableEvent(
 	server node.ID,
 	d *dispatcherStat,
 ) {
-	event := pevent.NewNotReusableEvent(d.info.GetID(), d.info.GetIsRedo())
-	wrapEvent := newWrapNotReusableEvent(server, event)
+	event := pevent.NewNotReusableEvent(d.info.GetID())
+	wrapEvent := newWrapNotReusableEvent(server, event, d.info.GetIsRedo())
 
 	// must success unless we can do retry later
 	c.getMessageCh(d.messageWorkerIndex) <- wrapEvent
@@ -401,8 +400,8 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
 		remoteID := node.ID(task.info.GetServerID())
-		event := pevent.NewReadyEvent(task.info.GetID(), task.info.GetIsRedo())
-		wrapEvent := newWrapReadyEvent(remoteID, event)
+		event := pevent.NewReadyEvent(task.info.GetID())
+		wrapEvent := newWrapReadyEvent(remoteID, event, task.info.GetIsRedo())
 		c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
 		metricEventServiceSendCommandCount.Inc()
 		return false
@@ -426,10 +425,9 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		task.resetTs.Load(),
 		task.seq.Add(1),
 		task.epoch.Load(),
-		task.startTableInfo.Load(),
-		task.info.GetIsRedo())
+		task.startTableInfo.Load())
 	log.Debug("send handshake event to dispatcher", zap.Stringer("dispatcher", task.id), zap.String("eventType", pevent.TypeToString(event.GetType())), zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
-	wrapEvent := newWrapHandshakeEvent(remoteID, event)
+	wrapEvent := newWrapHandshakeEvent(remoteID, event, task.info.GetIsRedo())
 	c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
 }
@@ -460,11 +458,10 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			CommitTsList: newCommitTsList,
 			Seq:          d.seq.Add(1),
 			Epoch:        d.epoch.Load(),
-			IsRedo:       d.info.GetIsRedo(),
 		}
 		log.Debug("send syncpoint event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(e.GetType())), zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
-		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
+		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState(), d.info.GetIsRedo())
 		c.getMessageCh(d.messageWorkerIndex) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
@@ -606,7 +603,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				}
 				tMsg := messaging.NewSingleTargetMessage(
 					m.serverID,
-					messaging.EventCollectorTopic,
+					getTopic(m.isRedo),
 					m.e,
 					uint64(workerIndex),
 				)
@@ -653,7 +650,7 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 	}
 	tMsg := messaging.NewSingleTargetMessage(
 		serverID,
-		messaging.EventCollectorTopic,
+		getTopic(isRedo),
 		msg,
 		uint64(workerIndex),
 	)
@@ -1016,4 +1013,11 @@ func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*event.Dispa
 		msg := messaging.NewSingleTargetMessage(node.ID(serverID), messaging.EventCollectorTopic, response)
 		c.msgSender.SendCommand(msg)
 	}
+}
+
+func getTopic(isRedo bool) string {
+	if isRedo {
+		return messaging.RedoEventCollectorTopic
+	}
+	return messaging.EventCollectorTopic
 }

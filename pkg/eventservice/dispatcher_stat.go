@@ -297,7 +297,7 @@ type wrapEvent struct {
 	isRedo       bool
 }
 
-func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState) *wrapEvent {
+func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState, isRedo bool) *wrapEvent {
 	for _, dml := range e.DMLEvents {
 		dml.State = state
 	}
@@ -305,7 +305,7 @@ func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state peven
 	w.serverID = serverID
 	w.e = e
 	w.msgType = e.GetType()
-	w.isRedo = e.GetIsRedo()
+	w.isRedo = isRedo
 	return w
 }
 
@@ -327,60 +327,60 @@ func (w *wrapEvent) getDispatcherID() common.DispatcherID {
 	return e.GetDispatcherID()
 }
 
-func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent) *wrapEvent {
+func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent, isRedo bool) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = &e
 	w.msgType = pevent.TypeHandshakeEvent
-	w.isRedo = e.GetIsRedo()
+	w.isRedo = isRedo
 	return w
 }
 
-func newWrapReadyEvent(serverID node.ID, e pevent.ReadyEvent) *wrapEvent {
+func newWrapReadyEvent(serverID node.ID, e pevent.ReadyEvent, isRedo bool) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = &e
 	w.msgType = pevent.TypeReadyEvent
-	w.isRedo = e.GetIsRedo()
+	w.isRedo = isRedo
 	return w
 }
 
-func newWrapNotReusableEvent(serverID node.ID, e pevent.NotReusableEvent) *wrapEvent {
+func newWrapNotReusableEvent(serverID node.ID, e pevent.NotReusableEvent, isRedo bool) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = &e
 	w.msgType = pevent.TypeNotReusableEvent
-	w.isRedo = e.GetIsRedo()
+	w.isRedo = isRedo
 	return w
 }
 
-func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent, state pevent.EventSenderState) *wrapEvent {
+func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent, state pevent.EventSenderState, isRedo bool) *wrapEvent {
 	e.State = state
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.resolvedTsEvent = e
 	w.msgType = pevent.TypeResolvedEvent
-	w.isRedo = e.GetIsRedo()
+	w.isRedo = isRedo
 	return w
 }
 
-func newWrapDDLEvent(serverID node.ID, e *pevent.DDLEvent, state pevent.EventSenderState) *wrapEvent {
+func newWrapDDLEvent(serverID node.ID, e *pevent.DDLEvent, state pevent.EventSenderState, isRedo bool) *wrapEvent {
 	e.State = state
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
 	w.msgType = pevent.TypeDDLEvent
-	w.isRedo = e.GetIsRedo()
+	w.isRedo = isRedo
 	return w
 }
 
-func newWrapSyncPointEvent(serverID node.ID, e *pevent.SyncPointEvent, state pevent.EventSenderState) *wrapEvent {
+func newWrapSyncPointEvent(serverID node.ID, e *pevent.SyncPointEvent, state pevent.EventSenderState, isRedo bool) *wrapEvent {
 	e.State = state
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
 	w.msgType = pevent.TypeSyncPointEvent
-	w.isRedo = e.GetIsRedo()
+	w.isRedo = isRedo
 	return w
 }
 

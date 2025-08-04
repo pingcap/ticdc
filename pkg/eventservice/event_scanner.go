@@ -472,7 +472,7 @@ func (m *eventMerger) appendRemainingDDLs(endTs uint64) []event.Event {
 		m.ddlIndex++
 	}
 
-	events = append(events, pevent.NewResolvedEvent(endTs, m.dispatcherID, m.epoch, false))
+	events = append(events, pevent.NewResolvedEvent(endTs, m.dispatcherID, m.epoch))
 
 	return events
 }
