@@ -393,7 +393,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
 
-	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, event.NewMounter(time.UTC, &integrity.Config{}))
 
 	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
 	helper := event.NewEventTestHelper(t)
@@ -418,7 +418,6 @@ func TestEventScannerWithDDL(t *testing.T) {
 	dml2 := kvEvents[1]
 	dml3 := kvEvents[2]
 	dml3.CRTs = dml2.CRTs
-	dml3.StartTs = dml2.StartTs
 
 	fakeDDL := event.DDLEvent{
 		FinishedTs: dml2.CRTs,
@@ -442,7 +441,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//             └── Scanning interrupted at DML1
 	sl := scanLimit{
 		maxDMLBytes: eSize,
-		timeout:     1000 * time.Second,
+		timeout:     10 * time.Second,
 	}
 
 	ctx := context.Background()
@@ -472,7 +471,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//                                               ▲
 	//                                               └── Events with same commitTs must be returned together
 	sl = scanLimit{
-		maxDMLBytes: 2 * eSize,
+		maxDMLBytes: 556,
 		timeout:     10000 * time.Second,
 	}
 	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
@@ -494,6 +493,9 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
 	require.Equal(t, dml3.CRTs, e.GetCommitTs())
 	require.Equal(t, int32(2), e.(*event.BatchDMLEvent).Len())
+	require.Equal(t, dml2.CRTs, e.(*event.BatchDMLEvent).DMLEvents[0].GetCommitTs())
+	require.Equal(t, dml3.CRTs, e.(*event.BatchDMLEvent).DMLEvents[1].GetCommitTs())
+
 	// fake DDL
 	e = events[3]
 	require.Equal(t, e.GetType(), event.TypeDDLEvent)
@@ -528,21 +530,27 @@ func TestEventScannerWithDDL(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL2)
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL3)
+
 	resolvedTs = resolvedTs + 3
 	disp.eventStoreResolvedTs.Store(resolvedTs)
+
 	ok, dataRange = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
 	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
+
 	require.Equal(t, 8, len(events))
+
 	e = events[5]
 	require.Equal(t, e.GetType(), event.TypeDDLEvent)
 	require.Equal(t, e.GetCommitTs(), fakeDDL2.FinishedTs)
+
 	e = events[6]
 	require.Equal(t, e.GetType(), event.TypeDDLEvent)
 	require.Equal(t, e.GetCommitTs(), fakeDDL3.FinishedTs)
+
 	e = events[7]
 	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
 	require.Equal(t, resolvedTs, e.GetCommitTs())
