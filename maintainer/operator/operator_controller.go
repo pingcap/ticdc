@@ -295,7 +295,10 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()
 		old.IsRemoved = true
+
+		oc.mu.Lock()
 		delete(oc.operators, op.ID())
+		oc.mu.Unlock()
 	}
 	oc.mu.Unlock()
 	oc.pushOperator(op)
@@ -312,7 +315,11 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 
 	oc.mu.Lock()
 	oc.operators[op.ID()] = withTime
+	oc.mu.Unlock()
+
 	op.Start()
+
+	oc.mu.Lock()
 	heap.Push(&oc.runningQueue, withTime)
 	oc.mu.Unlock()
 
@@ -418,26 +425,18 @@ func (oc *Controller) AddMergeOperator(
 	return mergeOperator
 }
 
-func (oc *Controller) GetLock() *sync.RWMutex {
-	oc.mu.RLock()
-	return &oc.mu
-}
-
-func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
-	mutex.RUnlock()
-}
-
 // =========== following func only for test ===========
 func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	oc.mu.RLock()
-	defer oc.mu.RUnlock()
-
 	start := time.Now()
 	defer func() {
 		log.Info("GetAllOperators cost", zap.Duration("cost", time.Since(start)))
 	}()
 
 	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(oc.operators))
+
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
 	for _, op := range oc.operators {
 		operators = append(operators, op.OP)
 	}
