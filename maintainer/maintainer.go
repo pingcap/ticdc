@@ -508,7 +508,6 @@ func (m *Maintainer) calCheckpointTs() {
 		return
 	}
 
-	start := time.Now()
 	// make sure there is no task running
 	// the dispatcher changing come from:
 	// 1. node change
