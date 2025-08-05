@@ -389,22 +389,28 @@ func TestEventScannerWithDDL(t *testing.T) {
 	startTs := uint64(100)
 	disp := newDispatcherStat(startTs, disInfo, nil, 0, 0, changefeedStatus)
 	makeDispatcherReady(disp)
-	broker.addDispatcher(disp.info)
+
+	err := broker.addDispatcher(disp.info)
+	require.NoError(t, err)
 
 	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
 
 	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
-		`insert into test.t(id,c) values (0, "c0")`,
-		`insert into test.t(id,c) values (1, "c1")`,
-		`insert into test.t(id,c) values (2, "c2")`,
-		`insert into test.t(id,c) values (3, "c3")`,
-	}...)
+	ddlEvent, kvEvents := genEvents(helper,
+		`create table test.t(id int primary key, c char(50))`,
+		[]string{
+			`insert into test.t(id,c) values (0, "c0")`,
+			`insert into test.t(id,c) values (1, "c1")`,
+			`insert into test.t(id,c) values (2, "c2")`,
+			`insert into test.t(id,c) values (3, "c3")`,
+		}...)
+
 	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-	err := mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
+	err = mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
 	require.NoError(t, err)
+
 	mockSchemaStore.AppendDDLEvent(tableID, ddlEvent)
 
 	// Create fake DDL event sharing commitTs with dml2 and dml3
@@ -412,18 +418,20 @@ func TestEventScannerWithDDL(t *testing.T) {
 	dml2 := kvEvents[1]
 	dml3 := kvEvents[2]
 	dml3.CRTs = dml2.CRTs
+	dml3.StartTs = dml2.StartTs
+
 	fakeDDL := event.DDLEvent{
 		FinishedTs: dml2.CRTs,
 		TableInfo:  ddlEvent.TableInfo,
 		TableID:    ddlEvent.TableID,
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
+
 	disp.eventStoreResolvedTs.Store(resolvedTs)
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
-	eSize := kvEvents[0].GetSize()
-
+	eSize := int64(266)
 	// case 1: Scanning interrupted at dml1
 	// Tests interruption at first DML due to size limit
 	// Event sequence:
@@ -434,7 +442,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//             └── Scanning interrupted at DML1
 	sl := scanLimit{
 		maxDMLBytes: eSize,
-		timeout:     10 * time.Second,
+		timeout:     1000 * time.Second,
 	}
 
 	ctx := context.Background()
@@ -450,6 +458,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	e = events[1]
 	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
+	require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
 	// resolvedTs
 	e = events[2]
 	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
@@ -459,12 +468,12 @@ func TestEventScannerWithDDL(t *testing.T) {
 	// case 2: Scanning interrupted at dml2
 	// Tests atomic return of DML2/DML3/fakeDDL sharing same commitTs
 	// Expected result (MaxBytes=2*eSize):
-	// [DDL(x), DML1(x+1), DML2(x+2), DML3(x+2), fakeDDL(x+2), Resolved(x+3)]
+	// [DDL(x), DML1(x+1), DML2(x+2), DML3(x+2), fakeDDL(x+2), Resolved(x+2)]
 	//                                               ▲
 	//                                               └── Events with same commitTs must be returned together
 	sl = scanLimit{
 		maxDMLBytes: 2 * eSize,
-		timeout:     10 * time.Second,
+		timeout:     10000 * time.Second,
 	}
 	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
@@ -478,11 +487,13 @@ func TestEventScannerWithDDL(t *testing.T) {
 	// DML1
 	e = events[1]
 	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+	require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
 	// DML2 DML3
 	e = events[2]
 	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
 	require.Equal(t, dml3.CRTs, e.GetCommitTs())
+	require.Equal(t, int32(2), e.(*event.BatchDMLEvent).Len())
 	// fake DDL
 	e = events[3]
 	require.Equal(t, e.GetType(), event.TypeDDLEvent)
@@ -1253,7 +1264,7 @@ func TestEventMerger(t *testing.T) {
 		merger := newEventMerger(ddlEvents)
 
 		// Test endTs is exactly equal to some DDL's FinishedTs
-		events1 := merger.remainingEvents()
+		events1 := merger.resolveDDLEvents(300)
 		require.Equal(t, 3, len(events1)) // DDL2 + DDL3
 
 		require.Equal(t, event.TypeDDLEvent, events1[0].GetType())

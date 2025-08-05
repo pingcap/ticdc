@@ -326,7 +326,7 @@ func finalizeScan(
 
 	resolvedBatch := processor.getResolvedBatchDML()
 	events := merger.appendDMLEvent(resolvedBatch)
-	events = append(events, merger.remainingEvents()...)
+	events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
 
 	resolveTs := event.NewResolvedEvent(sess.dataRange.EndTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch.Load())
 	events = append(events, resolveTs)
@@ -347,7 +347,7 @@ func interruptScan(
 ) {
 	// Append current batch
 	events := merger.appendDMLEvent(processor.getResolvedBatchDML())
-	events = append(events, merger.remainingEvents()...)
+	events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
 
 	if newCommitTs != merger.lastCommitTs {
 		resolve := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
@@ -464,13 +464,14 @@ func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent) []event.Event {
 	return events
 }
 
-// remainingEvents return all remaining DDL events that have not been processed yet.
-func (m *eventMerger) remainingEvents() []event.Event {
-	// Return all remaining DDL events
-	if m.ddlIndex >= len(m.ddlEvents) {
-		return nil
+// resolveDDLEvents return all remaining DDL events that have not been processed yet.
+func (m *eventMerger) resolveDDLEvents(endTs uint64) []event.Event {
+	var events []event.Event
+	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].GetCommitTs() <= endTs {
+		events = append(events, m.ddlEvents[m.ddlIndex])
+		m.ddlIndex++
 	}
-	return m.ddlEvents[m.ddlIndex:]
+	return events
 }
 
 // hasPendingDDLs return true if there are DDLs
