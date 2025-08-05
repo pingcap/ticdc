@@ -402,10 +402,10 @@ func (c *resolvedTsCache) isFull() bool {
 	return c.len >= c.limit
 }
 
-func (c *resolvedTsCache) getAll() (res []pevent.ResolvedEvent) {
-	res = c.cache[:c.len]
+func (c *resolvedTsCache) getAll() []pevent.ResolvedEvent {
+	res := c.cache[:c.len]
 	c.reset()
-	return
+	return res
 }
 
 func (c *resolvedTsCache) reset() {

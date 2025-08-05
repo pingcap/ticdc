@@ -463,7 +463,7 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 	return nil
 }
 
-// MessageCenterHandler is the handler for the events message from EventService.
+// RedoMessageCenterHandler is the handler for the redo events message from EventService.
 func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
 	// If the message is a log service event, we need to forward it to the
 	// corresponding channel to handle it in multi-thread.
