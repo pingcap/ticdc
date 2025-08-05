@@ -120,7 +120,7 @@ var (
 		Namespace: "ticdc",
 		Subsystem: "event_service",
 		Name:      "available_memory_quota",
-	}, []string{"changefeedID"})
+	}, []string{"changefeed"})
 
 	EventServiceScannedDMLSize = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
