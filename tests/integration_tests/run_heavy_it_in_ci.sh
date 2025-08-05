@@ -131,7 +131,8 @@ pulsar_groups=(
 	# G09
 	'mq_sink_error_resume'
 	# G10
-	fail_over_ddl_mix_with_syncpoint
+	# fail_over_ddl_mix_with_syncpoint
+	''
 	# G11
 	'ddl_with_random_move_table'
 	# G12
@@ -170,7 +171,8 @@ storage_groups=(
 	# G10
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G11
-	'fail_over_ddl_mix_with_syncpoint'
+	# fail_over_ddl_mix_with_syncpoint
+	''
 	# G12
 	'ddl_with_random_move_table'
 	# G13

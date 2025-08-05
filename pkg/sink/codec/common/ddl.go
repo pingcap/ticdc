@@ -128,7 +128,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionDropIndex
 	case *ast.DropDatabaseStmt:
 		return timodel.ActionDropSchema
-	case *ast.RecoverTableStmt:
+	case *ast.FlashBackTableStmt, *ast.RecoverTableStmt:
 		return timodel.ActionRecoverTable
 	case *ast.RenameTableStmt:
 		if len(s.TableToTables) > 1 {
