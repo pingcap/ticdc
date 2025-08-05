@@ -521,17 +521,10 @@ func (m *Maintainer) calCheckpointTs() {
 	// If all check is successfully, we begin to do the checkpointTs calculation,
 	// otherwise, we just return.
 	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
-	operatorLock := m.controller.operatorController.GetLock()
-	barrierLock := m.barrier.GetLock()
 
 	// TODO: consider how can we simplify the logic better
 	minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
 	minCheckpointTsForBarrier := m.barrier.GetMinBlockedCheckpointTsForNewTables()
-
-	m.controller.operatorController.ReleaseLock(operatorLock)
-	m.barrier.ReleaseLock(barrierLock)
-
-	log.Info("calCheckpointTs lock cost", zap.Duration("cost", time.Since(start)))
 
 	newWatermark := heartbeatpb.NewMaxWatermark()
 	// if there is no tables, there must be a table trigger dispatcher

@@ -210,12 +210,14 @@ func (oc *Controller) OperatorSize() int {
 
 func (oc *Controller) GetMinCheckpointTs() uint64 {
 	minCheckpointTs := uint64(math.MaxUint64)
-	for _, op := range oc.operators {
-		if op.OP.BlockTsForward() {
-			spanReplication := oc.spanController.GetTaskByID(op.OP.ID())
+	ops := oc.GetAllOperators()
+
+	for _, op := range ops {
+		if op.BlockTsForward() {
+			spanReplication := oc.spanController.GetTaskByID(op.ID())
 			if spanReplication == nil {
 				// for test
-				log.Panic("span replication is nil", zap.String("operator", op.OP.String()))
+				log.Panic("span replication is nil", zap.String("operator", op.String()))
 			}
 			if spanReplication.GetStatus().CheckpointTs < minCheckpointTs {
 				minCheckpointTs = spanReplication.GetStatus().CheckpointTs
@@ -431,6 +433,11 @@ func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
 func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
 	oc.mu.RLock()
 	defer oc.mu.RUnlock()
+
+	start := time.Now()
+	defer func() {
+		log.Info("GetAllOperators cost", zap.Duration("cost", time.Since(start)))
+	}()
 
 	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(oc.operators))
 	for _, op := range oc.operators {
