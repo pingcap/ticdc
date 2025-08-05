@@ -287,12 +287,26 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 }
 
 func (m *Maintainer) runHandleMessage(ctx context.Context) error {
+	buffer := make([]*messaging.TargetMessage, 0, 1024)
+
+	findFirstHeartbeat := func(msg []*messaging.TargetMessage) int {
+		for i := 0; i < len(msg); i++ {
+			if msg[i].Type != messaging.TypeHeartBeatRequest {
+				m.onMessage(msg[i])
+			} else {
+				return i
+			}
+		}
+		return -1
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
-			msg, ok := m.msgCh.Get()
+			buffer = buffer[:0]
+			msg, ok := m.msgCh.GetMultipleNoGroup(buffer)
 			if !ok {
 				log.Error("msgCh is closed", zap.String("changefeed", m.id.String()))
 				return nil
@@ -300,8 +314,25 @@ func (m *Maintainer) runHandleMessage(ctx context.Context) error {
 			// first check the online/offline nodes
 			// TODO:not sure whether we need check nodeChanged first
 			m.checkNodeChanged()
+			// we just batch the continous msg of `heartbeat`
+			firstIndex := findFirstHeartbeat(msg)
+			if firstIndex == -1 {
+				continue
+			}
 
-			m.onMessage(msg)
+			index := firstIndex + 1
+			for index < len(msg) {
+				if msg[index].Type != messaging.TypeHeartBeatRequest {
+					m.onBatchMessage(msg[firstIndex:index])
+					firstIndex = findFirstHeartbeat(msg[index:])
+					index = firstIndex + 1
+				} else {
+					index += 1
+				}
+			}
+			if firstIndex != -1 {
+				m.onBatchMessage(msg[firstIndex:])
+			}
 		}
 	}
 }
@@ -442,6 +473,18 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 			zap.String("changefeed", m.id.Name()),
 			zap.String("messageType", msg.Type.String()))
 	}
+}
+
+func (m *Maintainer) onBatchMessage(msg []*messaging.TargetMessage) {
+	for _, msg := range msg {
+		if msg.Type != messaging.TypeHeartBeatRequest {
+			log.Panic("invalid message type",
+				zap.String("changefeed", m.id.Name()),
+				zap.String("messageType", msg.Type.String()))
+		}
+	}
+	m.onBatchHeartBeatRequest(msg)
+
 }
 
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
@@ -586,6 +629,57 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 				zap.String("changefeed", m.id.Name()),
 				zap.Any("msg", msg), zap.Error(err))
 			continue
+		}
+	}
+}
+
+func (m *Maintainer) onBatchHeartBeatRequest(msg []*messaging.TargetMessage) {
+	// ignore the heartbeat if the maintainer not bootstrapped
+	if !m.bootstrapped.Load() {
+		return
+	}
+
+	start := time.Now()
+	defer func() {
+		log.Info("onBatchHeartBeatRequest cost", zap.Duration("cost", time.Since(start)), zap.Int("msgCount", len(msg)))
+	}()
+
+	// we first group the status, to reduce the status number we need to handle
+	dispatcherStatusMap := make(map[node.ID]map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus)
+	watermarkMap := make(map[node.ID]*heartbeatpb.Watermark)
+	for _, msg := range msg {
+		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
+		if _, ok := dispatcherStatusMap[msg.From]; !ok {
+			dispatcherStatusMap[msg.From] = make(map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus)
+		}
+		if len(req.Statuses) > 0 {
+			for _, status := range req.Statuses {
+				dispatcherStatusMap[msg.From][*status.ID] = status
+			}
+		}
+		if req.Watermark != nil {
+			watermarkMap[msg.From] = req.Watermark
+		}
+
+		if req.Err != nil {
+			log.Error("dispatcher report an error",
+				zap.Stringer("changefeed", m.id),
+				zap.Stringer("sourceNode", msg.From),
+				zap.String("error", req.Err.Message))
+			m.onError(msg.From, req.Err)
+		}
+	}
+
+	for nodeID, statusMap := range dispatcherStatusMap {
+		for _, status := range statusMap {
+			m.controller.HandleStatus(nodeID, []*heartbeatpb.TableSpanStatus{status})
+		}
+	}
+
+	for nodeID, watermark := range watermarkMap {
+		old, ok := m.checkpointTsByCapture[nodeID]
+		if !ok || watermark.Seq >= old.Seq {
+			m.checkpointTsByCapture[nodeID] = *watermark
 		}
 	}
 }
