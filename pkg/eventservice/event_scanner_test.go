@@ -426,17 +426,16 @@ func TestEventScannerWithDDL(t *testing.T) {
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
-	eSize := int64(266)
 	// case 1: Scanning interrupted at dml1
 	// Tests interruption at first DML due to size limit
 	// Event sequence:
-	//   DDL(x) -> DML1(x+1) -> DML2(x+2) -> fakeDDL(x+2) -> DML3(x+3)
+	//   DDL(x) -> DML1(x+1) -> DML2(x+2) -> DML3(x+2) -> fakeDDL(x+2) -> DML3(x+4)
 	// Expected result (MaxBytes=1*eSize):
 	// [DDL(x), DML1(x+1), Resolved(x+1)]
 	//             ▲
 	//             └── Scanning interrupted at DML1
 	sl := scanLimit{
-		maxDMLBytes: eSize,
+		maxDMLBytes: 266,
 		timeout:     10 * time.Second,
 	}
 
@@ -462,10 +461,49 @@ func TestEventScannerWithDDL(t *testing.T) {
 
 	// case 2: Scanning interrupted at dml2
 	// Tests atomic return of DML2/DML3/fakeDDL sharing same commitTs
-	// Expected result (MaxBytes=2*eSize):
-	// [DDL(x), DML1(x+1), DML2(x+2), DML3(x+2), fakeDDL(x+2), Resolved(x+2)]
+	// Event sequence:
+	//   DDL(x) -> DML1(x+1) -> DML2(x+2) -> DML3(x+2) -> fakeDDL(x+2) -> DML3(x+4)
+	// Expected result:
+	//   [DDL(x), DML1(x+1), DML2(x+2)]
+	// 							▲
+	// 							└── Scanning interrupted at DML3
+	// DO NOT emit fakeDDL and ResolvedTs here, since there is still DML3 not scanned
+	sl = scanLimit{
+		maxDMLBytes: 300,
+		timeout:     1000 * time.Second,
+	}
+	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	require.NoError(t, err)
+	require.True(t, isBroken)
+	require.Equal(t, 3, len(events))
+
+	// DDL1
+	e = events[0]
+	require.Equal(t, e.GetType(), event.TypeDDLEvent)
+	require.Equal(t, ddlEvent.GetCommitTs(), e.GetCommitTs())
+
+	// DML1
+	e = events[1]
+	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+	require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
+	require.Equal(t, dml1.CRTs, e.GetCommitTs())
+
+	// DML2
+	e = events[2]
+	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+	require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
+	require.Equal(t, dml2.CRTs, e.GetCommitTs())
+
+	// case 3: Scanning interrupted at dml3
+	// Tests atomic return of DML2/DML3/fakeDDL sharing same commitTs
+	// Event sequence:
+	//   DDL(x) -> DML1(x+1) -> DML2(x+2) -> DML3(x+2) -> fakeDDL(x+2) -> DML3(x+4)
+	// Expected result:
+	//   [DDL(x), DML1(x+1), DML2(x+2), DML3(x+2), fakeDDL(x+2), Resolved(x+2)]
 	//                                               ▲
 	//                                               └── Events with same commitTs must be returned together
+	// 										▲
+	// 										└── Scanning interrupted at DML3
 	sl = scanLimit{
 		maxDMLBytes: 556,
 		timeout:     10 * time.Second,
@@ -502,14 +540,14 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
 	require.Equal(t, dml3.CRTs, e.GetCommitTs())
 
-	// case 3: Tests handling of multiple DDL events
+	// case 4: Tests handling of multiple DDL events
 	// Tests that scanner correctly processes multiple DDL events
 	// Event sequence after additions:
 	//   ... -> fakeDDL2(x+5) -> fakeDDL3(x+6)
 	// Expected result:
 	// [..., fakeDDL2(x+5), fakeDDL3(x+6), Resolved(x+7)]
 	sl = scanLimit{
-		maxDMLBytes: 100 * eSize,
+		maxDMLBytes: 10000,
 		timeout:     10 * time.Second,
 	}
 

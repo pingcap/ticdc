@@ -347,9 +347,8 @@ func interruptScan(
 ) {
 	// Append current batch
 	events := merger.appendDMLEvent(processor.getResolvedBatchDML())
-	events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
-
 	if newCommitTs != merger.lastCommitTs {
+		events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
 		resolve := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
 		events = append(events, resolve)
 	}
