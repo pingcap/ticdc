@@ -184,11 +184,11 @@ func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 
 func (c *Controller) GetMinCheckpointTsForAbsentSpans() uint64 {
 	minCheckpointTs := uint64(math.MaxUint64)
-	// for _, span := range c.GetAbsent() {
-	// 	if span.GetStatus().CheckpointTs < minCheckpointTs {
-	// 		minCheckpointTs = span.GetStatus().CheckpointTs
-	// 	}
-	// }
+	for _, span := range c.GetAbsent() {
+		if span.GetStatus().CheckpointTs < minCheckpointTs {
+			minCheckpointTs = span.GetStatus().CheckpointTs
+		}
+	}
 	return minCheckpointTs
 }
 
