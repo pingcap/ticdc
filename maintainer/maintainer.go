@@ -319,8 +319,8 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 func (m *Maintainer) runHandleMessage(ctx context.Context) error {
 	buffer := make([]*messaging.TargetMessage, 0, 1024)
 
-	findFirstHeartbeat := func(msg []*messaging.TargetMessage) int {
-		for i := 0; i < len(msg); i++ {
+	findFirstHeartbeat := func(msg []*messaging.TargetMessage, beginIndex int) int {
+		for i := beginIndex; i < len(msg); i++ {
 			if msg[i].Type != messaging.TypeHeartBeatRequest {
 				m.onMessage(msg[i])
 			} else {
@@ -345,7 +345,7 @@ func (m *Maintainer) runHandleMessage(ctx context.Context) error {
 			// TODO:not sure whether we need check nodeChanged first
 			m.checkNodeChanged()
 			// we just batch the continous msg of `heartbeat`
-			firstIndex := findFirstHeartbeat(msg)
+			firstIndex := findFirstHeartbeat(msg, 0)
 			if firstIndex == -1 {
 				continue
 			}
@@ -354,7 +354,7 @@ func (m *Maintainer) runHandleMessage(ctx context.Context) error {
 			for index < len(msg) {
 				if msg[index].Type != messaging.TypeHeartBeatRequest {
 					m.onBatchMessage(msg[firstIndex:index])
-					firstIndex = findFirstHeartbeat(msg[index:])
+					firstIndex = findFirstHeartbeat(msg, index)
 					index = firstIndex + 1
 				} else {
 					index += 1
