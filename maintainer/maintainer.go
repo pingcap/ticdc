@@ -355,6 +355,9 @@ func (m *Maintainer) runHandleMessage(ctx context.Context) error {
 				if msg[index].Type != messaging.TypeHeartBeatRequest {
 					m.onBatchMessage(msg[firstIndex:index])
 					firstIndex = findFirstHeartbeat(msg, index)
+					if firstIndex == -1 {
+						break
+					}
 					index = firstIndex + 1
 				} else {
 					index += 1
