@@ -68,37 +68,47 @@ func TestEventServiceBasic(t *testing.T) {
 	log.Info("start event service basic test")
 
 	mockStore := newMockEventStore(100)
-	mockStore.Run(ctx)
+	_ = mockStore.Run(ctx)
 
 	mc := &mockMessageCenter{
 		messageCh: make(chan *messaging.TargetMessage, 100),
 	}
 	esImpl := startEventService(ctx, t, mc, mockStore)
-	esImpl.Close(ctx)
+	_ = esImpl.Close(ctx)
 
 	dispatcherInfo := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	// register acceptor
 	esImpl.registerDispatcher(ctx, dispatcherInfo)
 	require.Equal(t, 1, len(esImpl.brokers))
-	require.NotNil(t, esImpl.brokers[dispatcherInfo.GetClusterID()])
 
-	// add events to eventStore
+	broker := esImpl.brokers[dispatcherInfo.GetClusterID()]
+	require.NotNil(t, broker)
+
+	controlM := commonEvent.NewCongestionControl()
+	controlM.AddAvailableMemory(dispatcherInfo.GetChangefeedID().Id, memoryQuotaLowThreshold+1024*1024)
+	broker.handleCongestionControl(node.ID(dispatcherInfo.serverID), controlM)
+
+	// add events to eventStore`
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
-		`insert into test.t(id,c) values (0, "c0")`,
-		`insert into test.t(id,c) values (1, "c1")`,
-		`insert into test.t(id,c) values (2, "c2")`,
-	}...)
+	ddlEvent, kvEvents := genEvents(helper,
+		`create table test.t(id int primary key, c char(50))`,
+		[]string{
+			`insert into test.t(id,c) values (0, "c0")`,
+			`insert into test.t(id,c) values (1, "c1")`,
+			`insert into test.t(id,c) values (2, "c2")`,
+		}...)
 	require.NotNil(t, kvEvents)
-	schemastore := esImpl.schemaStore.(*mockSchemaStore)
-	schemastore.AppendDDLEvent(dispatcherInfo.span.TableID, ddlEvent)
+
+	esImpl.schemaStore.(*mockSchemaStore).AppendDDLEvent(dispatcherInfo.span.TableID, ddlEvent)
 
 	resolvedTs := kvEvents[0].CRTs + 1
-	mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents[0])
+	_ = mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents[0])
 	// receive events from msg center
-	msgCnt := 0
-	dmlCount := 0
+	var (
+		msgCnt   int
+		dmlCount int
+	)
 	for {
 		msg := <-mc.messageCh
 		log.Info("receive message", zap.Any("message", msg))
@@ -106,29 +116,28 @@ func TestEventServiceBasic(t *testing.T) {
 			msgCnt++
 			switch e := m.(type) {
 			case *commonEvent.ReadyEvent:
-				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, dispatcherInfo.id, e.DispatcherID)
 				require.Equal(t, uint64(0), e.GetSeq())
 				log.Info("receive ready event", zap.Any("event", e))
+
 				// 1. When a Dispatcher is register, it will send a ReadyEvent to the eventCollector.
 				// 2. The eventCollector will send a reset request to the eventService.
 				// 3. We are here to simulate the reset request.
 				esImpl.resetDispatcher(dispatcherInfo)
-				mockStore.AppendEvents(dispatcherInfo.id, resolvedTs+1)
+				_ = mockStore.AppendEvents(dispatcherInfo.id, resolvedTs+1)
 			case *commonEvent.HandshakeEvent:
-				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, dispatcherInfo.id, e.DispatcherID)
 				require.Equal(t, dispatcherInfo.startTs, e.GetStartTs())
 				require.Equal(t, uint64(1), e.Seq)
 				log.Info("receive handshake event", zap.Any("event", e))
-				mockStore.AppendEvents(dispatcherInfo.id, kvEvents[1].CRTs+1, kvEvents[1])
-				mockStore.AppendEvents(dispatcherInfo.id, kvEvents[2].CRTs+1, kvEvents[2])
+
+				_ = mockStore.AppendEvents(dispatcherInfo.id, kvEvents[1].CRTs+1, kvEvents[1])
+				_ = mockStore.AppendEvents(dispatcherInfo.id, kvEvents[2].CRTs+1, kvEvents[2])
 			case *commonEvent.BatchDMLEvent:
-				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
-				// first dml has one event, sencond dml has two events
+				// first dml has one event, second dml has two events
 				if dmlCount == 0 {
 					require.Equal(t, int32(1), e.Len())
 				} else if dmlCount == 1 {
@@ -138,12 +147,10 @@ func TestEventServiceBasic(t *testing.T) {
 				require.Equal(t, kvEvents[dmlCount-1].CRTs, e.GetCommitTs())
 				require.Equal(t, uint64(dmlCount+2), e.GetSeq())
 			case *commonEvent.DDLEvent:
-				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, ddlEvent.FinishedTs, e.FinishedTs)
 				require.Equal(t, uint64(2), e.Seq)
 			case *commonEvent.BatchResolvedEvent:
-				require.NotNil(t, msg)
 				log.Info("receive watermark", zap.Uint64("ts", e.Events[0].ResolvedTs))
 			}
 		}
