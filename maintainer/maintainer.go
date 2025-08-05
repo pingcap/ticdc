@@ -519,14 +519,14 @@ func (m *Maintainer) calCheckpointTs() {
 	// If all check is successfully, we begin to do the checkpointTs calculation,
 	// otherwise, we just return.
 	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
-	// operatorLock := m.controller.operatorController.GetLock()
+	operatorLock := m.controller.operatorController.GetLock()
 	barrierLock := m.barrier.GetLock()
 
 	// TODO: consider how can we simplify the logic better
-	// minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
+	minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
 	minCheckpointTsForBarrier := m.barrier.GetMinBlockedCheckpointTsForNewTables()
 
-	// m.controller.operatorController.ReleaseLock(operatorLock)
+	m.controller.operatorController.ReleaseLock(operatorLock)
 	m.barrier.ReleaseLock(barrierLock)
 
 	newWatermark := heartbeatpb.NewMaxWatermark()
@@ -551,9 +551,9 @@ func (m *Maintainer) calCheckpointTs() {
 	if minCheckpointTsForBarrier != uint64(math.MaxUint64) {
 		newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
 	}
-	// if minCheckpointTsForScheduler != 0 {
-	// 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
-	// }
+	if minCheckpointTsForScheduler != 0 {
+		newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
+	}
 
 	log.Info("can advance checkpointTs",
 		zap.String("changefeed", m.id.Name()),

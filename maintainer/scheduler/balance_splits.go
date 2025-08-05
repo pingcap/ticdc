@@ -107,7 +107,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 				splitSpans := s.splitter.Split(context.Background(), checkResult.SplitSpan.Span, checkResult.SpanNum, checkResult.SpanType)
 				if len(splitSpans) > 1 {
 					op := operator.NewSplitDispatcherOperator(s.spanController, checkResult.SplitSpan, splitSpans, checkResult.SplitTargetNodes, func(span *replica.SpanReplication, node node.ID) bool {
-						return s.operatorController.AddOperatorWithoutLock(operator.NewAddDispatcherOperator(s.spanController, span, node))
+						return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, span, node))
 					})
 					ret := s.operatorController.AddOperator(op)
 					if ret {

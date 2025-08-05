@@ -111,9 +111,6 @@ func (oc *Controller) Execute() time.Time {
 // RemoveAllTasks remove all tasks, and notify all operators to stop.
 // it is only called by the barrier when the changefeed is stopped.
 func (oc *Controller) RemoveAllTasks() {
-	oc.mu.Lock()
-	defer oc.mu.Unlock()
-
 	for _, replicaSet := range oc.spanController.RemoveAll() {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, replicaSet))
 	}
@@ -122,8 +119,6 @@ func (oc *Controller) RemoveAllTasks() {
 // RemoveTasksBySchemaID remove all tasks by schema id.
 // it is only by the barrier when the schema is dropped by ddl
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
-	oc.mu.Lock()
-	defer oc.mu.Unlock()
 	for _, replicaSet := range oc.spanController.RemoveBySchemaID(schemaID) {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, replicaSet))
 	}
@@ -132,8 +127,6 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 // RemoveTasksByTableIDs remove all tasks by table ids.
 // it is only called by the barrier when the table is dropped by ddl
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
-	oc.mu.Lock()
-	defer oc.mu.Unlock()
 	for _, replicaSet := range oc.spanController.RemoveByTableIDs(tables...) {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, replicaSet))
 	}
@@ -141,21 +134,16 @@ func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 
 // AddOperator adds an operator to the controller, if the operator already exists, return false.
 func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
-	oc.mu.Lock()
-	defer oc.mu.Unlock()
-
-	return oc.AddOperatorWithoutLock(op)
-}
-
-// AddOperator adds an operator to the controller, if the operator already exists, return false.
-func (oc *Controller) AddOperatorWithoutLock(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
+	oc.mu.RLock()
 	if _, ok := oc.operators[op.ID()]; ok {
+		oc.mu.Unlock()
 		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("operator", op.String()))
 		return false
 	}
+	oc.mu.RUnlock()
 	span := oc.spanController.GetTaskByID(op.ID())
 	if span == nil {
 		log.Warn("add operator failed, span not found",
@@ -182,11 +170,10 @@ func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID,
 // the controller will mark all spans on the node as absent if no operator is handling it,
 // then the controller will notify all operators.
 func (oc *Controller) OnNodeRemoved(n node.ID) {
-	oc.mu.RLock()
-	defer oc.mu.RUnlock()
-
 	for _, span := range oc.spanController.GetTaskByNodeID(n) {
+		oc.mu.RLock()
 		_, ok := oc.operators[span.ID]
+		oc.mu.RUnlock()
 		if !ok {
 			oc.spanController.MarkSpanAbsent(span)
 		}
@@ -212,11 +199,6 @@ func (oc *Controller) GetOperator(id common.DispatcherID) operator.Operator[comm
 func (oc *Controller) OperatorSize() int {
 	oc.mu.RLock()
 	defer oc.mu.RUnlock()
-	return len(oc.operators)
-}
-
-// OperatorSize returns the number of operators in the controller.
-func (oc *Controller) OperatorSizeWithLock() int {
 	return len(oc.operators)
 }
 
@@ -295,7 +277,10 @@ func (oc *Controller) pollQueueingOperator() (
 }
 
 func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
+	oc.mu.Lock()
 	if old, ok := oc.operators[op.ID()]; ok {
+		oc.mu.Unlock()
+
 		log.Info("replica set is removed , replace the old one",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
@@ -306,6 +291,7 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.IsRemoved = true
 		delete(oc.operators, op.ID())
 	}
+	oc.mu.Unlock()
 	oc.pushOperator(op)
 }
 
@@ -317,9 +303,13 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 		zap.String("changefeed", oc.changefeedID.Name()),
 		zap.String("operator", op.String()))
 	withTime := operator.NewOperatorWithTime(op, time.Now())
+
+	oc.mu.Lock()
 	oc.operators[op.ID()] = withTime
 	op.Start()
 	heap.Push(&oc.runningQueue, withTime)
+	oc.mu.Unlock()
+
 	metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 	metrics.TotalOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 }
@@ -377,9 +367,6 @@ func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 func (oc *Controller) AddMergeOperator(
 	affectedReplicaSets []*replica.SpanReplication,
 ) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	oc.mu.Lock()
-	defer oc.mu.Unlock()
-
 	if !checkMergeOperator(affectedReplicaSets) {
 		return nil
 	}
@@ -387,7 +374,7 @@ func (oc *Controller) AddMergeOperator(
 	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
 	for _, replicaSet := range affectedReplicaSets {
 		operator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
-		ret := oc.AddOperatorWithoutLock(operator)
+		ret := oc.AddOperator(operator)
 		if ret {
 			operators = append(operators, operator)
 		} else {
@@ -405,7 +392,7 @@ func (oc *Controller) AddMergeOperator(
 	}
 
 	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators)
-	ret := oc.AddOperatorWithoutLock(mergeOperator)
+	ret := oc.AddOperator(mergeOperator)
 	if !ret {
 		log.Error("failed to add merge dispatcher operator",
 			zap.String("changefeed", oc.changefeedID.String()),
@@ -426,12 +413,12 @@ func (oc *Controller) AddMergeOperator(
 }
 
 func (oc *Controller) GetLock() *sync.RWMutex {
-	oc.mu.Lock()
+	oc.mu.RLock()
 	return &oc.mu
 }
 
 func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
-	mutex.Unlock()
+	mutex.RUnlock()
 }
 
 // =========== following func only for test ===========
