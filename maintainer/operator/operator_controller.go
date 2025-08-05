@@ -157,13 +157,19 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
+	log.Info("Begin UpdateOperatorStatus",
+		zap.String("id", id.String()))
+	start := time.Now()
 	oc.mu.RLock()
+	log.Info("GetLock", zap.Duration("cost", time.Since(start)))
 	op, ok := oc.operators[id]
 	oc.mu.RUnlock()
+	log.Info("GetOperator", zap.Duration("cost", time.Since(start)))
 
 	if ok {
 		op.OP.Check(from, status)
 	}
+	log.Info("End UpdateOperatorStatus", zap.Duration("cost", time.Since(start)))
 }
 
 // OnNodeRemoved is called when a node is offline,

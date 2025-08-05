@@ -507,6 +507,8 @@ func (m *Maintainer) calCheckpointTs() {
 		m.bootstrapper.PrintBootstrapStatus()
 		return
 	}
+
+	start := time.Now()
 	// make sure there is no task running
 	// the dispatcher changing come from:
 	// 1. node change
@@ -528,6 +530,8 @@ func (m *Maintainer) calCheckpointTs() {
 
 	m.controller.operatorController.ReleaseLock(operatorLock)
 	m.barrier.ReleaseLock(barrierLock)
+
+	log.Info("calCheckpointTs lock cost", zap.Duration("cost", time.Since(start)))
 
 	newWatermark := heartbeatpb.NewMaxWatermark()
 	// if there is no tables, there must be a table trigger dispatcher
