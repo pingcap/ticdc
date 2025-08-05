@@ -48,9 +48,9 @@ func GetDDLActionType(query string) timodel.ActionType {
 		if len(s.Specs) > 1 {
 			return timodel.ActionMultiSchemaChange
 		} else if len(s.Specs) == 0 {
-			// The upstream TTL deletions will be synchronized to the downstream.
-			// Therefore, to prevent duplicate deletions,
-			// the TTL_ENABLE attribute of the downstream tables will be forcibly set to OFF.
+			// The TTL_ENABLE attribute in the downstream will be automatically set to OFF
+			// `ALTER TABLE TTL_ENABLE='ON'` will transform into `ALTER TABLE`
+			// and the table specs are empty.
 			return timodel.ActionAlterTTLInfo
 		}
 		spec := s.Specs[0]
