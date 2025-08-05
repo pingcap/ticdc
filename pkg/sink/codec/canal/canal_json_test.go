@@ -15,6 +15,7 @@ package canal
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
@@ -1197,4 +1198,69 @@ func TestCheckpointTs(t *testing.T) {
 
 	obtained := decoder.NextResolvedEvent()
 	require.Equal(t, watermark, obtained)
+}
+
+func TestRowKey(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	createTableDDL := `create table test.t(
+		id int primary key auto_increment,
+ 		a tinyint, b tinyint unsigned,
+ 		c smallint, d smallint unsigned,
+ 		e mediumint, f mediumint unsigned,
+ 		g int, h int unsigned,
+ 		i bigint, j bigint unsigned)`
+
+	job := helper.DDL2Job(createTableDDL)
+	tableInfo := helper.GetTableInfo(job)
+
+	sql := `insert into test.t values(
+		1,
+		-128, 0,
+		-32768, 0,
+		-8388608, 0,
+		-2147483648, 0,
+		-9223372036854775808, 0)`
+	values := helper.DML2Event("test", "t", sql)
+	row, ok := values.GetNextRow()
+	require.True(t, ok)
+	columnSelector := columnselector.NewDefaultColumnSelector()
+	event := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       values.GetCommitTs(),
+		Event:          row,
+		ColumnSelector: columnSelector,
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	codecConfig.ContentCompatible = true
+	codecConfig.OnlyOutputUpdatedColumns = true
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.OutputRowKey = true
+	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+	err = encoder.AppendRowChangedEvent(ctx, "", event)
+	require.NoError(t, err)
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	message := messages[0]
+
+	var data map[string]json.RawMessage
+	err = json.Unmarshal(message.Value, &data)
+	require.NoError(t, err)
+
+	var tidb_ext struct {
+		CommitTs int64  `json:"commitTs"`
+		Rowkey   string `json:"rowkey"`
+	}
+	err = json.Unmarshal(data["_tidb"], &tidb_ext)
+	require.NoError(t, err)
+
+	require.NotEqual(t, tidb_ext.CommitTs, 0)
+	require.Equal(t, tidb_ext.Rowkey, "dIAAAAAAAABwX3KAAAAAAAAAAQ==")
 }
