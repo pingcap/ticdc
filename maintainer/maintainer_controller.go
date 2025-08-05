@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"math"
 	"time"
 
 	"github.com/pingcap/log"
@@ -181,6 +182,12 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 func (c *Controller) GetMinCheckpointTs() uint64 {
 	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs()
 	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForAbsentSpans()
+	if minCheckpointTsForOperator == math.MaxUint64 {
+		return minCheckpointTsForSpan
+	}
+	if minCheckpointTsForSpan == math.MaxUint64 {
+		return minCheckpointTsForOperator
+	}
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
 

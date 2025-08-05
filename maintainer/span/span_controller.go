@@ -310,9 +310,6 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 	log.Info("span get status checker cost", zap.Duration("cost", time.Since(start)), zap.String("checker", checker.Name()))
 
 	// TODO: check if we need to lock the mu here, or we can add a lock inner the checker
-	c.mu.Lock()
-	log.Info("update status get lock cost", zap.Duration("cost", time.Since(start)))
-	defer c.mu.Unlock()
 	checker.UpdateStatus(span)
 	log.Info("update status cost", zap.Duration("cost", time.Since(start)))
 }
