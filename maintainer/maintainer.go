@@ -551,9 +551,9 @@ func (m *Maintainer) calCheckpointTs() {
 	if minCheckpointTsForBarrier != uint64(math.MaxUint64) {
 		newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
 	}
-	if minCheckpointTsForScheduler != 0 {
-		newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
-	}
+	// if minCheckpointTsForScheduler != 0 {
+	// 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
+	// }
 
 	log.Info("can advance checkpointTs",
 		zap.String("changefeed", m.id.Name()),
