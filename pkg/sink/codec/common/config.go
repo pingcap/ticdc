@@ -182,6 +182,8 @@ type urlConfig struct {
 	// can be `json` and `avro`, default to `json`.
 	EncodingFormatType *string `form:"encoding-format"`
 
+	// If both `EnableTiDBExtension` and `OutputRowKey` is set to true, row key will be outputed in the tidb-extension field.
+	// This is only used for the **canal-json** protocol.
 	OutputRowKey *bool `form:"output-row-key"`
 }
 
