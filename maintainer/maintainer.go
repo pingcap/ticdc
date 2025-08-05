@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	periodEventInterval = time.Millisecond * 2000
+	periodEventInterval = time.Millisecond * 100
 )
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
@@ -519,14 +519,14 @@ func (m *Maintainer) calCheckpointTs() {
 	// If all check is successfully, we begin to do the checkpointTs calculation,
 	// otherwise, we just return.
 	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
-	operatorLock := m.controller.operatorController.GetLock()
+	// operatorLock := m.controller.operatorController.GetLock()
 	barrierLock := m.barrier.GetLock()
 
 	// TODO: consider how can we simplify the logic better
-	minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
+	// minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
 	minCheckpointTsForBarrier := m.barrier.GetMinBlockedCheckpointTsForNewTables()
 
-	m.controller.operatorController.ReleaseLock(operatorLock)
+	// m.controller.operatorController.ReleaseLock(operatorLock)
 	m.barrier.ReleaseLock(barrierLock)
 
 	newWatermark := heartbeatpb.NewMaxWatermark()
