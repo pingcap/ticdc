@@ -249,10 +249,6 @@ func TestEventScanner(t *testing.T) {
 		timeout:     1000 * time.Second,
 	}
 
-	//err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
-	//require.NoError(t, err)
-	//broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
-
 	require.True(t, ok)
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
 	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
@@ -472,7 +468,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//                                               └── Events with same commitTs must be returned together
 	sl = scanLimit{
 		maxDMLBytes: 556,
-		timeout:     10000 * time.Second,
+		timeout:     10 * time.Second,
 	}
 	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
@@ -542,6 +538,11 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.False(t, isBroken)
 
 	require.Equal(t, 8, len(events))
+
+	e = events[4]
+	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+	require.Equal(t, e.GetCommitTs(), kvEvents[3].CRTs)
+	require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
 
 	e = events[5]
 	require.Equal(t, e.GetType(), event.TypeDDLEvent)

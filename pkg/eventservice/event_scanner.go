@@ -326,7 +326,7 @@ func finalizeScan(
 
 	resolvedBatch := processor.getResolvedBatchDML()
 	events := merger.appendDMLEvent(resolvedBatch)
-	events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
+	events = append(events, merger.resolveDDLEvents(sess.dataRange.EndTs)...)
 
 	resolveTs := event.NewResolvedEvent(sess.dataRange.EndTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch.Load())
 	events = append(events, resolveTs)
