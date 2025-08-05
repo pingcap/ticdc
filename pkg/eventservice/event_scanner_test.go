@@ -43,79 +43,6 @@ func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.
 	return 0, nil, nil
 }
 
-type schemaStoreWithErr struct {
-	*mockSchemaStore
-	getTableInfoError error
-}
-
-func (s *schemaStoreWithErr) GetTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
-	if s.getTableInfoError != nil {
-		return nil, s.getTableInfoError
-	}
-	return s.mockSchemaStore.GetTableInfo(tableID, ts)
-}
-
-func TestGetTableInfo4Txn(t *testing.T) {
-	// Setup
-	broker, _, mockSS := newEventBrokerForTest()
-	broker.close()
-
-	disInfo := newMockDispatcherInfoForTest(t)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
-	tableID := disInfo.GetTableSpan().TableID
-
-	disp := newDispatcherStat(100, disInfo, nil, 0, 0, changefeedStatus)
-
-	// Prepare a table info for success case
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
-	ddlEvent, _ := genEvents(helper, `create table test.t(id int primary key, c char(50))`)
-	mockSS.AppendDDLEvent(tableID, ddlEvent)
-	ts := ddlEvent.TableInfo.UpdateTS()
-
-	schemaStore := &schemaStoreWithErr{mockSchemaStore: mockSS}
-	scanner := newEventScanner(broker.eventStore, schemaStore, &mockMounter{})
-
-	// Case 1: Success
-	t.Run("Success", func(t *testing.T) {
-		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
-		require.NoError(t, err)
-		require.NotNil(t, info)
-		require.Equal(t, ddlEvent.TableInfo, info)
-	})
-
-	// Case 2: Dispatcher removed
-	t.Run("DispatcherRemoved", func(t *testing.T) {
-		schemaStore.getTableInfoError = errors.New("some error")
-		disp.isRemoved.Store(true)
-		defer disp.isRemoved.Store(false) // reset state
-
-		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
-		require.NoError(t, err)
-		require.Nil(t, info)
-	})
-
-	// Case 3: Table deleted
-	t.Run("TableDeleted", func(t *testing.T) {
-		schemaStore.getTableInfoError = &schemastore.TableDeletedError{}
-
-		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
-		require.NoError(t, err)
-		require.Nil(t, info)
-	})
-
-	// Case 4: Other error
-	t.Run("OtherError", func(t *testing.T) {
-		otherErr := errors.New("other error")
-		schemaStore.getTableInfoError = otherErr
-
-		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
-		require.Error(t, err)
-		require.Equal(t, otherErr, err)
-		require.Nil(t, info)
-	})
-}
-
 func TestEventScanner(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
@@ -142,366 +69,306 @@ func TestEventScanner(t *testing.T) {
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
 
-	t.Run("case 1: No DDL and DML events, should emit resolved-ts event", func(t *testing.T) {
-		// Expected result:
-		// [Resolved(ts=102)]
-		scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	// case 1: No DDL and DML events, should emit resolved-ts event
+	// Expected result:
+	// [Resolved(ts=102)]
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
 
-		disp.eventStoreResolvedTs.Store(102)
-		sl := scanLimit{
-			maxDMLBytes: 1000,
-			timeout:     10 * time.Second,
-		}
-		ok, dataRange := broker.getScanTaskDataRange(disp)
-		require.True(t, ok)
+	disp.eventStoreResolvedTs.Store(102)
+	sl := scanLimit{
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
+	}
+	ok, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
 
-		events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
-		require.NoError(t, err)
-		require.False(t, isBroken)
-		require.Equal(t, 1, len(events))
-		e := events[0]
-		require.Equal(t, e.GetType(), event.TypeResolvedEvent)
-		require.Equal(t, e.GetCommitTs(), uint64(102))
-	})
+	events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, isBroken)
+	require.Equal(t, 1, len(events))
+	e := events[0]
+	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
+	require.Equal(t, e.GetCommitTs(), uint64(102))
 
-	t.Run("case 2: Has DDL and no DML, should emit DDL and resolved-ts event", func(t *testing.T) {
-		broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
+	// case 2: Has DDL and no DML, should emit DDL and resolved-ts event
+	broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
 
-		resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-		disp.eventStoreResolvedTs.Store(resolvedTs)
-		ok, dataRange := broker.getScanTaskDataRange(disp)
-		require.True(t, ok)
+	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
+	disp.eventStoreResolvedTs.Store(resolvedTs)
+	ok, dataRange = broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
 
-		sl := scanLimit{
-			maxDMLBytes: 1000,
-			timeout:     1000 * time.Second,
-		}
+	sl = scanLimit{
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
+	}
 
-		scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
-		events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
-		require.NoError(t, err)
-		require.False(t, isBroken)
-		require.Equal(t, 2, len(events))
-		e := events[0]
-		require.Equal(t, e.GetType(), event.TypeDDLEvent)
-		require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
-		e = events[1]
-		require.Equal(t, e.GetType(), event.TypeResolvedEvent)
-		require.Equal(t, resolvedTs, e.GetCommitTs())
-	})
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, isBroken)
+	require.Equal(t, 2, len(events))
 
-	t.Run("case 3: Has DML but no DDL, should emit BatchDML and resolved-ts event", func(t *testing.T) {
-		// Event sequence:
-		//   DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4)
-		// Expected result:
-		// [BatchDML_1[DML(x+1), DML(x+2), DML(x+3), DML(x+4)], Resolved(x+5)]
-		resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
+	e = events[0]
+	require.Equal(t, e.GetType(), event.TypeDDLEvent)
+	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
 
-		err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
-		broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
-		require.NoError(t, err)
+	e = events[1]
+	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
+	require.Equal(t, resolvedTs, e.GetCommitTs())
 
-		disp.eventStoreResolvedTs.Store(resolvedTs)
-		ok, dataRange := broker.getScanTaskDataRange(disp)
-		require.True(t, ok)
-		dataRange.StartTs = ddlEvent.GetCommitTs()
+	// case 3: Has DML but no DDL, should emit BatchDML and resolved-ts event
+	// Event sequence:
+	//   DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4)
+	// Expected result:
+	// [BatchDML_1[DML(x+1), DML(x+2), DML(x+3), DML(x+4)], Resolved(x+5)]
+	err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
+	require.NoError(t, err)
 
-		sl := scanLimit{
-			maxDMLBytes: 1000,
-			timeout:     10000 * time.Second,
-		}
+	disp.eventStoreResolvedTs.Store(resolvedTs)
+	require.True(t, ok)
+	dataRange.StartTs = ddlEvent.GetCommitTs()
 
-		scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
-		events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
-		require.NoError(t, err)
-		require.False(t, isBroken)
-		require.Equal(t, 2, len(events))
+	sl = scanLimit{
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
+	}
 
-		require.Equal(t, event.TypeBatchDMLEvent, events[0].GetType())
-		require.Equal(t, event.TypeResolvedEvent, events[1].GetType())
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, isBroken)
+	require.Equal(t, 2, len(events))
 
-		batchDMLEvent := events[0].(*event.BatchDMLEvent)
-		require.Equal(t, int32(4), batchDMLEvent.Len())
+	require.Equal(t, event.TypeBatchDMLEvent, events[0].GetType())
+	require.Equal(t, event.TypeResolvedEvent, events[1].GetType())
 
-		require.Equal(t, batchDMLEvent.DMLEvents[0].Len(), int32(1))
-		require.Equal(t, batchDMLEvent.DMLEvents[0].GetCommitTs(), kvEvents[0].CRTs)
+	batchDMLEvent := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, int32(4), batchDMLEvent.Len())
 
-		require.Equal(t, batchDMLEvent.DMLEvents[1].Len(), int32(1))
-		require.Equal(t, batchDMLEvent.DMLEvents[1].GetCommitTs(), kvEvents[1].CRTs)
+	require.Equal(t, batchDMLEvent.DMLEvents[0].Len(), int32(1))
+	require.Equal(t, batchDMLEvent.DMLEvents[0].GetCommitTs(), kvEvents[0].CRTs)
 
-		require.Equal(t, batchDMLEvent.DMLEvents[2].Len(), int32(1))
-		require.Equal(t, batchDMLEvent.DMLEvents[2].GetCommitTs(), kvEvents[2].CRTs)
+	require.Equal(t, batchDMLEvent.DMLEvents[1].Len(), int32(1))
+	require.Equal(t, batchDMLEvent.DMLEvents[1].GetCommitTs(), kvEvents[1].CRTs)
 
-		require.Equal(t, batchDMLEvent.DMLEvents[3].Len(), int32(1))
-		require.Equal(t, batchDMLEvent.DMLEvents[3].GetCommitTs(), kvEvents[3].CRTs)
+	require.Equal(t, batchDMLEvent.DMLEvents[2].Len(), int32(1))
+	require.Equal(t, batchDMLEvent.DMLEvents[2].GetCommitTs(), kvEvents[2].CRTs)
 
-		require.Equal(t, events[1].(event.ResolvedEvent).GetCommitTs(), resolvedTs)
-	})
+	require.Equal(t, batchDMLEvent.DMLEvents[3].Len(), int32(1))
+	require.Equal(t, batchDMLEvent.DMLEvents[3].GetCommitTs(), kvEvents[3].CRTs)
 
-	t.Run("case 4: Contains DDL, DML and resolvedTs events", func(t *testing.T) {
-		// Tests that the scanner can handle mixed event types (DDL + DML + resolvedTs)
-		// Event sequence:
-		//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4) -> Resolved(ts=x+5)
-		// Expected result:
-		// [DDL(x), BatchDML_1[DML(x+1)], BatchDML_2[DML(x+2), DML(x+3), DML(x+4)], Resolved(x+5)]
-		resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
+	require.Equal(t, events[1].(event.ResolvedEvent).GetCommitTs(), resolvedTs)
 
-		err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
-		require.NoError(t, err)
-		broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
+	// case 4: Contains DDL, DML and resolvedTs events
+	// Tests that the scanner can handle mixed event types (DDL + DML + resolvedTs)
+	// Event sequence:
+	//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4) -> Resolved(ts=x+5)
+	// Expected result:
+	// [DDL(x), BatchDML_1[DML(x+1)], BatchDML_2[DML(x+2), DML(x+3), DML(x+4)], Resolved(x+5)]
+	disp.eventStoreResolvedTs.Store(resolvedTs)
+	ok, dataRange = broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
 
-		disp.eventStoreResolvedTs.Store(resolvedTs)
-		ok, dataRange := broker.getScanTaskDataRange(disp)
-		require.True(t, ok)
+	sl = scanLimit{
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
+	}
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, isBroken)
+	require.Equal(t, 4, len(events))
+	require.Equal(t, event.TypeDDLEvent, events[0].GetType())
+	require.Equal(t, event.TypeBatchDMLEvent, events[1].GetType())
+	require.Equal(t, event.TypeBatchDMLEvent, events[2].GetType())
+	require.Equal(t, event.TypeResolvedEvent, events[3].GetType())
+	batchDML1 := events[1].(*event.BatchDMLEvent)
+	require.Equal(t, int32(1), batchDML1.Len())
+	require.Equal(t, batchDML1.DMLEvents[0].GetCommitTs(), kvEvents[0].CRTs)
+	batchDML2 := events[2].(*event.BatchDMLEvent)
+	require.Equal(t, int32(3), batchDML2.Len())
+	require.Equal(t, batchDML2.DMLEvents[0].GetCommitTs(), kvEvents[1].CRTs)
+	require.Equal(t, batchDML2.DMLEvents[1].GetCommitTs(), kvEvents[2].CRTs)
+	require.Equal(t, batchDML2.DMLEvents[2].GetCommitTs(), kvEvents[3].CRTs)
 
-		sl := scanLimit{
-			maxDMLBytes: 1000,
-			timeout:     10 * time.Second,
-		}
-		scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
-		events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
-		require.NoError(t, err)
-		require.False(t, isBroken)
-		require.Equal(t, 4, len(events))
-		require.Equal(t, event.TypeDDLEvent, events[0].GetType())
-		require.Equal(t, event.TypeBatchDMLEvent, events[1].GetType())
-		require.Equal(t, event.TypeBatchDMLEvent, events[2].GetType())
-		require.Equal(t, event.TypeResolvedEvent, events[3].GetType())
-		batchDML1 := events[1].(*event.BatchDMLEvent)
-		require.Equal(t, int32(1), batchDML1.Len())
-		require.Equal(t, batchDML1.DMLEvents[0].GetCommitTs(), kvEvents[0].CRTs)
-		batchDML2 := events[2].(*event.BatchDMLEvent)
-		require.Equal(t, int32(3), batchDML2.Len())
-		require.Equal(t, batchDML2.DMLEvents[0].GetCommitTs(), kvEvents[1].CRTs)
-		require.Equal(t, batchDML2.DMLEvents[1].GetCommitTs(), kvEvents[2].CRTs)
-		require.Equal(t, batchDML2.DMLEvents[2].GetCommitTs(), kvEvents[3].CRTs)
-	})
+	// case 5: Reaches scan limit, only 1 DDL and 1 DML event scanned
+	// Tests that when MaxBytes limit is reached, the scanner returns partial events with isBroken=true
+	// Event sequence:
+	//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4)
+	// Expected result:
+	// [DDL(x), BatchDML[DML(x+1)], Resolved(x+1)] (partial events due to size limit)
+	//               ▲
+	//               └── Scanning interrupted here
+	sl = scanLimit{
+		maxDMLBytes: 1,
+		timeout:     1000 * time.Second,
+	}
 
-	t.Run("case 5: Reaches scan limit, only 1 DDL and 1 DML event scanned", func(t *testing.T) {
-		// Tests that when MaxBytes limit is reached, the scanner returns partial events with isBroken=true
-		// Event sequence:
-		//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4)
-		// Expected result:
-		// [DDL(x), BatchDML[DML(x+1)], Resolved(x+1)] (partial events due to size limit)
-		//               ▲
-		//               └── Scanning interrupted here
-		resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-		err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
-		require.NoError(t, err)
-		broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	require.NoError(t, err)
+	require.True(t, isBroken)
+	require.Equal(t, 3, len(events))
 
-		sl := scanLimit{
-			maxDMLBytes: 1,
-			timeout:     1000 * time.Second,
-		}
-		disp.eventStoreResolvedTs.Store(resolvedTs)
-		ok, dataRange := broker.getScanTaskDataRange(disp)
-		require.True(t, ok)
+	e = events[0]
+	require.Equal(t, e.GetType(), event.TypeDDLEvent)
+	require.Equal(t, ddlEvent.GetCommitTs(), e.GetCommitTs())
 
-		scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
-		events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
-		require.NoError(t, err)
-		require.True(t, isBroken)
-		require.Equal(t, 3, len(events))
+	e = events[1]
+	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+	require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
 
-		e := events[0]
-		require.Equal(t, e.GetType(), event.TypeDDLEvent)
-		require.Equal(t, ddlEvent.GetCommitTs(), e.GetCommitTs())
+	e = events[2]
+	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
+	require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
 
-		e = events[1]
-		require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
-		require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
+	// case 6: Tests transaction atomicity during scanning, without resolved-ts
+	// Tests that transactions with same startTs and commitTs are scanned atomically (not split even when limit is reached)
+	// Modified events: first 3 DMLs have same startTs=x:
+	//   DDL(x) -> DML-1(start-ts = x, commit-ts = x+4) -> DML-2(start-ts = x, commit-ts = x+4) -> DML-3(start-ts = x, commit-ts = x+4) -> DML-4(start-ts = x + 3, commit-ts = x+4)
+	// Expected result (MaxBytes=1):
+	// [DDL(x), BatchDML_1[DML-1(x+1), DML-2(x+1), DML-3(x+1)]]
+	//                               ▲
+	//                               └── Scanning interrupted here
+	// The length of the result here is 2.
+	// The DML-1(x+1) will appear separately because it encounters DDL(x), which will immediately append it.
 
-		e = events[2]
-		require.Equal(t, e.GetType(), event.TypeResolvedEvent)
-		require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
-	})
+	// the first 3 entries have the same startTs and commitTs, so they belong to the same transaction.
+	// The last entry has different startTs, even though the commitTs is the same,
+	// it should not be scanned, and trigger interrupt scan. and do not output resolved-ts
+	firstStartTs := kvEvents[0].StartTs
+	lastCommitTs := kvEvents[3].CRTs
+	for i := 0; i < 3; i++ {
+		kvEvents[i].StartTs = firstStartTs
+		kvEvents[i].CRTs = lastCommitTs
+	}
 
-	t.Run("case 6: Tests transaction atomicity during scanning, without resolved-ts", func(t *testing.T) {
-		// Tests that transactions with same startTs and commitTs are scanned atomically (not split even when limit is reached)
-		// Modified events: first 3 DMLs have same startTs=x:
-		//   DDL(x) -> DML-1(start-ts = x, commit-ts = x+4) -> DML-2(start-ts = x, commit-ts = x+4) -> DML-3(start-ts = x, commit-ts = x+4) -> DML-4(start-ts = x + 3, commit-ts = x+4)
-		// Expected result (MaxBytes=1):
-		// [DDL(x), BatchDML_1[DML-1(x+1), DML-2(x+1), DML-3(x+1)]]
-		//                               ▲
-		//                               └── Scanning interrupted here
-		// The length of the result here is 2.
-		// The DML-1(x+1) will appear separately because it encounters DDL(x), which will immediately append it.
+	sl = scanLimit{
+		maxDMLBytes: 1,
+		timeout:     1000 * time.Second,
+	}
 
-		// the first 3 entries have the same startTs and commitTs, so they belong to the same transaction.
-		// The last entry has different startTs, even though the commitTs is the same,
-		// it should not be scanned, and trigger interrupt scan. and do not output resolved-ts
-		firstStartTs := kvEvents[0].StartTs
-		lastCommitTs := kvEvents[3].CRTs
-		for i := 0; i < 3; i++ {
-			kvEvents[i].StartTs = firstStartTs
-			kvEvents[i].CRTs = lastCommitTs
-		}
+	//err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
+	//require.NoError(t, err)
+	//broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
 
-		sl := scanLimit{
-			maxDMLBytes: 1,
-			timeout:     1000 * time.Second,
-		}
+	require.True(t, ok)
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	require.NoError(t, err)
+	require.True(t, isBroken)
+	require.Equal(t, 2, len(events))
 
-		resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-		err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
-		require.NoError(t, err)
-		broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
-		disp.eventStoreResolvedTs.Store(resolvedTs)
+	// DDL
+	e = events[0]
+	require.Equal(t, e.GetType(), event.TypeDDLEvent)
+	require.Equal(t, ddlEvent.GetCommitTs(), e.GetCommitTs())
 
-		ok, dataRange := broker.getScanTaskDataRange(disp)
-		require.True(t, ok)
-		scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
-		events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
-		require.NoError(t, err)
-		require.True(t, isBroken)
-		require.Equal(t, 2, len(events))
+	// DML-1
+	e = events[1]
+	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+	require.Equal(t, len(e.(*event.BatchDMLEvent).DMLEvents), 1)
+	require.Equal(t, e.(*event.BatchDMLEvent).DMLEvents[0].Len(), int32(3))
+	require.Equal(t, firstStartTs, e.GetStartTs())
+	require.Equal(t, lastCommitTs, e.GetCommitTs())
 
-		// DDL
-		e := events[0]
-		require.Equal(t, e.GetType(), event.TypeDDLEvent)
-		require.Equal(t, ddlEvent.GetCommitTs(), e.GetCommitTs())
+	// case 7: Tests transaction atomicity during scanning, with resolved-ts
+	// Tests that transactions with same startTs and commitTs are scanned atomically (not split even when limit is reached)
+	// Modified events: first 3 DMLs have same startTs=x:
+	//   DDL(x) -> DML-1(start-ts = x, commit-ts = x+4) -> DML-2(start-ts = x, commit-ts = x+4) -> DML-3(start-ts = x, commit-ts = x+4) -> DML-4(start-ts = x + 3, commit-ts = x+5)
+	// Expected result (MaxBytes=1):
+	// [DDL(x), BatchDML_1[DML-1(x+1), DML-2(x+1), DML-3(x+1)]]
+	//                               ▲
+	//                               └── Scanning interrupted here
+	// The length of the result here is 2.
+	// The DML-1(x+1) will appear separately because it encounters DDL(x), which will immediately append it.
 
-		// DML-1
-		e = events[1]
-		require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
-		require.Equal(t, len(e.(*event.BatchDMLEvent).DMLEvents), 1)
-		require.Equal(t, e.(*event.BatchDMLEvent).DMLEvents[0].Len(), int32(3))
-		require.Equal(t, firstStartTs, e.GetStartTs())
-		require.Equal(t, lastCommitTs, e.GetCommitTs())
-	})
+	// the first 3 entries have the same startTs and commitTs, so they belong to the same transaction.
+	// The last entry has different startTs and different commitTs,
+	// it should not be scanned, and trigger interrupt scan. and should output resolved-ts
+	kvEvents[3].CRTs++
 
-	t.Run("case 7: Tests transaction atomicity during scanning, with resolved-ts", func(t *testing.T) {
-		// Tests that transactions with same startTs and commitTs are scanned atomically (not split even when limit is reached)
-		// Modified events: first 3 DMLs have same startTs=x:
-		//   DDL(x) -> DML-1(start-ts = x, commit-ts = x+4) -> DML-2(start-ts = x, commit-ts = x+4) -> DML-3(start-ts = x, commit-ts = x+4) -> DML-4(start-ts = x + 3, commit-ts = x+5)
-		// Expected result (MaxBytes=1):
-		// [DDL(x), BatchDML_1[DML-1(x+1), DML-2(x+1), DML-3(x+1)]]
-		//                               ▲
-		//                               └── Scanning interrupted here
-		// The length of the result here is 2.
-		// The DML-1(x+1) will appear separately because it encounters DDL(x), which will immediately append it.
+	sl = scanLimit{
+		maxDMLBytes: 1,
+		timeout:     1000 * time.Second,
+	}
 
-		// the first 3 entries have the same startTs and commitTs, so they belong to the same transaction.
-		// The last entry has different startTs and different commitTs,
-		// it should not be scanned, and trigger interrupt scan. and should output resolved-ts
-		firstStartTs := kvEvents[0].StartTs
-		lastCommitTs := kvEvents[3].CRTs
-		for i := 0; i < 3; i++ {
-			kvEvents[i].StartTs = firstStartTs
-			kvEvents[i].CRTs = lastCommitTs
-		}
-		kvEvents[3].CRTs++
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	require.NoError(t, err)
+	require.True(t, isBroken)
+	require.Equal(t, 3, len(events))
 
-		sl := scanLimit{
-			maxDMLBytes: 1,
-			timeout:     1000 * time.Second,
-		}
+	// DDL
+	e = events[0]
+	require.Equal(t, e.GetType(), event.TypeDDLEvent)
+	require.Equal(t, ddlEvent.GetCommitTs(), e.GetCommitTs())
 
-		resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-		err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
-		require.NoError(t, err)
-		broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
-		disp.eventStoreResolvedTs.Store(resolvedTs)
+	// DML-1
+	batchDMLEvent = events[1].(*event.BatchDMLEvent)
+	require.Equal(t, len(batchDMLEvent.DMLEvents), 1)
+	require.Equal(t, batchDMLEvent.DMLEvents[0].Len(), int32(3))
+	require.Equal(t, firstStartTs, batchDMLEvent.GetStartTs())
+	require.Equal(t, lastCommitTs, batchDMLEvent.GetCommitTs())
 
-		ok, dataRange := broker.getScanTaskDataRange(disp)
-		require.True(t, ok)
-		scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
-		events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
-		require.NoError(t, err)
-		require.True(t, isBroken)
-		require.Equal(t, 3, len(events))
+	resolvedEvent := events[2].(event.ResolvedEvent)
+	require.Equal(t, resolvedEvent.GetType(), event.TypeResolvedEvent)
+	require.Equal(t, lastCommitTs, resolvedEvent.GetCommitTs())
 
-		// DDL
-		e := events[0]
-		require.Equal(t, e.GetType(), event.TypeDDLEvent)
-		require.Equal(t, ddlEvent.GetCommitTs(), e.GetCommitTs())
+	// case 8: Tests DMLs are returned before DDLs when they share same commitTs
+	// Tests that DMLs take precedence over DDLs with same commitTs
+	// Event sequence after adding fakeDDL(ts=x):
+	//   DDL(x) -> DML(x+1) -> DML(x+1) -> DML(x+1) -> fakeDDL(x+1) -> DML(x+4)
+	// Expected result:
+	// [DDL(x), BatchDML_1[DML(x+1), DML(x+1), DML(x+1)], fakeDDL(x+1), BatchDML_3[DML(x+4)], Resolved(x+5)]
+	//                                ▲
+	//                                └── DMLs take precedence over DDL with same ts
+	fakeDDL := event.DDLEvent{
+		FinishedTs: kvEvents[0].CRTs,
+		TableInfo:  ddlEvent.TableInfo,
+		TableID:    ddlEvent.TableID,
+	}
+	broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, fakeDDL)
 
-		// DML-1
-		batchDMLEvent := events[1].(*event.BatchDMLEvent)
-		require.Equal(t, len(batchDMLEvent.DMLEvents), 1)
-		require.Equal(t, batchDMLEvent.DMLEvents[0].Len(), int32(3))
-		require.Equal(t, firstStartTs, batchDMLEvent.GetStartTs())
-		require.Equal(t, lastCommitTs, batchDMLEvent.GetCommitTs())
+	sl = scanLimit{
+		maxDMLBytes: 1000,
+		timeout:     10 * time.Second,
+	}
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, isBroken)
+	require.Equal(t, 5, len(events))
 
-		resolvedEvent := events[2].(event.ResolvedEvent)
-		require.Equal(t, resolvedEvent.GetType(), event.TypeResolvedEvent)
-		require.Equal(t, lastCommitTs, resolvedEvent.GetCommitTs())
-	})
+	firstDDL := events[0].(*event.DDLEvent)
+	require.Equal(t, firstDDL.GetType(), event.TypeDDLEvent)
+	require.Equal(t, ddlEvent.GetCommitTs(), firstDDL.GetCommitTs())
 
-	t.Run("case 8: Tests DMLs are returned before DDLs when they share same commitTs", func(t *testing.T) {
-		// Tests that DMLs take precedence over DDLs with same commitTs
-		// Event sequence after adding fakeDDL(ts=x):
-		//   DDL(x) -> DML(x+1) -> DML(x+1) -> DML(x+1) -> fakeDDL(x+1) -> DML(x+4)
-		// Expected result:
-		// [DDL(x), BatchDML_1[DML(x+1), DML(x+1), DML(x+1)], fakeDDL(x+1), BatchDML_3[DML(x+4)], Resolved(x+5)]
-		//                                ▲
-		//                                └── DMLs take precedence over DDL with same ts
+	// First 2 BatchDMLs should appear before fake DDL
+	// BatchDML_1
+	firstDML := events[1].(*event.BatchDMLEvent)
+	require.Equal(t, firstDML.GetType(), event.TypeBatchDMLEvent)
+	require.Equal(t, len(firstDML.DMLEvents), 1)
+	require.Equal(t, firstDML.DMLEvents[0].Len(), int32(3))
+	require.Equal(t, kvEvents[0].CRTs, firstDML.GetCommitTs())
 
-		firstStartTs := kvEvents[0].StartTs
-		lastCommitTs := kvEvents[3].CRTs
-		for i := 0; i < 3; i++ {
-			kvEvents[i].StartTs = firstStartTs
-			kvEvents[i].CRTs = lastCommitTs
-		}
-		kvEvents[3].CRTs++
+	// Fake DDL should appear after DMLs
+	ddl := events[2]
+	require.Equal(t, ddl.GetType(), event.TypeDDLEvent)
+	require.Equal(t, fakeDDL.FinishedTs, ddl.GetCommitTs())
+	require.Equal(t, fakeDDL.FinishedTs, firstDML.GetCommitTs())
 
-		broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
-		fakeDDL := event.DDLEvent{
-			FinishedTs: kvEvents[0].CRTs,
-			TableInfo:  ddlEvent.TableInfo,
-			TableID:    ddlEvent.TableID,
-		}
-		broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, fakeDDL)
+	// BatchDML_3
+	batchDML3 := events[3]
+	require.Equal(t, batchDML3.GetType(), event.TypeBatchDMLEvent)
+	require.Equal(t, len(batchDML3.(*event.BatchDMLEvent).DMLEvents), 1)
+	require.Equal(t, kvEvents[3].CRTs, batchDML3.GetCommitTs())
 
-		resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-
-		err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
-		require.NoError(t, err)
-
-		disp.eventStoreResolvedTs.Store(resolvedTs)
-		ok, dataRange := broker.getScanTaskDataRange(disp)
-		require.True(t, ok)
-		scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
-
-		sl := scanLimit{
-			maxDMLBytes: 1000,
-			timeout:     10000 * time.Second,
-		}
-		events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
-		require.NoError(t, err)
-		require.False(t, isBroken)
-		require.Equal(t, 5, len(events))
-
-		firstDDL := events[0].(*event.DDLEvent)
-		require.Equal(t, firstDDL.GetType(), event.TypeDDLEvent)
-		require.Equal(t, ddlEvent.GetCommitTs(), firstDDL.GetCommitTs())
-
-		// First 2 BatchDMLs should appear before fake DDL
-		// BatchDML_1
-		firstDML := events[1].(*event.BatchDMLEvent)
-		require.Equal(t, firstDML.GetType(), event.TypeBatchDMLEvent)
-		require.Equal(t, len(firstDML.DMLEvents), 1)
-		require.Equal(t, firstDML.DMLEvents[0].Len(), int32(3))
-		require.Equal(t, kvEvents[0].CRTs, firstDML.GetCommitTs())
-
-		// Fake DDL should appear after DMLs
-		ddl := events[2]
-		require.Equal(t, ddl.GetType(), event.TypeDDLEvent)
-		require.Equal(t, fakeDDL.FinishedTs, ddl.GetCommitTs())
-		require.Equal(t, fakeDDL.FinishedTs, firstDML.GetCommitTs())
-
-		// BatchDML_3
-		batchDML3 := events[3]
-		require.Equal(t, batchDML3.GetType(), event.TypeBatchDMLEvent)
-		require.Equal(t, len(batchDML3.(*event.BatchDMLEvent).DMLEvents), 1)
-		require.Equal(t, kvEvents[3].CRTs, batchDML3.GetCommitTs())
-
-		// Resolved
-		e := events[4]
-		require.Equal(t, e.GetType(), event.TypeResolvedEvent)
-		require.Equal(t, resolvedTs, e.GetCommitTs())
-	})
+	// Resolved
+	e = events[4]
+	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
+	require.Equal(t, resolvedTs, e.GetCommitTs())
 }
 
 // TestEventScannerWithDDL tests cases where scanning is interrupted at DDL events
@@ -1509,4 +1376,77 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	require.Equal(t, updateEvent.CRTs, merger.lastCommitTs)
 	require.Equal(t, 1, sess.dmlCount)
 	require.True(t, sess.scannedBytes > 0) // Some bytes were processed
+}
+
+type schemaStoreWithErr struct {
+	*mockSchemaStore
+	getTableInfoError error
+}
+
+func (s *schemaStoreWithErr) GetTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+	if s.getTableInfoError != nil {
+		return nil, s.getTableInfoError
+	}
+	return s.mockSchemaStore.GetTableInfo(tableID, ts)
+}
+
+func TestGetTableInfo4Txn(t *testing.T) {
+	// Setup
+	broker, _, mockSS := newEventBrokerForTest()
+	broker.close()
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	tableID := disInfo.GetTableSpan().TableID
+
+	disp := newDispatcherStat(100, disInfo, nil, 0, 0, changefeedStatus)
+
+	// Prepare a table info for success case
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	ddlEvent, _ := genEvents(helper, `create table test.t(id int primary key, c char(50))`)
+	mockSS.AppendDDLEvent(tableID, ddlEvent)
+	ts := ddlEvent.TableInfo.UpdateTS()
+
+	schemaStore := &schemaStoreWithErr{mockSchemaStore: mockSS}
+	scanner := newEventScanner(broker.eventStore, schemaStore, &mockMounter{})
+
+	// Case 1: Success
+	t.Run("Success", func(t *testing.T) {
+		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
+		require.NoError(t, err)
+		require.NotNil(t, info)
+		require.Equal(t, ddlEvent.TableInfo, info)
+	})
+
+	// Case 2: Dispatcher removed
+	t.Run("DispatcherRemoved", func(t *testing.T) {
+		schemaStore.getTableInfoError = errors.New("some error")
+		disp.isRemoved.Store(true)
+		defer disp.isRemoved.Store(false) // reset state
+
+		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
+		require.NoError(t, err)
+		require.Nil(t, info)
+	})
+
+	// Case 3: Table deleted
+	t.Run("TableDeleted", func(t *testing.T) {
+		schemaStore.getTableInfoError = &schemastore.TableDeletedError{}
+
+		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
+		require.NoError(t, err)
+		require.Nil(t, info)
+	})
+
+	// Case 4: Other error
+	t.Run("OtherError", func(t *testing.T) {
+		otherErr := errors.New("other error")
+		schemaStore.getTableInfoError = otherErr
+
+		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
+		require.Error(t, err)
+		require.Equal(t, otherErr, err)
+		require.Nil(t, info)
+	})
 }
