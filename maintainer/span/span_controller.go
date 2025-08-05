@@ -17,6 +17,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -301,14 +302,19 @@ func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
 
 // UpdateStatus updates the status of a span
 func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbeatpb.TableSpanStatus) {
+	start := time.Now()
 	span.UpdateStatus(status)
+	log.Info("span update status cost", zap.Duration("cost", time.Since(start)), zap.String("span", span.ID.String()))
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
+	log.Info("span get status checker cost", zap.Duration("cost", time.Since(start)), zap.String("checker", checker.Name()))
 
 	// TODO: check if we need to lock the mu here, or we can add a lock inner the checker
 	c.mu.Lock()
+	log.Info("update status get lock cost", zap.Duration("cost", time.Since(start)))
 	defer c.mu.Unlock()
 	checker.UpdateStatus(span)
+	log.Info("update status cost", zap.Duration("cost", time.Since(start)))
 }
 
 // AddAbsentReplicaSet adds absent replica sets
