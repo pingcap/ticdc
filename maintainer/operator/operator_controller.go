@@ -161,10 +161,8 @@ func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID,
 		zap.String("id", id.String()))
 	start := time.Now()
 	oc.mu.RLock()
-	log.Info("GetLock", zap.Duration("cost", time.Since(start)))
 	op, ok := oc.operators[id]
 	oc.mu.RUnlock()
-	log.Info("GetOperator", zap.Duration("cost", time.Since(start)))
 
 	if ok {
 		op.OP.Check(from, status)

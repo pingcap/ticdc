@@ -304,10 +304,8 @@ func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
 func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbeatpb.TableSpanStatus) {
 	start := time.Now()
 	span.UpdateStatus(status)
-	log.Info("span update status cost", zap.Duration("cost", time.Since(start)), zap.String("span", span.ID.String()))
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
-	log.Info("span get status checker cost", zap.Duration("cost", time.Since(start)), zap.String("checker", checker.Name()))
 
 	// TODO: check if we need to lock the mu here, or we can add a lock inner the checker
 	checker.UpdateStatus(span)

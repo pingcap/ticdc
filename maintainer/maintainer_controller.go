@@ -121,24 +121,24 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			zap.Duration("cost", time.Since(start)))
 	}()
 	for _, status := range statusList {
-		log.Info("HandleStatus",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.String("from", from.String()),
-			zap.Any("status", status))
+		// log.Info("HandleStatus",
+		// 	zap.String("changefeed", c.changefeedID.Name()),
+		// 	zap.String("from", from.String()),
+		// 	zap.Any("status", status))
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		start1 := time.Now()
+		// start1 := time.Now()
 		c.operatorController.UpdateOperatorStatus(dispatcherID, from, status)
-		log.Info("UpdateOperatorStatus cost",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.String("from", from.String()),
-			zap.Duration("cost", time.Since(start1)))
-		start2 := time.Now()
+		// log.Info("UpdateOperatorStatus cost",
+		// 	zap.String("changefeed", c.changefeedID.Name()),
+		// 	zap.String("from", from.String()),
+		// 	zap.Duration("cost", time.Since(start1)))
+		// start2 := time.Now()
 		stm := c.spanController.GetTaskByID(dispatcherID)
-		log.Info("GetTaskByID cost",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.String("from", from.String()),
-			zap.Duration("cost", time.Since(start2)))
-		start3 := time.Now()
+		// log.Info("GetTaskByID cost",
+		// 	zap.String("changefeed", c.changefeedID.Name()),
+		// 	zap.String("from", from.String()),
+		// 	zap.Duration("cost", time.Since(start2)))
+		// start3 := time.Now()
 		if stm == nil {
 			if status.ComponentStatus != heartbeatpb.ComponentState_Working {
 				continue
@@ -154,11 +154,11 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				// if the span is not found, and the status is working, we need to remove it from dispatcher
 				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID))
 			}
-			log.Info("get operator cost",
-				zap.String("changefeed", c.changefeedID.Name()),
-				zap.String("from", from.String()),
-				zap.String("dispatcherID", dispatcherID.String()),
-				zap.Duration("cost", time.Since(start3)))
+			// log.Info("get operator cost",
+			// 	zap.String("changefeed", c.changefeedID.Name()),
+			// 	zap.String("from", from.String()),
+			// 	zap.String("dispatcherID", dispatcherID.String()),
+			// 	zap.Duration("cost", time.Since(start3)))
 			continue
 		}
 		nodeID := stm.GetNodeID()
@@ -171,11 +171,11 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			continue
 		}
 		c.spanController.UpdateStatus(stm, status)
-		log.Info("update status cost",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.String("from", from.String()),
-			zap.String("dispatcherID", dispatcherID.String()),
-			zap.Duration("cost", time.Since(start3)))
+		// log.Info("update status cost",
+		// 	zap.String("changefeed", c.changefeedID.Name()),
+		// 	zap.String("from", from.String()),
+		// 	zap.String("dispatcherID", dispatcherID.String()),
+		// 	zap.Duration("cost", time.Since(start3)))
 	}
 }
 

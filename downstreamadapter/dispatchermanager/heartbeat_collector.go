@@ -157,22 +157,24 @@ func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
 			log.Info("heartbeat collector is shutting down, exit sendHeartBeatMessages")
 			return ctx.Err()
 		default:
-			heartBeatRequestWithTargetID := c.heartBeatReqQueue.Dequeue(ctx)
-			if heartBeatRequestWithTargetID == nil {
-				continue
-			}
-			log.Info("send heartbeat request message",
-				zap.Stringer("targetID", heartBeatRequestWithTargetID.TargetID),
-				zap.Any("request", heartBeatRequestWithTargetID.Request),
-			)
-			err := c.mc.SendCommand(
-				messaging.NewSingleTargetMessage(
-					heartBeatRequestWithTargetID.TargetID,
-					messaging.MaintainerManagerTopic,
-					heartBeatRequestWithTargetID.Request,
-				))
-			if err != nil {
-				log.Error("failed to send heartbeat request message", zap.Error(err))
+			heartBeatRequestWithTargetIDs := c.heartBeatReqQueue.Dequeue()
+			for _, heartBeatRequestWithTargetID := range heartBeatRequestWithTargetIDs {
+				if heartBeatRequestWithTargetID == nil {
+					continue
+				}
+				log.Info("send heartbeat request message",
+					zap.Stringer("targetID", heartBeatRequestWithTargetID.TargetID),
+					zap.Any("request", heartBeatRequestWithTargetID.Request),
+				)
+				err := c.mc.SendCommand(
+					messaging.NewSingleTargetMessage(
+						heartBeatRequestWithTargetID.TargetID,
+						messaging.MaintainerManagerTopic,
+						heartBeatRequestWithTargetID.Request,
+					))
+				if err != nil {
+					log.Error("failed to send heartbeat request message", zap.Error(err))
+				}
 			}
 		}
 	}

@@ -16,8 +16,10 @@ package dispatchermanager
 import (
 	"context"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/chann"
 )
 
 // HeartbeatRequestQueue is a channel for all event dispatcher managers to send heartbeat requests to HeartBeatCollector
@@ -27,30 +29,67 @@ type HeartBeatRequestWithTargetID struct {
 }
 
 type HeartbeatRequestQueue struct {
-	queue chan *HeartBeatRequestWithTargetID
+	queue *chann.UnlimitedChannel[*HeartBeatRequestWithTargetID, any]
 }
 
 func NewHeartbeatRequestQueue() *HeartbeatRequestQueue {
 	return &HeartbeatRequestQueue{
-		queue: make(chan *HeartBeatRequestWithTargetID, 100000),
+		queue: chann.NewUnlimitedChannel[*HeartBeatRequestWithTargetID, any](nil, nil),
 	}
 }
 
 func (q *HeartbeatRequestQueue) Enqueue(request *HeartBeatRequestWithTargetID) {
-	q.queue <- request
+	q.queue.Push(request)
 }
 
-func (q *HeartbeatRequestQueue) Dequeue(ctx context.Context) *HeartBeatRequestWithTargetID {
-	select {
-	case <-ctx.Done():
+func (q *HeartbeatRequestQueue) Dequeue() []*HeartBeatRequestWithTargetID {
+	buffer := make([]*HeartBeatRequestWithTargetID, 0, 1024)
+	requests, ok := q.queue.GetMultipleNoGroup(buffer)
+	if !ok {
+		log.Error("heartbeat request queue is closed")
 		return nil
-	case request := <-q.queue:
-		return request
 	}
+
+	requestMap := make(map[node.ID]*HeartBeatRequestWithTargetID)
+	spanStatusMap := make(map[node.ID]map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus)
+	for _, request := range requests {
+		ret, ok := requestMap[request.TargetID]
+		if !ok {
+			requestMap[request.TargetID] = request
+		} else {
+			// update watermark and error
+			ret.Request.Watermark = request.Request.Watermark
+			if ret.Request.Err == nil && request.Request.Err != nil {
+				ret.Request.Err = request.Request.Err
+			}
+		}
+
+		for _, status := range request.Request.Statuses {
+			if _, ok := spanStatusMap[request.TargetID]; !ok {
+				spanStatusMap[request.TargetID] = make(map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus)
+			}
+			spanStatusMap[request.TargetID][*status.ID] = status
+		}
+	}
+
+	result := make([]*HeartBeatRequestWithTargetID, 0, len(requestMap))
+	for node, request := range requestMap {
+		if spanStatusMap[node] == nil {
+			request.Request.Statuses = make([]*heartbeatpb.TableSpanStatus, 0, len(spanStatusMap[node]))
+			for _, status := range spanStatusMap[node] {
+				request.Request.Statuses = append(request.Request.Statuses, status)
+			}
+			request.Request.CompeleteStatus = true
+		} else {
+			request.Request.CompeleteStatus = false
+		}
+		result = append(result, request)
+	}
+	return result
 }
 
 func (q *HeartbeatRequestQueue) Close() {
-	close(q.queue)
+	q.queue.Close()
 }
 
 type BlockStatusRequestWithTargetID struct {
