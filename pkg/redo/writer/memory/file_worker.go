@@ -217,7 +217,8 @@ func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) 
 func (f *fileWorkerGroup) bgWriteLogs(
 	egCtx context.Context, inputCh <-chan writer.RedoEvent,
 ) (err error) {
-	ticker := time.NewTicker(redo.DefaultFlushIntervalInMs)
+	d := time.Duration(f.cfg.FlushIntervalInMs) * time.Millisecond
+	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	num := 0
 	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)

@@ -350,10 +350,22 @@ func (e *eventStore) RegisterDispatcher(
 	onlyReuse bool,
 	bdrMode bool,
 ) bool {
-	log.Info("register dispatcher",
-		zap.Stringer("dispatcherID", dispatcherID),
-		zap.String("span", common.FormatTableSpan(dispatcherSpan)),
-		zap.Uint64("startTs", startTs))
+	pdTime := e.pdClock.CurrentTime()
+	pdPhyTs := oracle.GetPhysical(pdTime)
+	startPhyTs := oracle.ExtractPhysical(startTs)
+	startPhyLag := float64(pdPhyTs-startPhyTs) / 1e3
+	if startPhyLag > 10 {
+		log.Warn("register dispatcher with large startTs lag",
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+			zap.Uint64("startTs", startTs),
+			zap.Float64("startPhyLag", startPhyLag))
+	} else {
+		log.Info("register dispatcher",
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+			zap.Uint64("startTs", startTs))
+	}
 
 	start := time.Now()
 	defer func() {

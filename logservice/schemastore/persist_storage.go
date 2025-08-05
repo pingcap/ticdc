@@ -46,6 +46,8 @@ const dataDir = "schema_store"
 //  2. incremental ddl jobs
 //  3. metadata which describes the valid data range on disk
 type persistentStorage struct {
+	rootDir string
+
 	pdCli pd.Client
 
 	kvStorage kv.Storage
@@ -130,18 +132,8 @@ func newPersistentStorage(
 	pdCli pd.Client,
 	storage kv.Storage,
 ) *persistentStorage {
-	gcSafePoint, err := gc.SetServiceGCSafepoint(ctx, pdCli, "cdc-new-store", 0, 0)
-	if err != nil {
-		log.Panic("get ts failed", zap.Error(err))
-	}
-
-	dbPath := fmt.Sprintf("%s/%s", root, dataDir)
-	// FIXME: currently we don't try to reuse data at restart, when we need, just remove the following line
-	if err := os.RemoveAll(dbPath); err != nil {
-		log.Panic("fail to remove path")
-	}
-
 	dataStorage := &persistentStorage{
+		rootDir:                root,
 		pdCli:                  pdCli,
 		kvStorage:              storage,
 		tableMap:               make(map[int64]*BasicTableInfo),
@@ -151,6 +143,32 @@ func newPersistentStorage(
 		tableTriggerDDLHistory: make([]uint64, 0),
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
+	}
+
+	return dataStorage
+}
+
+func (p *persistentStorage) initialize(ctx context.Context) {
+	var gcSafePoint uint64
+	for {
+		var err error
+		gcSafePoint, err = gc.SetServiceGCSafepoint(ctx, p.pdCli, "cdc-new-store", 0, 0)
+		if err == nil {
+			break
+		}
+
+		log.Warn("get ts failed, will retry in 1s", zap.Error(err))
+		select {
+		case <-ctx.Done():
+			log.Panic("context is canceled during getting gc safepoint", zap.Error(ctx.Err()))
+		case <-time.After(time.Second):
+		}
+	}
+
+	dbPath := fmt.Sprintf("%s/%s", p.rootDir, dataDir)
+	// FIXME: currently we don't try to reuse data at restart, when we need, just remove the following line
+	if err := os.RemoveAll(dbPath); err != nil {
+		log.Panic("fail to remove path")
 	}
 
 	isDataReusable := false
@@ -174,19 +192,17 @@ func newPersistentStorage(
 		}
 
 		if isDataReusable {
-			dataStorage.db = db
-			dataStorage.gcTs = gcTs
-			dataStorage.upperBound = upperBound
-			dataStorage.initializeFromDisk()
+			p.db = db
+			p.gcTs = gcTs
+			p.upperBound = upperBound
+			p.initializeFromDisk()
 		} else {
 			db.Close()
 		}
 	}
 	if !isDataReusable {
-		dataStorage.initializeFromKVStorage(dbPath, storage, gcSafePoint)
+		p.initializeFromKVStorage(dbPath, p.kvStorage, gcSafePoint)
 	}
-
-	return dataStorage
 }
 
 func (p *persistentStorage) initializeFromKVStorage(dbPath string, storage kv.Storage, gcTs uint64) {

@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -57,8 +58,8 @@ type sink struct {
 	checkpointChan   chan uint64
 	tableSchemaStore *util.TableSchemaStore
 
-	eventChan chan *commonEvent.DMLEvent
-	rowChan   chan *commonEvent.MQRowEvent
+	eventChan *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	rowChan   *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
@@ -111,8 +112,8 @@ func New(
 		statistics:    statistics,
 
 		checkpointChan: make(chan uint64, 16),
-		eventChan:      make(chan *commonEvent.DMLEvent, 32),
-		rowChan:        make(chan *commonEvent.MQRowEvent, 32),
+		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		rowChan:        chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
 
 		isNormal: atomic.NewBool(true),
 		ctx:      ctx,
@@ -144,7 +145,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.eventChan <- event
+	s.eventChan.Push(event)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -166,6 +167,11 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
+func (s *sink) close() {
+	s.eventChan.Close()
+	s.rowChan.Close()
+}
+
 func (s *sink) sendDMLEvent(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -185,6 +191,9 @@ func (s *sink) sendDMLEvent(ctx context.Context) error {
 	})
 
 	g.Go(func() error {
+		// UnlimitedChannel will block when there is no event, they cannot dirrectly find ctx.Done()
+		// Thus, we need to close the channel when the context is done
+		defer s.close()
 		return s.sendMessages(ctx)
 	})
 	return g.Wait()
@@ -195,7 +204,14 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case event := <-s.eventChan:
+		default:
+			event, ok := s.eventChan.Get()
+			if !ok {
+				log.Info("kafka sink event channel closed",
+					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("changefeed", s.changefeedID.Name()))
+				return nil
+			}
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
@@ -249,7 +265,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						Checksum:        row.Checksum,
 					},
 				}
-				s.rowChan <- mqEvent
+				s.rowChan.Push(mqEvent)
 			}
 		}
 	}
@@ -260,7 +276,8 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case event, ok := <-s.rowChan:
+		default:
+			event, ok := s.rowChan.Get()
 			if !ok {
 				log.Info("kafka sink event channel closed",
 					zap.String("namespace", s.changefeedID.Namespace()),
@@ -282,12 +299,10 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		metrics.WorkerBatchSize.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	}()
 
-	ticker := time.NewTicker(batchInterval)
-	defer ticker.Stop()
-	msgsBuf := make([]*commonEvent.MQRowEvent, batchSize)
+	msgsBuf := make([]*commonEvent.MQRowEvent, 0, batchSize)
 	for {
 		start := time.Now()
-		msgCount, err := s.batch(ctx, msgsBuf, ticker)
+		msgs, err := s.batch(ctx, msgsBuf)
 		if err != nil {
 			log.Error("kafka sink batch dml events failed",
 				zap.String("namespace", s.changefeedID.Namespace()),
@@ -295,14 +310,13 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 				zap.Error(err))
 			return err
 		}
-		if msgCount == 0 {
+		if len(msgs) == 0 {
 			continue
 		}
 
-		metricBatchSize.Observe(float64(msgCount))
+		metricBatchSize.Observe(float64(len(msgs)))
 		metricBatchDuration.Observe(time.Since(start).Seconds())
 
-		msgs := msgsBuf[:msgCount]
 		// Group messages by its TopicPartitionKey before adding them to the encoder group.
 		groupedMsgs := s.group(msgs)
 		for key, msg := range groupedMsgs {
@@ -316,50 +330,19 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 // batch collects a batch of messages from w.msgChan into buffer.
 // It returns the number of messages collected.
 // Note: It will block until at least one message is received.
-func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
-	msgCount := 0
-	maxBatchSize := len(buffer)
-	// We need to receive at least one message or be interrupted,
-	// otherwise it will lead to idling.
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*commonEvent.MQRowEvent, error) {
 	select {
 	case <-ctx.Done():
-		return msgCount, ctx.Err()
-	case msg, ok := <-s.rowChan:
+		return nil, ctx.Err()
+	default:
+		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
 			log.Info("kafka sink event channel closed",
 				zap.String("namespace", s.changefeedID.Namespace()),
 				zap.String("changefeed", s.changefeedID.Name()))
-			return msgCount, nil
+			return nil, nil
 		}
-
-		buffer[msgCount] = msg
-		msgCount++
-	}
-
-	// Reset the ticker to start a new batching.
-	// We need to stop batching when the interval is reached.
-	ticker.Reset(batchInterval)
-	for {
-		select {
-		case <-ctx.Done():
-			return msgCount, ctx.Err()
-		case msg, ok := <-s.rowChan:
-			if !ok {
-				log.Info("kafka sink event channel closed",
-					zap.String("namespace", s.changefeedID.Namespace()),
-					zap.String("changefeed", s.changefeedID.Name()))
-				return msgCount, nil
-			}
-
-			buffer[msgCount] = msg
-			msgCount++
-
-			if msgCount >= maxBatchSize {
-				return msgCount, nil
-			}
-		case <-ticker.C:
-			return msgCount, nil
-		}
+		return msgs, nil
 	}
 }
 

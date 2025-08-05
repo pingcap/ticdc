@@ -100,7 +100,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
 	}
 
-	log.Debug("exec syncpoint ts query", zap.String("query", query))
+	log.Info("exec syncpoint ts query", zap.String("query", query))
 
 	// set global tidb_external_ts to secondary ts
 	// TiDB supports tidb_external_ts system variable since v6.4.0.
