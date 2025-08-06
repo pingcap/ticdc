@@ -40,6 +40,7 @@ func NewHeartbeatRequestQueue() *HeartbeatRequestQueue {
 }
 
 func (q *HeartbeatRequestQueue) Enqueue(request *HeartBeatRequestWithTargetID) {
+	log.Info("heartbeat request queue enqueue", zap.Stringer("targetID", request.TargetID))
 	q.queue.Push(request)
 }
 
@@ -75,7 +76,7 @@ func (q *HeartbeatRequestQueue) Dequeue() []*HeartBeatRequestWithTargetID {
 
 	result := make([]*HeartBeatRequestWithTargetID, 0, len(requestMap))
 	for node, request := range requestMap {
-		if spanStatusMap[node] == nil {
+		if spanStatusMap[node] != nil {
 			request.Request.Statuses = make([]*heartbeatpb.TableSpanStatus, 0, len(spanStatusMap[node]))
 			for _, status := range spanStatusMap[node] {
 				request.Request.Statuses = append(request.Request.Statuses, status)

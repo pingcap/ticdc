@@ -16,10 +16,12 @@ package messaging
 import (
 	"sync/atomic"
 
+	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/zap"
 )
 
 // localMessageTarget implements the SendMessageChannel interface.
@@ -79,6 +81,7 @@ func (s *localMessageTarget) recordCongestedMessageError(typeE string) {
 
 func (s *localMessageTarget) sendMsgToChan(ch chan *TargetMessage, msg ...*TargetMessage) error {
 	for i, m := range msg {
+		log.Info("message send to local target", zap.Any("msg type", m.Type))
 		m.To = s.localId
 		m.From = s.localId
 		m.Sequence = s.sequence.Add(1)
