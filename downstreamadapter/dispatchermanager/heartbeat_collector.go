@@ -16,11 +16,13 @@ package dispatchermanager
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -151,12 +153,14 @@ func (c *HeartBeatCollector) RemoveCheckpointTsMessage(changefeedID common.Chang
 }
 
 func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
+	ticker := time.NewTicker(time.Millisecond * 100)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("heartbeat collector is shutting down, exit sendHeartBeatMessages")
 			return ctx.Err()
-		default:
+		case <-ticker.C: // use a ticker to make heartbeat batch again, to avoid too many heartbeats
 			heartBeatRequestWithTargetIDs := c.heartBeatReqQueue.Dequeue()
 			for _, heartBeatRequestWithTargetID := range heartBeatRequestWithTargetIDs {
 				if heartBeatRequestWithTargetID == nil {
@@ -174,6 +178,12 @@ func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
 					))
 				if err != nil {
 					log.Error("failed to send heartbeat request message", zap.Error(err))
+					// If the error is due to message congestion, sleep and retry
+					if appErr, ok := err.(apperror.AppError); ok && appErr.Type == apperror.ErrorTypeMessageCongested {
+						log.Info("heartbeat request message is congested, sleep and retry", zap.Stringer("targetID", heartBeatRequestWithTargetID.TargetID))
+						time.Sleep(time.Millisecond * 200)
+						continue
+					}
 				}
 			}
 		}
