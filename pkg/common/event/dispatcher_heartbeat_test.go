@@ -282,8 +282,7 @@ func TestCongestionControl(t *testing.T) {
 	var decoded CongestionControl
 	err = decoded.Unmarshal(bytes)
 	require.NoError(t, err)
-	require.Equal(t, control.Version, decoded.Version)
-	require.Equal(t, control.ClusterID, decoded.ClusterID)
+	require.Equal(t, control.GetClusterID(), decoded.GetClusterID())
 	require.Equal(t, len(decoded.availables), len(control.availables))
 
 	control.AddAvailableMemory(common.NewGID(), 1024)
