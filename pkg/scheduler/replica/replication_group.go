@@ -205,11 +205,19 @@ func (g *replicationGroup[T, R]) GetNodeIDs() []node.ID {
 }
 
 func (g *replicationGroup[T, R]) GetTaskSizeByNodeID(nodeID node.ID) int {
-	return g.nodeTasks.get(nodeID).size()
+	nodeMap, ok := g.nodeTasks.tryGet(nodeID)
+	if !ok {
+		return 0
+	}
+	return nodeMap.size()
 }
 
 func (g *replicationGroup[T, R]) GetTasksByNodeID(nodeID node.ID) []R {
-	return g.nodeTasks.get(nodeID).values()
+	nodeMap, ok := g.nodeTasks.tryGet(nodeID)
+	if !ok {
+		return []R{}
+	}
+	return nodeMap.values()
 }
 
 func (g *replicationGroup[T, R]) GetAbsentSize() int {
