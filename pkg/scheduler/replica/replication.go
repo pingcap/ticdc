@@ -339,7 +339,7 @@ func (db *replicationDB[T, R]) getOrCreateGroup(task R) *replicationGroup[T, R] 
 
 	db.mutex.RLock()
 	g, ok := db.taskGroups[groupID]
-	db.mutex.Unlock()
+	db.mutex.RUnlock()
 
 	if !ok {
 		checker := db.newChecker(groupID)
