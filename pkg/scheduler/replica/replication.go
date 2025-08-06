@@ -144,9 +144,8 @@ func (db *replicationDB[T, R]) GetGroupSize() int {
 	return count
 }
 
-func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret GroupChecker[T, R]) {
-	ret = db.mustGetGroup(groupID).checker
-	return
+func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) GroupChecker[T, R] {
+	return db.mustGetGroup(groupID).checker
 }
 
 func (db *replicationDB[T, R]) GetAbsent() []R {
