@@ -31,7 +31,7 @@ import (
 // eventGetter is the interface for getting iterator of events
 // The implementation of eventGetter is eventstore.EventStore
 type eventGetter interface {
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (eventstore.EventIterator, error)
+	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) eventstore.EventIterator
 }
 
 // schemaGetter is the interface for getting schema info and ddl events
@@ -119,10 +119,7 @@ func (s *eventScanner) scan(
 		return nil, false, err
 	}
 
-	iter, err := s.getEventIterator(dispatcherStat, dataRange)
-	if err != nil {
-		return nil, false, err
-	}
+	iter := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
 	if iter == nil {
 		resolved := event.NewResolvedEvent(dataRange.EndTs, dispatcherStat.id, dispatcherStat.epoch.Load())
 		events = append(events, resolved)
@@ -152,18 +149,6 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 		result = append(result, &item)
 	}
 	return result, nil
-}
-
-// getEventIterator gets the event iterator for DML events
-func (s *eventScanner) getEventIterator(stat *dispatcherStat, dataRange common.DataRange) (eventstore.EventIterator, error) {
-	dispatcherID := stat.info.GetID()
-	iter, err := s.eventGetter.GetIterator(dispatcherID, dataRange)
-	if err != nil {
-		log.Error("read events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
-		return nil, err
-	}
-
-	return iter, nil
 }
 
 // closeIterator closes the event iterator and records metrics

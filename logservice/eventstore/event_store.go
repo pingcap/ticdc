@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -75,7 +74,7 @@ type EventStore interface {
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
 	// GetIterator return an iterator which scan the data in ts range (dataRange.StartTs, dataRange.EndTs]
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error)
+	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
 }
 
 type DMLEventState struct {
@@ -622,13 +621,13 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	updateSubStatCheckpoint(dispatcherStat.pendingSubStat)
 }
 
-func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error) {
+func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
 	e.dispatcherMeta.RLock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
 		log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 		e.dispatcherMeta.RUnlock()
-		return nil, nil
+		return nil
 	}
 
 	tryGetDB := func(subStat *subscriptionStat) *pebble.DB {
@@ -675,7 +674,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		if stat == nil {
 			e.dispatcherMeta.Unlock()
 			log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
-			return nil, nil
+			return nil
 		}
 		// GetIterator for the same dispatcher won't be called concurrently.
 		// So if the dispatcher is not unregistered during the unlock period,
@@ -693,13 +692,11 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	start := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.StartTs+1)
 	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.EndTs+1)
 	// TODO: optimize read performance
-	iter, err := db.NewIter(&pebble.IterOptions{
+	// it's impossible return error here
+	iter, _ := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,
 		UpperBound: end,
 	})
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
 	startTime := time.Now()
 	// todo: what happens if iter.First() returns false?
 	_ = iter.First()
@@ -720,7 +717,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:       dataRange.StartTs,
 		endTs:         dataRange.EndTs,
 		rowCount:      0,
-	}, nil
+	}
 }
 
 func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {

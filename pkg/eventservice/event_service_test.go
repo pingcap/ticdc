@@ -297,15 +297,15 @@ func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) 
 	}
 }
 
-func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (eventstore.EventIterator, error) {
+func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) eventstore.EventIterator {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
-		return nil, fmt.Errorf("dispatcher not found: %v", dispatcherID)
+		log.Panic("dispatcher not found", zap.Stringer("dispatcherID", dispatcherID))
 	}
 
 	v, ok := m.spansMap.Load(span)
 	if !ok {
-		return nil, fmt.Errorf("span not found: %v, dispatcherID: %v", span, dispatcherID)
+		log.Panic("span not found", zap.Any("span", span), zap.Stringer("dispatcherID", dispatcherID))
 	}
 
 	spanStats := v.(*mockSpanStats)
@@ -322,7 +322,7 @@ func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange
 	if len(entries) != 0 {
 		iter = &mockEventIterator{events: entries}
 	}
-	return iter, nil
+	return iter
 }
 
 func (m *mockEventStore) RegisterDispatcher(
