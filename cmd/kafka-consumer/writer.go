@@ -357,7 +357,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 		err := w.flushDDLEvent(ctx, ddl)
 		if err != nil {
-			log.Panic("flush DDL event failed", zap.String("DDL", ddl.Query), zap.Error(err))
+			log.Error("flush DDL event failed", zap.String("DDL", ddl.Query), zap.Error(err))
 		}
 		return true
 	case common.MessageTypeRow:
