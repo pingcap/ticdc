@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/chann"
+	"go.uber.org/zap"
 )
 
 // HeartbeatRequestQueue is a channel for all event dispatcher managers to send heartbeat requests to HeartBeatCollector
@@ -85,6 +86,7 @@ func (q *HeartbeatRequestQueue) Dequeue() []*HeartBeatRequestWithTargetID {
 		}
 		result = append(result, request)
 	}
+	log.Info("heartbeat request queue dequeue", zap.Int("result size", len(result)), zap.Any("len buffer", len(buffer)))
 	return result
 }
 
