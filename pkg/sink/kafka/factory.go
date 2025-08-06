@@ -91,7 +91,7 @@ type saramaSyncProducer struct {
 	id       commonType.ChangeFeedID
 	client   sarama.Client
 	producer sarama.SyncProducer
-	closed   bool
+	closed   *atomic.Bool
 }
 
 func (p *saramaSyncProducer) SendMessage(
@@ -99,7 +99,7 @@ func (p *saramaSyncProducer) SendMessage(
 	topic string, partitionNum int32,
 	message *common.Message,
 ) error {
-	if p.closed {
+	if p.closed.Load() {
 		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
 	_, _, err := p.producer.SendMessage(&sarama.ProducerMessage{
@@ -114,7 +114,7 @@ func (p *saramaSyncProducer) SendMessage(
 func (p *saramaSyncProducer) SendMessages(
 	_ context.Context, topic string, partitionNum int32, message *common.Message,
 ) error {
-	if p.closed {
+	if p.closed.Load() {
 		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
@@ -131,7 +131,7 @@ func (p *saramaSyncProducer) SendMessages(
 }
 
 func (p *saramaSyncProducer) Heartbeat() {
-	if p.closed {
+	if p.closed.Load() {
 		return
 	}
 	brokers := p.client.Brokers()
@@ -141,14 +141,14 @@ func (p *saramaSyncProducer) Heartbeat() {
 }
 
 func (p *saramaSyncProducer) Close() {
-	if p.closed {
+	if p.closed.Load() {
 		log.Warn("kafka DDL producer already closed",
 			zap.String("namespace", p.id.Namespace()),
 			zap.String("changefeed", p.id.Name()))
 		return
 	}
 
-	p.closed = true
+	p.closed.Store(true)
 	start := time.Now()
 	// this also close the client.
 	err := p.producer.Close()

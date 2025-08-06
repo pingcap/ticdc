@@ -137,7 +137,7 @@ func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
 		id:       f.changefeedID,
 		client:   client,
 		producer: p,
-		closed:   false,
+		closed:   atomic.NewBool(false),
 	}, nil
 }
 
