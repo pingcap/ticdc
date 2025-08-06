@@ -55,7 +55,7 @@ type Controller struct {
 	nodeManager    *watcher.NodeManager
 	splitter       *split.Splitter
 
-	mu           sync.RWMutex // protect the following fields
+	mu           sync.RWMutex // protect the following fields // TODO:use a struct instead of a mu+map
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 }
@@ -174,8 +174,9 @@ func (oc *Controller) OnNodeRemoved(n node.ID) {
 			oc.spanController.MarkSpanAbsent(span)
 		}
 	}
-	for _, op := range oc.operators {
-		op.OP.OnNodeRemove(n)
+	ops := oc.GetAllOperators()
+	for _, op := range ops {
+		op.OnNodeRemove(n)
 	}
 }
 
@@ -424,10 +425,10 @@ func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID,
 		log.Info("GetAllOperators cost", zap.Duration("cost", time.Since(start)))
 	}()
 
-	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(oc.operators))
-
 	oc.mu.RLock()
 	defer oc.mu.RUnlock()
+
+	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(oc.operators))
 
 	for _, op := range oc.operators {
 		operators = append(operators, op.OP)
