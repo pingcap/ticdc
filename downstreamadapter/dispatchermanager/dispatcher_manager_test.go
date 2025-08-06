@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -31,7 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var mockSink = sink.NewMockSink(common.MysqlSinkType)
+var mockSink = sink.NewMockSink(common.BlackHoleSinkType)
 
 // createTestDispatcher creates a test dispatcher with given parameters
 func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
@@ -291,123 +292,123 @@ func TestMergeDispatcherThreeDispatchers(t *testing.T) {
 	require.Equal(t, heartbeatpb.ComponentState_WaitingMerge, dispatcher3After.GetComponentStatus())
 }
 
-// func TestDoMerge(t *testing.T) {
-// 	manager := createTestManager(t)
+func TestDoMerge(t *testing.T) {
+	manager := createTestManager(t)
 
-// 	// Create two adjacent dispatchers
-// 	dispatcher1 := createTestDispatcher(t, manager,
-// 		common.NewDispatcherID(),
-// 		1,
-// 		[]byte("a"),
-// 		[]byte("m"),
-// 	)
-// 	dispatcher2 := createTestDispatcher(t, manager,
-// 		common.NewDispatcherID(),
-// 		1,
-// 		[]byte("m"),
-// 		[]byte("z"),
-// 	)
+	// Create two adjacent dispatchers
+	dispatcher1 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("a"),
+		[]byte("m"),
+	)
+	dispatcher2 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("m"),
+		[]byte("z"),
+	)
 
-// 	// Add resolved event to dispatcher1 to update the checkpointTs
-// 	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
-// 	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
+	// Add resolved event to dispatcher1 to update the checkpointTs
+	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
+	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
 
-// 	// Add resolved event to dispatcher2 to update the checkpointTs
-// 	resolvedEvent2 := event.NewResolvedEvent(200, dispatcher2.GetId(), 0)
-// 	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
+	// Add resolved event to dispatcher2 to update the checkpointTs
+	resolvedEvent2 := event.NewResolvedEvent(200, dispatcher2.GetId(), 0)
+	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
 
-// 	// Add dispatchers to manager
-// 	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
-// 	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
+	// Add dispatchers to manager
+	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
+	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
 
-// 	mergedID := common.NewDispatcherID()
-// 	task := manager.mergeEventDispatcher([]common.DispatcherID{
-// 		dispatcher1.GetId(),
-// 		dispatcher2.GetId(),
-// 	}, mergedID)
+	mergedID := common.NewDispatcherID()
+	task := manager.mergeEventDispatcher([]common.DispatcherID{
+		dispatcher1.GetId(),
+		dispatcher2.GetId(),
+	}, mergedID)
 
-// 	// Execute DoMerge
-// 	doMerge(task, task.manager.dispatcherMap)
+	// Execute DoMerge
+	doMerge(task, task.manager.dispatcherMap)
 
-// 	// Verify merged dispatcher state
-// 	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)
-// 	require.True(t, exists)
-// 	require.Equal(t, heartbeatpb.ComponentState_Initializing, mergedDispatcherAfter.GetComponentStatus())
-// 	// Verify startTs is set to the minimum checkpointTs
-// 	require.Equal(t, uint64(200), mergedDispatcherAfter.GetStartTs())
+	// Verify merged dispatcher state
+	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)
+	require.True(t, exists)
+	require.Equal(t, heartbeatpb.ComponentState_Initializing, mergedDispatcherAfter.GetComponentStatus())
+	// Verify startTs is set to the minimum checkpointTs
+	require.Equal(t, uint64(200), mergedDispatcherAfter.GetStartTs())
 
-// 	// Verify original dispatchers are removed
-// 	manager.aggregateDispatcherHeartbeats(false) // use heartbeat collector to remove merged dispatchers
-// 	_, exists = manager.dispatcherMap.Get(dispatcher1.GetId())
-// 	require.False(t, exists)
-// 	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
-// 	require.False(t, exists)
-// }
+	// Verify original dispatchers are removed
+	manager.aggregateDispatcherHeartbeats(false) // use heartbeat collector to remove merged dispatchers
+	_, exists = manager.dispatcherMap.Get(dispatcher1.GetId())
+	require.False(t, exists)
+	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
+	require.False(t, exists)
+}
 
-// func TestDoMergeWithThreeDispatchers(t *testing.T) {
-// 	manager := createTestManager(t)
+func TestDoMergeWithThreeDispatchers(t *testing.T) {
+	manager := createTestManager(t)
 
-// 	// Create three adjacent dispatchers
-// 	dispatcher1 := createTestDispatcher(t, manager,
-// 		common.NewDispatcherID(),
-// 		1,
-// 		[]byte("a"),
-// 		[]byte("m"),
-// 	)
-// 	dispatcher2 := createTestDispatcher(t, manager,
-// 		common.NewDispatcherID(),
-// 		1,
-// 		[]byte("m"),
-// 		[]byte("t"),
-// 	)
-// 	dispatcher3 := createTestDispatcher(t, manager,
-// 		common.NewDispatcherID(),
-// 		1,
-// 		[]byte("t"),
-// 		[]byte("z"),
-// 	)
+	// Create three adjacent dispatchers
+	dispatcher1 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("a"),
+		[]byte("m"),
+	)
+	dispatcher2 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("m"),
+		[]byte("t"),
+	)
+	dispatcher3 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("t"),
+		[]byte("z"),
+	)
 
-// 	// Add resolved event to dispatcher1 to update the checkpointTs
-// 	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
-// 	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
+	// Add resolved event to dispatcher1 to update the checkpointTs
+	resolvedEvent1 := event.NewResolvedEvent(300, dispatcher1.GetId(), 0)
+	dispatcher1.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent1)}, func() {})
 
-// 	// Add resolved event to dispatcher2 to update the checkpointTs
-// 	resolvedEvent2 := event.NewResolvedEvent(100, dispatcher2.GetId(), 0)
-// 	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
+	// Add resolved event to dispatcher2 to update the checkpointTs
+	resolvedEvent2 := event.NewResolvedEvent(100, dispatcher2.GetId(), 0)
+	dispatcher2.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent2)}, func() {})
 
-// 	// Add resolved event to dispatcher3 to update the checkpointTs
-// 	resolvedEvent3 := event.NewResolvedEvent(200, dispatcher3.GetId(), 0)
-// 	dispatcher3.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent3)}, func() {})
+	// Add resolved event to dispatcher3 to update the checkpointTs
+	resolvedEvent3 := event.NewResolvedEvent(200, dispatcher3.GetId(), 0)
+	dispatcher3.HandleEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(nil, resolvedEvent3)}, func() {})
 
-// 	// Add dispatchers to manager
-// 	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
-// 	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
-// 	manager.dispatcherMap.Set(dispatcher3.GetId(), dispatcher3)
+	// Add dispatchers to manager
+	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
+	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
+	manager.dispatcherMap.Set(dispatcher3.GetId(), dispatcher3)
 
-// 	// merge dispatcher
-// 	mergedID := common.NewDispatcherID()
-// 	task := manager.mergeEventDispatcher([]common.DispatcherID{
-// 		dispatcher1.GetId(),
-// 		dispatcher2.GetId(),
-// 		dispatcher3.GetId(),
-// 	}, mergedID)
+	// merge dispatcher
+	mergedID := common.NewDispatcherID()
+	task := manager.mergeEventDispatcher([]common.DispatcherID{
+		dispatcher1.GetId(),
+		dispatcher2.GetId(),
+		dispatcher3.GetId(),
+	}, mergedID)
 
-// 	// Execute DoMerge
-// 	doMerge(task, task.manager.dispatcherMap)
+	// Execute DoMerge
+	doMerge(task, task.manager.dispatcherMap)
 
-// 	// Verify merged dispatcher state
-// 	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)
-// 	require.True(t, exists)
-// 	require.Equal(t, heartbeatpb.ComponentState_Initializing, mergedDispatcherAfter.GetComponentStatus())
-// 	// Verify startTs is set to the minimum checkpointTs
-// 	require.Equal(t, uint64(100), mergedDispatcherAfter.GetStartTs())
+	// Verify merged dispatcher state
+	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)
+	require.True(t, exists)
+	require.Equal(t, heartbeatpb.ComponentState_Initializing, mergedDispatcherAfter.GetComponentStatus())
+	// Verify startTs is set to the minimum checkpointTs
+	require.Equal(t, uint64(100), mergedDispatcherAfter.GetStartTs())
 
-// 	// Verify original dispatchers are removed
-// 	manager.aggregateDispatcherHeartbeats(false) // use heartbeat collector to remove merged dispatchers
-// 	_, exists = manager.dispatcherMap.Get(dispatcher1.GetId())
-// 	require.False(t, exists)
-// 	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
-// 	require.False(t, exists)
-// 	_, exists = manager.dispatcherMap.Get(dispatcher3.GetId())
-// 	require.False(t, exists)
-// }
+	// Verify original dispatchers are removed
+	manager.aggregateDispatcherHeartbeats(false) // use heartbeat collector to remove merged dispatchers
+	_, exists = manager.dispatcherMap.Get(dispatcher1.GetId())
+	require.False(t, exists)
+	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
+	require.False(t, exists)
+	_, exists = manager.dispatcherMap.Get(dispatcher3.GetId())
+	require.False(t, exists)
+}
