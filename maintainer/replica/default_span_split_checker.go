@@ -117,14 +117,6 @@ func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
 }
 
 func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
-	start := time.Now()
-	defer func() {
-		log.Info("default span split checker: update status",
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.String("replica", replica.ID.String()),
-			zap.Any("time cost", time.Since(start)),
-		)
-	}()
 	status, ok := s.allTasks[replica.ID]
 	if !ok {
 		log.Warn("default span split checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()))

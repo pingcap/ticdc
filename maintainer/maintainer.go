@@ -707,12 +707,16 @@ func (m *Maintainer) onBatchHeartBeatRequest(msg []*messaging.TargetMessage) {
 	}
 	log.Info("onBatchHeartBeatRequest dispatcherStatusMap cost", zap.Any("time cost", time.Since(time1)))
 
+	size := 0
 	for nodeID, statusMap := range dispatcherStatusMap {
 		for _, status := range statusMap {
 			m.controller.HandleStatus(nodeID, []*heartbeatpb.TableSpanStatus{status})
 		}
+		size += len(statusMap)
 	}
-	log.Info("onBatchHeartBeatRequest watermarkMap cost", zap.Any("time cost", time.Since(time1)))
+	log.Info("onBatchHeartBeatRequest watermarkMap cost",
+		zap.Any("time cost", time.Since(time1)),
+		zap.Any("size", size))
 
 	for nodeID, watermark := range watermarkMap {
 		old, ok := m.checkpointTsByCapture.Get(nodeID)

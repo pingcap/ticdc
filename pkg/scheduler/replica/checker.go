@@ -13,7 +13,13 @@
 
 package replica
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
+)
 
 type (
 	GroupID           = int64
@@ -53,7 +59,14 @@ func (c *EmptyStatusChecker[T, R]) AddReplica(_ R) {}
 
 func (c *EmptyStatusChecker[T, R]) RemoveReplica(_ R) {}
 
-func (c *EmptyStatusChecker[T, R]) UpdateStatus(_ R) {}
+func (c *EmptyStatusChecker[T, R]) UpdateStatus(_ R) {
+	start := time.Now()
+	defer func() {
+		log.Info("empty status checker: update status",
+			zap.Any("time cost", time.Since(start)),
+		)
+	}()
+}
 
 func (c *EmptyStatusChecker[T, R]) Check(_ int) GroupCheckResult {
 	return nil
