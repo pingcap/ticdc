@@ -480,9 +480,11 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 		case <-ticker.C:
 			messages := c.newCongestionControlMessages()
 			for serverID, m := range messages {
-				msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, m)
-				if err := c.mc.SendCommand(msg); err != nil {
-					log.Warn("send congestion control message failed", zap.Error(err))
+				if len(m.GetAvailables()) != 0 {
+					msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, m)
+					if err := c.mc.SendCommand(msg); err != nil {
+						log.Warn("send congestion control message failed", zap.Error(err))
+					}
 				}
 			}
 		}

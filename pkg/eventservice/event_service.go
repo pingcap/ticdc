@@ -239,7 +239,7 @@ func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatW
 }
 
 func (s *eventService) handleCongestionControl(from node.ID, m *event.CongestionControl) {
-	clusterID := m.ClusterID
+	clusterID := m.GetClusterID()
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		return

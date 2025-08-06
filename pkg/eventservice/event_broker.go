@@ -1030,8 +1030,13 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 }
 
 func (c *eventBroker) handleCongestionControl(from node.ID, m *pevent.CongestionControl) {
-	holder := make(map[common.GID]uint64, len(m.AvailableMemory))
-	for _, item := range m.AvailableMemory {
+	availables := m.GetAvailables()
+	if len(availables) == 0 {
+		return
+	}
+
+	holder := make(map[common.GID]uint64, len(availables))
+	for _, item := range availables {
 		holder[item.Gid] = item.Available
 	}
 

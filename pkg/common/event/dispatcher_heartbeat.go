@@ -318,14 +318,16 @@ func (m AvailableMemory) GetSize() int {
 }
 
 type CongestionControl struct {
-	Version         byte
-	ClusterID       uint64
-	AvailableMemory []AvailableMemory
+	version   byte
+	clusterID uint64
+
+	changefeedCount uint32
+	availables      []AvailableMemory
 }
 
 func NewCongestionControl() *CongestionControl {
 	return &CongestionControl{
-		Version: CongestionControlVersion,
+		version: CongestionControlVersion,
 	}
 }
 
@@ -334,7 +336,7 @@ func (c *CongestionControl) GetSize() int {
 	size += 8 // clusterID
 
 	size += 4 // changefeed count
-	for _, mem := range c.AvailableMemory {
+	for _, mem := range c.availables {
 		size += mem.GetSize()
 	}
 	return size
@@ -342,11 +344,11 @@ func (c *CongestionControl) GetSize() int {
 
 func (c *CongestionControl) Marshal() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(c.Version)
-	_ = binary.Write(buf, binary.BigEndian, c.ClusterID)
+	buf.WriteByte(c.version)
+	_ = binary.Write(buf, binary.BigEndian, c.clusterID)
+	_ = binary.Write(buf, binary.BigEndian, c.changefeedCount)
 
-	_ = binary.Write(buf, binary.BigEndian, len(c.AvailableMemory))
-	for _, item := range c.AvailableMemory {
+	for _, item := range c.availables {
 		data := item.Marshal()
 		buf.Write(data)
 	}
@@ -356,21 +358,30 @@ func (c *CongestionControl) Marshal() ([]byte, error) {
 func (c *CongestionControl) Unmarshal(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	var err error
-	c.Version, err = buf.ReadByte()
+	c.version, err = buf.ReadByte()
 	if err != nil {
 		return err
 	}
-	c.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
-	length := binary.BigEndian.Uint32(buf.Next(4))
-	c.AvailableMemory = make([]AvailableMemory, 0, length)
-	for i := 0; i < int(length); i++ {
+	c.clusterID = binary.BigEndian.Uint64(buf.Next(8))
+	c.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
+	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
+	for i := uint32(0); i < c.changefeedCount; i++ {
 		var item AvailableMemory
 		item.Unmarshal(buf.Next(item.GetSize()))
-		c.AvailableMemory = append(c.AvailableMemory, item)
+		c.availables = append(c.availables, item)
 	}
 	return nil
 }
 
 func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64) {
-	c.AvailableMemory = append(c.AvailableMemory, NewAvailableMemory(gid, available))
+	c.changefeedCount++
+	c.availables = append(c.availables, NewAvailableMemory(gid, available))
+}
+
+func (c *CongestionControl) GetAvailables() []AvailableMemory {
+	return c.availables
+}
+
+func (c *CongestionControl) GetClusterID() uint64 {
+	return c.clusterID
 }
