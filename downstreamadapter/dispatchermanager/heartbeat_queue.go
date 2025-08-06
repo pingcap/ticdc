@@ -86,7 +86,7 @@ func (q *HeartbeatRequestQueue) Dequeue() []*HeartBeatRequestWithTargetID {
 		}
 		result = append(result, request)
 	}
-	log.Info("heartbeat request queue dequeue", zap.Int("result size", len(result)), zap.Any("len buffer", len(buffer)))
+	log.Info("heartbeat request queue dequeue", zap.Int("result size", len(result)), zap.Any("len requests", len(requests)))
 	return result
 }
 
