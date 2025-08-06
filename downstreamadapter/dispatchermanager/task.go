@@ -46,7 +46,7 @@ func (t *HeartBeatTask) Execute() time.Time {
 	}
 	executeInterval := time.Millisecond * 200
 	// 10s / 200ms = 50
-	completeStatusInterval := int(time.Second * 10 / executeInterval)
+	completeStatusInterval := int(time.Second * 30 / executeInterval)
 	t.statusTick++
 	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
