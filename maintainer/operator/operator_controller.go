@@ -108,14 +108,6 @@ func (oc *Controller) Execute() time.Time {
 	}
 }
 
-// RemoveAllTasks remove all tasks, and notify all operators to stop.
-// it is only called by the barrier when the changefeed is stopped.
-func (oc *Controller) RemoveAllTasks() {
-	for _, replicaSet := range oc.spanController.RemoveAll() {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, replicaSet))
-	}
-}
-
 // RemoveTasksBySchemaID remove all tasks by schema id.
 // it is only by the barrier when the schema is dropped by ddl
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {

@@ -22,13 +22,12 @@ import (
 )
 
 // replicationGroup maintains a group of replication tasks.
-// All methods are not thread-safe.
 type replicationGroup[T ReplicationID, R Replication[T]] struct {
 	id        string
 	groupID   GroupID
 	groupName string
 
-	nodeTasks map[node.ID]map[T]R // group the tasks by the node id
+	nodeTasks *nodeMap[T, R] // group the tasks by the node id
 
 	// maps that maintained base on the replica scheduling status
 	replicating *iMap[T, R]
@@ -45,7 +44,7 @@ func newReplicationGroup[T ReplicationID, R Replication[T]](
 		id:          id,
 		groupID:     groupID,
 		groupName:   GetGroupName(groupID),
-		nodeTasks:   make(map[node.ID]map[T]R),
+		nodeTasks:   newNodeMap[T, R](),
 		replicating: newIMap[T, R](),
 		scheduling:  newIMap[T, R](),
 		absent:      newIMap[T, R](),
@@ -151,22 +150,22 @@ func (g *replicationGroup[T, R]) BindReplicaToNode(old, new node.ID, replica R) 
 func (g *replicationGroup[T, R]) updateNodeMap(old, new node.ID, replica R) {
 	// clear from the old node
 	if old != "" {
-		oldMap, ok := g.nodeTasks[old]
+		oldMap, ok := g.nodeTasks.tryGet(old)
 		if ok {
-			delete(oldMap, replica.GetID())
-			if len(oldMap) == 0 {
-				delete(g.nodeTasks, old)
+			oldMap.delete(replica.GetID())
+			if oldMap.size() == 0 {
+				g.nodeTasks.delete(old)
 			}
 		}
 	}
 	// add to the new node if the new node is not empty
 	if new != "" {
-		newMap, ok := g.nodeTasks[new]
+		newMap, ok := g.nodeTasks.tryGet(new)
 		if !ok {
-			newMap = make(map[T]R)
-			g.nodeTasks[new] = newMap
+			newMap = newReplicationMap[T, R]()
+			g.nodeTasks.set(new, newMap)
 		}
-		newMap[replica.GetID()] = replica
+		newMap.set(replica.GetID(), replica)
 	}
 }
 
@@ -185,10 +184,10 @@ func (g *replicationGroup[T, R]) RemoveReplica(replica R) {
 	g.absent.Delete(replica.GetID())
 	g.replicating.Delete(replica.GetID())
 	g.scheduling.Delete(replica.GetID())
-	nodeMap := g.nodeTasks[replica.GetNodeID()]
-	delete(nodeMap, replica.GetID())
-	if len(nodeMap) == 0 {
-		delete(g.nodeTasks, replica.GetNodeID())
+	nodeMap := g.nodeTasks.get(replica.GetNodeID())
+	nodeMap.delete(replica.GetID())
+	if nodeMap.size() == 0 {
+		g.nodeTasks.delete(replica.GetNodeID())
 	}
 	g.checker.RemoveReplica(replica)
 }
@@ -201,12 +200,16 @@ func (g *replicationGroup[T, R]) IsStable() bool {
 	return g.scheduling.Len() == 0 && g.absent.Len() == 0
 }
 
-func (g *replicationGroup[T, R]) GetTaskSizeByNodeID(nodeID node.ID) int {
-	return len(g.nodeTasks[nodeID])
+func (g *replicationGroup[T, R]) GetNodeIDs() []node.ID {
+	return g.nodeTasks.keys()
 }
 
-func (g *replicationGroup[T, R]) GetNodeTasks() map[node.ID]map[T]R {
-	return g.nodeTasks
+func (g *replicationGroup[T, R]) GetTaskSizeByNodeID(nodeID node.ID) int {
+	return g.nodeTasks.get(nodeID).size()
+}
+
+func (g *replicationGroup[T, R]) GetTasksByNodeID(nodeID node.ID) []R {
+	return g.nodeTasks.get(nodeID).values()
 }
 
 func (g *replicationGroup[T, R]) GetAbsentSize() int {
@@ -257,8 +260,9 @@ func (g *replicationGroup[T, R]) GetReplicating() []R {
 
 func (g *replicationGroup[T, R]) GetTaskSizePerNode() map[node.ID]int {
 	res := make(map[node.ID]int)
-	for nodeID, tasks := range g.nodeTasks {
-		res[nodeID] = len(tasks)
+	nodeIDs := g.GetNodeIDs()
+	for _, nodeID := range nodeIDs {
+		res[nodeID] = g.GetTaskSizeByNodeID(nodeID)
 	}
 	return res
 }

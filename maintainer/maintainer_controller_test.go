@@ -76,28 +76,6 @@ func TestSchedule(t *testing.T) {
 	require.Equal(t, 3, controller.spanController.GetTaskSizeByNodeID("node3"))
 }
 
-func TestRemoveAbsentTask(t *testing.T) {
-	testutil.SetUpTestServices()
-	replica.SetMinTrafficBalanceThreshold(1)
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, ddlSpan, 9, time.Minute)
-	controller.spanController.AddNewTable(commonEvent.Table{
-		SchemaID: 1,
-		TableID:  int64(1),
-	}, 1)
-	require.Equal(t, 1, controller.spanController.GetAbsentSize())
-	controller.operatorController.RemoveAllTasks()
-	require.Equal(t, 0, controller.spanController.GetAbsentSize())
-}
-
 // This case test the scenario that the balance scheduler when a new node join in.
 // In this case, the num of split tables is more than the num of nodes,
 // and we can select appropriate split spans to move
