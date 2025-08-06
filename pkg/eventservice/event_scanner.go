@@ -197,7 +197,12 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			err := finalizeScan(merger, processor, session)
+			err = finalizeScan(merger, processor, session)
+			log.Info("scan finalized",
+				zap.Stringer("dispatcherID", dispatcher.id),
+				zap.Int64("tableID", tableID),
+				zap.Uint64("startTs", session.dataRange.StartTs),
+				zap.Uint64("endTs", session.dataRange.EndTs))
 			return false, err
 		}
 
@@ -219,6 +224,11 @@ func (s *eventScanner) scanAndMergeEvents(
 
 			if session.limitCheck(processor.batchDML.GetSize()) {
 				interruptScan(session, merger, processor, rawEvent.CRTs)
+				log.Info("scan interrupted due to limit",
+					zap.Stringer("dispatcherID", dispatcher.id),
+					zap.Int64("tableID", tableID),
+					zap.Uint64("startTs", session.dataRange.StartTs),
+					zap.Uint64("endTs", session.dataRange.EndTs))
 				return true, nil
 			}
 
