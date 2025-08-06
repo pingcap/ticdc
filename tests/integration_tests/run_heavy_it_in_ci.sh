@@ -73,12 +73,11 @@ kafka_groups=(
 	# G02
 	'canal_json_handle_key_only'
 	# G03
-	'canal_json_adapter_compatibility'
+	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	# move_table ddl_for_split_tables_with_merge_and_split
-	'drop_many_tables'
+	'move_table drop_many_tables'
 	# G06
 	'cdc default_value'
 	# G07
@@ -114,12 +113,11 @@ pulsar_groups=(
 	# G02
 	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'canal_json_adapter_compatibility'
+	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	# move_table
-	'drop_many_tables ddl_for_split_tables_with_merge_and_split'
+	'move_table drop_many_tables'
 	# G06
 	'cdc default_value'
 	# G07
@@ -158,8 +156,8 @@ storage_groups=(
 	# G04
 	'ddl_for_split_tables_with_random_move_table'
 	# G05
- 	# move_table
-	'drop_many_tables'
+ 	#
+	'move_table drop_many_tables'
 	# G06
 	'cdc default_value'
 	# G07
