@@ -15,6 +15,7 @@ package operator
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -27,6 +28,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	minSendMessageInterval = 5 * time.Second
+)
+
 // AddDispatcherOperator is an operator to schedule a table span to a dispatcher
 type AddDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
@@ -34,6 +39,9 @@ type AddDispatcherOperator struct {
 	finished       atomic.Bool
 	removed        atomic.Bool
 	spanController *span.Controller
+
+	// TODO:for other operators
+	lastSendMessageTime time.Time
 }
 
 func NewAddDispatcherOperator(
@@ -42,9 +50,10 @@ func NewAddDispatcherOperator(
 	dest node.ID,
 ) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
-		replicaSet:     replicaSet,
-		dest:           dest,
-		spanController: spanController,
+		replicaSet:          replicaSet,
+		dest:                dest,
+		spanController:      spanController,
+		lastSendMessageTime: time.Now().Add(-minSendMessageInterval),
 	}
 }
 
@@ -79,6 +88,10 @@ func (m *AddDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.removed.Load() {
 		return nil
 	}
+	if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+		return nil
+	}
+	m.lastSendMessageTime = time.Now()
 	msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
 	if err != nil {
 		log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))
