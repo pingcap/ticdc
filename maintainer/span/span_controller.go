@@ -272,7 +272,11 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 	checker := c.GetGroupChecker(span.GetGroupID())
 
 	log.Info("get status checker cost", zap.Duration("cost", time.Since(start)))
-	checker.UpdateStatus(span)
+	// TODO:make a try
+	if checker.Name() != "empty checker" {
+		checker.UpdateStatus(span)
+	}
+
 	log.Info("update status cost", zap.Duration("cost", time.Since(start)))
 }
 
