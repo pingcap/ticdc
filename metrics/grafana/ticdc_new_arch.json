@@ -224,7 +224,7 @@
           },
           "yaxes": [
             {
-              "format": "Bps",
+              "format": "binBps",
               "logBase": 1,
               "min": "0",
               "show": true
@@ -316,7 +316,7 @@
           },
           "yaxes": [
             {
-              "format": "Bps",
+              "format": "binBps",
               "logBase": 1,
               "min": "0",
               "show": true
@@ -513,13 +513,13 @@
           },
           "yaxes": [
             {
-              "format": "Bps",
+              "format": "binBps",
               "logBase": 1,
               "min": "0",
               "show": true
             },
             {
-              "format": "Bps",
+              "format": "binBps",
               "logBase": 1,
               "show": false
             }
@@ -21759,5 +21759,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aac",
-  "version": 5
+  "version": 6
 }
