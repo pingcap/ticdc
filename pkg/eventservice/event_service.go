@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/pingcap/log"
@@ -30,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type DispatcherInfo interface {
@@ -71,9 +73,12 @@ type eventService struct {
 	// clusterID -> eventBroker
 	brokers map[uint64]*eventBroker
 
-	// TODO: use a better way to cache the acceptorInfos
-	dispatcherInfoChan  chan DispatcherInfo
+	// dispatcher info channels - array of 8 channels for parallel processing
+	dispatcherInfoChans [8]chan DispatcherInfo
 	dispatcherHeartbeat chan *DispatcherHeartBeatWithServerID
+
+	// worker control fields
+	waitGroup *errgroup.Group
 }
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
@@ -83,9 +88,14 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
 		brokers:             make(map[uint64]*eventBroker),
-		dispatcherInfoChan:  make(chan DispatcherInfo, 10000), // TODO:unlimit?
 		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 32),
 	}
+
+	// Initialize dispatcher info channels
+	for i := 0; i < 8; i++ {
+		es.dispatcherInfoChans[i] = make(chan DispatcherInfo, 1000) // Buffer size for each channel
+	}
+
 	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
 	return es
 }
@@ -100,19 +110,61 @@ func (s *eventService) Run(ctx context.Context) error {
 		log.Info("event service exited")
 	}()
 
+	// Create errgroup for managing goroutines
+	s.waitGroup, ctx = errgroup.WithContext(ctx)
+
+	// Start dispatcher heartbeat processor
+	s.waitGroup.Go(func() error {
+		s.handleDispatcherHeartbeatLoop(ctx)
+		return nil
+	})
+
+	// Start dispatcher workers
+	for i := 0; i < 8; i++ {
+		workerID := i // Capture the loop variable
+		s.waitGroup.Go(func() error {
+			s.dispatcherWorker(ctx, workerID)
+			return nil
+		})
+	}
+
+	// Wait for all goroutines to complete
+	return s.waitGroup.Wait()
+}
+
+// handleDispatcherHeartbeatLoop processes dispatcher heartbeat messages
+func (s *eventService) handleDispatcherHeartbeatLoop(ctx context.Context) {
+	log.Info("dispatcher heartbeat processor started")
+	defer log.Info("dispatcher heartbeat processor stopped")
+
+	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
-	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
+
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
-			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
 			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
-		case info := <-s.dispatcherInfoChan:
-			log.Info("event service: dispatcher info", zap.Any("info", info), zap.Any("info dispatcherID", info.GetID()))
+		case heartbeat := <-s.dispatcherHeartbeat:
+			s.handleDispatcherHeartbeat(heartbeat)
+		}
+	}
+}
+
+// dispatcherWorker processes dispatcher tasks from the assigned channel
+func (s *eventService) dispatcherWorker(ctx context.Context, workerID int) {
+	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo", strconv.Itoa(workerID))
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChans[workerID])))
+		case info := <-s.dispatcherInfoChans[workerID]:
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
 				s.registerDispatcher(ctx, info)
@@ -127,10 +179,13 @@ func (s *eventService) Run(ctx context.Context) error {
 			default:
 				log.Panic("invalid action type", zap.Any("info", info))
 			}
-		case heartbeat := <-s.dispatcherHeartbeat:
-			s.handleDispatcherHeartbeat(heartbeat)
 		}
 	}
+}
+
+// hashDispatcherID returns a hash value for the dispatcher ID
+func hashDispatcherID(id common.DispatcherID) int {
+	return int((common.GID)(id).Hash(8))
 }
 
 func (s *eventService) Close(_ context.Context) error {
@@ -152,10 +207,12 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		infos := msgToDispatcherInfo(msg)
 		log.Info("msg to dispatcher info time cost", zap.Any("time cost", time.Since(start)), zap.Any("msg", msg))
 		for _, info := range infos {
+			// Hash the dispatcher ID to determine which channel to use
+			channelIndex := hashDispatcherID(info.GetID())
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case s.dispatcherInfoChan <- info:
+			case s.dispatcherInfoChans[channelIndex] <- info:
 			}
 		}
 		log.Info("event service: handle message", zap.Any("time cost", time.Since(start)))
@@ -178,6 +235,18 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		log.Panic("unknown message type", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	}
 	return nil
+}
+
+func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
+	res := make([]DispatcherInfo, 0, len(msg.Message))
+	for _, m := range msg.Message {
+		info, ok := m.(*messaging.DispatcherRequest)
+		if !ok {
+			log.Panic("invalid dispatcher info", zap.Any("info", m))
+		}
+		res = append(res, info)
+	}
+	return res
 }
 
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
@@ -240,16 +309,4 @@ func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatW
 		return
 	}
 	c.handleDispatcherHeartbeat(heartbeat)
-}
-
-func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
-	res := make([]DispatcherInfo, 0, len(msg.Message))
-	for _, m := range msg.Message {
-		info, ok := m.(*messaging.DispatcherRequest)
-		if !ok {
-			log.Panic("invalid dispatcher info", zap.Any("info", m))
-		}
-		res = append(res, info)
-	}
-	return res
 }
