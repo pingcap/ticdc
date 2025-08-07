@@ -589,78 +589,86 @@ func persistSchemaSnapshot(
 	snapTs uint64,
 	collectMetaInfo bool,
 ) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
-	meta := getSnapshotMeta(tiStore, snapTs)
-	start := time.Now()
-	dbInfos, err := meta.ListDatabases()
-	if err != nil {
-		log.Fatal("list databases failed", zap.Error(err))
-	}
-
-	var databaseMap map[int64]*BasicDatabaseInfo
-	var tableMap map[int64]*BasicTableInfo
-	var partitionMap map[int64]BasicPartitionInfo
-	if collectMetaInfo {
-		databaseMap = make(map[int64]*BasicDatabaseInfo)
-		tableMap = make(map[int64]*BasicTableInfo)
-		partitionMap = make(map[int64]BasicPartitionInfo)
-	}
-	for _, dbInfo := range dbInfos {
-		if filter.IsSysSchema(dbInfo.Name.O) {
+	for {
+		meta := getSnapshotMeta(tiStore, snapTs)
+		start := time.Now()
+		dbInfos, err := meta.ListDatabases()
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			log.Warn("list databases failed, retrying", zap.Error(err))
 			continue
 		}
-		batch := db.NewBatch()
-		addSchemaInfoToBatch(batch, snapTs, dbInfo)
-		rawTables, err := meta.GetMetasByDBID(dbInfo.ID)
-		if err != nil {
-			log.Fatal("get tables failed", zap.Error(err))
-		}
-		var tablesInDB map[int64]bool
+
+		var databaseMap map[int64]*BasicDatabaseInfo
+		var tableMap map[int64]*BasicTableInfo
+		var partitionMap map[int64]BasicPartitionInfo
 		if collectMetaInfo {
-			tablesInDB = make(map[int64]bool)
+			databaseMap = make(map[int64]*BasicDatabaseInfo)
+			tableMap = make(map[int64]*BasicTableInfo)
+			partitionMap = make(map[int64]BasicPartitionInfo)
 		}
-		for _, rawTable := range rawTables {
-			if !isTableRawKey(rawTable.Field) {
+		for _, dbInfo := range dbInfos {
+			if filter.IsSysSchema(dbInfo.Name.O) {
 				continue
 			}
-			tableID, tableName, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
-			if collectMetaInfo {
-				tableMap[tableID] = &BasicTableInfo{
-					SchemaID: dbInfo.ID,
-					Name:     tableName,
-				}
-				tablesInDB[tableID] = true
-				if len(partitionIDs) > 0 {
-					partitionMap[tableID] = make(BasicPartitionInfo)
-					for _, partitionID := range partitionIDs {
-						partitionMap[tableID].AddPartitionIDs(partitionID)
+			batch := db.NewBatch()
+			addSchemaInfoToBatch(batch, snapTs, dbInfo)
+			for {
+				rawTables, err := meta.GetMetasByDBID(dbInfo.ID)
+				if err == nil {
+					var tablesInDB map[int64]bool
+					if collectMetaInfo {
+						tablesInDB = make(map[int64]bool)
 					}
+					for _, rawTable := range rawTables {
+						if !isTableRawKey(rawTable.Field) {
+							continue
+						}
+						tableID, tableName, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
+						if collectMetaInfo {
+							tableMap[tableID] = &BasicTableInfo{
+								SchemaID: dbInfo.ID,
+								Name:     tableName,
+							}
+							tablesInDB[tableID] = true
+							if len(partitionIDs) > 0 {
+								partitionMap[tableID] = make(BasicPartitionInfo)
+								for _, partitionID := range partitionIDs {
+									partitionMap[tableID].AddPartitionIDs(partitionID)
+								}
+							}
+						}
+						// 8M is arbitrary, we can adjust it later
+						if batch.Len() >= 8*1024*1024 {
+							if err := batch.Commit(pebble.NoSync); err != nil {
+								return nil, nil, nil, err
+							}
+							batch = db.NewBatch()
+						}
+					}
+					if collectMetaInfo {
+						databaseInfo := &BasicDatabaseInfo{
+							Name:   dbInfo.Name.O,
+							Tables: tablesInDB,
+						}
+						databaseMap[dbInfo.ID] = databaseInfo
+					}
+					if err := batch.Commit(pebble.NoSync); err != nil {
+						return nil, nil, nil, err
+					}
+					break
 				}
-			}
-			// 8M is arbitrary, we can adjust it later
-			if batch.Len() >= 8*1024*1024 {
-				if err := batch.Commit(pebble.NoSync); err != nil {
-					return nil, nil, nil, err
-				}
-				batch = db.NewBatch()
+				time.Sleep(100 * time.Millisecond)
+				log.Warn("get tables failed", zap.Error(err))
 			}
 		}
-		if collectMetaInfo {
-			databaseInfo := &BasicDatabaseInfo{
-				Name:   dbInfo.Name.O,
-				Tables: tablesInDB,
-			}
-			databaseMap[dbInfo.ID] = databaseInfo
-		}
-		if err := batch.Commit(pebble.NoSync); err != nil {
-			return nil, nil, nil, err
-		}
+
+		writeGcTs(db, snapTs)
+
+		log.Info("finish write schema snapshot",
+			zap.Any("duration", time.Since(start).Seconds()))
+		return databaseMap, tableMap, partitionMap, nil
 	}
-
-	writeGcTs(db, snapTs)
-
-	log.Info("finish write schema snapshot",
-		zap.Any("duration", time.Since(start).Seconds()))
-	return databaseMap, tableMap, partitionMap, nil
 }
 
 func cleanObsoleteData(db *pebble.DB, oldGcTs uint64, gcTs uint64) {

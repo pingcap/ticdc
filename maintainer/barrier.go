@@ -128,7 +128,7 @@ func (b *Barrier) ReleaseLock(mutex *sync.Mutex) {
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
 ) *messaging.TargetMessage {
-	log.Info("handle block status", zap.String("from", from.String()),
+	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)

@@ -401,9 +401,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 }
 
 func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
-	if event.TiDBOnly {
-		return nil
-	}
 	for _, e := range event.GetEvents() {
 		message, err := s.comp.encoder.EncodeDDLEvent(e)
 		if err != nil {
