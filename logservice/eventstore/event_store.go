@@ -648,7 +648,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 
 	// get from pendingSubStat first,
-	// because its span is more close to dispatcher span if it it not nil
+	// because its span is more close to dispatcher span if it's not nil
 	var needUpgradeLock bool
 	db := tryGetDB(stat.pendingSubStat)
 	subStat := stat.pendingSubStat
