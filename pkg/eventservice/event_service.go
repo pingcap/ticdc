@@ -137,7 +137,7 @@ func (s *eventService) handleDispatcherHeartbeatLoop(ctx context.Context) {
 	log.Info("dispatcher heartbeat processor started")
 	defer log.Info("dispatcher heartbeat processor stopped")
 
-	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
+	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat", "0")
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
