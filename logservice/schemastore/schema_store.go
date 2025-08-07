@@ -264,6 +264,7 @@ func (s *schemaStore) GetTableInfo(tableID int64, ts uint64) (*common.TableInfo,
 		metrics.SchemaStoreGetTableInfoLagHist.Observe(time.Since(start).Seconds())
 	}()
 	s.waitResolvedTs(tableID, ts, 2*time.Second)
+	log.Info("before data storage get tableInfo", zap.Any("tableID", tableID))
 	return s.dataStorage.getTableInfo(tableID, ts)
 }
 

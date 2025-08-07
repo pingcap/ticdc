@@ -826,6 +826,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		)
 		return err
 	}
+
+	log.Info("eventBroker register dispatcher to eventStore success", zap.Any("time cost", time.Since(start)), zap.Any("dispatcherID", id))
+
 	tableInfo, err := c.schemaStore.GetTableInfo(span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("get table info from schemaStore failed",
