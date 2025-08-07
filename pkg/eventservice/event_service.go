@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -64,6 +65,46 @@ type DispatcherHeartBeatWithServerID struct {
 	heartbeat *event.DispatcherHeartbeat
 }
 
+type brokerMap struct {
+	mu      sync.RWMutex
+	brokers map[uint64]*eventBroker
+}
+
+func newBrokerMap() *brokerMap {
+	return &brokerMap{
+		brokers: make(map[uint64]*eventBroker),
+	}
+}
+
+func (m *brokerMap) get(clusterID uint64) (*eventBroker, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	broker, ok := m.brokers[clusterID]
+	return broker, ok
+}
+
+func (m *brokerMap) set(clusterID uint64, broker *eventBroker) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.brokers[clusterID] = broker
+}
+
+func (m *brokerMap) delete(clusterID uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.brokers, clusterID)
+}
+
+func (m *brokerMap) values() []*eventBroker {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	values := make([]*eventBroker, 0, len(m.brokers))
+	for _, broker := range m.brokers {
+		values = append(values, broker)
+	}
+	return values
+}
+
 // EventService accepts the requests of pulling events.
 // The EventService is a singleton in the system.
 type eventService struct {
@@ -71,7 +112,7 @@ type eventService struct {
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
 	// clusterID -> eventBroker
-	brokers map[uint64]*eventBroker
+	brokers *brokerMap
 
 	// dispatcher info channels - array of 8 channels for parallel processing
 	dispatcherInfoChans [8]chan DispatcherInfo
@@ -87,7 +128,7 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		mc:                  mc,
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
-		brokers:             make(map[uint64]*eventBroker),
+		brokers:             newBrokerMap(),
 		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 32),
 	}
 
@@ -190,7 +231,7 @@ func hashDispatcherID(id common.DispatcherID) int {
 
 func (s *eventService) Close(_ context.Context) error {
 	log.Info("event service is closing")
-	for _, c := range s.brokers {
+	for _, c := range s.brokers.values() {
 		c.close()
 	}
 	log.Info("event service is closed")
@@ -252,10 +293,10 @@ func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
 	log.Info("event service: register dispatcher", zap.Any("info", info), zap.Any("info dispatcherID", info.GetID()))
 	clusterID := info.GetClusterID()
-	c, ok := s.brokers[clusterID]
+	c, ok := s.brokers.get(clusterID)
 	if !ok {
 		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
-		s.brokers[clusterID] = c
+		s.brokers.set(clusterID, c)
 	}
 
 	// FIXME: Send message to the dispatcherManager to handle the error.
@@ -267,7 +308,7 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 
 func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers[clusterID]
+	c, ok := s.brokers.get(clusterID)
 	if !ok {
 		return
 	}
@@ -276,7 +317,7 @@ func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers[clusterID]
+	c, ok := s.brokers.get(clusterID)
 	if !ok {
 		return
 	}
@@ -285,7 +326,7 @@ func (s *eventService) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers[clusterID]
+	c, ok := s.brokers.get(clusterID)
 	if !ok {
 		return
 	}
@@ -295,7 +336,7 @@ func (s *eventService) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	log.Info("event service: reset dispatcher", zap.Any("info", dispatcherInfo), zap.Any("info dispatcherID", dispatcherInfo.GetID()))
 	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers[clusterID]
+	c, ok := s.brokers.get(clusterID)
 	if !ok {
 		return
 	}
@@ -304,7 +345,7 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	clusterID := heartbeat.heartbeat.ClusterID
-	c, ok := s.brokers[clusterID]
+	c, ok := s.brokers.get(clusterID)
 	if !ok {
 		return
 	}
