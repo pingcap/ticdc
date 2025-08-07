@@ -922,9 +922,19 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
+	log.Info("reset dispatcher",
+		zap.Stringer("dispatcherID", dispatcherInfo.GetID()),
+		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
+		zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
+	)
 	start := time.Now()
 	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
 	if !ok {
+		log.Info("reset dispatcher, but the dispatcher is not registered, register it",
+			zap.Stringer("dispatcherID", dispatcherInfo.GetID()),
+			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
+			zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
+		)
 		// The dispatcher is not registered, register it.
 		// FIXME: Handle the error.
 		_ = c.addDispatcher(dispatcherInfo)
@@ -942,6 +952,11 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		}
 		// Give other goroutines a chance to acquire the write lock
 		time.Sleep(10 * time.Millisecond)
+		log.Info("wait for the scan task goroutine to return",
+			zap.Stringer("dispatcherID", stat.id),
+			zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
+			zap.Uint64("startTs", stat.info.GetStartTs()),
+		)
 	}
 
 	oldSeq := stat.seq.Load()

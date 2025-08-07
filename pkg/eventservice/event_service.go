@@ -246,7 +246,6 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	switch msg.Type {
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)
-		log.Info("msg to dispatcher info time cost", zap.Any("time cost", time.Since(start)), zap.Any("msg", msg))
 		for _, info := range infos {
 			// Hash the dispatcher ID to determine which channel to use
 			channelIndex := hashDispatcherID(info.GetID())
@@ -262,7 +261,6 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 			log.Panic("invalid dispatcher heartbeat", zap.Any("msg", msg))
 		}
 		heartbeat := msg.Message[0].(*event.DispatcherHeartbeat)
-		log.Info("event service: to dispatcher heartbeat", zap.Any("time cost", time.Since(start)))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -271,7 +269,6 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 			heartbeat: heartbeat,
 		}:
 		}
-		log.Info("event service: handle message", zap.Any("time cost", time.Since(start)))
 	default:
 		log.Panic("unknown message type", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	}
@@ -338,6 +335,11 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
 	c, ok := s.brokers.get(clusterID)
 	if !ok {
+		log.Info("reset dispatcher, but the broker is not found, ignore it",
+			zap.Stringer("dispatcherID", dispatcherInfo.GetID()),
+			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
+			zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
+		)
 		return
 	}
 	c.resetDispatcher(dispatcherInfo)
