@@ -197,7 +197,9 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 		dml.Seq = d.seq.Add(1)
 		dml.Epoch = d.epoch.Load()
 		lastStartTs = dml.GetStartTs()
-		log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(dml.GetType())), zap.Uint64("commitTs", dml.GetCommitTs()), zap.Uint64("seq", dml.GetSeq()))
+		log.Debug("send dml event to dispatcher",
+			zap.Stringer("dispatcher", d.id), zap.Uint64("startTs", dml.GetStartTs()),
+			zap.Uint64("commitTs", dml.GetCommitTs()), zap.Uint64("seq", dml.GetSeq()))
 	}
 	d.updateSentResolvedTs(lastStartTs)
 	doSendDML(batchEvent)
