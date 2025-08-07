@@ -336,6 +336,7 @@ func NewCmdServer() *cobra.Command {
 
 func patchTiDBConfig() {
 	ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
+		// Disable kv client batch send loop introduced by tidb library, it's not used by the TiCDC server.
 		conf.TiKVClient.MaxBatchSize = 0
 	})
 }
