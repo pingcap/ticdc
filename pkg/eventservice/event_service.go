@@ -112,6 +112,7 @@ func (s *eventService) Run(ctx context.Context) error {
 			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
 			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
 		case info := <-s.dispatcherInfoChan:
+			log.Info("event service: dispatcher info", zap.Any("info", info), zap.Any("info dispatcherID", info.GetID()))
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
 				s.registerDispatcher(ctx, info)
@@ -149,7 +150,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	switch msg.Type {
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)
-		log.Info("msg to dispatcher info time cost", zap.Any("time cost", time.Since(start)))
+		log.Info("msg to dispatcher info time cost", zap.Any("time cost", time.Since(start)), zap.Any("msg", msg))
 		for _, info := range infos {
 			select {
 			case <-ctx.Done():
@@ -180,6 +181,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 }
 
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
+	log.Info("event service: register dispatcher", zap.Any("info", info), zap.Any("info dispatcherID", info.GetID()))
 	clusterID := info.GetClusterID()
 	c, ok := s.brokers[clusterID]
 	if !ok {
@@ -222,6 +224,7 @@ func (s *eventService) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
+	log.Info("event service: reset dispatcher", zap.Any("info", dispatcherInfo), zap.Any("info dispatcherID", dispatcherInfo.GetID()))
 	clusterID := dispatcherInfo.GetClusterID()
 	c, ok := s.brokers[clusterID]
 	if !ok {

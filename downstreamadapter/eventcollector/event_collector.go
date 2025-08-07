@@ -271,6 +271,7 @@ func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
 		} else {
 			if msg.To == c.serverId {
 				c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, false, 0)
+				log.Info("enqueue message for send", zap.Any("msg", msg))
 			} else {
 				c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, true, commonMsgRetryQuota)
 			}
@@ -353,6 +354,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case req := <-c.dispatcherMessageChan.Out():
+			log.Info("event collector get req", zap.Any("message", req.Message))
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
 				sleepInterval := 10 * time.Millisecond

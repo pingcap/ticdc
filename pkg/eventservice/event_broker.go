@@ -802,6 +802,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		info.GetBdrMode(),
 	)
 
+	log.Info("eventBroker register dispatcher to eventStore", zap.Any("time cost", time.Since(start)), zap.Any("dispatcherID", id))
+
 	if !success {
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
@@ -834,6 +836,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		)
 		return err
 	}
+
+	log.Info("eventBroker register dispatcher to schemaStore", zap.Any("time cost", time.Since(start)), zap.Any("dispatcherID", id))
+
 	dispatcher.updateTableInfo(tableInfo)
 	c.dispatchers.Store(id, dispatcher)
 	log.Info("register dispatcher",
