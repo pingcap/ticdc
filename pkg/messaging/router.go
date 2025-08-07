@@ -16,6 +16,7 @@ package messaging
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
@@ -60,7 +61,9 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 				log.Debug("no handler for message, drop it", zap.Any("msg", msg))
 				continue
 			}
+			start := time.Now()
 			err := handler(ctx, msg)
+			log.Info("router: handle message", zap.Any("time cost", time.Since(start)), zap.Any("msg type", msg.Type))
 			if err != nil {
 				log.Error("Handle message failed", zap.Error(err), zap.Any("msg", msg))
 			}
