@@ -142,9 +142,14 @@ func (s *eventService) Close(_ context.Context) error {
 }
 
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
+	start := time.Now()
+	defer func() {
+		log.Info("event service: handle message", zap.Any("time cost", time.Since(start)), zap.Any("msg type", msg.Type), zap.Any("msg", msg))
+	}()
 	switch msg.Type {
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)
+		log.Info("msg to dispatcher info time cost", zap.Any("time cost", time.Since(start)))
 		for _, info := range infos {
 			select {
 			case <-ctx.Done():
@@ -152,6 +157,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 			case s.dispatcherInfoChan <- info:
 			}
 		}
+		log.Info("event service: handle message", zap.Any("time cost", time.Since(start)))
 	case messaging.TypeDispatcherHeartbeat:
 		if len(msg.Message) != 1 {
 			log.Panic("invalid dispatcher heartbeat", zap.Any("msg", msg))
@@ -165,6 +171,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 			heartbeat: heartbeat,
 		}:
 		}
+		log.Info("event service: handle message", zap.Any("time cost", time.Since(start)))
 	default:
 		log.Panic("unknown message type", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	}
