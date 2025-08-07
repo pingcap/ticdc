@@ -484,26 +484,39 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 }
 
 func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {
+	start := time.Now()
+
 	tableID := store.getTableID()
 	// get snapshot from disk before get current gc ts to make sure data is not deleted by gc process
 	storageSnap := p.db.NewSnapshot()
 	defer storageSnap.Close()
 
 	p.mu.RLock()
+	log.Info("buildVersionedTableInfoStore get lock", zap.Int64("tableID", tableID), zap.Any("time cost", time.Since(start)))
+
 	kvSnapVersion := p.gcTs
 	var allDDLFinishedTs []uint64
 	allDDLFinishedTs = append(allDDLFinishedTs, p.tablesDDLHistory[tableID]...)
 	p.mu.RUnlock()
 
+	log.Info("buildVersionedTableInfoStore release lock", zap.Int64("tableID", tableID), zap.Any("time cost", time.Since(start)))
+
 	if err := addTableInfoFromKVSnap(store, kvSnapVersion, storageSnap); err != nil {
 		return err
 	}
+
+	log.Info("buildVersionedTableInfoStore addTableInfoFromKVSnap", zap.Int64("tableID", tableID), zap.Any("time cost", time.Since(start)))
 
 	for _, version := range allDDLFinishedTs {
 		ddlEvent := readPersistedDDLEvent(storageSnap, version)
 		store.applyDDLFromPersistStorage(&ddlEvent)
 	}
+
+	log.Info("buildVersionedTableInfoStore before setTableInfoInitialized", zap.Int64("tableID", tableID), zap.Any("time cost", time.Since(start)))
 	store.setTableInfoInitialized()
+
+	log.Info("buildVersionedTableInfoStore setTableInfoInitialized done", zap.Int64("tableID", tableID), zap.Any("time cost", time.Since(start)))
+
 	return nil
 }
 

@@ -83,6 +83,17 @@ func (m *brokerMap) get(clusterID uint64) (*eventBroker, bool) {
 	return broker, ok
 }
 
+func (m *brokerMap) getOrSet(clusterID uint64, brokerFunc func() *eventBroker) *eventBroker {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	broker, ok := m.brokers[clusterID]
+	if !ok {
+		broker = brokerFunc()
+		m.brokers[clusterID] = broker
+	}
+	return broker
+}
+
 func (m *brokerMap) set(clusterID uint64, broker *eventBroker) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -290,11 +301,9 @@ func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
 	log.Info("event service: register dispatcher", zap.Any("info", info), zap.Any("info dispatcherID", info.GetID()))
 	clusterID := info.GetClusterID()
-	c, ok := s.brokers.get(clusterID)
-	if !ok {
-		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
-		s.brokers.set(clusterID, c)
-	}
+	c := s.brokers.getOrSet(clusterID, func() *eventBroker {
+		return newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
+	})
 
 	// FIXME: Send message to the dispatcherManager to handle the error.
 	err := c.addDispatcher(info)

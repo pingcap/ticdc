@@ -673,16 +673,10 @@ func (m *Maintainer) onBatchHeartBeatRequest(msg []*messaging.TargetMessage) {
 		return
 	}
 
-	start := time.Now()
-	defer func() {
-		log.Info("onBatchHeartBeatRequest cost", zap.Duration("cost", time.Since(start)), zap.Int("msgCount", len(msg)))
-	}()
-
 	// we first group the status, to reduce the status number we need to handle
 	dispatcherStatusMap := make(map[node.ID]map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus)
 	watermarkMap := make(map[node.ID]*heartbeatpb.Watermark)
 
-	time1 := time.Now()
 	for _, msg := range msg {
 		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
 		if _, ok := dispatcherStatusMap[msg.From]; !ok {
@@ -705,7 +699,6 @@ func (m *Maintainer) onBatchHeartBeatRequest(msg []*messaging.TargetMessage) {
 			m.onError(msg.From, req.Err)
 		}
 	}
-	log.Info("onBatchHeartBeatRequest dispatcherStatusMap cost", zap.Any("time cost", time.Since(time1)))
 
 	size := 0
 	for nodeID, statusMap := range dispatcherStatusMap {
@@ -714,9 +707,6 @@ func (m *Maintainer) onBatchHeartBeatRequest(msg []*messaging.TargetMessage) {
 		}
 		size += len(statusMap)
 	}
-	log.Info("onBatchHeartBeatRequest watermarkMap cost",
-		zap.Any("time cost", time.Since(time1)),
-		zap.Any("size", size))
 
 	for nodeID, watermark := range watermarkMap {
 		old, ok := m.checkpointTsByCapture.Get(nodeID)
@@ -724,7 +714,6 @@ func (m *Maintainer) onBatchHeartBeatRequest(msg []*messaging.TargetMessage) {
 			m.checkpointTsByCapture.Set(nodeID, *watermark)
 		}
 	}
-	log.Info("onBatchHeartBeatRequest checkpointTsByCapture cost", zap.Any("time cost", time.Since(time1)))
 }
 
 func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
