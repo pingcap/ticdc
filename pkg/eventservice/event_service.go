@@ -83,7 +83,7 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
 		brokers:             make(map[uint64]*eventBroker),
-		dispatcherInfoChan:  make(chan DispatcherInfo, 32),
+		dispatcherInfoChan:  make(chan DispatcherInfo, 10000), // TODO:unlimit?
 		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 32),
 	}
 	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
@@ -163,6 +163,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 			log.Panic("invalid dispatcher heartbeat", zap.Any("msg", msg))
 		}
 		heartbeat := msg.Message[0].(*event.DispatcherHeartbeat)
+		log.Info("event service: to dispatcher heartbeat", zap.Any("time cost", time.Since(start)))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
