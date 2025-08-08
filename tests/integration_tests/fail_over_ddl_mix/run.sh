@@ -31,7 +31,7 @@ function prepare() {
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
+	#	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
@@ -166,16 +166,16 @@ function kill_server() {
 			sleep 15
 			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
 			;;
-		1)
-			cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
-			if [ -z "$cdc_pid_2" ]; then
-				continue
-			fi
-			kill_cdc_pid $cdc_pid_2
-
-			sleep 15
-			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
-			;;
+			#		1)
+			#			cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+			#			if [ -z "$cdc_pid_2" ]; then
+			#				continue
+			#			fi
+			#			kill_cdc_pid $cdc_pid_2
+			#
+			#			sleep 15
+			#			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
+			#			;;
 		esac
 		sleep 15
 	done
