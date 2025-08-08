@@ -225,13 +225,13 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	if startTs >= resolvedTs {
 		return common.DataRange{}, false
 	}
-	// Range: (startTs, EndTs],
+	// Range: (startTs-lastScannedStartTs, EndTs],
 	// since the startTs(and the data before startTs) is already sent to the dispatcher.
 	r := common.DataRange{
-		Span:    a.info.GetTableSpan(),
-		StartTs: startTs,
-		EndTs:   resolvedTs,
-		LastTs:  a.lastScannedStartTs,
+		Span:               a.info.GetTableSpan(),
+		StartTs:            startTs,
+		EndTs:              resolvedTs,
+		LastScannedStartTs: a.lastScannedStartTs,
 	}
 	return r, true
 }
