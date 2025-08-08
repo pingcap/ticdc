@@ -186,7 +186,10 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if idx.ID != indices[i].ID {
 			return false
 		}
-		if idx.Name.O != indices[i].Name.O {
+		// if idx.Name.O != indices[i].Name.O {
+		// 	return false
+		// }
+		if !idx.Name.Equals(indices[i].Name) {
 			return false
 		}
 		if len(idx.Columns) != len(indices[i].Columns) {
