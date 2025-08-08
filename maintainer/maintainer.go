@@ -587,7 +587,8 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 		old, ok := m.checkpointTsByCapture[msg.From]
 		if !ok || req.Watermark.Seq >= old.Seq {
 			log.Error("onHeartBeatRequest update Watermark", zap.Any("m", m.id), zap.Any("From", msg.From),
-				zap.Any("req", req),
+				zap.Any("req", req), zap.Any("old.Seq", old.Seq), zap.Any("req.Watermark.Seq", req.Watermark.Seq),
+				zap.Any("ok", ok),
 			)
 			m.checkpointTsByCapture[msg.From] = *req.Watermark
 		}
