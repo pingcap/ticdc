@@ -83,6 +83,10 @@ func NewMaintainerManager(selfNode *node.Info,
 
 // recvMessages is the message handler for maintainer manager
 func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
+	// log.Info("MaintainerManager recvMessages",
+	// 	zap.String("from", msg.From.String()),
+	// 	zap.Any("message", msg.Message),
+	// )
 	switch msg.Type {
 	// Coordinator related messages
 	case messaging.TypeAddMaintainerRequest,
@@ -250,11 +254,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler)
 		m.maintainers.Store(cfID, cf)
 	}
-	cf.(*Maintainer).pushEvent(&Event{
-		changefeedID: cfID,
-		eventType:    EventMessage,
-		message:      msg,
-	})
+	cf.(*Maintainer).msgCh.Push(msg)
 	log.Info("received remove maintainer request",
 		zap.Stringer("changefeed", cfID))
 	return nil
@@ -338,11 +338,7 @@ func (m *Manager) dispatcherMaintainerMessage(
 		return ctx.Err()
 	default:
 		maintainer := c.(*Maintainer)
-		maintainer.pushEvent(&Event{
-			changefeedID: changefeed,
-			eventType:    EventMessage,
-			message:      msg,
-		})
+		maintainer.msgCh.Push(msg)
 	}
 	return nil
 }
