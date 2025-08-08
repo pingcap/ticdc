@@ -439,15 +439,19 @@ func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64)
 }
 
 func unmarshalPersistedDDLEvent(value []byte) PersistedDDLEvent {
+	start := time.Now()
 	var ddlEvent PersistedDDLEvent
 	if _, err := ddlEvent.UnmarshalMsg(value); err != nil {
 		log.Fatal("unmarshal ddl job failed", zap.Error(err))
 	}
 
+	log.Info("unmarshal ddl job done", zap.Any("time cost", time.Since(start)))
+
 	ddlEvent.TableInfo = &model.TableInfo{}
 	if err := json.Unmarshal(ddlEvent.TableInfoValue, &ddlEvent.TableInfo); err != nil {
 		log.Fatal("unmarshal table info failed", zap.Error(err))
 	}
+	log.Info("unmarshal table info done", zap.Any("time cost", time.Since(start)))
 	ddlEvent.TableInfoValue = nil
 
 	if ddlEvent.ExtraTableInfoValue != nil {
@@ -457,6 +461,7 @@ func unmarshalPersistedDDLEvent(value []byte) PersistedDDLEvent {
 			log.Fatal("unmarshal pre table info failed", zap.Error(err))
 		}
 		ddlEvent.ExtraTableInfoValue = nil
+		log.Info("unmarshal extra table info done", zap.Any("time cost", time.Since(start)))
 	}
 
 	if len(ddlEvent.MultipleTableInfosValue) > 0 {
@@ -467,21 +472,25 @@ func unmarshalPersistedDDLEvent(value []byte) PersistedDDLEvent {
 			}
 		}
 	}
+	log.Info("unmarshal multiple table infos done", zap.Any("time cost", time.Since(start)))
 	ddlEvent.MultipleTableInfosValue = nil
 	return ddlEvent
 }
 
 func readPersistedDDLEvent(snap *pebble.Snapshot, version uint64) PersistedDDLEvent {
+	start := time.Now()
 	ddlKey, err := ddlJobKey(version)
 	if err != nil {
 		log.Fatal("generate ddl job key failed", zap.Error(err))
 	}
+	log.Info("get ddl job key cost", zap.Any("time cost", time.Since(start)), zap.Any("version", version))
 	ddlValue, closer, err := snap.Get(ddlKey)
 	if err != nil {
 		log.Fatal("get ddl job failed",
 			zap.Uint64("version", version),
 			zap.Error(err))
 	}
+	log.Info("get ddl job value cost", zap.Any("time cost", time.Since(start)), zap.Any("version", version))
 	defer closer.Close()
 	return unmarshalPersistedDDLEvent(ddlValue)
 }

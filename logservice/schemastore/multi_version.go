@@ -18,6 +18,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -167,13 +168,16 @@ func assertNonDeleted(v *versionedTableInfoStore) {
 }
 
 func (v *versionedTableInfoStore) applyDDLFromPersistStorage(event *PersistedDDLEvent) {
+	start := time.Now()
 	v.mu.Lock()
+	log.Info("applyDDLFromPersistStorage get lock", zap.Any("time cost", time.Since(start)))
 	defer v.mu.Unlock()
 	if v.initialized {
 		log.Panic("should not happen")
 	}
 
 	v.doApplyDDL(event)
+	log.Info("applyDDLFromPersistStorage release lock", zap.Any("time cost", time.Since(start)))
 }
 
 func (v *versionedTableInfoStore) applyDDL(event *PersistedDDLEvent) {

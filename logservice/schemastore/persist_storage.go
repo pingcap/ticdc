@@ -512,7 +512,10 @@ func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableIn
 		store.applyDDLFromPersistStorage(&ddlEvent)
 	}
 
-	log.Info("buildVersionedTableInfoStore before setTableInfoInitialized", zap.Int64("tableID", tableID), zap.Any("time cost", time.Since(start)))
+	log.Info("buildVersionedTableInfoStore before setTableInfoInitialized",
+		zap.Int64("tableID", tableID),
+		zap.Any("time cost", time.Since(start)),
+		zap.Any("len of allDDLFinishedTs", len(allDDLFinishedTs)))
 	store.setTableInfoInitialized()
 
 	log.Info("buildVersionedTableInfoStore setTableInfoInitialized done", zap.Int64("tableID", tableID), zap.Any("time cost", time.Since(start)))
