@@ -30,37 +30,27 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'fail_over_ddl_D'
 	# G01
-	'api_v2 ddl_for_split_tables_with_random_move_table'
+	'fail_over_ddl_D'
 	# G02
-	'availability ddl_for_split_tables_with_failover'
+	'fail_over_ddl_D'
 	# G03
-	''
+	'fail_over_ddl_D'
 	# G04
-	'syncpoint syncpoint_check_ts'
+	'fail_over_ddl_D'
 	# G05
-	'move_table ddl_for_split_tables_with_merge_and_split'
-	# G06
-	'cdc ddl_for_split_tables_with_random_merge_and_split'
-	# G07
-	'resolve_lock merge_table'
-	# G08
-	'bank'
-	# G09
-	'drop_many_tables'
-	# G10
-	'default_value http_proxies'
-	# G11
-	'ddl_reentrant force_replicate_table'
-	# G12
-	'tidb_mysql_test ddl_with_random_move_table'
-	# G13
-	'fail_over region_merge'
-	# G14
-	'fail_over_ddl_mix'
-	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
+	'fail_over_ddl_D'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.

@@ -324,6 +324,7 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		Err:           runningErrors,
 		BootstrapDone: m.bootstrapped.Load(),
 	}
+	log.Error("GetMaintainerStatus", zap.Any("status", status))
 	return status
 }
 
@@ -537,6 +538,7 @@ func (m *Maintainer) calCheckpointTs() {
 				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 			return
 		}
+		log.Error("calCheckpointTs newWatermark.UpdateMin", zap.Any("id", id), zap.Any("Watermark", m.checkpointTsByCapture[id]))
 		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
 	}
 
@@ -912,12 +914,14 @@ func (m *Maintainer) getWatermark() heartbeatpb.Watermark {
 		CheckpointTs: m.watermark.CheckpointTs,
 		ResolvedTs:   m.watermark.ResolvedTs,
 	}
+	log.Error("getWatermark", zap.Any("res", res))
 	return res
 }
 
 func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	m.watermark.mu.Lock()
 	defer m.watermark.mu.Unlock()
+	log.Error("setWatermark", zap.Any("newWatermark", newWatermark))
 	if newWatermark.CheckpointTs != math.MaxUint64 {
 		m.watermark.CheckpointTs = newWatermark.CheckpointTs
 	}
