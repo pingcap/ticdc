@@ -82,47 +82,55 @@ func (s *basicScheduler) Execute() time.Time {
 		return time.Now().Add(time.Millisecond * 100)
 	}
 
+	// deal with the split table spans first
 	for _, id := range s.spanController.GetGroups() {
+		if id == pkgreplica.DefaultGroupID {
+			continue
+		}
 		availableSize -= s.schedule(id, availableSize)
 		if availableSize <= 0 {
 			break
 		}
 	}
 
+	if availableSize > 0 {
+		// still have available size, deal with the normal spans
+		s.schedule(pkgreplica.DefaultGroupID, availableSize)
+	}
+
 	return time.Now().Add(time.Millisecond * 500)
 }
 
-func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int) (scheduled int) {
+func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int) int {
 	scheduleNodeSize := s.spanController.GetScheduleTaskSizePerNodeByGroup(groupID)
-
-	// calculate the space based on schedule count
+	// for each group, we try to make each node have the same scheduling task count,
+	// to make the usage of each node as balanced as possible.
+	//
+	// for the split table spans, each time each node can at most have s.schedulingTaskCountPerNode scheduling tasks.
+	// for the normal spans, we don't have the upper limit.
 	size := 0
 	for id := range s.nodeManager.GetAliveNodes() {
 		if _, ok := scheduleNodeSize[id]; !ok {
 			scheduleNodeSize[id] = 0
 		}
-		if groupID == pkgreplica.DefaultGroupID {
-			// for default group, each node can support more task
-			size += s.schedulingTaskCountPerNode*10 - scheduleNodeSize[id]
-		} else {
+		if groupID != pkgreplica.DefaultGroupID {
 			size += s.schedulingTaskCountPerNode - scheduleNodeSize[id]
 		}
-
 	}
 
-	if size == 0 {
-		// no available slot for new replication task
-		return
+	if groupID != pkgreplica.DefaultGroupID {
+		if size == 0 {
+			return 0
+		}
+		availableSize = min(availableSize, size)
 	}
-	availableSize = min(availableSize, size)
 
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, scheduleNodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
 		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id))
 	})
-	scheduled = len(absentReplications)
-	return
+	return len(absentReplications)
 }
 
 func (s *basicScheduler) Name() string {
