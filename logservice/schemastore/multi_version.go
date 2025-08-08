@@ -18,7 +18,6 @@ import (
 	"math"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -191,10 +190,6 @@ func (v *versionedTableInfoStore) applyDDL(event *PersistedDDLEvent) {
 
 // lock must be hold by the caller
 func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
-	start := time.Now()
-	defer func() {
-		log.Info("doApplyDDL cost", zap.Any("time cost", time.Since(start)), zap.Any("event", event.FinishedTs), zap.Any("tableID", v.tableID))
-	}()
 	if len(v.infos) != 0 && event.FinishedTs <= v.infos[len(v.infos)-1].Version {
 		log.Warn("already applied ddl, ignore it.",
 			zap.Int64("tableID", v.tableID),
@@ -208,9 +203,7 @@ func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", ddlType), zap.String("query", event.Query))
 	}
-	log.Info("doApplyDDL before extractTableInfoFunc", zap.Any("time cost", time.Since(start)), zap.Any("event", event.FinishedTs), zap.Any("tableID", v.tableID))
 	tableInfo, deleted := handler.extractTableInfoFunc(event, v.tableID)
-	log.Info("doApplyDDL after extractTableInfoFunc", zap.Any("time cost", time.Since(start)), zap.Any("event", event.FinishedTs), zap.Any("tableID", v.tableID))
 	if tableInfo != nil {
 		if ddlType == model.ActionRecoverTable {
 			v.deleteVersion = math.MaxUint64
