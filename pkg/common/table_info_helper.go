@@ -222,8 +222,13 @@ func (s *columnSchema) equal(columnSchema *columnSchema) bool {
 // findSameOrNil scans bucket list and returns a pointer to the matched entry whose schema
 // is semantically the same as tableInfo. Caller must hold bucket lock while using the returned pointer.
 func findSameOrNil(list []ColumnSchemaWithCount, tableInfo *model.TableInfo) *ColumnSchemaWithCount {
+	start := time.Now()
+	defer func() {
+		log.Info("findSameOrNil cost", zap.Any("time cost", time.Since(start)), zap.Any("len of list", len(list)))
+	}()
 	for i := range list {
 		if list[i].columnSchema.SameWithTableInfo(tableInfo) {
+			log.Info("findSameOrNil found same column info", zap.Any("time cost", time.Since(start)), zap.Any("tableInfo", tableInfo))
 			return &list[i]
 		}
 	}
