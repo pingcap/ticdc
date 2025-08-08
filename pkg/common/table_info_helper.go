@@ -281,21 +281,24 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 
 	// Fast path: bucket-level lookup
 	b := s.getOrCreateBucket(digest)
+	log.Info("GetOrSetColumnSchema get bucket", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 	b.mu.Lock()
+	log.Info("GetOrSetColumnSchema get bucket lock", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 	if entry := findSameOrNil(b.list, tableInfo); entry != nil {
 		entry.count++
 		cs := entry.columnSchema
 		b.mu.Unlock()
-		log.Info("get or set column schema found same column info", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
+		log.Info("GetOrSetColumnSchema found same column info", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 		return cs
 	}
 	b.mu.Unlock()
-
+	log.Info("GetOrSetColumnSchema get bucket unlock", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 	// Build outside lock (heavy work)
 	built := newColumnSchema(tableInfo, digest)
-
+	log.Info("GetOrSetColumnSchema build column schema", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 	// Double-check under bucket lock
 	b.mu.Lock()
+	log.Info("GetOrSetColumnSchema get bucket lock (after build)", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 	if entry := findSameOrNil(b.list, tableInfo); entry != nil {
 		entry.count++
 		cs := entry.columnSchema
@@ -348,8 +351,8 @@ func (s *SharedColumnSchemaStorage) tryReleaseColumnSchema(columnSchema *columnS
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for idx := range b.list {
-		if b.list[idx].columnSchema == columnSchema {
+	for idx, colSchemaWithCount := range b.list {
+		if colSchemaWithCount.columnSchema == columnSchema {
 			b.list[idx].count--
 			if b.list[idx].count == 0 {
 				// release the columnSchema object
@@ -360,6 +363,7 @@ func (s *SharedColumnSchemaStorage) tryReleaseColumnSchema(columnSchema *columnS
 					delete(s.buckets, columnSchema.Digest)
 				}
 			}
+			return
 		}
 	}
 	log.Warn("try release column schema failed, column schema not found", zap.Any("columnSchema", columnSchema))
@@ -460,6 +464,10 @@ func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
 // make newColumnSchema as a private method, in order to avoid other method to directly create a columnSchema object.
 // we only want user to get columnSchema by GetOrSetColumnSchema or Clone method.
 func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
+	start := time.Now()
+	defer func() {
+		log.Info("newColumnSchema cost", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
+	}()
 	colSchema := &columnSchema{
 		Digest:           digest,
 		Columns:          tableInfo.Columns,
