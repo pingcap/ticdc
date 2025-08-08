@@ -228,7 +228,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 	// handle resolvedTsCacheSize resolvedTs events, so the cache is full.
 	for i := 0; i < resolvedTsCacheSize+1; i++ {
-		broker.handleResolvedTs(ctx, cacheMap, wrapEvent, disp.messageWorkerIndex)
+		broker.handleResolvedTs(ctx, cacheMap, wrapEvent, disp.messageWorkerIndex, messaging.EventCollectorTopic)
 	}
 
 	msg := <-mc.messageCh

@@ -94,7 +94,7 @@ const (
 	ErrorTypeInvalidMessage       ErrorType = 208
 	ErrorTypeTargetMismatch       ErrorType = 209
 
-	// ErrorTypeCreateEventDispatcherManagerFailed ErrorType = 300
+	// ErrorTypeCreateDispatcherManagerFailed ErrorType = 300
 
 	ErrorInvalidDDLEvent ErrorType = 301
 )
