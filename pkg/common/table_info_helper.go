@@ -194,7 +194,7 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 			log.Info("different indices", zap.Any("s.Indices", s.Indices), zap.Any("indices", indices))
 			return false
 		}
-		if !idx.Name.Equals(indices[i].Name) {
+		if idx.Name.O != indices[i].Name.O {
 			log.Info("different indices", zap.Any("s.Indices", s.Indices), zap.Any("indices", indices))
 			return false
 		}
