@@ -530,6 +530,12 @@ func (m *Maintainer) onNodeChanged() {
 }
 
 func (m *Maintainer) calCheckpointTs() {
+	start := time.Now()
+	defer func() {
+		log.Info("maintainer calculate checkpointTs cost",
+			zap.String("changefeed", m.id.String()),
+			zap.Duration("duration", time.Since(start)))
+	}()
 	defer m.updateMetrics()
 	if !m.bootstrapped.Load() {
 		log.Warn("can not advance checkpointTs since not bootstrapped",
