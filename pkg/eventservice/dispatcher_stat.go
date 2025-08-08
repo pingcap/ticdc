@@ -68,6 +68,8 @@ type dispatcherStat struct {
 	// TODO: maintain it
 	checkpointTs atomic.Uint64
 
+	lastStartTs uint64
+
 	// The seq of the events that have been sent to the downstream dispatcher.
 	// It start from 1, and increase by 1 for each event.
 	// If the dispatcher is reset, the seq should be set to 1.
@@ -226,6 +228,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 		Span:    a.info.GetTableSpan(),
 		StartTs: startTs,
 		EndTs:   resolvedTs,
+		LastTs:  a.lastStartTs,
 	}
 	return r, true
 }

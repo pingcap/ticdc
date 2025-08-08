@@ -201,7 +201,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 			zap.Stringer("dispatcher", d.id), zap.Uint64("startTs", dml.GetStartTs()),
 			zap.Uint64("commitTs", dml.GetCommitTs()), zap.Uint64("seq", dml.GetSeq()))
 	}
-	d.updateSentResolvedTs(lastStartTs + 1)
+	d.lastStartTs = lastStartTs
 	doSendDML(batchEvent)
 }
 
@@ -238,6 +238,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	)
 	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
+	d.lastStartTs = 0
 	metricEventServiceSendResolvedTsCount.Inc()
 }
 
