@@ -555,6 +555,13 @@ func (d *Dispatcher) EmitBootstrap() bool {
 
 // updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
 func (d *Dispatcher) updateDispatcherStatusToWorking() {
+	log.Info("update dispatcher status to working",
+		zap.Stringer("dispatcher", d.id),
+		zap.Stringer("changefeedID", d.changefeedID),
+		zap.String("table", common.FormatTableSpan(d.tableSpan)),
+		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
+		zap.Uint64("resolvedTs", d.GetResolvedTs()),
+	)
 	// only when we receive the first event, we can regard the dispatcher begin syncing data
 	// then add it to status dynamic stream to receive dispatcher status from maintainer
 	d.addToStatusDynamicStream()
