@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -127,7 +126,7 @@ var (
 func GetSharedColumnSchemaStorage() *SharedColumnSchemaStorage {
 	once.Do(func() {
 		storage = &SharedColumnSchemaStorage{
-			buckets: make(map[Digest]*schemaBucket),
+			m: make(map[Digest][]ColumnSchemaWithCount),
 		}
 	})
 	return storage
@@ -145,17 +144,18 @@ func NewColumnSchemaWithCount(columnSchema *columnSchema) *ColumnSchemaWithCount
 	}
 }
 
-// schemaBucket holds column schemas under the same digest with its own lock.
-type schemaBucket struct {
-	mu   sync.Mutex
-	list []ColumnSchemaWithCount
-}
-
 type SharedColumnSchemaStorage struct {
-	// For tables that have the same column schema, we share the same columnSchema object to reduce memory usage.
-	// We shard by digest into buckets, and each bucket has its own mutex to reduce lock contention.
-	buckets map[Digest]*schemaBucket
-	mu      sync.RWMutex // protects buckets map (bucket pointer install/removal only)
+	// For the table have the same column schema, we will use the same columnSchema object to reduce memory usage.
+	// we use a map to store the columnSchema object(in ColumnSchemaWithCount),
+	// the key is the hash value of the Column Info of the table info.
+	// We use SHA-256 to calculate the hash value to reduce the collision probability.
+	// However, there may still have some collisions in some cases,
+	// so we use a list to store the ColumnSchemaWithCount object with the same hash value.
+	// ColumnSchemaWithCount contains the columnSchema and a reference count.
+	// The reference count is used to check whether the columnSchema object can be released.
+	// If the reference count is 0, we can release the columnSchema object.
+	m     map[Digest][]ColumnSchemaWithCount
+	mutex sync.Mutex
 }
 
 func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indices []*model.IndexInfo) bool {
@@ -186,9 +186,6 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if idx.ID != indices[i].ID {
 			return false
 		}
-		// if idx.Name.O != indices[i].Name.O {
-		// 	return false
-		// }
 		if !idx.Name.Equals(indices[i].Name) {
 			return false
 		}
@@ -219,57 +216,23 @@ func (s *columnSchema) equal(columnSchema *columnSchema) bool {
 	return s.sameColumnsAndIndices(columnSchema.Columns, columnSchema.Indices)
 }
 
-// findSameOrNil scans bucket list and returns a pointer to the matched entry whose schema
-// is semantically the same as tableInfo. Caller must hold bucket lock while using the returned pointer.
-func findSameOrNil(list []ColumnSchemaWithCount, tableInfo *model.TableInfo) *ColumnSchemaWithCount {
-	start := time.Now()
-	defer func() {
-		log.Info("findSameOrNil cost", zap.Any("time cost", time.Since(start)), zap.Any("len of list", len(list)))
-	}()
-	for i := range list {
-		if list[i].columnSchema.SameWithTableInfo(tableInfo) {
-			log.Info("findSameOrNil found same column info", zap.Any("time cost", time.Since(start)), zap.Any("tableInfo", tableInfo))
-			return &list[i]
+func (s *SharedColumnSchemaStorage) incColumnSchemaCount(columnSchema *columnSchema) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	colSchemas, ok := s.m[columnSchema.Digest]
+	if !ok {
+		log.Error("inc column schema count failed, column schema not found", zap.Any("columnSchema", columnSchema))
+	}
+	for idx, colSchemaWithCount := range colSchemas {
+		if colSchemaWithCount.columnSchema.equal(columnSchema) {
+			s.m[columnSchema.Digest][idx].count++
+			return
 		}
 	}
-	return nil
-}
-
-// findEqualOrNil scans bucket list and returns a pointer to the matched entry whose schema
-// equals to the given columnSchema (sameColumnsAndIndices). Caller must hold bucket lock.
-func findEqualOrNil(list []ColumnSchemaWithCount, cs *columnSchema) *ColumnSchemaWithCount {
-	for i := range list {
-		if list[i].columnSchema.equal(cs) {
-			return &list[i]
-		}
+	if !ok {
+		log.Error("inc column schema count failed, column schema not found", zap.Any("columnSchema", columnSchema))
 	}
-	return nil
-}
-
-// getOrCreateBucket fetches the bucket by digest or creates one if absent.
-func (s *SharedColumnSchemaStorage) getOrCreateBucket(digest Digest) *schemaBucket {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b := s.buckets[digest]
-	if b != nil {
-		return b
-	} else {
-		s.buckets[digest] = &schemaBucket{}
-		b = s.buckets[digest]
-	}
-	return b
-}
-
-func (s *SharedColumnSchemaStorage) incColumnSchemaCount(cs *columnSchema) {
-	b := s.getOrCreateBucket(cs.Digest)
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	found := findEqualOrNil(b.list, cs)
-	if found == nil {
-		log.Error("inc column schema count failed, column schema not found", zap.Any("columnSchema", cs))
-		return
-	}
-	found.count++
 }
 
 // we should get ColumnSchema By GetOrSetColumnSchema.
@@ -278,60 +241,58 @@ func (s *SharedColumnSchemaStorage) incColumnSchemaCount(cs *columnSchema) {
 // to ensure the gc for column schema.
 //
 //	eg. runtime.SetFinalizer(ti, func(ti *TableInfo) {
-//	   	GetSharedColumnSchemaStorage().tryReleaseColumnSchema(ti.ColumnSchema)
-//	  })
+//	    	GetSharedColumnSchemaStorage().tryReleaseColumnSchema(ti.ColumnSchema)
+//	   })
 func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableInfo) *columnSchema {
-	start := time.Now()
 	digest := hashTableInfo(tableInfo)
-
-	// Fast path: bucket-level lookup
-	b := s.getOrCreateBucket(digest)
-	log.Info("GetOrSetColumnSchema get bucket", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
-	b.mu.Lock()
-	log.Info("GetOrSetColumnSchema get bucket lock", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
-	if entry := findSameOrNil(b.list, tableInfo); entry != nil {
-		entry.count++
-		cs := entry.columnSchema
-		b.mu.Unlock()
-		log.Info("GetOrSetColumnSchema found same column info", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
-		return cs
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	colSchemas, ok := s.m[digest]
+	if !ok {
+		// generate Column Schema
+		columnSchema := newColumnSchema(tableInfo, digest)
+		SharedColumnSchemaCountGauge.Inc()
+		s.m[digest] = make([]ColumnSchemaWithCount, 1)
+		s.m[digest][0] = *NewColumnSchemaWithCount(columnSchema)
+		return columnSchema
+	} else {
+		for idx, colSchemaWithCount := range colSchemas {
+			// compare tableInfo to check whether the column schema is the same
+			if colSchemaWithCount.columnSchema.SameWithTableInfo(tableInfo) {
+				s.m[digest][idx].count++
+				return colSchemaWithCount.columnSchema
+			}
+		}
+		// not found the same column info, create a new one
+		columnSchema := newColumnSchema(tableInfo, digest)
+		SharedColumnSchemaCountGauge.Inc()
+		s.m[digest] = append(s.m[digest], *NewColumnSchemaWithCount(columnSchema))
+		return columnSchema
 	}
-	b.mu.Unlock()
-	log.Info("GetOrSetColumnSchema get bucket unlock", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
-	// Build outside lock (heavy work)
-	built := newColumnSchema(tableInfo, digest)
-	log.Info("GetOrSetColumnSchema build column schema", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
-	// Double-check under bucket lock
-	b.mu.Lock()
-	log.Info("GetOrSetColumnSchema get bucket lock (after build)", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
-	if entry := findSameOrNil(b.list, tableInfo); entry != nil {
-		entry.count++
-		cs := entry.columnSchema
-		b.mu.Unlock()
-		log.Info("get or set column schema found same column info (after build)", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
-		return cs
-	}
-	b.list = append(b.list, *NewColumnSchemaWithCount(built))
-	b.mu.Unlock()
-	SharedColumnSchemaCountGauge.Inc()
-	log.Info("create new column schema", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
-	return built
 }
 
 // This function is used after unmarshal, we need to get shared column schema by the unmarshal result to avoid inused-object.
 func (s *SharedColumnSchemaStorage) getOrSetColumnSchemaByColumnSchema(columnSchema *columnSchema) *columnSchema {
 	digest := columnSchema.Digest
-	b := s.getOrCreateBucket(digest)
-	b.mu.Lock()
-	if entry := findEqualOrNil(b.list, columnSchema); entry != nil {
-		entry.count++
-		cs := entry.columnSchema
-		b.mu.Unlock()
-		return cs
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	colSchemas, ok := s.m[digest]
+	if !ok {
+		s.m[digest] = make([]ColumnSchemaWithCount, 1)
+		s.m[digest][0] = *NewColumnSchemaWithCount(columnSchema)
+		return columnSchema
+	} else {
+		for idx, colSchemaWithCount := range colSchemas {
+			// compare tableInfo to check whether the column schema is the same
+			if colSchemaWithCount.columnSchema.equal(columnSchema) {
+				s.m[digest][idx].count++
+				return colSchemaWithCount.columnSchema
+			}
+		}
+		// not found the same column info, add a new one
+		s.m[digest] = append(s.m[digest], *NewColumnSchemaWithCount(columnSchema))
+		return columnSchema
 	}
-	b.list = append(b.list, *NewColumnSchemaWithCount(columnSchema))
-	b.mu.Unlock()
-	return columnSchema
 }
 
 // we call this function when each TableInfo is released,
@@ -345,33 +306,26 @@ func (s *SharedColumnSchemaStorage) getOrSetColumnSchemaByColumnSchema(columnSch
 //     However, the tableInfo is shared with dispatcher, and dispatcher always release later, so we don't need to deal here.
 //  4. versionedTableInfo gc will release some tableInfo.
 func (s *SharedColumnSchemaStorage) tryReleaseColumnSchema(columnSchema *columnSchema) {
-	// Lock order: top-level map lock first, then bucket lock, to safely delete empty buckets.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b := s.buckets[columnSchema.Digest]
-	if b == nil {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	colSchemas, ok := s.m[columnSchema.Digest]
+	if !ok {
 		log.Warn("try release column schema failed, column schema not found", zap.Any("columnSchema", columnSchema))
 		return
 	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for idx, colSchemaWithCount := range b.list {
+	for idx, colSchemaWithCount := range colSchemas {
 		if colSchemaWithCount.columnSchema == columnSchema {
-			b.list[idx].count--
-			if b.list[idx].count == 0 {
+			s.m[columnSchema.Digest][idx].count--
+			if s.m[columnSchema.Digest][idx].count == 0 {
 				// release the columnSchema object
 				SharedColumnSchemaCountGauge.Dec()
-				b.list = append(b.list[:idx], b.list[idx+1:]...)
-				if len(b.list) == 0 {
-					// remove empty bucket from top-level map
-					delete(s.buckets, columnSchema.Digest)
+				s.m[columnSchema.Digest] = append(s.m[columnSchema.Digest][:idx], s.m[columnSchema.Digest][idx+1:]...)
+				if len(s.m[columnSchema.Digest]) == 0 {
+					delete(s.m, columnSchema.Digest)
 				}
 			}
-			return
 		}
 	}
-	log.Warn("try release column schema failed, column schema not found", zap.Any("columnSchema", columnSchema))
 }
 
 // columnSchema is used to store the column schema information of tableInfo.
@@ -469,10 +423,6 @@ func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
 // make newColumnSchema as a private method, in order to avoid other method to directly create a columnSchema object.
 // we only want user to get columnSchema by GetOrSetColumnSchema or Clone method.
 func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
-	start := time.Now()
-	defer func() {
-		log.Info("newColumnSchema cost", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
-	}()
 	colSchema := &columnSchema{
 		Digest:           digest,
 		Columns:          tableInfo.Columns,
