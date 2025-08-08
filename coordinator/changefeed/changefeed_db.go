@@ -69,7 +69,7 @@ func (db *ChangefeedDB) AddAbsentChangefeed(tasks ...*Changefeed) {
 	for _, task := range tasks {
 		db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
 		db.changefeeds[task.ID] = task
-		db.AddAbsent(task)
+		db.AddAbsentWithoutLock(task)
 	}
 }
 
@@ -95,7 +95,7 @@ func (db *ChangefeedDB) AddReplicatingMaintainer(task *Changefeed, nodeID node.I
 
 	db.changefeeds[task.ID] = task
 	db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
-	db.AddReplicating(task)
+	db.AddReplicatingWithoutLock(task)
 }
 
 // StopByChangefeedID stop a changefeed by the changefeed id
@@ -171,7 +171,7 @@ func (db *ChangefeedDB) BindChangefeedToNode(old, new node.ID, task *Changefeed)
 		zap.String("changefeed", task.ID.String()),
 		zap.String("oldNode", old.String()),
 		zap.String("node", new.String()))
-	db.BindReplicaToNode(old, new, task)
+	db.BindReplicaToNodeWithoutLock(old, new, task)
 }
 
 // MarkMaintainerReplicating move the maintainer to the replicating map
@@ -181,7 +181,7 @@ func (db *ChangefeedDB) MarkMaintainerReplicating(task *Changefeed) {
 
 	log.Info("marking changefeed replicating",
 		zap.String("changefeed", task.ID.String()))
-	db.MarkReplicating(task)
+	db.MarkReplicatingWithoutLock(task)
 	task.StartFinished()
 }
 

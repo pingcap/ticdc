@@ -464,18 +464,6 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	}
 }
 
-func (m *Maintainer) onBatchMessage(msg []*messaging.TargetMessage) {
-	for _, msg := range msg {
-		if msg.Type != messaging.TypeHeartBeatRequest {
-			log.Panic("invalid message type",
-				zap.String("changefeed", m.id.Name()),
-				zap.String("messageType", msg.Type.String()))
-		}
-	}
-	m.onBatchHeartBeatRequest(msg)
-
-}
-
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	m.removing.Store(true)
 	m.cascadeRemoving = cascade
@@ -619,55 +607,6 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 				zap.String("changefeed", m.id.Name()),
 				zap.Any("msg", msg), zap.Error(err))
 			continue
-		}
-	}
-}
-
-func (m *Maintainer) onBatchHeartBeatRequest(msg []*messaging.TargetMessage) {
-	// ignore the heartbeat if the maintainer not bootstrapped
-	if !m.bootstrapped.Load() {
-		return
-	}
-
-	// we first group the status, to reduce the status number we need to handle
-	dispatcherStatusMap := make(map[node.ID]map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus)
-	watermarkMap := make(map[node.ID]*heartbeatpb.Watermark)
-
-	for _, msg := range msg {
-		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
-		if _, ok := dispatcherStatusMap[msg.From]; !ok {
-			dispatcherStatusMap[msg.From] = make(map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus)
-		}
-		if len(req.Statuses) > 0 {
-			for _, status := range req.Statuses {
-				dispatcherStatusMap[msg.From][*status.ID] = status
-			}
-		}
-		if req.Watermark != nil {
-			watermarkMap[msg.From] = req.Watermark
-		}
-
-		if req.Err != nil {
-			log.Error("dispatcher report an error",
-				zap.Stringer("changefeed", m.id),
-				zap.Stringer("sourceNode", msg.From),
-				zap.String("error", req.Err.Message))
-			m.onError(msg.From, req.Err)
-		}
-	}
-
-	size := 0
-	for nodeID, statusMap := range dispatcherStatusMap {
-		for _, status := range statusMap {
-			m.controller.HandleStatus(nodeID, []*heartbeatpb.TableSpanStatus{status})
-		}
-		size += len(statusMap)
-	}
-
-	for nodeID, watermark := range watermarkMap {
-		old, ok := m.checkpointTsByCapture.Get(nodeID)
-		if !ok || watermark.Seq >= old.Seq {
-			m.checkpointTsByCapture.Set(nodeID, *watermark)
 		}
 	}
 }

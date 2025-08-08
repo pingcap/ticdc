@@ -416,11 +416,6 @@ func (oc *Controller) AddMergeOperator(
 
 // =========== following func only for test ===========
 func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	start := time.Now()
-	defer func() {
-		log.Info("GetAllOperators cost", zap.Duration("cost", time.Since(start)))
-	}()
-
 	oc.mu.RLock()
 	defer oc.mu.RUnlock()
 

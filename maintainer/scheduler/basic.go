@@ -93,7 +93,7 @@ func (s *basicScheduler) Execute() time.Time {
 	}
 
 	// deal with the split table spans first
-	for _, id := range s.spanController.GetGroupIDs() {
+	for _, id := range s.spanController.GetGroups() {
 		if id == pkgreplica.DefaultGroupID {
 			continue
 		}

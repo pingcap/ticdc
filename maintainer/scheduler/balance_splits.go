@@ -85,7 +85,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 	// if not, check what dispatchers can be moved to facilitate merge operations.
 
 	// we only process spans of one group that are all in replicating state (merge/split/move operations will enter scheduling state once created)
-	for _, group := range s.spanController.GetGroupIDs() {
+	for _, group := range s.spanController.GetGroups() {
 		// we don't deal with the default group in this scheduler
 		if group == pkgReplica.DefaultGroupID {
 			continue
