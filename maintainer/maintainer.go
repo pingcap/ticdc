@@ -101,7 +101,6 @@ type Maintainer struct {
 	pdClock pdutil.Clock
 
 	eventCh *chann.DrainableChann[*Event]
-	msgCh   *chann.UnlimitedChannel[*messaging.TargetMessage, any]
 
 	mc messaging.MessageCenter
 
@@ -204,7 +203,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
-		msgCh:             chann.NewUnlimitedChannel[*messaging.TargetMessage, any](nil, nil),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
@@ -250,7 +248,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	go m.runUpdateMetrics(ctx)
 	go m.runHandleEvents(ctx)
-	go m.runHandleMessage(ctx)
 
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.String("state", string(cfg.State)),
@@ -310,64 +307,12 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 	switch event.eventType {
 	case EventInit:
 		return m.onInit()
+	case EventMessage:
+		m.onMessage(event.message)
 	case EventPeriod:
 		m.onPeriodTask()
 	}
 	return false
-}
-
-func (m *Maintainer) runHandleMessage(ctx context.Context) error {
-	buffer := make([]*messaging.TargetMessage, 0, 1024)
-
-	findFirstHeartbeat := func(msg []*messaging.TargetMessage, beginIndex int) int {
-		for i := beginIndex; i < len(msg); i++ {
-			if msg[i].Type != messaging.TypeHeartBeatRequest {
-				m.onMessage(msg[i])
-			} else {
-				return i
-			}
-		}
-		return -1
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			buffer = buffer[:0]
-			msg, ok := m.msgCh.GetMultipleNoGroup(buffer)
-			if !ok {
-				log.Error("msgCh is closed", zap.String("changefeed", m.id.String()))
-				return nil
-			}
-			// first check the online/offline nodes
-			// TODO:not sure whether we need check nodeChanged first
-			m.checkNodeChanged()
-			// we just batch the continous msg of `heartbeat`
-			firstIndex := findFirstHeartbeat(msg, 0)
-			if firstIndex == -1 {
-				continue
-			}
-
-			index := firstIndex + 1
-			for index < len(msg) {
-				if msg[index].Type != messaging.TypeHeartBeatRequest {
-					m.onBatchMessage(msg[firstIndex:index])
-					firstIndex = findFirstHeartbeat(msg, index)
-					if firstIndex == -1 {
-						break
-					}
-					index = firstIndex + 1
-				} else {
-					index += 1
-				}
-			}
-			if firstIndex != -1 {
-				m.onBatchMessage(msg[firstIndex:])
-			}
-		}
-	}
 }
 
 func (m *Maintainer) checkNodeChanged() {
@@ -383,7 +328,6 @@ func (m *Maintainer) checkNodeChanged() {
 func (m *Maintainer) Close() {
 	m.cancel()
 	m.cleanupMetrics()
-	m.msgCh.Close()
 	m.controller.Stop()
 	log.Info("changefeed maintainer closed",
 		zap.String("changefeed", m.id.String()),
@@ -506,18 +450,6 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 			zap.String("changefeed", m.id.Name()),
 			zap.String("messageType", msg.Type.String()))
 	}
-}
-
-func (m *Maintainer) onBatchMessage(msg []*messaging.TargetMessage) {
-	for _, msg := range msg {
-		if msg.Type != messaging.TypeHeartBeatRequest {
-			log.Panic("invalid message type",
-				zap.String("changefeed", m.id.Name()),
-				zap.String("messageType", msg.Type.String()))
-		}
-	}
-	m.onBatchHeartBeatRequest(msg)
-
 }
 
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
