@@ -101,7 +101,7 @@ type Maintainer struct {
 	pdClock pdutil.Clock
 
 	eventCh *chann.DrainableChann[*Event]
-	msgCh   *chann.UnlimitedChannel[*messaging.TargetMessage, any]
+	msgCh   chan *messaging.TargetMessage
 
 	mc messaging.MessageCenter
 
@@ -204,7 +204,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
-		msgCh:             chann.NewUnlimitedChannel[*messaging.TargetMessage, any](nil, nil),
+		msgCh:             make(chan *messaging.TargetMessage, 1024),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
@@ -317,58 +317,12 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 }
 
 func (m *Maintainer) runHandleMessage(ctx context.Context) error {
-	buffer := make([]*messaging.TargetMessage, 0, 1024)
-
-	// findFirstHeartbeat := func(msg []*messaging.TargetMessage, beginIndex int) int {
-	// 	for i := beginIndex; i < len(msg); i++ {
-	// 		if msg[i].Type != messaging.TypeHeartBeatRequest {
-	// 			m.onMessage(msg[i])
-	// 		} else {
-	// 			return i
-	// 		}
-	// 	}
-	// 	return -1
-	// }
-
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		default:
-			buffer = buffer[:0]
-			msg, ok := m.msgCh.GetMultipleNoGroup(buffer)
-			if !ok {
-				log.Error("msgCh is closed", zap.String("changefeed", m.id.String()))
-				return nil
-			}
-			// first check the online/offline nodes
-			// TODO:not sure whether we need check nodeChanged first
-			for _, msg := range msg {
-				m.checkNodeChanged()
-				m.onMessage(msg)
-			}
-			// // we just batch the continous msg of `heartbeat`
-			// firstIndex := findFirstHeartbeat(msg, 0)
-			// if firstIndex == -1 {
-			// 	continue
-			// }
-
-			// index := firstIndex + 1
-			// for index < len(msg) {
-			// 	if msg[index].Type != messaging.TypeHeartBeatRequest {
-			// 		m.onBatchMessage(msg[firstIndex:index])
-			// 		firstIndex = findFirstHeartbeat(msg, index)
-			// 		if firstIndex == -1 {
-			// 			break
-			// 		}
-			// 		index = firstIndex + 1
-			// 	} else {
-			// 		index += 1
-			// 	}
-			// }
-			// if firstIndex != -1 {
-			// 	m.onBatchMessage(msg[firstIndex:])
-			// }
+		case msg := <-m.msgCh:
+			m.onMessage(msg)
 		}
 	}
 }
@@ -386,7 +340,6 @@ func (m *Maintainer) checkNodeChanged() {
 func (m *Maintainer) Close() {
 	m.cancel()
 	m.cleanupMetrics()
-	m.msgCh.Close()
 	m.controller.Stop()
 	log.Info("changefeed maintainer closed",
 		zap.String("changefeed", m.id.String()),
