@@ -23,7 +23,7 @@ var (
 		Subsystem: "event_service",
 		Name:      "channel_size",
 		Help:      "The size of the event service channel",
-	}, []string{"type", "worker"})
+	}, []string{"type"})
 
 	// EventServiceSendEventCount is the metric that counts events sent by the event service.
 	EventServiceSendEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{

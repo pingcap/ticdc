@@ -15,8 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"strconv"
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -32,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 type DispatcherInfo interface {
@@ -65,57 +62,6 @@ type DispatcherHeartBeatWithServerID struct {
 	heartbeat *event.DispatcherHeartbeat
 }
 
-type brokerMap struct {
-	mu      sync.RWMutex
-	brokers map[uint64]*eventBroker
-}
-
-func newBrokerMap() *brokerMap {
-	return &brokerMap{
-		brokers: make(map[uint64]*eventBroker),
-	}
-}
-
-func (m *brokerMap) get(clusterID uint64) (*eventBroker, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	broker, ok := m.brokers[clusterID]
-	return broker, ok
-}
-
-func (m *brokerMap) getOrSet(clusterID uint64, brokerFunc func() *eventBroker) *eventBroker {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	broker, ok := m.brokers[clusterID]
-	if !ok {
-		broker = brokerFunc()
-		m.brokers[clusterID] = broker
-	}
-	return broker
-}
-
-func (m *brokerMap) set(clusterID uint64, broker *eventBroker) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.brokers[clusterID] = broker
-}
-
-func (m *brokerMap) delete(clusterID uint64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.brokers, clusterID)
-}
-
-func (m *brokerMap) values() []*eventBroker {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	values := make([]*eventBroker, 0, len(m.brokers))
-	for _, broker := range m.brokers {
-		values = append(values, broker)
-	}
-	return values
-}
-
 // EventService accepts the requests of pulling events.
 // The EventService is a singleton in the system.
 type eventService struct {
@@ -123,14 +69,11 @@ type eventService struct {
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
 	// clusterID -> eventBroker
-	brokers *brokerMap
+	brokers map[uint64]*eventBroker
 
-	// dispatcher info channels - array of 8 channels for parallel processing
-	dispatcherInfoChans [8]chan DispatcherInfo
+	// TODO: use a better way to cache the acceptorInfos
+	dispatcherInfoChan  chan DispatcherInfo
 	dispatcherHeartbeat chan *DispatcherHeartBeatWithServerID
-
-	// worker control fields
-	waitGroup *errgroup.Group
 }
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
@@ -139,15 +82,10 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		mc:                  mc,
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
-		brokers:             newBrokerMap(),
+		brokers:             make(map[uint64]*eventBroker),
+		dispatcherInfoChan:  make(chan DispatcherInfo, 32),
 		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 32),
 	}
-
-	// Initialize dispatcher info channels
-	for i := 0; i < 8; i++ {
-		es.dispatcherInfoChans[i] = make(chan DispatcherInfo, 1000) // Buffer size for each channel
-	}
-
 	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
 	return es
 }
@@ -162,61 +100,18 @@ func (s *eventService) Run(ctx context.Context) error {
 		log.Info("event service exited")
 	}()
 
-	// Create errgroup for managing goroutines
-	s.waitGroup, ctx = errgroup.WithContext(ctx)
-
-	// Start dispatcher heartbeat processor
-	s.waitGroup.Go(func() error {
-		s.handleDispatcherHeartbeatLoop(ctx)
-		return nil
-	})
-
-	// Start dispatcher workers
-	for i := 0; i < 8; i++ {
-		workerID := i // Capture the loop variable
-		s.waitGroup.Go(func() error {
-			s.dispatcherWorker(ctx, workerID)
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
+	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
+	for {
+		select {
+		case <-ctx.Done():
 			return nil
-		})
-	}
-
-	// Wait for all goroutines to complete
-	return s.waitGroup.Wait()
-}
-
-// handleDispatcherHeartbeatLoop processes dispatcher heartbeat messages
-func (s *eventService) handleDispatcherHeartbeatLoop(ctx context.Context) {
-	log.Info("dispatcher heartbeat processor started")
-	defer log.Info("dispatcher heartbeat processor stopped")
-
-	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat", "0")
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
 		case <-ticker.C:
+			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
 			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
-		case heartbeat := <-s.dispatcherHeartbeat:
-			s.handleDispatcherHeartbeat(heartbeat)
-		}
-	}
-}
-
-// dispatcherWorker processes dispatcher tasks from the assigned channel
-func (s *eventService) dispatcherWorker(ctx context.Context, workerID int) {
-	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo", strconv.Itoa(workerID))
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChans[workerID])))
-		case info := <-s.dispatcherInfoChans[workerID]:
+		case info := <-s.dispatcherInfoChan:
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
 				s.registerDispatcher(ctx, info)
@@ -231,18 +126,15 @@ func (s *eventService) dispatcherWorker(ctx context.Context, workerID int) {
 			default:
 				log.Panic("invalid action type", zap.Any("info", info))
 			}
+		case heartbeat := <-s.dispatcherHeartbeat:
+			s.handleDispatcherHeartbeat(heartbeat)
 		}
 	}
 }
 
-// hashDispatcherID returns a hash value for the dispatcher ID
-func hashDispatcherID(id common.DispatcherID) int {
-	return int((common.GID)(id).Hash(8))
-}
-
 func (s *eventService) Close(_ context.Context) error {
 	log.Info("event service is closing")
-	for _, c := range s.brokers.values() {
+	for _, c := range s.brokers {
 		c.close()
 	}
 	log.Info("event service is closed")
@@ -250,23 +142,16 @@ func (s *eventService) Close(_ context.Context) error {
 }
 
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
-	start := time.Now()
-	defer func() {
-		log.Info("event service: handle message", zap.Any("time cost", time.Since(start)), zap.Any("msg type", msg.Type), zap.Any("msg", msg))
-	}()
 	switch msg.Type {
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)
 		for _, info := range infos {
-			// Hash the dispatcher ID to determine which channel to use
-			channelIndex := hashDispatcherID(info.GetID())
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case s.dispatcherInfoChans[channelIndex] <- info:
+			case s.dispatcherInfoChan <- info:
 			}
 		}
-		log.Info("event service: handle message", zap.Any("time cost", time.Since(start)))
 	case messaging.TypeDispatcherHeartbeat:
 		if len(msg.Message) != 1 {
 			log.Panic("invalid dispatcher heartbeat", zap.Any("msg", msg))
@@ -286,24 +171,13 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	return nil
 }
 
-func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
-	res := make([]DispatcherInfo, 0, len(msg.Message))
-	for _, m := range msg.Message {
-		info, ok := m.(*messaging.DispatcherRequest)
-		if !ok {
-			log.Panic("invalid dispatcher info", zap.Any("info", m))
-		}
-		res = append(res, info)
-	}
-	return res
-}
-
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
-	log.Info("event service: register dispatcher", zap.Any("info", info), zap.Any("info dispatcherID", info.GetID()))
 	clusterID := info.GetClusterID()
-	c := s.brokers.getOrSet(clusterID, func() *eventBroker {
-		return newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
-	})
+	c, ok := s.brokers[clusterID]
+	if !ok {
+		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
+		s.brokers[clusterID] = c
+	}
 
 	// FIXME: Send message to the dispatcherManager to handle the error.
 	err := c.addDispatcher(info)
@@ -314,7 +188,7 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 
 func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers.get(clusterID)
+	c, ok := s.brokers[clusterID]
 	if !ok {
 		return
 	}
@@ -323,7 +197,7 @@ func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers.get(clusterID)
+	c, ok := s.brokers[clusterID]
 	if !ok {
 		return
 	}
@@ -332,7 +206,7 @@ func (s *eventService) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers.get(clusterID)
+	c, ok := s.brokers[clusterID]
 	if !ok {
 		return
 	}
@@ -340,15 +214,9 @@ func (s *eventService) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
-	log.Info("event service: reset dispatcher", zap.Any("info", dispatcherInfo), zap.Any("info dispatcherID", dispatcherInfo.GetID()))
 	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers.get(clusterID)
+	c, ok := s.brokers[clusterID]
 	if !ok {
-		log.Info("reset dispatcher, but the broker is not found, ignore it",
-			zap.Stringer("dispatcherID", dispatcherInfo.GetID()),
-			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
-			zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
-		)
 		return
 	}
 	c.resetDispatcher(dispatcherInfo)
@@ -356,9 +224,21 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	clusterID := heartbeat.heartbeat.ClusterID
-	c, ok := s.brokers.get(clusterID)
+	c, ok := s.brokers[clusterID]
 	if !ok {
 		return
 	}
 	c.handleDispatcherHeartbeat(heartbeat)
+}
+
+func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
+	res := make([]DispatcherInfo, 0, len(msg.Message))
+	for _, m := range msg.Message {
+		info, ok := m.(*messaging.DispatcherRequest)
+		if !ok {
+			log.Panic("invalid dispatcher info", zap.Any("info", m))
+		}
+		res = append(res, info)
+	}
+	return res
 }

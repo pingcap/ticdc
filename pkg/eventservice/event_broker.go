@@ -802,8 +802,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		info.GetBdrMode(),
 	)
 
-	log.Info("eventBroker register dispatcher to eventStore", zap.Any("time cost", time.Since(start)), zap.Any("dispatcherID", id))
-
 	if !success {
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
@@ -826,9 +824,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		)
 		return err
 	}
-
-	log.Info("eventBroker register dispatcher to eventStore success", zap.Any("time cost", time.Since(start)), zap.Any("dispatcherID", id))
-
 	tableInfo, err := c.schemaStore.GetTableInfo(span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("get table info from schemaStore failed",
@@ -839,9 +834,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		)
 		return err
 	}
-
-	log.Info("eventBroker register dispatcher to schemaStore", zap.Any("time cost", time.Since(start)), zap.Any("dispatcherID", id))
-
 	dispatcher.updateTableInfo(tableInfo)
 	c.dispatchers.Store(id, dispatcher)
 	log.Info("register dispatcher",
@@ -922,19 +914,9 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
-	log.Info("reset dispatcher",
-		zap.Stringer("dispatcherID", dispatcherInfo.GetID()),
-		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
-		zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
-	)
 	start := time.Now()
 	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
 	if !ok {
-		log.Info("reset dispatcher, but the dispatcher is not registered, register it",
-			zap.Stringer("dispatcherID", dispatcherInfo.GetID()),
-			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
-			zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
-		)
 		// The dispatcher is not registered, register it.
 		// FIXME: Handle the error.
 		_ = c.addDispatcher(dispatcherInfo)
@@ -952,11 +934,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		}
 		// Give other goroutines a chance to acquire the write lock
 		time.Sleep(10 * time.Millisecond)
-		log.Info("wait for the scan task goroutine to return",
-			zap.Stringer("dispatcherID", stat.id),
-			zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
-			zap.Uint64("startTs", stat.info.GetStartTs()),
-		)
 	}
 
 	oldSeq := stat.seq.Load()
