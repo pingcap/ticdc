@@ -35,7 +35,7 @@ type mockMounter struct {
 
 func makeDispatcherReady(disp *dispatcherStat) {
 	disp.isHandshaked.Store(true)
-	disp.isReadyRecevingData.Store(true)
+	disp.isReadyReceivingData.Store(true)
 	disp.resetTs.Store(disp.info.GetStartTs())
 }
 
@@ -1360,11 +1360,11 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	// Create scan session
 	ctx := context.Background()
 	stat := &dispatcherStat{
-		id:                  dispatcherID,
-		isReadyRecevingData: atomic.Bool{},
-		isRemoved:           atomic.Bool{},
+		id:                   dispatcherID,
+		isReadyReceivingData: atomic.Bool{},
+		isRemoved:            atomic.Bool{},
 	}
-	stat.isReadyRecevingData.Store(true)
+	stat.isReadyReceivingData.Store(true)
 
 	dataRange := common.DataRange{
 		Span: &heartbeatpb.TableSpan{

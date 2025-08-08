@@ -65,8 +65,10 @@ type eventBroker struct {
 
 	// changefeedMap is used to track the changefeed status.
 	changefeedMap sync.Map // common.ChangeFeedID -> *changefeedStatus
+
 	// All the dispatchers that register to the eventBroker.
 	dispatchers sync.Map
+
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
 
@@ -561,7 +563,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	// Check whether the task is ready to receive data events again before sending events.
-	if !task.isReadyRecevingData.Load() {
+	if !task.isReadyReceivingData.Load() {
 		return
 	}
 
@@ -812,7 +814,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	defer c.metricsCollector.metricDispatcherCount.Inc()
 	filter := info.GetFilter()
 
-	start := time.Now()
 	id := info.GetID()
 	span := info.GetTableSpan()
 	startTs := info.GetStartTs()
@@ -820,7 +821,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	workerIndex := (common.GID)(id).Hash(uint64(len(c.messageCh)))
 	scanWorkerIndex := (common.GID)(id).Hash(uint64(len(c.taskChan)))
 
-	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, c.getOrSetChangefeedStatus(changefeedID))
+	status := c.getOrSetChangefeedStatus(changefeedID)
+	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, status)
 	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
@@ -828,12 +830,11 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", startTs),
-			zap.Duration("brokerRegisterDuration", time.Since(start)),
-		)
+			zap.Uint64("startTs", startTs))
 		return nil
 	}
 
+	start := time.Now()
 	success := c.eventStore.RegisterDispatcher(
 		id,
 		span,
@@ -912,10 +913,10 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat.(*dispatcherStat).isRemoved.Store(true)
-	stat.(*dispatcherStat).isReadyRecevingData.Store(false)
+	stat.(*dispatcherStat).isReadyReceivingData.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
-	// todo: how to handle this error?
-	_ = c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
+
+	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",
@@ -938,7 +939,7 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
-	stat.isReadyRecevingData.Store(false)
+	stat.isReadyReceivingData.Store(false)
 	stat.resetScanLimit()
 }
 
@@ -953,7 +954,7 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
-	stat.isReadyRecevingData.Store(true)
+	stat.isReadyReceivingData.Store(true)
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
@@ -968,7 +969,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 
 	// Must set the isRunning to false before reset the dispatcher.
 	// Otherwise, the scan task goroutine will not return before reset the dispatcher.
-	stat.isReadyRecevingData.Store(false)
+	stat.isReadyReceivingData.Store(false)
 
 	// Wait until the scan task goroutine return before reset the dispatcher.
 	for {
@@ -1012,7 +1013,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 		stat = newChangefeedStatus(changefeedID)
 		log.Info("new changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
-			zap.Bool("isRunning", stat.(*changefeedStatus).isReadyRecevingData.Load()),
+			zap.Bool("isRunning", stat.(*changefeedStatus).isReadyReceivingData.Load()),
 		)
 		c.changefeedMap.Store(changefeedID, stat)
 	}
