@@ -457,13 +457,13 @@ func NewTableInfo(schemaName string, tableName string, tableID int64, isPartitio
 func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	start := time.Now()
 	defer func() {
-		log.Info("WrapTableInfo cost", zap.Any("time cost", time.Since(start)), zap.Any("schemaName", schemaName), zap.Any("info", info))
+		log.Info("WrapTableInfo cost", zap.Any("time cost", time.Since(start)), zap.Any("schemaName", schemaName))
 	}()
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
-	log.Info("WrapTableInfo before GetOrSetColumnSchema", zap.Any("time cost", time.Since(start)), zap.Any("schemaName", schemaName), zap.Any("info", info))
+	log.Info("WrapTableInfo before GetOrSetColumnSchema", zap.Any("time cost", time.Since(start)), zap.Any("schemaName", schemaName))
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
-	log.Info("WrapTableInfo after GetOrSetColumnSchema", zap.Any("time cost", time.Since(start)), zap.Any("schemaName", schemaName), zap.Any("info", info))
+	log.Info("WrapTableInfo after GetOrSetColumnSchema", zap.Any("time cost", time.Since(start)), zap.Any("schemaName", schemaName))
 	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
 }
 
