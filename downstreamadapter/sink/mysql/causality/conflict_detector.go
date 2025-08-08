@@ -15,15 +15,15 @@ package causality
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/prometheus/client_golang/prometheus"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -96,7 +96,11 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 
 	node.TrySendToTxnCache = func(cacheID int64) bool {
 		// Try sending this txn to related cache as soon as all dependencies are resolved.
-		return d.sendToCache(event, cacheID)
+		ok := d.sendToCache(event, cacheID)
+		if ok {
+			d.metricConflictDetectDuration.Observe(time.Since(start).Seconds())
+		}
+		return ok
 	}
 	node.RandCacheID = func() int64 {
 		return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches))
@@ -109,7 +113,6 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 			}
 		}()
 		d.notifiedNodes.In() <- callback
-		d.metricConflictDetectDuration.Observe(time.Since(start).Seconds())
 	}
 	d.slots.Add(node)
 }
