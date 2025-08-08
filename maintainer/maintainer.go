@@ -70,6 +70,7 @@ type Maintainer struct {
 	pdClock pdutil.Clock
 
 	eventCh *chann.DrainableChann[*Event]
+	msgCh   chan *messaging.TargetMessage
 
 	mc messaging.MessageCenter
 
@@ -78,7 +79,7 @@ type Maintainer struct {
 		*heartbeatpb.Watermark
 	}
 
-	checkpointTsByCapture map[node.ID]heartbeatpb.Watermark
+	checkpointTsByCapture *CheckpointTsCaptureMap
 
 	scheduleState atomic.Int32
 	bootstrapper  *bootstrap.Bootstrapper[heartbeatpb.MaintainerBootstrapResponse]
@@ -173,6 +174,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
+		msgCh:             make(chan *messaging.TargetMessage, 1024),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, pdAPI, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
@@ -186,7 +188,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		pdClock:         appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 
 		ddlSpan:               ddlSpan,
-		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
+		checkpointTsByCapture: newCheckpointTsCaptureMap(),
 		newChangefeed:         newChangefeed,
 
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
@@ -218,6 +220,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	go m.runUpdateMetrics(ctx)
 	go m.runHandleEvents(ctx)
+	go m.runHandleMessage(ctx)
 
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.String("state", string(cfg.State)),
@@ -274,15 +277,25 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 	// first check the online/offline nodes
 	m.checkNodeChanged()
 
+	// TODO:use a better way
 	switch event.eventType {
 	case EventInit:
 		return m.onInit()
-	case EventMessage:
-		m.onMessage(event.message)
 	case EventPeriod:
 		m.onPeriodTask()
 	}
 	return false
+}
+
+func (m *Maintainer) runHandleMessage(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case msg := <-m.msgCh:
+			m.onMessage(msg)
+		}
+	}
 }
 
 func (m *Maintainer) checkNodeChanged() {
@@ -460,7 +473,7 @@ func (m *Maintainer) onNodeChanged() {
 	for id := range currentNodes {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
-			delete(m.checkpointTsByCapture, id)
+			m.checkpointTsByCapture.Delete(id)
 			m.controller.operatorController.OnNodeRemoved(id)
 		}
 	}
@@ -529,7 +542,8 @@ func (m *Maintainer) calCheckpointTs() {
 			continue
 		}
 		// node level watermark reported, ignore this round
-		if _, ok := m.checkpointTsByCapture[id]; !ok {
+		watermark, ok := m.checkpointTsByCapture.Get(id)
+		if !ok {
 			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
 				zap.String("changefeed", m.id.Name()),
 				zap.Any("node", id),
@@ -537,7 +551,7 @@ func (m *Maintainer) calCheckpointTs() {
 				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 			return
 		}
-		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
+		newWatermark.UpdateMin(watermark)
 	}
 
 	m.setWatermark(*newWatermark)
@@ -580,9 +594,9 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
 	if req.Watermark != nil {
-		old, ok := m.checkpointTsByCapture[msg.From]
+		old, ok := m.checkpointTsByCapture.Get(msg.From)
 		if !ok || req.Watermark.Seq >= old.Seq {
-			m.checkpointTsByCapture[msg.From] = *req.Watermark
+			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
 		}
 	}
 	m.controller.HandleStatus(msg.From, req.Statuses)
@@ -958,4 +972,34 @@ func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
 // so after merge table, the table may also have multiple dispatchers
 func (m *Maintainer) MergeTable(tableId int64) error {
 	return m.controller.mergeTable(tableId)
+}
+
+type CheckpointTsCaptureMap struct {
+	mu sync.RWMutex
+	m  map[node.ID]heartbeatpb.Watermark
+}
+
+func newCheckpointTsCaptureMap() *CheckpointTsCaptureMap {
+	return &CheckpointTsCaptureMap{
+		m: make(map[node.ID]heartbeatpb.Watermark),
+	}
+}
+
+func (c *CheckpointTsCaptureMap) Get(nodeID node.ID) (heartbeatpb.Watermark, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	watermark, ok := c.m[nodeID]
+	return watermark, ok
+}
+
+func (c *CheckpointTsCaptureMap) Set(nodeID node.ID, watermark heartbeatpb.Watermark) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m[nodeID] = watermark
+}
+
+func (c *CheckpointTsCaptureMap) Delete(nodeID node.ID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.m, nodeID)
 }

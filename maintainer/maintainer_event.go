@@ -21,8 +21,6 @@ import (
 const (
 	// EventInit initialize the changefeed maintainer
 	EventInit = iota
-	// EventMessage is triggered when a grpc message received
-	EventMessage
 	// EventPeriod is triggered periodically, maintainer handle some task in the loop, like resend messages
 	EventPeriod
 )
