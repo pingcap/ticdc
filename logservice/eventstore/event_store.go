@@ -690,7 +690,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 
 	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
 	var start []byte
-	if dataRange.StartTs != 0 {
+	if dataRange.LastTs != 0 {
 		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.StartTs, dataRange.LastTs+1)
 		log.Warn("set start ts for iterator",
 			zap.Int64("tableID", stat.tableSpan.TableID),
