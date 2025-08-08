@@ -247,14 +247,7 @@ func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
 		span.SetSchemaID(newSchemaID)
 
 		// update schema map
-		schemaMap, ok := c.schemaTasks.tryGet(oldSchemaID)
-		if ok {
-			schemaMap.delete(span.ID)
-			// clear the map if empty
-			if schemaMap.size() == 0 {
-				c.schemaTasks.delete(oldSchemaID)
-			}
-		}
+		c.schemaTasks.getAndDelete(oldSchemaID, span)
 		// add it to new schema map
 		c.schemaTasks.set(newSchemaID, span)
 	}
@@ -433,14 +426,8 @@ func (c *Controller) removeSpan(spans ...*replica.SpanReplication) {
 
 		tableID := span.Span.TableID
 		schemaID := span.GetSchemaID()
-		c.schemaTasks.get(schemaID).delete(span.ID)
-		c.tableTasks.get(tableID).delete(span.ID)
-		if c.schemaTasks.get(schemaID).size() == 0 {
-			c.schemaTasks.delete(schemaID)
-		}
-		if c.tableTasks.get(tableID).size() == 0 {
-			c.tableTasks.delete(tableID)
-		}
+		c.schemaTasks.getAndDelete(schemaID, span)
+		c.tableTasks.getAndDelete(tableID, span)
 		c.allTasks.delete(span.ID)
 	}
 }

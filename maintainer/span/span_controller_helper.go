@@ -107,8 +107,15 @@ func (m *idToSpanMap) tryGet(id int64) (*spanMap, bool) {
 	return sm, ok
 }
 
-func (m *idToSpanMap) delete(id int64) {
+func (m *idToSpanMap) getAndDelete(id int64, span *replica.SpanReplication) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	delete(m.m, id)
+	sm, ok := m.m[id]
+	if !ok {
+		return
+	}
+	sm.delete(span.ID)
+	if sm.size() == 0 {
+		delete(m.m, id)
+	}
 }
