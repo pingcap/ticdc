@@ -46,6 +46,7 @@ type ConflictDetector struct {
 
 	notifiedNodes *chann.DrainableChann[func()]
 
+	changefeedID                 common.ChangeFeedID
 	metricConflictDetectDuration prometheus.Observer
 }
 
@@ -58,6 +59,8 @@ func New(
 		slots:                        NewSlots(numSlots),
 		notifiedNodes:                chann.NewAutoDrainChann[func()](),
 		metricConflictDetectDuration: metrics.ConflictDetectDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+
+		changefeedID: changefeedID,
 	}
 	for i := 0; i < opt.Count; i++ {
 		ret.resolvedTxnCaches[i] = newTxnCache(opt)
@@ -68,7 +71,11 @@ func New(
 }
 
 func (d *ConflictDetector) Run(ctx context.Context) error {
-	defer d.closeCache()
+	defer func() {
+		metrics.ConflictDetectDuration.DeleteLabelValues(d.changefeedID.Namespace(), d.changefeedID.Name())
+		d.closeCache()
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
