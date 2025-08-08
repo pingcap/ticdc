@@ -319,16 +319,16 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 func (m *Maintainer) runHandleMessage(ctx context.Context) error {
 	buffer := make([]*messaging.TargetMessage, 0, 1024)
 
-	findFirstHeartbeat := func(msg []*messaging.TargetMessage, beginIndex int) int {
-		for i := beginIndex; i < len(msg); i++ {
-			if msg[i].Type != messaging.TypeHeartBeatRequest {
-				m.onMessage(msg[i])
-			} else {
-				return i
-			}
-		}
-		return -1
-	}
+	// findFirstHeartbeat := func(msg []*messaging.TargetMessage, beginIndex int) int {
+	// 	for i := beginIndex; i < len(msg); i++ {
+	// 		if msg[i].Type != messaging.TypeHeartBeatRequest {
+	// 			m.onMessage(msg[i])
+	// 		} else {
+	// 			return i
+	// 		}
+	// 	}
+	// 	return -1
+	// }
 
 	for {
 		select {
@@ -343,29 +343,32 @@ func (m *Maintainer) runHandleMessage(ctx context.Context) error {
 			}
 			// first check the online/offline nodes
 			// TODO:not sure whether we need check nodeChanged first
-			m.checkNodeChanged()
-			// we just batch the continous msg of `heartbeat`
-			firstIndex := findFirstHeartbeat(msg, 0)
-			if firstIndex == -1 {
-				continue
+			for _, msg := range msg {
+				m.checkNodeChanged()
+				m.onMessage(msg)
 			}
+			// // we just batch the continous msg of `heartbeat`
+			// firstIndex := findFirstHeartbeat(msg, 0)
+			// if firstIndex == -1 {
+			// 	continue
+			// }
 
-			index := firstIndex + 1
-			for index < len(msg) {
-				if msg[index].Type != messaging.TypeHeartBeatRequest {
-					m.onBatchMessage(msg[firstIndex:index])
-					firstIndex = findFirstHeartbeat(msg, index)
-					if firstIndex == -1 {
-						break
-					}
-					index = firstIndex + 1
-				} else {
-					index += 1
-				}
-			}
-			if firstIndex != -1 {
-				m.onBatchMessage(msg[firstIndex:])
-			}
+			// index := firstIndex + 1
+			// for index < len(msg) {
+			// 	if msg[index].Type != messaging.TypeHeartBeatRequest {
+			// 		m.onBatchMessage(msg[firstIndex:index])
+			// 		firstIndex = findFirstHeartbeat(msg, index)
+			// 		if firstIndex == -1 {
+			// 			break
+			// 		}
+			// 		index = firstIndex + 1
+			// 	} else {
+			// 		index += 1
+			// 	}
+			// }
+			// if firstIndex != -1 {
+			// 	m.onBatchMessage(msg[firstIndex:])
+			// }
 		}
 	}
 }
