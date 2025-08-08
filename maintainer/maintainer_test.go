@@ -333,11 +333,7 @@ func TestMaintainerSchedule(t *testing.T) {
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
 		func(ctx context.Context, msg *messaging.TargetMessage) error {
-			maintainer.eventCh.In() <- &Event{
-				changefeedID: cfID,
-				eventType:    EventMessage,
-				message:      msg,
-			}
+			maintainer.msgCh <- msg
 			return nil
 		})
 
