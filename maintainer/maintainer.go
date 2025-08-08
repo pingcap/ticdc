@@ -538,7 +538,9 @@ func (m *Maintainer) calCheckpointTs() {
 				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 			return
 		}
-		log.Error("calCheckpointTs newWatermark.UpdateMin", zap.Any("id", id), zap.Any("Watermark", m.checkpointTsByCapture[id]))
+		log.Error("calCheckpointTs newWatermark.UpdateMin", zap.Any("m", m.id), zap.Any("id", id),
+			zap.Any("preWatermark", m.getWatermark()),
+			zap.Any("Watermark", m.checkpointTsByCapture[id]))
 		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
 	}
 
@@ -584,6 +586,9 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	if req.Watermark != nil {
 		old, ok := m.checkpointTsByCapture[msg.From]
 		if !ok || req.Watermark.Seq >= old.Seq {
+			log.Error("onHeartBeatRequest update Watermark", zap.Any("m", m.id), zap.Any("From", msg.From),
+				zap.Any("req", req),
+			)
 			m.checkpointTsByCapture[msg.From] = *req.Watermark
 		}
 	}
@@ -914,14 +919,14 @@ func (m *Maintainer) getWatermark() heartbeatpb.Watermark {
 		CheckpointTs: m.watermark.CheckpointTs,
 		ResolvedTs:   m.watermark.ResolvedTs,
 	}
-	log.Error("getWatermark", zap.Any("res", res))
+	log.Error("getWatermark", zap.Any("m", m.id), zap.Any("res", res))
 	return res
 }
 
 func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	m.watermark.mu.Lock()
 	defer m.watermark.mu.Unlock()
-	log.Error("setWatermark", zap.Any("newWatermark", newWatermark))
+	log.Error("setWatermark", zap.Any("m", m.id), zap.Any("newWatermark", newWatermark))
 	if newWatermark.CheckpointTs != math.MaxUint64 {
 		m.watermark.CheckpointTs = newWatermark.CheckpointTs
 	}
