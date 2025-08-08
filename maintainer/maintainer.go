@@ -87,6 +87,7 @@ type Maintainer struct {
 	removed *atomic.Bool
 
 	bootstrapped     atomic.Bool
+	mutex            sync.Mutex // protect the postBootstrapMsg
 	postBootstrapMsg *heartbeatpb.MaintainerPostBootstrapRequest
 
 	// startCheckpointTs is the initial checkpointTs when the maintainer is created.
@@ -674,7 +675,9 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 		return
 	}
 	// disable resend post bootstrap message
+	m.mutex.Lock()
 	m.postBootstrapMsg = nil
+	m.mutex.Unlock()
 }
 
 // isMysqlCompatible returns true if the sinkURIStr is mysql compatible.
@@ -707,7 +710,9 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	// Memory Consumption is 64(tableName/schemaName limit) * 4(utf8.UTFMax) * 2(tableName+schemaName) * tableNum
 	// For an extreme case(100w tables, and 64 utf8 characters for each name), the memory consumption is about 488MB.
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.
+	m.mutex.Lock()
 	m.postBootstrapMsg = msg
+	m.mutex.Unlock()
 	m.sendPostBootstrapRequest()
 	// set status changed to true, trigger the maintainer manager to send heartbeat to coordinator
 	// to report the this changefeed's status
@@ -715,6 +720,8 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 }
 
 func (m *Maintainer) sendPostBootstrapRequest() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	if m.postBootstrapMsg != nil {
 		msg := messaging.NewSingleTargetMessage(
 			m.selfNode.ID,
@@ -740,9 +747,11 @@ func (m *Maintainer) handleResendMessage() {
 	}
 	// resend bootstrap message
 	m.sendMessages(m.bootstrapper.ResendBootstrapMessage())
+	m.mutex.Lock()
 	if m.postBootstrapMsg != nil {
 		m.sendPostBootstrapRequest()
 	}
+	m.mutex.Unlock()
 	if m.barrier != nil {
 		// resend barrier ack messages
 		m.sendMessages(m.barrier.Resend())
