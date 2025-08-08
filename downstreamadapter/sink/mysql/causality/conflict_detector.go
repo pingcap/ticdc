@@ -15,6 +15,10 @@ package causality
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+	"time"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -41,16 +45,19 @@ type ConflictDetector struct {
 	nextCacheID atomic.Int64
 
 	notifiedNodes *chann.DrainableChann[func()]
+
+	metricConflictDetectDuration prometheus.Observer
 }
 
 // New creates a new ConflictDetector.
 func New(
-	numSlots uint64, opt TxnCacheOption,
+	numSlots uint64, opt TxnCacheOption, changefeedID common.ChangeFeedID,
 ) *ConflictDetector {
 	ret := &ConflictDetector{
-		resolvedTxnCaches: make([]txnCache, opt.Count),
-		slots:             NewSlots(numSlots),
-		notifiedNodes:     chann.NewAutoDrainChann[func()](),
+		resolvedTxnCaches:            make([]txnCache, opt.Count),
+		slots:                        NewSlots(numSlots),
+		notifiedNodes:                chann.NewAutoDrainChann[func()](),
+		metricConflictDetectDuration: metrics.ConflictDetectDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 	}
 	for i := 0; i < opt.Count; i++ {
 		ret.resolvedTxnCaches[i] = newTxnCache(opt)
@@ -79,6 +86,7 @@ func (d *ConflictDetector) Run(ctx context.Context) error {
 // NOTE: if multiple threads access this concurrently,
 // ConflictKeys must be sorted by the slot index.
 func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
+	start := time.Now()
 	hashes := ConflictKeys(event)
 	node := d.slots.AllocNode(hashes)
 
@@ -101,6 +109,7 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 			}
 		}()
 		d.notifiedNodes.In() <- callback
+		d.metricConflictDetectDuration.Observe(time.Since(start).Seconds())
 	}
 	d.slots.Add(node)
 }
