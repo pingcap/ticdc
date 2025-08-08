@@ -258,10 +258,7 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 	span.UpdateStatus(status)
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
-	// TODO:make a try
-	if checker.Name() != "empty checker" {
-		checker.UpdateStatus(span)
-	}
+	checker.UpdateStatus(span)
 }
 
 // AddAbsentReplicaSet adds absent replica sets
