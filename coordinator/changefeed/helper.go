@@ -34,13 +34,6 @@ func (m *changefeedMap) set(id common.ChangeFeedID, value *Changefeed) {
 	m.m[id] = value
 }
 
-func (m *changefeedMap) tryGet(id common.ChangeFeedID) (*Changefeed, bool) {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-	value, ok := m.m[id]
-	return value, ok
-}
-
 func (m *changefeedMap) get(id common.ChangeFeedID) *Changefeed {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()

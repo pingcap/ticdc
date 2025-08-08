@@ -61,11 +61,11 @@ type Controller struct {
 	// ReplicationDB tracks the scheduling status of spans
 	pkgreplica.ReplicationDB[common.DispatcherID, *replica.SpanReplication]
 	// allTasks maps dispatcher IDs to their spans, including table trigger dispatchers
-	allTasks *spanMap
+	allTasks map[common.DispatcherID]*replica.SpanReplication
 	// schemaTasks provides quick access to spans by schema ID
-	schemaTasks *idToSpanMap
+	schemaTasks map[int64]map[common.DispatcherID]*replica.SpanReplication
 	// tableTasks provides quick access to spans by table ID
-	tableTasks *idToSpanMap
+	tableTasks map[int64]map[common.DispatcherID]*replica.SpanReplication
 
 	// newGroupChecker creates a GroupChecker for validating span groups
 	newGroupChecker func(groupID pkgreplica.GroupID) pkgreplica.GroupChecker[common.DispatcherID, *replica.SpanReplication]
@@ -113,21 +113,25 @@ func (c *Controller) doWithRLock(action func()) {
 
 // reset resets the maps of Controller
 func (c *Controller) reset(ddlSpan *replica.SpanReplication) {
-	c.schemaTasks = newIdToSpanMap()
-	c.tableTasks = newIdToSpanMap()
-	c.allTasks = newSpanMap()
+	c.schemaTasks = make(map[int64]map[common.DispatcherID]*replica.SpanReplication)
+	c.tableTasks = make(map[int64]map[common.DispatcherID]*replica.SpanReplication)
+	c.allTasks = make(map[common.DispatcherID]*replica.SpanReplication)
 	c.ReplicationDB = pkgreplica.NewReplicationDB(c.changefeedID.String(), c.doWithRLock, c.newGroupChecker)
 	c.initializeDDLSpan(ddlSpan)
 }
 
 func (c *Controller) initializeDDLSpan(ddlSpan *replica.SpanReplication) {
 	// we don't need to schedule the ddl span, but added it to the allTasks map, so we can access it by id
-	c.allTasks.set(ddlSpan)
+	c.allTasks[ddlSpan.ID] = ddlSpan
 	// dispatcher will report a block event with table ID 0,
 	// so we need to add it to the table map
-	c.tableTasks.set(ddlSpan.Span.TableID, ddlSpan)
+	c.tableTasks[ddlSpan.Span.TableID] = map[common.DispatcherID]*replica.SpanReplication{
+		ddlSpan.ID: ddlSpan,
+	}
 	// also put it to the schema map
-	c.schemaTasks.set(ddlSpan.GetSchemaID(), ddlSpan)
+	c.schemaTasks[ddlSpan.GetSchemaID()] = map[common.DispatcherID]*replica.SpanReplication{
+		ddlSpan.ID: ddlSpan,
+	}
 }
 
 func (c *Controller) SetIsMysqlCompatibleBackend(isMysqlCompatibleBackend bool) {
@@ -189,7 +193,10 @@ func (c *Controller) GetMinCheckpointTsForAbsentSpans() uint64 {
 
 // GetTaskByID returns the replica set by the id, it will search the replicating, scheduling and absent map
 func (c *Controller) GetTaskByID(id common.DispatcherID) *replica.SpanReplication {
-	return c.allTasks.get(id)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return c.allTasks[id]
 }
 
 // GetTasksByTableID returns the spans by the table id
@@ -197,59 +204,98 @@ func (c *Controller) GetTasksByTableID(tableID int64) []*replica.SpanReplication
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	tasks := c.tableTasks.get(tableID).values()
+	var tasks []*replica.SpanReplication
+	for _, task := range c.tableTasks[tableID] {
+		tasks = append(tasks, task)
+	}
 	return tasks
 }
 
 // GetTasksBySchemaID returns the spans by the schema id
 func (c *Controller) GetTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
-	sm, ok := c.schemaTasks.tryGet(schemaID)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	sm, ok := c.schemaTasks[schemaID]
 	if !ok {
 		return nil
 	}
-	return sm.values()
+	replicaSets := make([]*replica.SpanReplication, 0, len(sm))
+	for _, v := range sm {
+		replicaSets = append(replicaSets, v)
+	}
+	return replicaSets
 }
 
 // GetAllTasks returns all the spans in the db, it will also return the ddl span
 func (c *Controller) GetAllTasks() []*replica.SpanReplication {
-	return c.allTasks.values()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	tasks := make([]*replica.SpanReplication, 0, len(c.allTasks))
+	for _, task := range c.allTasks {
+		tasks = append(tasks, task)
+	}
+	return tasks
 }
 
 // GetTaskSizeBySchemaID returns the size of the task by the schema id
 func (c *Controller) GetTaskSizeBySchemaID(schemaID int64) int {
-	sm, ok := c.schemaTasks.tryGet(schemaID)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	sm, ok := c.schemaTasks[schemaID]
 	if ok {
-		return sm.size()
+		return len(sm)
 	}
 	return 0
 }
 
 // TaskSize returns the total task size in the db, it includes replicating, scheduling and absent tasks
 func (c *Controller) TaskSize() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	// the ddl span is a special span, we don't need to schedule it
-	return c.allTasks.size()
+	return len(c.allTasks)
 }
 
 // IsTableExists checks if the table exists in the db
 func (c *Controller) IsTableExists(tableID int64) bool {
-	tm, ok := c.tableTasks.tryGet(tableID)
-	return ok && tm.size() > 0
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	tm, ok := c.tableTasks[tableID]
+	return ok && len(tm) > 0
 }
 
 // UpdateSchemaID will update the schema id of the table, and move the task to the new schema map.
 // It is called when a DDL like `ALTER TABLE old_schema.old_tbl RENAME TO new_schema.new_tbl` is executed.
 func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
-	spans := c.tableTasks.get(tableID).values()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	for _, span := range spans {
+	for _, span := range c.tableTasks[tableID] {
 		oldSchemaID := span.GetSchemaID()
 		// update schemaID
 		span.SetSchemaID(newSchemaID)
 
 		// update schema map
-		c.schemaTasks.getAndDelete(oldSchemaID, span)
+		schemaMap, ok := c.schemaTasks[oldSchemaID]
+		if ok {
+			delete(schemaMap, span.ID)
+			// clear the map if empty
+			if len(schemaMap) == 0 {
+				delete(c.schemaTasks, oldSchemaID)
+			}
+		}
 		// add it to new schema map
-		c.schemaTasks.set(newSchemaID, span)
+		newMap, ok := c.schemaTasks[newSchemaID]
+		if !ok {
+			newMap = make(map[common.DispatcherID]*replica.SpanReplication)
+			c.schemaTasks[newSchemaID] = newMap
+		}
+		newMap[span.ID] = span
 	}
 }
 
@@ -258,64 +304,84 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 	span.UpdateStatus(status)
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
+
+	// TODO: check if we need to lock the mu here, or we can add a lock inner the checker
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	checker.UpdateStatus(span)
 }
 
 // AddAbsentReplicaSet adds absent replica sets
 func (c *Controller) AddAbsentReplicaSet(spans ...*replica.SpanReplication) {
-	c.addAbsentReplicaSet(spans...)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.addAbsentReplicaSetWithoutLock(spans...)
 }
 
 // AddSchedulingReplicaSet adds scheduling replica sets
 func (c *Controller) AddSchedulingReplicaSet(span *replica.SpanReplication, targetNodeID node.ID) {
-	c.addSchedulingReplicaSet(span, targetNodeID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.addSchedulingReplicaSetWithoutLock(span, targetNodeID)
 }
 
 // AddReplicatingSpan adds replicating span
 func (c *Controller) AddReplicatingSpan(span *replica.SpanReplication) {
-	c.allTasks.set(span)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.allTasks[span.ID] = span
 	c.addToSchemaAndTableMap(span)
-	c.AddReplicating(span)
+	c.AddReplicatingWithoutLock(span)
 }
 
 // MarkSpanAbsent marks span as absent
 func (c *Controller) MarkSpanAbsent(span *replica.SpanReplication) {
-	c.MarkAbsent(span)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.MarkAbsentWithoutLock(span)
 }
 
 // MarkSpanScheduling marks span as scheduling
 func (c *Controller) MarkSpanScheduling(span *replica.SpanReplication) {
-	c.MarkScheduling(span)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.MarkSchedulingWithoutLock(span)
 }
 
 // MarkSpanReplicating marks span as replicating
 func (c *Controller) MarkSpanReplicating(span *replica.SpanReplication) {
-	c.MarkReplicating(span)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.MarkReplicatingWithoutLock(span)
 }
 
 // BindSpanToNode binds span to node
 func (c *Controller) BindSpanToNode(old, new node.ID, span *replica.SpanReplication) {
-	c.BindReplicaToNode(old, new, span)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BindReplicaToNodeWithoutLock(old, new, span)
 }
 
 // RemoveReplicatingSpan removes replicating span
 func (c *Controller) RemoveReplicatingSpan(span *replica.SpanReplication) {
-	c.removeSpan(span)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.removeSpanWithoutLock(span)
 }
 
 // addAbsentReplicaSetWithoutLock adds spans to absent map
-func (c *Controller) addAbsentReplicaSet(spans ...*replica.SpanReplication) {
+func (c *Controller) addAbsentReplicaSetWithoutLock(spans ...*replica.SpanReplication) {
 	for _, span := range spans {
-		c.allTasks.set(span)
-		c.AddAbsent(span)
+		c.allTasks[span.ID] = span
+		c.AddAbsentWithoutLock(span)
 		c.addToSchemaAndTableMap(span)
 	}
 }
 
 // addSchedulingReplicaSetWithoutLock adds scheduling replica set without lock
-func (c *Controller) addSchedulingReplicaSet(span *replica.SpanReplication, targetNodeID node.ID) {
-	c.allTasks.set(span)
-	c.AddSchedulingReplica(span, targetNodeID)
+func (c *Controller) addSchedulingReplicaSetWithoutLock(span *replica.SpanReplication, targetNodeID node.ID) {
+	c.allTasks[span.ID] = span
+	c.AddSchedulingReplicaWithoutLock(span, targetNodeID)
 	c.addToSchemaAndTableMap(span)
 }
 
@@ -326,9 +392,12 @@ func (c *Controller) ReplaceReplicaSet(
 	checkpointTs uint64,
 	splitTargetNodes []node.ID,
 ) []*replica.SpanReplication {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// 1. check if the old replica set exists
 	for _, old := range oldReplications {
-		if _, ok := c.allTasks.tryGet(old.ID); !ok {
+		if _, ok := c.allTasks[old.ID]; !ok {
 			log.Panic("old replica set not found",
 				zap.String("changefeed", c.changefeedID.Name()),
 				zap.String("span", old.ID.String()))
@@ -337,7 +406,7 @@ func (c *Controller) ReplaceReplicaSet(
 		if checkpointTs > oldCheckpointTs {
 			checkpointTs = oldCheckpointTs
 		}
-		c.removeSpan(old)
+		c.removeSpanWithoutLock(old)
 	}
 
 	// 2. create the new replica set
@@ -355,10 +424,10 @@ func (c *Controller) ReplaceReplicaSet(
 	if len(splitTargetNodes) > 0 && len(splitTargetNodes) == len(news) {
 		// the spans have the target nodes
 		for idx, newSpan := range news {
-			c.addSchedulingReplicaSet(newSpan, splitTargetNodes[idx])
+			c.addSchedulingReplicaSetWithoutLock(newSpan, splitTargetNodes[idx])
 		}
 	} else {
-		c.addAbsentReplicaSet(news...)
+		c.addAbsentReplicaSetWithoutLock(news...)
 	}
 
 	return news
@@ -387,15 +456,34 @@ func (c *Controller) GetSplitter() *split.Splitter {
 // CheckByGroup checks by group
 func (c *Controller) CheckByGroup(groupID pkgreplica.GroupID, batch int) pkgreplica.GroupCheckResult {
 	checker := c.GetGroupChecker(groupID)
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return checker.Check(batch)
+}
+
+// RemoveAll reset the db and return all the replicating and scheduling tasks
+func (c *Controller) RemoveAll() []*replica.SpanReplication {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	tasks := make([]*replica.SpanReplication, 0)
+	tasks = append(tasks, c.GetReplicatingWithoutLock()...)
+	tasks = append(tasks, c.GetSchedulingWithoutLock()...)
+
+	c.reset(c.ddlSpan)
+	return tasks
 }
 
 // RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks
 func (c *Controller) RemoveByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	tasks := make([]*replica.SpanReplication, 0)
 	for _, tblID := range tableIDs {
-		for _, task := range c.tableTasks.get(tblID).values() {
-			c.removeSpan(task)
+		for _, task := range c.tableTasks[tblID] {
+			c.removeSpanWithoutLock(task)
 			if task.IsScheduled() {
 				tasks = append(tasks, task)
 			}
@@ -406,9 +494,12 @@ func (c *Controller) RemoveByTableIDs(tableIDs ...int64) []*replica.SpanReplicat
 
 // RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
 func (c *Controller) RemoveBySchemaID(schemaID int64) []*replica.SpanReplication {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	tasks := make([]*replica.SpanReplication, 0)
-	for _, task := range c.schemaTasks.get(schemaID).values() {
-		c.removeSpan(task)
+	for _, task := range c.schemaTasks[schemaID] {
+		c.removeSpanWithoutLock(task)
 		if task.IsScheduled() {
 			tasks = append(tasks, task)
 		}
@@ -417,15 +508,21 @@ func (c *Controller) RemoveBySchemaID(schemaID int64) []*replica.SpanReplication
 }
 
 // removeSpanWithoutLock removes the spans from the db without lock
-func (c *Controller) removeSpan(spans ...*replica.SpanReplication) {
+func (c *Controller) removeSpanWithoutLock(spans ...*replica.SpanReplication) {
 	for _, span := range spans {
-		c.RemoveReplica(span)
+		c.RemoveReplicaWithoutLock(span)
 
 		tableID := span.Span.TableID
 		schemaID := span.GetSchemaID()
-		c.schemaTasks.getAndDelete(schemaID, span)
-		c.tableTasks.getAndDelete(tableID, span)
-		c.allTasks.delete(span.ID)
+		delete(c.schemaTasks[schemaID], span.ID)
+		delete(c.tableTasks[tableID], span.ID)
+		if len(c.schemaTasks[schemaID]) == 0 {
+			delete(c.schemaTasks, schemaID)
+		}
+		if len(c.tableTasks[tableID]) == 0 {
+			delete(c.tableTasks, tableID)
+		}
+		delete(c.allTasks, span.ID)
 	}
 }
 
@@ -434,9 +531,20 @@ func (c *Controller) addToSchemaAndTableMap(span *replica.SpanReplication) {
 	tableID := span.Span.TableID
 	schemaID := span.GetSchemaID()
 	// modify the schema map
-	c.schemaTasks.set(schemaID, span)
+	schemaMap, ok := c.schemaTasks[schemaID]
+	if !ok {
+		schemaMap = make(map[common.DispatcherID]*replica.SpanReplication)
+		c.schemaTasks[schemaID] = schemaMap
+	}
+	schemaMap[span.ID] = span
+
 	// modify the table map
-	c.tableTasks.set(tableID, span)
+	tableMap, ok := c.tableTasks[tableID]
+	if !ok {
+		tableMap = make(map[common.DispatcherID]*replica.SpanReplication)
+		c.tableTasks[tableID] = tableMap
+	}
+	tableMap[span.ID] = span
 }
 
 // GetAbsentForTest returns absent spans for testing
