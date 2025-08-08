@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -244,8 +245,11 @@ func (s *SharedColumnSchemaStorage) incColumnSchemaCount(columnSchema *columnSch
 //	    	GetSharedColumnSchemaStorage().tryReleaseColumnSchema(ti.ColumnSchema)
 //	   })
 func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableInfo) *columnSchema {
+	start := time.Now()
 	digest := hashTableInfo(tableInfo)
+	log.Info("GetOrSetColumnSchema before lock", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 	s.mutex.Lock()
+	log.Info("GetOrSetColumnSchema after lock", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 	defer s.mutex.Unlock()
 	colSchemas, ok := s.m[digest]
 	if !ok {
@@ -254,12 +258,14 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 		SharedColumnSchemaCountGauge.Inc()
 		s.m[digest] = make([]ColumnSchemaWithCount, 1)
 		s.m[digest][0] = *NewColumnSchemaWithCount(columnSchema)
+		log.Info("create new column schema", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 		return columnSchema
 	} else {
 		for idx, colSchemaWithCount := range colSchemas {
 			// compare tableInfo to check whether the column schema is the same
 			if colSchemaWithCount.columnSchema.SameWithTableInfo(tableInfo) {
 				s.m[digest][idx].count++
+				log.Info("get or set column schema found same column info", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 				return colSchemaWithCount.columnSchema
 			}
 		}
@@ -267,6 +273,7 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 		columnSchema := newColumnSchema(tableInfo, digest)
 		SharedColumnSchemaCountGauge.Inc()
 		s.m[digest] = append(s.m[digest], *NewColumnSchemaWithCount(columnSchema))
+		log.Info("create new column schema", zap.Any("time cost", time.Since(start)), zap.Any("digest", digest))
 		return columnSchema
 	}
 }

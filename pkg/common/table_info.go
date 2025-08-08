@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -454,9 +455,15 @@ func NewTableInfo(schemaName string, tableName string, tableID int64, isPartitio
 
 // WrapTableInfo creates a TableInfo from a model.TableInfo
 func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
+	start := time.Now()
+	defer func() {
+		log.Info("WrapTableInfo cost", zap.Any("time cost", time.Since(start)), zap.Any("schemaName", schemaName), zap.Any("info", info))
+	}()
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
+	log.Info("WrapTableInfo before GetOrSetColumnSchema", zap.Any("time cost", time.Since(start)), zap.Any("schemaName", schemaName), zap.Any("info", info))
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
+	log.Info("WrapTableInfo after GetOrSetColumnSchema", zap.Any("time cost", time.Since(start)), zap.Any("schemaName", schemaName), zap.Any("info", info))
 	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
 }
 

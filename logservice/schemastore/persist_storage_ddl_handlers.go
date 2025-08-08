@@ -16,6 +16,7 @@ package schemastore
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -1303,6 +1304,10 @@ func iterateEventTablesForRemovePartitioning(event *PersistedDDLEvent, apply fun
 // =======
 
 func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	start := time.Now()
+	defer func() {
+		log.Info("extractTableInfoFuncForSingleTableDDL cost", zap.Any("time cost", time.Since(start)), zap.Any("event", event.FinishedTs), zap.Any("tableID", tableID))
+	}()
 	if isPartitionTable(event.TableInfo) {
 		for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
 			if tableID == partitionID {
@@ -1310,6 +1315,7 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 			}
 		}
 	} else {
+		log.Info("extractTableInfoFuncForSingleTableDDL before wrapTableInfo", zap.Any("time cost", time.Since(start)), zap.Any("event", event.FinishedTs), zap.Any("tableID", tableID))
 		if tableID == event.TableID {
 			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
