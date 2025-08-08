@@ -161,47 +161,59 @@ type SharedColumnSchemaStorage struct {
 
 func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indices []*model.IndexInfo) bool {
 	if len(s.Columns) != len(columns) {
+		log.Info("different columns", zap.Any("s.Columns", s.Columns), zap.Any("columns", columns))
 		return false
 	}
 
 	for i, col := range s.Columns {
 		if col.Name.O != columns[i].Name.O {
+			log.Info("different columns", zap.Any("s.Columns", s.Columns), zap.Any("columns", columns))
 			return false
 		}
 		if !col.FieldType.Equal(&columns[i].FieldType) {
+			log.Info("different columns", zap.Any("s.Columns", s.Columns), zap.Any("columns", columns))
 			return false
 		}
 		if col.ID != columns[i].ID {
+			log.Info("different columns", zap.Any("s.Columns", s.Columns), zap.Any("columns", columns))
 			return false
 		}
 		if col.GetDefaultValue() != columns[i].GetDefaultValue() {
+			log.Info("different columns", zap.Any("s.Columns", s.Columns), zap.Any("columns", columns))
 			return false
 		}
 	}
 
 	if len(s.Indices) != len(indices) {
+		log.Info("different indices", zap.Any("s.Indices", s.Indices), zap.Any("indices", indices))
 		return false
 	}
 
 	for i, idx := range s.Indices {
 		if idx.ID != indices[i].ID {
+			log.Info("different indices", zap.Any("s.Indices", s.Indices), zap.Any("indices", indices))
 			return false
 		}
 		if !idx.Name.Equals(indices[i].Name) {
+			log.Info("different indices", zap.Any("s.Indices", s.Indices), zap.Any("indices", indices))
 			return false
 		}
 		if len(idx.Columns) != len(indices[i].Columns) {
+			log.Info("different indices", zap.Any("s.Indices", s.Indices), zap.Any("indices", indices))
 			return false
 		}
 		for j, col := range idx.Columns {
 			if col.Offset != indices[i].Columns[j].Offset {
+				log.Info("different indices", zap.Any("s.Indices", s.Indices), zap.Any("indices", indices))
 				return false
 			}
 		}
 		if idx.Unique != indices[i].Unique {
+			log.Info("different indices", zap.Any("s.Indices", s.Indices), zap.Any("indices", indices))
 			return false
 		}
 		if idx.Primary != indices[i].Primary {
+			log.Info("different indices", zap.Any("s.Indices", s.Indices), zap.Any("indices", indices))
 			return false
 		}
 	}
