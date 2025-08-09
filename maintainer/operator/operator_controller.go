@@ -68,6 +68,7 @@ func NewOperatorController(
 ) *Controller {
 	return &Controller{
 		changefeedID:   changefeedID,
+		batchSize:      batchSize,
 		operators:      make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
 		runningQueue:   make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
 		role:           "maintainer",
