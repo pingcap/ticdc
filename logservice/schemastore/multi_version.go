@@ -112,8 +112,8 @@ func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, er
 		log.Warn("table info deleted",
 			zap.Any("ts", ts),
 			zap.Any("tableID", v.tableID),
-			zap.Any("infos", v.infos),
-			zap.Any("deleteVersion", v.deleteVersion))
+			zap.Any("deleteVersion", v.deleteVersion),
+			zap.Any("infos", v.infos))
 		return nil, &TableDeletedError{}
 	}
 
@@ -124,8 +124,8 @@ func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, er
 		log.Error("no version found",
 			zap.Any("ts", ts),
 			zap.Any("tableID", v.tableID),
-			zap.Any("infos", v.infos),
-			zap.Any("deleteVersion", v.deleteVersion))
+			zap.Any("deleteVersion", v.deleteVersion),
+			zap.Any("infos", v.infos))
 		return nil, errors.New("no version found")
 	}
 	return v.infos[target-1].Info, nil

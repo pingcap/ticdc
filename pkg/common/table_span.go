@@ -25,6 +25,9 @@ type DataRange struct {
 	Span      *heartbeatpb.TableSpan
 	StartTs   uint64
 	EndTs     uint64
+
+	// LastScannedStartTs is the start-ts of the last scanned DML event.
+	LastScannedStartTs uint64
 }
 
 func NewDataRange(clusterID uint64, span *heartbeatpb.TableSpan, startTs, endTs uint64) *DataRange {

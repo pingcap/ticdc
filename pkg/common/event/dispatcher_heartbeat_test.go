@@ -270,3 +270,31 @@ func TestDispatcherHeartbeatResponseWithMultipleStates(t *testing.T) {
 		require.Equal(t, state.DispatcherID, unmarshalledResponse.DispatcherStates[i].DispatcherID)
 	}
 }
+
+func TestCongestionControl(t *testing.T) {
+	t.Parallel()
+
+	control := NewCongestionControl()
+	bytes, err := control.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, len(bytes), control.GetSize())
+
+	var decoded CongestionControl
+	err = decoded.Unmarshal(bytes)
+	require.NoError(t, err)
+	require.Equal(t, control.GetClusterID(), decoded.GetClusterID())
+	require.Equal(t, len(decoded.availables), len(control.availables))
+
+	control.AddAvailableMemory(common.NewGID(), 1024)
+	bytes, err = control.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, len(bytes), control.GetSize())
+
+	err = decoded.Unmarshal(bytes)
+	require.NoError(t, err)
+
+	for idx, item := range control.availables {
+		require.Equal(t, item.Gid, decoded.availables[idx].Gid)
+		require.Equal(t, item.Available, decoded.availables[idx].Available)
+	}
+}

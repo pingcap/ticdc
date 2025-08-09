@@ -24,6 +24,8 @@ import (
 const (
 	DispatcherHeartbeatVersion         = 0
 	DispatcherHeartbeatResponseVersion = 0
+
+	CongestionControlVersion = 1
 )
 
 // DispatcherProgress is used to report the progress of a dispatcher to the EventService
@@ -284,4 +286,102 @@ func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
 		buf.Write(dsData)
 	}
 	return buf.Bytes(), nil
+}
+
+type AvailableMemory struct {
+	Gid       common.GID // GID is the internal representation of ChangeFeedID
+	Available uint64     // in bytes, used to report the Available memory
+}
+
+func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
+	return AvailableMemory{
+		Gid:       gid,
+		Available: available,
+	}
+}
+
+func (m AvailableMemory) Marshal() []byte {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	buf.Write(m.Gid.Marshal())
+	binary.Write(buf, binary.BigEndian, m.Available)
+	return buf.Bytes()
+}
+
+func (m *AvailableMemory) Unmarshal(data []byte) {
+	buf := bytes.NewBuffer(data)
+	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
+	m.Available = binary.BigEndian.Uint64(buf.Next(8))
+}
+
+func (m AvailableMemory) GetSize() int {
+	return m.Gid.GetSize() + 8
+}
+
+type CongestionControl struct {
+	version   byte
+	clusterID uint64
+
+	changefeedCount uint32
+	availables      []AvailableMemory
+}
+
+func NewCongestionControl() *CongestionControl {
+	return &CongestionControl{
+		version: CongestionControlVersion,
+	}
+}
+
+func (c *CongestionControl) GetSize() int {
+	size := 1 // version
+	size += 8 // clusterID
+
+	size += 4 // changefeed count
+	for _, mem := range c.availables {
+		size += mem.GetSize()
+	}
+	return size
+}
+
+func (c *CongestionControl) Marshal() ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	buf.WriteByte(c.version)
+	_ = binary.Write(buf, binary.BigEndian, c.clusterID)
+	_ = binary.Write(buf, binary.BigEndian, c.changefeedCount)
+
+	for _, item := range c.availables {
+		data := item.Marshal()
+		buf.Write(data)
+	}
+	return buf.Bytes(), nil
+}
+
+func (c *CongestionControl) Unmarshal(data []byte) error {
+	buf := bytes.NewBuffer(data)
+	var err error
+	c.version, err = buf.ReadByte()
+	if err != nil {
+		return err
+	}
+	c.clusterID = binary.BigEndian.Uint64(buf.Next(8))
+	c.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
+	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
+	for i := uint32(0); i < c.changefeedCount; i++ {
+		var item AvailableMemory
+		item.Unmarshal(buf.Next(item.GetSize()))
+		c.availables = append(c.availables, item)
+	}
+	return nil
+}
+
+func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64) {
+	c.changefeedCount++
+	c.availables = append(c.availables, NewAvailableMemory(gid, available))
+}
+
+func (c *CongestionControl) GetAvailables() []AvailableMemory {
+	return c.availables
+}
+
+func (c *CongestionControl) GetClusterID() uint64 {
+	return c.clusterID
 }

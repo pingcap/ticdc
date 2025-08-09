@@ -123,15 +123,21 @@ func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
 // SyncProducer returns a Sync SyncProducer,
 // it should be the caller's responsibility to close the producer
 func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
-	p, err := sarama.NewSyncProducer(f.endpoints, f.config)
+	client, err := sarama.NewClient(f.endpoints, f.config)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+
+	p, err := sarama.NewSyncProducerFromClient(client)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
 	return &saramaSyncProducer{
 		id:       f.changefeedID,
+		client:   client,
 		producer: p,
-		closed:   false,
+		closed:   atomic.NewBool(false),
 	}, nil
 }
 
