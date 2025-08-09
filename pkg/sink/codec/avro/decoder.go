@@ -274,9 +274,9 @@ func assembleEvent(
 	event.Length++
 	common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
 
-	rowType := commonEvent.RowTypeInsert
+	rowType := commonType.RowTypeInsert
 	if isDelete {
-		rowType = commonEvent.RowTypeDelete
+		rowType = commonType.RowTypeDelete
 	}
 	event.RowTypes = append(event.RowTypes, rowType)
 	return event, nil

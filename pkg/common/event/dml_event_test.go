@@ -18,6 +18,8 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -41,27 +43,31 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 	e := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, &common.TableInfo{})
 	// append some rows to the event
 	{
+		// mock a chunk to pass e.Rows.GetRow(), otherwise it will panic
+		e.Rows = chunk.NewChunkWithCapacity([]*types.FieldType{types.NewFieldType(mysql.TypeLong)}, 1)
+
 		// insert
 		err := e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypePut,
 			Value:  []byte("value1"),
-		}, mockDecodeRawKVToChunk)
+		}, mockDecodeRawKVToChunk, nil)
 		require.Nil(t, err)
 		// update
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType:   common.OpTypePut,
 			Value:    []byte("value1"),
 			OldValue: []byte("old_value1"),
-		}, mockDecodeRawKVToChunk)
+		}, mockDecodeRawKVToChunk, nil)
 		require.Nil(t, err)
 		// delete
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypeDelete,
-		}, mockDecodeRawKVToChunk)
+		}, mockDecodeRawKVToChunk, nil)
 		require.Nil(t, err)
 	}
 	// TableInfo is not encoded, for test comparison purpose, set it to nil.
 	e.TableInfo = nil
+	e.Rows = nil
 
 	value, err := e.encode()
 	require.Nil(t, err)

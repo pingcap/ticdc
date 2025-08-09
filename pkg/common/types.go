@@ -20,8 +20,10 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
 )
 
 const (
@@ -302,3 +304,28 @@ const (
 	BlackHoleSinkType
 	RedoSinkType
 )
+
+type RowType byte
+
+const (
+	// RowTypeDelete represents a delete row.
+	RowTypeDelete RowType = iota
+	// RowTypeInsert represents a insert row.
+	RowTypeInsert
+	// RowTypeUpdate represents a update row.
+	RowTypeUpdate
+)
+
+func (r RowType) String() string {
+	switch r {
+	case RowTypeDelete:
+		return "delete"
+	case RowTypeInsert:
+		return "insert"
+	case RowTypeUpdate:
+		return "update"
+	default:
+	}
+	log.Panic("RowType: invalid row type", zap.Uint8("rowType", uint8(r)))
+	return ""
+}
