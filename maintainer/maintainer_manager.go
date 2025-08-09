@@ -301,7 +301,6 @@ func (m *Manager) sendHeartbeat() {
 			return true
 		})
 		if len(response.Statuses) != 0 {
-			log.Error("sendHeartbeat MaintainerHeartbeat", zap.Any("status", response.Statuses))
 			m.sendMessages(response)
 		}
 	}
