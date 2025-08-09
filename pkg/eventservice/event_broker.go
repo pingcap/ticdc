@@ -733,14 +733,14 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) error {
 		case <-ticker.C:
 			inActiveDispatchers := make([]*dispatcherStat, 0)
 			c.dispatchers.Range(func(key, value interface{}) bool {
-				//dispatcher := value.(*dispatcherStat)
-				//checkpointTs := dispatcher.checkpointTs.Load()
-				////if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
-				////	c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
-				////}
-				//if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
-				//	inActiveDispatchers = append(inActiveDispatchers, dispatcher)
-				//}
+				dispatcher := value.(*dispatcherStat)
+				checkpointTs := dispatcher.checkpointTs.Load()
+				if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
+					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
+				}
+				if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
+					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
+				}
 				return true
 			})
 

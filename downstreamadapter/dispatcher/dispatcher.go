@@ -471,17 +471,18 @@ func (d *Dispatcher) GetResolvedTs() uint64 {
 }
 
 func (d *Dispatcher) GetCheckpointTs() uint64 {
-	checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
-	if checkpointTs == 0 {
-		// This means the dispatcher has never send events to the sink,
-		// so we use resolvedTs as checkpointTs
-		return d.GetResolvedTs()
-	}
-
-	if isEmpty {
-		return max(checkpointTs, d.GetResolvedTs())
-	}
-	return checkpointTs
+	//checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
+	//if checkpointTs == 0 {
+	//	// This means the dispatcher has never send events to the sink,
+	//	// so we use resolvedTs as checkpointTs
+	//	return d.GetResolvedTs()
+	//}
+	//
+	//if isEmpty {
+	//	return max(checkpointTs, d.GetResolvedTs())
+	//}
+	// 	return checkpointTs
+	return d.GetResolvedTs()
 }
 
 // EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started
