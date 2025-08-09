@@ -114,8 +114,9 @@ func (s *eventScanner) scan(
 	defer sess.recordMetrics()
 
 	log.Info("scanner starts scanning",
-		zap.Int64("tableID", dataRange.Span.TableID), zap.Uint64("startTs", dataRange.StartTs),
-		zap.Uint64("endTs", dataRange.EndTs), zap.Uint64("lastScannedStartTs", dataRange.LastScannedStartTs))
+		zap.Int64("tableID", dataRange.Span.TableID), zap.Stringer("dispatcherID", dispatcherStat.id),
+		zap.Uint64("startTs", dataRange.StartTs), zap.Uint64("endTs", dataRange.EndTs),
+		zap.Uint64("lastScannedStartTs", dataRange.LastScannedStartTs))
 
 	// Fetch DDL events
 	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
