@@ -113,6 +113,10 @@ func (s *eventScanner) scan(
 	sess := newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
 
+	log.Info("scanner starts scanning",
+		zap.Int64("tableID", dataRange.Span.TableID), zap.Uint64("startTs", dataRange.StartTs),
+		zap.Uint64("endTs", dataRange.EndTs), zap.Uint64("lastScannedStartTs", dataRange.LastScannedStartTs))
+
 	// Fetch DDL events
 	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
 	if err != nil {
@@ -198,8 +202,6 @@ func (s *eventScanner) scanAndMergeEvents(
 				return false, err
 			}
 			if tableInfo == nil {
-				log.Warn("table info not found, stop scanning, return nothing",
-					zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID))
 				return false, nil
 			}
 
@@ -248,7 +250,7 @@ func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int6
 	}
 
 	if dispatcher.isRemoved.Load() {
-		log.Warn("get table info failed, since the dispatcher is removed",
+		log.Warn("get table info failed, but the dispatcher is removed from the event service",
 			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
 			zap.Uint64("ts", ts), zap.Error(err))
 		return nil, nil
@@ -257,7 +259,7 @@ func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int6
 	if errors.Is(err, &schemastore.TableDeletedError{}) {
 		log.Warn("get table info failed, since the table is deleted",
 			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-			zap.Uint64("ts", ts), zap.Error(err))
+			zap.Uint64("ts", ts))
 		return nil, nil
 	}
 

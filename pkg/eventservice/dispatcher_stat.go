@@ -183,6 +183,10 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	// Reset the sentResolvedTs to the resetTs.
 	// Because when the dispatcher is reset, the downstream want to resend the events from the resetTs.
 	a.sentResolvedTs.Store(resetTs)
+
+	a.lastScannedCommitTs = resetTs
+	a.lastScannedStartTs = 0
+
 	a.resetTs.Store(resetTs)
 	a.seq.Store(0)
 
