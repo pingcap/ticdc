@@ -329,7 +329,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		},
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
-		}, n, taskScheduler, nil, 10, true)
+		}, n, taskScheduler, 10, true)
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
 		func(ctx context.Context, msg *messaging.TargetMessage) error {
