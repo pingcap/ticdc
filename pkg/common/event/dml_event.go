@@ -339,7 +339,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error),
 ) error {
 	rowType := RowTypeInsert
-	if raw.OpType == common.OpTypeDelete {
+	if raw.IsDelete() {
 		rowType = RowTypeDelete
 	}
 	if raw.IsUpdate() {
@@ -349,17 +349,21 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if err != nil {
 		return err
 	}
-	for range count {
-		t.RowTypes = append(t.RowTypes, rowType)
+	if count > 0 {
+		for range count {
+			t.RowTypes = append(t.RowTypes, rowType)
 
-		keyCopy := make([]byte, len(raw.Key))
-		copy(keyCopy, raw.Key)
-		t.RowKeys = append(t.RowKeys, keyCopy)
-	}
-	t.Length += 1
-	t.ApproximateSize += raw.GetSize()
-	if checksum != nil {
-		t.Checksum = append(t.Checksum, checksum)
+			keyCopy := make([]byte, len(raw.Key))
+			copy(keyCopy, raw.Key)
+			t.RowKeys = append(t.RowKeys, keyCopy)
+		}
+		t.Length += 1
+		t.ApproximateSize += raw.GetSize()
+		if checksum != nil {
+			t.Checksum = append(t.Checksum, checksum)
+		}
+	} else {
+		log.Panic("DMLEvent.AppendRow: no rows decoded from the raw KV entry", zap.Any("raw", raw))
 	}
 	return nil
 }

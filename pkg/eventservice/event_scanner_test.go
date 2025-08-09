@@ -43,7 +43,11 @@ func makeDispatcherReady(disp *dispatcherStat) {
 }
 
 func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
-	return 0, nil, nil
+	if rawKV.IsUpdate() {
+		return 2, nil, nil
+	} else {
+		return 1, nil, nil
+	}
 }
 
 func TestEventScanner(t *testing.T) {
