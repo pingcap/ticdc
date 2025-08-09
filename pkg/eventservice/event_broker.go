@@ -398,10 +398,17 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
+		now := time.Now().Unix()
+		lastSendTime := task.lastReadySendTime.Load()
+		// Skip if the interval since last send is less than 10 seconds
+		if now-lastSendTime < 10 {
+			return false
+		}
 		remoteID := node.ID(task.info.GetServerID())
 		event := pevent.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex) <- wrapEvent
+		task.lastReadySendTime.Store(now)
 		metricEventServiceSendCommandCount.Inc()
 		return false
 	}
