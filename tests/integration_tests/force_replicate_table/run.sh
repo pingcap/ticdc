@@ -52,10 +52,10 @@ function run() {
 
 	cd $WORK_DIR
 
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
-
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-force_replicate_table-test-$RANDOM"
 	case $SINK_TYPE in
@@ -68,7 +68,7 @@ function run() {
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?safe-mode=true" ;;
 	esac
 
-	cdc cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config $CUR/conf/changefeed.toml
+	create_changefeed --start-ts=$start_ts --sink-uri="$SINK_URI" --config $CUR/conf/changefeed.toml
 
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml ;;

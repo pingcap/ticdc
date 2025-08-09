@@ -25,10 +25,10 @@ function run() {
 
 	cd $WORK_DIR
 
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	# this test contains `recover table`, which requires super privilege, so we
 	# can't use the normal user
@@ -50,9 +50,9 @@ function run() {
         auth-tls-private-key-path="${WORK_DIR}/broker_client.key-pk8.pem"
         auth-tls-certificate-path="${WORK_DIR}/broker_client.cert.pem"
 EOF
-		cdc cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config=$WORK_DIR/pulsar_test.toml
+		create_changefeed --start-ts=$start_ts --sink-uri="$SINK_URI" --config=$WORK_DIR/pulsar_test.toml
 	else
-		cdc cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+		create_changefeed --start-ts=$start_ts --sink-uri="$SINK_URI"
 	fi
 
 	case $SINK_TYPE in

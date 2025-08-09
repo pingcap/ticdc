@@ -24,14 +24,14 @@ function run() {
 
 	cd $WORK_DIR
 
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_sql "CREATE DATABASE sink_retry;"
 	go-ycsb load mysql -P $CUR/conf/workload -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=sink_retry
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkTxnRandomError=25%return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	create_changefeed --start-ts=$start_ts --sink-uri="$SINK_URI"
 
 	run_sql "CREATE TABLE sink_retry.finish_mark_1 (a int primary key);"
 	sleep 30
