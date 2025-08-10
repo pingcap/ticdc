@@ -202,7 +202,12 @@ func (s *eventScanner) scanAndMergeEvents(
 			if err != nil {
 				return false, err
 			}
+			// table is deleted, still append remaining DDL event and resolved event.
 			if tableInfo == nil {
+				events := merger.resolveDDLEvents(session.dataRange.EndTs)
+				resolve := event.NewResolvedEvent(session.dataRange.EndTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
+				events = append(events, resolve)
+				session.appendEvents(events)
 				return false, nil
 			}
 
@@ -346,29 +351,6 @@ func interruptScan(
 		events = append(events, resolve)
 	}
 	session.appendEvents(events)
-
-	if newCommitTs != merger.lastCommitTs {
-		log.Info("scan interrupted due to limit, also print resolved event",
-			zap.Stringer("dispatcherID", session.dispatcherStat.id),
-			zap.Int64("tableID", session.dataRange.Span.TableID),
-			zap.Uint64("startTs", session.dataRange.StartTs),
-			zap.Uint64("endTs", session.dataRange.EndTs),
-			zap.Uint64("lastCommitTs", merger.lastCommitTs),
-			zap.Uint64("newCommitTs", newCommitTs),
-			zap.Int("scannedEntryCount", session.scannedEntryCount),
-			zap.Int64("eventBytes", session.eventBytes),
-			zap.Int("txnCount", session.dmlCount))
-	} else {
-		log.Info("scan interrupted due to limit, no resolved event",
-			zap.Stringer("dispatcherID", session.dispatcherStat.id),
-			zap.Int64("tableID", session.dataRange.Span.TableID),
-			zap.Uint64("startTs", session.dataRange.StartTs),
-			zap.Uint64("endTs", session.dataRange.EndTs),
-			zap.Uint64("lastCommitTs", merger.lastCommitTs),
-			zap.Int("scannedEntryCount", session.scannedEntryCount),
-			zap.Int64("eventBytes", session.eventBytes),
-			zap.Int("txnCount", session.dmlCount))
-	}
 }
 
 // session manages the state and context of a scan operation
