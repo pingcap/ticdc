@@ -640,12 +640,9 @@
           },
           "type": "graph",
           "title": "Memory Quota",
-          "datasource": {
-            "uid": "aC208JH4z",
-            "type": "prometheus"
-          },
+          "datasource": "${DS_TEST-CLUSTER}",
           "thresholds": [],
-          "pluginVersion": "9.2.4",
+          "pluginVersion": "7.5.17",
           "description": "Changefeed memory quota",
           "legend": {
             "alignAsTable": true,
@@ -675,13 +672,7 @@
               "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component=~\"event-collector\", instance=~\"$ticdc_instance\"}",
               "interval": "",
               "legendFormat": "{{area}}-{{instance}}-memory-{{component}}-{{type}}",
-              "refId": "A",
-              "datasource": {
-                "uid": "aC208JH4z",
-                "type": "prometheus"
-              },
-              "editorMode": "code",
-              "range": true
+              "refId": "A"
             }
           ],
           "timeRegions": [],
