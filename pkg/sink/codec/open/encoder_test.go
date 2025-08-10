@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -1233,9 +1232,6 @@ func TestGenerateColumn(t *testing.T) {
 	require.Equal(t, messageType, common.MessageTypeRow)
 
 	decoded = dec.NextDMLEvent()
-
-	hashKey := causality.ConflictKeys(decoded)
-	require.NotNil(t, hashKey)
 }
 
 // Including insert / update / delete

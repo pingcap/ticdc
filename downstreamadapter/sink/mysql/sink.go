@@ -98,11 +98,13 @@ func newMySQLSink(
 		db:           db,
 		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
 		statistics:   stat,
-		conflictDetector: causality.New(defaultConflictDetectorSlots, causality.TxnCacheOption{
-			Count:         cfg.WorkerCount,
-			Size:          1024,
-			BlockStrategy: causality.BlockStrategyWaitEmpty,
-		}),
+		conflictDetector: causality.New(defaultConflictDetectorSlots,
+			causality.TxnCacheOption{
+				Count:         cfg.WorkerCount,
+				Size:          1024,
+				BlockStrategy: causality.BlockStrategyWaitEmpty,
+			},
+			changefeedID),
 		isNormal:   atomic.NewBool(true),
 		maxTxnRows: cfg.MaxTxnRow,
 	}

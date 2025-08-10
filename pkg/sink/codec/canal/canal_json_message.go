@@ -128,6 +128,7 @@ type tidbExtension struct {
 	WatermarkTs        uint64 `json:"watermarkTs,omitempty"`
 	OnlyHandleKey      bool   `json:"onlyHandleKey,omitempty"`
 	ClaimCheckLocation string `json:"claimCheckLocation,omitempty"`
+	RowKey             string `json:"rowkey,omitempty"`
 }
 
 type canalJSONMessageWithTiDBExtension struct {
@@ -141,4 +142,8 @@ type canalJSONMessageWithTiDBExtension struct {
 
 func (c *canalJSONMessageWithTiDBExtension) getCommitTs() uint64 {
 	return c.Extensions.CommitTs
+}
+
+func (c *canalJSONMessageWithTiDBExtension) getRowKey() string {
+	return c.Extensions.RowKey
 }
