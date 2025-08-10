@@ -351,7 +351,7 @@ func (e *eventStore) RegisterDispatcher(
 	bdrMode bool,
 ) bool {
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
-	if lag >= 10 {
+	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
