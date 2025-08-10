@@ -61,7 +61,7 @@ type dispatcherStat struct {
 	latestCommitTs atomic.Uint64
 
 	// The last scanned DML event start-ts.
-	lastScannedCommitTs uint64
+	lastScannedCommitTs atomic.Uint64
 	lastScannedStartTs  uint64
 	// The sentResolvedTs of the events that have been sent to the dispatcher.
 	// We use this value to generate data range for the next scan task.
@@ -184,7 +184,7 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	// Because when the dispatcher is reset, the downstream want to resend the events from the resetTs.
 	a.sentResolvedTs.Store(resetTs)
 
-	a.lastScannedCommitTs = resetTs
+	a.lastScannedCommitTs.Store(resetTs)
 	a.lastScannedStartTs = 0
 
 	a.resetTs.Store(resetTs)
@@ -215,7 +215,7 @@ func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
 
 // getDataRange returns the data range that the dispatcher needs to scan.
 func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
-	startTs := a.lastScannedCommitTs
+	startTs := a.lastScannedCommitTs.Load()
 	resetTs := a.resetTs.Load()
 	if startTs < resetTs {
 		log.Warn("resetTs is greater than startTs, set startTs as the resetTs",

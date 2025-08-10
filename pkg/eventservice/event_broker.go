@@ -201,7 +201,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastStartTs = dml.GetStartTs()
 		lastCommitTs = dml.GetCommitTs()
 	}
-	d.lastScannedCommitTs = lastCommitTs
+	d.lastScannedCommitTs.Store(lastCommitTs)
 	d.lastScannedStartTs = lastStartTs
 	log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id),
 		zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
@@ -285,26 +285,30 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 			return context.Cause(ctx)
 		case <-ticker.C:
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
-				dispatcherStat := value.(*dispatcherStat)
-				if !c.checkAndSendReady(dispatcherStat) {
+				stat := value.(*dispatcherStat)
+				if !c.checkAndSendReady(stat) {
 					return true
 				}
-				c.sendHandshakeIfNeed(dispatcherStat)
-				startTs := dispatcherStat.sentResolvedTs.Load()
-				remoteID := node.ID(dispatcherStat.info.GetServerID())
+				c.sendHandshakeIfNeed(stat)
+				lastCommitTs := stat.lastScannedCommitTs.Load()
+				startTs := stat.sentResolvedTs.Load()
+				remoteID := node.ID(stat.info.GetServerID())
 				// TODO: maybe limit 1 is enough.
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(dispatcherStat.filter, startTs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.filter, startTs, 100)
 				if err != nil {
-					log.Error("table trigger ddl events fetch failed", zap.Stringer("dispatcher", dispatcherStat.id), zap.Error(err))
+					log.Error("table trigger ddl events fetch failed", zap.Stringer("dispatcher", stat.id), zap.Error(err))
 					return true
 				}
 				for _, e := range ddlEvents {
 					ep := &e
-					c.sendDDL(ctx, remoteID, ep, dispatcherStat)
+					c.sendDDL(ctx, remoteID, ep, stat)
 				}
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
-					c.sendResolvedTs(dispatcherStat, endTs)
+					log.Info("send resolved tickTableTriggerDispatchers",
+						zap.Stringer("dispatcher", stat.id), zap.Uint64("resolvedTs", endTs),
+						zap.Uint64("startTs", startTs), zap.Uint64("lastCommitTs", lastCommitTs))
+					c.sendResolvedTs(stat, endTs)
 				}
 				return true
 			})
@@ -370,6 +374,10 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		dataRange.StartTs >= ddlState.MaxEventCommitTs {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
+		log.Info("send resolved ts by getScanTaskDataRange",
+			zap.Stringer("dispatcher", task.id), zap.Uint64("resolvedTs", dataRange.EndTs),
+			zap.Uint64("StartTs", dataRange.StartTs), zap.Uint64("latestCommitTs", task.latestCommitTs.Load()),
+			zap.Uint64("MaxEventCommitTs", ddlState.MaxEventCommitTs))
 		c.sendResolvedTs(task, dataRange.EndTs)
 		return false, common.DataRange{}
 	}
@@ -400,7 +408,9 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 		// If the dispatcher is not ready to receive data event,
 		// we still need to send the last resolvedTs to the dispatcher.
 		resolvedTs := task.sentResolvedTs.Load()
-		c.sendResolvedTs(task, resolvedTs)
+		log.Info("send resolved ts by scan not ready",
+			zap.Stringer("dispatcher", task.id), zap.Uint64("resolvedTs", resolvedTs))
+		log.Info("")
 		return false
 	}
 
@@ -589,6 +599,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			if !ok {
 				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
+			log.Info("send resolved ts by scan",
+				zap.Stringer("dispatcher", task.id), zap.Uint64("resolvedTs", re.ResolvedTs))
 			c.sendResolvedTs(task, re.ResolvedTs)
 		default:
 			log.Panic("unknown event type", zap.Any("event", e))
