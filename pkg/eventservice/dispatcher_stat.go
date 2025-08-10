@@ -62,7 +62,8 @@ type dispatcherStat struct {
 
 	// The last scanned DML event start-ts.
 	lastScannedCommitTs atomic.Uint64
-	lastScannedStartTs  uint64
+	lastScannedStartTs  atomic.Uint64
+
 	// The sentResolvedTs of the events that have been sent to the dispatcher.
 	// We use this value to generate data range for the next scan task.
 	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
@@ -172,6 +173,8 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 	// Only update the sentResolvedTs when the dispatcher is handshaked.
 	if a.isHandshaked.Load() {
 		a.sentResolvedTs.Store(resolvedTs)
+		a.lastScannedCommitTs.Store(resolvedTs)
+		a.lastScannedStartTs.Store(0)
 		a.lastSentResolvedTsTime.Store(time.Now())
 	}
 }
@@ -185,7 +188,7 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.sentResolvedTs.Store(resetTs)
 
 	a.lastScannedCommitTs.Store(resetTs)
-	a.lastScannedStartTs = 0
+	a.lastScannedStartTs.Store(0)
 
 	a.resetTs.Store(resetTs)
 	a.seq.Store(0)
@@ -236,7 +239,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 		Span:               a.info.GetTableSpan(),
 		StartTs:            startTs,
 		EndTs:              resolvedTs,
-		LastScannedStartTs: a.lastScannedStartTs,
+		LastScannedStartTs: a.lastScannedStartTs.Load(),
 	}
 	return r, true
 }

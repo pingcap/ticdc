@@ -112,8 +112,8 @@ func TestOnNotify(t *testing.T) {
 	err := broker.addDispatcher(disInfo)
 	require.NoError(t, err)
 
-	disp, ok := broker.getDispatcher(disInfo.GetID())
-	require.True(t, ok)
+	disp := broker.getDispatcher(disInfo.GetID())
+	require.NotNil(t, disp)
 	require.Equal(t, disp.id, disInfo.GetID())
 
 	broker.resetDispatcher(disInfo)
@@ -175,35 +175,34 @@ func TestCURDDispatcher(t *testing.T) {
 	dispInfo := newMockDispatcherInfoForTest(t)
 	// Case 1: Add and get a dispatcher.
 	broker.addDispatcher(dispInfo)
-	disp, ok := broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
+	disp := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 
 	// Case 2: Reset a dispatcher.
 	dispInfo.startTs = 1002
 	broker.resetDispatcher(dispInfo)
-	disp, ok = broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
+	disp = broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 	// Check the resetTs is updated.
 	require.Equal(t, disp.resetTs.Load(), dispInfo.GetStartTs())
 
 	// Case 3: Pause a dispatcher.
 	broker.pauseDispatcher(dispInfo)
-	disp, ok = broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
+	disp = broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
 	require.False(t, disp.isReadyReceivingData.Load())
 
 	// Case 4: Resume a dispatcher.
 	broker.resumeDispatcher(dispInfo)
-	disp, ok = broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
+	disp = broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
 	require.True(t, disp.isReadyReceivingData.Load())
 
 	// Case 5: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
-	disp, ok = broker.getDispatcher(dispInfo.GetID())
-	require.False(t, ok)
+	disp = broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, disp)
 }
 
@@ -213,8 +212,8 @@ func TestHandleResolvedTs(t *testing.T) {
 
 	dispInfo := newMockDispatcherInfoForTest(t)
 	broker.addDispatcher(dispInfo)
-	disp, ok := broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
+	disp := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 
 	mc := broker.msgSender.(*mockMessageCenter)

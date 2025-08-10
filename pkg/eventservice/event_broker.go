@@ -241,9 +241,6 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	)
 	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
-	if d.lastScannedStartTs != 0 {
-		d.lastScannedStartTs = 0
-	}
 	metricEventServiceSendResolvedTsCount.Inc()
 }
 
@@ -290,7 +287,6 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					return true
 				}
 				c.sendHandshakeIfNeed(stat)
-				lastCommitTs := stat.lastScannedCommitTs.Load()
 				startTs := stat.sentResolvedTs.Load()
 				remoteID := node.ID(stat.info.GetServerID())
 				// TODO: maybe limit 1 is enough.
@@ -307,7 +303,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					// After all the events are sent, we send the watermark to the dispatcher.
 					log.Info("send resolved tickTableTriggerDispatchers",
 						zap.Stringer("dispatcher", stat.id), zap.Uint64("resolvedTs", endTs),
-						zap.Uint64("startTs", startTs), zap.Uint64("lastCommitTs", lastCommitTs))
+						zap.Uint64("startTs", startTs), zap.Uint64("lastCommitTs", stat.lastScannedCommitTs.Load()))
 					c.sendResolvedTs(stat, endTs)
 				}
 				return true
