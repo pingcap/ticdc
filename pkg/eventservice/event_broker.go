@@ -202,7 +202,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastCommitTs = dml.GetCommitTs()
 	}
 	d.lastScannedCommitTs.Store(lastCommitTs)
-	d.lastScannedStartTs = lastStartTs
+	d.lastScannedStartTs.Store(lastStartTs)
 	log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id),
 		zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	doSendDML(batchEvent)
