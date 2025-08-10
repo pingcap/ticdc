@@ -631,19 +631,22 @@
           }
         },
         {
-          "id": 719,
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Changefeed memory quota",
+          "fill": 0,
+          "fillGradient": 0,
           "gridPos": {
             "h": 6,
             "w": 12,
             "x": 12,
             "y": 13
           },
-          "type": "graph",
-          "title": "Memory Quota",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "thresholds": [],
-          "pluginVersion": "7.5.17",
-          "description": "Changefeed memory quota",
+          "hiddenSeries": false,
+          "id": 719,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -654,18 +657,21 @@
             "total": false,
             "values": true
           },
-          "aliasColors": {},
-          "dashLength": 10,
           "lines": true,
           "linewidth": 1,
           "nullPointMode": "null",
           "options": {
             "alertThreshold": true
           },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
           "pointradius": 2,
+          "points": false,
           "renderer": "flot",
           "seriesOverrides": [],
           "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
           "targets": [
             {
               "exemplar": true,
@@ -675,12 +681,17 @@
               "refId": "A"
             }
           ],
+          "thresholds": [],
+          "timeFrom": null,
           "timeRegions": [],
+          "timeShift": null,
+          "title": "Memory Quota",
           "tooltip": {
             "shared": true,
             "sort": 0,
             "value_type": "individual"
           },
+          "type": "graph",
           "xaxis": {
             "buckets": null,
             "mode": "time",
@@ -704,17 +715,10 @@
           "yaxis": {
             "align": false
           },
-          "bars": false,
-          "dashes": false,
-          "fill": 0,
-          "fillGradient": 0,
-          "hiddenSeries": false,
-          "percentage": false,
-          "points": false,
-          "stack": false,
-          "steppedLine": false,
-          "timeFrom": null,
-          "timeShift": null
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          }
         }
       ],
       "title": "Summary",
@@ -6311,19 +6315,22 @@
           "yBucketSize": null
         },
         {
-          "id": 22291,
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Log puller memory quota",
+          "fill": 0,
+          "fillGradient": 0,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
             "y": 16
           },
-          "type": "graph",
-          "title": "Memory Quota",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "thresholds": [],
-          "pluginVersion": "7.5.17",
-          "description": "Log puller memory quota",
+          "hiddenSeries": false,
+          "id": 22291,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -6334,18 +6341,21 @@
             "total": false,
             "values": true
           },
-          "aliasColors": {},
-          "dashLength": 10,
           "lines": true,
           "linewidth": 1,
           "nullPointMode": "null",
           "options": {
             "alertThreshold": true
           },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
           "pointradius": 2,
+          "points": false,
           "renderer": "flot",
           "seriesOverrides": [],
           "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
           "targets": [
             {
               "exemplar": true,
@@ -6355,12 +6365,17 @@
               "refId": "A"
             }
           ],
+          "thresholds": [],
+          "timeFrom": null,
           "timeRegions": [],
+          "timeShift": null,
+          "title": "Memory Quota",
           "tooltip": {
             "shared": true,
             "sort": 0,
             "value_type": "individual"
           },
+          "type": "graph",
           "xaxis": {
             "buckets": null,
             "mode": "time",
@@ -6370,33 +6385,26 @@
           },
           "yaxes": [
             {
+              "$$hashKey": "object:178",
               "format": "bytes",
               "logBase": 1,
               "min": "0",
-              "show": true,
-              "$$hashKey": "object:178"
+              "show": true
             },
             {
+              "$$hashKey": "object:179",
               "format": "short",
               "logBase": 1,
-              "show": false,
-              "$$hashKey": "object:179"
+              "show": false
             }
           ],
           "yaxis": {
             "align": false
           },
-          "bars": false,
-          "dashes": false,
-          "fill": 0,
-          "fillGradient": 0,
-          "hiddenSeries": false,
-          "percentage": false,
-          "points": false,
-          "stack": false,
-          "steppedLine": false,
-          "timeFrom": null,
-          "timeShift": null
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          }
         }
       ],
       "title": "Log Puller",
