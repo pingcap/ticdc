@@ -6320,75 +6320,65 @@
           "yBucketSize": null
         },
         {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Sink worker busy ratio",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
+          "id": 22291,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
             "y": 16
           },
-          "hiddenSeries": false,
-          "id": 12048,
+          "type": "graph",
+          "title": "Memory Quota",
+          "datasource": {
+            "uid": "aC208JH4z",
+            "type": "prometheus"
+          },
+          "thresholds": [],
+          "pluginVersion": "9.2.4",
+          "description": "Log puller memory quota",
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
-            "rightSide": true,
             "show": true,
-            "sort": "current",
-            "sortDesc": true,
             "total": false,
             "values": true
           },
+          "aliasColors": {},
+          "dashLength": 10,
           "lines": true,
           "linewidth": 1,
           "nullPointMode": "null",
           "options": {
             "alertThreshold": true
           },
-          "percentage": false,
-          "pluginVersion": "7.5.17",
           "pointradius": 2,
-          "points": false,
           "renderer": "flot",
           "seriesOverrides": [],
           "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_kvclient_worker_process_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"EventStore\"}[1m])) by (namespace,changefeed,instance, type, id) / sum(rate(ticdc_kvclient_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"EventStore\"}[1m])) by (namespace,changefeed,instance, type, id) *100",
+              "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component=~\"log-puller\", instance=~\"$ticdc_instance\"}",
               "interval": "",
-              "legendFormat": "{{instance}}-worker-{{type}}-{{id}}",
-              "queryType": "randomWalk",
-              "refId": "A"
+              "legendFormat": "{{area}}-{{instance}}-memory-{{component}}-{{type}}",
+              "refId": "A",
+              "datasource": {
+                "uid": "aC208JH4z",
+                "type": "prometheus"
+              },
+              "editorMode": "code",
+              "range": true
             }
           ],
-          "thresholds": [],
-          "timeFrom": null,
           "timeRegions": [],
-          "timeShift": null,
-          "title": "KV Client Region Worker Busy Ratio",
           "tooltip": {
             "shared": true,
             "sort": 0,
             "value_type": "individual"
           },
-          "type": "graph",
           "xaxis": {
             "buckets": null,
             "mode": "time",
@@ -6398,26 +6388,33 @@
           },
           "yaxes": [
             {
-              "format": "percent",
-              "label": null,
+              "format": "bytes",
               "logBase": 1,
-              "max": null,
               "min": "0",
-              "show": true
+              "show": true,
+              "$$hashKey": "object:178"
             },
             {
               "format": "short",
-              "label": null,
               "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": false
+              "show": false,
+              "$$hashKey": "object:179"
             }
           ],
           "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
+            "align": false
+          },
+          "bars": false,
+          "dashes": false,
+          "fill": 0,
+          "fillGradient": 0,
+          "hiddenSeries": false,
+          "percentage": false,
+          "points": false,
+          "stack": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null
         }
       ],
       "title": "Log Puller",
