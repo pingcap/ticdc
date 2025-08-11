@@ -200,15 +200,15 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.DDLEvent, d *dispatcherStat) {
+	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+	e.DispatcherID = d.id
+	e.Seq = d.seq.Add(1)
+	e.Epoch = d.epoch.Load()
 	// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
 	// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
 	if d.info.GetBdrMode() && e.BDRMode != string(ast.BDRRolePrimary) {
 		return
 	}
-	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
-	e.DispatcherID = d.id
-	e.Seq = d.seq.Add(1)
-	e.Epoch = d.epoch.Load()
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
