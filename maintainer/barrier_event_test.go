@@ -123,8 +123,8 @@ func TestResendAction(t *testing.T) {
 
 	// resend write action
 	event.selected.Store(true)
-	event.writerDispatcherAdvanced = false
-	event.writerDispatcher = dispatcherIDs[0]
+	event.writerDispatcherAdvanced.Store(false)
+	event.writerDispatcher.set(dispatcherIDs[0])
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 
@@ -137,7 +137,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
-	event.writerDispatcherAdvanced = true
+	event.writerDispatcherAdvanced.Store(true)
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -155,7 +155,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
-	event.writerDispatcherAdvanced = true
+	event.writerDispatcherAdvanced.Store(true)
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -174,7 +174,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
-	event.writerDispatcherAdvanced = true
+	event.writerDispatcherAdvanced.Store(true)
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
