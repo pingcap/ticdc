@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -199,6 +200,11 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.DDLEvent, d *dispatcherStat) {
+	// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
+	// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
+	if d.info.GetBdrMode() && e.BDRMode != string(ast.BDRRolePrimary) {
+		return
+	}
 	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)

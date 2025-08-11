@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -385,15 +384,6 @@ func (d *Dispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 }
 
 func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
-	// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
-	// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
-	if d.bdrMode {
-		ddl, ok := event.(*commonEvent.DDLEvent)
-		if ok && ddl.BDRMode != string(ast.BDRRolePrimary) {
-			d.PassBlockEventToSink(event)
-			return nil
-		}
-	}
 	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
 }
