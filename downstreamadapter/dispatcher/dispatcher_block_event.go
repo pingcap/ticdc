@@ -148,14 +148,7 @@ func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
 		err := d.AddBlockEventToSink(event)
 		if err != nil {
-			select {
-			case d.errCh <- err:
-			default:
-				log.Error("error channel is full, discard error",
-					zap.Stringer("changefeedID", d.changefeedID),
-					zap.Stringer("dispatcherID", d.id),
-					zap.Error(err))
-			}
+			d.HandleError(err)
 			return
 		}
 		if event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil {
