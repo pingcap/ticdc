@@ -637,11 +637,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "Changefeed memory quota",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
+          "fill": 0,
           "fillGradient": 0,
           "gridPos": {
             "h": 6,
@@ -679,7 +675,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component!=\"\", instance=~\"$ticdc_instance\"}",
+              "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component=~\"event-collector\", instance=~\"$ticdc_instance\"}",
               "interval": "",
               "legendFormat": "{{area}}-{{instance}}-memory-{{component}}-{{type}}",
               "refId": "A"
@@ -718,6 +714,10 @@
           ],
           "yaxis": {
             "align": false
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
           }
         }
       ],
@@ -6320,12 +6320,8 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Sink worker busy ratio",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
+          "description": "Log puller memory quota",
+          "fill": 0,
           "fillGradient": 0,
           "gridPos": {
             "h": 8,
@@ -6334,17 +6330,14 @@
             "y": 16
           },
           "hiddenSeries": false,
-          "id": 12048,
+          "id": 22291,
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
-            "rightSide": true,
             "show": true,
-            "sort": "current",
-            "sortDesc": true,
             "total": false,
             "values": true
           },
@@ -6366,10 +6359,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_kvclient_worker_process_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"EventStore\"}[1m])) by (namespace,changefeed,instance, type, id) / sum(rate(ticdc_kvclient_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"EventStore\"}[1m])) by (namespace,changefeed,instance, type, id) *100",
+              "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component=~\"log-puller\", instance=~\"$ticdc_instance\"}",
               "interval": "",
-              "legendFormat": "{{instance}}-worker-{{type}}-{{id}}",
-              "queryType": "randomWalk",
+              "legendFormat": "{{area}}-{{instance}}-memory-{{component}}-{{type}}",
               "refId": "A"
             }
           ],
@@ -6377,7 +6369,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV Client Region Worker Busy Ratio",
+          "title": "Memory Quota",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -6393,25 +6385,25 @@
           },
           "yaxes": [
             {
-              "format": "percent",
-              "label": null,
+              "$$hashKey": "object:178",
+              "format": "bytes",
               "logBase": 1,
-              "max": null,
               "min": "0",
               "show": true
             },
             {
+              "$$hashKey": "object:179",
               "format": "short",
-              "label": null,
               "logBase": 1,
-              "max": null,
-              "min": null,
               "show": false
             }
           ],
           "yaxis": {
-            "align": false,
-            "alignLevel": null
+            "align": false
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
           }
         }
       ],
