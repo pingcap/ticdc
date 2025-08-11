@@ -397,6 +397,8 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 	if !task.IsReadyRecevingData() {
 		// If the dispatcher is not ready to receive data event,
 		// we still need to send the last resolvedTs to the dispatcher.
+		resolvedTs := task.sentResolvedTs.Load()
+		c.sendResolvedTs(task, resolvedTs)
 		return false
 	}
 
