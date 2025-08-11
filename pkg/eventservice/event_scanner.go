@@ -217,8 +217,13 @@ func (s *eventScanner) scanAndMergeEvents(
 		}
 
 		if isNewTxn {
-			if err = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
+			tableDeleted := false
+			if err, tableDeleted = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
 				return nil, false, err
+			}
+			if tableDeleted {
+				events, err := s.finalizeScan(session, merger, processor)
+				return events, false, err
 			}
 			continue
 		}
@@ -250,13 +255,14 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 }
 
 // handleNewTransaction processes a new transaction event, and append the rawEvent to it.
+// It returns an unhandled error along with a boolean flag indicating whether the table was deleted.
 func (s *eventScanner) handleNewTransaction(
 	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
 	rawEvent *common.RawKVEntry,
 	tableID int64,
-) error {
+) (error, bool) {
 	// Get table info
 	tableInfo, err := s.schemaGetter.GetTableInfo(tableID, rawEvent.CRTs-1)
 	if err != nil {
@@ -268,14 +274,15 @@ func (s *eventScanner) handleNewTransaction(
 					zap.Stringer("dispatcherID", session.dispatcherStat.id),
 					zap.Int64("tableID", tableID),
 					zap.Uint64("getTableInfoStartTs", rawEvent.CRTs-1))
-				return returnErr
+				return returnErr, false
 			}
 			// For table deleted case, we need to append remaining DDLs
 			if errors.Is(err, &schemastore.TableDeletedError{}) {
 				remainingEvents := merger.appendRemainingDDLs(session.dataRange.EndTs)
 				session.events = append(session.events, remainingEvents...)
+				return nil, true
 			}
-			return nil
+			return nil, false
 		}
 	}
 
@@ -289,12 +296,12 @@ func (s *eventScanner) handleNewTransaction(
 
 	// Process new transaction
 	if err = processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id); err != nil {
-		return err
+		return err, false
 	}
 
 	session.lastCommitTs = rawEvent.CRTs
 	session.dmlCount++
-	return nil
+	return nil, false
 }
 
 // finalizeScan finalizes the scan when all events have been processed
