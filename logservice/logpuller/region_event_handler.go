@@ -128,7 +128,7 @@ func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) 
 }
 
 func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {
-	if event.entries != nil {
+	if event.entries != nil && event.entries.Entries != nil && len(event.entries.Entries.GetEntries()) > 0 {
 		entries := event.entries.Entries.GetEntries()
 		switch entries[0].Type {
 		case cdcpb.Event_INITIALIZED:
