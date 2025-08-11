@@ -692,9 +692,6 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	var start []byte
 	if dataRange.LastScannedStartTs != 0 {
 		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.StartTs, dataRange.LastScannedStartTs+1)
-		log.Warn("set start ts for iterator",
-			zap.Int64("tableID", stat.tableSpan.TableID),
-			zap.Uint64("startTs", dataRange.StartTs), zap.Uint64("lastTs", dataRange.LastScannedStartTs+1))
 	} else {
 		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.StartTs+1)
 	}

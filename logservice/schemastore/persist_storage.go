@@ -314,21 +314,19 @@ func (p *persistentStorage) registerTable(tableID int64, startTs uint64) error {
 	return nil
 }
 
-func (p *persistentStorage) unregisterTable(tableID int64) {
+func (p *persistentStorage) unregisterTable(tableID int64) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.tableRegisteredCount[tableID] -= 1
-
-	if p.tableRegisteredCount[tableID] > 0 {
-		return
+	if p.tableRegisteredCount[tableID] <= 0 {
+		if _, ok := p.tableInfoStoreMap[tableID]; !ok {
+			return fmt.Errorf("table %d not found", tableID)
+		}
+		delete(p.tableInfoStoreMap, tableID)
+		log.Info("unregister table",
+			zap.Int64("tableID", tableID))
 	}
-
-	if _, ok := p.tableInfoStoreMap[tableID]; !ok {
-		log.Warn("unregister table not exist", zap.Int64("tableID", tableID))
-		return
-	}
-	delete(p.tableInfoStoreMap, tableID)
-	log.Info("unregister table", zap.Int64("tableID", tableID))
+	return nil
 }
 
 func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {

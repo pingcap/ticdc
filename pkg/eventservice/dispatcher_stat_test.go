@@ -90,7 +90,8 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	require.Equal(t, info.GetTableSpan(), r.Span)
 
 	// When watermark equals resolvedTs
-	stat.sentResolvedTs.Store(200)
+	stat.isHandshaked.Store(true)
+	stat.updateSentResolvedTs(200)
 	r, ok = stat.getDataRange()
 	require.False(t, ok)
 

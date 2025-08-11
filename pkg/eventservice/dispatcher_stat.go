@@ -147,7 +147,11 @@ func newDispatcherStat(
 	}
 	dispStat.eventStoreResolvedTs.Store(startTs)
 	dispStat.checkpointTs.Store(startTs)
+
 	dispStat.sentResolvedTs.Store(startTs)
+	dispStat.lastScannedCommitTs.Store(startTs)
+	dispStat.lastScannedStartTs.Store(0)
+
 	dispStat.isReadyReceivingData.Store(true)
 	dispStat.resetScanLimit()
 

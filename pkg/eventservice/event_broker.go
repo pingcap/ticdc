@@ -198,13 +198,14 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		// Set sequence number for the event
 		dml.Seq = d.seq.Add(1)
 		dml.Epoch = d.epoch.Load()
+
 		lastStartTs = dml.GetStartTs()
 		lastCommitTs = dml.GetCommitTs()
+		log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id),
+			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
 	d.lastScannedCommitTs.Store(lastCommitTs)
 	d.lastScannedStartTs.Store(lastStartTs)
-	log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id),
-		zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	doSendDML(batchEvent)
 }
 
@@ -301,9 +302,6 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				}
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
-					log.Info("send resolved tickTableTriggerDispatchers",
-						zap.Stringer("dispatcher", stat.id), zap.Uint64("resolvedTs", endTs),
-						zap.Uint64("startTs", startTs), zap.Uint64("lastCommitTs", stat.lastScannedCommitTs.Load()))
 					c.sendResolvedTs(stat, endTs)
 				}
 				return true
@@ -370,10 +368,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		dataRange.StartTs >= ddlState.MaxEventCommitTs {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
-		log.Info("send resolved ts by getScanTaskDataRange",
-			zap.Stringer("dispatcher", task.id), zap.Uint64("resolvedTs", dataRange.EndTs),
-			zap.Uint64("StartTs", dataRange.StartTs), zap.Uint64("latestCommitTs", task.latestCommitTs.Load()),
-			zap.Uint64("MaxEventCommitTs", ddlState.MaxEventCommitTs))
 		c.sendResolvedTs(task, dataRange.EndTs)
 		return false, common.DataRange{}
 	}
@@ -403,10 +397,6 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 	if !task.IsReadyRecevingData() {
 		// If the dispatcher is not ready to receive data event,
 		// we still need to send the last resolvedTs to the dispatcher.
-		resolvedTs := task.sentResolvedTs.Load()
-		log.Info("send resolved ts by scan not ready",
-			zap.Stringer("dispatcher", task.id), zap.Uint64("resolvedTs", resolvedTs))
-		log.Info("")
 		return false
 	}
 
@@ -595,8 +585,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			if !ok {
 				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
-			log.Info("send resolved ts by scan",
-				zap.Stringer("dispatcher", task.id), zap.Uint64("resolvedTs", re.ResolvedTs))
 			c.sendResolvedTs(task, re.ResolvedTs)
 		default:
 			log.Panic("unknown event type", zap.Any("event", e))
