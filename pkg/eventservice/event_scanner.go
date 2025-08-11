@@ -192,7 +192,9 @@ func (s *eventScanner) scanAndMergeEvents(
 				zap.Stringer("dispatcherID", dispatcher.id),
 				zap.Int64("tableID", tableID),
 				zap.Uint64("startTs", session.dataRange.StartTs),
-				zap.Uint64("endTs", session.dataRange.EndTs))
+				zap.Uint64("endTs", session.dataRange.EndTs),
+				zap.Int("entryCount", session.scannedEntryCount), zap.Int64("scannedBytes", session.scannedBytes),
+				zap.Int("txnCount", session.dmlCount))
 			return false, err
 		}
 
