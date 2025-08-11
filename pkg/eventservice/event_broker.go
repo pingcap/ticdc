@@ -535,8 +535,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	if available.Load() < memoryQuotaLowThreshold {
 		task.resetScanLimit()
-		log.Warn("available memory quota is too low, skip scan task",
-			zap.Uint64("available", available.Load()))
 		return
 	}
 

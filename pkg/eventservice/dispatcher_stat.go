@@ -180,10 +180,6 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 		a.lastScannedCommitTs.Store(resolvedTs)
 		a.lastScannedStartTs.Store(0)
 		a.lastSentResolvedTsTime.Store(time.Now())
-		log.Warn("update sent resolved-ts", zap.Stringer("dispatcherID", a.id), zap.Uint64("resolvedTs", resolvedTs))
-	} else {
-		log.Warn("cannot update resolved-ts because the dispatcher is not handshaked",
-			zap.Stringer("dispatcherID", a.id), zap.Uint64("resolvedTs", resolvedTs))
 	}
 }
 
