@@ -385,12 +385,14 @@ func (d *Dispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 }
 
 func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
-	ddl, ok := event.(*commonEvent.DDLEvent)
 	// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
 	// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
-	if ok && d.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
-		d.PassBlockEventToSink(event)
-		return nil
+	if d.bdrMode {
+		ddl, ok := event.(*commonEvent.DDLEvent)
+		if ok && ddl.BDRMode != string(ast.BDRRolePrimary) {
+			d.PassBlockEventToSink(event)
+			return nil
+		}
 	}
 	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
