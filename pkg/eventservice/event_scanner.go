@@ -113,11 +113,6 @@ func (s *eventScanner) scan(
 	sess := newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
 
-	log.Info("scanner starts scanning",
-		zap.Int64("tableID", dataRange.Span.TableID), zap.Stringer("dispatcherID", dispatcherStat.id),
-		zap.Uint64("startTs", dataRange.StartTs), zap.Uint64("endTs", dataRange.EndTs),
-		zap.Uint64("lastScannedStartTs", dataRange.LastScannedStartTs))
-
 	// Fetch DDL events
 	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
 	if err != nil {
@@ -188,13 +183,6 @@ func (s *eventScanner) scanAndMergeEvents(
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
 			err = finalizeScan(merger, processor, session)
-			log.Info("scan finalized",
-				zap.Stringer("dispatcherID", dispatcher.id),
-				zap.Int64("tableID", tableID),
-				zap.Uint64("startTs", session.dataRange.StartTs),
-				zap.Uint64("endTs", session.dataRange.EndTs),
-				zap.Int("entryCount", session.scannedEntryCount), zap.Int64("scannedBytes", session.scannedBytes),
-				zap.Int("txnCount", session.dmlCount))
 			return false, err
 		}
 

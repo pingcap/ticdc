@@ -359,8 +359,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	if dataRange.EndTs <= dataRange.StartTs {
 		metricEventServiceSkipResolvedTsCount.Inc()
-		log.Warn("not ready to scan, since endTs <= startTs",
-			zap.Uint64("startTs", dataRange.StartTs), zap.Uint64("endTs", dataRange.EndTs))
 		return false, common.DataRange{}
 	}
 
@@ -371,9 +369,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.EndTs)
-		log.Warn("not ready to scan, but send resolved-ts",
-			zap.Uint64("startTs", dataRange.StartTs), zap.Uint64("latestCommitTs", task.latestCommitTs.Load()),
-			zap.Uint64("maxEventCommitTs", ddlState.MaxEventCommitTs))
 		return false, common.DataRange{}
 	}
 	return true, dataRange

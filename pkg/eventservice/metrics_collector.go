@@ -104,8 +104,8 @@ func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 	// If there are no dispatchers, use current time as resolved timestamps
 	if snapshot.dispatcherCount == 0 {
 		pdTSO := oracle.GoTimeToTS(snapshot.pdTime)
-		snapshot.receivedMinResolvedTs = uint64(pdTSO)
-		snapshot.sentMinResolvedTs = uint64(pdTSO)
+		snapshot.receivedMinResolvedTs = pdTSO
+		snapshot.sentMinResolvedTs = pdTSO
 	}
 
 	return snapshot
