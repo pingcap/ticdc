@@ -103,6 +103,8 @@ func newEventBroker(
 	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
+	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
+
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -124,7 +126,7 @@ func newEventBroker(
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		cancel:                  cancel,
 		g:                       g,
-		scanRateLimiter:         rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), maxScanLimitInBytesPerSecond),
+		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
 	}
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
