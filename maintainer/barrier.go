@@ -203,11 +203,11 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 				// it's in writing stage, must be the writer dispatcher
 				// it's the maintainer's responsibility to resend the write action
 				event.selected.Store(true)
-				event.writerDispatcher.set(common.NewDispatcherIDFromPB(span.ID))
+				event.writerDispatcher = common.NewDispatcherIDFromPB(span.ID)
 			case heartbeatpb.BlockStage_DONE:
 				// it's the maintainer's responsibility to resend the pass action
 				event.selected.Store(true)
-				event.writerDispatcherAdvanced.Store(true)
+				event.writerDispatcherAdvanced = true
 			}
 			event.markDispatcherEventDone(common.NewDispatcherIDFromPB(span.ID))
 		}
@@ -311,10 +311,10 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// there is a block event and the dispatcher write or pass action already
 	// which means we have sent pass or write action to it
 	// the writer already synced ddl to downstream
-	if event.writerDispatcher.get() == dispatcherID {
+	if event.writerDispatcher == dispatcherID {
 		// the pass action will be sent periodically in resend logic if not acked
 		// todo: schedule the block event here?
-		event.writerDispatcherAdvanced.Store(true)
+		event.writerDispatcherAdvanced = true
 	}
 
 	// checkpoint ts is advanced, clear the map, so do not need to resend message anymore

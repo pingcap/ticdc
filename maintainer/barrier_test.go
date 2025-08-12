@@ -85,9 +85,9 @@ func TestOneBlockEvent(t *testing.T) {
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
-	require.True(t, event.writerDispatcher.get() == spanController.GetDDLDispatcherID())
+	require.True(t, event.writerDispatcher == spanController.GetDDLDispatcherID())
 	require.True(t, event.selected.Load())
-	require.False(t, event.writerDispatcherAdvanced.Load())
+	require.False(t, event.writerDispatcherAdvanced)
 	require.Len(t, resp.DispatcherStatuses, 2)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 	require.Equal(t, resp.DispatcherStatuses[1].Action.CommitTs, uint64(10))
@@ -249,7 +249,7 @@ func TestNormalBlock(t *testing.T) {
 	}
 	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
-	require.True(t, event.writerDispatcher.get() == selectDispatcherID)
+	require.True(t, event.writerDispatcher == selectDispatcherID)
 	// all dispatcher reported, the reported status is reset
 	require.False(t, event.rangeChecker.IsFullyCovered())
 
@@ -284,7 +284,7 @@ func TestNormalBlock(t *testing.T) {
 		},
 	})
 	require.Equal(t, uint64(10), event.commitTs)
-	require.True(t, event.writerDispatcher.get() == selectDispatcherID)
+	require.True(t, event.writerDispatcher == selectDispatcherID)
 
 	// selected node write done
 	msg = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
@@ -424,7 +424,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	}
 	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
-	require.True(t, event.writerDispatcher.get() == tableTriggerEventDispatcherID)
+	require.True(t, event.writerDispatcher == tableTriggerEventDispatcherID)
 	// all dispatcher reported, the reported status is reset
 	require.False(t, event.rangeChecker.IsFullyCovered())
 	require.True(t, event.tableTriggerDispatcherRelated)
@@ -576,7 +576,7 @@ func TestSchemaBlock(t *testing.T) {
 	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	// the ddl dispatcher will be the writer
-	require.Equal(t, event.writerDispatcher.get(), spanController.GetDDLDispatcherID())
+	require.Equal(t, event.writerDispatcher, spanController.GetDDLDispatcherID())
 
 	// repeated status
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -607,7 +607,7 @@ func TestSchemaBlock(t *testing.T) {
 	event = barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	// the ddl dispatcher will be the writer
-	require.Equal(t, event.writerDispatcher.get(), spanController.GetDDLDispatcherID())
+	require.Equal(t, event.writerDispatcher, spanController.GetDDLDispatcherID())
 
 	// selected node write done
 	msg = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
@@ -751,7 +751,7 @@ func TestSyncPointBlock(t *testing.T) {
 	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	// the last one will be the writer
-	require.Equal(t, event.writerDispatcher.get(), spanController.GetDDLDispatcherID())
+	require.Equal(t, event.writerDispatcher, spanController.GetDDLDispatcherID())
 
 	// selected node write done
 	_ = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
@@ -896,9 +896,9 @@ func TestUpdateCheckpointTs(t *testing.T) {
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
-	require.True(t, event.writerDispatcher.get() == spanController.GetDDLDispatcherID())
+	require.True(t, event.writerDispatcher == spanController.GetDDLDispatcherID())
 	require.True(t, event.selected.Load())
-	require.False(t, event.writerDispatcherAdvanced.Load())
+	require.False(t, event.writerDispatcherAdvanced)
 	require.Len(t, resp.DispatcherStatuses, 2)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 	require.Equal(t, resp.DispatcherStatuses[1].Action.CommitTs, uint64(10))
@@ -969,7 +969,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event := barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.False(t, event.selected.Load())
-	require.False(t, event.writerDispatcherAdvanced.Load())
+	require.False(t, event.writerDispatcherAdvanced)
 	require.True(t, event.allDispatcherReported())
 
 	// one waiting dispatcher, and one writing
@@ -1007,7 +1007,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
-	require.False(t, event.writerDispatcherAdvanced.Load())
+	require.False(t, event.writerDispatcherAdvanced)
 
 	// two done dispatchers
 	barrier = NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
@@ -1044,7 +1044,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
-	require.True(t, event.writerDispatcherAdvanced.Load())
+	require.True(t, event.writerDispatcherAdvanced)
 
 	// nil, none stage
 	barrier = NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{

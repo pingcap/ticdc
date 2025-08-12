@@ -14,7 +14,6 @@
 package maintainer
 
 import (
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -44,9 +43,8 @@ type BarrierEvent struct {
 	hasNewTable        bool
 	// table trigger event dispatcher reported the block event, we should use it as the writer
 	tableTriggerDispatcherRelated bool
-
-	writerDispatcher         *writeDispatcher
-	writerDispatcherAdvanced atomic.Bool
+	writerDispatcher              common.DispatcherID
+	writerDispatcherAdvanced      bool
 
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
@@ -85,7 +83,6 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		operatorController: operatorController,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		selected:           atomic.Bool{},
-		writerDispatcher:   newWriteDispatcher(),
 		hasNewTable:        len(status.NeedAddedTables) > 0,
 
 		blockedDispatchers: status.BlockTables,
@@ -205,17 +202,17 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 	// reset ranger checkers
 	be.rangeChecker.Reset()
 	be.selected.Store(true)
-	be.writerDispatcher.set(dispatcher)
+	be.writerDispatcher = dispatcher
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("changefeed", be.cfID.Name()),
-		zap.String("dispatcher", be.writerDispatcher.get().String()),
+		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
 	be.scheduleBlockEvent()
 	return &heartbeatpb.DispatcherStatus{
 		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
 			InfluenceType: heartbeatpb.InfluenceType_Normal,
-			DispatcherIDs: []*heartbeatpb.DispatcherID{be.writerDispatcher.get().ToPB()},
+			DispatcherIDs: []*heartbeatpb.DispatcherID{be.writerDispatcher.ToPB()},
 		},
 		Action: be.action(heartbeatpb.Action_Write),
 	}
@@ -374,7 +371,7 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 				for _, stm := range spans {
 					nodeID := stm.GetNodeID()
 					dispatcherID := stm.ID
-					if dispatcherID == be.writerDispatcher.get() {
+					if dispatcherID == be.writerDispatcher {
 						continue
 					}
 					msg, ok := msgMap[nodeID]
@@ -417,7 +414,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 				if replication.GetStatus().CheckpointTs >= be.commitTs {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					be.selected.Store(true)
-					be.writerDispatcherAdvanced.Store(true)
+					be.writerDispatcherAdvanced = true
 					return
 				}
 			}
@@ -429,7 +426,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			if replication.GetStatus().CheckpointTs >= be.commitTs {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
-				be.writerDispatcherAdvanced.Store(true)
+				be.writerDispatcherAdvanced = true
 				return
 			}
 		}
@@ -439,7 +436,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			if replication.GetStatus().CheckpointTs >= be.commitTs {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
-				be.writerDispatcherAdvanced.Store(true)
+				be.writerDispatcherAdvanced = true
 				return
 			}
 		}
@@ -459,7 +456,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),
 					zap.Bool("selected", be.selected.Load()),
-					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced.Load()),
+					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
 					zap.String("coverage", be.rangeChecker.Detail()),
 					zap.Any("blocker", be.blockedDispatchers),
 					zap.Any("resend", msgs),
@@ -470,7 +467,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),
 					zap.Bool("selected", be.selected.Load()),
-					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced.Load()),
+					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
 					zap.Any("blocker", be.blockedDispatchers),
 					zap.Any("resend", msgs),
 				)
@@ -487,7 +484,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint),
 				zap.Bool("selected", be.selected.Load()),
-				zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced.Load()),
+				zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
 				zap.Any("blocker", be.blockedDispatchers))
 		}
 		be.checkBlockedDispatchers()
@@ -495,13 +492,13 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 	}
 	be.lastResendTime = time.Now()
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
-	if !be.writerDispatcherAdvanced.Load() {
+	if !be.writerDispatcherAdvanced {
 		// resend write action
-		stm := be.spanController.GetTaskByID(be.writerDispatcher.get())
+		stm := be.spanController.GetTaskByID(be.writerDispatcher)
 		if stm == nil || stm.GetNodeID() == "" {
 			log.Warn("writer dispatcher not found",
 				zap.String("changefeed", be.cfID.Name()),
-				zap.String("dispatcher", be.writerDispatcher.get().String()),
+				zap.String("dispatcher", be.writerDispatcher.String()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint))
 
@@ -512,7 +509,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 				log.Panic("influence type should be normal when writer dispatcher not found",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Any("event", be),
-					zap.String("dispatcher", be.writerDispatcher.get().String()),
+					zap.String("dispatcher", be.writerDispatcher.String()),
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint))
 			}
@@ -525,12 +522,12 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Int64("tableID", tableID),
 					zap.Any("event", be),
-					zap.String("dispatcher", be.writerDispatcher.get().String()),
+					zap.String("dispatcher", be.writerDispatcher.String()),
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint))
 			}
 
-			be.writerDispatcher.set(replications[0].ID)
+			be.writerDispatcher = replications[0].ID
 			return nil
 		}
 
@@ -552,7 +549,7 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID) *messaging.Targe
 					InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
 						InfluenceType: heartbeatpb.InfluenceType_Normal,
 						DispatcherIDs: []*heartbeatpb.DispatcherID{
-							be.writerDispatcher.get().ToPB(),
+							be.writerDispatcher.ToPB(),
 						},
 					},
 				},
@@ -570,7 +567,7 @@ func (be *BarrierEvent) newPassActionMessage(capture node.ID) *messaging.TargetM
 					InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
 						InfluenceType:       be.blockedDispatchers.InfluenceType,
 						SchemaID:            be.blockedDispatchers.SchemaID,
-						ExcludeDispatcherId: be.writerDispatcher.get().ToPB(),
+						ExcludeDispatcherId: be.writerDispatcher.ToPB(),
 					},
 				},
 			},
@@ -593,27 +590,4 @@ func getAllNodes(nodeManager *watcher.NodeManager) []node.ID {
 		nodes = append(nodes, id)
 	}
 	return nodes
-}
-
-type writeDispatcher struct {
-	mutex        sync.Mutex
-	dispatcherID common.DispatcherID
-}
-
-func newWriteDispatcher() *writeDispatcher {
-	return &writeDispatcher{
-		dispatcherID: common.DispatcherID{},
-	}
-}
-
-func (wd *writeDispatcher) get() common.DispatcherID {
-	wd.mutex.Lock()
-	defer wd.mutex.Unlock()
-	return wd.dispatcherID
-}
-
-func (wd *writeDispatcher) set(dispatcherID common.DispatcherID) {
-	wd.mutex.Lock()
-	defer wd.mutex.Unlock()
-	wd.dispatcherID = dispatcherID
 }
