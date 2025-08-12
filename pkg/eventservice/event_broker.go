@@ -599,15 +599,15 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
 					continue
 				}
-				// Note: we need to flush the resolvedTs cache before sending the message
-				// to keep the order of the resolvedTs and the message.
-				c.flushResolvedTs(ctx, resolvedTsCacheMap[m.serverID], m.serverID, workerIndex)
 				tMsg := messaging.NewSingleTargetMessage(
 					m.serverID,
 					messaging.EventCollectorTopic,
 					m.e,
 					uint64(workerIndex),
 				)
+				// Note: we need to flush the resolvedTs cache before sending the message
+				// to keep the order of the resolvedTs and the message.
+				c.flushResolvedTs(ctx, resolvedTsCacheMap[m.serverID], m.serverID, workerIndex)
 				c.sendMsg(ctx, tMsg, m.postSendFunc)
 				m.reset()
 			}
