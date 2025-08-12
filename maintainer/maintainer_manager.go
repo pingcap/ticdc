@@ -254,7 +254,11 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler, m.pdAPI)
 		m.maintainers.Store(cfID, cf)
 	}
-	cf.(*Maintainer).msgCh <- msg
+	cf.(*Maintainer).pushEvent(&Event{
+		changefeedID: cfID,
+		eventType:    EventMessage,
+		message:      msg,
+	})
 	log.Info("received remove maintainer request",
 		zap.Stringer("changefeed", cfID))
 	return nil
@@ -338,7 +342,11 @@ func (m *Manager) dispatcherMaintainerMessage(
 		return ctx.Err()
 	default:
 		maintainer := c.(*Maintainer)
-		maintainer.msgCh <- msg
+		maintainer.pushEvent(&Event{
+			changefeedID: changefeed,
+			eventType:    EventMessage,
+			message:      msg,
+		})
 	}
 	return nil
 }
