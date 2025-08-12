@@ -39,7 +39,7 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := newMySQLSink(ctx, changefeedID, cfg, db)
+	sink := newMySQLSink(ctx, changefeedID, cfg, db, false)
 	return ctx, sink, mock
 }
 
