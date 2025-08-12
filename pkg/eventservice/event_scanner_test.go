@@ -277,6 +277,7 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, resolvedTs, e.GetCommitTs())
 }
 
+// Test the case where some DMLs have commit timestamps newer than the table's delete version
 func TestEventScannerWithDeleteTable(t *testing.T) {
 	broker, _, _ := newEventBrokerForTest()
 	broker.close()

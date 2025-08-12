@@ -416,13 +416,7 @@ func newLimitChecker(maxBytes int64, timeout time.Duration, startTime time.Time)
 
 // checkLimits returns true if any limit has been reached
 func (c *limitChecker) checkLimits(totalBytes int64) bool {
-	// return totalBytes > c.maxBytes || time.Since(c.startTime) > c.timeout
-	if totalBytes > c.maxBytes {
-		return true
-	} else if time.Since(c.startTime) > c.timeout {
-		return true
-	}
-	return false
+	return totalBytes > c.maxBytes || time.Since(c.startTime) > c.timeout
 }
 
 // canInterrupt checks if scan can be interrupted at current position
