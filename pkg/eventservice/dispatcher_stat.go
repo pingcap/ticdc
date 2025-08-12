@@ -294,6 +294,7 @@ type wrapEvent struct {
 	msgType int
 	// postSendFunc should be called after the message is sent to message center
 	postSendFunc func()
+	ignored      bool
 }
 
 func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState) *wrapEvent {
@@ -313,6 +314,7 @@ func (w *wrapEvent) reset() {
 	w.resolvedTsEvent = zeroResolvedEvent
 	w.serverID = ""
 	w.msgType = -1
+	w.ignored = false
 	wrapEventPool.Put(w)
 }
 

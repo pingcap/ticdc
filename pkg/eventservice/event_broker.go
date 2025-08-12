@@ -204,11 +204,6 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
 	e.Epoch = d.epoch.Load()
-	// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
-	// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
-	if d.info.GetBdrMode() && e.BDRMode != string(ast.BDRRolePrimary) {
-		return
-	}
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
@@ -217,6 +212,11 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq))
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
+	// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
+	// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
+	if d.info.GetBdrMode() && e.BDRMode != string(ast.BDRRolePrimary) {
+		ddlEvent.ignored = true
+	}
 	select {
 	case <-ctx.Done():
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
@@ -606,16 +606,18 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
 					continue
 				}
-				tMsg := messaging.NewSingleTargetMessage(
-					m.serverID,
-					messaging.EventCollectorTopic,
-					m.e,
-					uint64(workerIndex),
-				)
 				// Note: we need to flush the resolvedTs cache before sending the message
 				// to keep the order of the resolvedTs and the message.
 				c.flushResolvedTs(ctx, resolvedTsCacheMap[m.serverID], m.serverID, workerIndex)
-				c.sendMsg(ctx, tMsg, m.postSendFunc)
+				if !m.ignored {
+					tMsg := messaging.NewSingleTargetMessage(
+						m.serverID,
+						messaging.EventCollectorTopic,
+						m.e,
+						uint64(workerIndex),
+					)
+					c.sendMsg(ctx, tMsg, m.postSendFunc)
+				}
 				m.reset()
 			}
 			batchM = batchM[:0]
