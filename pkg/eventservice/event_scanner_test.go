@@ -313,10 +313,10 @@ func TestEventScannerWithTruncatedTable(t *testing.T) {
 	mockSchemaStore.AppendDDLEvent(tableID, ddlEvent)
 
 	// delete table after dml2
-	// dml0 := kvEvents[0]
-	// dml1 := kvEvents[1]
+	dml0 := kvEvents[0]
+	dml1 := kvEvents[1]
 	dml2 := kvEvents[2]
-	mockSchemaStore.DeleteTable(ddlEvent.TableID, dml2.CRTs)
+	mockSchemaStore.DeleteTable(tableID, dml2.CRTs)
 	disp.eventStoreResolvedTs.Store(resolvedTs)
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
@@ -328,7 +328,7 @@ func TestEventScannerWithTruncatedTable(t *testing.T) {
 	_, events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
-	// require.Equal(t, 5, len(events))
+	require.Equal(t, 4, len(events))
 	// DDL
 	e := events[0]
 	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
@@ -336,16 +336,21 @@ func TestEventScannerWithTruncatedTable(t *testing.T) {
 	// DML0
 	e = events[1]
 	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
-	// require.Equal(t, dml0.CRTs, e.GetCommitTs())
-	batchDML0 := events[1].(*pevent.BatchDMLEvent)
-	require.Equal(t, int32(3), batchDML0.Len())
-	// require.Equal(t, batchDML0.DMLEvents[0].GetCommitTs(), dml0.CRTs)
-	// require.Equal(t, batchDML0.DMLEvents[1].GetCommitTs(), dml1.CRTs)
-	// require.Equal(t, batchDML0.DMLEvents[2].GetCommitTs(), dml2.CRTs)
-	// resolvedTs
+	batchDML0 := e.(*pevent.BatchDMLEvent)
+	require.Equal(t, int32(1), batchDML0.Len())
+	require.Equal(t, batchDML0.DMLEvents[0].GetCommitTs(), dml0.CRTs)
+
+	// DML1 & DML2
 	e = events[2]
+	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
+	batchDML1 := e.(*pevent.BatchDMLEvent)
+	require.Equal(t, int32(2), batchDML1.Len())
+	require.Equal(t, batchDML1.DMLEvents[0].GetCommitTs(), dml1.CRTs)
+	require.Equal(t, batchDML1.DMLEvents[1].GetCommitTs(), dml2.CRTs)
+
+	// resolvedTs
+	e = events[3]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
-	require.Equal(t, dml2.CRTs, e.GetCommitTs())
 	require.Equal(t, dml2.CRTs, e.GetCommitTs())
 }
 

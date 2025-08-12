@@ -203,7 +203,7 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			events, err := s.finalizeScan(session, merger, processor)
+			events, err := s.finalizeScan(session, merger, processor, session.dataRange.EndTs)
 			return events, false, err
 		}
 
@@ -224,7 +224,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			// Some DMLs may have commitTs larger than the table's delete version.
 			// These DMLs can be safely skipped during scanning.
 			if tableDeleted {
-				events, err := s.finalizeScan(session, merger, processor)
+				events, err := s.finalizeScan(session, merger, processor, rawEvent.CRTs-1)
 				return events, false, err
 			}
 			continue
@@ -278,13 +278,7 @@ func (s *eventScanner) handleNewTransaction(
 					zap.Uint64("getTableInfoStartTs", rawEvent.CRTs-1))
 				return returnErr, false
 			}
-			// For table deleted case, we need to append remaining DDLs
-			if errors.Is(err, &schemastore.TableDeletedError{}) {
-				remainingEvents := merger.appendRemainingDDLs(session.dataRange.EndTs)
-				session.events = append(session.events, remainingEvents...)
-				return nil, true
-			}
-			return nil, false
+			return nil, errors.Is(err, &schemastore.TableDeletedError{})
 		}
 	}
 
@@ -311,6 +305,7 @@ func (s *eventScanner) finalizeScan(
 	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
+	endTs uint64,
 ) ([]event.Event, error) {
 	if err := processor.clearCache(); err != nil {
 		return nil, err
@@ -320,7 +315,7 @@ func (s *eventScanner) finalizeScan(
 	session.events = append(session.events, events...)
 
 	// Append remaining DDLs
-	remainingEvents := merger.appendRemainingDDLs(session.dataRange.EndTs)
+	remainingEvents := merger.appendRemainingDDLs(endTs)
 	session.events = append(session.events, remainingEvents...)
 
 	return session.events, nil

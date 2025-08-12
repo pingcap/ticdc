@@ -424,7 +424,7 @@ func (m *mockSchemaStore) AppendDDLEvent(id common.TableID, ddls ...commonEvent.
 
 func (m *mockSchemaStore) GetTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if info, ok := m.TableInfo[tableID]; ok {
-		if info.deleteVersion < uint64(ts) {
+		if info.deleteVersion <= uint64(ts) {
 			return nil, &schemastore.TableDeletedError{}
 		}
 		infos := m.TableInfo[tableID].tableInfos
