@@ -518,7 +518,15 @@ func (m *Maintainer) onNodeChanged() {
 }
 
 func (m *Maintainer) calCheckpointTs() {
-	defer m.updateMetrics()
+	start := time.Now()
+	defer func() {
+		log.Info("checkpointTs calculation duration",
+			zap.String("changefeed", m.id.Name()),
+			zap.Duration("duration", time.Since(start)))
+	}()
+	defer func() {
+		m.updateMetrics()
+	}()
 	if !m.bootstrapped.Load() {
 		log.Warn("can not advance checkpointTs since not bootstrapped",
 			zap.String("changefeed", m.id.Name()),
@@ -542,8 +550,11 @@ func (m *Maintainer) calCheckpointTs() {
 	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
 
 	// TODO: consider how can we simplify the logic better
+	log.Info("before scheduler checkpointTs calculation cost", zap.Any("time cost", time.Since(start)))
 	minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
+	log.Info("after scheduler checkpointTs calculation cost", zap.Any("time cost", time.Since(start)))
 	minCheckpointTsForBarrier := m.barrier.GetMinBlockedCheckpointTsForNewTables()
+	log.Info("after barrier checkpointTs calculation cost", zap.Any("time cost", time.Since(start)))
 
 	newWatermark := heartbeatpb.NewMaxWatermark()
 	// if there is no tables, there must be a table trigger dispatcher
