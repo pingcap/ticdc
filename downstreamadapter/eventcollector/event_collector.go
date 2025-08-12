@@ -536,10 +536,6 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 
 		for nodeID, portion := range proportion {
-			// nodeID is not set yet, just skip it temporarily.
-			if nodeID == "" {
-				continue
-			}
 			ratio := float64(portion) / float64(sum)
 			quota := uint64(float64(total) * ratio)
 
