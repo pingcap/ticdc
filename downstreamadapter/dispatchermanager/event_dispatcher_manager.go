@@ -736,7 +736,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 				zap.Any("componentStatus", dispatcher.GetComponentStatus()))
 			return nil
 		}
-		outputRawChangeEvent = dispatcher.GetOutputRawChangeEvent()
+		outputRawChangeEvent = dispatcher.IsOutputRawChangeEvent()
 		if dispatcher.GetCheckpointTs() < fakeStartTs {
 			fakeStartTs = dispatcher.GetCheckpointTs()
 		}

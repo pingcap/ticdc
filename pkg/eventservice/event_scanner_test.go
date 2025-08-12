@@ -1267,7 +1267,10 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 
 	// Create scan session
 	ctx := context.Background()
+
+	disInfo := newMockDispatcherInfoForTest(t)
 	dispatcherStat := &dispatcherStat{
+		info:                disInfo,
 		id:                  dispatcherID,
 		isReadyRecevingData: atomic.Bool{},
 		isRemoved:           atomic.Bool{},
