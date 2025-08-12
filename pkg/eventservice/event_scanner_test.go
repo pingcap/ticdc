@@ -277,7 +277,7 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, resolvedTs, e.GetCommitTs())
 }
 
-func TestEventScannerWithTruncatedTable(t *testing.T) {
+func TestEventScannerWithDeleteTable(t *testing.T) {
 	broker, _, _ := newEventBrokerForTest()
 	broker.close()
 
