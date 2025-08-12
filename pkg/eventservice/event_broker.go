@@ -25,14 +25,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -212,11 +210,6 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq))
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
-	// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
-	// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
-	if d.info.GetBdrMode() && e.BDRMode != string(ast.BDRRolePrimary) {
-		ddlEvent.ignored = true
-	}
 	select {
 	case <-ctx.Done():
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
@@ -609,15 +602,13 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				// Note: we need to flush the resolvedTs cache before sending the message
 				// to keep the order of the resolvedTs and the message.
 				c.flushResolvedTs(ctx, resolvedTsCacheMap[m.serverID], m.serverID, workerIndex)
-				if !m.ignored {
-					tMsg := messaging.NewSingleTargetMessage(
-						m.serverID,
-						messaging.EventCollectorTopic,
-						m.e,
-						uint64(workerIndex),
-					)
-					c.sendMsg(ctx, tMsg, m.postSendFunc)
-				}
+				tMsg := messaging.NewSingleTargetMessage(
+					m.serverID,
+					messaging.EventCollectorTopic,
+					m.e,
+					uint64(workerIndex),
+				)
+				c.sendMsg(ctx, tMsg, m.postSendFunc)
 				m.reset()
 			}
 			batchM = batchM[:0]
@@ -985,17 +976,17 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
-	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
+	responseMap := make(map[string]*pevent.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
 		// Can't find the dispatcher, it means the dispatcher is removed.
 		if !ok {
 			response, ok := responseMap[heartbeat.serverID]
 			if !ok {
-				response = event.NewDispatcherHeartbeatResponse()
+				response = pevent.NewDispatcherHeartbeatResponse()
 				responseMap[heartbeat.serverID] = response
 			}
-			response.Append(event.NewDispatcherState(dp.DispatcherID, event.DSStateRemoved))
+			response.Append(pevent.NewDispatcherState(dp.DispatcherID, pevent.DSStateRemoved))
 			continue
 		}
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
@@ -1008,7 +999,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 	c.sendDispatcherResponse(responseMap)
 }
 
-func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {
+func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*pevent.DispatcherHeartbeatResponse) {
 	for serverID, response := range responseMap {
 		msg := messaging.NewSingleTargetMessage(node.ID(serverID), messaging.EventCollectorTopic, response)
 		c.msgSender.SendCommand(msg)
