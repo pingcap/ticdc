@@ -366,16 +366,21 @@ var _ schemastore.SchemaStore = &mockSchemaStore{}
 
 type mockSchemaStore struct {
 	DDLEvents map[common.TableID][]commonEvent.DDLEvent
-	TableInfo map[common.TableID][]*common.TableInfo
+	TableInfo map[common.TableID]*mockVersionTableInfo
 
 	resolvedTs     uint64
 	maxDDLCommitTs uint64
 }
 
+type mockVersionTableInfo struct {
+	tableInfos    []*common.TableInfo
+	deleteVersion uint64
+}
+
 func newMockSchemaStore() *mockSchemaStore {
 	return &mockSchemaStore{
 		DDLEvents:      make(map[common.TableID][]commonEvent.DDLEvent),
-		TableInfo:      make(map[common.TableID][]*common.TableInfo),
+		TableInfo:      make(map[common.TableID]*mockVersionTableInfo),
 		resolvedTs:     math.MaxUint64,
 		maxDDLCommitTs: math.MaxUint64,
 	}
@@ -393,22 +398,45 @@ func (m *mockSchemaStore) Close(ctx context.Context) error {
 	return nil
 }
 
+func (m *mockSchemaStore) DeleteTable(id common.TableID, ts common.Ts) {
+	if info, ok := m.TableInfo[id]; ok {
+		info.deleteVersion = uint64(ts)
+	} else {
+		m.TableInfo[id] = &mockVersionTableInfo{
+			tableInfos:    make([]*common.TableInfo, 0),
+			deleteVersion: uint64(ts),
+		}
+	}
+}
+
 func (m *mockSchemaStore) AppendDDLEvent(id common.TableID, ddls ...commonEvent.DDLEvent) {
 	for _, ddl := range ddls {
 		m.DDLEvents[id] = append(m.DDLEvents[id], ddl)
-		m.TableInfo[id] = append(m.TableInfo[id], ddl.TableInfo)
+		if _, ok := m.TableInfo[id]; !ok {
+			m.TableInfo[id] = &mockVersionTableInfo{
+				tableInfos:    make([]*common.TableInfo, 0),
+				deleteVersion: math.MaxUint64,
+			}
+		}
+		m.TableInfo[id].tableInfos = append(m.TableInfo[id].tableInfos, ddl.TableInfo)
 	}
 }
 
 func (m *mockSchemaStore) GetTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
-	infos := m.TableInfo[tableID]
-	idx := sort.Search(len(infos), func(i int) bool {
-		return infos[i].UpdateTS() > uint64(ts)
-	})
-	if idx == 0 {
-		return nil, nil
+	if info, ok := m.TableInfo[tableID]; ok {
+		if info.deleteVersion < uint64(ts) {
+			return nil, &schemastore.TableDeletedError{}
+		}
+		infos := m.TableInfo[tableID].tableInfos
+		idx := sort.Search(len(infos), func(i int) bool {
+			return infos[i].UpdateTS() > uint64(ts)
+		})
+		if idx == 0 {
+			return nil, nil
+		}
+		return infos[idx-1], nil
 	}
-	return infos[idx-1], nil
+	return nil, nil
 }
 
 func (m *mockSchemaStore) GetAllPhysicalTables(snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {

@@ -221,6 +221,8 @@ func (s *eventScanner) scanAndMergeEvents(
 			if err, tableDeleted = s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
 				return nil, false, err
 			}
+			// Some DMLs may have commitTs larger than the table's delete version.
+			// These DMLs can be safely skipped during scanning.
 			if tableDeleted {
 				events, err := s.finalizeScan(session, merger, processor)
 				return events, false, err
@@ -419,7 +421,13 @@ func newLimitChecker(maxBytes int64, timeout time.Duration, startTime time.Time)
 
 // checkLimits returns true if any limit has been reached
 func (c *limitChecker) checkLimits(totalBytes int64) bool {
-	return totalBytes > c.maxBytes || time.Since(c.startTime) > c.timeout
+	// return totalBytes > c.maxBytes || time.Since(c.startTime) > c.timeout
+	if totalBytes > c.maxBytes {
+		return true
+	} else if time.Since(c.startTime) > c.timeout {
+		return true
+	}
+	return false
 }
 
 // canInterrupt checks if scan can be interrupted at current position
