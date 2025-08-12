@@ -54,6 +54,7 @@ type EventDispatcher interface {
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
+	IsOutputRawChangeEvent() bool
 }
 
 /*
@@ -162,6 +163,8 @@ type Dispatcher struct {
 	seq     uint64
 
 	BootstrapState bootstrapState
+
+	outputRawChangeEvent bool
 }
 
 func NewDispatcher(
@@ -182,6 +185,7 @@ func NewDispatcher(
 	currentPdTs uint64,
 	errCh chan error,
 	bdrMode bool,
+	outputRawChangeEvent bool,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
 		changefeedID:          changefeedID,
@@ -208,6 +212,7 @@ func NewDispatcher(
 		errCh:                 errCh,
 		bdrMode:               bdrMode,
 		BootstrapState:        BootstrapFinished,
+		outputRawChangeEvent:  outputRawChangeEvent,
 	}
 
 	return dispatcher
@@ -579,4 +584,8 @@ func (d *Dispatcher) HandleError(err error) {
 			zap.Stringer("dispatcherID", d.id),
 			zap.Error(err))
 	}
+}
+
+func (d *Dispatcher) IsOutputRawChangeEvent() bool {
+	return d.outputRawChangeEvent
 }

@@ -639,13 +639,14 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64)
 			TableSpan:    d.target.GetTableSpan(),
 			StartTs:      resetTs,
 			// ServerId is the id of the request sender.
-			ServerId:          d.eventCollector.getLocalServerID().String(),
-			ActionType:        eventpb.ActionType_ACTION_TYPE_RESET,
-			FilterConfig:      d.target.GetFilterConfig(),
-			EnableSyncPoint:   d.target.EnableSyncPoint(),
-			SyncPointInterval: uint64(syncPointInterval.Seconds()),
-			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
-			Epoch:             epoch,
+			ServerId:             d.eventCollector.getLocalServerID().String(),
+			ActionType:           eventpb.ActionType_ACTION_TYPE_RESET,
+			FilterConfig:         d.target.GetFilterConfig(),
+			EnableSyncPoint:      d.target.EnableSyncPoint(),
+			SyncPointInterval:    uint64(syncPointInterval.Seconds()),
+			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
+			Epoch:                epoch,
+			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
 		},
 	}
 }

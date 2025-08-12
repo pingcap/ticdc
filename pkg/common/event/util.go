@@ -303,12 +303,15 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dml...)
 
 	raw := &common.RawKVEntry{
-		OpType:   common.OpTypePut,
-		Key:      rawKvs[1].Key,
-		Value:    rawKvs[1].Value,
-		OldValue: rawKvs[0].Value,
-		StartTs:  rawKvs[0].StartTs,
-		CRTs:     rawKvs[1].CRTs,
+		OpType:      common.OpTypePut,
+		KeyLen:      uint32(len(rawKvs[1].Key)),
+		ValueLen:    uint32(len(rawKvs[1].Value)),
+		OldValueLen: uint32(len(rawKvs[0].Value)),
+		Key:         rawKvs[1].Key,
+		Value:       rawKvs[1].Value,
+		OldValue:    rawKvs[0].Value,
+		StartTs:     rawKvs[0].StartTs,
+		CRTs:        rawKvs[1].CRTs,
 	}
 
 	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk)

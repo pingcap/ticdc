@@ -106,6 +106,10 @@ func (d *Dispatcher) GetStartTs() uint64 {
 	return d.startTs
 }
 
+func (d *Dispatcher) GetOutputRawChangeEvent() bool {
+	return d.outputRawChangeEvent
+}
+
 // addToDynamicStream add self to dynamic stream
 func (d *Dispatcher) addToStatusDynamicStream() {
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()

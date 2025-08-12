@@ -609,6 +609,10 @@ func (m *mockDispatcherInfo) GetEpoch() uint64 {
 	return 0
 }
 
+func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {
+	return false
+}
+
 func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)
 	kvEvents := helper.DML2RawKv(job.TableID, job.BinlogInfo.FinishedTS, dmls...)
