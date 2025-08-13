@@ -75,7 +75,6 @@ func NewOperatorController(
 		spanController: spanController,
 		nodeManager:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		messageCenter:  appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		batchSize:      batchSize,
 	}
 }
 
