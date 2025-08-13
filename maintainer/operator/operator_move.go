@@ -16,7 +16,6 @@ package operator
 import (
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -41,18 +40,18 @@ type MoveDispatcherOperator struct {
 
 	noPostFinishNeed bool
 
-	lastSendMessageTime time.Time
+	sendThrottler sendThrottler
 
 	lck sync.Mutex
 }
 
 func NewMoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {
 	return &MoveDispatcherOperator{
-		replicaSet:          replicaSet,
-		origin:              origin,
-		dest:                dest,
-		spanController:      spanController,
-		lastSendMessageTime: time.Now().Add(-minSendMessageInterval),
+		replicaSet:     replicaSet,
+		origin:         origin,
+		dest:           dest,
+		spanController: spanController,
+		sendThrottler:  newSendThrottler(),
 	}
 }
 
@@ -65,7 +64,7 @@ func (m *MoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSp
 			zap.String("replicaSet", m.replicaSet.ID.String()))
 
 		// reset last send message time
-		m.lastSendMessageTime = time.Now().Add(-minSendMessageInterval)
+		m.sendThrottler.reset()
 		m.originNodeStopped = true
 	}
 	if m.originNodeStopped && from == m.dest && status.ComponentStatus == heartbeatpb.ComponentState_Working {
@@ -96,10 +95,9 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 			m.bind = true
 		}
 
-		if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+		if !m.sendThrottler.shouldSend() {
 			return nil
 		}
-		m.lastSendMessageTime = time.Now()
 
 		msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
 		if err != nil {
@@ -109,10 +107,9 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 		return msg
 	}
 
-	if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+	if !m.sendThrottler.shouldSend() {
 		return nil
 	}
-	m.lastSendMessageTime = time.Now()
 	return m.replicaSet.NewRemoveDispatcherMessage(m.origin)
 }
 

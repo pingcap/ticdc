@@ -16,7 +16,6 @@ package operator
 import (
 	"encoding/hex"
 	"fmt"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -48,7 +47,7 @@ type MergeDispatcherOperator struct {
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 
-	lastSendMessageTime time.Time
+	sendThrottler sendThrottler
 }
 
 func NewMergeDispatcherOperator(
@@ -126,7 +125,7 @@ func NewMergeDispatcherOperator(
 		mergedSpanInfo:      spansInfo,
 		occupyOperators:     occupyOperators,
 		newReplicaSet:       newReplicaSet,
-		lastSendMessageTime: time.Now().Add(-minSendMessageInterval),
+		sendThrottler:       newSendThrottler(),
 	}
 	return op
 }
@@ -179,11 +178,10 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 		return nil
 	}
 
-	if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+	if !m.sendThrottler.shouldSend() {
 		return nil
 	}
 
-	m.lastSendMessageTime = time.Now()
 	return messaging.NewSingleTargetMessage(m.node,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.MergeDispatcherRequest{
