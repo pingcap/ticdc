@@ -353,7 +353,6 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case req := <-c.dispatcherMessageChan.Out():
-			log.Info("hyy event collector send dispatcher request message", zap.Any("message", req.Message))
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
 				sleepInterval := 10 * time.Millisecond
@@ -374,10 +373,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 				c.dispatcherMessageChan.In() <- req
 				// Sleep a short time to avoid too many requests in a short time.
 				// TODO: requests can to different EventService, so we should improve the logic here.
-				if sleepInterval == 1*time.Second {
-					time.Sleep(sleepInterval)
-				}
-
+				time.Sleep(sleepInterval)
 			}
 		}
 	}

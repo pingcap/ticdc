@@ -113,7 +113,6 @@ func (s *eventService) Run(ctx context.Context) error {
 			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
 			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
 		case info := <-s.dispatcherInfoChan:
-			log.Info("hyy event service received dispatcher info", zap.Any("info", info), zap.Any("dispatcherID", info.GetID()))
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
 				s.registerDispatcher(ctx, info)
