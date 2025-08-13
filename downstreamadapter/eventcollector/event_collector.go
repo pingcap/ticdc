@@ -374,7 +374,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 				c.dispatcherMessageChan.In() <- req
 				// Sleep a short time to avoid too many requests in a short time.
 				// TODO: requests can to different EventService, so we should improve the logic here.
-				time.Sleep(sleepInterval)
+				//time.Sleep(sleepInterval)
 			}
 		}
 	}
