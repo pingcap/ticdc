@@ -541,6 +541,7 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 			// TODO: consider how can we simplify the logic better
 			minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
 			minCheckpointTsForBarrier := m.barrier.GetMinBlockedCheckpointTsForNewTables()
+			log.Info("checkpointTs", zap.Any("minCheckpointTsForScheduler", minCheckpointTsForScheduler), zap.Any("minCheckpointTsForBarrier", minCheckpointTsForBarrier))
 
 			newWatermark := heartbeatpb.NewMaxWatermark()
 			// if there is no tables, there must be a table trigger dispatcher
@@ -562,6 +563,7 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				}
 				newWatermark.UpdateMin(watermark)
 			}
+			log.Info("newWatermark", zap.Any("newWatermark", newWatermark))
 
 			if !updateCheckpointTs {
 				break
