@@ -92,7 +92,7 @@ func NewDefaultSchedulerConfig() *SchedulerConfig {
 		CollectStatsTick:     200, // 200 * 50ms = 10s.
 		MaxTaskConcurrency:   10,
 		CheckBalanceInterval: TomlDuration(15 * time.Second),
-		AddTableBatchSize:    1000,
+		AddTableBatchSize:    10000,
 	}
 }
 
