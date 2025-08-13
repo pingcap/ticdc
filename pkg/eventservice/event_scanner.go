@@ -587,7 +587,6 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	var shouldSplit bool
 	var err error
 
-	log.Debug("fizz append row", zap.Any("outputRawChangeEvent", p.outputRawChangeEvent))
 	if !p.outputRawChangeEvent {
 		shouldSplit, err = pevent.IsUKChanged(rawEvent, p.currentDML.TableInfo)
 		if err != nil {

@@ -370,10 +370,11 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		newStartTsList = startTsList
 	}
 
-	outputRawChangeEvent := false
-	if e.sink.SinkType() == common.CloudStorageSinkType {
+	var outputRawChangeEvent bool
+	switch e.sink.SinkType() {
+	case common.CloudStorageSinkType:
 		outputRawChangeEvent = e.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
-	} else if e.sink.SinkType() == common.KafkaSinkType {
+	case common.KafkaSinkType:
 		outputRawChangeEvent = e.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
