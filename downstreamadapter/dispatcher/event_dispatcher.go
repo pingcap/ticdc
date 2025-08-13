@@ -73,6 +73,7 @@ func NewEventDispatcher(
 	currentPdTs uint64,
 	errCh chan error,
 	bdrMode bool,
+	outputRawChangeEvent bool,
 	redoEnable bool,
 	redoGlobalTs *atomic.Uint64,
 ) *EventDispatcher {
@@ -92,6 +93,7 @@ func NewEventDispatcher(
 		currentPdTs,
 		errCh,
 		bdrMode,
+		outputRawChangeEvent,
 		TypeDispatcherEvent,
 	)
 	dispatcher := &EventDispatcher{

@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -105,6 +104,8 @@ func newEventBroker(
 	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
+	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
+
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -127,7 +128,7 @@ func newEventBroker(
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
 		cancel:                  cancel,
 		g:                       g,
-		scanRateLimiter:         rate.NewLimiter(rate.Limit(maxScanLimitInBytesPerSecond), maxScanLimitInBytesPerSecond),
+		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
 	}
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
@@ -990,17 +991,17 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
-	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
+	responseMap := make(map[string]*pevent.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
 		// Can't find the dispatcher, it means the dispatcher is removed.
 		if !ok {
 			response, ok := responseMap[heartbeat.serverID]
 			if !ok {
-				response = event.NewDispatcherHeartbeatResponse()
+				response = pevent.NewDispatcherHeartbeatResponse()
 				responseMap[heartbeat.serverID] = response
 			}
-			response.Append(event.NewDispatcherState(dp.DispatcherID, event.DSStateRemoved))
+			response.Append(pevent.NewDispatcherState(dp.DispatcherID, pevent.DSStateRemoved))
 			continue
 		}
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
@@ -1013,7 +1014,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 	c.sendDispatcherResponse(responseMap)
 }
 
-func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {
+func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*pevent.DispatcherHeartbeatResponse) {
 	for serverID, response := range responseMap {
 		msg := messaging.NewSingleTargetMessage(node.ID(serverID), messaging.EventCollectorTopic, response)
 		c.msgSender.SendCommand(msg)

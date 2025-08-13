@@ -147,7 +147,7 @@ storage_groups=(
 	# G00
 	'generate_column many_pk_or_uk multi_source'
 	# G01
-	#csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered
+	csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered
 	''
 	# G02
 	'canal_json_storage_basic canal_json_storage_partition_table'

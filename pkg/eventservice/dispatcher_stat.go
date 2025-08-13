@@ -36,8 +36,6 @@ const (
 	minScanLimitInBytes     = 1024 * 128      // 128KB
 	maxScanLimitInBytes     = 1024 * 1024 * 4 // 4MB
 	updateScanLimitInterval = time.Second * 10
-
-	maxScanLimitInBytesPerSecond = 1024 * 1024 * 256 // 256MB/s
 )
 
 // Store the progress of the dispatcher, and the incremental events stats.
@@ -420,8 +418,6 @@ type changefeedStatus struct {
 	isReadyRecevingData atomic.Bool
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
 	dispatcherCount atomic.Uint64
-
-	dispatcherStatMap sync.Map // nodeID -> dispatcherID -> dispatcherStat
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

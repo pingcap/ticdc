@@ -74,6 +74,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		make(chan error, 1),
 		false,
 		false,
+		false,
 		&redoTs,
 	)
 }

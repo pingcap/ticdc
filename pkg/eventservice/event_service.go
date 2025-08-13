@@ -56,6 +56,7 @@ type DispatcherInfo interface {
 	GetTimezone() *time.Location
 	GetIsRedo() bool
 	GetEpoch() uint64
+	IsOutputRawChangeEvent() bool
 }
 
 type DispatcherHeartBeatWithServerID struct {

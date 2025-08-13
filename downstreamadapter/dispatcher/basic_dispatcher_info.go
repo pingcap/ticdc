@@ -66,6 +66,10 @@ func (d *BasicDispatcher) GetTimezone() string {
 	return d.timezone
 }
 
+func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
+	return d.outputRawChangeEvent
+}
+
 func (d *BasicDispatcher) GetFilterConfig() *eventpb.FilterConfig {
 	return d.filterConfig
 }

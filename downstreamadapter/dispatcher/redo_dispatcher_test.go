@@ -48,6 +48,7 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		nil, // filterConfig
 		make(chan error, 1),
 		false,
+		false,
 	)
 }
 

@@ -52,6 +52,7 @@ func NewRedoDispatcher(
 	filterConfig *eventpb.FilterConfig,
 	errCh chan error,
 	bdrMode bool,
+	outputRawChangeEvent bool,
 ) *RedoDispatcher {
 	basicDispatcher := NewBasicDispatcher(
 		changefeedID,
@@ -69,6 +70,7 @@ func NewRedoDispatcher(
 		0,
 		errCh,
 		bdrMode,
+		outputRawChangeEvent,
 		TypeDispatcherRedo,
 	)
 	dispatcher := &RedoDispatcher{

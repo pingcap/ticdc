@@ -139,7 +139,8 @@ func (e *DispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, rem
 			e.integrityConfig,
 			e.filterConfig,
 			e.errCh,
-			e.config.BDRMode)
+			e.config.BDRMode,
+			e.outputRawChangeEvent)
 		if e.heartBeatTask == nil {
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
@@ -255,6 +256,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		e.filterConfig,
 		e.errCh,
 		e.config.BDRMode,
+		e.outputRawChangeEvent,
 	)
 
 	log.Info("new redo dispatcher created(merge dispatcher)",

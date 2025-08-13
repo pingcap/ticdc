@@ -345,6 +345,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if raw.IsUpdate() {
 		rowType = RowTypeUpdate
 	}
+
 	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
 	if err != nil {
 		return err

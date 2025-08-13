@@ -133,6 +133,10 @@ type DispatcherManager struct {
 	sinkQuota uint64
 	redoQuota uint64
 
+	// For the Kafka and Storage sink, the outputRawChangeEvent parameter is introduced to control
+	// split behavior. TiCDC only output original change event if outputRawChangeEvent is true.
+	outputRawChangeEvent bool
+
 	metricTableTriggerEventDispatcherCount prometheus.Gauge
 	metricEventDispatcherCount             prometheus.Gauge
 	metricCreateDispatcherDuration         prometheus.Observer
@@ -211,10 +215,31 @@ func NewDispatcherManager(
 		}
 	}
 
+	totalQuota := manager.config.MemoryQuota
+	if manager.RedoEnable {
+		consistentMemoryUsage := manager.config.Consistent.MemoryUsage
+		if consistentMemoryUsage == nil {
+			consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
+		}
+
+		manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
+		manager.sinkQuota = totalQuota - manager.redoQuota
+	} else {
+		manager.sinkQuota = totalQuota
+		manager.redoQuota = 0
+	}
+
 	var err error
 	manager.sink, err = sink.New(ctx, manager.config, manager.changefeedID)
 	if err != nil {
 		return nil, 0, errors.Trace(err)
+	}
+
+	switch manager.sink.SinkType() {
+	case common.CloudStorageSinkType:
+		manager.outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
+	case common.KafkaSinkType:
+		manager.outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
 	// Register Event Dispatcher Manager in HeartBeatCollector,
@@ -265,20 +290,6 @@ func NewDispatcherManager(
 		manager.collectBlockStatusRequest(ctx)
 	}()
 
-	totalQuota := manager.config.MemoryQuota
-	if manager.RedoEnable {
-		consistentMemoryUsage := manager.config.Consistent.MemoryUsage
-		if consistentMemoryUsage == nil {
-			consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
-		}
-
-		manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
-		manager.sinkQuota = totalQuota - manager.redoQuota
-	} else {
-		manager.sinkQuota = totalQuota
-		manager.redoQuota = 0
-	}
-
 	log.Info("event dispatcher manager created",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
@@ -287,6 +298,7 @@ func NewDispatcherManager(
 		zap.Uint64("sinkQuota", manager.sinkQuota),
 		zap.Uint64("redoQuota", manager.redoQuota),
 		zap.Bool("redoEnable", manager.RedoEnable),
+		zap.Bool("outputRawChangeEvent", manager.outputRawChangeEvent),
 	)
 	return manager, tableTriggerStartTs, nil
 }
@@ -429,6 +441,7 @@ func (e *DispatcherManager) newEventDispatchers(infos []dispatcherCreateInfo, re
 			currentPdTs,
 			e.errCh,
 			e.config.BDRMode,
+			e.outputRawChangeEvent,
 			e.RedoEnable,
 			&e.redoGlobalTs,
 		)
@@ -748,6 +761,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		0, // currentPDTs will be calculated later.
 		e.errCh,
 		e.config.BDRMode,
+		e.outputRawChangeEvent,
 		e.RedoEnable,
 		&e.redoGlobalTs,
 	)

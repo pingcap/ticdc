@@ -49,6 +49,7 @@ type DispatcherService interface {
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
+	IsOutputRawChangeEvent() bool
 }
 
 // Dispatcher defines the interface for event dispatchers that are responsible for receiving events
@@ -173,9 +174,12 @@ type BasicDispatcher struct {
 	// errCh is shared in the DispatcherManager
 	errCh chan error
 
-	bdrMode        bool
-	seq            uint64
-	dispatcherType int
+	bdrMode              bool
+	seq                  uint64
+	dispatcherType       int
+	outputRawChangeEvent bool
+
+	BootstrapState bootstrapState
 }
 
 func NewBasicDispatcher(
@@ -196,6 +200,7 @@ func NewBasicDispatcher(
 	currentPdTs uint64,
 	errCh chan error,
 	bdrMode bool,
+	outputRawChangeEvent bool,
 	dispatcherType int,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
@@ -223,6 +228,8 @@ func NewBasicDispatcher(
 		errCh:                 errCh,
 		bdrMode:               bdrMode,
 		dispatcherType:        dispatcherType,
+		outputRawChangeEvent:  outputRawChangeEvent,
+		BootstrapState:        BootstrapFinished,
 	}
 
 	return dispatcher

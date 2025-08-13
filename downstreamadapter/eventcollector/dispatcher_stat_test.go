@@ -120,6 +120,10 @@ func (m *mockDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 	return &eventpb.IntegrityConfig{}
 }
 
+func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
+	return false
+}
+
 // mockEvent implements the Event interface for testing
 type mockEvent struct {
 	eventType    int
