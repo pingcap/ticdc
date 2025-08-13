@@ -25,7 +25,6 @@ type TableName struct {
 	Table       string `toml:"tbl-name" msg:"tbl-name"`
 	TableID     int64  `toml:"tbl-id" msg:"tbl-id"`
 	IsPartition bool   `toml:"is-partition" msg:"is-partition"`
-	quotedName  string `json:"-"`
 }
 
 // String implements fmt.Stringer interface.
@@ -35,10 +34,7 @@ func (t TableName) String() string {
 
 // QuoteString returns quoted full table name
 func (t TableName) QuoteString() string {
-	if t.quotedName == "" {
-		return QuoteSchema(t.Schema, t.Table)
-	}
-	return t.quotedName
+	return QuoteSchema(t.Schema, t.Table)
 }
 
 // GetSchema returns schema name.
