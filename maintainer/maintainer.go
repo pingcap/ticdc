@@ -516,12 +516,13 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			updateCheckpointTs := true
 			if !m.bootstrapped.Load() {
 				log.Warn("can not advance checkpointTs since not bootstrapped",
 					zap.String("changefeed", m.id.Name()),
 					zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
 					zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
-				return
+				break
 			}
 
 			// make sure there is no task running
@@ -551,20 +552,25 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				// node level watermark reported, ignore this round
 				watermark, ok := m.checkpointTsByCapture.Get(id)
 				if !ok {
+					updateCheckpointTs = false
 					log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
 						zap.String("changefeed", m.id.Name()),
 						zap.Any("node", id),
 						zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
 						zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
-					return
+					continue
 				}
 				newWatermark.UpdateMin(watermark)
+			}
+
+			if !updateCheckpointTs {
+				break
 			}
 
 			if minCheckpointTsForBarrier != uint64(math.MaxUint64) {
 				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
 			}
-			if minCheckpointTsForScheduler != 0 {
+			if minCheckpointTsForScheduler != uint64(math.MaxUint64) {
 				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
 			}
 
