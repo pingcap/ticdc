@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -32,7 +31,7 @@ import (
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
 func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
-	log.Info("dispatcher handle dispatcher status",
+	log.Debug("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),
 		zap.Stringer("dispatcher", d.id),
 		zap.Any("action", dispatcherStatus.GetAction()),
@@ -147,24 +146,10 @@ func (d *Dispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
 func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
-		ddl, ok := event.(*commonEvent.DDLEvent)
-		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
-		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
-		if ok && d.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
-			d.PassBlockEventToSink(event)
-		} else {
-			err := d.AddBlockEventToSink(event)
-			if err != nil {
-				select {
-				case d.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", d.changefeedID),
-						zap.Stringer("dispatcherID", d.id),
-						zap.Error(err))
-				}
-				return
-			}
+		err := d.AddBlockEventToSink(event)
+		if err != nil {
+			d.HandleError(err)
+			return
 		}
 		if event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil {
 			message := &heartbeatpb.TableSpanBlockStatus{

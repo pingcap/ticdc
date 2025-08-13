@@ -186,9 +186,6 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
-	if event.TiDBOnly {
-		return nil
-	}
 	// For exchange partition, we need to write the schema of the source table.
 	// write the previous table first
 	if event.GetDDLType() == model.ActionExchangeTablePartition {

@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -55,6 +56,7 @@ type Sink struct {
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal   *atomic.Bool
 	maxTxnRows int
+	bdrMode    bool
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -83,7 +85,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	return newMySQLSink(ctx, changefeedID, cfg, db), nil
+	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
 }
 
 func newMySQLSink(
@@ -91,6 +93,7 @@ func newMySQLSink(
 	changefeedID common.ChangeFeedID,
 	cfg *mysql.Config,
 	db *sql.DB,
+	bdrMode bool,
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
 	result := &Sink{
@@ -98,13 +101,16 @@ func newMySQLSink(
 		db:           db,
 		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
 		statistics:   stat,
-		conflictDetector: causality.New(defaultConflictDetectorSlots, causality.TxnCacheOption{
-			Count:         cfg.WorkerCount,
-			Size:          1024,
-			BlockStrategy: causality.BlockStrategyWaitEmpty,
-		}),
+		conflictDetector: causality.New(defaultConflictDetectorSlots,
+			causality.TxnCacheOption{
+				Count:         cfg.WorkerCount,
+				Size:          1024,
+				BlockStrategy: causality.BlockStrategyWaitEmpty,
+			},
+			changefeedID),
 		isNormal:   atomic.NewBool(true),
 		maxTxnRows: cfg.MaxTxnRow,
+		bdrMode:    bdrMode,
 	}
 	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < len(result.dmlWriter); i++ {
@@ -221,7 +227,13 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
-		err = s.ddlWriter.FlushDDLEvent(event.(*commonEvent.DDLEvent))
+		ddl := event.(*commonEvent.DDLEvent)
+		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
+		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
+		if s.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
+			break
+		}
+		err = s.ddlWriter.FlushDDLEvent(ddl)
 	case commonEvent.TypeSyncPointEvent:
 		err = s.ddlWriter.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
 	default:

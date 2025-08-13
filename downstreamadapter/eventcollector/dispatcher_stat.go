@@ -646,6 +646,10 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64)
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			Epoch:             epoch,
+			// OnlyReuse:         false,
+			BdrMode:   d.target.GetBDRMode(),
+			Timezone:  d.target.GetTimezone(),
+			Integrity: d.target.GetIntegrityConfig(),
 		},
 	}
 }

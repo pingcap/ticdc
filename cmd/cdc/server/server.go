@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
+	ticonfig "github.com/pingcap/tidb/pkg/config"
 	tiflowServer "github.com/pingcap/tiflow/pkg/cmd/server"
 	tiflowConfig "github.com/pingcap/tiflow/pkg/config"
 	"github.com/spf13/cobra"
@@ -328,7 +329,14 @@ func NewCmdServer() *cobra.Command {
 			return runTiFlowServer(o, cmd)
 		},
 	}
-
+	patchTiDBConfig()
 	o.addFlags(command)
 	return command
+}
+
+func patchTiDBConfig() {
+	ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
+		// Disable kv client batch send loop introduced by tidb library, it's not used by the TiCDC server.
+		conf.TiKVClient.MaxBatchSize = 0
+	})
 }

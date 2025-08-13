@@ -275,7 +275,8 @@ func (w *Writer) SyncWrite(event writer.RedoEvent) error {
 }
 
 func (w *Writer) encode(ctx context.Context) error {
-	ticker := time.NewTicker(redo.DefaultFlushIntervalInMs)
+	d := time.Duration(w.cfg.FlushIntervalInMs) * time.Millisecond
+	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	num := 0
 	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)

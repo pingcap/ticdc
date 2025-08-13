@@ -73,14 +73,12 @@ kafka_groups=(
 	# G02
 	'canal_json_handle_key_only'
 	# G03
-	'canal_json_adapter_compatibility'
+	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	# move_table ddl_for_split_tables_with_merge_and_split
-	'drop_many_tables'
+	'move_table drop_many_tables'
 	# G06
-	# ddl_for_split_tables_with_random_merge_and_split
 	'cdc default_value'
 	# G07
 	# merge_table
@@ -113,14 +111,13 @@ pulsar_groups=(
 	# G01
 	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
 	# G02
-	'canal_json_handle_key_only canal_json_storage_basic canal_json_storage_partition_table ddl_for_split_tables_with_failover'
+	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'canal_json_adapter_compatibility'
+	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	# move_table
-	'drop_many_tables ddl_for_split_tables_with_merge_and_split'
+	'move_table drop_many_tables'
 	# G06
 	'cdc default_value'
 	# G07
@@ -131,7 +128,8 @@ pulsar_groups=(
 	# G09
 	'mq_sink_error_resume'
 	# G10
-	fail_over_ddl_mix_with_syncpoint
+	# fail_over_ddl_mix_with_syncpoint
+	''
 	# G11
 	'ddl_with_random_move_table'
 	# G12
@@ -147,36 +145,38 @@ pulsar_groups=(
 
 storage_groups=(
 	# G00
-	'many_pk_or_uk generate_column multi_source'
+	'generate_column many_pk_or_uk multi_source'
 	# G01
+	#csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered
 	''
 	# G02
 	'canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
-	''
+	'csv_storage_basic storage_csv_update'
 	# G04
-	' '
+	'ddl_for_split_tables_with_random_move_table'
 	# G05
-	# 'move_table drop_many_tables'
-	'drop_many_tables'
+	#
+	'move_table drop_many_tables'
 	# G06
 	'cdc default_value'
 	# G07
-	'resolve_lock force_replicate_table'
+	'merge_table resolve_lock force_replicate_table'
 	# G08
 	'tidb_mysql_test'
 	# G09
-	''
+	'ddl_for_split_tables_with_merge_and_split'
 	# G10
-	''
+	'ddl_for_split_tables_with_random_merge_and_split'
 	# G11
+	# fail_over_ddl_mix_with_syncpoint
 	''
 	# G12
-	''
+	'ddl_with_random_move_table'
 	# G13
 	'fail_over region_merge'
 	# G14
-	''
+	'fail_over_ddl_mix'
 	# G15
 	''
 )

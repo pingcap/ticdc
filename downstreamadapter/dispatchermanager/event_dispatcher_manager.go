@@ -545,9 +545,6 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 			if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 				newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 			}
-			if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
-				newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
-			}
 			delay := time.NewTimer(10 * time.Millisecond)
 		loop:
 			for {
@@ -559,9 +556,6 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 					}
 					if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 						newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
-					}
-					if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
-						newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
 					}
 				case <-delay.C:
 					break loop
