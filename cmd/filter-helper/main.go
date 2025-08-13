@@ -17,11 +17,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/filter"
 	"github.com/spf13/cobra"
 )
 
@@ -49,13 +47,7 @@ func runFilter(cmd *cobra.Command, args []string) {
 	// fmt.Printf("Filter Rules: %v\n", filterRules)
 	// fmt.Printf("Schema Name: %s\n", schemaName)
 	// fmt.Printf("Table Name: %s\n", tableName)
-	cfg := &config.ReplicaConfig{}
-	err := util.StrictDecodeFile(cfgPath, "cdc filter helper", cfg)
-	if err != nil {
-		fmt.Printf("decode config file error: %v\n", err)
-		return
-	}
-	ft, err := filter.NewFilter(cfg, "")
+	ft, err := filter.NewFilter(config.NewDefaultFilterConfig(), "UTC", false, false)
 	if err != nil {
 		fmt.Printf("filter create error: %v\n", err)
 		return
@@ -73,7 +65,7 @@ func runFilter(cmd *cobra.Command, args []string) {
 
 	switch target {
 	case "table":
-		matched := !ft.ShouldIgnoreTable(tableAndSchema[0], tableAndSchema[1])
+		matched := !ft.ShouldIgnoreTable(tableAndSchema[0], tableAndSchema[1], nil)
 		if matched {
 			fmt.Printf("Table: %s, Matched filter rule\n", table)
 			return
@@ -81,22 +73,7 @@ func runFilter(cmd *cobra.Command, args []string) {
 		fmt.Printf("Table: %s, Not matched filter rule\n", table)
 	case "ddl":
 		ddlType := timodel.ActionCreateTable
-		discard := ft.ShouldDiscardDDL(ddlType, tableAndSchema[0], tableAndSchema[1])
-		if discard {
-			fmt.Printf("DDL: %s, should be discard by event filter rule\n", ddl)
-			return
-		}
-		ignored, err := ft.ShouldIgnoreDDLEvent(&model.DDLEvent{
-			StartTs: uint64(0),
-			Query:   ddl,
-			Type:    ddlType,
-			TableInfo: &model.TableInfo{
-				TableName: model.TableName{
-					Schema: tableAndSchema[0],
-					Table:  tableAndSchema[1],
-				},
-			},
-		})
+		ignored, err := ft.ShouldIgnoreDDL(tableAndSchema[0], tableAndSchema[1], ddl, ddlType, nil)
 		if err != nil {
 			fmt.Printf("filter ddl error: %s, error: %v\n", ddl, err)
 			return

@@ -223,7 +223,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			continue
 		}
 
-		if err = processor.appendRow(rawEvent); err != nil {
+		if err = processor.appendRow(rawEvent, session.dispatcherStat.filter); err != nil {
 			log.Error("append row failed", zap.Error(err),
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
@@ -288,7 +288,7 @@ func (s *eventScanner) handleNewTransaction(
 	}
 
 	// Process new transaction
-	if err = processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id); err != nil {
+	if err = processor.processNewTransaction(rawEvent, tableID, tableInfo, session.dispatcherStat.id, session.dispatcherStat.filter); err != nil {
 		return err
 	}
 
@@ -303,7 +303,7 @@ func (s *eventScanner) finalizeScan(
 	merger *eventMerger,
 	processor *dmlProcessor,
 ) ([]event.Event, error) {
-	if err := processor.clearCache(); err != nil {
+	if err := processor.clearCache(session.dispatcherStat.filter); err != nil {
 		return nil, err
 	}
 	// Append final batch
@@ -323,7 +323,7 @@ func (s *eventScanner) interruptScan(
 	merger *eventMerger,
 	processor *dmlProcessor,
 ) ([]event.Event, bool, error) {
-	if err := processor.clearCache(); err != nil {
+	if err := processor.clearCache(session.dispatcherStat.filter); err != nil {
 		return nil, false, err
 	}
 	// Append current batch
@@ -514,10 +514,10 @@ func newDMLProcessor(mounter pevent.Mounter, schemaGetter schemaGetter) *dmlProc
 	}
 }
 
-func (p *dmlProcessor) clearCache() error {
+func (p *dmlProcessor) clearCache(filter filter.Filter) error {
 	if len(p.insertRowCache) > 0 {
 		for _, insertRow := range p.insertRowCache {
-			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
+			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk, filter); err != nil {
 				return err
 			}
 		}
@@ -532,10 +532,11 @@ func (p *dmlProcessor) processNewTransaction(
 	tableID int64,
 	tableInfo *common.TableInfo,
 	dispatcherID common.DispatcherID,
+	filter filter.Filter,
 ) error {
 	if p.currentDML != nil && len(p.insertRowCache) > 0 {
 		for _, insertRow := range p.insertRowCache {
-			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
+			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk, filter); err != nil {
 				return err
 			}
 		}
@@ -544,7 +545,7 @@ func (p *dmlProcessor) processNewTransaction(
 	// Create a new DMLEvent for the current transaction
 	p.currentDML = pevent.NewDMLEvent(dispatcherID, tableID, rawEvent.StartTs, rawEvent.CRTs, tableInfo)
 	p.batchDML.AppendDMLEvent(p.currentDML)
-	return p.appendRow(rawEvent)
+	return p.appendRow(rawEvent, filter)
 }
 
 // appendRow appends a row to the current DML event.
@@ -573,13 +574,13 @@ func (p *dmlProcessor) processNewTransaction(
 //   - Appends the delete part to the current event
 //
 // 4. For normal updates (no unique key changes), appends the row directly
-func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
+func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry, filter filter.Filter) error {
 	if p.currentDML == nil {
 		return errors.New("no current DML event to append to")
 	}
 
 	if !rawEvent.IsUpdate() {
-		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
+		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, filter)
 	}
 
 	shouldSplit, err := pevent.IsUKChanged(rawEvent, p.currentDML.TableInfo)
@@ -592,10 +593,10 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 			return err
 		}
 		p.insertRowCache = append(p.insertRowCache, insertRow)
-		return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
+		return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk, filter)
 	}
 
-	return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
+	return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, filter)
 }
 
 // getCurrentBatch returns the current batch DML event

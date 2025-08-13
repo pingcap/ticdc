@@ -135,11 +135,11 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 		columnCount := len(r.TableInfo.GetColumns())
 		columns := make([]*RedoColumn, 0, columnCount)
 		switch r.Event.RowType {
-		case RowTypeInsert:
+		case common.RowTypeInsert:
 			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
-		case RowTypeDelete:
+		case common.RowTypeDelete:
 			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
-		case RowTypeUpdate:
+		case common.RowTypeUpdate:
 			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
 			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
 		default:
@@ -155,13 +155,13 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 				})
 				isHandleKey := r.TableInfo.IsHandleKey(column.ID)
 				switch r.Event.RowType {
-				case RowTypeInsert:
+				case common.RowTypeInsert:
 					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-				case RowTypeDelete:
+				case common.RowTypeDelete:
 					v := parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
 					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
-				case RowTypeUpdate:
+				case common.RowTypeUpdate:
 					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
 					v = parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
@@ -171,11 +171,11 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 			}
 		}
 		switch r.Event.RowType {
-		case RowTypeInsert:
+		case common.RowTypeInsert:
 			redoLog.RedoRow.Row.Columns = columns
-		case RowTypeDelete:
+		case common.RowTypeDelete:
 			redoLog.RedoRow.Row.PreColumns = columns
-		case RowTypeUpdate:
+		case common.RowTypeUpdate:
 			redoLog.RedoRow.Row.Columns = columns
 			redoLog.RedoRow.Row.PreColumns = columns
 		}
