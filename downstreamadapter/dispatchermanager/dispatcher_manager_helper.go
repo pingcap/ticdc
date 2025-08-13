@@ -51,6 +51,15 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 		}
 	}
 	if needCompleteStatus {
+		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Initializing {
+			log.Debug("dispatcher is initializing",
+				zap.Stringer("changefeedID", dispatcherItem.GetChangefeedID()),
+				zap.Stringer("dispatcherID", id),
+				zap.String("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
+				zap.Any("componentStatus", dispatcherItem.GetComponentStatus()),
+			)
+			return nil, nil, &heartBeatInfo.Watermark
+		}
 		return &heartbeatpb.TableSpanStatus{
 			ID:                 id.ToPB(),
 			ComponentStatus:    heartBeatInfo.ComponentStatus,

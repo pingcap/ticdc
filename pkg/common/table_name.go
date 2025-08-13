@@ -15,8 +15,6 @@ package common
 
 import (
 	"fmt"
-
-	"github.com/pingcap/log"
 )
 
 //go:generate msgp
@@ -38,7 +36,7 @@ func (t TableName) String() string {
 // QuoteString returns quoted full table name
 func (t TableName) QuoteString() string {
 	if t.quotedName == "" {
-		log.Panic("quotedName is not initialized")
+		return QuoteSchema(t.Schema, t.Table)
 	}
 	return t.quotedName
 }

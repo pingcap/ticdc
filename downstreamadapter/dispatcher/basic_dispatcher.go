@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -298,6 +297,13 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 
 // updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
 func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
+	log.Info("update dispatcher status to working",
+		zap.Stringer("dispatcher", d.id),
+		zap.Stringer("changefeedID", d.changefeedID),
+		zap.String("table", common.FormatTableSpan(d.tableSpan)),
+		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
+		zap.Uint64("resolvedTs", d.GetResolvedTs()),
+	)
 	// only when we receive the first event, we can regard the dispatcher begin syncing data
 	// then add it to status dynamic stream to receive dispatcher status from maintainer
 	addToStatusDynamicStream(d)
@@ -586,17 +592,10 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
 func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
-		ddl, ok := event.(*commonEvent.DDLEvent)
-		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
-		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
-		if ok && d.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
-			d.PassBlockEventToSink(event)
-		} else {
-			err := d.AddBlockEventToSink(event)
-			if err != nil {
-				d.HandleError(err)
-				return
-			}
+		err := d.AddBlockEventToSink(event)
+		if err != nil {
+			d.HandleError(err)
+			return
 		}
 		if event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil {
 			message := &heartbeatpb.TableSpanBlockStatus{
