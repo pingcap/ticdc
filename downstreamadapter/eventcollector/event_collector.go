@@ -353,6 +353,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case req := <-c.dispatcherMessageChan.Out():
+			log.Info("hyy event collector send dispatcher request message", zap.Any("message", req.Message))
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
 				sleepInterval := 10 * time.Millisecond
