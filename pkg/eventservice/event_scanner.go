@@ -600,6 +600,9 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		if err != nil {
 			return err
 		}
+		log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
+			zap.Uint64("commitTs", rawEvent.CRTs),
+			zap.String("table", p.currentDML.TableInfo.TableName.String()))
 		p.insertRowCache = append(p.insertRowCache, insertRow)
 		return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
 	}
