@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -42,6 +43,8 @@ type SplitDispatcherOperator struct {
 	finished atomic.Bool
 
 	lck sync.Mutex
+
+	lastSendMessageTime time.Time
 }
 
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator
@@ -56,12 +59,13 @@ func NewSplitDispatcherOperator(spanController *span.Controller,
 			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
 	}
 	op := &SplitDispatcherOperator{
-		replicaSet:     replicaSet,
-		originNode:     originNode,
-		splitSpans:     splitSpans,
-		checkpointTs:   replicaSet.GetStatus().GetCheckpointTs(),
-		spanController: spanController,
-		splitSpanInfo:  spansInfo,
+		replicaSet:          replicaSet,
+		originNode:          originNode,
+		splitSpans:          splitSpans,
+		checkpointTs:        replicaSet.GetStatus().GetCheckpointTs(),
+		spanController:      spanController,
+		splitSpanInfo:       spansInfo,
+		lastSendMessageTime: time.Now().Add(-minSendMessageInterval),
 	}
 	return op
 }
@@ -113,6 +117,10 @@ func (m *SplitDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableS
 }
 
 func (m *SplitDispatcherOperator) Schedule() *messaging.TargetMessage {
+	if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+		return nil
+	}
+	m.lastSendMessageTime = time.Now()
 	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode)
 }
 

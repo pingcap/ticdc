@@ -15,6 +15,7 @@ package operator
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -33,12 +34,15 @@ type removeDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
 	finished       atomic.Bool
 	spanController *span.Controller
+
+	lastSendMessageTime time.Time
 }
 
 func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		spanController: spanController,
+		replicaSet:          replicaSet,
+		spanController:      spanController,
+		lastSendMessageTime: time.Now().Add(-minSendMessageInterval),
 	}
 }
 
@@ -53,6 +57,11 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 }
 
 func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
+	if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+		return nil
+	}
+	m.lastSendMessageTime = time.Now()
+
 	return m.replicaSet.NewRemoveDispatcherMessage(m.replicaSet.GetNodeID())
 }
 
@@ -78,7 +87,6 @@ func (m *removeDispatcherOperator) IsFinished() bool {
 
 func (m *removeDispatcherOperator) OnTaskRemoved() {
 	panic("unreachable")
-	// m.finished.Store(true)
 }
 
 func (m *removeDispatcherOperator) Start() {

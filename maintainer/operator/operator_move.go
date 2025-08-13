@@ -16,6 +16,7 @@ package operator
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -40,15 +41,18 @@ type MoveDispatcherOperator struct {
 
 	noPostFinishNeed bool
 
+	lastSendMessageTime time.Time
+
 	lck sync.Mutex
 }
 
 func NewMoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {
 	return &MoveDispatcherOperator{
-		replicaSet:     replicaSet,
-		origin:         origin,
-		dest:           dest,
-		spanController: spanController,
+		replicaSet:          replicaSet,
+		origin:              origin,
+		dest:                dest,
+		spanController:      spanController,
+		lastSendMessageTime: time.Now().Add(-minSendMessageInterval),
 	}
 }
 
@@ -59,6 +63,9 @@ func (m *MoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSp
 	if from == m.origin && status.ComponentStatus != heartbeatpb.ComponentState_Working {
 		log.Info("replica set removed from origin node",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
+
+		// reset last send message time
+		m.lastSendMessageTime = time.Now().Add(-minSendMessageInterval)
 		m.originNodeStopped = true
 	}
 	if m.originNodeStopped && from == m.dest && status.ComponentStatus == heartbeatpb.ComponentState_Working {
@@ -88,6 +95,12 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 			m.spanController.BindSpanToNode(m.origin, m.dest, m.replicaSet)
 			m.bind = true
 		}
+
+		if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+			return nil
+		}
+		m.lastSendMessageTime = time.Now()
+
 		msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
 		if err != nil {
 			log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))
@@ -95,6 +108,11 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 		}
 		return msg
 	}
+
+	if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+		return nil
+	}
+	m.lastSendMessageTime = time.Now()
 	return m.replicaSet.NewRemoveDispatcherMessage(m.origin)
 }
 

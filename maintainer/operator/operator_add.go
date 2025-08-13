@@ -15,6 +15,7 @@ package operator
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -34,6 +35,8 @@ type AddDispatcherOperator struct {
 	finished       atomic.Bool
 	removed        atomic.Bool
 	spanController *span.Controller
+
+	lastSendMessageTime time.Time
 }
 
 func NewAddDispatcherOperator(
@@ -42,9 +45,10 @@ func NewAddDispatcherOperator(
 	dest node.ID,
 ) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
-		replicaSet:     replicaSet,
-		dest:           dest,
-		spanController: spanController,
+		replicaSet:          replicaSet,
+		dest:                dest,
+		spanController:      spanController,
+		lastSendMessageTime: time.Now().Add(-minSendMessageInterval),
 	}
 }
 
@@ -74,6 +78,12 @@ func (m *AddDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.removed.Load() {
 		return nil
 	}
+
+	if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+		return nil
+	}
+
+	m.lastSendMessageTime = time.Now()
 	msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
 	if err != nil {
 		log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))
