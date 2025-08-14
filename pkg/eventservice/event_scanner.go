@@ -167,7 +167,7 @@ func (s *eventScanner) scanAndMergeEvents(
 	merger *eventMerger,
 	iter eventstore.EventIterator,
 ) (bool, error) {
-	processor := newDMLProcessor(s.mounter, s.schemaGetter)
+	processor := newDMLProcessor(s.mounter, s.schemaGetter, session.dispatcherStat.info.IsOutputRawChangeEvent())
 
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
@@ -479,16 +479,18 @@ type dmlProcessor struct {
 	// currentDML is the transaction that is handling now
 	currentDML *event.DMLEvent
 
-	batchDML *event.BatchDMLEvent
+	batchDML             *event.BatchDMLEvent
+	outputRawChangeEvent bool
 }
 
 // newDMLProcessor creates a new DML processor
-func newDMLProcessor(mounter event.Mounter, schemaGetter schemaGetter) *dmlProcessor {
+func newDMLProcessor(mounter event.Mounter, schemaGetter schemaGetter, outputRawChangeEvent bool) *dmlProcessor {
 	return &dmlProcessor{
-		mounter:        mounter,
-		schemaGetter:   schemaGetter,
-		batchDML:       event.NewBatchDMLEvent(),
-		insertRowCache: make([]*common.RawKVEntry, 0),
+		mounter:              mounter,
+		schemaGetter:         schemaGetter,
+		batchDML:             event.NewBatchDMLEvent(),
+		insertRowCache:       make([]*common.RawKVEntry, 0),
+		outputRawChangeEvent: outputRawChangeEvent,
 	}
 }
 
@@ -553,15 +555,24 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
 	}
 
-	shouldSplit, err := event.IsUKChanged(rawEvent, p.currentDML.TableInfo)
-	if err != nil {
-		return err
+	var (
+		shouldSplit bool
+		err         error
+	)
+	if !p.outputRawChangeEvent {
+		shouldSplit, err = event.IsUKChanged(rawEvent, p.currentDML.TableInfo)
+		if err != nil {
+			return err
+		}
 	}
 
 	if !shouldSplit {
 		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
 	}
 
+	log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
+		zap.Uint64("commitTs", rawEvent.CRTs),
+		zap.String("table", p.currentDML.TableInfo.TableName.String()))
 	deleteRow, insertRow, err := rawEvent.SplitUpdate()
 	if err != nil {
 		return err

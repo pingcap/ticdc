@@ -40,6 +40,8 @@ const (
 	emptyPollInterval = time.Millisecond * 200
 	// nextPollInterval is the interval to poll the operator from the queue when the queue is not empty.
 	nextPollInterval = time.Millisecond * 50
+	// minSendMessageInterval is the minimum interval to send same message to the dispatcher.
+	minSendMessageInterval = 5 * time.Second
 )
 
 var _ operator.Controller[common.DispatcherID, *heartbeatpb.TableSpanStatus] = &Controller{}
@@ -68,6 +70,7 @@ func NewOperatorController(
 ) *Controller {
 	return &Controller{
 		changefeedID:   changefeedID,
+		batchSize:      batchSize,
 		operators:      make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
 		runningQueue:   make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
 		role:           "maintainer",

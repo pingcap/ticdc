@@ -44,8 +44,6 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
-
-	memoryQuotaLowThreshold = 1024 * 1024 * 256
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -77,6 +75,8 @@ type eventBroker struct {
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
 	messageCh []chan *wrapEvent
+
+	scanLimitInBytes uint64
 
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
 	cancel context.CancelFunc
@@ -125,9 +125,11 @@ func newEventBroker(
 		msgSender:               mc,
 		taskChan:                make([]chan scanTask, scanWorkerCount),
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
+		scanLimitInBytes:        uint64(config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes),
 		cancel:                  cancel,
 		g:                       g,
 	}
+
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
 
@@ -533,7 +535,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	available := item.(*atomic.Uint64)
 
-	if available.Load() < memoryQuotaLowThreshold {
+	if available.Load() < c.scanLimitInBytes {
 		task.resetScanLimit()
 		return
 	}

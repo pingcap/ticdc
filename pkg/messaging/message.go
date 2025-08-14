@@ -259,6 +259,10 @@ func (r DispatcherRequest) GetEpoch() uint64 {
 	return r.Epoch
 }
 
+func (r DispatcherRequest) IsOutputRawChangeEvent() bool {
+	return r.OutputRawChangeEvent
+}
+
 type IOTypeT interface {
 	Unmarshal(data []byte) error
 	Marshal() (data []byte, err error)

@@ -54,6 +54,7 @@ type EventDispatcher interface {
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
+	IsOutputRawChangeEvent() bool
 }
 
 /*
@@ -162,6 +163,8 @@ type Dispatcher struct {
 	seq     uint64
 
 	BootstrapState bootstrapState
+
+	outputRawChangeEvent bool
 }
 
 func NewDispatcher(
@@ -182,6 +185,7 @@ func NewDispatcher(
 	currentPdTs uint64,
 	errCh chan error,
 	bdrMode bool,
+	outputRawChangeEvent bool,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
 		changefeedID:          changefeedID,
@@ -208,6 +212,7 @@ func NewDispatcher(
 		errCh:                 errCh,
 		bdrMode:               bdrMode,
 		BootstrapState:        BootstrapFinished,
+		outputRawChangeEvent:  outputRawChangeEvent,
 	}
 
 	return dispatcher
@@ -554,6 +559,13 @@ func (d *Dispatcher) EmitBootstrap() bool {
 
 // updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
 func (d *Dispatcher) updateDispatcherStatusToWorking() {
+	log.Info("update dispatcher status to working",
+		zap.Stringer("dispatcher", d.id),
+		zap.Stringer("changefeedID", d.changefeedID),
+		zap.String("table", common.FormatTableSpan(d.tableSpan)),
+		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
+		zap.Uint64("resolvedTs", d.GetResolvedTs()),
+	)
 	// only when we receive the first event, we can regard the dispatcher begin syncing data
 	// then add it to status dynamic stream to receive dispatcher status from maintainer
 	d.addToStatusDynamicStream()
@@ -578,4 +590,8 @@ func (d *Dispatcher) HandleError(err error) {
 			zap.Stringer("dispatcherID", d.id),
 			zap.Error(err))
 	}
+}
+
+func (d *Dispatcher) IsOutputRawChangeEvent() bool {
+	return d.outputRawChangeEvent
 }

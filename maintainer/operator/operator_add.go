@@ -34,6 +34,8 @@ type AddDispatcherOperator struct {
 	finished       atomic.Bool
 	removed        atomic.Bool
 	spanController *span.Controller
+
+	sendThrottler sendThrottler
 }
 
 func NewAddDispatcherOperator(
@@ -45,6 +47,7 @@ func NewAddDispatcherOperator(
 		replicaSet:     replicaSet,
 		dest:           dest,
 		spanController: spanController,
+		sendThrottler:  newSendThrottler(),
 	}
 }
 
@@ -74,6 +77,11 @@ func (m *AddDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.removed.Load() {
 		return nil
 	}
+
+	if !m.sendThrottler.shouldSend() {
+		return nil
+	}
+
 	msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
 	if err != nil {
 		log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))

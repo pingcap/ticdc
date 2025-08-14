@@ -33,12 +33,15 @@ type removeDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
 	finished       atomic.Bool
 	spanController *span.Controller
+
+	sendThrottler sendThrottler
 }
 
 func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
 		replicaSet:     replicaSet,
 		spanController: spanController,
+		sendThrottler:  newSendThrottler(),
 	}
 }
 
@@ -53,6 +56,10 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 }
 
 func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
+	if !m.sendThrottler.shouldSend() {
+		return nil
+	}
+
 	return m.replicaSet.NewRemoveDispatcherMessage(m.replicaSet.GetNodeID())
 }
 
@@ -78,7 +85,6 @@ func (m *removeDispatcherOperator) IsFinished() bool {
 
 func (m *removeDispatcherOperator) OnTaskRemoved() {
 	panic("unreachable")
-	// m.finished.Store(true)
 }
 
 func (m *removeDispatcherOperator) Start() {
