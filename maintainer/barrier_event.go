@@ -101,7 +101,6 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	}
 
 	if status.BlockTables != nil {
-		event.reportedDispatchers[dispatcherID] = struct{}{}
 		switch status.BlockTables.InfluenceType {
 		case heartbeatpb.InfluenceType_Normal:
 			if dynamicSplitEnabled {
@@ -280,6 +279,7 @@ func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID
 			zap.String("dispatcher", dispatcherID.String()))
 		return
 	}
+	be.reportedDispatchers[dispatcherID] = struct{}{}
 	if be.rangeChecker == nil {
 		// rangeChecker is not created
 		if be.spanController.IsDDLDispatcher(dispatcherID) {
@@ -326,7 +326,13 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 	// 5. Therefore, when checking the reported status, we need to check for expired dispatchers
 	//    to avoid this situation.
 	for dispatcherID := range be.reportedDispatchers {
-		if be.spanController.GetTaskByID(dispatcherID) == nil {
+		task := be.spanController.GetTaskByID(dispatcherID)
+		if task == nil || !be.spanController.IsReplicating(task) {
+			log.Info("unexisted dispatcher or not replicating task, remove it from barrier event",
+				zap.String("changefeed", be.cfID.Name()),
+				zap.String("dispatcher", dispatcherID.String()),
+				zap.Any("taskNil", task == nil),
+			)
 			needDoubleCheck = true
 			delete(be.reportedDispatchers, dispatcherID)
 		}

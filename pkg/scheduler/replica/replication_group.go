@@ -251,6 +251,10 @@ func (g *replicationGroup[T, R]) GetReplicating() []R {
 	return res
 }
 
+func (g *replicationGroup[T, R]) IsReplicating(replica R) bool {
+	return g.replicating.Find(replica.GetID())
+}
+
 func (g *replicationGroup[T, R]) GetTaskSizePerNode() map[node.ID]int {
 	res := make(map[node.ID]int)
 	for nodeID, tasks := range g.nodeTasks {
