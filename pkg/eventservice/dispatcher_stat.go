@@ -418,8 +418,6 @@ type changefeedStatus struct {
 	isReadyRecevingData atomic.Bool
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
 	dispatcherCount atomic.Uint64
-
-	dispatcherStatMap sync.Map // nodeID -> dispatcherID -> dispatcherStat
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

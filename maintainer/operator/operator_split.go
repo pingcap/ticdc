@@ -51,6 +51,8 @@ type SplitDispatcherOperator struct {
 	removed      atomic.Bool
 
 	lck sync.Mutex
+
+	sendThrottler sendThrottler
 }
 
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator
@@ -75,6 +77,7 @@ func NewSplitDispatcherOperator(
 		splitSpanInfo:    spansInfo,
 		splitTargetNodes: splitTargetNodes,
 		postFinish:       postFinish,
+		sendThrottler:    newSendThrottler(),
 	}
 	return op
 }
@@ -128,6 +131,9 @@ func (m *SplitDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableS
 }
 
 func (m *SplitDispatcherOperator) Schedule() *messaging.TargetMessage {
+	if !m.sendThrottler.shouldSend() {
+		return nil
+	}
 	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode)
 }
 

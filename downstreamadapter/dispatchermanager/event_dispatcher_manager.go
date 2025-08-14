@@ -374,6 +374,14 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		newStartTsList = startTsList
 	}
 
+	var outputRawChangeEvent bool
+	switch e.sink.SinkType() {
+	case common.CloudStorageSinkType:
+		outputRawChangeEvent = e.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
+	case common.KafkaSinkType:
+		outputRawChangeEvent = e.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
+	}
+
 	if e.latestWatermark.Get().CheckpointTs == 0 {
 		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
 		smallestStartTs := int64(math.MaxInt64)
@@ -401,7 +409,9 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.filterConfig,
 			currentPdTs,
 			e.errCh,
-			e.config.BDRMode)
+			e.config.BDRMode,
+			outputRawChangeEvent,
+		)
 
 		if e.heartBeatTask == nil {
 			e.heartBeatTask = newHeartBeatTask(e)
@@ -724,6 +734,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 	var endKey []byte
 	var schemaID int64
 	var fakeStartTs uint64 = math.MaxUint64 // we calculate the fake startTs as the min-checkpointTs of these dispatchers
+	outputRawChangeEvent := false
 	for idx, id := range dispatcherIDs {
 		dispatcher, ok := e.dispatcherMap.Get(id)
 		if !ok {
@@ -739,6 +750,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 				zap.Any("componentStatus", dispatcher.GetComponentStatus()))
 			return nil
 		}
+		outputRawChangeEvent = dispatcher.IsOutputRawChangeEvent()
 		if dispatcher.GetCheckpointTs() < fakeStartTs {
 			fakeStartTs = dispatcher.GetCheckpointTs()
 		}
@@ -789,6 +801,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		0, // currentPDTs will be calculated later.
 		e.errCh,
 		e.config.BDRMode,
+		outputRawChangeEvent,
 	)
 
 	log.Info("new dispatcher created(merge dispatcher)",

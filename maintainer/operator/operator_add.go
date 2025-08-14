@@ -40,8 +40,7 @@ type AddDispatcherOperator struct {
 	removed        atomic.Bool
 	spanController *span.Controller
 
-	// TODO:for other operators
-	lastSendMessageTime time.Time
+	sendThrottler sendThrottler
 }
 
 func NewAddDispatcherOperator(
@@ -50,10 +49,10 @@ func NewAddDispatcherOperator(
 	dest node.ID,
 ) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
-		replicaSet:          replicaSet,
-		dest:                dest,
-		spanController:      spanController,
-		lastSendMessageTime: time.Now().Add(-minSendMessageInterval),
+		replicaSet:     replicaSet,
+		dest:           dest,
+		spanController: spanController,
+		sendThrottler:  newSendThrottler(),
 	}
 }
 
@@ -88,10 +87,11 @@ func (m *AddDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.removed.Load() {
 		return nil
 	}
-	if time.Since(m.lastSendMessageTime) < minSendMessageInterval {
+
+	if !m.sendThrottler.shouldSend() {
 		return nil
 	}
-	m.lastSendMessageTime = time.Now()
+
 	msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
 	if err != nil {
 		log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))

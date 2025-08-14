@@ -46,6 +46,8 @@ type MergeDispatcherOperator struct {
 	checkpointTs        uint64
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+
+	sendThrottler sendThrottler
 }
 
 func NewMergeDispatcherOperator(
@@ -99,6 +101,7 @@ func NewMergeDispatcherOperator(
 		mergedSpanInfo:      spansInfo,
 		occupyOperators:     occupyOperators,
 		newReplicaSet:       newReplicaSet,
+		sendThrottler:       newSendThrottler(),
 	}
 	return op
 }
@@ -150,6 +153,11 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.removed.Load() {
 		return nil
 	}
+
+	if !m.sendThrottler.shouldSend() {
+		return nil
+	}
+
 	return messaging.NewSingleTargetMessage(m.node,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.MergeDispatcherRequest{
