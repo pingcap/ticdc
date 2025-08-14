@@ -29,37 +29,38 @@ group_num=${group#G}
 
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
-	# G05
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
-	# G06
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
-	# G07
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
+	# G00
+	'generate_column many_pk_or_uk multi_source'
+	# G01
+	'api_v2 ddl_for_split_tables_with_random_move_table'
+	# G02
+	'availability ddl_for_split_tables_with_failover'
+	# G03
+	''
 	# G04
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
+	'syncpoint syncpoint_check_ts'
 	# G05
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
+	'move_table ddl_for_split_tables_with_merge_and_split'
 	# G06
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
+	'cdc ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
+	'resolve_lock merge_table'
 	# G08
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
-	# G05
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
-	# G06
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
-	# G07
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
+	'bank'
+	# G09
+	'drop_many_tables'
+	# G10
+	'default_value http_proxies'
+	# G11
+	'ddl_reentrant force_replicate_table'
 	# G12
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
-	# G05
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
-	# G06
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
-	# G07
-	'ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
+	'tidb_mysql_test ddl_with_random_move_table'
+	# G13
+	'fail_over region_merge'
+	# G14
+	'fail_over_ddl_mix'
+	# G15
+	'fail_over_ddl_mix_with_syncpoint'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
