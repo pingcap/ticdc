@@ -279,6 +279,9 @@ func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID
 			zap.String("dispatcher", dispatcherID.String()))
 		return
 	}
+	log.Info("markDispatcherEventDone",
+		zap.String("changefeed", be.cfID.Name()),
+		zap.String("dispatcher", dispatcherID.String()))
 	be.reportedDispatchers[dispatcherID] = struct{}{}
 	if be.rangeChecker == nil {
 		// rangeChecker is not created
@@ -307,6 +310,12 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 		return false
 	}
 
+	for dispatcherID := range be.reportedDispatchers {
+		log.Info("in allDispatcherReported",
+			zap.String("changefeed", be.cfID.Name()),
+			zap.String("dispatcher", dispatcherID.String()))
+	}
+
 	if !be.rangeChecker.IsFullyCovered() {
 		return false
 	}
@@ -326,12 +335,11 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 	// 5. Therefore, when checking the reported status, we need to check for expired dispatchers
 	//    to avoid this situation.
 	for dispatcherID := range be.reportedDispatchers {
-		task := be.spanController.GetTaskByID(dispatcherID)
-		if task == nil || !be.spanController.IsReplicating(task) {
-			log.Info("unexisted dispatcher or not replicating task, remove it from barrier event",
+		// task := be.spanController.GetTaskByID(dispatcherID)
+		if be.spanController.GetTaskByID(dispatcherID) == nil {
+			log.Info("unexisted dispatcher, remove it from barrier event",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
-				zap.Any("taskNil", task == nil),
 			)
 			needDoubleCheck = true
 			delete(be.reportedDispatchers, dispatcherID)
