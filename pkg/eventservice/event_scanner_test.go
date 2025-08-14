@@ -385,7 +385,8 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	startTs := uint64(100)
 	disp := newDispatcherStat(startTs, disInfo, nil, 0, 0, changefeedStatus)
 	makeDispatcherReady(disp)
-	broker.addDispatcher(disp.info)
+	err := broker.addDispatcher(disp.info)
+	require.NoError(t, err)
 
 	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
 
@@ -399,7 +400,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 		`insert into test.t(id,c) values (3, "c3")`,
 	}...)
 	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-	err := mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
+	err = mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
 	require.NoError(t, err)
 	mockSchemaStore.AppendDDLEvent(tableID, ddlEvent)
 
@@ -1055,7 +1056,8 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		insertSQL, updateSQL := "insert into test.t(id,a,b) values (7, 'a7', 'b7')", "update test.t set a = 'a7_updated' where id = 7"
 		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
 
-		err := processor.processNewTransaction(updateEvent, tableID, tableInfo, dispatcherID)
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs)
+		err := processor.appendRow(updateEvent)
 		require.NoError(t, err)
 
 		// Verify insert cache
