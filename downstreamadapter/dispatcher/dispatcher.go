@@ -472,6 +472,8 @@ func (d *Dispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
 	h.Id = d.GetId()
 	h.ComponentStatus = d.GetComponentStatus()
 	h.IsRemoving = d.GetRemovingStatus()
+
+	log.Info("dispatcher heartbeat info", zap.Any("dispatcher", d.id), zap.Any("checkpointTs", d.GetCheckpointTs()), zap.Any("resolvedTs", d.GetResolvedTs()))
 }
 
 func (d *Dispatcher) GetResolvedTs() uint64 {

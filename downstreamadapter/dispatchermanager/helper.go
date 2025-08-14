@@ -187,9 +187,6 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 }
 
 func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *EventDispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
-	log.Info("SchedulerDispatcherRequestHandler handle",
-		zap.String("changefeed", eventDispatcherManager.changefeedID.Name()),
-		zap.Any("reqs", reqs))
 	// If req is about remove dispatcher, then there will only be one request in reqs.
 	infos := make([]dispatcherCreateInfo, 0, len(reqs))
 	for _, req := range reqs {
