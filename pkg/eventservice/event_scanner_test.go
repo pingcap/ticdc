@@ -23,8 +23,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -391,7 +389,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
 
 	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
-	helper := commonEvent.NewEventTestHelper(t)
+	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
@@ -423,26 +421,26 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	require.Equal(t, 4, len(events))
 	// DDL
 	e := events[0]
-	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, e.GetType(), event.TypeDDLEvent)
 	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
 	// DML0
 	e = events[1]
-	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
-	batchDML0 := e.(*pevent.BatchDMLEvent)
+	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+	batchDML0 := e.(*event.BatchDMLEvent)
 	require.Equal(t, int32(1), batchDML0.Len())
 	require.Equal(t, batchDML0.DMLEvents[0].GetCommitTs(), dml0.CRTs)
 
 	// DML1 & DML2
 	e = events[2]
-	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
-	batchDML1 := e.(*pevent.BatchDMLEvent)
+	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+	batchDML1 := e.(*event.BatchDMLEvent)
 	require.Equal(t, int32(2), batchDML1.Len())
 	require.Equal(t, batchDML1.DMLEvents[0].GetCommitTs(), dml1.CRTs)
 	require.Equal(t, batchDML1.DMLEvents[1].GetCommitTs(), dml2.CRTs)
 
 	// resolvedTs
 	e = events[3]
-	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
+	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
 	require.Equal(t, dml2.CRTs, e.GetCommitTs())
 }
 
@@ -1050,7 +1048,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 7: appendRow for update operation with unique key change and outputRawChangeEvent is true (do not split update)
 	t.Run("AppendUpdateRowWithUKChangeAndOutputRawChangeEvent", func(t *testing.T) {
-		processor := newDMLProcessor(pevent.NewMounter(time.UTC, &integrity.Config{}), mockSchemaGetter, true)
+		processor := newDMLProcessor(event.NewMounter(time.UTC, &integrity.Config{}), mockSchemaGetter, true)
 		// Generate a real update event that changes unique key using helper
 		// This updates the unique key column 'a' from 'a1' to 'a1_new'
 		insertSQL, updateSQL := "insert into test.t(id,a,b) values (7, 'a7', 'b7')", "update test.t set a = 'a7_updated' where id = 7"

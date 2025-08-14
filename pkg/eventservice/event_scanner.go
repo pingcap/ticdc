@@ -182,7 +182,7 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			err = finalizeScan(merger, processor, session)
+			err = finalizeScan(merger, processor, session, session.dataRange.EndTs)
 			return false, err
 		}
 
@@ -194,10 +194,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			}
 			// table is deleted, still append remaining DDL event and resolved event.
 			if tableInfo == nil {
-				events := merger.resolveDDLEvents(session.dataRange.EndTs)
-				resolve := event.NewResolvedEvent(session.dataRange.EndTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
-				events = append(events, resolve)
-				session.appendEvents(events)
+				err = finalizeScan(merger, processor, session, rawEvent.CRTs-1)
 				return false, nil
 			}
 
@@ -307,6 +304,7 @@ func finalizeScan(
 	merger *eventMerger,
 	processor *dmlProcessor,
 	sess *session,
+	endTs uint64,
 ) error {
 	if err := processor.commitTxn(); err != nil {
 		return err
@@ -314,11 +312,10 @@ func finalizeScan(
 
 	resolvedBatch := processor.getResolvedBatchDML()
 	events := merger.appendDMLEvent(resolvedBatch)
-	events = append(events, merger.resolveDDLEvents(sess.dataRange.EndTs)...)
+	events = append(events, merger.resolveDDLEvents(endTs)...)
 
-	resolveTs := event.NewResolvedEvent(sess.dataRange.EndTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch.Load())
+	resolveTs := event.NewResolvedEvent(endTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch.Load())
 	events = append(events, resolveTs)
-
 	sess.appendEvents(events)
 	return nil
 }
