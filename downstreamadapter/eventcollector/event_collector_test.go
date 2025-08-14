@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var _ dispatcher.EventDispatcher = (*mockEventDispatcher)(nil)
+var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
 	id        common.DispatcherID
@@ -43,8 +43,16 @@ func (m *mockEventDispatcher) GetId() common.DispatcherID {
 	return m.id
 }
 
+func (m *mockEventDispatcher) GetType() int {
+	return dispatcher.TypeDispatcherEvent
+}
+
 func (m *mockEventDispatcher) GetStartTs() uint64 {
 	return 0
+}
+
+func (m *mockEventDispatcher) GetBDRMode() bool {
+	return false
 }
 
 func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
@@ -53,6 +61,14 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return m.tableSpan
+}
+
+func (m *mockEventDispatcher) GetTimezone() string {
+	return "system"
+}
+
+func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
+	return nil
 }
 
 func (m *mockEventDispatcher) GetFilterConfig() *eventpb.FilterConfig {
@@ -86,16 +102,8 @@ func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.Dispatc
 	return false
 }
 
-func (m *mockEventDispatcher) GetBDRMode() bool {
-	return false
-}
-
-func (m *mockEventDispatcher) GetTimezone() string {
-	return "system"
-}
-
-func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
-	return nil
+func (m *mockEventDispatcher) GetBlockEventStatus() *heartbeatpb.State {
+	return &heartbeatpb.State{}
 }
 
 func (m *mockEventDispatcher) IsOutputRawChangeEvent() bool {
@@ -119,7 +127,7 @@ func TestProcessMessage(t *testing.T) {
 	did := common.NewDispatcherID()
 	ch := make(chan *messaging.TargetMessage, receiveChanSize)
 	go func() {
-		c.runDispatchMessage(ctx, ch)
+		c.runDispatchMessage(ctx, ch, false)
 	}()
 
 	var seq atomic.Uint64
