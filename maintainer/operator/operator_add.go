@@ -15,7 +15,6 @@ package operator
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -26,10 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
-)
-
-const (
-	minSendMessageInterval = 5 * time.Second
 )
 
 // AddDispatcherOperator is an operator to schedule a table span to a dispatcher
