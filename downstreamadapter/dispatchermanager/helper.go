@@ -188,7 +188,7 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 
 func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *EventDispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	// If req is about remove dispatcher, then there will only be one request in reqs.
-	infos := make([]dispatcherCreateInfo, 0, len(reqs))
+	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	for _, req := range reqs {
 		if req.ScheduleDispatcherRequest == nil {
 			log.Warn("scheduleDispatcherRequest is nil, skip")
@@ -198,12 +198,12 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 		dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)
 		switch req.ScheduleAction {
 		case heartbeatpb.ScheduleAction_Create:
-			infos = append(infos, dispatcherCreateInfo{
+			infos[dispatcherID] = dispatcherCreateInfo{
 				Id:        dispatcherID,
 				TableSpan: config.Span,
 				StartTs:   config.StartTs,
 				SchemaID:  config.SchemaID,
-			})
+			}
 		case heartbeatpb.ScheduleAction_Remove:
 			if len(reqs) != 1 {
 				log.Error("invalid remove dispatcher request count in one batch", zap.Int("count", len(reqs)))
@@ -212,7 +212,11 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 		}
 	}
 	if len(infos) > 0 {
-		err := eventDispatcherManager.newDispatchers(infos, false)
+		infoList := make([]dispatcherCreateInfo, 0, len(infos))
+		for _, info := range infos {
+			infoList = append(infoList, info)
+		}
+		err := eventDispatcherManager.newDispatchers(infoList, false)
 		if err != nil {
 			select {
 			case eventDispatcherManager.errCh <- err:
