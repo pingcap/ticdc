@@ -15,6 +15,7 @@ package common
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/pingcap/log"
 )
@@ -23,6 +24,7 @@ import (
 
 // TableName represents name of a table, includes table name and schema name.
 type TableName struct {
+	mu          sync.RWMutex
 	Schema      string `toml:"db-name" msg:"db-name"`
 	Table       string `toml:"tbl-name" msg:"tbl-name"`
 	TableID     int64  `toml:"tbl-id" msg:"tbl-id"`
@@ -32,11 +34,15 @@ type TableName struct {
 
 // String implements fmt.Stringer interface.
 func (t TableName) String() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return fmt.Sprintf("%s.%s", t.Schema, t.Table)
 }
 
 // QuoteString returns quoted full table name
 func (t TableName) QuoteString() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	if t.quotedName == "" {
 		log.Panic("quotedName is not initialized")
 	}
@@ -45,15 +51,21 @@ func (t TableName) QuoteString() string {
 
 // GetSchema returns schema name.
 func (t *TableName) GetSchema() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.Schema
 }
 
 // GetTable returns table name.
 func (t *TableName) GetTable() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.Table
 }
 
 // GetTableID returns table ID.
 func (t *TableName) GetTableID() int64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.TableID
 }
