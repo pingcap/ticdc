@@ -14,6 +14,7 @@
 package eventcollector
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -398,6 +399,10 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
+				log.Info("get dml event in batch dml",
+					zap.Any("dml", dml.CommitTs),
+					zap.Stringer("dispatcherID", event.GetDispatcherID()),
+					zap.String("tableInfo_address", fmt.Sprintf("%p", dml.TableInfo)))
 				dml.TableInfoVersion = tableInfoVersion
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.filterAndUpdateEventByCommitTs(dmlEvent) {
