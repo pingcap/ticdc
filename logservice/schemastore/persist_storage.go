@@ -415,7 +415,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 		if ok {
 			events = append(events, ddlEvent)
 		} else {
-			log.Warn("skip fetch ddl event",
+			log.Info("skip fetch ddl event",
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", tableID),
 				zap.Uint64("ts", ts),
