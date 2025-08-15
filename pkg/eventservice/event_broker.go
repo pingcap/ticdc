@@ -548,9 +548,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	log.Info("scan events finished",
-		zap.Stringer("dispatcher", task.id),
-		zap.Int("len(events)", len(events)))
 	for _, e := range events {
 		if task.isRemoved.Load() {
 			return

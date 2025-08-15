@@ -1519,11 +1519,6 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	if rawEvent.TableInfo != nil {
 		wrapTableInfo = common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo)
 	}
-	log.Debug("buildDDLEventCommon",
-		zap.String("schemaName", rawEvent.SchemaName),
-		zap.String("tableName", rawEvent.TableName),
-		zap.String("query", rawEvent.Query),
-		zap.Bool("filtered", filtered))
 
 	return commonEvent.DDLEvent{
 		Type: rawEvent.Type,
@@ -1673,10 +1668,6 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 	if !ok {
 		return ddlEvent, false
 	}
-	log.Info("after buildDDLEventCommon",
-		zap.String("schemaName", rawEvent.SchemaName),
-		zap.String("tableName", rawEvent.TableName),
-		zap.String("query", rawEvent.Query))
 
 	// the event is related to the partition table
 	if rawEvent.TableInfo.Partition != nil {
