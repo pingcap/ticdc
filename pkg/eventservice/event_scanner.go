@@ -284,7 +284,7 @@ func (s *eventScanner) handleNewTransaction(
 
 	// Check if batch should be flushed
 	hasNewDDL := merger.hasMoreDDLs() && rawEvent.CRTs > merger.nextDDLFinishedTs()
-	if processor.shouldFlushBatch(tableInfo.UpdateTS(), hasNewDDL) {
+	if processor.shouldFlushBatch(tableInfo.UpdateTS(), hasNewDDL, session.dispatcherStat.id) {
 		events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
 		session.events = append(session.events, events...)
 		processor.flushBatch(tableInfo.UpdateTS())
@@ -618,10 +618,11 @@ func (p *dmlProcessor) getCurrentBatch() *pevent.BatchDMLEvent {
 }
 
 // shouldFlushBatch determines if the current batch should be flushed
-func (p *dmlProcessor) shouldFlushBatch(tableInfoUpdateTs uint64, hasNewDDL bool) bool {
+func (p *dmlProcessor) shouldFlushBatch(tableInfoUpdateTs uint64, hasNewDDL bool, dispatcherID common.DispatcherID) bool {
 	log.Info("should flush batch",
 		zap.Uint64("tableInfoUpdateTs", tableInfoUpdateTs),
 		zap.Uint64("lastTableInfoUpdateTs", p.lastTableInfoUpdateTs),
+		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Bool("hasNewDDL", hasNewDDL))
 	return tableInfoUpdateTs != p.lastTableInfoUpdateTs || hasNewDDL
 }
