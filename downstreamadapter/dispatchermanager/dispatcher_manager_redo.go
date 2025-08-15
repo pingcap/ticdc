@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -50,6 +51,14 @@ func initRedoComponet(
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
 	manager.redoSink = redo.New(ctx, changefeedID, startTs, manager.config.Consistent)
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
+
+	totalQuota := manager.sinkQuota
+	consistentMemoryUsage := manager.config.Consistent.MemoryUsage
+	if consistentMemoryUsage == nil {
+		consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
+	}
+	manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
+	manager.sinkQuota = totalQuota - manager.redoQuota
 
 	// init redo table trigger event dispatcher when redoTableTriggerEventDispatcherID is not nil
 	if redoTableTriggerEventDispatcherID != nil {
