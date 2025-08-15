@@ -149,19 +149,6 @@ func (e *SyncPointEvent) decode(data []byte) error {
 	return e.decodeV0(data)
 }
 
-// type SyncPointEvent struct {
-// 	// State is the state of sender when sending this event.
-// 	State        EventSenderState
-// 	DispatcherID common.DispatcherID
-// 	CommitTsList []uint64
-// 	// The seq of the event. It is set by event service.
-// 	Seq uint64
-// 	// The epoch of the event. It is set by event service.
-// 	Epoch          uint64
-// 	Version        byte
-// 	PostTxnFlushed []func()
-// }
-
 func (e SyncPointEvent) encodeV0() ([]byte, error) {
 	data := make([]byte, e.GetSize())
 	offset := 0
