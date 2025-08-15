@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -47,6 +48,36 @@ import (
 const (
 	periodEventInterval = time.Millisecond * 100
 )
+
+type CheckpointTsCaptureMap struct {
+	mu sync.RWMutex
+	m  map[node.ID]heartbeatpb.Watermark
+}
+
+func newCheckpointTsCaptureMap() *CheckpointTsCaptureMap {
+	return &CheckpointTsCaptureMap{
+		m: make(map[node.ID]heartbeatpb.Watermark),
+	}
+}
+
+func (c *CheckpointTsCaptureMap) Get(nodeID node.ID) (heartbeatpb.Watermark, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	watermark, ok := c.m[nodeID]
+	return watermark, ok
+}
+
+func (c *CheckpointTsCaptureMap) Set(nodeID node.ID, watermark heartbeatpb.Watermark) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m[nodeID] = watermark
+}
+
+func (c *CheckpointTsCaptureMap) Delete(nodeID node.ID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.m, nodeID)
+}
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
 // 1. schedule tables to dispatcher manager
@@ -78,7 +109,7 @@ type Maintainer struct {
 		*heartbeatpb.Watermark
 	}
 
-	checkpointTsByCapture map[node.ID]heartbeatpb.Watermark
+	checkpointTsByCapture *CheckpointTsCaptureMap
 
 	scheduleState atomic.Int32
 	bootstrapper  *bootstrap.Bootstrapper[heartbeatpb.MaintainerBootstrapResponse]
@@ -136,14 +167,14 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
-	cancelUpdateMetrics            context.CancelFunc
+	cancel                         context.CancelFunc
 	changefeedCheckpointTsGauge    prometheus.Gauge
 	changefeedCheckpointTsLagGauge prometheus.Gauge
 	changefeedResolvedTsGauge      prometheus.Gauge
 	changefeedResolvedTsLagGauge   prometheus.Gauge
 	changefeedStatusGauge          prometheus.Gauge
 	scheduledTaskGauge             prometheus.Gauge
-	runningTaskGauge               prometheus.Gauge
+	spanCountGauge                 prometheus.Gauge
 	tableCountGauge                prometheus.Gauge
 	handleEventDuration            prometheus.Observer
 }
@@ -154,7 +185,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	cfg *config.ChangeFeedInfo,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
-	pdAPI pdutil.PDAPIClient,
 	checkpointTs uint64,
 	newChangefeed bool,
 ) *Maintainer {
@@ -174,7 +204,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		controller: NewController(cfID, checkpointTs, pdAPI, taskScheduler,
+		controller: NewController(cfID, checkpointTs, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
@@ -186,7 +216,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		pdClock:         appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 
 		ddlSpan:               ddlSpan,
-		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
+		checkpointTsByCapture: newCheckpointTsCaptureMap(),
 		newChangefeed:         newChangefeed,
 
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
@@ -195,8 +225,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		runningTaskGauge:               metrics.RunningScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		tableCountGauge:                metrics.TableGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
 	}
 	m.nodeChanged.changed = false
@@ -214,10 +244,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelUpdateMetrics = cancel
+	m.cancel = cancel
 
-	go m.runUpdateMetrics(ctx)
 	go m.runHandleEvents(ctx)
+	go m.calCheckpointTs(ctx)
 
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.String("state", string(cfg.State)),
@@ -233,14 +263,13 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	conf *config.SchedulerConfig,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
-	pdAPI pdutil.PDAPIClient,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI, 1, false)
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false)
 	m.cascadeRemoving = true
 	return m
 }
@@ -274,6 +303,7 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 	// first check the online/offline nodes
 	m.checkNodeChanged()
 
+	// TODO:use a better way
 	switch event.eventType {
 	case EventInit:
 		return m.onInit()
@@ -296,7 +326,7 @@ func (m *Maintainer) checkNodeChanged() {
 
 // Close cleanup resources
 func (m *Maintainer) Close() {
-	m.cancelUpdateMetrics()
+	m.cancel()
 	m.cleanupMetrics()
 	m.controller.Stop()
 	log.Info("changefeed maintainer closed",
@@ -372,8 +402,8 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.RunningScheduleTaskGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.TableGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
+	metrics.SpanCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
+	metrics.TableCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Namespace(), m.id.Name())
 }
 
@@ -460,7 +490,7 @@ func (m *Maintainer) onNodeChanged() {
 	for id := range currentNodes {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
-			delete(m.checkpointTsByCapture, id)
+			m.checkpointTsByCapture.Delete(id)
 			m.controller.operatorController.OnNodeRemoved(id)
 		}
 	}
@@ -475,72 +505,87 @@ func (m *Maintainer) onNodeChanged() {
 	}
 }
 
-func (m *Maintainer) calCheckpointTs() {
-	defer m.updateMetrics()
-	if !m.bootstrapped.Load() {
-		log.Warn("can not advance checkpointTs since not bootstrapped",
-			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
-		m.bootstrapper.PrintBootstrapStatus()
-		return
-	}
-	// make sure there is no task running
-	// the dispatcher changing come from:
-	// 1. node change
-	// 2. ddl
-	// 3. interval scheduling, like balance, split
+// calCheckpointTs will be a little expensive when there are a large number of operators or absent tasks
+// so we use a single goroutine to calculate the checkpointTs, instead of blocking event handling
+func (m *Maintainer) calCheckpointTs(ctx context.Context) {
+	ticker := time.NewTicker(periodEventInterval)
+	defer ticker.Stop()
 
-	// Thus, to ensure the whole process atomic, we first obtain the lock of operator and barrier
-	// then do the basic check.
-	// We ensure only the operator and barrier can generate absent replica, so we don't need to obtain the lock of replicationDB
-	// If all check is successfully, we begin to do the checkpointTs calculation,
-	// otherwise, we just return.
-	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
-	operatorLock := m.controller.operatorController.GetLock()
-	barrierLock := m.barrier.GetLock()
-
-	defer func() {
-		m.controller.operatorController.ReleaseLock(operatorLock)
-		m.barrier.ReleaseLock(barrierLock)
-	}()
-
-	if !m.controller.ScheduleFinished() {
-		log.Warn("can not advance checkpointTs since schedule is not finished",
-			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
-		)
-		return
-	}
-	if m.barrier.ShouldBlockCheckpointTs() {
-		log.Warn("can not advance checkpointTs since barrier is blocking",
-			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
-		)
-		return
-	}
-	newWatermark := heartbeatpb.NewMaxWatermark()
-	// if there is no tables, there must be a table trigger dispatcher
-	for id := range m.bootstrapper.GetAllNodes() {
-		// maintainer node has the table trigger dispatcher
-		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
-			continue
-		}
-		// node level watermark reported, ignore this round
-		if _, ok := m.checkpointTsByCapture[id]; !ok {
-			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
-				zap.String("changefeed", m.id.Name()),
-				zap.Any("node", id),
-				zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+	for {
+		select {
+		case <-ctx.Done():
 			return
-		}
-		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
-	}
+		case <-ticker.C:
+			updateCheckpointTs := true
+			if !m.bootstrapped.Load() {
+				log.Warn("can not advance checkpointTs since not bootstrapped",
+					zap.String("changefeed", m.id.Name()),
+					zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+					zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+				break
+			}
 
-	m.setWatermark(*newWatermark)
+			// make sure there is no task running
+			// the dispatcher changing come from:
+			// 1. node change
+			// 2. ddl
+			// 3. interval scheduling, like balance, split
+
+			// Thus, to ensure the whole process atomic, we first obtain the lock of operator and barrier
+			// then do the basic check.
+			// We ensure only the operator and barrier can generate absent replica, so we don't need to obtain the lock of replicationDB
+			// If all check is successfully, we begin to do the checkpointTs calculation,
+			// otherwise, we just return.
+			// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
+
+			// TODO: consider how can we simplify the logic better
+			minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
+			minCheckpointTsForBarrier := m.barrier.GetMinBlockedCheckpointTsForNewTables()
+			log.Info("checkpointTs", zap.Any("minCheckpointTsForScheduler", minCheckpointTsForScheduler), zap.Any("minCheckpointTsForBarrier", minCheckpointTsForBarrier))
+
+			newWatermark := heartbeatpb.NewMaxWatermark()
+			// if there is no tables, there must be a table trigger dispatcher
+			for id := range m.bootstrapper.GetAllNodes() {
+				// maintainer node has the table trigger dispatcher
+				if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
+					continue
+				}
+				// node level watermark reported, ignore this round
+				watermark, ok := m.checkpointTsByCapture.Get(id)
+				if !ok {
+					updateCheckpointTs = false
+					log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
+						zap.String("changefeed", m.id.Name()),
+						zap.Any("node", id),
+						zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+						zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+					continue
+				}
+				newWatermark.UpdateMin(watermark)
+			}
+			log.Info("newWatermark", zap.Any("newWatermark", newWatermark))
+
+			if !updateCheckpointTs {
+				break
+			}
+
+			if minCheckpointTsForBarrier != uint64(math.MaxUint64) {
+				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
+			}
+			if minCheckpointTsForScheduler != uint64(math.MaxUint64) {
+				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
+			}
+
+			log.Info("can advance checkpointTs",
+				zap.String("changefeed", m.id.Name()),
+				zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
+				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
+			)
+
+			m.setWatermark(*newWatermark)
+			m.updateMetrics()
+		}
+	}
 }
 
 func (m *Maintainer) updateMetrics() {
@@ -579,15 +624,16 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
+	// TODO:add comment and test to ensure the operator will get first before calculate checkpointTs
+	m.controller.HandleStatus(msg.From, req.Statuses)
 	if req.Watermark != nil {
-		old, ok := m.checkpointTsByCapture[msg.From]
+		old, ok := m.checkpointTsByCapture.Get(msg.From)
 		if !ok || req.Watermark.Seq >= old.Seq {
-			m.checkpointTsByCapture[msg.From] = *req.Watermark
+			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
 		}
 	}
-	m.controller.HandleStatus(msg.From, req.Statuses)
 	if req.Err != nil {
-		log.Warn("dispatcher report an error",
+		log.Error("dispatcher report an error",
 			zap.Stringer("changefeed", m.id),
 			zap.Stringer("sourceNode", msg.From),
 			zap.String("error", req.Err.Message))
@@ -677,12 +723,12 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	if cachedResp == nil {
 		return
 	}
-	isMySQLCompatible, err := isMysqlCompatible(m.config.SinkURI)
+	isMySQLSinkCompatible, err := isMysqlCompatible(m.config.SinkURI)
 	if err != nil {
 		m.handleError(err)
 		return
 	}
-	barrier, msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLCompatible)
+	barrier, msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLSinkCompatible)
 	if err != nil {
 		m.handleError(err)
 		return
@@ -845,7 +891,6 @@ func (m *Maintainer) onPeriodTask() {
 	// send scheduling messages
 	m.handleResendMessage()
 	m.collectMetrics()
-	m.calCheckpointTs()
 }
 
 func (m *Maintainer) collectMetrics() {
@@ -854,30 +899,24 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		// exclude the table trigger
-		total := m.controller.spanController.TaskSize() - 1
+		totalSpanCount := m.controller.spanController.TaskSize() - 1
+		totalTableCount := 0
+		groupSize := m.controller.spanController.GetGroupSize()
+		if groupSize == 1 {
+			totalTableCount = m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
+		} else {
+			totalTableCount = groupSize - 1 + m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
+		}
 		scheduling := m.controller.spanController.GetSchedulingSize()
 		working := m.controller.spanController.GetReplicatingSize()
 		absent := m.controller.spanController.GetAbsentSize()
 
-		m.tableCountGauge.Set(float64(total))
+		m.spanCountGauge.Set(float64(totalSpanCount))
+		m.tableCountGauge.Set(float64(totalTableCount))
 		m.scheduledTaskGauge.Set(float64(scheduling))
 		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent").Set(float64(absent))
 		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working").Set(float64(working))
 		m.lastPrintStatusTime = time.Now()
-	}
-}
-
-func (m *Maintainer) runUpdateMetrics(ctx context.Context) {
-	ticker := time.NewTicker(time.Second * 1)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("stop update metrics")
-			return
-		case <-ticker.C:
-			m.updateMetrics()
-		}
 	}
 }
 

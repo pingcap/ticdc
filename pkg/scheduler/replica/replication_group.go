@@ -242,6 +242,10 @@ func (g *replicationGroup[T, R]) GetReplicatingSize() int {
 	return g.replicating.Len()
 }
 
+func (g *replicationGroup[T, R]) GetSize() int {
+	return g.replicating.Len() + g.scheduling.Len() + g.absent.Len()
+}
+
 func (g *replicationGroup[T, R]) GetReplicating() []R {
 	res := make([]R, 0, g.replicating.Len())
 	g.replicating.Range(func(_ T, r R) bool {

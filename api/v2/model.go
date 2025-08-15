@@ -514,7 +514,6 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			RegionThreshold:            c.Scheduler.RegionThreshold,
 			RegionCountPerSpan:         c.Scheduler.RegionCountPerSpan,
 			WriteKeyThreshold:          c.Scheduler.WriteKeyThreshold,
-			SplitNumberPerNode:         c.Scheduler.SplitNumberPerNode,
 			SchedulingTaskCountPerNode: c.Scheduler.SchedulingTaskCountPerNode,
 		}
 	}
@@ -840,7 +839,6 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			RegionThreshold:            cloned.Scheduler.RegionThreshold,
 			RegionCountPerSpan:         cloned.Scheduler.RegionCountPerSpan,
 			WriteKeyThreshold:          cloned.Scheduler.WriteKeyThreshold,
-			SplitNumberPerNode:         cloned.Scheduler.SplitNumberPerNode,
 			SchedulingTaskCountPerNode: cloned.Scheduler.SchedulingTaskCountPerNode,
 		}
 	}
@@ -1053,8 +1051,6 @@ type ChangefeedSchedulerConfig struct {
 	RegionCountPerSpan int `toml:"region-count-per-span" json:"region-count-per-span"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write_key_threshold" json:"write_key_threshold"`
-	// SplitNumberPerNode is the number of splits per node.
-	SplitNumberPerNode int `toml:"split_number_per_node" json:"split_number_per_node"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
 	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
 }

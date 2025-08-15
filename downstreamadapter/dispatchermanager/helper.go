@@ -163,9 +163,11 @@ func (w *Watermark) Set(watermark *heartbeatpb.Watermark) {
 }
 
 func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler] {
+	option := dynstream.NewOption()
+	option.BatchCount = 1024
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
-		&SchedulerDispatcherRequestHandler{}, dynstream.NewOption())
+		&SchedulerDispatcherRequestHandler{}, option)
 	ds.Start()
 	return ds
 }
@@ -186,8 +188,8 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 
 func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	// If req is about remove dispatcher, then there will only be one request in reqs.
-	infos := make([]dispatcherCreateInfo, 0, len(reqs))
-	redoInfos := make([]dispatcherCreateInfo, 0, len(reqs))
+	infos := map[common.DispatcherID]dispatcherCreateInfo{}
+	redoInfos := map[common.DispatcherID]dispatcherCreateInfo{}
 	for _, req := range reqs {
 		if req.ScheduleDispatcherRequest == nil {
 			log.Warn("scheduleDispatcherRequest is nil, skip")
@@ -204,9 +206,9 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 				SchemaID:  config.SchemaID,
 			}
 			if config.IsRedo {
-				redoInfos = append(redoInfos, info)
+				redoInfos[dispatcherID] = info
 			} else {
-				infos = append(infos, info)
+				infos[dispatcherID] = info
 			}
 		case heartbeatpb.ScheduleAction_Remove:
 			if len(reqs) != 1 {
@@ -231,13 +233,21 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 		}
 	}
 	if len(redoInfos) > 0 {
-		err := dispatcherManager.newRedoDispatchers(redoInfos, false)
+		redoInfoList := make([]dispatcherCreateInfo, 0, len(redoInfos))
+		for _, info := range redoInfos {
+			redoInfoList = append(redoInfoList, info)
+		}
+		err := dispatcherManager.newRedoDispatchers(redoInfoList, false)
 		if err != nil {
 			handleErr(err)
 		}
 	}
 	if len(infos) > 0 {
-		err := dispatcherManager.newEventDispatchers(infos, false)
+		infoList := make([]dispatcherCreateInfo, 0, len(infos))
+		for _, info := range infos {
+			infoList = append(infoList, info)
+		}
+		err := dispatcherManager.newEventDispatchers(infoList, false)
 		if err != nil {
 			handleErr(err)
 		}
@@ -488,7 +498,8 @@ func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) interface{} {
 func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
-		&MergeDispatcherRequestHandler{})
+		&MergeDispatcherRequestHandler{},
+	)
 	ds.Start()
 	return ds
 }

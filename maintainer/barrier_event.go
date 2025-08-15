@@ -224,10 +224,11 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Int64s("table", be.dropDispatchers.TableIDs))
 		case heartbeatpb.InfluenceType_All:
-			be.operatorController.RemoveAllTasks()
-			log.Info("remove all tables by barrier",
-				zap.Uint64("commitTs", be.commitTs),
-				zap.String("changefeed", be.cfID.Name()))
+			log.Panic("invalid influence type meet drop dispatchers",
+				zap.Any("blockedDispatchers", be.blockedDispatchers),
+				zap.Any("changefeed", be.cfID.Name()),
+				zap.Any("commitTs", be.commitTs),
+			)
 		}
 	}
 	for _, add := range be.newTables {
