@@ -327,6 +327,9 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 	// 5. Therefore, when checking the reported status, we need to check for expired dispatchers
 	//    to avoid this situation.
 	for dispatcherID := range be.reportedDispatchers {
+		if dispatcherID == be.spanController.GetDDLDispatcherID() {
+			continue
+		}
 		task := be.spanController.GetTaskByID(dispatcherID)
 		if task == nil {
 			log.Info("unexisted dispatcher, remove it from barrier event",

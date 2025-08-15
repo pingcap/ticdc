@@ -137,14 +137,16 @@ func (b *Barrier) HandleStatus(from node.ID,
 	for _, status := range request.BlockStatuses {
 		// only receive block status from the replicating dispatcher
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		task := b.spanController.GetTaskByID(dispatcherID)
-		if task == nil {
-			log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
-			continue
-		} else {
-			if !b.spanController.IsReplicating(task) {
-				log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
+		if dispatcherID != b.spanController.GetDDLDispatcherID() {
+			task := b.spanController.GetTaskByID(dispatcherID)
+			if task == nil {
+				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
 				continue
+			} else {
+				if !b.spanController.IsReplicating(task) {
+					log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
+					continue
+				}
 			}
 		}
 
