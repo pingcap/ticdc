@@ -667,6 +667,7 @@ func TestSyncPointBlock(t *testing.T) {
 	selectDispatcherID := common.NewDispatcherIDFromPB(dispatcherIDs[2])
 	selectedRep := spanController.GetTaskByID(selectDispatcherID)
 	spanController.BindSpanToNode("node1", "node2", selectedRep)
+	spanController.MarkSpanReplicating(selectedRep)
 
 	barrier := NewBarrier(spanController, operatorController, true, nil)
 	// first dispatcher  block request
@@ -819,7 +820,11 @@ func TestNonBlocked(t *testing.T) {
 
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
-		blockedDispatcherIDS = append(blockedDispatcherIDS, common.NewDispatcherID().ToPB())
+		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
+		stm := spanController.GetTasksByTableID(int64(id))[0]
+		dispatcherID := stm.ID
+		blockedDispatcherIDS = append(blockedDispatcherIDS, dispatcherID.ToPB())
+		spanController.MarkSpanReplicating(stm)
 	}
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -1200,6 +1205,10 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 	spanController.BindSpanToNode("", "node1", dispatcherB)
 	spanController.BindSpanToNode("", "node1", dispatcherC)
 
+	spanController.MarkSpanReplicating(dispatcherA)
+	spanController.MarkSpanReplicating(dispatcherB)
+	spanController.MarkSpanReplicating(dispatcherC)
+
 	// create barrier
 	barrier := NewBarrier(spanController, operatorController, true, nil)
 
@@ -1266,6 +1275,10 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 	spanController.BindSpanToNode("", "node1", dispatcherE)
 	spanController.BindSpanToNode("", "node1", dispatcherF)
 	spanController.BindSpanToNode("", "node1", dispatcherG)
+
+	spanController.MarkSpanReplicating(dispatcherE)
+	spanController.MarkSpanReplicating(dispatcherF)
+	spanController.MarkSpanReplicating(dispatcherG)
 
 	// report from dispatcherE and dispatcherF
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
