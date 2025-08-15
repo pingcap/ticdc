@@ -130,7 +130,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
 	isRedo bool,
 ) *messaging.TargetMessage {
-	log.Info("handle block status", zap.String("from", from.String()),
+	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request), zap.Bool("isRedo", isRedo))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)

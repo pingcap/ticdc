@@ -932,6 +932,9 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 				zap.Uint64("startTs", m.startCheckpointTs),
 			)
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
+			if m.redoDDLSpan != nil {
+				msg.RedoTableTriggerEventDispatcherId = m.redoDDLSpan.ID.ToPB()
+			}
 			msg.IsNewChangefeed = m.newChangefeed
 		}
 
@@ -1039,12 +1042,20 @@ func (m *Maintainer) GetDispatcherCount() int {
 
 // MoveTable moves a table to a specific node.
 func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
-	return m.controller.moveTable(tableId, targetNode)
+	err := m.controller.moveTable(tableId, targetNode, true)
+	if err != nil {
+		return err
+	}
+	return m.controller.moveTable(tableId, targetNode, false)
 }
 
 // MoveSplitTable moves all the dispatchers in a split table to a specific node.
 func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
-	return m.controller.moveSplitTable(tableId, targetNode)
+	err := m.controller.moveSplitTable(tableId, targetNode, true)
+	if err != nil {
+		return err
+	}
+	return m.controller.moveSplitTable(tableId, targetNode, false)
 }
 
 // GetTables returns all tables.
@@ -1055,11 +1066,19 @@ func (m *Maintainer) GetTables() []*replica.SpanReplication {
 // SplitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
 func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
-	return m.controller.splitTableByRegionCount(tableId)
+	err := m.controller.splitTableByRegionCount(tableId, true)
+	if err != nil {
+		return err
+	}
+	return m.controller.splitTableByRegionCount(tableId, false)
 }
 
 // MergeTable merge two dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
 func (m *Maintainer) MergeTable(tableId int64) error {
-	return m.controller.mergeTable(tableId)
+	err := m.controller.mergeTable(tableId, true)
+	if err != nil {
+		return err
+	}
+	return m.controller.mergeTable(tableId, false)
 }
