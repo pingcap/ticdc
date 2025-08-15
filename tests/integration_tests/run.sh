@@ -1,11 +1,14 @@
 #!/bin/bash
 
-# This file is used to run integration tests for developers(self-test).
+# set -x            # Enable tracing
+# export SHELLOPTS  # Make tracing apply to subshells
 
+# This file is used to run integration tests for developers(self-test).
 set -eu
 
 OUT_DIR=/tmp/tidb_cdc_test
-CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+export CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+export TEST_ROOT=$(realpath "$CUR/../../")
 export PATH=$PATH:$CUR/_utils:$CUR/../bin:$CUR/../../bin:$CUR/../../scripts/bin
 export TICDC_NEWARCH=true
 
@@ -40,6 +43,7 @@ run_case() {
 	local script=$2
 	local sink_type=$3
 	echo "=================>> Running test $script using Sink-Type: $sink_type... <<================="
+	export WORK_DIR=$OUT_DIR/$case
 	PATH="$CUR/../bin:$CUR/_utils:$PATH" \
 		LD_LIBRARY_PATH="$CUR/../bin:$CUR/_utils:$PATH" \
 		OUT_DIR=$OUT_DIR \

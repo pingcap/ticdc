@@ -26,8 +26,8 @@ import (
 func main() {
 	upHost := GetEnvDefault("UP_TIDB_HOST", "127.0.0.1")
 	upPort := GetEnvDefault("UP_TIDB_PORT", "4000")
-	downHost := GetEnvDefault("UP_TIDB_HOST", "127.0.0.1")
-	downPort := GetEnvDefault("UP_TIDB_PORT", "3306")
+	downHost := GetEnvDefault("DOWN_TIDB_HOST", "127.0.0.1")
+	downPort := GetEnvDefault("DOWN_TIDB_PORT", "3306")
 
 	var wg sync.WaitGroup
 	wg.Add(2)

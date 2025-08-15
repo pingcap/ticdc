@@ -37,7 +37,7 @@ function run() {
 	SINK_URI="mysql://root@127.0.0.1:3306/?batch-dml-enable=true"
 
 	changefeed_id="test"
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c ${changefeed_id}
+	create_changefeed --sink-uri="$SINK_URI" -c ${changefeed_id}
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

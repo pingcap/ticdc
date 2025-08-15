@@ -15,16 +15,16 @@ function prepare() {
 
 	cd $WORK_DIR
 
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config $CUR/conf/server.toml
+
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	run_sql "CREATE table test.simple1(id int primary key, val int);"
 	run_sql "CREATE table test.simple2(id int primary key, val int);"
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config $CUR/conf/server.toml
-
 	SINK_URI="mysql+ssl://normal:123456@127.0.0.1:3306/"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	create_changefeed --start-ts=$start_ts --sink-uri="$SINK_URI"
 }
 
 function sql_check() {

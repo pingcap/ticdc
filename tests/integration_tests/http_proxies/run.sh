@@ -9,16 +9,36 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 TEST_HOST_LIST=(UP_TIDB_HOST UP_PD_HOST_{1..3} UP_TIKV_HOST_{1..3})
-# FIXME: hostname in macOS doesn't support -I option.
-lan_addrs=($(hostname -I))
-lan_addr=${lan_addrs[0]-"127.0.0.1"}
-export UP_TIDB_HOST=$lan_addr \
-	UP_PD_HOST_1=$lan_addr \
-	UP_PD_HOST_2=$lan_addr \
-	UP_PD_HOST_3=$lan_addr \
-	UP_TIKV_HOST_1=$lan_addr \
-	UP_TIKV_HOST_2=$lan_addr \
-	UP_TIKV_HOST_3=$lan_addr
+# Get LAN address, compatible with both Linux and macOS
+if [[ "$OSTYPE" == "darwin"* ]]; then
+	lan_addr=$(ipconfig getifaddr en0 || echo "127.0.0.1")
+else
+	lan_addrs=($(hostname -I))
+	lan_addr=${lan_addrs[0]-"127.0.0.1"}
+fi
+# export UP_TIDB_HOST=$lan_addr \
+# 	UP_PD_HOST_1=$lan_addr \
+# 	UP_PD_HOST_2=$lan_addr \
+# 	UP_PD_HOST_3=$lan_addr \
+# 	UP_TIKV_HOST_1=$lan_addr \
+# 	UP_TIKV_HOST_2=$lan_addr \
+# 	UP_TIKV_HOST_3=$lan_addr
+
+export UP_TIDB_HOST="$lan_addr"
+export DOWN_TIDB_HOST="$lan_addr"
+export TLS_TIDB_HOST="$lan_addr"
+export UP_PD_HOST_1="$lan_addr"
+export CDC_DEFAULT_HOST="$lan_addr"
+export UP_PD_HOST_2="$lan_addr"
+export UP_PD_HOST_3="$lan_addr"
+export DOWN_PD_HOST="$lan_addr"
+export TLS_PD_HOST="$lan_addr"
+export UP_TIKV_HOST_1="$lan_addr"
+export UP_TIKV_HOST_2="$lan_addr"
+export UP_TIKV_HOST_3="$lan_addr"
+export DOWN_TIKV_HOST="$lan_addr"
+export TLS_TIKV_HOST="$lan_addr"
+export TIKV_WORKER_HOST="$lan_addr"
 
 proxy_pid=""
 proxy_port=$(shuf -i 10081-20081 -n1)
@@ -64,14 +84,15 @@ function prepare() {
 	echo started proxy at port: $proxy_port
 
 	cd $WORK_DIR
-	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-	echo "query start ts: $start_ts"
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	echo started cdc server successfully
 
+	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+	echo "query start ts: $start_ts"
+
 	SINK_URI="blackhole:///"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	create_changefeed --start-ts=$start_ts --sink-uri="$SINK_URI"
 }
 
 function check() {
