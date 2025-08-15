@@ -233,14 +233,14 @@ func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.
 	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.GetRedo())
 }
 
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, redo bool) *messaging.TargetMessage {
+func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, isRedo bool) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: cfID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
 				DispatcherID: dispatcherID,
-				IsRedo:       redo,
+				IsRedo:       isRedo,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
 		})

@@ -167,19 +167,6 @@ func (c *Controller) buildWorkingTaskMap(
 	return workingTaskMap, redoWorkingTaskMap
 }
 
-func (c *Controller) addToWorkingTaskMap(
-	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-	span *heartbeatpb.TableSpan,
-	spanReplication *replica.SpanReplication,
-) {
-	tableSpans, ok := workingTaskMap[span.TableID]
-	if !ok {
-		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
-		workingTaskMap[span.TableID] = tableSpans
-	}
-	tableSpans.ReplaceOrInsert(span, spanReplication)
-}
-
 func (c *Controller) processTablesAndBuildSchemaInfo(
 	tables []commonEvent.Table,
 	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],

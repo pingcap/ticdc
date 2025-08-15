@@ -174,14 +174,6 @@ func (c *Controller) Stop() {
 	}
 }
 
-// RemoveNode is called when a node is removed
-func (c *Controller) RemoveNode(id node.ID) {
-	if c.redoOperatorController != nil {
-		c.redoOperatorController.OnNodeRemoved(id)
-	}
-	c.operatorController.OnNodeRemoved(id)
-}
-
 func (c *Controller) checkAdvance(isRedo bool) bool {
 	spanController := c.getSpanController(isRedo)
 	operatorController := c.getOperatorController(isRedo)

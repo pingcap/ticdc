@@ -86,11 +86,20 @@ func (s *basicScheduler) Execute() time.Time {
 		return time.Now().Add(time.Millisecond * 100)
 	}
 
+	// deal with the split table spans first
 	for _, id := range s.spanController.GetGroups() {
+		if id == pkgreplica.DefaultGroupID {
+			continue
+		}
 		availableSize -= s.schedule(id, availableSize)
 		if availableSize <= 0 {
 			break
 		}
+	}
+
+	if availableSize > 0 {
+		// still have available size, deal with the normal spans
+		s.schedule(pkgreplica.DefaultGroupID, availableSize)
 	}
 
 	return time.Now().Add(time.Millisecond * 500)
