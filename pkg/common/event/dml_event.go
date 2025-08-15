@@ -192,8 +192,8 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		return
 	}
 
-	if b.TableInfo != nil && b.TableInfo.UpdateTS() != tableInfo.UpdateTS() {
-		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.UpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.UpdateTS()))
+	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
+		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
 		return
 	}
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
