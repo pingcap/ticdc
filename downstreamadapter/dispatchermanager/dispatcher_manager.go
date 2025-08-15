@@ -181,18 +181,20 @@ func NewDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	manager := &DispatcherManager{
-		dispatcherMap:                          newDispatcherMap[*dispatcher.EventDispatcher](),
-		changefeedID:                           changefeedID,
-		pdClock:                                pdClock,
-		statusesChan:                           make(chan dispatcher.TableSpanStatusWithSeq, 8192),
-		blockStatusesChan:                      make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
-		errCh:                                  make(chan error, 1),
-		cancel:                                 cancel,
-		config:                                 cfConfig,
-		integrityConfig:                        integrityCfg,
-		filterConfig:                           filterCfg,
-		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
-		latestWatermark:                        NewWatermark(0),
+		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
+		changefeedID:          changefeedID,
+		pdClock:               pdClock,
+		statusesChan:          make(chan dispatcher.TableSpanStatusWithSeq, 8192),
+		blockStatusesChan:     make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
+		errCh:                 make(chan error, 1),
+		cancel:                cancel,
+		config:                cfConfig,
+		integrityConfig:       integrityCfg,
+		filterConfig:          filterCfg,
+		schemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
+		latestWatermark:       NewWatermark(0),
+		sinkQuota:             cfConfig.MemoryQuota,
+
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "eventDispatcher"),
 		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "eventDispatcher"),
 		metricCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "eventDispatcher"),
@@ -200,6 +202,10 @@ func NewDispatcherManager(
 		metricCheckpointTsLag:                  metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTs:                       metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTsLag:                    metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+
+		metricRedoTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redoDispatcher"),
+		metricRedoEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redoDispatcher"),
+		metricRedoCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
 	// Set the epoch and maintainerID of the event dispatcher manager
@@ -213,20 +219,6 @@ func NewDispatcherManager(
 			SyncPointInterval:  cfConfig.SyncPointInterval,
 			SyncPointRetention: cfConfig.SyncPointRetention,
 		}
-	}
-
-	totalQuota := manager.config.MemoryQuota
-	if manager.RedoEnable {
-		consistentMemoryUsage := manager.config.Consistent.MemoryUsage
-		if consistentMemoryUsage == nil {
-			consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
-		}
-
-		manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
-		manager.sinkQuota = totalQuota - manager.redoQuota
-	} else {
-		manager.sinkQuota = totalQuota
-		manager.redoQuota = 0
 	}
 
 	var err error

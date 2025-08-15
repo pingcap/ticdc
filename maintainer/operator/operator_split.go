@@ -44,6 +44,7 @@ type SplitDispatcherOperator struct {
 	lck sync.Mutex
 
 	sendThrottler sendThrottler
+	repeat        bool
 }
 
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator
@@ -146,4 +147,12 @@ func (m *SplitDispatcherOperator) String() string {
 
 func (m *SplitDispatcherOperator) Type() string {
 	return "split"
+}
+
+func (m *SplitDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *SplitDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }
