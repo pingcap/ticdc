@@ -215,7 +215,6 @@ func (s *eventService) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
-	log.Info("event service begin reset dispatcher", zap.Any("dispatcherID", dispatcherInfo.GetID()))
 	clusterID := dispatcherInfo.GetClusterID()
 	c, ok := s.brokers[clusterID]
 	if !ok {

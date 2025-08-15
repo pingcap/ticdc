@@ -442,7 +442,6 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 			return context.Cause(ctx)
 		case targetMessage := <-inCh:
 			for _, msg := range targetMessage.Message {
-				log.Info("event collector receive message", zap.Any("msg", msg))
 				switch e := msg.(type) {
 				case event.Event:
 					switch e.GetType() {

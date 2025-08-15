@@ -1028,6 +1028,11 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		s.balanceCondition.reset()
 		return
 	} else {
+		log.Info("should balance, thus update score",
+			zap.Any("minTrafficNodeID", minTrafficNodeID),
+			zap.Any("maxTrafficNodeID", maxTrafficNodeID),
+			zap.Any("balanceCauseByMinNode", balanceCauseByMinNode),
+			zap.Any("balanceCauseByMaxNode", balanceCauseByMaxNode))
 		s.balanceCondition.updateScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 		if s.balanceCondition.balanceScore < balanceScoreThreshold {
 			// now is unbalanced, but we want to check more times to avoid balance too frequently

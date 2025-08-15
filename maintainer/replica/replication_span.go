@@ -136,6 +136,9 @@ func (r *SpanReplication) initGroupID() {
 	}
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)
+		log.Info("set group id for span", zap.String("changefeedID", r.ChangefeedID.Name()),
+			zap.String("DispatcherID", r.ID.String()), zap.Int64("tableID", span.TableID),
+			zap.String("groupID", replica.GetGroupName(r.groupID)))
 	}
 }
 
