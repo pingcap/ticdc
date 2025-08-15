@@ -619,6 +619,10 @@ func (p *dmlProcessor) getCurrentBatch() *pevent.BatchDMLEvent {
 
 // shouldFlushBatch determines if the current batch should be flushed
 func (p *dmlProcessor) shouldFlushBatch(tableInfoUpdateTs uint64, hasNewDDL bool) bool {
+	log.Info("should flush batch",
+		zap.Uint64("tableInfoUpdateTs", tableInfoUpdateTs),
+		zap.Uint64("lastTableInfoUpdateTs", p.lastTableInfoUpdateTs),
+		zap.Bool("hasNewDDL", hasNewDDL))
 	return tableInfoUpdateTs != p.lastTableInfoUpdateTs || hasNewDDL
 }
 
