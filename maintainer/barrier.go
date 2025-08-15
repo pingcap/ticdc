@@ -140,6 +140,21 @@ func (b *Barrier) HandleStatus(from node.ID,
 		if isRedo != status.IsRedo {
 			continue
 		}
+		// only receive block status from the replicating dispatcher
+		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
+		if dispatcherID != b.spanController.GetDDLDispatcherID() {
+			task := b.spanController.GetTaskByID(dispatcherID)
+			if task == nil {
+				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
+				continue
+			} else {
+				if !b.spanController.IsReplicating(task) {
+					log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
+					continue
+				}
+			}
+		}
+
 		// deal with block status, and check whether need to return action.
 		// we need to deal with the block status in order, otherwise scheduler may have problem
 		// e.g. TODO（truncate + create table)

@@ -327,13 +327,26 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 	// 5. Therefore, when checking the reported status, we need to check for expired dispatchers
 	//    to avoid this situation.
 	for dispatcherID := range be.reportedDispatchers {
-		if be.spanController.GetTaskByID(dispatcherID) == nil {
+		if dispatcherID == be.spanController.GetDDLDispatcherID() {
+			continue
+		}
+		task := be.spanController.GetTaskByID(dispatcherID)
+		if task == nil {
 			log.Info("unexisted dispatcher, remove it from barrier event",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
 			)
 			needDoubleCheck = true
 			delete(be.reportedDispatchers, dispatcherID)
+		} else {
+			if !be.spanController.IsReplicating(task) {
+				log.Info("unreplicating dispatcher, remove it from barrier event",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.String("dispatcher", dispatcherID.String()),
+				)
+				needDoubleCheck = true
+				delete(be.reportedDispatchers, dispatcherID)
+			}
 		}
 	}
 
