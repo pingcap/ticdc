@@ -184,6 +184,7 @@ func TestNormalBlock(t *testing.T) {
 	selectDispatcherID := common.NewDispatcherIDFromPB(blockedDispatcherIDS[2])
 	selectedRep := spanController.GetTaskByID(selectDispatcherID)
 	spanController.BindSpanToNode("node1", "node2", selectedRep)
+	spanController.MarkSpanReplicating(selectedRep)
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
 	barrier := NewBarrier(spanController, operatorController, false, nil)
@@ -600,14 +601,7 @@ func TestSchemaBlock(t *testing.T) {
 			},
 		},
 	})
-	// ack and write message
-	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, resp.DispatcherStatuses, 1)
-	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
-	event = barrier.blockedEvents.m[key]
-	require.Equal(t, uint64(10), event.commitTs)
-	// the ddl dispatcher will be the writer
-	require.Equal(t, event.writerDispatcher, spanController.GetDDLDispatcherID())
+	require.Nil(t, msg)
 
 	// selected node write done
 	msg = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
@@ -673,6 +667,7 @@ func TestSyncPointBlock(t *testing.T) {
 	selectDispatcherID := common.NewDispatcherIDFromPB(dispatcherIDs[2])
 	selectedRep := spanController.GetTaskByID(selectDispatcherID)
 	spanController.BindSpanToNode("node1", "node2", selectedRep)
+	spanController.MarkSpanReplicating(selectedRep)
 
 	barrier := NewBarrier(spanController, operatorController, true, nil)
 	// first dispatcher  block request
@@ -825,7 +820,11 @@ func TestNonBlocked(t *testing.T) {
 
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
-		blockedDispatcherIDS = append(blockedDispatcherIDS, common.NewDispatcherID().ToPB())
+		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
+		stm := spanController.GetTasksByTableID(int64(id))[0]
+		dispatcherID := stm.ID
+		blockedDispatcherIDS = append(blockedDispatcherIDS, dispatcherID.ToPB())
+		spanController.MarkSpanReplicating(stm)
 	}
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -1144,4 +1143,348 @@ func TestSyncPointBlockPerf(t *testing.T) {
 	})
 	require.NotNil(t, msg)
 	log.Info("duration", zap.Duration("duration", time.Since(now)))
+}
+
+// TestBarrierEventWithDispatcherReallocation tests the barrier's behavior when dispatchers are reallocated
+// during a blocking event. The test verifies that:
+// 1. When dispatchers are removed and new ones are created to replace them
+// 2. The barrier correctly tracks the new dispatchers and their blocking status
+// 3. The event selection logic works properly with the reallocated dispatchers
+// 4. The barrier maintains consistency when dispatcher IDs change but the same table spans are covered
+func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
+	testutil.SetNodeManagerAndMessageCenter()
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test")
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1")
+	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+
+	tableID := int64(1)
+	schemaID := int64(1)
+	startTs := uint64(10)
+	ddlTs := uint64(10)
+
+	spanController.AddNewTable(commonEvent.Table{SchemaID: schemaID, TableID: tableID}, startTs)
+
+	span := common.TableIDToComparableSpan(tableID)
+	startKey := span.StartKey
+	endKey := span.EndKey
+
+	dispatcherA := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: startKey,
+		EndKey:   append(startKey, byte('a')),
+	}, startTs)
+
+	dispatcherB := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: append(startKey, byte('a')),
+		EndKey:   append(startKey, byte('b')),
+	}, startTs)
+
+	dispatcherC := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: append(startKey, byte('b')),
+		EndKey:   endKey,
+	}, startTs)
+
+	// add dispatcher to spanController and set to replicating state
+	spanController.AddReplicatingSpan(dispatcherA)
+	spanController.AddReplicatingSpan(dispatcherB)
+	spanController.AddReplicatingSpan(dispatcherC)
+
+	// bind to node
+	spanController.BindSpanToNode("", "node1", dispatcherA)
+	spanController.BindSpanToNode("", "node1", dispatcherB)
+	spanController.BindSpanToNode("", "node1", dispatcherC)
+
+	spanController.MarkSpanReplicating(dispatcherA)
+	spanController.MarkSpanReplicating(dispatcherB)
+	spanController.MarkSpanReplicating(dispatcherC)
+
+	// create barrier
+	barrier := NewBarrier(spanController, operatorController, true, nil)
+
+	// report from dispatcherA
+	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: dispatcherA.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, msg)
+
+	// check the event is created, but not selected
+	event, ok := barrier.blockedEvents.Get(getEventKey(ddlTs, false))
+	require.True(t, ok)
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+	require.Contains(t, event.reportedDispatchers, dispatcherA.ID)
+
+	// remove dispatcherA, B, C
+	spanController.RemoveReplicatingSpan(dispatcherA)
+	spanController.RemoveReplicatingSpan(dispatcherB)
+	spanController.RemoveReplicatingSpan(dispatcherC)
+
+	// check dispatcherA, B, C is removed
+	require.Nil(t, spanController.GetTaskByID(dispatcherA.ID))
+	require.Nil(t, spanController.GetTaskByID(dispatcherB.ID))
+	require.Nil(t, spanController.GetTaskByID(dispatcherC.ID))
+
+	// create new dispatcher E, F, G
+	dispatcherE := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: append(startKey, byte('a')),
+		EndKey:   append(startKey, byte('b')),
+	}, startTs)
+
+	dispatcherF := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: append(startKey, byte('b')),
+		EndKey:   endKey,
+	}, startTs)
+
+	dispatcherG := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: startKey,
+		EndKey:   append(startKey, byte('a')),
+	}, startTs)
+
+	spanController.AddReplicatingSpan(dispatcherE)
+	spanController.AddReplicatingSpan(dispatcherF)
+	spanController.AddReplicatingSpan(dispatcherG)
+
+	spanController.BindSpanToNode("", "node1", dispatcherE)
+	spanController.BindSpanToNode("", "node1", dispatcherF)
+	spanController.BindSpanToNode("", "node1", dispatcherG)
+
+	spanController.MarkSpanReplicating(dispatcherE)
+	spanController.MarkSpanReplicating(dispatcherF)
+	spanController.MarkSpanReplicating(dispatcherG)
+
+	// report from dispatcherE and dispatcherF
+	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: dispatcherE.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID},
+					},
+				},
+			},
+			{
+				ID: dispatcherF.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, msg)
+
+	// check writer of this event is not selected
+	event, ok = barrier.blockedEvents.Get(getEventKey(ddlTs, false))
+	require.True(t, ok)
+	require.NotNil(t, event)
+	require.False(t, event.allDispatcherReported())
+
+	// check remove dispatcherA
+	require.NotContains(t, event.reportedDispatchers, dispatcherA.ID)
+	require.Contains(t, event.reportedDispatchers, dispatcherE.ID)
+	require.Contains(t, event.reportedDispatchers, dispatcherF.ID)
+
+	require.False(t, event.allDispatcherReported())
+
+	// report from dispatcherG
+	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: dispatcherG.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, msg)
+
+	// check the event is selected
+	event, ok = barrier.blockedEvents.Get(getEventKey(ddlTs, false))
+	require.True(t, ok)
+	require.NotNil(t, event)
+	require.True(t, event.selected.Load())
+}
+
+// TestBarrierEventWithDispatcherScheduling tests the barrier's behavior when a dispatcher
+// goes through scheduling process (replicating -> scheduling -> replicating) while
+// handling DDL events. The test verifies that:
+// 1. When dispatcher A reports DDL before table trigger event dispatcher, DDL should not execute
+// 2. When dispatcher A enters scheduling state and table trigger event dispatcher reports DDL, DDL should not execute
+// 3. When dispatcher A finishes scheduling and reports DDL again, DDL should execute
+func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
+	testutil.SetNodeManagerAndMessageCenter()
+
+	// Setup table trigger event dispatcher (DDL dispatcher)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test")
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1")
+	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+
+	// Setup dispatcher A
+	tableID := int64(1)
+	schemaID := int64(1)
+	startTs := uint64(9)
+	ddlTs := uint64(10)
+
+	span := common.TableIDToComparableSpan(tableID)
+	dispatcherA := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: span.StartKey,
+		EndKey:   span.EndKey,
+	}, startTs)
+
+	// Add dispatcher A to spanController and set to replicating state
+	spanController.AddReplicatingSpan(dispatcherA)
+	spanController.BindSpanToNode("", "node1", dispatcherA)
+	// After binding to node, we need to mark it as replicating again
+	spanController.MarkSpanReplicating(dispatcherA)
+
+	// Create barrier
+	barrier := NewBarrier(spanController, operatorController, true, nil)
+
+	// Verify dispatcher A is in replicating state
+	require.True(t, spanController.IsReplicating(dispatcherA))
+
+	// Phase 1: Dispatcher A reports DDL before table trigger event dispatcher
+	// This should not trigger DDL execution since table trigger event dispatcher hasn't reported yet
+	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: dispatcherA.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID, 0},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, msg)
+
+	// Verify the event is created but not selected for execution
+	event, ok := barrier.blockedEvents.Get(getEventKey(ddlTs, false))
+	require.True(t, ok)
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+	require.Contains(t, event.reportedDispatchers, dispatcherA.ID)
+
+	// Phase 2: Dispatcher A enters scheduling state, table trigger event dispatcher reports DDL
+	// Move dispatcher A to scheduling state
+	spanController.MarkSpanScheduling(dispatcherA)
+
+	// Table trigger event dispatcher reports DDL
+	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID, 0},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, msg)
+
+	// Verify DDL should not execute because dispatcher A is in scheduling state and was removed from reported dispatchers
+	// Only table trigger event dispatcher remains, but range checker still expects all tasks to report
+	event, ok = barrier.blockedEvents.Get(getEventKey(ddlTs, false))
+	require.True(t, ok)
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+	require.Contains(t, event.reportedDispatchers, tableTriggerEventDispatcherID)
+	require.NotContains(t, event.reportedDispatchers, dispatcherA.ID)
+
+	// Phase 3: Dispatcher A finishes scheduling and reports DDL again
+	// Move dispatcher A back to replicating state
+	spanController.MarkSpanReplicating(dispatcherA)
+
+	// Dispatcher A reports DDL again after scheduling
+	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: dispatcherA.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID, 0},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, msg)
+
+	event, ok = barrier.blockedEvents.Get(getEventKey(ddlTs, false))
+	require.True(t, ok)
+	require.NotNil(t, event)
+	require.True(t, event.selected.Load())
 }
