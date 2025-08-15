@@ -1343,3 +1343,142 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
 }
+
+// TestBarrierEventWithDispatcherScheduling tests the barrier's behavior when a dispatcher
+// goes through scheduling process (replicating -> scheduling -> replicating) while
+// handling DDL events. The test verifies that:
+// 1. When dispatcher A reports DDL before table trigger event dispatcher, DDL should not execute
+// 2. When dispatcher A enters scheduling state and table trigger event dispatcher reports DDL, DDL should not execute
+// 3. When dispatcher A finishes scheduling and reports DDL again, DDL should execute
+func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
+	testutil.SetNodeManagerAndMessageCenter()
+
+	// Setup table trigger event dispatcher (DDL dispatcher)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test")
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1")
+	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+
+	// Setup dispatcher A
+	tableID := int64(1)
+	schemaID := int64(1)
+	startTs := uint64(9)
+	ddlTs := uint64(10)
+
+	span := common.TableIDToComparableSpan(tableID)
+	dispatcherA := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: span.StartKey,
+		EndKey:   span.EndKey,
+	}, startTs)
+
+	// Add dispatcher A to spanController and set to replicating state
+	spanController.AddReplicatingSpan(dispatcherA)
+	spanController.BindSpanToNode("", "node1", dispatcherA)
+	// After binding to node, we need to mark it as replicating again
+	spanController.MarkSpanReplicating(dispatcherA)
+
+	// Create barrier
+	barrier := NewBarrier(spanController, operatorController, true, nil)
+
+	// Verify dispatcher A is in replicating state
+	require.True(t, spanController.IsReplicating(dispatcherA))
+
+	// Phase 1: Dispatcher A reports DDL before table trigger event dispatcher
+	// This should not trigger DDL execution since table trigger event dispatcher hasn't reported yet
+	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: dispatcherA.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID, 0},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, msg)
+
+	// Verify the event is created but not selected for execution
+	event, ok := barrier.blockedEvents.Get(getEventKey(ddlTs, false))
+	require.True(t, ok)
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+	require.Contains(t, event.reportedDispatchers, dispatcherA.ID)
+
+	// Phase 2: Dispatcher A enters scheduling state, table trigger event dispatcher reports DDL
+	// Move dispatcher A to scheduling state
+	spanController.MarkSpanScheduling(dispatcherA)
+
+	// Table trigger event dispatcher reports DDL
+	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID, 0},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, msg)
+
+	// Verify DDL should not execute because dispatcher A is in scheduling state and was removed from reported dispatchers
+	// Only table trigger event dispatcher remains, but range checker still expects all tasks to report
+	event, ok = barrier.blockedEvents.Get(getEventKey(ddlTs, false))
+	require.True(t, ok)
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+	require.Contains(t, event.reportedDispatchers, tableTriggerEventDispatcherID)
+	require.NotContains(t, event.reportedDispatchers, dispatcherA.ID)
+
+	// Phase 3: Dispatcher A finishes scheduling and reports DDL again
+	// Move dispatcher A back to replicating state
+	spanController.MarkSpanReplicating(dispatcherA)
+
+	// Dispatcher A reports DDL again after scheduling
+	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: dispatcherA.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   ddlTs,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{tableID, 0},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, msg)
+
+	// Verify that the event has been cleaned up since DDL was already executed in phase 2
+	// When dispatcher A reports DDL again, it should be ignored as the event is already processed
+	event, ok = barrier.blockedEvents.Get(getEventKey(ddlTs, false))
+	require.False(t, ok)
+	require.Nil(t, event)
+}
