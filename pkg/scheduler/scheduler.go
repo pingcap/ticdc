@@ -60,10 +60,9 @@ func (sm *Controller) Start(taskPool threadpool.ThreadPool) (handles []*threadpo
 	}
 	basicScheduler := sm.schedulers[BasicScheduler]
 	handles = append(handles, taskPool.Submit(basicScheduler, time.Now()))
-
 	checkerSchedulers := []Scheduler{}
 	for _, scheduler := range sm.schedulers {
-		if scheduler.Name() != BasicScheduler {
+		if scheduler.Name() != BasicScheduler && scheduler.Name() != RedoBasicScheduler {
 			checkerSchedulers = append(checkerSchedulers, scheduler)
 		}
 	}
