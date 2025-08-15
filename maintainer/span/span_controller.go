@@ -72,6 +72,7 @@ type Controller struct {
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
 	ddlDispatcherID        common.DispatcherID
+	redo                   bool
 }
 
 // NewController creates a new span controller
@@ -80,6 +81,7 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	enableTableAcrossNodes bool,
+	redo bool,
 ) *Controller {
 	c := &Controller{
 		changefeedID:           changefeedID,
@@ -89,6 +91,7 @@ func NewController(
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		ddlDispatcherID:        ddlSpan.ID,
+		redo:                   redo,
 	}
 
 	c.reset(c.ddlSpan)
@@ -162,7 +165,7 @@ func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.redo)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -387,7 +390,8 @@ func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplicatio
 			old.ChangefeedID,
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
-			span, checkpointTs)
+			span, checkpointTs,
+			old.GetRedo())
 		news = append(news, new)
 	}
 

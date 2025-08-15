@@ -36,6 +36,7 @@ type AddDispatcherOperator struct {
 	spanController *span.Controller
 
 	sendThrottler sendThrottler
+	repeat        bool
 }
 
 func NewAddDispatcherOperator(
@@ -136,4 +137,12 @@ func (m *AddDispatcherOperator) String() string {
 
 func (m *AddDispatcherOperator) Type() string {
 	return "add"
+}
+
+func (m *AddDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *AddDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

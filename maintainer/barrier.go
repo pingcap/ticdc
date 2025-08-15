@@ -104,6 +104,7 @@ func NewBarrier(spanController *span.Controller,
 	operatorController *operator.Controller,
 	splitTableEnabled bool,
 	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	isRedo bool,
 ) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
@@ -111,7 +112,7 @@ func NewBarrier(spanController *span.Controller,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
 	}
-	barrier.handleBootstrapResponse(bootstrapRespMap)
+	barrier.handleBootstrapResponse(bootstrapRespMap, isRedo)
 	return &barrier
 }
 
@@ -127,14 +128,18 @@ func (b *Barrier) ReleaseLock(mutex *sync.Mutex) {
 // HandleStatus handle the block status from dispatcher manager
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
+	isRedo bool,
 ) *messaging.TargetMessage {
-	log.Debug("handle block status", zap.String("from", from.String()),
+	log.Info("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
-		zap.Any("detail", request))
+		zap.Any("detail", request), zap.Bool("isRedo", isRedo))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := []*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	for _, status := range request.BlockStatuses {
+		if isRedo != status.IsRedo {
+			continue
+		}
 		// deal with block status, and check whether need to return action.
 		// we need to deal with the block status in order, otherwise scheduler may have problem
 		// e.g. TODO（truncate + create table)
@@ -161,9 +166,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 			Ack: ackEvent(event.commitTs, event.isSyncPoint),
 		})
 	}
-	for action := range actions {
-		dispatcherStatus = append(dispatcherStatus, actions[action])
-	}
+	dispatcherStatus = append(dispatcherStatus, actions...)
 
 	if len(dispatcherStatus) <= 0 {
 		log.Warn("no dispatcher status to send",
@@ -177,13 +180,17 @@ func (b *Barrier) HandleStatus(from node.ID,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID:       request.ChangefeedID,
 			DispatcherStatuses: dispatcherStatus,
+			IsRedo:             isRedo,
 		})
 }
 
 // handleBootstrapResponse rebuild the block event from the bootstrap response
-func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
+func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse, isRedo bool) {
 	for _, resp := range bootstrapRespMap {
 		for _, span := range resp.Spans {
+			if isRedo != span.IsRedo {
+				continue
+			}
 			// we only care about the WAITING, WRITING and DONE stage
 			if span.BlockState == nil || span.BlockState.Stage == heartbeatpb.BlockStage_NONE {
 				continue
@@ -238,13 +245,13 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 }
 
 // Resend resends the message to the dispatcher manger, the pass action is handle here
-func (b *Barrier) Resend() []*messaging.TargetMessage {
+func (b *Barrier) Resend(isRedo bool) []*messaging.TargetMessage {
 	var msgs []*messaging.TargetMessage
 
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
-		msgs = append(msgs, barrierEvent.resend()...)
+		msgs = append(msgs, barrierEvent.resend(isRedo)...)
 
 		eventList = append(eventList, barrierEvent)
 		return true
@@ -286,6 +293,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 			ID:              status.ID,
 			CheckpointTs:    status.State.BlockTs - 1,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
+			IsRedo:          status.IsRedo,
 		})
 		if status.State != nil {
 			span.UpdateBlockState(*status.State)

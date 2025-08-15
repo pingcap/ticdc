@@ -32,35 +32,35 @@ mysql_groups=(
 	# G00
 	'generate_column many_pk_or_uk multi_source'
 	# G01
-	'api_v2 ddl_for_split_tables_with_random_move_table'
+	'api_v2 consistent_ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
 	# G02
-	'availability ddl_for_split_tables_with_failover'
+	'availability consistent_ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
 	# G03
-	''
+	'cdc move_table'
 	# G04
-	'syncpoint syncpoint_check_ts'
+	'syncpoint syncpoint_check_ts '
 	# G05
-	'move_table ddl_for_split_tables_with_merge_and_split'
+	'consistent_ddl_for_split_tables_with_merge_and_split ddl_for_split_tables_with_merge_and_split'
 	# G06
-	'cdc ddl_for_split_tables_with_random_merge_and_split'
+	'consistent_ddl_for_split_tables_with_random_merge_and_split ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'resolve_lock merge_table'
+	'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
 	# G08
-	'bank'
+	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
 	# G09
-	'drop_many_tables'
+	'resolve_lock merge_table drop_many_tables bank'
 	# G10
 	'default_value http_proxies'
 	# G11
 	'ddl_reentrant force_replicate_table'
 	# G12
-	'tidb_mysql_test ddl_with_random_move_table'
+	'tidb_mysql_test consistent_ddl_with_random_move_table ddl_with_random_move_table'
 	# G13
 	'fail_over region_merge'
 	# G14
-	'fail_over_ddl_mix'
+	'consistent_fail_over_ddl_mix fail_over_ddl_mix'
 	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	'consistent_fail_over_ddl_mix_with_syncpoint fail_over_ddl_mix_with_syncpoint'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.

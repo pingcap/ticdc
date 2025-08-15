@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -65,7 +66,6 @@ type Maintainer struct {
 	config     *config.ChangeFeedInfo
 	selfNode   *node.Info
 	controller *Controller
-	barrier    *Barrier
 
 	pdClock pdutil.Clock
 
@@ -92,6 +92,10 @@ type Maintainer struct {
 	// It is sent to dispatcher managers during bootstrap to initialize their
 	// checkpointTs.
 	startCheckpointTs uint64
+	redoTsMap         map[node.ID]*heartbeatpb.RedoTsMessage
+	// redoTs is global redoTs to forward
+	redoTs      *heartbeatpb.RedoTsMessage
+	redoDDLSpan *replica.SpanReplication
 
 	// ddlSpan represents the table trigger event dispatcher that handles DDL events.
 	// This dispatcher is always created on the same node as the maintainer and has a
@@ -168,14 +172,29 @@ func NewMaintainer(cfID common.ChangeFeedID,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
 		}, selfNode.ID)
-
+	// redo releated
+	var (
+		redoDDLSpan *replica.SpanReplication
+	)
+	if redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
+		redoTableTriggerEventDispatcherID := common.NewDispatcherID()
+		redoDDLSpan = replica.NewWorkingSpanReplication(cfID, redoTableTriggerEventDispatcherID,
+			common.DDLSpanSchemaID,
+			common.DDLSpan, &heartbeatpb.TableSpanStatus{
+				ID:              redoTableTriggerEventDispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    checkpointTs,
+				IsRedo:          true,
+			}, selfNode.ID)
+	}
 	m := &Maintainer{
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
+		redoTsMap:         make(map[node.ID]*heartbeatpb.RedoTsMessage),
 		controller: NewController(cfID, checkpointTs, pdAPI, taskScheduler,
-			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
+			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
 		nodeManager:     nodeManager,
@@ -186,6 +205,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		pdClock:         appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 
 		ddlSpan:               ddlSpan,
+		redoDDLSpan:           redoDDLSpan,
 		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
 		newChangefeed:         newChangefeed,
 
@@ -203,6 +223,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
 	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: checkpointTs,
+		ResolvedTs:   checkpointTs,
+	}
+	m.redoTs = &heartbeatpb.RedoTsMessage{
+		ChangefeedID: cfID.ToPB(),
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
@@ -415,6 +440,9 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		m.onCheckpointTsPersisted(req)
+	case messaging.TypeRedoTsMessage:
+		req := msg.Message[0].(*heartbeatpb.RedoTsMessage)
+		m.onRedoTsPersisted(msg.From, req)
 	default:
 		log.Panic("unexpected message type",
 			zap.String("changefeed", m.id.Name()),
@@ -446,6 +474,55 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 	})
 }
 
+// onRedoTsPersisted forwards the redoTs message to the dispatcher manager.
+// - CheckpointTs: All events with Commit-Ts less than or equal to this value have been written to the downstream system.
+// - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
+func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessage) {
+	if !m.bootstrapped.Load() {
+		log.Warn("can not advance redoTs since not bootstrapped",
+			zap.String("changefeed", m.id.Name()))
+		return
+	}
+	var (
+		checkpointTs uint64 = math.MaxUint64
+		resolvedTs   uint64 = math.MaxUint64
+	)
+	m.redoTsMap[id] = msg
+	for _, redoTs := range m.redoTsMap {
+		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
+		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
+	}
+	advance := m.controller.checkAdvance(false)
+	redoAdvance := m.controller.checkAdvance(true)
+	needUpdate := false
+	// need to consider if all dispatcher are removed
+	// this leads resolvedTs is math.MaxUint64
+	if m.redoTs.CheckpointTs < checkpointTs && checkpointTs != math.MaxUint64 && advance {
+		m.redoTs.CheckpointTs = checkpointTs
+		needUpdate = true
+	}
+	if m.redoTs.ResolvedTs < resolvedTs && resolvedTs != math.MaxUint64 && redoAdvance {
+		m.redoTs.ResolvedTs = resolvedTs
+		needUpdate = true
+	}
+	log.Debug("received redo ts message", zap.Bool("advance", advance), zap.Bool("redoAdvance", redoAdvance),
+		zap.Any("needUpdate", needUpdate), zap.Any("mapLength", len(m.redoTsMap)), zap.Any("nodeId", id),
+		zap.Any("message", msg), zap.Any("globalRedoTs", m.redoTs),
+		zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs),
+	)
+	if needUpdate {
+		msgs := make([]*messaging.TargetMessage, 0, len(m.redoTsMap))
+		for id := range m.redoTsMap {
+			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoTsMessage{
+				ChangefeedID: m.redoTs.ChangefeedID,
+				CheckpointTs: m.redoTs.CheckpointTs,
+				ResolvedTs:   m.redoTs.ResolvedTs,
+			}))
+		}
+		m.sendMessages(msgs)
+	}
+}
+
 func (m *Maintainer) onNodeChanged() {
 	currentNodes := m.bootstrapper.GetAllNodes()
 
@@ -462,6 +539,13 @@ func (m *Maintainer) onNodeChanged() {
 			removedNodes = append(removedNodes, id)
 			delete(m.checkpointTsByCapture, id)
 			m.controller.operatorController.OnNodeRemoved(id)
+		}
+	}
+	if m.redoDDLSpan != nil {
+		for rid := range m.redoTsMap {
+			if _, ok := activeNodes[rid]; !ok {
+				delete(m.redoTsMap, rid)
+			}
 		}
 	}
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),
@@ -498,11 +582,11 @@ func (m *Maintainer) calCheckpointTs() {
 	// otherwise, we just return.
 	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
 	operatorLock := m.controller.operatorController.GetLock()
-	barrierLock := m.barrier.GetLock()
+	barrierLock := m.controller.barrier.GetLock()
 
 	defer func() {
 		m.controller.operatorController.ReleaseLock(operatorLock)
-		m.barrier.ReleaseLock(barrierLock)
+		m.controller.barrier.ReleaseLock(barrierLock)
 	}()
 
 	if !m.controller.ScheduleFinished() {
@@ -513,7 +597,7 @@ func (m *Maintainer) calCheckpointTs() {
 		)
 		return
 	}
-	if m.barrier.ShouldBlockCheckpointTs() {
+	if m.controller.barrier.ShouldBlockCheckpointTs() {
 		log.Warn("can not advance checkpointTs since barrier is blocking",
 			zap.String("changefeed", m.id.Name()),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
@@ -585,7 +669,9 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 			m.checkpointTsByCapture[msg.From] = *req.Watermark
 		}
 	}
-	m.controller.HandleStatus(msg.From, req.Statuses)
+	if len(req.Statuses) > 0 {
+		m.controller.HandleStatus(msg.From, req.Statuses)
+	}
 	if req.Err != nil {
 		log.Warn("dispatcher report an error",
 			zap.Stringer("changefeed", m.id),
@@ -612,8 +698,18 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
-	ackMsg := m.barrier.HandleStatus(msg.From, req)
-	m.sendMessages([]*messaging.TargetMessage{ackMsg})
+	if len(req.BlockStatuses) > 0 {
+		if m.controller.redoBarrier != nil {
+			ackMsg := m.controller.redoBarrier.HandleStatus(msg.From, req, true)
+			if ackMsg != nil {
+				m.sendMessages([]*messaging.TargetMessage{ackMsg})
+			}
+		}
+		ackMsg := m.controller.barrier.HandleStatus(msg.From, req, false)
+		if ackMsg != nil {
+			m.sendMessages([]*messaging.TargetMessage{ackMsg})
+		}
+	}
 }
 
 // onMaintainerBootstrapResponse is called when a maintainer bootstrap response(send by dispatcher manager) is received.
@@ -682,12 +778,11 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 		m.handleError(err)
 		return
 	}
-	barrier, msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLCompatible)
+	msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLCompatible)
 	if err != nil {
 		m.handleError(err)
 		return
 	}
-	m.barrier = barrier
 	m.bootstrapped.Store(true)
 
 	// Memory Consumption is 64(tableName/schemaName limit) * 4(utf8.UTFMax) * 2(tableName+schemaName) * tableNum
@@ -729,9 +824,13 @@ func (m *Maintainer) handleResendMessage() {
 	if m.postBootstrapMsg != nil {
 		m.sendPostBootstrapRequest()
 	}
-	if m.barrier != nil {
+	if m.controller.redoBarrier != nil {
+		// resend redo barrier ack messages
+		m.sendMessages(m.controller.redoBarrier.Resend(true))
+	}
+	if m.controller.barrier != nil {
 		// resend barrier ack messages
-		m.sendMessages(m.barrier.Resend())
+		m.sendMessages(m.controller.barrier.Resend(false))
 	}
 }
 
@@ -741,6 +840,10 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 	}
 	if !m.cascadeRemoving {
 		m.controller.operatorController.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
+		if m.controller.redoOperatorController != nil {
+			m.controller.redoOperatorController.RemoveTasksByTableIDs(m.redoDDLSpan.Span.TableID)
+			return !m.ddlSpan.IsWorking() && !m.redoDDLSpan.IsWorking()
+		}
 		return !m.ddlSpan.IsWorking()
 	}
 	return m.trySendMaintainerCloseRequestToAllNode()

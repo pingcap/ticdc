@@ -50,11 +50,13 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
+	isRedo bool,
 ) *SpanReplication {
 	r := newSpanReplication(cfID, id, SchemaID, span)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
 		ID:           id.ToPB(),
 		CheckpointTs: checkpointTs,
+		IsRedo:       isRedo,
 	})
 	log.Info("new span replication created",
 		zap.String("changefeedID", cfID.Name()),
@@ -139,6 +141,10 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 	return r.status.Load()
 }
 
+func (r *SpanReplication) GetRedo() bool {
+	return r.status.Load().IsRedo
+}
+
 // UpdateStatus updates the replication status with the following rules:
 //  1. If there is a block state in WAITING stage and its blockTs is less than or equal to
 //     the new status's checkpointTs, the update is **skipped** to prevent checkpoint advancement
@@ -217,22 +223,24 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 				SchemaID:     r.schemaID,
 				Span:         r.Span,
 				StartTs:      r.status.Load().CheckpointTs,
+				IsRedo:       r.GetRedo(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		}), nil
 }
 
 func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB())
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.GetRedo())
 }
 
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID) *messaging.TargetMessage {
+func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, redo bool) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: cfID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
 				DispatcherID: dispatcherID,
+				IsRedo:       redo,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
 		})

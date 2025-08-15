@@ -48,6 +48,7 @@ type MergeDispatcherOperator struct {
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 
 	sendThrottler sendThrottler
+	repeat        bool
 }
 
 func NewMergeDispatcherOperator(
@@ -111,7 +112,8 @@ func NewMergeDispatcherOperator(
 		newDispatcherID,
 		toMergedReplicaSets[0].GetSchemaID(),
 		mergeTableSpan,
-		1) // use a fake checkpointTs here.
+		1, // use a fake checkpointTs here.
+		toMergedReplicaSets[0].GetRedo())
 
 	spanController.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 
@@ -224,4 +226,12 @@ func (m *MergeDispatcherOperator) String() string {
 
 func (m *MergeDispatcherOperator) Type() string {
 	return "merge"
+}
+
+func (m *MergeDispatcherOperator) IsRepeat() bool {
+	return m.repeat
+}
+
+func (m *MergeDispatcherOperator) SetRepeat(repeat bool) {
+	m.repeat = repeat
 }

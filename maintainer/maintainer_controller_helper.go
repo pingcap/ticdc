@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -298,4 +299,25 @@ func (c *Controller) checkParams(tableId int64, targetNode node.ID) error {
 	}
 
 	return nil
+}
+
+func (c *Controller) getOperatorController(isRedo bool) *operator.Controller {
+	if isRedo {
+		return c.redoOperatorController
+	}
+	return c.operatorController
+}
+
+func (c *Controller) getSpanController(isRedo bool) *span.Controller {
+	if isRedo {
+		return c.redoSpanController
+	}
+	return c.spanController
+}
+
+func (c *Controller) getBarrier(isRedo bool) *Barrier {
+	if isRedo {
+		return c.redoBarrier
+	}
+	return c.barrier
 }
