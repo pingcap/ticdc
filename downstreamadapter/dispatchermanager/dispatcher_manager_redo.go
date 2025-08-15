@@ -127,20 +127,6 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	}
 
 	for idx, id := range dispatcherIds {
-		sharedInfo := dispatcher.NewSharedInfo(
-			e.changefeedID,
-			e.config.TimeZone,
-			e.config.BDRMode,
-			e.outputRawChangeEvent,
-			e.integrityConfig,
-			e.filterConfig,
-			nil, // redo dispatcher doesn't need syncPointConfig
-			e.redoSink,
-			e.statusesChan,
-			e.blockStatusesChan,
-			e.redoSchemaIDToDispatchers,
-			e.errCh,
-		)
 		rd := dispatcher.NewRedoDispatcher(
 			id,
 			tableSpans[idx],
@@ -148,7 +134,8 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			schemaIds[idx],
 			false, // startTsIsSyncpoint
 			0,     // currentPDTs
-			sharedInfo,
+			e.redoSink,
+			e.sharedInfo,
 		)
 		if e.heartBeatTask == nil {
 			e.heartBeatTask = newHeartBeatTask(e)
@@ -240,7 +227,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 	//         3. whether the dispatcherIDs belong to the same table
 	//         4. whether the dispatcherIDs have consecutive ranges
 	//         5. whether the dispatcher in working status.
-	ok := prepareMergeDispatcher(e.changefeedID, dispatcherIDs, e.redoDispatcherMap, mergedDispatcherID, e.statusesChan)
+	ok := prepareMergeDispatcher(e.changefeedID, dispatcherIDs, e.redoDispatcherMap, mergedDispatcherID, e.sharedInfo.GetStatusesChan())
 	if !ok {
 		return nil
 	}
@@ -250,20 +237,6 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		return nil
 	}
 
-	sharedInfo := dispatcher.NewSharedInfo(
-		e.changefeedID,
-		e.config.TimeZone,
-		e.config.BDRMode,
-		e.outputRawChangeEvent,
-		e.integrityConfig,
-		e.filterConfig,
-		nil, // redo dispatcher doesn't need syncPointConfig
-		e.redoSink,
-		e.statusesChan,
-		e.blockStatusesChan,
-		e.redoSchemaIDToDispatchers,
-		e.errCh,
-	)
 	mergedDispatcher := dispatcher.NewRedoDispatcher(
 		mergedDispatcherID,
 		mergedSpan,
@@ -271,7 +244,8 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		schemaID,
 		false, // startTsIsSyncpoint
 		0,     // currentPDTs
-		sharedInfo,
+		e.redoSink,
+		e.sharedInfo,
 	)
 
 	log.Info("new redo dispatcher created(merge dispatcher)",

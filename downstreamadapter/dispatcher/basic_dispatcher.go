@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -123,6 +124,9 @@ type BasicDispatcher struct {
 	// Shared info containing all common configuration and resources
 	sharedInfo *SharedInfo
 
+	// sink is the sink for this dispatcher
+	sink sink.Sink
+
 	// the max resolvedTs received by the dispatcher
 	resolvedTs uint64
 
@@ -158,6 +162,7 @@ func NewBasicDispatcher(
 	startTsIsSyncpoint bool,
 	currentPDTs uint64,
 	dispatcherType int,
+	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
@@ -166,6 +171,7 @@ func NewBasicDispatcher(
 		startTs:            startTs,
 		startTsIsSyncpoint: startTsIsSyncpoint,
 		sharedInfo:         sharedInfo,
+		sink:               sink,
 		componentStatus:    newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
 		resolvedTs:         startTs,
 		isRemoving:         atomic.Bool{},
@@ -189,14 +195,14 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 		d.tableProgress.Add(event)
 	}
 	for _, event := range events {
-		d.sharedInfo.sink.AddDMLEvent(event)
+		d.sink.AddDMLEvent(event)
 		failpoint.Inject("BlockAddDMLEvents", nil)
 	}
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 	d.tableProgress.Add(event)
-	return d.sharedInfo.sink.WriteBlockEvent(event)
+	return d.sink.WriteBlockEvent(event)
 }
 
 func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
@@ -718,7 +724,7 @@ func (d *BasicDispatcher) Remove() {
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
-	if !d.sharedInfo.sink.IsNormal() || d.tableProgress.Empty() {
+	if !d.sink.IsNormal() || d.tableProgress.Empty() {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
@@ -739,7 +745,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	log.Info("dispatcher is not ready to close",
 		zap.Stringer("dispatcher", d.id),
 		zap.Bool("isRedo", IsRedoDispatcher(d)),
-		zap.Bool("sinkIsNormal", d.sharedInfo.sink.IsNormal()),
+		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
 		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
 		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.

@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -42,7 +41,6 @@ type SharedInfo struct {
 	syncPointConfig *syncpoint.SyncPointConfig
 
 	// Shared resources
-	sink sink.Sink
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
 	statusesChan chan TableSpanStatusWithSeq
@@ -68,7 +66,6 @@ func NewSharedInfo(
 	integrityConfig *eventpb.IntegrityConfig,
 	filterConfig *eventpb.FilterConfig,
 	syncPointConfig *syncpoint.SyncPointConfig,
-	sink sink.Sink,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
@@ -82,7 +79,6 @@ func NewSharedInfo(
 		integrityConfig:       integrityConfig,
 		filterConfig:          filterConfig,
 		syncPointConfig:       syncPointConfig,
-		sink:                  sink,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
 		schemaIDToDispatchers: schemaIDToDispatchers,
@@ -189,4 +185,25 @@ func (d *BasicDispatcher) SetStartTs(startTs uint64) {
 
 func (d *BasicDispatcher) SetCurrentPDTs(currentPDTs uint64) {
 	d.creationPDTs = currentPDTs
+}
+
+// SharedInfo methods
+func (s *SharedInfo) IsOutputRawChangeEvent() bool {
+	return s.outputRawChangeEvent
+}
+
+func (s *SharedInfo) GetSchemaIDToDispatchers() *SchemaIDToDispatchers {
+	return s.schemaIDToDispatchers
+}
+
+func (s *SharedInfo) GetStatusesChan() chan TableSpanStatusWithSeq {
+	return s.statusesChan
+}
+
+func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
+	return s.blockStatusesChan
+}
+
+func (s *SharedInfo) GetErrCh() chan error {
+	return s.errCh
 }

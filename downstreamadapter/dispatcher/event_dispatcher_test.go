@@ -63,7 +63,6 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		}, // syncPointConfig
-		sink,
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		NewSchemaIDToDispatchers(),
@@ -77,6 +76,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		false,
 		common.Ts(0), // pdTs
 		TypeDispatcherEvent,
+		sink,
 		sharedInfo,
 		false,
 		&redoTs,

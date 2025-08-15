@@ -17,6 +17,7 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -42,6 +43,7 @@ func NewRedoDispatcher(
 	schemaID int64,
 	startTsIsSyncpoint bool,
 	currentPDTs uint64,
+	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *RedoDispatcher {
 	basicDispatcher := NewBasicDispatcher(
@@ -52,6 +54,7 @@ func NewRedoDispatcher(
 		startTsIsSyncpoint,
 		currentPDTs,
 		TypeDispatcherRedo,
+		sink,
 		sharedInfo,
 	)
 	dispatcher := &RedoDispatcher{

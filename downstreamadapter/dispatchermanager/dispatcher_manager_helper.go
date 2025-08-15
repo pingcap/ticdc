@@ -226,7 +226,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 	sinkType common.SinkType,
 ) {
 	changefeedID := e.changefeedID
-	statusesChan := e.statusesChan
+	statusesChan := e.sharedInfo.GetStatusesChan()
 
 	dispatcherItem, ok := dispatcherMap.Get(id)
 	if ok {

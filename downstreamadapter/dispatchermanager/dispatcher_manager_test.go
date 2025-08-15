@@ -51,7 +51,6 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		nil,
 		nil,
 		nil,
-		mockSink,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
 		dispatcher.NewSchemaIDToDispatchers(),
@@ -63,8 +62,9 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		0,
 		0,
 		false,
-		0,
+		0, // currentPDTs
 		dispatcher.TypeDispatcherEvent,
+		mockSink,
 		sharedInfo,
 		false,
 		&redoTs,
@@ -79,12 +79,10 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	manager := &DispatcherManager{
 		changefeedID:            changefeedID,
 		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
-		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),
 		sink:                    mockSink,
 		latestWatermark:         NewWatermark(0),
-		errCh:                   make(chan error, 1),
 		closing:                 atomic.Bool{},
 		pdClock:                 pdutil.NewClock4Test(),
 		config: &config.ChangefeedConfig{
@@ -96,6 +94,21 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		metricCheckpointTsLag:      metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTsLag:        metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 	}
+
+	// Create shared info for the test manager
+	manager.sharedInfo = dispatcher.NewSharedInfo(
+		manager.changefeedID,
+		"system",
+		manager.config.BDRMode,
+		false, // outputRawChangeEvent
+		nil,   // integrityConfig
+		nil,   // filterConfig
+		nil,   // syncPointConfig
+		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
+		dispatcher.NewSchemaIDToDispatchers(),
+		make(chan error, 1),
+	)
 	nodeID := node.NewID()
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)

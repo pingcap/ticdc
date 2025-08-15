@@ -41,7 +41,6 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		nil,
 		nil,
 		nil, // redo dispatcher doesn't need syncPointConfig
-		sink,
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		NewSchemaIDToDispatchers(),
@@ -54,6 +53,7 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		1,            // schemaID
 		false,        // startTsIsSyncpoint
 		0,            // currentPDTs
+		sink,
 		sharedInfo,
 	)
 }

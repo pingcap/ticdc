@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
@@ -60,6 +61,7 @@ func NewEventDispatcher(
 	startTsIsSyncpoint bool,
 	currentPdTs uint64,
 	dispatcherType int,
+	sink sink.Sink,
 	sharedInfo *SharedInfo,
 	redoEnable bool,
 	redoGlobalTs *atomic.Uint64,
@@ -72,6 +74,7 @@ func NewEventDispatcher(
 		startTsIsSyncpoint,
 		currentPdTs,
 		dispatcherType,
+		sink,
 		sharedInfo,
 	)
 	dispatcher := &EventDispatcher{
@@ -103,8 +106,8 @@ func (d *EventDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 		return false, nil
 	}
 
-	d.tableSchemaStore = util.NewTableSchemaStore(schemaInfo, d.sharedInfo.sink.SinkType())
-	d.sharedInfo.sink.SetTableSchemaStore(d.tableSchemaStore)
+	d.tableSchemaStore = util.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
+	d.sink.SetTableSchemaStore(d.tableSchemaStore)
 	return true, nil
 }
 
@@ -221,7 +224,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 			continue
 		}
 		ddlEvent := codec.NewBootstrapDDLEvent(table)
-		err := d.sharedInfo.sink.WriteBlockEvent(ddlEvent)
+		err := d.sink.WriteBlockEvent(ddlEvent)
 		if err != nil {
 			log.Error("send bootstrap message failed",
 				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
