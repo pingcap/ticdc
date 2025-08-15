@@ -77,6 +77,7 @@ const (
 	AddTablePartition      EventType = "add table partition"
 	DropTablePartition     EventType = "drop table partition"
 	TruncateTablePartition EventType = "truncate table partition"
+	AddForeignKey          EventType = "add foreign key"
 	// if need, add more	AlertTableOption     = "alert table option"
 
 	IncompatibleDDLChanges EventType = "incompatible ddl changes"
