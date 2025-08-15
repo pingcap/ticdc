@@ -199,10 +199,8 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	b.Rows, _ = decoder.Decode(b.RawRows)
 	b.TableInfo = tableInfo
-	log.Info("AssembleRows", zap.String("tableInfo_address", fmt.Sprintf("%p", b.TableInfo)))
 	b.RawRows = nil
 	for _, dml := range b.DMLEvents {
-		log.Info("AssembleRows assign table info", zap.String("tableInfo_address", fmt.Sprintf("%p", b.TableInfo)))
 		dml.Rows = b.Rows
 		dml.TableInfo = b.TableInfo
 	}
