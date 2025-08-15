@@ -793,7 +793,9 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		zap.Stringer("dispatcher", d.id),
 		zap.Bool("isRedo", IsRedoDispatcher(d)),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
-		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()))
+		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
+		zap.Int("tableProgressLen", d.tableProgress.Len()),
+		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
 	return w, false
 }
 

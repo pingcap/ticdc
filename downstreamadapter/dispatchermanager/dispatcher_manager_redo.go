@@ -83,14 +83,14 @@ func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.D
 	if e.redoTableTriggerEventDispatcher != nil {
 		log.Error("redo table trigger event dispatcher existed!")
 	}
-	err := e.newRedoDispatchers([]dispatcherCreateInfo{
-		{
-			Id:        common.NewDispatcherIDFromPB(id),
-			TableSpan: common.DDLSpan,
-			StartTs:   startTs,
-			SchemaID:  0,
-		},
-	}, newChangefeed)
+	infos := map[common.DispatcherID]dispatcherCreateInfo{}
+	infos[common.NewDispatcherIDFromPB(id)] = dispatcherCreateInfo{
+		Id:        common.NewDispatcherIDFromPB(id),
+		TableSpan: common.DDLSpan,
+		StartTs:   startTs,
+		SchemaID:  0,
+	}
+	err := e.newRedoDispatchers(infos, newChangefeed)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -105,7 +105,7 @@ func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.D
 	return nil
 }
 
-func (e *DispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
+func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
 
 	dispatcherIds, tableIds, startTsList, tableSpans, schemaIds := prepareCreateDispatcher(infos, e.redoDispatcherMap)

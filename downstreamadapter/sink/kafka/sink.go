@@ -388,6 +388,10 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						future.Key.Topic,
 						future.Key.Partition,
 						message); err != nil {
+						log.Error("kafka sink send message failed",
+							zap.String("namespace", s.changefeedID.Namespace()),
+							zap.String("changefeed", s.changefeedID.Name()),
+							zap.Error(err))
 						return 0, 0, err
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil

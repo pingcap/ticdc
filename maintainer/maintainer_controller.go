@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -61,7 +60,6 @@ type Controller struct {
 
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
-	pdAPIClient pdutil.PDAPIClient,
 	taskPool threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
 	ddlSpan *replica.SpanReplication,
@@ -73,7 +71,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	var splitter *split.Splitter
 	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
 		enableTableAcrossNodes = true
-		splitter = split.NewSplitter(changefeedID, pdAPIClient, cfConfig.Scheduler)
+		splitter = split.NewSplitter(changefeedID, cfConfig.Scheduler)
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)

@@ -71,7 +71,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 	return nil, nil, &heartBeatInfo.Watermark
 }
 
-func prepareCreateDispatcher[T dispatcher.Dispatcher](infos []dispatcherCreateInfo, dispatcherMap *DispatcherMap[T]) (
+func prepareCreateDispatcher[T dispatcher.Dispatcher](infos map[common.DispatcherID]dispatcherCreateInfo, dispatcherMap *DispatcherMap[T]) (
 	[]common.DispatcherID, []int64, []int64, []*heartbeatpb.TableSpan, []int64,
 ) {
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))

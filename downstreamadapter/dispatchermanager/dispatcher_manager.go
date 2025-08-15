@@ -307,14 +307,14 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 	if e.tableTriggerEventDispatcher != nil {
 		log.Error("table trigger event dispatcher existed!")
 	}
-	err := e.newEventDispatchers([]dispatcherCreateInfo{
-		{
-			Id:        common.NewDispatcherIDFromPB(id),
-			TableSpan: common.DDLSpan,
-			StartTs:   startTs,
-			SchemaID:  0,
-		},
-	}, newChangefeed)
+	infos := map[common.DispatcherID]dispatcherCreateInfo{}
+	infos[common.NewDispatcherIDFromPB(id)] = dispatcherCreateInfo{
+		Id:        common.NewDispatcherIDFromPB(id),
+		TableSpan: common.DDLSpan,
+		StartTs:   startTs,
+		SchemaID:  0,
+	}
+	err := e.newEventDispatchers(infos, newChangefeed)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
@@ -387,7 +387,7 @@ func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int6
 // removeDDLTs is true only when meet the following conditions:
 // 1. newEventDispatchers is called by NewTableTriggerEventDispatcher(just means when creating table trigger event dispatcher)
 // 2. changefeed is total new created, or resumed with overwriteCheckpointTs
-func (e *DispatcherManager) newEventDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
+func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
 	currentPdTs := e.pdClock.CurrentTS()
 
