@@ -34,7 +34,7 @@ type SyncPointEvent struct {
 	Seq uint64 `json:"seq"`
 	// The epoch of the event. It is set by event service.
 	Epoch          uint64   `json:"epoch"`
-	PostTxnFlushed []func() `msg:"-"`
+	PostTxnFlushed []func() `json:"-"`
 }
 
 func (e *SyncPointEvent) GetType() int {
@@ -58,7 +58,7 @@ func (e *SyncPointEvent) GetStartTs() common.Ts {
 }
 
 func (e *SyncPointEvent) GetSize() int64 {
-	return int64(e.State.GetSize() + e.DispatcherID.GetSize() + 8*len(e.CommitTsList))
+	return int64(e.State.GetSize()+e.DispatcherID.GetSize()+8*len(e.CommitTsList)) + 8 + 8
 }
 
 func (e *SyncPointEvent) IsPaused() bool {
