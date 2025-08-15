@@ -260,20 +260,6 @@ func (g *replicationGroup[T, R]) GetTaskSizePerNode() map[node.ID]int {
 }
 
 func (g *replicationGroup[T, R]) IsReplicating(replica R) bool {
-	// log.Info("isReplicating",
-	// 	zap.String("schedulerID", g.id),
-	// 	zap.String("group", g.groupName),
-	// 	zap.String("replica", replica.GetID().String()),
-	// 	zap.Any("len", g.replicating.Len()),
-	// )
-	// g.replicating.Range(func(_ T, r R) bool {
-	// 	log.Info("in isReplicating list",
-	// 		zap.String("schedulerID", g.id),
-	// 		zap.String("group", g.groupName),
-	// 		zap.String("replica", r.GetID().String()),
-	// 	)
-	// 	return true
-	// })
 	return g.replicating.Find(replica.GetID())
 }
 
