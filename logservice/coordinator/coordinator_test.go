@@ -188,7 +188,7 @@ func TestGetCandidateNodes(t *testing.T) {
 	}
 
 	// remove node1 and check again
-	coordinator.nodes.m[nodeID1] = nil
+	delete(coordinator.nodes.m, nodeID1)
 	{
 		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
