@@ -77,7 +77,8 @@ var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	// difficult to classify DDLs
 	timodel.ActionMultiSchemaChange: bf.MultiSchemaChange,
 
-	timodel.ActionAddForeignKey: bf.AddForeignKey,
+	timodel.ActionAddForeignKey:  bf.AddForeignKey,
+	timodel.ActionDropForeignKey: bf.DropForeignKey,
 
 	// deprecated DDLs,see https://github.com/pingcap/tidb/pull/35862.
 	// DDL types below are deprecated in TiDB v6.2.0, but we still keep them here
