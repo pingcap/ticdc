@@ -33,8 +33,8 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 180
 
-	minScanLimitInBytes     = 1024 * 128      // 128KB
-	maxScanLimitInBytes     = 1024 * 1024 * 4 // 4MB
+	minScanLimitInBytes     = 1024 * 128  // 128KB
+	maxScanLimitInBytes     = 1024 * 1024 // 1MB
 	updateScanLimitInterval = time.Second * 10
 )
 
@@ -59,27 +59,34 @@ type dispatcherStat struct {
 	eventStoreResolvedTs atomic.Uint64
 	// The max latest commit ts received from event store.
 	latestCommitTs atomic.Uint64
+
+	// The last scanned DML event start-ts.
+	lastScannedCommitTs atomic.Uint64
+	lastScannedStartTs  atomic.Uint64
+
 	// The sentResolvedTs of the events that have been sent to the dispatcher.
 	// We use this value to generate data range for the next scan task.
 	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
 	sentResolvedTs atomic.Uint64
+
 	// checkpointTs is the ts that reported by the downstream dispatcher.
 	// events <= checkpointTs will not needed anymore, so we can inform eventStore to GC them.
 	// TODO: maintain it
 	checkpointTs atomic.Uint64
 
 	// The seq of the events that have been sent to the downstream dispatcher.
-	// It start from 1, and increase by 1 for each event.
+	// It starts from 1, and increase by 1 for each event.
 	// If the dispatcher is reset, the seq should be set to 1.
 	seq atomic.Uint64
 
 	// The epoch of the dispatcher.
 	epoch atomic.Uint64
 
-	// isReadyRecevingData is used to indicate whether the dispatcher is ready to receive data events.
+	// isReadyReceivingData is used to indicate whether the dispatcher is ready to receive data events.
 	// It will be set to false, after it receives the pause event from the dispatcher.
 	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
-	isReadyRecevingData atomic.Bool
+	isReadyReceivingData atomic.Bool
+
 	// isHandshaked is used to indicate whether the dispatcher is ready to send data.
 	// It will be set to true, after it sends the handshake event to the dispatcher.
 	// It will be set to false, after it receives the reset event from the dispatcher.
@@ -113,8 +120,6 @@ type dispatcherStat struct {
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
-
-	lastScanBytes atomic.Int64
 }
 
 func newDispatcherStat(
@@ -133,10 +138,6 @@ func newDispatcherStat(
 		info:               info,
 		filter:             filter,
 	}
-
-	// A small value to avoid too many scan tasks at the first place.
-	dispStat.lastScanBytes.Store(1024)
-
 	changefeedStatus.addDispatcher()
 
 	if info.SyncPointEnabled() {
@@ -146,8 +147,12 @@ func newDispatcherStat(
 	}
 	dispStat.eventStoreResolvedTs.Store(startTs)
 	dispStat.checkpointTs.Store(startTs)
+
 	dispStat.sentResolvedTs.Store(startTs)
-	dispStat.isReadyRecevingData.Store(true)
+	dispStat.lastScannedCommitTs.Store(startTs)
+	dispStat.lastScannedStartTs.Store(0)
+
+	dispStat.isReadyReceivingData.Store(true)
 	dispStat.resetScanLimit()
 
 	now := time.Now()
@@ -172,6 +177,8 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 	// Only update the sentResolvedTs when the dispatcher is handshaked.
 	if a.isHandshaked.Load() {
 		a.sentResolvedTs.Store(resolvedTs)
+		a.lastScannedCommitTs.Store(resolvedTs)
+		a.lastScannedStartTs.Store(0)
 		a.lastSentResolvedTsTime.Store(time.Now())
 	}
 }
@@ -183,12 +190,16 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	// Reset the sentResolvedTs to the resetTs.
 	// Because when the dispatcher is reset, the downstream want to resend the events from the resetTs.
 	a.sentResolvedTs.Store(resetTs)
+
+	a.lastScannedCommitTs.Store(resetTs)
+	a.lastScannedStartTs.Store(0)
+
 	a.resetTs.Store(resetTs)
 	a.seq.Store(0)
 
 	a.isTaskScanning.Store(false)
 
-	a.isReadyRecevingData.Store(true)
+	a.isReadyReceivingData.Store(true)
 	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 }
 
@@ -211,7 +222,7 @@ func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
 
 // getDataRange returns the data range that the dispatcher needs to scan.
 func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
-	startTs := a.sentResolvedTs.Load()
+	startTs := a.lastScannedCommitTs.Load()
 	resetTs := a.resetTs.Load()
 	if startTs < resetTs {
 		log.Warn("resetTs is greater than startTs, set startTs as the resetTs",
@@ -226,18 +237,19 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	if startTs >= resolvedTs {
 		return common.DataRange{}, false
 	}
-	// Range: (startTs, EndTs],
+	// Range: (startTs-lastScannedStartTs, EndTs],
 	// since the startTs(and the data before startTs) is already sent to the dispatcher.
 	r := common.DataRange{
-		Span:    a.info.GetTableSpan(),
-		StartTs: startTs,
-		EndTs:   resolvedTs,
+		Span:               a.info.GetTableSpan(),
+		StartTs:            startTs,
+		EndTs:              resolvedTs,
+		LastScannedStartTs: a.lastScannedStartTs.Load(),
 	}
 	return r, true
 }
 
 func (a *dispatcherStat) IsReadyRecevingData() bool {
-	return a.isReadyRecevingData.Load() && a.changefeedStat.isReadyRecevingData.Load()
+	return a.isReadyReceivingData.Load() && a.changefeedStat.isReadyReceivingData.Load()
 }
 
 // getCurrentScanLimitInBytes returns the current scan limit in bytes.
@@ -412,20 +424,24 @@ func (c *resolvedTsCache) reset() {
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
-	// isReadyRecevingData is used to indicate whether the changefeed is running.
+	// isReadyReceivingData is used to indicate whether the changefeed is running.
 	// It will be set to false, after it receives the pause event from the dispatcher.
 	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
-	isReadyRecevingData atomic.Bool
+	isReadyReceivingData atomic.Bool
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
 	dispatcherCount atomic.Uint64
+
+	dispatcherStatMap sync.Map // nodeID -> dispatcherID -> dispatcherStat
+
+	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 	stat := &changefeedStatus{
-		changefeedID:        changefeedID,
-		isReadyRecevingData: atomic.Bool{},
+		changefeedID:         changefeedID,
+		isReadyReceivingData: atomic.Bool{},
 	}
-	stat.isReadyRecevingData.Store(true)
+	stat.isReadyReceivingData.Store(true)
 	return stat
 }
 

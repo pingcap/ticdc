@@ -170,6 +170,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 	})
 
 	g.Go(func() error {
+		return c.controlCongestion(ctx)
+	})
+
+	g.Go(func() error {
 		return c.sendDispatcherRequests(ctx)
 	})
 
@@ -510,6 +514,87 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 			}
 		}
 	}
+}
+
+func (c *EventCollector) controlCongestion(ctx context.Context) error {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			messages := c.newCongestionControlMessages()
+			for serverID, m := range messages {
+				if len(m.GetAvailables()) != 0 {
+					msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, m)
+					if err := c.mc.SendCommand(msg); err != nil {
+						log.Warn("send congestion control message failed", zap.Error(err))
+					}
+				}
+			}
+		}
+	}
+}
+
+func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
+	// collect all changefeeds' available memory quota
+	availables := make(map[common.ChangeFeedID]uint64)
+	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
+		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
+		if !ok {
+			continue
+		}
+		availables[changefeedID.(common.ChangeFeedID)] = uint64(quota.AvailableMemory())
+	}
+	if len(availables) == 0 {
+		return nil
+	}
+
+	// calculate each changefeed's available memory quota for each node
+	// by the proportion of the dispatcher on each node.
+	// this is not accurate, we should also consider each node's workload distribution.
+	proportions := make(map[common.ChangeFeedID]map[node.ID]uint64)
+	c.dispatcherMap.Range(func(k, v interface{}) bool {
+		stat := v.(*dispatcherStat)
+		eventServiceID := stat.connState.getEventServiceID()
+		if eventServiceID == "" {
+			return true
+		}
+
+		changefeedID := stat.target.GetChangefeedID()
+		holder, ok := proportions[changefeedID]
+		if !ok {
+			holder = make(map[node.ID]uint64, len(availables))
+			proportions[changefeedID] = holder
+		}
+		holder[eventServiceID]++
+		return true
+	})
+
+	// group the available memory quota by nodeID
+	result := make(map[node.ID]*event.CongestionControl)
+	for changefeedID, total := range availables {
+		proportion := proportions[changefeedID]
+		var sum uint64
+		for _, portion := range proportion {
+			sum += portion
+		}
+
+		for nodeID, portion := range proportion {
+			ratio := float64(portion) / float64(sum)
+			quota := uint64(float64(total) * ratio)
+
+			m, ok := result[nodeID]
+			if !ok {
+				m = event.NewCongestionControl()
+				result[nodeID] = m
+			}
+			m.AddAvailableMemory(changefeedID.ID(), quota)
+		}
+	}
+	return result
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) error {

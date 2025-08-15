@@ -389,7 +389,7 @@ func TestEventStoreGetIterator(t *testing.T) {
 	}
 	// get iterator from subStat 1
 	{
-		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
+		iter := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -398,7 +398,6 @@ func TestEventStoreGetIterator(t *testing.T) {
 			StartTs: 100,
 			EndTs:   150,
 		})
-		require.Nil(t, err)
 		iterImpl := iter.(*eventStoreIter)
 		require.True(t, iterImpl.needCheckSpan)
 	}
@@ -413,7 +412,7 @@ func TestEventStoreGetIterator(t *testing.T) {
 	}
 	// get iterator from subStat 2
 	{
-		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
+		iter := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -422,7 +421,6 @@ func TestEventStoreGetIterator(t *testing.T) {
 			StartTs: 100,
 			EndTs:   150,
 		})
-		require.Nil(t, err)
 		iterImpl := iter.(*eventStoreIter)
 		require.False(t, iterImpl.needCheckSpan)
 	}

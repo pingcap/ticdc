@@ -25,16 +25,17 @@ import (
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -54,15 +55,17 @@ type eventBroker struct {
 	// eventStore is the source of the events, eventBroker get the events from the eventStore.
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
-	mounter     pevent.Mounter
+	mounter     event.Mounter
 	// msgSender is used to send the events to the dispatchers.
 	msgSender messaging.MessageSender
 	pdClock   pdutil.Clock
 
 	// changefeedMap is used to track the changefeed status.
-	changefeedMap sync.Map
+	changefeedMap sync.Map // common.ChangeFeedID -> *changefeedStatus
+
 	// All the dispatchers that register to the eventBroker.
 	dispatchers sync.Map
+
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
 
@@ -74,15 +77,14 @@ type eventBroker struct {
 	messageCh     []chan *wrapEvent
 	redoMessageCh []chan *wrapEvent
 
+	scanLimitInBytes uint64
+
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
 	cancel context.CancelFunc
 	g      *errgroup.Group
 
 	// metricsCollector handles all metrics collection and reporting
 	metricsCollector *metricsCollector
-
-	scanRateLimiter  *rate.Limiter
-	scanLimitInBytes int
 }
 
 func newEventBroker(
@@ -105,8 +107,6 @@ func newEventBroker(
 	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
-	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
-
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -118,7 +118,7 @@ func newEventBroker(
 		tidbClusterID:           id,
 		eventStore:              eventStore,
 		pdClock:                 pdClock,
-		mounter:                 pevent.NewMounter(tz, integrity),
+		mounter:                 event.NewMounter(tz, integrity),
 		schemaStore:             schemaStore,
 		changefeedMap:           sync.Map{},
 		dispatchers:             sync.Map{},
@@ -127,11 +127,12 @@ func newEventBroker(
 		taskChan:                make([]chan scanTask, scanWorkerCount),
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
-		cancel:                  cancel,
-		g:                       g,
-		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
-		scanLimitInBytes:        scanLimitInBytes,
+
+		scanLimitInBytes: uint64(config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes),
+		cancel:           cancel,
+		g:                g,
 	}
+
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
 
@@ -170,12 +171,12 @@ func newEventBroker(
 		return c.metricsCollector.Run(ctx)
 	})
 
-	log.Info("new event broker created", zap.Uint64("id", id), zap.Int64("scanLimitInBytes", int64(scanLimitInBytes)))
+	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
 }
 
-func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
-	doSendDML := func(e *pevent.BatchDMLEvent) {
+func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent, d *dispatcherStat) {
+	doSendDML := func(e *event.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
 			c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
@@ -183,31 +184,41 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 		}
 	}
 
-	i := 0
+	var (
+		idx          int
+		lastStartTs  uint64
+		lastCommitTs uint64
+	)
 	for {
-		if i >= len(batchEvent.DMLEvents) {
+		if idx >= len(batchEvent.DMLEvents) {
 			break
 		}
-		dml := batchEvent.DMLEvents[i]
+		dml := batchEvent.DMLEvents[idx]
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
-			events := batchEvent.PopHeadDMLEvents(i)
+			events := batchEvent.PopHeadDMLEvents(idx)
 			doSendDML(events)
 			// Reset the index to 1 to process the next event after `dml` in next loop
-			i = 1
+			idx = 1
 			// Emit sync point event if needed
 			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
 		} else {
-			i++
+			idx++
 		}
 		// Set sequence number for the event
 		dml.Seq = d.seq.Add(1)
 		dml.Epoch = d.epoch.Load()
-		log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(dml.GetType())), zap.Uint64("commitTs", dml.GetCommitTs()), zap.Uint64("seq", dml.GetSeq()))
+
+		lastStartTs = dml.GetStartTs()
+		lastCommitTs = dml.GetCommitTs()
+		log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id),
+			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
+	d.lastScannedCommitTs.Store(lastCommitTs)
+	d.lastScannedStartTs.Store(lastStartTs)
 	doSendDML(batchEvent)
 }
 
-func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.DDLEvent, d *dispatcherStat) {
+func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DDLEvent, d *dispatcherStat) {
 	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
@@ -233,7 +244,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
-	re := pevent.NewResolvedEvent(watermark, d.id, d.epoch.Load())
+	re := event.NewResolvedEvent(watermark, d.id, d.epoch.Load())
 	resolvedEvent := newWrapResolvedEvent(
 		remoteID,
 		re,
@@ -247,7 +258,7 @@ func (c *eventBroker) sendNotReusableEvent(
 	server node.ID,
 	d *dispatcherStat,
 ) {
-	event := pevent.NewNotReusableEvent(d.info.GetID())
+	event := event.NewNotReusableEvent(d.info.GetID())
 	wrapEvent := newWrapNotReusableEvent(server, event)
 
 	// must success unless we can do retry later
@@ -284,26 +295,26 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 			return context.Cause(ctx)
 		case <-ticker.C:
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
-				dispatcherStat := value.(*dispatcherStat)
-				if !c.checkAndSendReady(dispatcherStat) {
+				stat := value.(*dispatcherStat)
+				if !c.checkAndSendReady(stat) {
 					return true
 				}
-				c.sendHandshakeIfNeed(dispatcherStat)
-				startTs := dispatcherStat.sentResolvedTs.Load()
-				remoteID := node.ID(dispatcherStat.info.GetServerID())
+				c.sendHandshakeIfNeed(stat)
+				startTs := stat.sentResolvedTs.Load()
+				remoteID := node.ID(stat.info.GetServerID())
 				// TODO: maybe limit 1 is enough.
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(dispatcherStat.filter, startTs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.filter, startTs, 100)
 				if err != nil {
-					log.Error("table trigger ddl events fetch failed", zap.Stringer("dispatcher", dispatcherStat.id), zap.Error(err))
+					log.Error("table trigger ddl events fetch failed", zap.Stringer("dispatcher", stat.id), zap.Error(err))
 					return true
 				}
 				for _, e := range ddlEvents {
 					ep := &e
-					c.sendDDL(ctx, remoteID, ep, dispatcherStat)
+					c.sendDDL(ctx, remoteID, ep, stat)
 				}
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
-					c.sendResolvedTs(dispatcherStat, endTs)
+					c.sendResolvedTs(stat, endTs)
 				}
 				return true
 			})
@@ -411,7 +422,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
 		remoteID := node.ID(task.info.GetServerID())
-		event := pevent.NewReadyEvent(task.info.GetID())
+		event := event.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
 		metricEventServiceSendCommandCount.Inc()
@@ -431,13 +442,14 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	// Always reset the seq of the dispatcher to 0 before sending a handshake event.
 	task.seq.Store(0)
 	remoteID := node.ID(task.info.GetServerID())
-	event := pevent.NewHandshakeEvent(
+	event := event.NewHandshakeEvent(
 		task.id,
 		task.resetTs.Load(),
 		task.seq.Add(1),
 		task.epoch.Load(),
 		task.startTableInfo.Load())
-	log.Debug("send handshake event to dispatcher", zap.Stringer("dispatcher", task.id), zap.String("eventType", pevent.TypeToString(event.GetType())), zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
+	log.Debug("send handshake event to dispatcher", zap.Stringer("dispatcher", task.id),
+		zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
@@ -464,13 +476,13 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		if len(commitTsList) > 16 {
 			newCommitTsList = commitTsList[:16]
 		}
-		e := &pevent.SyncPointEvent{
+		e := &event.SyncPointEvent{
 			DispatcherID: d.id,
 			CommitTsList: newCommitTsList,
 			Seq:          d.seq.Add(1),
 			Epoch:        d.epoch.Load(),
 		}
-		log.Debug("send syncpoint event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(e.GetType())), zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
+		log.Debug("send syncpoint event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", event.TypeToString(e.GetType())), zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
 		c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- syncPointEvent
@@ -480,6 +492,13 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		} else {
 			break
 		}
+	}
+}
+
+func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
+	return scanLimit{
+		maxDMLBytes: task.getCurrentScanLimitInBytes(),
+		timeout:     time.Second,
 	}
 }
 
@@ -493,12 +512,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 	}()
 
-	remoteID := node.ID(task.info.GetServerID())
+	var (
+		remoteID     = node.ID(task.info.GetServerID())
+		changefeedID = task.info.GetChangefeedID()
+	)
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
 		log.Info("The remote target is not ready, skip scan",
-			zap.String("changefeed", task.info.GetChangefeedID().String()),
+			zap.String("changefeed", changefeedID.String()),
 			zap.String("dispatcher", task.id.String()),
 			zap.String("remote", remoteID.String()))
 		return
@@ -509,42 +531,45 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
-	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
-	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
-	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
-	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
-	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
-		log.Debug("scan rate limit exceeded", zap.Stringer("dispatcher", task.id), zap.Int64("lastScanBytes", task.lastScanBytes.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
+	item, ok := c.changefeedMap.Load(changefeedID)
+	if !ok {
+		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
+	}
+
+	status := item.(*changefeedStatus)
+	item, ok = status.availableMemoryQuota.Load(remoteID)
+	if !ok {
+		log.Info("The available memory quota is not set, skip scan",
+			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+		return
+	}
+	available := item.(*atomic.Uint64)
+
+	if available.Load() < c.scanLimitInBytes {
+		task.resetScanLimit()
 		return
 	}
 
-	scanner := newEventScanner(
-		c.eventStore,
-		c.schemaStore,
-		c.mounter,
-		task.epoch.Load(),
-	)
-
-	sl := scanLimit{
-		maxScannedBytes: task.getCurrentScanLimitInBytes(),
-		timeout:         time.Millisecond * 1000, // 1 Second
+	sl := c.calculateScanLimit(task)
+	ok = allocQuota(available, uint64(sl.maxDMLBytes))
+	if !ok {
+		log.Warn("cannot allocate enough memory quota for scan task, skip it",
+			zap.Uint64("available", available.Load()), zap.Uint64("required", uint64(sl.maxDMLBytes)))
+		return
 	}
 
-	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
+	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
-		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
+		log.Error("scan events failed", zap.Stringer("dispatcher", task.id),
+			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()),
+			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
-
-	if scannedBytes > int64(c.scanLimitInBytes) {
-		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
-		scannedBytes = int64(c.scanLimitInBytes)
-	}
-	task.lastScanBytes.Store(scannedBytes)
 
 	// Check whether the task is ready to receive data events again before sending events.
-	if !task.isReadyRecevingData.Load() {
+	if !task.isReadyReceivingData.Load() {
+		log.Warn("skip sending events, since the task is not ready to receive data events")
 		return
 	}
 
@@ -560,20 +585,20 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 
 		switch e.GetType() {
-		case pevent.TypeBatchDMLEvent:
-			dmls, ok := e.(*pevent.BatchDMLEvent)
+		case event.TypeBatchDMLEvent:
+			dmls, ok := e.(*event.BatchDMLEvent)
 			if !ok {
 				log.Panic("expect a DMLEvent, but got", zap.Any("event", e))
 			}
 			c.sendDML(remoteID, dmls, task)
-		case pevent.TypeDDLEvent:
-			ddl, ok := e.(*pevent.DDLEvent)
+		case event.TypeDDLEvent:
+			ddl, ok := e.(*event.DDLEvent)
 			if !ok {
 				log.Panic("expect a DDLEvent, but got", zap.Any("event", e))
 			}
 			c.sendDDL(ctx, remoteID, ddl, task)
-		case pevent.TypeResolvedEvent:
-			re, ok := e.(pevent.ResolvedEvent)
+		case event.TypeResolvedEvent:
+			re, ok := e.(event.ResolvedEvent)
 			if !ok {
 				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
@@ -584,6 +609,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
+}
+
+func allocQuota(quota *atomic.Uint64, nBytes uint64) bool {
+	available := quota.Load()
+	if available < nBytes {
+		return false
+	}
+	return quota.CompareAndSwap(available, available-nBytes)
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int, topic string) error {
@@ -612,7 +645,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int,
 				}
 			}
 			for _, m = range batchM {
-				if m.msgType == pevent.TypeResolvedEvent {
+				if m.msgType == event.TypeResolvedEvent {
 					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex, topic)
 					continue
 				}
@@ -655,7 +688,7 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 	if cache == nil || cache.len == 0 {
 		return
 	}
-	msg := &pevent.BatchResolvedEvent{}
+	msg := &event.BatchResolvedEvent{}
 	msg.Events = append(msg.Events, cache.getAll()...)
 	if len(msg.Events) == 0 {
 		return
@@ -774,23 +807,22 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 	}
 }
 
-func (c *eventBroker) getDispatcher(id common.DispatcherID) (*dispatcherStat, bool) {
+func (c *eventBroker) getDispatcher(id common.DispatcherID) *dispatcherStat {
 	stat, ok := c.dispatchers.Load(id)
 	if ok {
-		return stat.(*dispatcherStat), true
+		return stat.(*dispatcherStat)
 	}
 	stat, ok = c.tableTriggerDispatchers.Load(id)
 	if ok {
-		return stat.(*dispatcherStat), true
+		return stat.(*dispatcherStat)
 	}
-	return nil, false
+	return nil
 }
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	defer c.metricsCollector.metricDispatcherCount.Inc()
 	filter := info.GetFilter()
 
-	start := time.Now()
 	id := info.GetID()
 	span := info.GetTableSpan()
 	startTs := info.GetStartTs()
@@ -798,7 +830,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	workerIndex := (common.GID)(id).Hash(uint64(len(c.messageCh)))
 	scanWorkerIndex := (common.GID)(id).Hash(uint64(len(c.taskChan)))
 
-	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, c.getOrSetChangefeedStatus(changefeedID))
+	status := c.getOrSetChangefeedStatus(changefeedID)
+	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, status)
 	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
@@ -806,12 +839,11 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", startTs),
-			zap.Duration("brokerRegisterDuration", time.Since(start)),
-		)
+			zap.Uint64("startTs", startTs))
 		return nil
 	}
 
+	start := time.Now()
 	success := c.eventStore.RegisterDispatcher(
 		id,
 		span,
@@ -880,32 +912,34 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
+	changefeedID := dispatcherInfo.GetChangefeedID()
 
 	if stat.(*dispatcherStat).changefeedStat.dispatcherCount.Load() == 0 {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
-			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("changefeedID", changefeedID),
 		)
-		c.changefeedMap.Delete(dispatcherInfo.GetChangefeedID())
+		c.changefeedMap.Delete(changefeedID)
+		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 	}
 
 	stat.(*dispatcherStat).isRemoved.Store(true)
-	stat.(*dispatcherStat).isReadyRecevingData.Store(false)
+	stat.(*dispatcherStat).isReadyReceivingData.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
-	// todo: how to handle this error?
-	_ = c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
+
+	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
 		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
 }
 
 func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
-	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
-	if !ok {
+	stat := c.getDispatcher(dispatcherInfo.GetID())
+	if stat == nil {
 		return
 	}
 	log.Info("pause dispatcher",
@@ -915,13 +949,13 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
-	stat.isReadyRecevingData.Store(false)
+	stat.isReadyReceivingData.Store(false)
 	stat.resetScanLimit()
 }
 
 func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
-	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
-	if !ok {
+	stat := c.getDispatcher(dispatcherInfo.GetID())
+	if stat == nil {
 		return
 	}
 	log.Info("resume dispatcher",
@@ -930,13 +964,13 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
-	stat.isReadyRecevingData.Store(true)
+	stat.isReadyReceivingData.Store(true)
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	start := time.Now()
-	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
-	if !ok {
+	stat := c.getDispatcher(dispatcherInfo.GetID())
+	if stat == nil {
 		// The dispatcher is not registered, register it.
 		// FIXME: Handle the error.
 		_ = c.addDispatcher(dispatcherInfo)
@@ -945,7 +979,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 
 	// Must set the isRunning to false before reset the dispatcher.
 	// Otherwise, the scan task goroutine will not return before reset the dispatcher.
-	stat.isReadyRecevingData.Store(false)
+	stat.isReadyReceivingData.Store(false)
 
 	// Wait until the scan task goroutine return before reset the dispatcher.
 	for {
@@ -989,7 +1023,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 		stat = newChangefeedStatus(changefeedID)
 		log.Info("new changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
-			zap.Bool("isRunning", stat.(*changefeedStatus).isReadyRecevingData.Load()),
+			zap.Bool("isRunning", stat.(*changefeedStatus).isReadyReceivingData.Load()),
 		)
 		c.changefeedMap.Store(changefeedID, stat)
 	}
@@ -997,17 +1031,17 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
-	responseMap := make(map[string]*pevent.DispatcherHeartbeatResponse)
+	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
-		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
+		dispatcher := c.getDispatcher(dp.DispatcherID)
 		// Can't find the dispatcher, it means the dispatcher is removed.
-		if !ok {
+		if dispatcher == nil {
 			response, ok := responseMap[heartbeat.serverID]
 			if !ok {
-				response = pevent.NewDispatcherHeartbeatResponse()
+				response = event.NewDispatcherHeartbeatResponse()
 				responseMap[heartbeat.serverID] = response
 			}
-			response.Append(pevent.NewDispatcherState(dp.DispatcherID, pevent.DSStateRemoved))
+			response.Append(event.NewDispatcherState(dp.DispatcherID, event.DSStateRemoved))
 			continue
 		}
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
@@ -1020,7 +1054,32 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 	c.sendDispatcherResponse(responseMap)
 }
 
-func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*pevent.DispatcherHeartbeatResponse) {
+func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionControl) {
+	availables := m.GetAvailables()
+	if len(availables) == 0 {
+		return
+	}
+
+	holder := make(map[common.GID]uint64, len(availables))
+	for _, item := range availables {
+		holder[item.Gid] = item.Available
+	}
+
+	c.changefeedMap.Range(func(k, v interface{}) bool {
+		changefeedID := k.(common.ChangeFeedID)
+		changefeed := v.(*changefeedStatus)
+
+		available, ok := holder[changefeedID.ID()]
+		if !ok {
+			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
+		}
+		changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
+		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		return true
+	})
+}
+
+func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {
 	for serverID, response := range responseMap {
 		msg := messaging.NewSingleTargetMessage(node.ID(serverID), messaging.EventCollectorTopic, response)
 		c.msgSender.SendCommand(msg)
