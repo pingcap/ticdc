@@ -127,20 +127,29 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	}
 
 	for idx, id := range dispatcherIds {
-		rd := dispatcher.NewRedoDispatcher(
+		sharedInfo := dispatcher.NewSharedInfo(
 			e.changefeedID,
-			id, tableSpans[idx], e.redoSink,
-			uint64(newStartTsList[idx]),
-			e.statusesChan,
-			e.blockStatusesChan,
-			schemaIds[idx],
-			e.redoSchemaIDToDispatchers,
 			e.config.TimeZone,
+			e.config.BDRMode,
+			e.outputRawChangeEvent,
 			e.integrityConfig,
 			e.filterConfig,
+			nil, // redo dispatcher doesn't need syncPointConfig
+			e.redoSink,
+			e.statusesChan,
+			e.blockStatusesChan,
+			e.redoSchemaIDToDispatchers,
 			e.errCh,
-			e.config.BDRMode,
-			e.outputRawChangeEvent)
+		)
+		rd := dispatcher.NewRedoDispatcher(
+			id,
+			tableSpans[idx],
+			uint64(newStartTsList[idx]),
+			schemaIds[idx],
+			false, // startTsIsSyncpoint
+			0,     // currentPDTs
+			sharedInfo,
+		)
 		if e.heartBeatTask == nil {
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
@@ -241,22 +250,28 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		return nil
 	}
 
-	mergedDispatcher := dispatcher.NewRedoDispatcher(
+	sharedInfo := dispatcher.NewSharedInfo(
 		e.changefeedID,
-		mergedDispatcherID,
-		mergedSpan,
-		e.redoSink,
-		fakeStartTs, // real startTs will be calculated later.
-		e.statusesChan,
-		e.blockStatusesChan,
-		schemaID,
-		e.redoSchemaIDToDispatchers,
 		e.config.TimeZone,
-		e.integrityConfig,
-		e.filterConfig,
-		e.errCh,
 		e.config.BDRMode,
 		e.outputRawChangeEvent,
+		e.integrityConfig,
+		e.filterConfig,
+		nil, // redo dispatcher doesn't need syncPointConfig
+		e.redoSink,
+		e.statusesChan,
+		e.blockStatusesChan,
+		e.redoSchemaIDToDispatchers,
+		e.errCh,
+	)
+	mergedDispatcher := dispatcher.NewRedoDispatcher(
+		mergedDispatcherID,
+		mergedSpan,
+		fakeStartTs, // real startTs will be calculated later.
+		schemaID,
+		false, // startTsIsSyncpoint
+		0,     // currentPDTs
+		sharedInfo,
 	)
 
 	log.Info("new redo dispatcher created(merge dispatcher)",

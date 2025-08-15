@@ -425,23 +425,29 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 	}
 
 	for idx, id := range dispatcherIds {
-		d := dispatcher.NewEventDispatcher(
+		sharedInfo := dispatcher.NewSharedInfo(
 			e.changefeedID,
-			id, tableSpans[idx], e.sink,
-			uint64(newStartTsList[idx]),
-			e.statusesChan,
-			e.blockStatusesChan,
-			schemaIds[idx],
-			e.schemaIDToDispatchers,
 			e.config.TimeZone,
-			e.integrityConfig,
-			e.syncPointConfig,
-			startTsIsSyncpointList[idx],
-			e.filterConfig,
-			currentPdTs,
-			e.errCh,
 			e.config.BDRMode,
 			e.outputRawChangeEvent,
+			e.integrityConfig,
+			e.filterConfig,
+			e.syncPointConfig,
+			e.sink,
+			e.statusesChan,
+			e.blockStatusesChan,
+			e.schemaIDToDispatchers,
+			e.errCh,
+		)
+		d := dispatcher.NewEventDispatcher(
+			id,
+			tableSpans[idx],
+			uint64(newStartTsList[idx]),
+			schemaIds[idx],
+			startTsIsSyncpointList[idx],
+			currentPdTs,
+			dispatcher.TypeDispatcherEvent,
+			sharedInfo,
 			e.RedoEnable,
 			&e.redoGlobalTs,
 		)
@@ -743,25 +749,29 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		return nil
 	}
 
-	mergedDispatcher := dispatcher.NewEventDispatcher(
+	sharedInfo := dispatcher.NewSharedInfo(
 		e.changefeedID,
-		mergedDispatcherID,
-		mergedSpan,
-		e.sink,
-		fakeStartTs, // real startTs will be calculated later.
-		e.statusesChan,
-		e.blockStatusesChan,
-		schemaID,
-		e.schemaIDToDispatchers,
 		e.config.TimeZone,
-		e.integrityConfig,
-		e.syncPointConfig,
-		false,
-		e.filterConfig,
-		0, // currentPDTs will be calculated later.
-		e.errCh,
 		e.config.BDRMode,
 		e.outputRawChangeEvent,
+		e.integrityConfig,
+		e.filterConfig,
+		e.syncPointConfig,
+		e.sink,
+		e.statusesChan,
+		e.blockStatusesChan,
+		e.schemaIDToDispatchers,
+		e.errCh,
+	)
+	mergedDispatcher := dispatcher.NewEventDispatcher(
+		mergedDispatcherID,
+		mergedSpan,
+		fakeStartTs, // real startTs will be calculated later.
+		schemaID,
+		false,
+		0, // currentPDTs will be calculated later.
+		dispatcher.TypeDispatcherEvent,
+		sharedInfo,
 		e.RedoEnable,
 		&e.redoGlobalTs,
 	)

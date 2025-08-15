@@ -43,25 +43,29 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 	}
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	d := dispatcher.NewEventDispatcher(
+	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
-		id,
-		span,
+		"system",
+		false,
+		false,
+		nil,
+		nil,
+		nil,
 		mockSink,
-		0,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
-		0,
 		dispatcher.NewSchemaIDToDispatchers(),
-		"system",
-		nil,
-		nil,
-		false,
-		nil,
-		0,
 		make(chan error, 1),
+	)
+	d := dispatcher.NewEventDispatcher(
+		id,
+		span,
+		0,
+		0,
 		false,
-		false,
+		0,
+		dispatcher.TypeDispatcherEvent,
+		sharedInfo,
 		false,
 		&redoTs,
 	)
