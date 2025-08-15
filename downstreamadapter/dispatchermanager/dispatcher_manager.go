@@ -301,8 +301,9 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 		log.Error("table trigger event dispatcher existed!")
 	}
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
-	infos[common.NewDispatcherIDFromPB(id)] = dispatcherCreateInfo{
-		Id:        common.NewDispatcherIDFromPB(id),
+	dispatcherID := common.NewDispatcherIDFromPB(id)
+	infos[dispatcherID] = dispatcherCreateInfo{
+		Id:        dispatcherID,
 		TableSpan: common.DDLSpan,
 		StartTs:   startTs,
 		SchemaID:  0,
