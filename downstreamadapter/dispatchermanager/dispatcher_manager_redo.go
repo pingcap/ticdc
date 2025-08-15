@@ -134,7 +134,6 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			uint64(newStartTsList[idx]),
 			schemaIds[idx],
 			false, // startTsIsSyncpoint
-			0,     // currentPDTs
 			e.redoSink,
 			e.sharedInfo,
 		)
@@ -244,7 +243,6 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		fakeStartTs, // real startTs will be calculated later.
 		schemaID,
 		false, // startTsIsSyncpoint
-		0,     // currentPDTs
 		e.redoSink,
 		e.sharedInfo,
 	)

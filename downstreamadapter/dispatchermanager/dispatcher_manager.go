@@ -383,6 +383,7 @@ func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int6
 // 2. changefeed is total new created, or resumed with overwriteCheckpointTs
 func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
+	currentPdTs := e.pdClock.CurrentTS()
 
 	dispatcherIds, tableIds, startTsList, tableSpans, schemaIds := prepareCreateDispatcher(infos, e.dispatcherMap)
 	if len(dispatcherIds) == 0 {
@@ -424,7 +425,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			uint64(newStartTsList[idx]),
 			schemaIds[idx],
 			startTsIsSyncpointList[idx],
-			0, // currentPDTs
+			currentPdTs,
 			dispatcher.TypeDispatcherEvent,
 			e.sink,
 			e.sharedInfo,

@@ -52,7 +52,6 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		common.Ts(0), // startTs
 		1,            // schemaID
 		false,        // startTsIsSyncpoint
-		0,            // currentPDTs
 		sink,
 		sharedInfo,
 	)
