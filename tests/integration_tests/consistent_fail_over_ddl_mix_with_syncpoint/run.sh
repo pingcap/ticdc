@@ -75,10 +75,7 @@ function execute_ddl() {
 
 function execute_dml() {
 	table_name="table_$1"
-	echo "DML: Inserting data into $table_name..."
-	while true; do
-		run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
-	done
+	execute_mixed_dml "$table_name" "${UP_TIDB_HOST}" "${UP_TIDB_PORT}"
 }
 
 function kill_server() {
