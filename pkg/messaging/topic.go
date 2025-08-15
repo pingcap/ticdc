@@ -25,6 +25,9 @@ const (
 	LogCoordinatorClientTopic = "log-coordinator-client"
 	// EventCollectorTopic is the topic of the event collector.
 	EventCollectorTopic = "event-collector"
+	// RedoEventCollectorTopic is the topic of the event collector.
+	// Only send log service event for redo.
+	RedoEventCollectorTopic = "redo-event-collector"
 	// CoordinatorTopic is the topic of the coordinator.
 	CoordinatorTopic = "coordinator"
 	// MaintainerManagerTopic is the topic of the maintainer manager.

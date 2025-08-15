@@ -111,7 +111,6 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
-	ti.TableName.quotedName = QuoteSchema(ti.TableName.Schema, ti.TableName.Table)
 	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteString())
@@ -429,7 +428,6 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 			Table:       table,
 			TableID:     tableID,
 			IsPartition: isPartition,
-			quotedName:  QuoteSchema(schema, table),
 		},
 		columnSchema: columnSchema,
 		View:         tableInfo.View,

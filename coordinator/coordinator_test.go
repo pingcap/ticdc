@@ -508,6 +508,8 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	nodeManager.GetAliveNodes()[info.ID] = info
 
 	// Initialize message center
@@ -546,7 +548,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	}()
 
 	// Give coordinator some time to initialize
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	// Start goroutines to send events
 	for i := 0; i < sendEventGoroutines; i++ {

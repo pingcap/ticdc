@@ -48,17 +48,17 @@ type BatchDMLEvent struct {
 	TableInfo *common.TableInfo `json:"table_info"`
 }
 
-func (b *BatchDMLEvent) String() string {
-	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %v, RawRows: %v, Table: %v, Len: %d}",
-		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo.TableName, b.Len())
-}
-
 // NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
 func NewBatchDMLEvent() *BatchDMLEvent {
 	return &BatchDMLEvent{
 		Version:   0,
 		DMLEvents: make([]*DMLEvent, 0),
 	}
+}
+
+func (b *BatchDMLEvent) String() string {
+	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %v, RawRows: %v, Table: %v, Len: %d}",
+		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo.TableName.String(), b.Len())
 }
 
 // PopHeadDMLEvents pops the first `count` DMLEvents from the BatchDMLEvent and returns a new BatchDMLEvent.
@@ -304,11 +304,6 @@ type DMLEvent struct {
 	checksumOffset int                   `json:"-"`
 }
 
-func (t *DMLEvent) String() string {
-	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, Size: %d}",
-		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName, t.Checksum, t.Length, t.GetSize())
-}
-
 // NewDMLEvent creates a new DMLEvent with the given parameters
 func NewDMLEvent(
 	dispatcherID common.DispatcherID,
@@ -326,6 +321,11 @@ func NewDMLEvent(
 		TableInfo:       tableInfo,
 		RowTypes:        make([]RowType, 0),
 	}
+}
+
+func (t *DMLEvent) String() string {
+	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, Size: %d}",
+		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName.String(), t.Checksum, t.Length, t.GetSize())
 }
 
 // SetRows sets the Rows chunk for this DMLEvent
