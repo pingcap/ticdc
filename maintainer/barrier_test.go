@@ -1476,9 +1476,8 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 
 	require.NotNil(t, msg)
 
-	// Verify that the event has been cleaned up since DDL was already executed in phase 2
-	// When dispatcher A reports DDL again, it should be ignored as the event is already processed
 	event, ok = barrier.blockedEvents.Get(getEventKey(ddlTs, false))
-	require.False(t, ok)
-	require.Nil(t, event)
+	require.True(t, ok)
+	require.NotNil(t, event)
+	require.True(t, event.selected.Load())
 }
