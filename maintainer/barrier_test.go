@@ -184,6 +184,7 @@ func TestNormalBlock(t *testing.T) {
 	selectDispatcherID := common.NewDispatcherIDFromPB(blockedDispatcherIDS[2])
 	selectedRep := spanController.GetTaskByID(selectDispatcherID)
 	spanController.BindSpanToNode("node1", "node2", selectedRep)
+	spanController.MarkSpanReplicating(selectedRep)
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
 	barrier := NewBarrier(spanController, operatorController, false, nil)
@@ -600,14 +601,7 @@ func TestSchemaBlock(t *testing.T) {
 			},
 		},
 	})
-	// ack and write message
-	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, resp.DispatcherStatuses, 1)
-	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
-	event = barrier.blockedEvents.m[key]
-	require.Equal(t, uint64(10), event.commitTs)
-	// the ddl dispatcher will be the writer
-	require.Equal(t, event.writerDispatcher, spanController.GetDDLDispatcherID())
+	require.Nil(t, msg)
 
 	// selected node write done
 	msg = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
