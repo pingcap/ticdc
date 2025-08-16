@@ -173,11 +173,25 @@ download_and_extract() {
 	local extract_path=${3:-""}
 
 	download_file "$url" "$file_name" "${TMP_DIR}/$file_name"
-	if [ -n "$extract_path" ]; then
-		tar -xz --wildcards -C ${THIRD_BIN_DIR} $extract_path -f ${TMP_DIR}/$file_name
-	else
-		tar -xz --wildcards -C ${THIRD_BIN_DIR} -f ${TMP_DIR}/$file_name
+
+	local tar_cmd_args=("-xz")
+
+	# For GNU tar, use --wildcards. For BSD tar (macOS), this option is not available.
+	local tar_opts=()
+	local local_os=$(uname -s)
+	if [[ "$local_os" != "Darwin" ]]; then
+		tar_opts+=("--wildcards")
 	fi
+
+	# Arguments are added in a standard order: options, archive, members.
+	tar_cmd_args+=(-C "${THIRD_BIN_DIR}")
+	tar_cmd_args+=(-f "${TMP_DIR}/$file_name")
+
+	if [ -n "$extract_path" ]; then
+		tar_cmd_args+=("$extract_path")
+	fi
+
+	tar "${tar_cmd_args[@]}"
 
 	# Move extracted files if necessary
 	case $file_name in
