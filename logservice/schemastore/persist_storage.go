@@ -372,6 +372,7 @@ func (p *persistentStorage) getMaxEventCommitTs(tableID int64, ts uint64) uint64
 }
 
 // TODO: not all ddl in p.tablesDDLHistory should be sent to the dispatcher, verify dispatcher will set the right range
+// fetch table ddl events in the range (start, end]
 func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
 	// TODO: check a dispatcher won't fetch the ddl events that create it(create table/rename table)
 	p.mu.RLock()
@@ -413,6 +414,13 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 		ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
 		if ok {
 			events = append(events, ddlEvent)
+		} else {
+			log.Info("skip fetch ddl event",
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Int64("tableID", tableID),
+				zap.Uint64("ts", ts),
+				zap.String("type", model.ActionType(rawEvent.Type).String()),
+				zap.String("query", rawEvent.Query))
 		}
 	}
 	log.Debug("fetchTableDDLEvents",

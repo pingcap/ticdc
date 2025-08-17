@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
@@ -64,7 +63,6 @@ type Splitter struct {
 // NewSplitter returns a Splitter.
 func NewSplitter(
 	changefeedID common.ChangeFeedID,
-	pdapi pdutil.PDAPIClient,
 	config *config.ChangefeedSchedulerConfig,
 ) *Splitter {
 	baseSpanNumberCoefficient = config.SplitNumberPerNode
@@ -72,7 +70,7 @@ func NewSplitter(
 	return &Splitter{
 		changefeedID:          changefeedID,
 		regionCounterSplitter: newRegionCountSplitter(changefeedID, config.RegionThreshold, config.RegionCountPerSpan),
-		writeKeySplitter:      newWriteSplitter(changefeedID, pdapi, config.WriteKeyThreshold),
+		writeKeySplitter:      newWriteSplitter(changefeedID, config.WriteKeyThreshold),
 	}
 }
 

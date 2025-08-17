@@ -71,7 +71,7 @@ func (e *DispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQueue *
 
 // Get all dispatchers id of the specified schemaID. Including the tableTriggerEventDispatcherID if exists.
 func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.DispatcherID {
-	dispatcherIDs := e.schemaIDToDispatchers.GetDispatcherIDs(schemaID)
+	dispatcherIDs := e.sharedInfo.GetSchemaIDToDispatchers().GetDispatcherIDs(schemaID)
 	if e.tableTriggerEventDispatcher != nil {
 		dispatcherIDs = append(dispatcherIDs, e.tableTriggerEventDispatcher.GetId())
 	}

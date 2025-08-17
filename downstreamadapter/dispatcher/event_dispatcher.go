@@ -20,8 +20,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
-	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
@@ -56,45 +54,28 @@ type EventDispatcher struct {
 // Here is a special dispatcher will deal with the events of the DDLSpan in one changefeed, we call it TableTriggerEventDispatcher
 // One changefeed across multiple nodes only will have one TableTriggerEventDispatcher.
 func NewEventDispatcher(
-	changefeedID common.ChangeFeedID,
 	id common.DispatcherID,
 	tableSpan *heartbeatpb.TableSpan,
-	sink sink.Sink,
 	startTs uint64,
-	statusesChan chan TableSpanStatusWithSeq,
-	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	schemaID int64,
-	schemaIDToDispatchers *SchemaIDToDispatchers,
-	timezone string,
-	integrityConfig *eventpb.IntegrityConfig,
-	syncPointConfig *syncpoint.SyncPointConfig,
 	startTsIsSyncpoint bool,
-	filterConfig *eventpb.FilterConfig,
 	currentPdTs uint64,
-	errCh chan error,
-	bdrMode bool,
-	outputRawChangeEvent bool,
+	dispatcherType int,
+	sink sink.Sink,
+	sharedInfo *SharedInfo,
 	redoEnable bool,
 	redoGlobalTs *atomic.Uint64,
 ) *EventDispatcher {
 	basicDispatcher := NewBasicDispatcher(
-		changefeedID,
-		id, tableSpan, sink,
+		id,
+		tableSpan,
 		startTs,
-		statusesChan,
-		blockStatusesChan,
 		schemaID,
-		schemaIDToDispatchers,
-		timezone,
-		integrityConfig,
-		syncPointConfig,
 		startTsIsSyncpoint,
-		filterConfig,
 		currentPdTs,
-		errCh,
-		bdrMode,
-		outputRawChangeEvent,
-		TypeDispatcherEvent,
+		dispatcherType,
+		sink,
+		sharedInfo,
 	)
 	dispatcher := &EventDispatcher{
 		BasicDispatcher: basicDispatcher,
@@ -228,7 +209,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 		tableInfo, err := schemaStore.GetTableInfo(tables[i], ts)
 		if err != nil {
 			log.Warn("get table info failed, just ignore",
-				zap.Stringer("changefeed", d.changefeedID),
+				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
 				zap.Error(err))
 			continue
 		}
@@ -236,7 +217,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 	}
 
 	log.Info("start to send bootstrap messages",
-		zap.Stringer("changefeed", d.changefeedID),
+		zap.Stringer("changefeed", d.sharedInfo.changefeedID),
 		zap.Int("tables", len(currentTables)))
 	for idx, table := range currentTables {
 		if table.IsView() {
@@ -246,7 +227,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 		err := d.sink.WriteBlockEvent(ddlEvent)
 		if err != nil {
 			log.Error("send bootstrap message failed",
-				zap.Stringer("changefeed", d.changefeedID),
+				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
 				zap.Int("tables", len(currentTables)),
 				zap.Int("emitted", idx+1),
 				zap.Duration("duration", time.Since(start)),
@@ -257,7 +238,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapFinished)
 	log.Info("send bootstrap messages finished",
-		zap.Stringer("changefeed", d.changefeedID),
+		zap.Stringer("changefeed", d.sharedInfo.changefeedID),
 		zap.Int("tables", len(currentTables)),
 		zap.Duration("cost", time.Since(start)))
 	return true

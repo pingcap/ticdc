@@ -82,6 +82,7 @@ func (c *server) prepare(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 	c.pdAPIClient = pdAPIClient
+	appctx.SetService(appctx.PDAPIClient, pdAPIClient)
 	log.Info("create etcdCli", zap.Strings("endpoints", c.pdEndpoints))
 	// we do not pass a `context` to create an etcd client,
 	// to prevent it's cancelled when the server is closing.
