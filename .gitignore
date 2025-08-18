@@ -3,6 +3,7 @@ vendor
 tools/bin
 tools/include
 tools/workload/bin
+mysql_test
 
 .vscode
 .idea

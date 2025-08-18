@@ -9,6 +9,7 @@
 # --pd: pd address
 
 set -e
+set +u
 
 workdir=
 tls=
@@ -19,17 +20,18 @@ binary=
 logsuffix=
 addr=
 addr_url="127.0.0.1:8300"
-pd_addr=
-pwd=$pwd
+
+pd_addr="--pd http://$UP_PD_HOST_1:$UP_PD_PORT_1"
+
+pwd=$(pwd)
 log_level=debug
 restart=
-failpoint=$GO_FAILPOINTS
+failpoint=${GO_FAILPOINTS:-}
 config_path=
 data_dir=
 curl_status_cmd=
 supposed_to_fail="no"
 cluster_id="default"
-newarch=
 
 while [[ ${1} ]]; do
 	case "${1}" in
@@ -92,10 +94,6 @@ while [[ ${1} ]]; do
 		cluster_id=${2}
 		shift
 		;;
-	--newarch)
-		newarch=${1}
-		shift
-		;;
 	*)
 		echo "Unknown parameter: ${1}" >&2
 		exit 1
@@ -114,7 +112,14 @@ fi
 
 echo "[$(date)] <<<<<< START cdc server in $TEST_NAME case >>>>>>"
 cd $workdir
-pid=$(ps -C run_cdc_server -o pid= | tr -d '[:space:]')
+
+os=$(uname -s)
+if [[ "$os" == "Darwin" ]]; then
+	pid=$(pgrep -f "run_cdc_server" | head -n 1)
+else
+	pid=$(ps -C run_cdc_server -o pid= | tr -d '[:space:]')
+fi
+
 # Uncomment to turn on grpc versbose log.
 # GRPC_GO_LOG_VERBOSITY_LEVEL=99 GRPC_GO_LOG_SEVERITY_LEVEL=debug \
 
@@ -122,7 +127,7 @@ set -x
 
 if [[ "$restart" == "true" ]]; then
 	while true; do
-		GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server $newarch \
+		GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server --newarch \
 			--log-file $workdir/cdc$logsuffix.log \
 			--log-level $log_level \
 			--data-dir "$data_dir" \
@@ -131,14 +136,14 @@ if [[ "$restart" == "true" ]]; then
 			$tls \
 			$certcn \
 			$addr \
-			$pd_addr &>>$workdir/stdout$logsuffix.log
+			$pd_addr >>$workdir/stdout$logsuffix.log 2>&1
 		if [ $? -eq 143 ]; then
 			break
 		fi
 		sleep 1
 	done &
 else
-	GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server \
+	GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server --newarch \
 		--log-file $workdir/cdc$logsuffix.log \
 		--log-level $log_level \
 		--data-dir "$data_dir" \
@@ -147,7 +152,7 @@ else
 		$tls \
 		$certcn \
 		$addr \
-		$pd_addr &>>$workdir/stdout$logsuffix.log &
+		$pd_addr >>$workdir/stdout$logsuffix.log 2>&1 &
 fi
 
 # Make sure cdc is ready to serve
@@ -184,6 +189,14 @@ for ((i = 0; i <= 50; i++)); do
 	fi
 	sleep 3
 done
+
+# for the next gen, we should create they keyspace info to replication worker
+if [ "$NEXT_GEN" = "1" ]; then
+	if ! curl -X POST "http://$TIKV_WORKER_HOST:$TIKV_WORKER_PORT/cdc/keyspace?keyspace_id=1" -H 'Content-Type: Application/json' -d "{\"pd_url\": \"http://${UP_PD_HOST_1}:${UP_PD_PORT_1}\", \"cdc_addr\": \"$addr_url\"}"; then
+		echo "init keyspace failed" >&2
+		exit 1
+	fi
+fi
 
 set +x
 
