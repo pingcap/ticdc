@@ -121,6 +121,9 @@ type BasicDispatcher struct {
 	// componentStatus is the status of the dispatcher, such as working, removing, stopped.
 	componentStatus *ComponentStateWithMutex
 
+	// schemaIDToDispatchers is shared in the DispatcherManager
+	schemaIDToDispatchers *SchemaIDToDispatchers
+
 	// Shared info containing all common configuration and resources
 	sharedInfo *SharedInfo
 
@@ -159,6 +162,7 @@ func NewBasicDispatcher(
 	tableSpan *heartbeatpb.TableSpan,
 	startTs uint64,
 	schemaID int64,
+	schemaIDToDispatchers *SchemaIDToDispatchers,
 	startTsIsSyncpoint bool,
 	currentPDTs uint64,
 	dispatcherType int,
@@ -166,22 +170,23 @@ func NewBasicDispatcher(
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                 id,
-		tableSpan:          tableSpan,
-		startTs:            startTs,
-		startTsIsSyncpoint: startTsIsSyncpoint,
-		sharedInfo:         sharedInfo,
-		sink:               sink,
-		componentStatus:    newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		resolvedTs:         startTs,
-		isRemoving:         atomic.Bool{},
-		blockEventStatus:   BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:      NewTableProgress(),
-		schemaID:           schemaID,
-		resendTaskMap:      newResendTaskMap(),
-		creationPDTs:       currentPDTs,
-		dispatcherType:     dispatcherType,
-		BootstrapState:     BootstrapFinished,
+		id:                    id,
+		tableSpan:             tableSpan,
+		startTs:               startTs,
+		startTsIsSyncpoint:    startTsIsSyncpoint,
+		sharedInfo:            sharedInfo,
+		sink:                  sink,
+		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		resolvedTs:            startTs,
+		isRemoving:            atomic.Bool{},
+		blockEventStatus:      BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:         NewTableProgress(),
+		schemaID:              schemaID,
+		schemaIDToDispatchers: schemaIDToDispatchers,
+		resendTaskMap:         newResendTaskMap(),
+		creationPDTs:          currentPDTs,
+		dispatcherType:        dispatcherType,
+		BootstrapState:        BootstrapFinished,
 	}
 
 	return dispatcher
@@ -669,7 +674,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					return
 				} else {
 					d.schemaID = schemaIDChange.NewSchemaID
-					d.sharedInfo.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
+					d.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
 					return
 				}
 			}

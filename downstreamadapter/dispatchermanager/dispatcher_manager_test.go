@@ -53,7 +53,6 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		nil,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
-		dispatcher.NewSchemaIDToDispatchers(),
 		make(chan error, 1),
 	)
 	d := dispatcher.NewEventDispatcher(
@@ -61,6 +60,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		span,
 		0,
 		0,
+		dispatcher.NewSchemaIDToDispatchers(),
 		false,
 		0, // currentPDTs
 		dispatcher.TypeDispatcherEvent,
@@ -106,7 +106,6 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // syncPointConfig
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
-		dispatcher.NewSchemaIDToDispatchers(),
 		make(chan error, 1),
 	)
 	nodeID := node.NewID()
