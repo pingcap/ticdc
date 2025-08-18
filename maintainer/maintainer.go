@@ -93,7 +93,7 @@ type Maintainer struct {
 	// checkpointTs.
 	startCheckpointTs uint64
 	redoTsMap         map[node.ID]*heartbeatpb.RedoTsMessage
-	// redoTs is global redoTs to forward
+	// redoTs is global ts to forward
 	redoTs      *heartbeatpb.RedoTsMessage
 	redoDDLSpan *replica.SpanReplication
 
