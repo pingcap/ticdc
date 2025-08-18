@@ -254,7 +254,6 @@ func (c *HeartBeatCollector) Close() {
 	c.mc.DeRegisterHandler(messaging.HeartbeatCollectorTopic)
 	c.cancel()
 	c.wg.Wait()
-
 	c.checkpointTsMessageDynamicStream.Close()
 	c.redoTsMessageDynamicStream.Close()
 	c.heartBeatResponseDynamicStream.Close()

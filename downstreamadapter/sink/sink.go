@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/blackhole"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/kafka"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/pulsar"
@@ -43,43 +42,43 @@ type Sink interface {
 	Run(ctx context.Context) error
 }
 
-func New(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
-	sinkURI, err := url.Parse(config.SinkURI)
+func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
+	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
-	scheme := helper.GetScheme(sinkURI)
+	scheme := config.GetScheme(sinkURI)
 	switch scheme {
-	case helper.MySQLScheme, helper.MySQLSSLScheme, helper.TiDBScheme, helper.TiDBSSLScheme:
-		return mysql.New(ctx, changefeedID, config, sinkURI)
-	case helper.KafkaScheme, helper.KafkaSSLScheme:
-		return kafka.New(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.PulsarScheme, helper.PulsarSSLScheme, helper.PulsarHTTPScheme, helper.PulsarHTTPSScheme:
-		return pulsar.New(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.S3Scheme, helper.FileScheme, helper.GCSScheme, helper.GSScheme, helper.AzblobScheme, helper.AzureScheme, helper.CloudStorageNoopScheme:
-		return cloudstorage.New(ctx, changefeedID, sinkURI, config.SinkConfig, nil)
-	case helper.BlackHoleScheme:
+	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
+		return mysql.New(ctx, changefeedID, cfg, sinkURI)
+	case config.KafkaScheme, config.KafkaSSLScheme:
+		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
+		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
+		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, nil)
+	case config.BlackHoleScheme:
 		return blackhole.New()
 	}
 	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
 }
 
-func Verify(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
-	sinkURI, err := url.Parse(config.SinkURI)
+func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
+	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
 		return errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
-	scheme := helper.GetScheme(sinkURI)
+	scheme := config.GetScheme(sinkURI)
 	switch scheme {
-	case helper.MySQLScheme, helper.MySQLSSLScheme, helper.TiDBScheme, helper.TiDBSSLScheme:
-		return mysql.Verify(ctx, sinkURI, config)
-	case helper.KafkaScheme, helper.KafkaSSLScheme:
-		return kafka.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.PulsarScheme, helper.PulsarSSLScheme, helper.PulsarHTTPScheme, helper.PulsarHTTPSScheme:
-		return pulsar.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.S3Scheme, helper.FileScheme, helper.GCSScheme, helper.GSScheme, helper.AzblobScheme, helper.AzureScheme, helper.CloudStorageNoopScheme:
-		return cloudstorage.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.BlackHoleScheme:
+	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
+		return mysql.Verify(ctx, sinkURI, cfg)
+	case config.KafkaScheme, config.KafkaSSLScheme:
+		return kafka.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
+		return pulsar.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
+		return cloudstorage.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+	case config.BlackHoleScheme:
 		return nil
 	}
 	return errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)

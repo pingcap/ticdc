@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/p2p"
 )
 
 // MessagesConfig configs MessageServer and MessageClient.
@@ -168,9 +167,33 @@ func (c *MessagesConfig) Clone() *MessagesConfig {
 	}
 }
 
+// MessageClientConfig is used to configure MessageClient
+type MessageClientConfig struct {
+	// The size of the sending channel used to buffer
+	// messages before they go to gRPC.
+	SendChannelSize int
+	// The maximum duration for which messages wait to be batched.
+	BatchSendInterval time.Duration
+	// The maximum size in bytes of a batch.
+	MaxBatchBytes int
+	// The maximum number of messages in a batch.
+	MaxBatchCount int
+	// The limit of the rate at which the connection to the server is retried.
+	RetryRateLimitPerSecond float64
+	// The dial timeout for the gRPC client
+	DialTimeout time.Duration
+	// The advertised address of this node. Used for logging and monitoring purposes.
+	AdvertisedAddr string
+	// The version of the client for compatibility check.
+	// It should be in semver format. Empty string means no check.
+	ClientVersion string
+	// MaxRecvMsgSize is the maximum message size in bytes TiCDC can receive.
+	MaxRecvMsgSize int
+}
+
 // ToMessageClientConfig converts the MessagesConfig to a MessageClientConfig.
-func (c *MessagesConfig) ToMessageClientConfig() *p2p.MessageClientConfig {
-	return &p2p.MessageClientConfig{
+func (c *MessagesConfig) ToMessageClientConfig() *MessageClientConfig {
+	return &MessageClientConfig{
 		SendChannelSize:         clientSendChannelSize,
 		BatchSendInterval:       time.Duration(c.ClientMaxBatchInterval),
 		MaxBatchBytes:           c.ClientMaxBatchSize,
@@ -181,9 +204,50 @@ func (c *MessagesConfig) ToMessageClientConfig() *p2p.MessageClientConfig {
 	}
 }
 
+// MessageServerConfig stores configurations for the MessageServer
+type MessageServerConfig struct {
+	// The maximum number of entries to be cached for topics with no handler registered
+	MaxPendingMessageCountPerTopic int
+	// The maximum number of unhandled internal tasks for the main thread.
+	MaxPendingTaskCount int
+	// The size of the channel for pending messages before sending them to gRPC.
+	SendChannelSize int
+	// The interval between ACKs.
+	AckInterval time.Duration
+	// The size of the goroutine pool for running the handlers.
+	WorkerPoolSize int
+	// The maximum send rate per stream (per peer).
+	SendRateLimitPerStream float64
+	// The maximum number of peers acceptable by this server
+	MaxPeerCount int
+	// Semver of the server. Empty string means no version check.
+	ServerVersion string
+	// MaxRecvMsgSize is the maximum message size in bytes TiCDC can receive.
+	MaxRecvMsgSize int
+
+	// After a duration of this time if the server doesn't see any activity it
+	// pings the client to see if the transport is still alive.
+	KeepAliveTime time.Duration
+
+	// After having pinged for keepalive check, the server waits for a duration
+	// of Timeout and if no activity is seen even after that the connection is
+	// closed.
+	KeepAliveTimeout time.Duration
+
+	// The maximum time duration to wait before forcefully removing a handler.
+	//
+	// waitUnregisterHandleTimeout specifies how long to wait for
+	// the topic handler to consume all pending messages before
+	// forcefully unregister the handler.
+	// For a correct implementation of the handler, the time it needs
+	// to consume these messages is minimal, as the handler is not
+	// expected to block on channels, etc.
+	WaitUnregisterHandleTimeoutThreshold time.Duration
+}
+
 // ToMessageServerConfig returns a MessageServerConfig that can be used to create a MessageServer.
-func (c *MessagesConfig) ToMessageServerConfig() *p2p.MessageServerConfig {
-	return &p2p.MessageServerConfig{
+func (c *MessagesConfig) ToMessageServerConfig() *MessageServerConfig {
+	return &MessageServerConfig{
 		MaxPendingMessageCountPerTopic:       maxTopicPendingCount,
 		MaxPendingTaskCount:                  c.ServerMaxPendingMessageCount,
 		SendChannelSize:                      serverSendChannelSize,
