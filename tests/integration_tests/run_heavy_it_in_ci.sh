@@ -61,6 +61,7 @@ mysql_groups=(
 	'ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
 	# G03
 	'ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+)
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
