@@ -249,7 +249,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				// ignore
 				continue
 			case *cdcpb.Event_Error:
-				log.Debug("region request worker receives a region error",
+				log.Warn("region request worker receives a region error",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId),
@@ -321,12 +321,17 @@ func (s *regionRequestWorker) processRegionSendTask(
 		if err := conn.Client.Send(req); err != nil {
 			log.Warn("region request worker send request to grpc stream failed",
 				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", req.RequestId),
+				zap.Uint64("requestID", req.RequestId),
 				zap.Uint64("regionID", req.RegionId),
 				zap.String("addr", s.store.storeAddr),
 				zap.Error(err))
 			return errors.Trace(err)
 		}
+		log.Info("send region request",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("requestID", req.RequestId),
+			zap.Uint64("regionID", req.RegionId),
+			zap.String("addr", s.store.storeAddr))
 		// TODO: add a metric?
 		return nil
 	}
