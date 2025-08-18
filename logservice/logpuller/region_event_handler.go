@@ -187,6 +187,10 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 	}
 	if stepsToRemoved {
 		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
+		log.Warn("step to remove region state",
+			zap.Uint64("workerID", worker.workerID),
+			zap.Uint64("subscriptionID", uint64(state.requestID)),
+			zap.Uint64("regionID", state.getRegionID()))
 		h.subClient.onRegionFail(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
