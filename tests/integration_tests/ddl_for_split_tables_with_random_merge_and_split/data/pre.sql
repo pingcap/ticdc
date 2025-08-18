@@ -1,3 +1,4 @@
+set global tidb_general_log="on";
 drop database if exists `test`;
 create database `test`;
 use `test`;
