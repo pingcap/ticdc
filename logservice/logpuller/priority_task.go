@@ -71,13 +71,13 @@ func (pt *regionPriorityTask) Priority() int {
 	case TaskHighPrior:
 		basePriority = 0 // Highest priority
 	case TaskLowPrior:
-		basePriority = 1000 // Lowest priority
+		basePriority = 3600 // Lowest priority
 	}
 
 	// Add time-based priority bonus
 	// Wait time in milliseconds, longer wait time means higher priority (lower value)
 	waitTime := time.Since(pt.createTime)
-	timeBonus := int(waitTime.Milliseconds())
+	timeBonus := int(waitTime.Seconds())
 
 	// Total priority = base priority - time bonus
 	// Lower value means higher priority
