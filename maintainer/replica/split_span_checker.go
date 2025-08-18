@@ -244,7 +244,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 
 	s.balanceCondition.statusUpdated = true
 
-	log.Debug("split span checker update status",
+	log.Info("split span checker update status",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
 		zap.Any("replica", replica.ID),
@@ -994,6 +994,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	if !needCheckBalance {
+		s.balanceCondition.reset()
 		return
 	}
 
@@ -1015,7 +1016,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	if !shouldBalance {
 		shouldBalance = true
 		for idx, traffic := range lastThreeTrafficPerNode[maxTrafficNodeID] {
-			if traffic < avgLastThreeTraffic[idx]*maxTrafficPercentage {
+			if traffic < avgLastThreeTraffic[idx]*maxTrafficPercentage || traffic < minTrafficBalanceThreshold {
 				shouldBalance = false
 				balanceCauseByMaxNode = false
 				break
