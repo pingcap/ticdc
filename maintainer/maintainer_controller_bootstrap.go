@@ -84,8 +84,6 @@ func (c *Controller) FinishBootstrap(
 		zap.Stringer("changefeed", c.changefeedID),
 		zap.Int("nodeCount", len(allNodesResp)))
 
-	c.spanController.SetIsMysqlCompatibleBackend(isMysqlCompatibleBackend)
-
 	// Step 1: Determine start timestamp and update DDL dispatcher
 	startTs := c.determineStartTs(allNodesResp)
 

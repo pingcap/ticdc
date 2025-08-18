@@ -74,9 +74,6 @@ type Controller struct {
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
 	ddlDispatcherID        common.DispatcherID
-
-	// isMysqlCompatibleBackend shows whether the sink of this changefeed is mysql-sink compatible
-	isMysqlCompatibleBackend bool
 }
 
 // NewController creates a new span controller
@@ -134,10 +131,6 @@ func (c *Controller) initializeDDLSpan(ddlSpan *replica.SpanReplication) {
 	}
 }
 
-func (c *Controller) SetIsMysqlCompatibleBackend(isMysqlCompatibleBackend bool) {
-	c.isMysqlCompatibleBackend = isMysqlCompatibleBackend
-}
-
 // AddNewTable adds a new table to the span controller
 // This is a complex business logic method that handles table splitting and span creation
 func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
@@ -156,7 +149,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes && c.splitter != nil {
-		if table.Splitable || !c.isMysqlCompatibleBackend {
+		if table.Splitable {
 			tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
 		}
 	}
