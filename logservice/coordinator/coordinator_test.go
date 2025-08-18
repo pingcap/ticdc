@@ -25,7 +25,6 @@ import (
 func newLogCoordinatorForTest() *logCoordinator {
 	c := &logCoordinator{}
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
-	c.nodes.m = make(map[node.ID]*node.Info)
 	return c
 }
 
@@ -35,9 +34,6 @@ func TestGetCandidateNodes(t *testing.T) {
 	nodeID1 := node.ID("node-1")
 	nodeID2 := node.ID("node-2")
 	nodeID3 := node.ID("node-3")
-	coordinator.nodes.m[nodeID1] = &node.Info{ID: nodeID1}
-	coordinator.nodes.m[nodeID2] = &node.Info{ID: nodeID2}
-	coordinator.nodes.m[nodeID3] = &node.Info{ID: nodeID3}
 
 	// initialize table spans
 	tableID1 := int64(100)
@@ -185,12 +181,5 @@ func TestGetCandidateNodes(t *testing.T) {
 	{
 		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
-	}
-
-	// remove node1 and check again
-	delete(coordinator.nodes.m, nodeID1)
-	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
-		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 }

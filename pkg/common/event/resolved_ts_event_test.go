@@ -26,7 +26,6 @@ func TestResolvedEvent(t *testing.T) {
 		Version:      ResolvedEventVersion,
 		DispatcherID: did,
 		ResolvedTs:   123,
-		Epoch:        10,
 	}
 	data, err := e.Marshal()
 	require.NoError(t, err)
@@ -45,13 +44,11 @@ func TestBatchResolvedTs(t *testing.T) {
 		Version:      ResolvedEventVersion,
 		DispatcherID: did,
 		ResolvedTs:   123,
-		Epoch:        10,
 	}
 	e2 := ResolvedEvent{
 		Version:      ResolvedEventVersion,
 		DispatcherID: did2,
 		ResolvedTs:   456,
-		Epoch:        11,
 	}
 
 	b := BatchResolvedEvent{

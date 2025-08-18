@@ -104,7 +104,7 @@ func initContext(serverId node.ID) {
 // 	var wg sync.WaitGroup
 // 	start := time.Now()
 
-// 	managerMap := make(map[int]*dispatchermanager.DispatcherManager)
+// 	managerMap := make(map[int]*dispatchermanager.EventDispatcherManager)
 
 // 	dispatcherIDSet := make(map[common.DispatcherID]interface{})
 // 	var mutex sync.Mutex
@@ -119,11 +119,11 @@ func initContext(serverId node.ID) {
 // 			},
 // 		}
 // 		changefeedID := common.NewChangeFeedIDWithName("test" + strconv.Itoa(db_index))
-// 		DispatcherManager, _, err := dispatchermanager.NewDispatcherManager(changefeedID, &changefeedConfig, nil, 0, serverId)
+// 		eventDispatcherManager, _, err := dispatchermanager.NewEventDispatcherManager(changefeedID, &changefeedConfig, nil, 0, serverId)
 // 		if err != nil {
 // 			t.Fatal(err)
 // 		}
-// 		managerMap[db_index] = DispatcherManager
+// 		managerMap[db_index] = eventDispatcherManager
 
 // 		for i := 0; i < dispatcherCount; i++ {
 // 			wg.Add(1)
@@ -134,7 +134,7 @@ func initContext(serverId node.ID) {
 // 				mutex.Lock()
 // 				dispatcherIDSet[dispatcherID] = nil
 // 				mutex.Unlock()
-// 				DispatcherManager.NewDispatcher(dispatcherID, tableSpan, 0, 1, 0)
+// 				eventDispatcherManager.NewDispatcher(dispatcherID, tableSpan, 0, 1, 0)
 // 			}(&wg)
 // 		}
 // 	}
@@ -155,8 +155,8 @@ func initContext(serverId node.ID) {
 // 			if finishVec[db_index] {
 // 				continue
 // 			}
-// 			DispatcherManager := managerMap[db_index]
-// 			message := DispatcherManager.AggregateDispatcherHeartbeats(false)
+// 			eventDispatcherManager := managerMap[db_index]
+// 			message := eventDispatcherManager.AggregateDispatcherHeartbeats(false)
 // 			checkpointTs := message.Watermark.CheckpointTs
 // 			if checkpointTs == uint64(totalCount)+10 {
 // 				finishVec[db_index] = true

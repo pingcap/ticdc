@@ -107,7 +107,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 		case ast.AlterTableRenameIndex:
 			return timodel.ActionRenameIndex
 		case ast.AlterTableTruncatePartition:
-			return timodel.ActionTruncateTablePartition
+			return timodel.ActionTruncateTable
 		case ast.AlterTablePartition:
 			return timodel.ActionAlterTablePartitioning
 		case ast.AlterTableRemovePartitioning:

@@ -135,21 +135,6 @@ func (b *Barrier) HandleStatus(from node.ID,
 	actions := []*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	for _, status := range request.BlockStatuses {
-		// only receive block status from the replicating dispatcher
-		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		if dispatcherID != b.spanController.GetDDLDispatcherID() {
-			task := b.spanController.GetTaskByID(dispatcherID)
-			if task == nil {
-				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
-				continue
-			} else {
-				if !b.spanController.IsReplicating(task) {
-					log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
-					continue
-				}
-			}
-		}
-
 		// deal with block status, and check whether need to return action.
 		// we need to deal with the block status in order, otherwise scheduler may have problem
 		// e.g. TODO（truncate + create table)
@@ -176,8 +161,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 			Ack: ackEvent(event.commitTs, event.isSyncPoint),
 		})
 	}
-
-	dispatcherStatus = append(dispatcherStatus, actions...)
+	for action := range actions {
+		dispatcherStatus = append(dispatcherStatus, actions[action])
+	}
 
 	if len(dispatcherStatus) <= 0 {
 		log.Warn("no dispatcher status to send",

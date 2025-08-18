@@ -43,11 +43,7 @@ func makeDispatcherReady(disp *dispatcherStat) {
 }
 
 func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
-	if rawKV.IsUpdate() {
-		return 2, nil, nil
-	} else {
-		return 1, nil, nil
-	}
+	return 0, nil, nil
 }
 
 func TestEventScanner(t *testing.T) {
@@ -625,7 +621,7 @@ func TestDMLProcessorProcessNewTransaction(t *testing.T) {
 		// Verify that the DML event uses the correct table info
 		require.NotNil(t, processor.currentDML)
 		require.Equal(t, differentTableInfo, processor.currentDML.TableInfo)
-		require.Equal(t, differentTableInfo.GetUpdateTS(), processor.currentDML.TableInfo.GetUpdateTS())
+		require.Equal(t, differentTableInfo.UpdateTS(), processor.currentDML.TableInfo.UpdateTS())
 	})
 
 	// Test case 4: Multiple consecutive transactions
