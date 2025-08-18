@@ -80,8 +80,7 @@ type eventBroker struct {
 	// metricsCollector handles all metrics collection and reporting
 	metricsCollector *metricsCollector
 
-	scanRateLimiter  *rate.Limiter
-	scanLimitInBytes int
+	scanRateLimiter *rate.Limiter
 }
 
 func newEventBroker(
@@ -128,7 +127,6 @@ func newEventBroker(
 		cancel:                  cancel,
 		g:                       g,
 		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
-		scanLimitInBytes:        scanLimitInBytes,
 	}
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
@@ -164,7 +162,7 @@ func newEventBroker(
 		return c.metricsCollector.Run(ctx)
 	})
 
-	log.Info("new event broker created", zap.Uint64("id", id), zap.Int64("scanLimitInBytes", int64(scanLimitInBytes)))
+	log.Info("new event broker created", zap.Uint64("id", id))
 	return c
 }
 
@@ -528,10 +526,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if scannedBytes > int64(c.scanLimitInBytes) {
-		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
-		scannedBytes = int64(c.scanLimitInBytes)
-	}
 	task.lastScanBytes.Store(scannedBytes)
 
 	// Check whether the task is ready to receive data events again before sending events.
