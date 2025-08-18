@@ -48,7 +48,7 @@ func TestSchedule(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, ddlSpan, 9, time.Minute)
+	controller := NewController(cfID, 1, nil, nil, ddlSpan, nil, 9, time.Minute)
 	for i := 0; i < 10; i++ {
 		controller.spanController.AddNewTable(commonEvent.Table{
 			SchemaID: 1,
@@ -79,7 +79,7 @@ func TestRemoveAbsentTask(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, ddlSpan, 9, time.Minute)
+	controller := NewController(cfID, 1, nil, nil, ddlSpan, nil, 9, time.Minute)
 	controller.spanController.AddNewTable(commonEvent.Table{
 		SchemaID: 1,
 		TableID:  int64(1),
@@ -101,7 +101,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0)
 
 	nodeID := node.ID("node1")
 	for i := 0; i < 100; i++ {
@@ -172,7 +172,7 @@ func TestBalanceGlobalUneven(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0)
 	for i := 0; i < 100; i++ {
 		// generate 100 groups
 		totalSpan := common.TableIDToComparableSpan(int64(i))
@@ -246,7 +246,7 @@ func TestBalance(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0)
 	for i := 0; i < 100; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -312,7 +312,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0)
 	for i := 0; i < 2; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -355,7 +355,7 @@ func TestFinishBootstrap(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	s := NewController(cfID, 1, &mockThreadPool{},
-		config.GetDefaultReplicaConfig(), ddlSpan, 1000, 0)
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0)
 	totalSpan := common.TableIDToComparableSpan(1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	schemaStore := &mockSchemaStore{
@@ -424,7 +424,7 @@ func TestBalanceUnEvenTask(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0)
 
 	for i := 0; i < 4; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
