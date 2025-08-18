@@ -190,6 +190,7 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 			ChangefeedID:       m.toMergedReplicaSets[0].ChangefeedID.ToPB(),
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
+			IsRedo:             m.newReplicaSet.GetRedo(),
 		})
 }
 
