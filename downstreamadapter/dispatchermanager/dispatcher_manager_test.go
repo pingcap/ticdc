@@ -82,6 +82,8 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),
 		sink:                    mockSink,
+		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
+		sinkQuota:               config.GetDefaultReplicaConfig().MemoryQuota,
 		latestWatermark:         NewWatermark(0),
 		closing:                 atomic.Bool{},
 		pdClock:                 pdutil.NewClock4Test(),
