@@ -68,6 +68,9 @@ func newRequestCache(maxPendingCount int) *requestCache {
 // It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
 func (c *requestCache) add(ctx context.Context, region regionInfo) error {
 	start := time.Now()
+	ticker := time.NewTicker(time.Millisecond * 5)
+	defer ticker.Stop()
+
 	for {
 		current := c.pendingCount.Load()
 		if current < c.maxPendingCount {
@@ -91,6 +94,8 @@ func (c *requestCache) add(ctx context.Context, region regionInfo) error {
 
 		// Wait for space to become available
 		select {
+		case <-ticker.C:
+			continue
 		case <-c.spaceAvailable:
 			continue // Retry
 		case <-ctx.Done():
