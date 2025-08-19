@@ -1,8 +1,6 @@
 module github.com/pingcap/ticdc
 
-go 1.23.8
-
-toolchain go1.23.10
+go 1.23.12
 
 require (
 	cloud.google.com/go/storage v1.39.1
@@ -160,7 +158,7 @@ require (
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/dolthub/swiss v0.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/dvsekhvalnov/jose2go v1.5.0 // indirect
+	github.com/dvsekhvalnov/jose2go v1.6.0 // indirect
 	github.com/eapache/go-resiliency v1.4.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230731223053-c322873962e3 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
