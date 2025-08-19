@@ -440,7 +440,7 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 		Charset:      tableInfo.Charset,
 		Collate:      tableInfo.Collate,
 		Comment:      tableInfo.Comment,
-		UpdateTS:     tableInfo.UpdateTS,
+		// UpdateTS:     tableInfo.UpdateTS,
 	}
 }
 
