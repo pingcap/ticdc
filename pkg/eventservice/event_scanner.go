@@ -198,7 +198,7 @@ func (s *eventScanner) scanAndMergeEvents(
 				return false, nil
 			}
 
-			if err = s.commitTxn(session, merger, processor, rawEvent.CRTs, tableInfo.UpdateTS()); err != nil {
+			if err = s.commitTxn(session, merger, processor, rawEvent.CRTs, tableInfo.GetUpdateTS()); err != nil {
 				return false, err
 			}
 
