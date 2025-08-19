@@ -542,6 +542,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		scannedBytes = int64(c.scanLimitInBytes)
 	}
 	task.lastScanBytes.Store(scannedBytes)
+	log.Debug("scan events finished",
+		zap.Stringer("dispatcher", task.id),
+		zap.Int64("scannedBytes", scannedBytes),
+		zap.Int64("limit", int64(c.scanLimitInBytes)),
+		zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()),
+		zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()),
+		zap.Int("eventCount", len(events)),
+		zap.Any("events", events),,
+		zap.Bool("interrupted", interrupted),
+		zap.String("range", dataRange.String()))
 
 	// Check whether the task is ready to receive data events again before sending events.
 	if !task.isReadyRecevingData.Load() {
