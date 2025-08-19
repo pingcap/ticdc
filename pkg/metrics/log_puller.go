@@ -53,6 +53,14 @@ var (
 			Name:      "requested_region_count",
 			Help:      "The number of requested regions",
 		}, []string{"state"})
+
+	SubscriptionClientAddRegionRequestCost = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "add_region_request_cost",
+			Help:      "The cost of adding region request",
+		})
 )
 
 func InitLogPullerMetrics(registry *prometheus.Registry) {

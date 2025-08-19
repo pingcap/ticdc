@@ -16,6 +16,7 @@ package logpuller
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/atomic"
@@ -66,6 +67,7 @@ func newRequestCache(maxPendingCount int) *requestCache {
 // add adds a new region request to the cache
 // It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
 func (c *requestCache) add(ctx context.Context, region regionInfo) error {
+	start := time.Now()
 	for {
 		current := c.pendingCount.Load()
 		if current < c.maxPendingCount {
@@ -77,6 +79,8 @@ func (c *requestCache) add(ctx context.Context, region regionInfo) error {
 
 			select {
 			case c.pendingQueue <- req:
+				cost := time.Since(start)
+				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
 				c.pendingCount.Add(1)
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
 				return nil
