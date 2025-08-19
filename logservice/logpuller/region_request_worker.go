@@ -432,25 +432,10 @@ func (s *regionRequestWorker) addRegionState(subscriptionID SubscriptionID, regi
 func (s *regionRequestWorker) getRegionState(subscriptionID SubscriptionID, regionID uint64) *regionFeedState {
 	s.requestedRegions.RLock()
 	defer s.requestedRegions.RUnlock()
-
-	states, ok := s.requestedRegions.subscriptions[subscriptionID]
-	if !ok {
-		log.Warn("cannot found states", zap.Any("requestID", subscriptionID))
-		return nil
+	if states, ok := s.requestedRegions.subscriptions[subscriptionID]; ok {
+		return states[regionID]
 	}
-
-	result, ok := states[regionID]
-	if !ok {
-		log.Warn("cannot found state for region", zap.Any("requestID", subscriptionID), zap.Uint64("regionID", regionID))
-		return nil
-	}
-
-	if result == nil {
-		log.Warn("region state is nil, this should be impossible",
-			zap.Any("requestID", subscriptionID), zap.Uint64("regionID", regionID))
-	}
-
-	return result
+	return nil
 }
 
 func (s *regionRequestWorker) takeRegionState(subscriptionID SubscriptionID, regionID uint64) *regionFeedState {
@@ -472,7 +457,6 @@ func (s *regionRequestWorker) takeRegionStates(subscriptionID SubscriptionID) re
 	defer s.requestedRegions.Unlock()
 	states := s.requestedRegions.subscriptions[subscriptionID]
 	delete(s.requestedRegions.subscriptions, subscriptionID)
-	log.Warn("take region state", zap.Any("requestID", subscriptionID))
 	return states
 }
 

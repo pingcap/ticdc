@@ -731,9 +731,10 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	if len(subStat.dispatchers.notifiers) == 0 {
 		subStat.idleTime.Store(time.Now().UnixMilli())
 		log.Info("subscription is idle, set idle time",
-			zap.Uint64("subID", uint64(subStat.subID)),
-			zap.Int("dbIndex", subStat.dbIndex),
-			zap.Int64("tableID", subStat.tableSpan.TableID))
+			zap.Any("dispatcherID", dispatcherID),
+			zap.Uint64("subscriptionID", uint64(subStat.subID)),
+			zap.Int64("tableID", subStat.tableSpan.TableID),
+			zap.Int("dbIndex", subStat.dbIndex))
 	}
 }
 
@@ -987,7 +988,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 		case change := <-e.subscriptionChangeCh.Out():
 			switch change.ChangeType {
 			case SubscriptionChangeTypeAdd:
-				log.Info("add subscription for upload state", zap.Uint64("subID", change.SubID))
+				log.Info("add subscription for upload state", zap.Uint64("subscriptionID", change.SubID))
 				if tableState, ok := state.TableStates[change.Span.TableID]; ok {
 					tableState.Subscriptions = append(tableState.Subscriptions, &logservicepb.SubscriptionState{
 						SubID:        change.SubID,
@@ -1008,7 +1009,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 			case SubscriptionChangeTypeRemove:
-				log.Info("remove subscription from upload state", zap.Uint64("subID", change.SubID))
+				log.Info("remove subscription from upload state", zap.Uint64("subscriptionID", change.SubID))
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {
 					log.Panic("cannot find table state", zap.Int64("tableID", change.Span.TableID))
@@ -1021,7 +1022,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 				if targetIndex == -1 {
-					log.Panic("cannot find subscription state", zap.Uint64("subID", change.SubID))
+					log.Panic("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 				}
 				tableState.Subscriptions = append(tableState.Subscriptions[:targetIndex], tableState.Subscriptions[targetIndex+1:]...)
 			case SubscriptionChangeTypeUpdate:
@@ -1038,13 +1039,13 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 				if targetIndex == -1 {
-					log.Warn("cannot find subscription state", zap.Uint64("subID", change.SubID))
+					log.Warn("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 					continue
 				}
 				if change.CheckpointTs < tableState.Subscriptions[targetIndex].CheckpointTs ||
 					change.ResolvedTs < tableState.Subscriptions[targetIndex].ResolvedTs {
 					log.Panic("should not happen",
-						zap.Uint64("subID", change.SubID),
+						zap.Uint64("subscriptionID", change.SubID),
 						zap.Uint64("oldCheckpointTs", tableState.Subscriptions[targetIndex].CheckpointTs),
 						zap.Uint64("oldResolvedTs", tableState.Subscriptions[targetIndex].ResolvedTs),
 						zap.Uint64("newCheckpointTs", change.CheckpointTs),

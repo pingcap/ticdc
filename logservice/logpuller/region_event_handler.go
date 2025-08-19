@@ -187,10 +187,6 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 	}
 	if stepsToRemoved {
 		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
-		log.Warn("step to remove region state",
-			zap.Uint64("workerID", worker.workerID),
-			zap.Uint64("subscriptionID", uint64(state.requestID)),
-			zap.Uint64("regionID", state.getRegionID()))
 		h.subClient.onRegionFail(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
@@ -313,10 +309,11 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
 			log.Info("subscription client is initialized",
 				zap.Uint64("subscriptionID", uint64(span.subID)),
+				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("resolvedTs", ts))
 		}
-		lastResolvedTs := span.resolvedTs.Load()
+		lastResolvedTs = span.resolvedTs.Load()
 		// Generally, we don't want to send duplicate resolved ts,
 		// so we check whether `ts` is larger than `lastResolvedTs` before send it.
 		// but when `ts` == `lastResolvedTs` == `span.startTs`,
