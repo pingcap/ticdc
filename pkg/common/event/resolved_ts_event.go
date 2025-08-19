@@ -195,8 +195,6 @@ func (e ResolvedEvent) encodeV0() ([]byte, error) {
 	offset += 1
 	binary.BigEndian.PutUint64(data[offset:], uint64(e.ResolvedTs))
 	offset += 8
-	binary.BigEndian.PutUint64(data[offset:], e.Epoch)
-	offset += 8
 	copy(data[offset:], e.State.encode())
 	offset += e.State.GetSize()
 	copy(data[offset:], e.DispatcherID.Marshal())
@@ -210,8 +208,6 @@ func (e *ResolvedEvent) decodeV0(data []byte) error {
 	offset := 1 // Skip version byte
 	e.ResolvedTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
-	e.Epoch = binary.BigEndian.Uint64(data[offset:])
-	offset += 8
 	e.State.decode(data[offset:])
 	offset += e.State.GetSize()
 	return e.DispatcherID.Unmarshal(data[offset:])
@@ -223,8 +219,7 @@ func (e ResolvedEvent) String() string {
 
 // Update GetSize method to reflect the new structure
 func (e ResolvedEvent) GetSize() int64 {
-	// Version(1) + ResolvedTs(8) + Epoch(8) + State(1) + DispatcherID(16)
-	return int64(1 + 8 + 8 + e.State.GetSize() + e.DispatcherID.GetSize())
+	return int64(1 + 8 + e.State.GetSize() + e.DispatcherID.GetSize()) // Version(1) + ResolvedTs(8) + State(1) + DispatcherID(16)
 }
 
 func (e ResolvedEvent) IsPaused() bool {
