@@ -164,11 +164,11 @@ func (w *Watermark) Set(watermark *heartbeatpb.Watermark) {
 }
 
 func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler] {
-	option := dynstream.NewOption()
-	option.BatchCount = 1024
+	// option := dynstream.NewOption()
+	// option.BatchCount = 1024
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
-		&SchedulerDispatcherRequestHandler{}, option)
+		&SchedulerDispatcherRequestHandler{}, dynstream.NewOption())
 	ds.Start()
 	return ds
 }
