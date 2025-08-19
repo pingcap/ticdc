@@ -120,7 +120,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 			if num >= 0 {
 				size += num
 			} else {
-				log.Panic("available size for scheduler on node is negative", zap.String("node", id.String()), zap.Any("scheduleNodeSize", scheduleNodeSize[id]), zap.Int("schedulingTaskCountPerNode", s.schedulingTaskCountPerNode))
+				log.Warn("available size for scheduler on node is negative", zap.String("node", id.String()), zap.Any("scheduleNodeSize", scheduleNodeSize[id]), zap.Int("schedulingTaskCountPerNode", s.schedulingTaskCountPerNode))
 			}
 		}
 	}
@@ -133,7 +133,8 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	}
 
 	if availableSize <= 0 {
-		log.Panic("available size for scheduler is negative", zap.Int("availableSize", availableSize), zap.Any("groupID", groupID))
+		log.Warn("available size for scheduler is negative", zap.Int("availableSize", availableSize), zap.Any("groupID", groupID))
+		return 0
 	}
 
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
