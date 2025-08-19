@@ -510,10 +510,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 	defer func() {
 		for _, rs := range stores {
 			for _, w := range rs.requestWorkers {
-				close(w.requestsCh)
-				for range w.requestsCh {
-					// TODO: do we need handle it?
-				}
+				w.requestCache.clear()
 			}
 		}
 	}()
@@ -530,7 +527,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		if region.isStopped() {
 			for _, rs := range stores {
 				for _, worker := range rs.requestWorkers {
-					worker.requestsCh <- region
+					worker.add(ctx, region)
 				}
 			}
 			continue
@@ -544,7 +541,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		store := getStore(region.rpcCtx.Addr)
 		worker := store.getRequestWorker()
-		worker.requestsCh <- region
+		worker.add(ctx, region)
 
 		log.Debug("subscription client will request a region",
 			zap.Uint64("workID", worker.workerID),
@@ -724,7 +721,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 	switch eerr := err.(type) {
 	case *eventError:
 		innerErr := eerr.err
-		log.Debug("cdc region error",
+		log.Info("fizz cdc region error",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 
