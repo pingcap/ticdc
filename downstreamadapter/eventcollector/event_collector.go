@@ -223,7 +223,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	}()
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
-	stat := newDispatcherStat(target, c, readyCallback, memoryQuota)
+	stat := newDispatcherStat(target, c, readyCallback)
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 
