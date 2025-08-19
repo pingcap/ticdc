@@ -206,8 +206,6 @@ type ChangefeedConfig struct {
 	// Epoch is the epoch of a changefeed, changes on every restart.
 	Epoch   uint64 `json:"epoch"`
 	BDRMode bool   `json:"bdr_mode" default:"false"`
-	// redo releated
-	Consistent *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -278,7 +276,6 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		Epoch:              info.Epoch,
 		BDRMode:            util.GetOrZero(info.Config.BDRMode),
 		TimeZone:           GetGlobalServerConfig().TZ,
-		Consistent:         info.Config.Consistent,
 		// other fields are not necessary for dispatcherManager
 	}
 }

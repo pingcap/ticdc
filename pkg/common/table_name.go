@@ -15,6 +15,8 @@ package common
 
 import (
 	"fmt"
+
+	"github.com/pingcap/log"
 )
 
 //go:generate msgp
@@ -25,6 +27,7 @@ type TableName struct {
 	Table       string `toml:"tbl-name" msg:"tbl-name"`
 	TableID     int64  `toml:"tbl-id" msg:"tbl-id"`
 	IsPartition bool   `toml:"is-partition" msg:"is-partition"`
+	quotedName  string `json:"-"`
 }
 
 // String implements fmt.Stringer interface.
@@ -34,7 +37,10 @@ func (t TableName) String() string {
 
 // QuoteString returns quoted full table name
 func (t TableName) QuoteString() string {
-	return QuoteSchema(t.Schema, t.Table)
+	if t.quotedName == "" {
+		log.Panic("quotedName is not initialized")
+	}
+	return t.quotedName
 }
 
 // GetSchema returns schema name.

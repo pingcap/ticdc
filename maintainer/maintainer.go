@@ -812,12 +812,11 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 	}
 	return func(id node.ID) *messaging.TargetMessage {
 		msg := &heartbeatpb.MaintainerBootstrapRequest{
-			ChangefeedID:                      m.id.ToPB(),
-			Config:                            cfgBytes,
-			StartTs:                           m.startCheckpointTs,
-			TableTriggerEventDispatcherId:     nil,
-			RedoTableTriggerEventDispatcherId: nil,
-			IsNewChangefeed:                   false,
+			ChangefeedID:                  m.id.ToPB(),
+			Config:                        cfgBytes,
+			StartTs:                       m.startCheckpointTs,
+			TableTriggerEventDispatcherId: nil,
+			IsNewChangefeed:               false,
 		}
 
 		// only send dispatcher id to dispatcher manager on the same node

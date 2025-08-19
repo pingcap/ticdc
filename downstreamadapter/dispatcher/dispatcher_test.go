@@ -14,8 +14,6 @@
 package dispatcher
 
 import (
-	"math"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,10 +47,8 @@ func getUncompleteTableSpan() *heartbeatpb.TableSpan {
 	}
 }
 
-func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *EventDispatcher {
-	var redoTs atomic.Uint64
-	redoTs.Store(math.MaxUint64)
-	return NewEventDispatcher(
+func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dispatcher {
+	return NewDispatcher(
 		common.NewChangefeedID(),
 		common.NewDispatcherID(),
 		tableSpan,
@@ -74,8 +70,6 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		make(chan error, 1),
 		false,
 		false,
-		false,
-		&redoTs,
 	)
 }
 

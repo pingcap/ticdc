@@ -16,7 +16,7 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	DispatcherManagerGauge = prometheus.NewGaugeVec(
+	EventDispatcherManagerGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanagermanager",
@@ -30,7 +30,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "table_trigger_event_dispatcher_count",
 			Help:      "The number of table event dispatchers",
-		}, []string{"namespace", "changefeed", "event_type"})
+		}, []string{"namespace", "changefeed"})
 
 	EventDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -38,7 +38,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "table_event_dispatcher_count",
 			Help:      "The number of table event dispatchers",
-		}, []string{"namespace", "changefeed", "event_type"})
+		}, []string{"namespace", "changefeed"})
 
 	CreateDispatcherDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -47,9 +47,9 @@ var (
 			Name:      "create_dispatcher_duration",
 			Help:      "Bucketed histogram of create dispatcher time (s) for table span.",
 			Buckets:   prometheus.ExponentialBuckets(0.000001, 2, 20), // 1us~524ms
-		}, []string{"namespace", "changefeed", "event_type"})
+		}, []string{"namespace", "changefeed"})
 
-	DispatcherManagerResolvedTsGauge = prometheus.NewGaugeVec(
+	EventDispatcherManagerResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -57,7 +57,7 @@ var (
 			Help:      "Resolved ts of event dispatcher manager(changefeed)",
 		}, []string{"namespace", "changefeed"})
 
-	DispatcherManagerResolvedTsLagGauge = prometheus.NewGaugeVec(
+	EventDispatcherManagerResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -65,7 +65,7 @@ var (
 			Help:      "Resolved ts lag of event dispatcher manager(changefeed) in seconds",
 		}, []string{"namespace", "changefeed"})
 
-	DispatcherManagerCheckpointTsGauge = prometheus.NewGaugeVec(
+	EventDispatcherManagerCheckpointTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -73,7 +73,7 @@ var (
 			Help:      "Checkpoint ts of event dispatcher manager(changefeed)",
 		}, []string{"namespace", "changefeed"})
 
-	DispatcherManagerCheckpointTsLagGauge = prometheus.NewGaugeVec(
+	EventDispatcherManagerCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -94,7 +94,7 @@ var (
 		Subsystem: "dispatcher",
 		Name:      "received_event_count",
 		Help:      "The number of events received by the dispatcher",
-	}, []string{"type", "event_type"})
+	}, []string{"type"})
 
 	EventCollectorRegisteredDispatcherCount = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "ticdc",
@@ -128,14 +128,14 @@ var (
 )
 
 func InitDispatcherMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(DispatcherManagerGauge)
+	registry.MustRegister(EventDispatcherManagerGauge)
 	registry.MustRegister(TableTriggerEventDispatcherGauge)
 	registry.MustRegister(EventDispatcherGauge)
 	registry.MustRegister(CreateDispatcherDuration)
-	registry.MustRegister(DispatcherManagerResolvedTsGauge)
-	registry.MustRegister(DispatcherManagerResolvedTsLagGauge)
-	registry.MustRegister(DispatcherManagerCheckpointTsGauge)
-	registry.MustRegister(DispatcherManagerCheckpointTsLagGauge)
+	registry.MustRegister(EventDispatcherManagerResolvedTsGauge)
+	registry.MustRegister(EventDispatcherManagerResolvedTsLagGauge)
+	registry.MustRegister(EventDispatcherManagerCheckpointTsGauge)
+	registry.MustRegister(EventDispatcherManagerCheckpointTsLagGauge)
 	registry.MustRegister(HandleDispatcherRequsetCounter)
 	registry.MustRegister(DispatcherReceivedEventCount)
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)
