@@ -39,7 +39,7 @@ func TestNewTableSchema(t *testing.T) {
 		Schema:  tableInfo.TableName.Schema,
 		Table:   tableInfo.TableName.Table,
 		TableID: tableInfo.TableName.TableID,
-		Version: tableInfo.UpdateTS(),
+		Version: tableInfo.GetUpdateTS(),
 		Columns: []*columnSchema{
 			{
 				Name: "id",
@@ -125,7 +125,7 @@ func TestNewTableSchema(t *testing.T) {
 		Schema:  tableInfo.TableName.Schema,
 		Table:   tableInfo.TableName.Table,
 		TableID: tableInfo.TableName.TableID,
-		Version: tableInfo.UpdateTS(),
+		Version: tableInfo.GetUpdateTS(),
 		Columns: []*columnSchema{
 			{
 				Name: "id",
@@ -241,7 +241,7 @@ func TestNewTableSchema(t *testing.T) {
 		Schema:  tableInfo.TableName.Schema,
 		Table:   tableInfo.TableName.Table,
 		TableID: tableInfo.TableName.TableID,
-		Version: tableInfo.UpdateTS(),
+		Version: tableInfo.GetUpdateTS(),
 		Columns: []*columnSchema{
 			{
 				Name: "t",

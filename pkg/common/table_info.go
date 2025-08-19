@@ -87,6 +87,11 @@ type TableInfo struct {
 
 	Sequence *model.SequenceInfo `json:"sequence"`
 
+	// UpdateTS is used to record the timestamp of updating the table's schema information.
+	// These changing schema operations don't include 'truncate table', 'rename table',
+	// 'truncate partition' and 'exchange partition'.
+	UpdateTS uint64 `json:"update_timestamp"`
+
 	preSQLs struct {
 		isInitialized atomic.Bool
 		mutex         sync.Mutex
@@ -111,7 +116,6 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
-	ti.TableName.quotedName = QuoteSchema(ti.TableName.Schema, ti.TableName.Table)
 	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteString())
@@ -195,11 +199,11 @@ func (ti *TableInfo) GetPKIndex() []int64 {
 	return ti.columnSchema.PKIndex
 }
 
-// UpdateTS returns the UpdateTS of columnSchema
+// GetUpdateTS() returns the GetUpdateTS() of columnSchema
 // These changing schema operations don't include 'truncate table', 'rename table',
 // 'rename tables', 'truncate partition' and 'exchange partition'.
-func (ti *TableInfo) UpdateTS() uint64 {
-	return ti.columnSchema.UpdateTS
+func (ti *TableInfo) GetUpdateTS() uint64 {
+	return ti.UpdateTS
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
@@ -429,7 +433,6 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 			Table:       table,
 			TableID:     tableID,
 			IsPartition: isPartition,
-			quotedName:  QuoteSchema(schema, table),
 		},
 		columnSchema: columnSchema,
 		View:         tableInfo.View,
@@ -437,6 +440,7 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 		Charset:      tableInfo.Charset,
 		Collate:      tableInfo.Collate,
 		Comment:      tableInfo.Comment,
+		UpdateTS:     tableInfo.UpdateTS,
 	}
 }
 

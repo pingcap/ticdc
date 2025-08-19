@@ -284,10 +284,10 @@ func (s *eventScanner) handleNewTransaction(
 
 	// Check if batch should be flushed
 	hasNewDDL := merger.hasMoreDDLs() && rawEvent.CRTs > merger.nextDDLFinishedTs()
-	if processor.shouldFlushBatch(tableInfo.UpdateTS(), hasNewDDL) {
+	if processor.shouldFlushBatch(tableInfo.GetUpdateTS(), hasNewDDL) {
 		events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
 		session.events = append(session.events, events...)
-		processor.flushBatch(tableInfo.UpdateTS())
+		processor.flushBatch(tableInfo.GetUpdateTS())
 	}
 
 	// Process new transaction

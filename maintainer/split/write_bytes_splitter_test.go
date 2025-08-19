@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
@@ -52,13 +53,13 @@ func cloneRegions(info []pdutil.RegionInfo) []pdutil.RegionInfo {
 }
 
 func TestSplitRegionsByWrittenKeysUniform(t *testing.T) {
-	t.Parallel()
+	preTest()
 	re := require.New(t)
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{100, 100, 100, 100, 100, 100, 100}) // region id: [2,3,4,5,6,7,8]
-	splitter := newWriteSplitter(cfID, nil, 0)
+	splitter := newWriteSplitter(cfID, 0)
 	info := splitter.splitRegionsByWrittenKeysV1(0, cloneRegions(regions), 1)
 	re.Len(info.RegionCounts, 1)
 	re.EqualValues(7, info.RegionCounts[0])
@@ -116,14 +117,14 @@ func TestSplitRegionsByWrittenKeysUniform(t *testing.T) {
 }
 
 func TestSplitRegionsByWrittenKeysHotspot1(t *testing.T) {
-	t.Parallel()
+	preTest()
 	re := require.New(t)
 
 	// Hotspots
 	cfID := common.NewChangeFeedIDWithName("test")
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{100, 1, 100, 1, 1, 1, 100})
-	splitter := newWriteSplitter(cfID, nil, 4)
+	splitter := newWriteSplitter(cfID, 4)
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, 4) // [2], [3,4], [5,6,7], [8]
 	re.Len(info.RegionCounts, 4)
 	re.EqualValues(1, info.RegionCounts[0])
@@ -147,14 +148,14 @@ func TestSplitRegionsByWrittenKeysHotspot1(t *testing.T) {
 }
 
 func TestSplitRegionsByWrittenKeysHotspot2(t *testing.T) {
-	t.Parallel()
+	preTest()
 	re := require.New(t)
 
 	// Hotspots
 	cfID := common.NewChangeFeedIDWithName("test")
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{1000, 1, 1, 1, 100, 1, 99})
-	splitter := newWriteSplitter(cfID, nil, 4)
+	splitter := newWriteSplitter(cfID, 4)
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, 4) // [2], [3,4,5,6], [7], [8]
 	re.Len(info.Spans, 4)
 	re.EqualValues(startKeys[2], info.Spans[0].StartKey)
@@ -168,7 +169,7 @@ func TestSplitRegionsByWrittenKeysHotspot2(t *testing.T) {
 }
 
 func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
-	// t.Parallel()
+	preTest()
 	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
 	baseSpanNumberCoefficient = 3
 	defer func() {
@@ -176,7 +177,7 @@ func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 	}()
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteSplitter(cfID, nil, 0)
+	splitter := newWriteSplitter(cfID, 0)
 	baseSpanNum := getSpansNumber(2, 1)
 	require.Equal(t, 3, baseSpanNum)
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
@@ -199,7 +200,7 @@ func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 }
 
 func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
-	// t.Parallel()
+	preTest()
 	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
 	baseSpanNumberCoefficient = 3
 	defer func() {
@@ -207,7 +208,7 @@ func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
 	}()
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteSplitter(cfID, nil, 1)
+	splitter := newWriteSplitter(cfID, 1)
 	baseSpanNum := getSpansNumber(2, 1)
 	require.Equal(t, 3, baseSpanNum)
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
@@ -222,11 +223,11 @@ func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
 }
 
 func TestSplitRegionsByWrittenKeysConfig(t *testing.T) {
-	t.Parallel()
+	preTest()
 	re := require.New(t)
 
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteSplitter(cfID, nil, math.MaxInt)
+	splitter := newWriteSplitter(cfID, math.MaxInt)
 	regions, startKeys, endKeys := prepareRegionsInfo([]int{1, 1, 1, 1, 1, 1, 1})
 	info := splitter.splitRegionsByWrittenKeysV1(1, regions, 3) // [2,3,4,5,6,7,8]
 	re.Len(info.RegionCounts, 1)
@@ -244,6 +245,7 @@ func TestSplitRegionsByWrittenKeysConfig(t *testing.T) {
 }
 
 func TestSplitRegionEven(t *testing.T) {
+	preTest()
 	var tblID int64 = 1
 	regionCount := 4653 + 1051 + 745 + 9530 + 1
 	regions := make([]pdutil.RegionInfo, regionCount)
@@ -256,7 +258,7 @@ func TestSplitRegionEven(t *testing.T) {
 		}
 	}
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteSplitter(cfID, nil, 4)
+	splitter := newWriteSplitter(cfID, 4)
 	info := splitter.splitRegionsByWrittenKeysV1(tblID, regions, 5)
 	require.Len(t, info.RegionCounts, 5)
 	require.Len(t, info.Weights, 5)
@@ -288,6 +290,7 @@ func TestSpanRegionLimitBase(t *testing.T) {
 }*/
 
 func TestSpanRegionLimit(t *testing.T) {
+	preTest()
 	// Fisher-Yates shuffle algorithm to shuffle the writtenKeys
 	// but keep the first preservationRate% of the writtenKeys in the left side of the list
 	// to make the writtenKeys more like a hot region list
@@ -341,7 +344,7 @@ func TestSpanRegionLimit(t *testing.T) {
 	writtenKeys = shuffle(writtenKeys, 0.7)
 
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteSplitter(cfID, nil, 0)
+	splitter := newWriteSplitter(cfID, 0)
 	var regions []pdutil.RegionInfo
 	// region number is 500,000
 	// weight is random between 0 and 40,000
@@ -357,4 +360,39 @@ func TestSpanRegionLimit(t *testing.T) {
 	for _, c := range info.RegionCounts {
 		require.LessOrEqual(t, float64(c), spanRegionLimit*1.1)
 	}
+}
+
+type mockPDAPIClient struct {
+	scanRegionsError error
+}
+
+func (m *mockPDAPIClient) ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]pdutil.RegionInfo, error) {
+	if m.scanRegionsError != nil {
+		return nil, m.scanRegionsError
+	}
+	return []pdutil.RegionInfo{}, nil
+}
+
+func (m *mockPDAPIClient) Close() {
+	// Mock implementation - do nothing
+}
+
+func (m *mockPDAPIClient) UpdateMetaLabel(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockPDAPIClient) ListGcServiceSafePoint(ctx context.Context) (*pdutil.ListServiceGCSafepoint, error) {
+	return nil, nil
+}
+
+func (m *mockPDAPIClient) CollectMemberEndpoints(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockPDAPIClient) Healthy(ctx context.Context, endpoint string) error {
+	return nil
+}
+
+func preTest() {
+	appcontext.SetService(appcontext.PDAPIClient, &mockPDAPIClient{})
 }

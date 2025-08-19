@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -27,61 +26,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func getCompleteTableSpanWithTableID(tableID int64) *heartbeatpb.TableSpan {
-	tableSpan := &heartbeatpb.TableSpan{
-		TableID: tableID,
-	}
-	startKey, endKey := common.GetTableRange(tableSpan.TableID)
-	tableSpan.StartKey = common.ToComparableKey(startKey)
-	tableSpan.EndKey = common.ToComparableKey(endKey)
-	return tableSpan
+var redoCount = 0
+
+func redoCallback() {
+	redoCount++
 }
 
-func getCompleteTableSpan() *heartbeatpb.TableSpan {
-	return getCompleteTableSpanWithTableID(1)
-}
-
-func getUncompleteTableSpan() *heartbeatpb.TableSpan {
-	return &heartbeatpb.TableSpan{
-		TableID: 1,
-	}
-}
-
-func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dispatcher {
-	return NewDispatcher(
+func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *RedoDispatcher {
+	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(),
-		common.NewDispatcherID(),
-		tableSpan,
-		sink,
-		common.Ts(0), // startTs
+		"system",
+		false,
+		false,
+		nil,
+		nil,
+		nil, // redo dispatcher doesn't need syncPointConfig
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
-		1, // schemaID
 		NewSchemaIDToDispatchers(),
-		"system",
-		nil,
-		&syncpoint.SyncPointConfig{
-			SyncPointInterval:  time.Duration(5 * time.Second),
-			SyncPointRetention: time.Duration(10 * time.Minute),
-		}, // syncPointConfig
-		false,
-		nil,          // filterConfig
-		common.Ts(0), // pdTs
 		make(chan error, 1),
-		false,
-		false,
+	)
+	return NewRedoDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(0), // startTs
+		1,            // schemaID
+		false,        // startTsIsSyncpoint
+		sink,
+		sharedInfo,
 	)
 }
 
-var count = 0
-
-func callback() {
-	count++
-}
-
-// test different events can be correctly handled by the dispatcher
-func TestDispatcherHandleEvents(t *testing.T) {
-	count = 0
+func TestRedoDispatcherHandleEvents(t *testing.T) {
+	redoCount = 0
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -98,7 +75,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 
 	sink := sink.NewMockSink(common.MysqlSinkType)
 	tableSpan := getCompleteTableSpan()
-	dispatcher := newDispatcherForTest(sink, tableSpan)
+	dispatcher := newRedoDispatcherForTest(sink, tableSpan)
 	require.Equal(t, uint64(0), dispatcher.GetCheckpointTs())
 	require.Equal(t, uint64(0), dispatcher.GetResolvedTs())
 	tableProgress := dispatcher.tableProgress
@@ -109,14 +86,14 @@ func TestDispatcherHandleEvents(t *testing.T) {
 
 	// ===== dml event =====
 	nodeID := node.NewID()
-	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, callback)
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	require.Equal(t, 1, len(sink.GetDMLs()))
 
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, false, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
-	require.Equal(t, 0, count)
+	require.Equal(t, 0, redoCount)
 
 	// flush
 	sink.FlushDMLs()
@@ -124,7 +101,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
-	require.Equal(t, 1, count)
+	require.Equal(t, 1, redoCount)
 
 	// ===== ddl event =====
 	// 1. non-block ddl event, and don't need to communicate with maintainer
@@ -137,7 +114,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 		TableInfo: tableInfo,
 	}
 
-	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	// no pending event
@@ -148,7 +125,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
 
-	require.Equal(t, 2, count)
+	require.Equal(t, 2, redoCount)
 
 	// 2.1 non-block ddl event, but need to communicate with maintainer(drop table)
 	ddlEvent21 := &commonEvent.DDLEvent{
@@ -163,7 +140,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 		},
 		TableInfo: tableInfo,
 	}
-	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent21)}, callback)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent21)}, redoCallback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	// no pending event
@@ -174,7 +151,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(2), checkpointTs)
 
-	require.Equal(t, 3, count)
+	require.Equal(t, 3, redoCount)
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -203,7 +180,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 		},
 		TableInfo: tableInfo,
 	}
-	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent2)}, callback)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent2)}, redoCallback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	// no pending event
@@ -214,7 +191,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, false, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
 
-	require.Equal(t, 4, count)
+	require.Equal(t, 4, redoCount)
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -252,7 +229,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 		},
 		TableInfo: tableInfo,
 	}
-	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent3)}, callback)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent3)}, redoCallback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	// pending event
@@ -264,7 +241,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
 
-	require.Equal(t, 4, count)
+	require.Equal(t, 4, redoCount)
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -303,60 +280,13 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
 	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
 
-	require.Equal(t, 5, count)
-
-	// ===== sync point event =====
-
-	syncPointEvent := &commonEvent.SyncPointEvent{
-		CommitTsList: []uint64{6},
-	}
-	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, callback)
-	require.Equal(t, true, block)
-	require.Equal(t, 0, len(sink.GetDMLs()))
-	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
-
-	// not available for write to sink
-	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
-	require.Equal(t, true, isEmpty)
-	require.Equal(t, uint64(4), checkpointTs)
-
-	// receive the ack info
-	dispatcherStatus = &heartbeatpb.DispatcherStatus{
-		Ack: &heartbeatpb.ACK{
-			CommitTs:    syncPointEvent.GetCommitTs(),
-			IsSyncPoint: true,
-		},
-	}
-	dispatcher.HandleDispatcherStatus(dispatcherStatus)
-	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
-	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
-
-	// receive the action info
-	dispatcherStatus = &heartbeatpb.DispatcherStatus{
-		Action: &heartbeatpb.DispatcherAction{
-			Action:      heartbeatpb.Action_Pass,
-			CommitTs:    syncPointEvent.GetCommitTs(),
-			IsSyncPoint: true,
-		},
-	}
-	dispatcher.HandleDispatcherStatus(dispatcherStatus)
-	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
-	require.Equal(t, true, isEmpty)
-	require.Equal(t, uint64(5), checkpointTs)
-
-	require.Equal(t, 6, count)
+	require.Equal(t, 5, redoCount)
 
 	// ===== resolved event =====
-	checkpointTs = dispatcher.GetCheckpointTs()
-	require.Equal(t, uint64(5), checkpointTs)
 	resolvedEvent := commonEvent.ResolvedEvent{
 		ResolvedTs: 7,
 	}
-	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, resolvedEvent)}, callback)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, resolvedEvent)}, redoCallback)
 	require.Equal(t, false, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	require.Equal(t, uint64(7), dispatcher.GetResolvedTs())
@@ -364,9 +294,8 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(7), checkpointTs)
 }
 
-// test uncompelete table span can correctly handle the ddl events
-func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
-	count = 0
+func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
+	redoCount = 0
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -376,7 +305,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 
 	sink := sink.NewMockSink(common.MysqlSinkType)
 	tableSpan := getUncompleteTableSpan()
-	dispatcher := newDispatcherForTest(sink, tableSpan)
+	dispatcher := newRedoDispatcherForTest(sink, tableSpan)
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values(1, 1)")
 	require.NotNil(t, dmlEvent)
@@ -393,7 +322,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	}
 
 	nodeID := node.NewID()
-	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	// pending event
 	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
@@ -402,7 +331,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 
 	checkpointTs := dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(0), checkpointTs)
-	require.Equal(t, 0, count)
+	require.Equal(t, 0, redoCount)
 
 	// receive the ack info
 	dispatcherStatus := &heartbeatpb.DispatcherStatus{
@@ -420,7 +349,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	// the ddl is still not available for write to sink
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(0), checkpointTs)
-	require.Equal(t, 0, count)
+	require.Equal(t, 0, redoCount)
 
 	// receive the action info
 	dispatcherStatus = &heartbeatpb.DispatcherStatus{
@@ -433,20 +362,15 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(1), checkpointTs)
-	require.Equal(t, 1, count)
+	require.Equal(t, 1, redoCount)
 }
 
-func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
-	count = 0
+func TestRedoTableTriggerEventDispatcherInMysql(t *testing.T) {
+	redoCount = 0
 
 	ddlTableSpan := common.DDLSpan
 	sink := sink.NewMockSink(common.MysqlSinkType)
-	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
-	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
-
-	ok, err := tableTriggerEventDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
-	require.NoError(t, err)
-	require.True(t, ok)
+	tableTriggerEventDispatcher := newRedoDispatcherForTest(sink, ddlTableSpan)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -470,15 +394,11 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	}
 
 	nodeID := node.NewID()
-	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, 1, count)
-
-	tableIds := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
-	require.Equal(t, 1, len(tableIds))
-	require.Equal(t, int64(0), tableIds[0])
+	require.Equal(t, 1, redoCount)
 
 	// ddl influences tableSchemaStore
 	ddlEvent = &commonEvent.DDLEvent{
@@ -504,29 +424,19 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 		TableInfo: tableInfo,
 	}
 
-	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, 2, count)
-
-	tableIds = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
-	require.Equal(t, int(2), len(tableIds))
-	require.Equal(t, int64(1), tableIds[0])
-	require.Equal(t, int64(0), tableIds[1])
+	require.Equal(t, 2, redoCount)
 }
 
-func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
-	count = 0
+func TestRedoTableTriggerEventDispatcherInKafka(t *testing.T) {
+	redoCount = 0
 
 	ddlTableSpan := common.DDLSpan
 	sink := sink.NewMockSink(common.KafkaSinkType)
-	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
-	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
-
-	ok, err := tableTriggerEventDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
-	require.NoError(t, err)
-	require.True(t, ok)
+	tableTriggerEventDispatcher := newRedoDispatcherForTest(sink, ddlTableSpan)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -550,14 +460,11 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	}
 
 	nodeID := node.NewID()
-	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, 1, count)
-
-	tableNames := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(2)
-	require.Equal(t, int(0), len(tableNames))
+	require.Equal(t, 1, redoCount)
 
 	// ddl influences tableSchemaStore
 	ddlEvent = &commonEvent.DDLEvent{
@@ -583,21 +490,14 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 		TableInfo: tableInfo,
 	}
 
-	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, 2, count)
-
-	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(3)
-	require.Equal(t, int(0), len(tableNames))
-	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(4)
-	require.Equal(t, int(1), len(tableNames))
-	require.Equal(t, commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"}, *tableNames[0])
+	require.Equal(t, 2, redoCount)
 }
 
-// ensure the dispatcher will be closed when no dml events is in sink
-func TestDispatcherClose(t *testing.T) {
+func TestRedoDispatcherClose(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -612,11 +512,11 @@ func TestDispatcherClose(t *testing.T) {
 
 	{
 		sink := sink.NewMockSink(common.MysqlSinkType)
-		dispatcher := newDispatcherForTest(sink, getCompleteTableSpan())
+		dispatcher := newRedoDispatcherForTest(sink, getCompleteTableSpan())
 
 		// ===== dml event =====
 		nodeID := node.NewID()
-		dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, callback)
+		dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, redoCallback)
 
 		_, ok := dispatcher.TryClose()
 		require.Equal(t, false, ok)
@@ -633,11 +533,11 @@ func TestDispatcherClose(t *testing.T) {
 	// test sink is not normal
 	{
 		sink := sink.NewMockSink(common.MysqlSinkType)
-		dispatcher := newDispatcherForTest(sink, getCompleteTableSpan())
+		dispatcher := newRedoDispatcherForTest(sink, getCompleteTableSpan())
 
 		// ===== dml event =====
 		nodeID := node.NewID()
-		dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, callback)
+		dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, redoCallback)
 
 		_, ok := dispatcher.TryClose()
 		require.Equal(t, false, ok)
@@ -651,9 +551,7 @@ func TestDispatcherClose(t *testing.T) {
 	}
 }
 
-// TestBatchDMLEventsPartialFlush tests that wakeCallback is called correctly
-// when DML events are flushed partially in multiple batches.
-func TestBatchDMLEventsPartialFlush(t *testing.T) {
+func TestRedoBatchDMLEventsPartialFlush(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -679,12 +577,12 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 
 	mockSink := sink.NewMockSink(common.MysqlSinkType)
 	tableSpan := getCompleteTableSpan()
-	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	dispatcher := newRedoDispatcherForTest(mockSink, tableSpan)
 
-	// Create a callback that records when it's called
-	var callbackCalled bool
-	wakeCallback := func() {
-		callbackCalled = true
+	// Create a redoCallback that records when it's called
+	var redoCallbackCalled bool
+	wakeredoCallback := func() {
+		redoCallbackCalled = true
 	}
 
 	nodeID := node.NewID()
@@ -699,22 +597,22 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 	failpoint.Enable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents", `pause`)
 
 	go func() {
-		block := dispatcher.HandleEvents(dispatcherEvents, wakeCallback)
+		block := dispatcher.HandleEvents(dispatcherEvents, wakeredoCallback)
 		require.Equal(t, true, block)
 	}()
 
 	time.Sleep(1 * time.Second)
 	require.Equal(t, 1, len(mockSink.GetDMLs()))
 	mockSink.FlushDMLs()
-	require.False(t, callbackCalled)
+	require.False(t, redoCallbackCalled)
 
 	failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents")
 
 	time.Sleep(1 * time.Second)
 	require.Equal(t, 2, len(mockSink.GetDMLs()))
 	mockSink.FlushDMLs()
-	// Now the callback should be called after all events are flushed
-	require.True(t, callbackCalled)
+	// Now the redoCallback should be called after all events are flushed
+	require.True(t, redoCallbackCalled)
 
 	// Verify that all events were actually flushed
 	require.Equal(t, 0, len(mockSink.GetDMLs()))

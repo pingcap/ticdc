@@ -128,7 +128,7 @@ func newTableSchemaMap(tableInfo *commonType.TableInfo) interface{} {
 		"database": tableInfo.TableName.Schema,
 		"table":    tableInfo.TableName.Table,
 		"tableID":  tableInfo.TableName.TableID,
-		"version":  int64(tableInfo.UpdateTS()),
+		"version":  int64(tableInfo.GetUpdateTS()),
 		"columns":  columnsSchema,
 		"indexes":  indexesSchema,
 	}
@@ -260,7 +260,7 @@ func (a *avroMarshaller) newDMLMessageMap(
 	dmlMessagePayload["tableID"] = event.GetTableID()
 	dmlMessagePayload["commitTs"] = int64(event.CommitTs)
 	dmlMessagePayload["buildTs"] = time.Now().UnixMilli()
-	dmlMessagePayload["schemaVersion"] = int64(event.TableInfo.UpdateTS())
+	dmlMessagePayload["schemaVersion"] = int64(event.TableInfo.GetUpdateTS())
 
 	if !a.config.LargeMessageHandle.Disabled() && onlyHandleKey {
 		dmlMessagePayload["handleKeyOnly"] = map[string]interface{}{

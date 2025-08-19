@@ -61,6 +61,8 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 	GetReplicatingByGroup(groupID GroupID) []R
 	GetGroupStat() string
 
+	IsReplicating(replica R) bool
+
 	// node scheduler interface
 	GetTaskByNodeID(id node.ID) []R
 	GetTaskSizeByNodeID(id node.ID) int
@@ -484,4 +486,13 @@ func (db *replicationDB[T, R]) RemoveReplicaWithoutLock(replica R) {
 func (db *replicationDB[T, R]) AddSchedulingReplicaWithoutLock(replica R, targetNodeID node.ID) {
 	g := db.mustGetGroup(replica.GetGroupID())
 	g.AddSchedulingReplica(replica, targetNodeID)
+}
+
+func (db *replicationDB[T, R]) IsReplicating(replica R) bool {
+	var ret bool
+	db.withRLock(func() {
+		g := db.mustGetGroup(replica.GetGroupID())
+		ret = g.IsReplicating(replica)
+	})
+	return ret
 }

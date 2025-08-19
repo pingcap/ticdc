@@ -336,7 +336,7 @@ func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
 	key := tableSchemaKey{
 		schema:  info.TableName.Schema,
 		table:   info.TableName.Table,
-		version: info.UpdateTS(),
+		version: info.GetUpdateTS(),
 	}
 
 	_, ok := m.memo[key]
@@ -344,7 +344,7 @@ func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
 		log.Debug("table info not stored, since it already exists",
 			zap.String("schema", info.TableName.Schema),
 			zap.String("table", info.TableName.Table),
-			zap.Uint64("version", info.UpdateTS()))
+			zap.Uint64("version", info.GetUpdateTS()))
 		return
 	}
 
@@ -352,7 +352,7 @@ func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
 	log.Info("table info stored",
 		zap.String("schema", info.TableName.Schema),
 		zap.String("table", info.TableName.Table),
-		zap.Uint64("version", info.UpdateTS()))
+		zap.Uint64("version", info.GetUpdateTS()))
 }
 
 // Read returns the table info with the exact (schema, table, version)

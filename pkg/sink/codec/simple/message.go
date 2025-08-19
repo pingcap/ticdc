@@ -227,7 +227,7 @@ func newTableSchema(tableInfo *commonType.TableInfo) *TableSchema {
 		Schema:  tableInfo.TableName.Schema,
 		Table:   tableInfo.TableName.Table,
 		TableID: tableInfo.TableName.TableID,
-		Version: tableInfo.UpdateTS(),
+		Version: tableInfo.GetUpdateTS(),
 		Columns: columns,
 		Indexes: indexes,
 	}
@@ -328,7 +328,7 @@ func (a *jsonMarshaller) newDMLMessage(
 		TableID:            event.GetTableID(),
 		CommitTs:           event.CommitTs,
 		BuildTs:            time.Now().UnixMilli(),
-		SchemaVersion:      event.TableInfo.UpdateTS(),
+		SchemaVersion:      event.TableInfo.GetUpdateTS(),
 		HandleKeyOnly:      onlyHandleKey,
 		ClaimCheckLocation: claimCheckFileName,
 	}
