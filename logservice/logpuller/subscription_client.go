@@ -532,7 +532,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		if region.isStopped() {
 			for _, rs := range stores {
 				for _, worker := range rs.requestWorkers {
-					worker.add(ctx, region)
+					worker.add(ctx, region, true)
 				}
 			}
 			continue
@@ -546,7 +546,24 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		store := getStore(region.rpcCtx.Addr)
 		worker := store.getRequestWorker()
-		worker.add(ctx, region)
+		force := regionTask.Priority() == int(TaskHighPrior)
+
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+		err := worker.add(ctx, region, force)
+		cancel()
+
+		if err != nil {
+			if errors.Cause(err) == context.DeadlineExceeded {
+				s.regionTaskQueue.Push(regionTask)
+				continue
+			} else {
+				log.Warn("subscription client add region request failed",
+					zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+					zap.Uint64("regionID", region.verID.GetID()),
+					zap.Error(err))
+				return err
+			}
+		}
 
 		log.Debug("subscription client will request a region",
 			zap.Uint64("workID", worker.workerID),

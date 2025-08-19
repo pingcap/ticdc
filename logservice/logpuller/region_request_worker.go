@@ -491,8 +491,8 @@ func (s *regionRequestWorker) clearRegionStates() map[SubscriptionID]regionFeedS
 
 // add adds a region request to the worker's cache
 // It blocks if the cache is full until there's space or ctx is cancelled
-func (s *regionRequestWorker) add(ctx context.Context, region regionInfo) error {
-	return s.requestCache.add(ctx, region)
+func (s *regionRequestWorker) add(ctx context.Context, region regionInfo, force bool) error {
+	return s.requestCache.add(ctx, region, force)
 }
 
 func (s *regionRequestWorker) clearPendingRegions() []regionInfo {

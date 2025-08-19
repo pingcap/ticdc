@@ -66,14 +66,14 @@ func newRequestCache(maxPendingCount int) *requestCache {
 
 // add adds a new region request to the cache
 // It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
-func (c *requestCache) add(ctx context.Context, region regionInfo) error {
+func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) error {
 	start := time.Now()
-	ticker := time.NewTicker(time.Millisecond * 5)
+	ticker := time.NewTicker(time.Millisecond * 2)
 	defer ticker.Stop()
 
 	for {
 		current := c.pendingCount.Load()
-		if current < c.maxPendingCount {
+		if current < c.maxPendingCount || force {
 			// Try to add the request
 			req := regionReq{
 				regionInfo: region,
