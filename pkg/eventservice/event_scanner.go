@@ -109,6 +109,12 @@ func (s *eventScanner) scan(
 	dataRange common.DataRange,
 	limit scanLimit,
 ) ([]event.Event, bool, error) {
+	log.Info("scanner starts scanning",
+		zap.Any("dispatcherID", dispatcherStat.id),
+		zap.Uint64("startTs", dataRange.StartTs),
+		zap.Uint64("lastScannedStartTs", dataRange.LastScannedStartTs),
+		zap.Uint64("endTs", dataRange.EndTs))
+
 	// Initialize scan session
 	sess := newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()

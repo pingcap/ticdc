@@ -210,11 +210,11 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 
 		lastStartTs = dml.GetStartTs()
 		lastCommitTs = dml.GetCommitTs()
-		log.Debug("send dml event to dispatcher", zap.Stringer("dispatcher", d.id),
-			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
 	d.lastScannedCommitTs.Store(lastCommitTs)
 	d.lastScannedStartTs.Store(lastStartTs)
+	log.Info("update scanner progress", zap.Stringer("dispatcher", d.id),
+		zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	doSendDML(batchEvent)
 }
 
@@ -251,6 +251,8 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 		d.getEventSenderState())
 	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
+	log.Info("update scanner progress by the resolved-ts",
+		zap.Uint64("lastCommitTs", d.lastScannedCommitTs.Load()), zap.Uint64("lastStartTs", d.lastScannedStartTs.Load()))
 	metricEventServiceSendResolvedTsCount.Inc()
 }
 
