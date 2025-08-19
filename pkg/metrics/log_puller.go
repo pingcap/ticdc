@@ -68,4 +68,5 @@ func InitLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
+	registry.MustRegister(SubscriptionClientAddRegionRequestCost)
 }
