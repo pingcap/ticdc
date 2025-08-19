@@ -87,10 +87,10 @@ type TableInfo struct {
 
 	Sequence *model.SequenceInfo `json:"sequence"`
 
-	// UpdateTS is used to record the timestamp of updating the table's schema information.
-	// These changing schema operations don't include 'truncate table', 'rename table',
-	// 'truncate partition' and 'exchange partition'.
-	UpdateTS uint64 `json:"update_timestamp"`
+	// // UpdateTS is used to record the timestamp of updating the table's schema information.
+	// // These changing schema operations don't include 'truncate table', 'rename table',
+	// // 'truncate partition' and 'exchange partition'.
+	// UpdateTS uint64 `json:"update_timestamp"`
 
 	preSQLs struct {
 		isInitialized atomic.Bool
@@ -203,7 +203,7 @@ func (ti *TableInfo) GetPKIndex() []int64 {
 // These changing schema operations don't include 'truncate table', 'rename table',
 // 'rename tables', 'truncate partition' and 'exchange partition'.
 func (ti *TableInfo) GetUpdateTS() uint64 {
-	return ti.UpdateTS
+	return ti.columnSchema.UpdateTS
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
