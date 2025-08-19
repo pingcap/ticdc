@@ -29,6 +29,16 @@ const (
 	TaskLowPrior
 )
 
+func (t TaskType) String() string {
+	switch t {
+	case TaskHighPrior:
+		return "high"
+	case TaskLowPrior:
+		return "low"
+	}
+	return "unknown"
+}
+
 // PriorityTask is the interface for priority-based tasks
 // It implements heap.Item interface
 type PriorityTask interface {

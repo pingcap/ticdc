@@ -524,6 +524,11 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		region := regionTask.GetRegionInfo()
+		log.Info("fizz cdc handle region task",
+			zap.String("priority", TaskType(regionTask.Priority()).String()),
+			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+			zap.Uint64("regionID", region.verID.GetID()))
+
 		if region.isStopped() {
 			for _, rs := range stores {
 				for _, worker := range rs.requestWorkers {
