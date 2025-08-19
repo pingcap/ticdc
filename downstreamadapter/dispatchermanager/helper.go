@@ -14,7 +14,6 @@
 package dispatchermanager
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 
@@ -164,11 +163,9 @@ func (w *Watermark) Set(watermark *heartbeatpb.Watermark) {
 }
 
 func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler] {
-	option := dynstream.NewOption()
-	option.BatchCount = 1024
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
-		&SchedulerDispatcherRequestHandler{}, option)
+		&SchedulerDispatcherRequestHandler{}, dynstream.NewOption())
 	ds.Start()
 	return ds
 }
@@ -189,8 +186,8 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 
 func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	// If req is about remove dispatcher, then there will only be one request in reqs.
-	infos := map[common.DispatcherID]dispatcherCreateInfo{}
-	redoInfos := map[common.DispatcherID]dispatcherCreateInfo{}
+	infos := make([]dispatcherCreateInfo, 0, len(reqs))
+	redoInfos := make([]dispatcherCreateInfo, 0, len(reqs))
 	for _, req := range reqs {
 		if req.ScheduleDispatcherRequest == nil {
 			log.Warn("scheduleDispatcherRequest is nil, skip")
@@ -207,9 +204,9 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 				SchemaID:  config.SchemaID,
 			}
 			if config.IsRedo {
-				redoInfos[dispatcherID] = info
+				redoInfos = append(redoInfos, info)
 			} else {
-				infos[dispatcherID] = info
+				infos = append(infos, info)
 			}
 		case heartbeatpb.ScheduleAction_Remove:
 			if len(reqs) != 1 {
@@ -222,17 +219,27 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 			}
 		}
 	}
-
+	handleErr := func(err error) {
+		select {
+		case dispatcherManager.errCh <- err:
+			log.Error("new redo dispatcher meet error", zap.String("ChangefeedID", dispatcherManager.changefeedID.String()),
+				zap.Error(err))
+		default:
+			log.Error("error channel is full, discard error",
+				zap.Any("ChangefeedID", dispatcherManager.changefeedID.String()),
+				zap.Error(err))
+		}
+	}
 	if len(redoInfos) > 0 {
 		err := dispatcherManager.newRedoDispatchers(redoInfos, false)
 		if err != nil {
-			dispatcherManager.handleError(context.Background(), err)
+			handleErr(err)
 		}
 	}
 	if len(infos) > 0 {
 		err := dispatcherManager.newEventDispatchers(infos, false)
 		if err != nil {
-			dispatcherManager.handleError(context.Background(), err)
+			handleErr(err)
 		}
 	}
 	return false
