@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -105,9 +106,10 @@ The workflow related to the dispatcher is as follows:
 */
 
 type BasicDispatcher struct {
-	id        common.DispatcherID
-	schemaID  int64
-	tableSpan *heartbeatpb.TableSpan
+	changefeedID common.ChangeFeedID
+	id           common.DispatcherID
+	schemaID     int64
+	tableSpan    *heartbeatpb.TableSpan
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
 	startTs            uint64
 	startTsIsSyncpoint bool
@@ -120,12 +122,30 @@ type BasicDispatcher struct {
 	creationPDTs uint64
 	// componentStatus is the status of the dispatcher, such as working, removing, stopped.
 	componentStatus *ComponentStateWithMutex
+	// the config of filter
+	filterConfig *eventpb.FilterConfig
 
-	// Shared info containing all common configuration and resources
-	sharedInfo *SharedInfo
-
-	// sink is the sink for this dispatcher
+	// shared by the event dispatcher manager
 	sink sink.Sink
+
+	// statusesChan is used to store the status of dispatchers when status changed
+	// and push to heartbeatRequestQueue
+	statusesChan chan TableSpanStatusWithSeq
+	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
+	// shared by the event dispatcher manager
+	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
+
+	// schemaIDToDispatchers is shared in the DispatcherManager,
+	// it store all the infos about schemaID->Dispatchers
+	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
+	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
+	schemaIDToDispatchers *SchemaIDToDispatchers
+
+	timezone        string
+	integrityConfig *eventpb.IntegrityConfig
+
+	// if syncPointInfo is not nil, means enable Sync Point feature,
+	syncPointConfig *syncpoint.SyncPointConfig
 
 	// the max resolvedTs received by the dispatcher
 	resolvedTs uint64
@@ -148,40 +168,67 @@ type BasicDispatcher struct {
 
 	isRemoving atomic.Bool
 
-	seq            uint64
-	dispatcherType int
+	// errCh is used to collect the errors that need to report to maintainer
+	// such as error of flush ddl events
+	// errCh is shared in the DispatcherManager
+	errCh chan error
+
+	bdrMode              bool
+	seq                  uint64
+	dispatcherType       int
+	outputRawChangeEvent bool
 
 	BootstrapState bootstrapState
 }
 
 func NewBasicDispatcher(
+	changefeedID common.ChangeFeedID,
 	id common.DispatcherID,
 	tableSpan *heartbeatpb.TableSpan,
-	startTs uint64,
-	schemaID int64,
-	startTsIsSyncpoint bool,
-	currentPDTs uint64,
-	dispatcherType int,
 	sink sink.Sink,
-	sharedInfo *SharedInfo,
+	startTs uint64,
+	statusesChan chan TableSpanStatusWithSeq,
+	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
+	schemaID int64,
+	schemaIDToDispatchers *SchemaIDToDispatchers,
+	timezone string,
+	integrityConfig *eventpb.IntegrityConfig,
+	syncPointConfig *syncpoint.SyncPointConfig,
+	startTsIsSyncpoint bool,
+	filterConfig *eventpb.FilterConfig,
+	currentPdTs uint64,
+	errCh chan error,
+	bdrMode bool,
+	outputRawChangeEvent bool,
+	dispatcherType int,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                 id,
-		tableSpan:          tableSpan,
-		startTs:            startTs,
-		startTsIsSyncpoint: startTsIsSyncpoint,
-		sharedInfo:         sharedInfo,
-		sink:               sink,
-		componentStatus:    newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		resolvedTs:         startTs,
-		isRemoving:         atomic.Bool{},
-		blockEventStatus:   BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:      NewTableProgress(),
-		schemaID:           schemaID,
-		resendTaskMap:      newResendTaskMap(),
-		creationPDTs:       currentPDTs,
-		dispatcherType:     dispatcherType,
-		BootstrapState:     BootstrapFinished,
+		changefeedID:          changefeedID,
+		id:                    id,
+		tableSpan:             tableSpan,
+		sink:                  sink,
+		startTs:               startTs,
+		startTsIsSyncpoint:    startTsIsSyncpoint,
+		statusesChan:          statusesChan,
+		blockStatusesChan:     blockStatusesChan,
+		timezone:              timezone,
+		integrityConfig:       integrityConfig,
+		syncPointConfig:       syncPointConfig,
+		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		resolvedTs:            startTs,
+		filterConfig:          filterConfig,
+		isRemoving:            atomic.Bool{},
+		blockEventStatus:      BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:         NewTableProgress(),
+		schemaID:              schemaID,
+		schemaIDToDispatchers: schemaIDToDispatchers,
+		resendTaskMap:         newResendTaskMap(),
+		creationPDTs:          currentPdTs,
+		errCh:                 errCh,
+		bdrMode:               bdrMode,
+		dispatcherType:        dispatcherType,
+		outputRawChangeEvent:  outputRawChangeEvent,
+		BootstrapState:        BootstrapFinished,
 	}
 
 	return dispatcher
@@ -252,7 +299,7 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	log.Info("update dispatcher status to working",
 		zap.Stringer("dispatcher", d.id),
-		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.Stringer("changefeedID", d.changefeedID),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)),
 		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 		zap.Uint64("resolvedTs", d.GetResolvedTs()),
@@ -262,7 +309,7 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	addToStatusDynamicStream(d)
 	// set the dispatcher to working status
 	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
-	d.sharedInfo.statusesChan <- TableSpanStatusWithSeq{
+	d.statusesChan <- TableSpanStatusWithSeq{
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
 			ID:              d.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
@@ -275,10 +322,10 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 
 func (d *BasicDispatcher) HandleError(err error) {
 	select {
-	case d.sharedInfo.errCh <- err:
+	case d.errCh <- err:
 	default:
 		log.Error("error channel is full, discard error",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+			zap.Stringer("changefeedID", d.changefeedID),
 			zap.Stringer("dispatcherID", d.id),
 			zap.Error(err))
 	}
@@ -495,7 +542,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 
 		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
-		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
+		d.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{
 				IsBlocked:   true,
@@ -589,7 +636,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 			} else {
 				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
 			}
-			d.sharedInfo.blockStatusesChan <- message
+			d.blockStatusesChan <- message
 		}
 	} else {
 		d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
@@ -622,7 +669,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint: true,
 				}
 				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-				d.sharedInfo.blockStatusesChan <- message
+				d.blockStatusesChan <- message
 			}
 		} else {
 			message := &heartbeatpb.TableSpanBlockStatus{
@@ -644,7 +691,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 				IsSyncPoint: false,
 			}
 			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-			d.sharedInfo.blockStatusesChan <- message
+			d.blockStatusesChan <- message
 		}
 	}
 
@@ -669,7 +716,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					return
 				} else {
 					d.schemaID = schemaIDChange.NewSchemaID
-					d.sharedInfo.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
+					d.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
 					return
 				}
 			}
@@ -733,7 +780,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 			d.tableSchemaStore.Clear()
 		}
 		log.Info("dispatcher component has stopped and is ready for cleanup",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+			zap.Stringer("changefeedID", d.changefeedID),
 			zap.Stringer("dispatcher", d.id),
 			zap.Bool("isRedo", IsRedoDispatcher(d)),
 			zap.String("table", common.FormatTableSpan(d.tableSpan)),
@@ -746,9 +793,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		zap.Stringer("dispatcher", d.id),
 		zap.Bool("isRedo", IsRedoDispatcher(d)),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
-		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
-		zap.Int("tableProgressLen", d.tableProgress.Len()),
-		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
+		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()))
 	return w, false
 }
 
@@ -757,13 +802,13 @@ func (d *BasicDispatcher) removeDispatcher() {
 	log.Info("remove dispatcher",
 		zap.Stringer("dispatcher", d.id),
 		zap.Bool("isRedo", IsRedoDispatcher(d)),
-		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.Stringer("changefeedID", d.changefeedID),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+			zap.Stringer("changefeedID", d.changefeedID),
 			zap.Stringer("dispatcher", d.id),
 			zap.String("table", common.FormatTableSpan(d.tableSpan)),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
