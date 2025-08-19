@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
 )
@@ -51,7 +50,6 @@ type Manager struct {
 	coordinatorVersion int64
 
 	selfNode *node.Info
-	pdAPI    pdutil.PDAPIClient
 
 	// msgCh is used to cache messages from coordinator
 	msgCh chan *messaging.TargetMessage
@@ -63,7 +61,6 @@ type Manager struct {
 // and register message handler to message center
 func NewMaintainerManager(selfNode *node.Info,
 	conf *config.SchedulerConfig,
-	pdAPI pdutil.PDAPIClient,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	m := &Manager{
@@ -73,7 +70,6 @@ func NewMaintainerManager(selfNode *node.Info,
 		selfNode:      selfNode,
 		msgCh:         make(chan *messaging.TargetMessage, 1024),
 		taskScheduler: threadpool.NewThreadPoolDefault(),
-		pdAPI:         pdAPI,
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
@@ -227,8 +223,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Uint64("checkpointTs", req.CheckpointTs),
 			zap.Any("config", cfConfig))
 	}
-	maintainer := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
-		m.pdAPI, req.CheckpointTs, req.IsNewChangefeed)
+	maintainer := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed)
 	m.maintainers.Store(cfID, maintainer)
 	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	return nil
@@ -251,7 +246,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		}
 		// it's cascade remove, we should remove the dispatcher from all node
 		// here we create a maintainer to run the remove the dispatcher logic
-		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler, m.pdAPI)
+		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler)
 		m.maintainers.Store(cfID, cf)
 	}
 	cf.(*Maintainer).pushEvent(&Event{

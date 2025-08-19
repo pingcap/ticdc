@@ -346,11 +346,6 @@ type columnSchema struct {
 	// IsCommonHandle is true when clustered index feature is
 	// enabled and the primary key is not a single integer column.
 	IsCommonHandle bool `json:"is_common_handle"`
-	// UpdateTS is used to record the timestamp of updating the table's schema information.
-	// These changing schema operations don't include 'truncate table', 'rename table',
-	// 'truncate partition' and 'exchange partition'.
-	UpdateTS uint64 `json:"update_timestamp"`
-
 	// rest fields are generated
 	// ColumnID -> offset in model.TableInfo.Columns
 	ColumnsOffset map[int64]int `json:"columns_offset"`
@@ -429,7 +424,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		Indices:          tableInfo.Indices,
 		PKIsHandle:       tableInfo.PKIsHandle,
 		IsCommonHandle:   tableInfo.IsCommonHandle,
-		UpdateTS:         tableInfo.UpdateTS,
 		ColumnsOffset:    make(map[int64]int, len(tableInfo.Columns)),
 		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
 		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),

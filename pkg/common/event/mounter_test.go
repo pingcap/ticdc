@@ -735,7 +735,7 @@ func TestDecodeToChunk(t *testing.T) {
 	ddlJob := helper.DDL2Job("create table t(id int primary key)")
 	require.NotNil(t, ddlJob)
 	tableInfo := helper.GetTableInfo(ddlJob)
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	dmls := []string{
 		"insert into t values(1)",
 		"insert into t values(2)",

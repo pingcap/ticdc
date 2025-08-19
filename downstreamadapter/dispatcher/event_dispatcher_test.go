@@ -52,28 +52,32 @@ func getUncompleteTableSpan() *heartbeatpb.TableSpan {
 func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *EventDispatcher {
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	return NewEventDispatcher(
+	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(),
-		common.NewDispatcherID(),
-		tableSpan,
-		sink,
-		common.Ts(0), // startTs
-		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
-		1, // schemaID
-		NewSchemaIDToDispatchers(),
 		"system",
+		false,
+		false,
+		nil,
 		nil,
 		&syncpoint.SyncPointConfig{
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		}, // syncPointConfig
-		false,
-		nil,          // filterConfig
-		common.Ts(0), // pdTs
+		make(chan TableSpanStatusWithSeq, 128),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		NewSchemaIDToDispatchers(),
 		make(chan error, 1),
+	)
+	return NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(0), // startTs
+		1,            // schemaID
 		false,
-		false,
+		common.Ts(0), // pdTs
+		TypeDispatcherEvent,
+		sink,
+		sharedInfo,
 		false,
 		&redoTs,
 	)

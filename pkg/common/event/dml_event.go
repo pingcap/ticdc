@@ -192,8 +192,8 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		return
 	}
 
-	if b.TableInfo != nil && b.TableInfo.UpdateTS() != tableInfo.UpdateTS() {
-		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.UpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.UpdateTS()))
+	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
+		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
 		return
 	}
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
@@ -338,8 +338,16 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		rawKv *common.RawKVEntry,
 		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error),
 ) error {
+	// Some transactions could generate empty row change event, such as
+	// begin; insert into t (id) values (1); delete from t where id=1; commit;
+	// Just ignore these row changed events
+	// See https://github.com/pingcap/tiflow/issues/2612 for more details.
+	if len(raw.Value) == 0 && len(raw.OldValue) == 0 {
+		log.Debug("the value and old_value of the raw kv entry are both nil, skip it", zap.String("raw", raw.String()))
+		return nil
+	}
 	rowType := RowTypeInsert
-	if raw.OpType == common.OpTypeDelete {
+	if raw.IsDelete() {
 		rowType = RowTypeDelete
 	}
 	if raw.IsUpdate() {
@@ -349,6 +357,9 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
 	if err != nil {
 		return err
+	}
+	if count <= 0 {
+		log.Panic("DMLEvent.AppendRow: no rows decoded from the raw KV entry", zap.String("raw", raw.String()))
 	}
 	for range count {
 		t.RowTypes = append(t.RowTypes, rowType)

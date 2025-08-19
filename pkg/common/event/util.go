@@ -222,7 +222,7 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 	require.True(s.t, ok)
 	batchDMLEvent := NewBatchDMLEvent()
 	did := common.NewDispatcherID()
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	physicalTableID := tableInfo.TableName.TableID
 	for _, dml := range dmls {
 		dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
@@ -242,7 +242,7 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 	require.True(s.t, ok)
 
 	did := common.NewDispatcherID()
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	physicalTableID := s.partitionIDs[key][partition]
 	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
@@ -266,7 +266,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	physicalTableID := tableInfo.TableName.TableID
 	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
@@ -295,7 +295,7 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	physicalTableID := tableInfo.TableName.TableID
 	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
@@ -334,7 +334,7 @@ func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, dele
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	physicalTableID := tableInfo.TableName.TableID
 	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
@@ -366,7 +366,7 @@ func (s *EventTestHelper) ExecuteDeleteDml(schema, table string, dml string) {
 	key := toTableInfosKey(schema, table)
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	physicalTableID := tableInfo.TableName.TableID
 
 	_ = s.DML2RawKv(physicalTableID, ts, dml)

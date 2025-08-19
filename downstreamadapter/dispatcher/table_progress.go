@@ -117,6 +117,18 @@ func (p *TableProgress) Pass(event commonEvent.FlushableEvent) {
 	p.maxCommitTs = getFinalCommitTs(event)
 }
 
+func (p *TableProgress) Len() int {
+	p.rwMutex.RLock()
+	defer p.rwMutex.RUnlock()
+	return p.list.Len()
+}
+
+func (p *TableProgress) MaxCommitTs() uint64 {
+	p.rwMutex.RLock()
+	defer p.rwMutex.RUnlock()
+	return p.maxCommitTs
+}
+
 // GetCheckpointTs returns the current checkpoint timestamp for the table span.
 // It returns:
 // 1. The commitTs of the earliest unflushed event minus 1, if there are unflushed events.

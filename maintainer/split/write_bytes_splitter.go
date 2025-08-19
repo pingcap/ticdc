@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"go.uber.org/zap"
 )
@@ -41,12 +42,11 @@ type splitRegionsInfo struct {
 
 func newWriteSplitter(
 	changefeedID common.ChangeFeedID,
-	pdAPIClient pdutil.PDAPIClient,
 	writeKeyThreshold int,
 ) *writeSplitter {
 	return &writeSplitter{
 		changefeedID:      changefeedID,
-		pdAPIClient:       pdAPIClient,
+		pdAPIClient:       appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient),
 		writeKeyThreshold: writeKeyThreshold,
 	}
 }

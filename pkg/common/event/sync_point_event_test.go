@@ -20,49 +20,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolvedEvent(t *testing.T) {
-	did := common.NewDispatcherID()
-	e := ResolvedEvent{
-		Version:      ResolvedEventVersion,
-		DispatcherID: did,
-		ResolvedTs:   123,
+func TestSyncpointEvent(t *testing.T) {
+	e := SyncPointEvent{
+		State:        EventSenderStatePaused,
+		DispatcherID: common.NewDispatcherID(),
+		CommitTsList: []uint64{100, 102},
+		Seq:          1000,
 		Epoch:        10,
+		Version:      SyncPointEventVersion,
 	}
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize()))
 
-	var e2 ResolvedEvent
+	var e2 SyncPointEvent
 	err = e2.Unmarshal(data)
 	require.NoError(t, err)
 	require.Equal(t, e, e2)
 }
 
-func TestBatchResolvedTs(t *testing.T) {
-	did := common.NewDispatcherID()
-	did2 := common.NewDispatcherID()
-	e := ResolvedEvent{
-		Version:      ResolvedEventVersion,
-		DispatcherID: did,
-		ResolvedTs:   123,
+func TestSyncpointEventWithEmtpyCommitTsList(t *testing.T) {
+	e := SyncPointEvent{
+		State:        EventSenderStateNormal,
+		DispatcherID: common.NewDispatcherID(),
+		CommitTsList: []uint64{},
+		Seq:          1000,
 		Epoch:        10,
+		Version:      SyncPointEventVersion,
 	}
-	e2 := ResolvedEvent{
-		Version:      ResolvedEventVersion,
-		DispatcherID: did2,
-		ResolvedTs:   456,
-		Epoch:        11,
-	}
-
-	b := BatchResolvedEvent{
-		Events: []ResolvedEvent{e, e2},
-	}
-	data, err := b.Marshal()
+	data, err := e.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, int(e.GetSize())*2)
+	require.Len(t, data, int(e.GetSize()))
 
-	var b2 BatchResolvedEvent
-	err = b2.Unmarshal(data)
+	var e2 SyncPointEvent
+	err = e2.Unmarshal(data)
 	require.NoError(t, err)
-	require.Equal(t, b, b2)
+	require.Equal(t, e, e2)
 }

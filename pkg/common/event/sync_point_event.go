@@ -14,12 +14,19 @@
 package event
 
 import (
-	"encoding/json"
+	"encoding/binary"
+	"fmt"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"go.uber.org/zap"
 )
 
 var _ Event = &SyncPointEvent{}
+
+const (
+	SyncPointEventVersion = 1
+)
 
 // Implement Event / FlushEvent / BlockEvent interface
 // CommitTsList contains the commit ts of sync point.
@@ -27,14 +34,15 @@ var _ Event = &SyncPointEvent{}
 // Otherwise, the commitTsList only contains one commit ts.
 type SyncPointEvent struct {
 	// State is the state of sender when sending this event.
-	State        EventSenderState    `json:"state"`
-	DispatcherID common.DispatcherID `json:"dispatcher_id"`
-	CommitTsList []uint64            `json:"commit_ts_list"`
+	State        EventSenderState
+	DispatcherID common.DispatcherID
+	CommitTsList []uint64
 	// The seq of the event. It is set by event service.
-	Seq uint64 `json:"seq"`
+	Seq uint64
 	// The epoch of the event. It is set by event service.
-	Epoch          uint64   `json:"epoch"`
-	PostTxnFlushed []func() `msg:"-"`
+	Epoch          uint64
+	Version        byte
+	PostTxnFlushed []func()
 }
 
 func (e *SyncPointEvent) GetType() int {
@@ -58,16 +66,12 @@ func (e *SyncPointEvent) GetStartTs() common.Ts {
 }
 
 func (e *SyncPointEvent) GetSize() int64 {
-	return int64(e.State.GetSize() + e.DispatcherID.GetSize() + 8*len(e.CommitTsList))
+	// Version(1) + Seq(8) + Epoch(8) + State(1) + DispatcherID(16) + len(CommitTsList) + 8 * len(CommitTsList)
+	return 1 + 8*2 + int64(e.State.GetSize()+e.DispatcherID.GetSize()+4+8*len(e.CommitTsList))
 }
 
 func (e *SyncPointEvent) IsPaused() bool {
 	return e.State.IsPaused()
-}
-
-func (e SyncPointEvent) Marshal() ([]byte, error) {
-	// TODO: optimize it
-	return json.Marshal(e)
 }
 
 func (e SyncPointEvent) GetSeq() uint64 {
@@ -76,11 +80,6 @@ func (e SyncPointEvent) GetSeq() uint64 {
 
 func (e SyncPointEvent) GetEpoch() uint64 {
 	return e.Epoch
-}
-
-func (e *SyncPointEvent) Unmarshal(data []byte) error {
-	// TODO: optimize it
-	return json.Unmarshal(data, e)
 }
 
 func (e *SyncPointEvent) GetBlockedTables() *InfluencedTables {
@@ -120,5 +119,72 @@ func (e *SyncPointEvent) ClearPostFlushFunc() {
 }
 
 func (e *SyncPointEvent) Len() int32 {
-	return 0
+	return 1
+}
+
+func (e SyncPointEvent) Marshal() ([]byte, error) {
+	return e.encode()
+}
+
+func (e *SyncPointEvent) Unmarshal(data []byte) error {
+	return e.decode(data)
+}
+
+func (e SyncPointEvent) encode() ([]byte, error) {
+	if e.Version != SyncPointEventVersion {
+		log.Panic("SyncPointEvent: invalid version",
+			zap.Uint64("expected", SyncPointEventVersion), zap.Uint8("received", e.Version))
+	}
+	return e.encodeV0()
+}
+
+func (e *SyncPointEvent) decode(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("SyncPointEvent.decode: empty data")
+	}
+	e.Version = data[0]
+	if e.Version != SyncPointEventVersion {
+		return fmt.Errorf("SyncPointEvent: invalid version, expect %d, got %d", SyncPointEventVersion, e.Version)
+	}
+	return e.decodeV0(data)
+}
+
+func (e SyncPointEvent) encodeV0() ([]byte, error) {
+	data := make([]byte, e.GetSize())
+	offset := 0
+	data[offset] = e.Version
+	offset += 1
+	binary.BigEndian.PutUint64(data[offset:], uint64(e.Seq))
+	offset += 8
+	binary.BigEndian.PutUint64(data[offset:], e.Epoch)
+	offset += 8
+	binary.BigEndian.PutUint32(data[offset:], uint32(len(e.CommitTsList)))
+	offset += 4
+	for _, ts := range e.CommitTsList {
+		binary.BigEndian.PutUint64(data[offset:], ts)
+		offset += 8
+	}
+	copy(data[offset:], e.State.encode())
+	offset += e.State.GetSize()
+	copy(data[offset:], e.DispatcherID.Marshal())
+	offset += e.DispatcherID.GetSize()
+	return data, nil
+}
+
+func (e *SyncPointEvent) decodeV0(data []byte) error {
+	offset := 1 // Skip version byte
+	e.Seq = common.Ts(binary.BigEndian.Uint64(data[offset:]))
+	offset += 8
+	e.Epoch = binary.BigEndian.Uint64(data[offset:])
+	offset += 8
+	count := binary.BigEndian.Uint32(data[offset:])
+	offset += 4
+	e.CommitTsList = make([]uint64, count)
+	for i := uint32(0); i < count; i++ {
+		e.CommitTsList[i] = binary.BigEndian.Uint64(data[offset:])
+		offset += 8
+	}
+	e.State.decode(data[offset:])
+	offset += e.State.GetSize()
+	return e.DispatcherID.Unmarshal(data[offset:])
 }

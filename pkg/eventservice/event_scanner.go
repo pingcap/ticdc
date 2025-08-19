@@ -287,7 +287,7 @@ func (s *eventScanner) commitTxn(
 		return nil
 	}
 	// Check if batch should be flushed
-	tableUpdated := resolvedBatch.TableInfo.UpdateTS() != updateTs
+	tableUpdated := resolvedBatch.TableInfo.GetUpdateTS() != updateTs
 	hasNewDDL := merger.hasPendingDDLs(untilTs)
 	if hasNewDDL || tableUpdated {
 		events := merger.appendDMLEvent(resolvedBatch)
