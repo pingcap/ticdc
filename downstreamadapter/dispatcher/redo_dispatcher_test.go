@@ -33,27 +33,22 @@ func redoCallback() {
 }
 
 func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *RedoDispatcher {
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(),
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		nil, // redo dispatcher doesn't need syncPointConfig
-		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
-		NewSchemaIDToDispatchers(),
-		make(chan error, 1),
-	)
 	return NewRedoDispatcher(
+		common.NewChangefeedID(),
 		common.NewDispatcherID(),
 		tableSpan,
-		common.Ts(0), // startTs
-		1,            // schemaID
-		false,        // startTsIsSyncpoint
 		sink,
-		sharedInfo,
+		common.Ts(0), // startTs
+		make(chan TableSpanStatusWithSeq, 128),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		1, // schemaID
+		NewSchemaIDToDispatchers(),
+		"system",
+		nil,
+		nil, // filterConfig
+		make(chan error, 1),
+		false,
+		false,
 	)
 }
 

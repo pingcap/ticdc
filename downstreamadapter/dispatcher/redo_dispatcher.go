@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -37,24 +38,40 @@ type RedoDispatcher struct {
 
 // RedoDispatcher is similar with BasicDispatcher.
 func NewRedoDispatcher(
+	changefeedID common.ChangeFeedID,
 	id common.DispatcherID,
 	tableSpan *heartbeatpb.TableSpan,
+	redoSink sink.Sink,
 	startTs uint64,
+	statusesChan chan TableSpanStatusWithSeq,
+	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	schemaID int64,
-	startTsIsSyncpoint bool,
-	sink sink.Sink,
-	sharedInfo *SharedInfo,
+	schemaIDToDispatchers *SchemaIDToDispatchers,
+	timezone string,
+	integrityConfig *eventpb.IntegrityConfig,
+	filterConfig *eventpb.FilterConfig,
+	errCh chan error,
+	bdrMode bool,
+	outputRawChangeEvent bool,
 ) *RedoDispatcher {
 	basicDispatcher := NewBasicDispatcher(
-		id,
-		tableSpan,
+		changefeedID,
+		id, tableSpan, redoSink,
 		startTs,
+		statusesChan,
+		blockStatusesChan,
 		schemaID,
-		startTsIsSyncpoint,
+		schemaIDToDispatchers,
+		timezone,
+		integrityConfig,
+		nil,
+		false,
+		filterConfig,
 		0,
+		errCh,
+		bdrMode,
+		outputRawChangeEvent,
 		TypeDispatcherRedo,
-		sink,
-		sharedInfo,
 	)
 	dispatcher := &RedoDispatcher{
 		BasicDispatcher: basicDispatcher,
@@ -89,7 +106,7 @@ func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
 	}
 	ctx := context.Background()
 	ctx, rd.cancel = context.WithCancel(ctx)
-	rd.redoMeta = redo.NewRedoMeta(rd.sharedInfo.changefeedID, rd.startTs, cfg)
+	rd.redoMeta = redo.NewRedoMeta(rd.changefeedID, rd.startTs, cfg)
 	go func() {
 		err := rd.redoMeta.PreStart(ctx)
 		if err != nil {
