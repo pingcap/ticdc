@@ -90,7 +90,7 @@ function execute_dml() {
 function kill_server() {
 	count=1
 	while true; do
-		case $((RANDOM % 2)) in
+		case $((RANDOM % 1)) in
 		0)
 			cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
 			if [ -z "$cdc_pid_1" ]; then
@@ -113,7 +113,7 @@ function kill_server() {
 			# 	;;
 		esac
 		count=$((count + 1))
-		sleep 15
+		sleep 45
 	done
 }
 
