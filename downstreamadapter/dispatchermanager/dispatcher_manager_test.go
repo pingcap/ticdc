@@ -43,29 +43,25 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 	}
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	sharedInfo := dispatcher.NewSharedInfo(
-		manager.changefeedID,
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		nil,
-		make(chan dispatcher.TableSpanStatusWithSeq, 1),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
-		dispatcher.NewSchemaIDToDispatchers(),
-		make(chan error, 1),
-	)
 	d := dispatcher.NewEventDispatcher(
+		manager.changefeedID,
 		id,
 		span,
-		0,
-		0,
-		false,
-		0, // currentPDTs
-		dispatcher.TypeDispatcherEvent,
 		mockSink,
-		sharedInfo,
+		0,
+		make(chan dispatcher.TableSpanStatusWithSeq, 1),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
+		0,
+		dispatcher.NewSchemaIDToDispatchers(),
+		"system",
+		nil,
+		nil,
+		false,
+		nil,
+		0,
+		make(chan error, 1),
+		false,
+		false,
 		false,
 		&redoTs,
 	)
@@ -79,10 +75,12 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	manager := &DispatcherManager{
 		changefeedID:            changefeedID,
 		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
+		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),
 		sink:                    mockSink,
 		latestWatermark:         NewWatermark(0),
+		errCh:                   make(chan error, 1),
 		closing:                 atomic.Bool{},
 		pdClock:                 pdutil.NewClock4Test(),
 		config: &config.ChangefeedConfig{
@@ -94,21 +92,6 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		metricCheckpointTsLag:      metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTsLag:        metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 	}
-
-	// Create shared info for the test manager
-	manager.sharedInfo = dispatcher.NewSharedInfo(
-		manager.changefeedID,
-		"system",
-		manager.config.BDRMode,
-		false, // outputRawChangeEvent
-		nil,   // integrityConfig
-		nil,   // filterConfig
-		nil,   // syncPointConfig
-		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
-		dispatcher.NewSchemaIDToDispatchers(),
-		make(chan error, 1),
-	)
 	nodeID := node.NewID()
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)

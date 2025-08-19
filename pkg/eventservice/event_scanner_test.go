@@ -625,7 +625,7 @@ func TestDMLProcessorProcessNewTransaction(t *testing.T) {
 		// Verify that the DML event uses the correct table info
 		require.NotNil(t, processor.currentDML)
 		require.Equal(t, differentTableInfo, processor.currentDML.TableInfo)
-		require.Equal(t, differentTableInfo.GetUpdateTS(), processor.currentDML.TableInfo.GetUpdateTS())
+		require.Equal(t, differentTableInfo.UpdateTS(), processor.currentDML.TableInfo.UpdateTS())
 	})
 
 	// Test case 4: Multiple consecutive transactions

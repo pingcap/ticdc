@@ -83,15 +83,14 @@ func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.D
 	if e.redoTableTriggerEventDispatcher != nil {
 		log.Error("redo table trigger event dispatcher existed!")
 	}
-	infos := map[common.DispatcherID]dispatcherCreateInfo{}
-	dispatcherID := common.NewDispatcherIDFromPB(id)
-	infos[dispatcherID] = dispatcherCreateInfo{
-		Id:        dispatcherID,
-		TableSpan: common.DDLSpan,
-		StartTs:   startTs,
-		SchemaID:  0,
-	}
-	err := e.newRedoDispatchers(infos, newChangefeed)
+	err := e.newRedoDispatchers([]dispatcherCreateInfo{
+		{
+			Id:        common.NewDispatcherIDFromPB(id),
+			TableSpan: common.DDLSpan,
+			StartTs:   startTs,
+			SchemaID:  0,
+		},
+	}, newChangefeed)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -106,7 +105,7 @@ func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.D
 	return nil
 }
 
-func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
+func (e *DispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
 
 	dispatcherIds, tableIds, startTsList, tableSpans, schemaIds := prepareCreateDispatcher(infos, e.redoDispatcherMap)
@@ -129,14 +128,19 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 
 	for idx, id := range dispatcherIds {
 		rd := dispatcher.NewRedoDispatcher(
-			id,
-			tableSpans[idx],
+			e.changefeedID,
+			id, tableSpans[idx], e.redoSink,
 			uint64(newStartTsList[idx]),
+			e.statusesChan,
+			e.blockStatusesChan,
 			schemaIds[idx],
-			false, // startTsIsSyncpoint
-			e.redoSink,
-			e.sharedInfo,
-		)
+			e.redoSchemaIDToDispatchers,
+			e.config.TimeZone,
+			e.integrityConfig,
+			e.filterConfig,
+			e.errCh,
+			e.config.BDRMode,
+			e.outputRawChangeEvent)
 		if e.heartBeatTask == nil {
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
@@ -227,7 +231,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 	//         3. whether the dispatcherIDs belong to the same table
 	//         4. whether the dispatcherIDs have consecutive ranges
 	//         5. whether the dispatcher in working status.
-	ok := prepareMergeDispatcher(e.changefeedID, dispatcherIDs, e.redoDispatcherMap, mergedDispatcherID, e.sharedInfo.GetStatusesChan())
+	ok := prepareMergeDispatcher(e.changefeedID, dispatcherIDs, e.redoDispatcherMap, mergedDispatcherID, e.statusesChan)
 	if !ok {
 		return nil
 	}
@@ -238,13 +242,21 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 	}
 
 	mergedDispatcher := dispatcher.NewRedoDispatcher(
+		e.changefeedID,
 		mergedDispatcherID,
 		mergedSpan,
-		fakeStartTs, // real startTs will be calculated later.
-		schemaID,
-		false, // startTsIsSyncpoint
 		e.redoSink,
-		e.sharedInfo,
+		fakeStartTs, // real startTs will be calculated later.
+		e.statusesChan,
+		e.blockStatusesChan,
+		schemaID,
+		e.redoSchemaIDToDispatchers,
+		e.config.TimeZone,
+		e.integrityConfig,
+		e.filterConfig,
+		e.errCh,
+		e.config.BDRMode,
+		e.outputRawChangeEvent,
 	)
 
 	log.Info("new redo dispatcher created(merge dispatcher)",
