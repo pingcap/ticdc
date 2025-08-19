@@ -1568,7 +1568,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	defer helper.Close()
 	ddlEvent, _ := genEvents(helper, `create table test.t(id int primary key, c char(50))`)
 	mockSS.AppendDDLEvent(tableID, ddlEvent)
-	ts := ddlEvent.TableInfo.UpdateTS()
+	ts := ddlEvent.TableInfo.GetUpdateTS()
 
 	schemaStore := &schemaStoreWithErr{mockSchemaStore: mockSS}
 	scanner := newEventScanner(broker.eventStore, schemaStore, &mockMounter{})
