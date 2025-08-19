@@ -259,10 +259,6 @@ func (g *replicationGroup[T, R]) GetTaskSizePerNode() map[node.ID]int {
 	return res
 }
 
-func (g *replicationGroup[T, R]) IsReplicating(replica R) bool {
-	return g.replicating.Find(replica.GetID())
-}
-
 type iMap[T ReplicationID, R Replication[T]] struct {
 	inner sync.Map
 }
