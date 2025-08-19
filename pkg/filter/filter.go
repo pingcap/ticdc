@@ -286,7 +286,8 @@ var (
 
 type FilterWithConfig struct {
 	Filter
-	Config *eventpb.FilterConfig
+	config   *eventpb.FilterConfig
+	timeZone string
 }
 
 type SharedFilterStorage struct {
@@ -307,12 +308,13 @@ func GetSharedFilterStorage() *SharedFilterStorage {
 func (s *SharedFilterStorage) GetOrSetFilter(
 	changeFeedID common.ChangeFeedID,
 	cfg *eventpb.FilterConfig,
+	timeZone string,
 ) (Filter, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if f, ok := s.m[changeFeedID]; ok {
-		if !isFilterConfigEqual(f.Config, cfg) {
-			log.Info("filter config changed, need to rebuild filter", zap.Any("preConfig", f.Config), zap.Any("newConfig", cfg))
+		if !isFilterConfigEqual(f.config, cfg) || f.timeZone != timeZone {
+			log.Info("filter config changed, need to rebuild filter", zap.Any("preConfig", f.config), zap.Any("newConfig", cfg), zap.String("preTimeZone", f.timeZone), zap.String("newTimeZone", timeZone))
 		} else {
 			return f.Filter, nil
 		}
@@ -338,13 +340,14 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 		filterCfg.EventFilters = append(filterCfg.EventFilters, f)
 	}
 	// generate table filter
-	f, err := NewFilter(filterCfg, "", cfg.CaseSensitive, cfg.ForceReplicate)
+	f, err := NewFilter(filterCfg, timeZone, cfg.CaseSensitive, cfg.ForceReplicate)
 	if err != nil {
 		return nil, err
 	}
 	s.m[changeFeedID] = FilterWithConfig{
-		Filter: f,
-		Config: cfg,
+		Filter:   f,
+		config:   cfg,
+		timeZone: timeZone,
 	}
 	return f, nil
 }

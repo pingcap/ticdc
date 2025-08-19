@@ -88,14 +88,15 @@ func TestSharedFilterStorage_SameConfigSharesFilter(t *testing.T) {
 
 	changeFeedID := createTestChangeFeedID("test-changefeed")
 	cfg := createTestFilterConfig()
+	timeZone := "UTC"
 
 	// First call - should create new filter
-	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg)
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg, timeZone)
 	require.NoError(t, err)
 	require.NotNil(t, filter1)
 
 	// Second call with same config - should return same filter
-	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg)
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg, timeZone)
 	require.NoError(t, err)
 	require.NotNil(t, filter2)
 
@@ -111,14 +112,15 @@ func TestSharedFilterStorage_SameConfigContentSharesFilter(t *testing.T) {
 	changeFeedID := createTestChangeFeedID("test-changefeed")
 	cfg1 := createTestFilterConfig()
 	cfg2 := createTestFilterConfig() // Create separate config object with same content
+	timeZone := "UTC"
 
 	// First call - should create new filter
-	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1)
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1, timeZone)
 	require.NoError(t, err)
 	require.NotNil(t, filter1)
 
 	// Second call with different config object but same content - should return same filter
-	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2)
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2, timeZone)
 	require.NoError(t, err)
 	require.NotNil(t, filter2)
 
@@ -135,14 +137,15 @@ func TestSharedFilterStorage_DifferentConfigCreatesNewFilter(t *testing.T) {
 	cfg1 := createTestFilterConfig()
 	cfg2 := createTestFilterConfig()
 	cfg2.CaseSensitive = true // Different configuration
+	timeZone := "UTC"
 
 	// First call with cfg1
-	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1)
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1, timeZone)
 	require.NoError(t, err)
 	require.NotNil(t, filter1)
 
 	// Second call with cfg2 - should create new filter
-	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2)
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2, timeZone)
 	require.NoError(t, err)
 	require.NotNil(t, filter2)
 
@@ -159,13 +162,14 @@ func TestSharedFilterStorage_DifferentChangeFeedIDCreatesIndependentFilter(t *te
 	changeFeedID2 := createTestChangeFeedID("test-changefeed-2")
 	cfg1 := createTestFilterConfig()
 	cfg2 := createTestFilterConfigWithRules([]string{"test.*"}) // Create different config content
+	timeZone := "UTC"
 
 	// Call with different changeFeedID and different config objects with different content
-	filter1, err := storage.GetOrSetFilter(changeFeedID1, cfg1)
+	filter1, err := storage.GetOrSetFilter(changeFeedID1, cfg1, timeZone)
 	require.NoError(t, err)
 	require.NotNil(t, filter1)
 
-	filter2, err := storage.GetOrSetFilter(changeFeedID2, cfg2)
+	filter2, err := storage.GetOrSetFilter(changeFeedID2, cfg2, timeZone)
 	require.NoError(t, err)
 	require.NotNil(t, filter2)
 
@@ -182,11 +186,12 @@ func TestSharedFilterStorage_CaseSensitiveFieldDifference(t *testing.T) {
 	cfg1 := createTestFilterConfig()
 	cfg2 := createTestFilterConfig()
 	cfg2.CaseSensitive = true
+	timeZone := "UTC"
 
-	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1)
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1, timeZone)
 	require.NoError(t, err)
 
-	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2)
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2, timeZone)
 	require.NoError(t, err)
 
 	assertFilterInstancesDifferent(t, filter1, filter2)
@@ -201,11 +206,12 @@ func TestSharedFilterStorage_ForceReplicateFieldDifference(t *testing.T) {
 	cfg1 := createTestFilterConfig()
 	cfg2 := createTestFilterConfig()
 	cfg2.ForceReplicate = true
+	timeZone := "UTC"
 
-	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1)
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1, timeZone)
 	require.NoError(t, err)
 
-	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2)
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2, timeZone)
 	require.NoError(t, err)
 
 	assertFilterInstancesDifferent(t, filter1, filter2)
@@ -219,11 +225,12 @@ func TestSharedFilterStorage_RulesFieldDifference(t *testing.T) {
 	changeFeedID := createTestChangeFeedID("test-changefeed")
 	cfg1 := createTestFilterConfigWithRules([]string{"*.*"})
 	cfg2 := createTestFilterConfigWithRules([]string{"test.*"})
+	timeZone := "UTC"
 
-	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1)
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1, timeZone)
 	require.NoError(t, err)
 
-	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2)
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2, timeZone)
 	require.NoError(t, err)
 
 	assertFilterInstancesDifferent(t, filter1, filter2)
@@ -238,11 +245,12 @@ func TestSharedFilterStorage_IgnoreTxnStartTsFieldDifference(t *testing.T) {
 	cfg1 := createTestFilterConfig()
 	cfg2 := createTestFilterConfig()
 	cfg2.FilterConfig.IgnoreTxnStartTs = []uint64{123456}
+	timeZone := "UTC"
 
-	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1)
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1, timeZone)
 	require.NoError(t, err)
 
-	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2)
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2, timeZone)
 	require.NoError(t, err)
 
 	assertFilterInstancesDifferent(t, filter1, filter2)
@@ -256,11 +264,12 @@ func TestSharedFilterStorage_EventFiltersFieldDifference(t *testing.T) {
 	changeFeedID := createTestChangeFeedID("test-changefeed")
 	cfg1 := createTestFilterConfig()
 	cfg2 := createTestFilterConfigWithEventFilters([]*eventpb.EventFilterRule{createTestEventFilterRule()})
+	timeZone := "UTC"
 
-	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1)
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1, timeZone)
 	require.NoError(t, err)
 
-	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2)
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2, timeZone)
 	require.NoError(t, err)
 
 	assertFilterInstancesDifferent(t, filter1, filter2)
@@ -272,6 +281,7 @@ func TestSharedFilterStorage_ComplexEventFiltersDifference(t *testing.T) {
 	}
 
 	changeFeedID := createTestChangeFeedID("test-changefeed")
+	timeZone := "UTC"
 
 	// Create first config with one event filter
 	eventFilter1 := createTestEventFilterRule()
@@ -283,10 +293,10 @@ func TestSharedFilterStorage_ComplexEventFiltersDifference(t *testing.T) {
 	eventFilter2.Matcher = []string{"test2.*"}
 	cfg2 := createTestFilterConfigWithEventFilters([]*eventpb.EventFilterRule{eventFilter2})
 
-	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1)
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg1, timeZone)
 	require.NoError(t, err)
 
-	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2)
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg2, timeZone)
 	require.NoError(t, err)
 
 	assertFilterInstancesDifferent(t, filter1, filter2)
@@ -307,8 +317,9 @@ func TestSharedFilterStorage_EmptyConfigTest(t *testing.T) {
 			EventFilters:     []*eventpb.EventFilterRule{},
 		},
 	}
+	timeZone := "UTC"
 
-	filter, err := storage.GetOrSetFilter(changeFeedID, cfg)
+	filter, err := storage.GetOrSetFilter(changeFeedID, cfg, timeZone)
 	require.NoError(t, err)
 	require.NotNil(t, filter)
 }
@@ -320,6 +331,7 @@ func TestSharedFilterStorage_ConcurrentAccessTest(t *testing.T) {
 
 	changeFeedID := createTestChangeFeedID("test-changefeed")
 	cfg := createTestFilterConfig()
+	timeZone := "UTC"
 
 	// Test concurrent access with same config
 	done := make(chan bool, 2)
@@ -327,12 +339,12 @@ func TestSharedFilterStorage_ConcurrentAccessTest(t *testing.T) {
 	var err1, err2 error
 
 	go func() {
-		filter1, err1 = storage.GetOrSetFilter(changeFeedID, cfg)
+		filter1, err1 = storage.GetOrSetFilter(changeFeedID, cfg, timeZone)
 		done <- true
 	}()
 
 	go func() {
-		filter2, err2 = storage.GetOrSetFilter(changeFeedID, cfg)
+		filter2, err2 = storage.GetOrSetFilter(changeFeedID, cfg, timeZone)
 		done <- true
 	}()
 
@@ -347,4 +359,39 @@ func TestSharedFilterStorage_ConcurrentAccessTest(t *testing.T) {
 
 	// Both should return the same filter instance due to sharing
 	assertFilterInstancesEqual(t, filter1, filter2)
+}
+
+func TestSharedFilterStorage_TimeZoneDifference(t *testing.T) {
+	storage := &SharedFilterStorage{
+		m: make(map[common.ChangeFeedID]FilterWithConfig),
+	}
+
+	changeFeedID := createTestChangeFeedID("test-changefeed")
+	// Create config with expression filters to make timezone difference more apparent
+	cfg := createTestFilterConfigWithEventFilters([]*eventpb.EventFilterRule{
+		{
+			Matcher:                  []string{"test.*"},
+			IgnoreEvent:              []string{},
+			IgnoreSql:                []string{},
+			IgnoreInsertValueExpr:    "id > 1000",
+			IgnoreUpdateNewValueExpr: "",
+			IgnoreUpdateOldValueExpr: "",
+			IgnoreDeleteValueExpr:    "",
+		},
+	})
+	timeZone1 := "UTC"
+	timeZone2 := "Asia/Shanghai"
+
+	// First call with UTC timezone
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg, timeZone1)
+	require.NoError(t, err)
+	require.NotNil(t, filter1)
+
+	// Second call with different timezone - should create new filter
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg, timeZone2)
+	require.NoError(t, err)
+	require.NotNil(t, filter2)
+
+	// Verify different timezone creates different filter instances
+	assertFilterInstancesDifferent(t, filter1, filter2)
 }
