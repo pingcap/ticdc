@@ -16,6 +16,7 @@ package filter
 import (
 	"sync"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
@@ -364,114 +365,6 @@ func isFilterConfigEqual(cfg1, cfg2 *eventpb.FilterConfig) bool {
 		return false
 	}
 
-	// Compare top-level fields
-	if cfg1.CaseSensitive != cfg2.CaseSensitive {
-		return false
-	}
-	if cfg1.ForceReplicate != cfg2.ForceReplicate {
-		return false
-	}
-
-	// Compare FilterConfig
-	if cfg1.FilterConfig == nil && cfg2.FilterConfig == nil {
-		return true
-	}
-	if cfg1.FilterConfig == nil || cfg2.FilterConfig == nil {
-		return false
-	}
-
-	inner1 := cfg1.FilterConfig
-	inner2 := cfg2.FilterConfig
-
-	// Compare Rules
-	if len(inner1.Rules) != len(inner2.Rules) {
-		return false
-	}
-	for i, rule := range inner1.Rules {
-		if rule != inner2.Rules[i] {
-			return false
-		}
-	}
-
-	// Compare IgnoreTxnStartTs
-	if len(inner1.IgnoreTxnStartTs) != len(inner2.IgnoreTxnStartTs) {
-		return false
-	}
-	for i, ts := range inner1.IgnoreTxnStartTs {
-		if ts != inner2.IgnoreTxnStartTs[i] {
-			return false
-		}
-	}
-
-	// Compare EventFilters
-	if len(inner1.EventFilters) != len(inner2.EventFilters) {
-		return false
-	}
-	for i, rule1 := range inner1.EventFilters {
-		rule2 := inner2.EventFilters[i]
-		if !isEventFilterRuleEqual(rule1, rule2) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// isEventFilterRuleEqual compares two EventFilterRule for equality by content
-func isEventFilterRuleEqual(rule1, rule2 *eventpb.EventFilterRule) bool {
-	// Fast path: if pointers are equal, rules are definitely equal
-	if rule1 == rule2 {
-		return true
-	}
-
-	// Handle nil cases
-	if rule1 == nil || rule2 == nil {
-		return false
-	}
-
-	// Compare Matcher
-	if len(rule1.Matcher) != len(rule2.Matcher) {
-		return false
-	}
-	for i, matcher := range rule1.Matcher {
-		if matcher != rule2.Matcher[i] {
-			return false
-		}
-	}
-
-	// Compare IgnoreEvent
-	if len(rule1.IgnoreEvent) != len(rule2.IgnoreEvent) {
-		return false
-	}
-	for i, event := range rule1.IgnoreEvent {
-		if event != rule2.IgnoreEvent[i] {
-			return false
-		}
-	}
-
-	// Compare IgnoreSql
-	if len(rule1.IgnoreSql) != len(rule2.IgnoreSql) {
-		return false
-	}
-	for i, sql := range rule1.IgnoreSql {
-		if sql != rule2.IgnoreSql[i] {
-			return false
-		}
-	}
-
-	// Compare expression fields
-	if rule1.IgnoreInsertValueExpr != rule2.IgnoreInsertValueExpr {
-		return false
-	}
-	if rule1.IgnoreUpdateNewValueExpr != rule2.IgnoreUpdateNewValueExpr {
-		return false
-	}
-	if rule1.IgnoreUpdateOldValueExpr != rule2.IgnoreUpdateOldValueExpr {
-		return false
-	}
-	if rule1.IgnoreDeleteValueExpr != rule2.IgnoreDeleteValueExpr {
-		return false
-	}
-
-	return true
+	// Use protobuf's built-in Equal method for content comparison
+	return proto.Equal(cfg1, cfg2)
 }
