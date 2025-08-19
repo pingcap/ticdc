@@ -332,14 +332,6 @@ func (s *subscriptionClient) Subscribe(
 		log.Panic("subscription client subscribe with zero TableID")
 		return
 	}
-	log.Info("subscribes span",
-		zap.Uint64("subscriptionID", uint64(subID)),
-		zap.String("span", span.String()))
-	defer func() {
-		log.Info("subscribes span done",
-			zap.Uint64("subscriptionID", uint64(subID)),
-			zap.String("span", span.String()))
-	}()
 
 	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval)
 	s.totalSpans.Lock()
@@ -348,7 +340,6 @@ func (s *subscriptionClient) Subscribe(
 
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
-
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode}
 }
 

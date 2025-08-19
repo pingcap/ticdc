@@ -92,6 +92,9 @@ func (p *ddlJobFetcher) run(startTs uint64) {
 			p.tryAdvanceResolvedTs(subID, ts)
 		}
 		p.subClient.Subscribe(subID, span, startTs, p.input, advanceSubSpanResolvedTs, 0, ddlPullerFilterLoop)
+		log.Info("ddl job fetcher subscribes span done",
+			zap.Uint64("subscriptionID", uint64(subID)), zap.Int64("tableID", span.TableID),
+			zap.Any("startKey", span.StartKey), zap.Any("endKey", span.EndKey))
 	}
 }
 
