@@ -284,16 +284,21 @@ var (
 	storage *SharedFilterStorage
 )
 
+type FilterWithConfig struct {
+	Filter
+	Config *eventpb.FilterConfig
+}
+
 type SharedFilterStorage struct {
 	// Each dispatcher in the same changefeed will share the same filter storage.
-	m     map[common.ChangeFeedID]Filter
+	m     map[common.ChangeFeedID]FilterWithConfig
 	mutex sync.Mutex
 }
 
 func GetSharedFilterStorage() *SharedFilterStorage {
 	once.Do(func() {
 		storage = &SharedFilterStorage{
-			m: make(map[common.ChangeFeedID]Filter),
+			m: make(map[common.ChangeFeedID]FilterWithConfig),
 		}
 	})
 	return storage
@@ -302,13 +307,15 @@ func GetSharedFilterStorage() *SharedFilterStorage {
 func (s *SharedFilterStorage) GetOrSetFilter(
 	changeFeedID common.ChangeFeedID,
 	cfg *eventpb.FilterConfig,
-	tz string,
-	caseSensitive bool,
 ) (Filter, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if f, ok := s.m[changeFeedID]; ok {
-		return f, nil
+		if !isFilterConfigEqual(f.Config, cfg) {
+			log.Info("filter config changed, need to rebuild filter", zap.Any("preConfig", f.Config), zap.Any("newConfig", cfg))
+		} else {
+			return f.Filter, nil
+		}
 	}
 	// convert eventpb.FilterConfig to config.FilterConfig
 	filterCfg := &config.FilterConfig{
@@ -331,10 +338,137 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 		filterCfg.EventFilters = append(filterCfg.EventFilters, f)
 	}
 	// generate table filter
-	f, err := NewFilter(filterCfg, tz, cfg.CaseSensitive, cfg.ForceReplicate)
+	f, err := NewFilter(filterCfg, "", cfg.CaseSensitive, cfg.ForceReplicate)
 	if err != nil {
 		return nil, err
 	}
-	s.m[changeFeedID] = f
+	s.m[changeFeedID] = FilterWithConfig{
+		Filter: f,
+		Config: cfg,
+	}
 	return f, nil
+}
+
+// isFilterConfigEqual compares two FilterConfig for equality by content
+func isFilterConfigEqual(cfg1, cfg2 *eventpb.FilterConfig) bool {
+	// Fast path: if pointers are equal, configs are definitely equal
+	if cfg1 == cfg2 {
+		return true
+	}
+
+	// Handle nil cases
+	if cfg1 == nil || cfg2 == nil {
+		return false
+	}
+
+	// Compare top-level fields
+	if cfg1.CaseSensitive != cfg2.CaseSensitive {
+		return false
+	}
+	if cfg1.ForceReplicate != cfg2.ForceReplicate {
+		return false
+	}
+
+	// Compare FilterConfig
+	if cfg1.FilterConfig == nil && cfg2.FilterConfig == nil {
+		return true
+	}
+	if cfg1.FilterConfig == nil || cfg2.FilterConfig == nil {
+		return false
+	}
+
+	inner1 := cfg1.FilterConfig
+	inner2 := cfg2.FilterConfig
+
+	// Compare Rules
+	if len(inner1.Rules) != len(inner2.Rules) {
+		return false
+	}
+	for i, rule := range inner1.Rules {
+		if rule != inner2.Rules[i] {
+			return false
+		}
+	}
+
+	// Compare IgnoreTxnStartTs
+	if len(inner1.IgnoreTxnStartTs) != len(inner2.IgnoreTxnStartTs) {
+		return false
+	}
+	for i, ts := range inner1.IgnoreTxnStartTs {
+		if ts != inner2.IgnoreTxnStartTs[i] {
+			return false
+		}
+	}
+
+	// Compare EventFilters
+	if len(inner1.EventFilters) != len(inner2.EventFilters) {
+		return false
+	}
+	for i, rule1 := range inner1.EventFilters {
+		rule2 := inner2.EventFilters[i]
+		if !isEventFilterRuleEqual(rule1, rule2) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isEventFilterRuleEqual compares two EventFilterRule for equality by content
+func isEventFilterRuleEqual(rule1, rule2 *eventpb.EventFilterRule) bool {
+	// Fast path: if pointers are equal, rules are definitely equal
+	if rule1 == rule2 {
+		return true
+	}
+
+	// Handle nil cases
+	if rule1 == nil || rule2 == nil {
+		return false
+	}
+
+	// Compare Matcher
+	if len(rule1.Matcher) != len(rule2.Matcher) {
+		return false
+	}
+	for i, matcher := range rule1.Matcher {
+		if matcher != rule2.Matcher[i] {
+			return false
+		}
+	}
+
+	// Compare IgnoreEvent
+	if len(rule1.IgnoreEvent) != len(rule2.IgnoreEvent) {
+		return false
+	}
+	for i, event := range rule1.IgnoreEvent {
+		if event != rule2.IgnoreEvent[i] {
+			return false
+		}
+	}
+
+	// Compare IgnoreSql
+	if len(rule1.IgnoreSql) != len(rule2.IgnoreSql) {
+		return false
+	}
+	for i, sql := range rule1.IgnoreSql {
+		if sql != rule2.IgnoreSql[i] {
+			return false
+		}
+	}
+
+	// Compare expression fields
+	if rule1.IgnoreInsertValueExpr != rule2.IgnoreInsertValueExpr {
+		return false
+	}
+	if rule1.IgnoreUpdateNewValueExpr != rule2.IgnoreUpdateNewValueExpr {
+		return false
+	}
+	if rule1.IgnoreUpdateOldValueExpr != rule2.IgnoreUpdateOldValueExpr {
+		return false
+	}
+	if rule1.IgnoreDeleteValueExpr != rule2.IgnoreDeleteValueExpr {
+		return false
+	}
+
+	return true
 }
