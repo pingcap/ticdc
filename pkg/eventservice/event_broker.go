@@ -549,7 +549,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()),
 		zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()),
 		zap.Int("eventCount", len(events)),
-		zap.Any("events", events),,
+		zap.Any("events", events),
 		zap.Bool("interrupted", interrupted),
 		zap.String("range", dataRange.String()))
 
