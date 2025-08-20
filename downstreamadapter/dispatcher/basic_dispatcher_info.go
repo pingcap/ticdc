@@ -17,10 +17,74 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 )
+
+// SharedInfo contains all the shared configuration and resources
+// that are common across all dispatchers within a DispatcherManager.
+// This eliminates the need to pass these parameters individually to each dispatcher.
+type SharedInfo struct {
+	// Basic configuration
+	changefeedID         common.ChangeFeedID
+	timezone             string
+	bdrMode              bool
+	outputRawChangeEvent bool
+
+	// Configuration objects
+	integrityConfig *eventpb.IntegrityConfig
+	// the config of filter
+	filterConfig *eventpb.FilterConfig
+	// if syncPointInfo is not nil, means enable Sync Point feature,
+	syncPointConfig *syncpoint.SyncPointConfig
+
+	// Shared resources
+	// statusesChan is used to store the status of dispatchers when status changed
+	// and push to heartbeatRequestQueue
+	statusesChan chan TableSpanStatusWithSeq
+	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
+	// shared by the event dispatcher manager
+	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
+	// schemaIDToDispatchers is shared in the DispatcherManager,
+	// it store all the infos about schemaID->Dispatchers
+	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
+	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
+	schemaIDToDispatchers *SchemaIDToDispatchers
+	// errCh is used to collect the errors that need to report to maintainer
+	// such as error of flush ddl events
+	errCh chan error
+}
+
+// NewSharedInfo creates a new SharedInfo with the given parameters
+func NewSharedInfo(
+	changefeedID common.ChangeFeedID,
+	timezone string,
+	bdrMode bool,
+	outputRawChangeEvent bool,
+	integrityConfig *eventpb.IntegrityConfig,
+	filterConfig *eventpb.FilterConfig,
+	syncPointConfig *syncpoint.SyncPointConfig,
+	statusesChan chan TableSpanStatusWithSeq,
+	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
+	schemaIDToDispatchers *SchemaIDToDispatchers,
+	errCh chan error,
+) *SharedInfo {
+	return &SharedInfo{
+		changefeedID:          changefeedID,
+		timezone:              timezone,
+		bdrMode:               bdrMode,
+		outputRawChangeEvent:  outputRawChangeEvent,
+		integrityConfig:       integrityConfig,
+		filterConfig:          filterConfig,
+		syncPointConfig:       syncPointConfig,
+		statusesChan:          statusesChan,
+		blockStatusesChan:     blockStatusesChan,
+		schemaIDToDispatchers: schemaIDToDispatchers,
+		errCh:                 errCh,
+	}
+}
 
 func (d *BasicDispatcher) GetId() common.DispatcherID {
 	return d.id
@@ -35,7 +99,7 @@ func (d *BasicDispatcher) GetType() int {
 }
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
-	return d.changefeedID
+	return d.sharedInfo.changefeedID
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
@@ -51,7 +115,7 @@ func (d *BasicDispatcher) GetRemovingStatus() bool {
 }
 
 func (d *BasicDispatcher) EnableSyncPoint() bool {
-	return d.syncPointConfig != nil
+	return d.sharedInfo.syncPointConfig != nil
 }
 
 func (d *BasicDispatcher) SetSeq(seq uint64) {
@@ -59,23 +123,23 @@ func (d *BasicDispatcher) SetSeq(seq uint64) {
 }
 
 func (d *BasicDispatcher) GetBDRMode() bool {
-	return d.bdrMode
+	return d.sharedInfo.bdrMode
 }
 
 func (d *BasicDispatcher) GetTimezone() string {
-	return d.timezone
+	return d.sharedInfo.timezone
 }
 
 func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
-	return d.outputRawChangeEvent
+	return d.sharedInfo.outputRawChangeEvent
 }
 
 func (d *BasicDispatcher) GetFilterConfig() *eventpb.FilterConfig {
-	return d.filterConfig
+	return d.sharedInfo.filterConfig
 }
 
 func (d *BasicDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
-	return d.integrityConfig
+	return d.sharedInfo.integrityConfig
 }
 
 func (d *BasicDispatcher) GetStartTs() uint64 {
@@ -91,8 +155,8 @@ func (d *BasicDispatcher) GetStartTsIsSyncpoint() bool {
 }
 
 func (d *BasicDispatcher) GetSyncPointInterval() time.Duration {
-	if d.syncPointConfig != nil {
-		return d.syncPointConfig.SyncPointInterval
+	if d.sharedInfo.syncPointConfig != nil {
+		return d.sharedInfo.syncPointConfig.SyncPointInterval
 	}
 	return time.Duration(0)
 }
@@ -102,7 +166,7 @@ func (d *BasicDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 }
 
 func (d *BasicDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
-	return d.blockStatusesChan
+	return d.sharedInfo.blockStatusesChan
 }
 
 func (d *BasicDispatcher) GetEventSizePerSecond() float32 {
@@ -121,4 +185,25 @@ func (d *BasicDispatcher) SetStartTs(startTs uint64) {
 
 func (d *BasicDispatcher) SetCurrentPDTs(currentPDTs uint64) {
 	d.creationPDTs = currentPDTs
+}
+
+// SharedInfo methods
+func (s *SharedInfo) IsOutputRawChangeEvent() bool {
+	return s.outputRawChangeEvent
+}
+
+func (s *SharedInfo) GetSchemaIDToDispatchers() *SchemaIDToDispatchers {
+	return s.schemaIDToDispatchers
+}
+
+func (s *SharedInfo) GetStatusesChan() chan TableSpanStatusWithSeq {
+	return s.statusesChan
+}
+
+func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
+	return s.blockStatusesChan
+}
+
+func (s *SharedInfo) GetErrCh() chan error {
+	return s.errCh
 }
