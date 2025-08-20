@@ -110,7 +110,7 @@ func (s *eventScanner) scan(
 	limit scanLimit,
 ) ([]event.Event, bool, error) {
 	log.Info("scanner starts scanning",
-		zap.Any("dispatcherID", dispatcherStat.id),
+		zap.Any("dispatcherID", dispatcherStat.id), zap.Int64("tableID", dataRange.Span.TableID),
 		zap.Uint64("startTs", dataRange.StartTs),
 		zap.Uint64("lastScannedStartTs", dataRange.LastScannedStartTs),
 		zap.Uint64("endTs", dataRange.EndTs))

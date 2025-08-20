@@ -252,6 +252,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	log.Info("update scanner progress by the resolved-ts",
+		zap.Any("dispatcherID", d.id),
 		zap.Uint64("lastCommitTs", d.lastScannedCommitTs.Load()), zap.Uint64("lastStartTs", d.lastScannedStartTs.Load()))
 	metricEventServiceSendResolvedTsCount.Inc()
 }
