@@ -113,7 +113,7 @@ function kill_server() {
 			# 	;;
 		esac
 		count=$((count + 1))
-		sleep 45
+		sleep 30
 	done
 }
 
