@@ -295,6 +295,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	ticdcClusterID := config.GetGlobalServerConfig().ClusterID
 
 	query := selectDDLTsQuery(tableIDs, ticdcClusterID, changefeedID)
+	log.Info("query ddl ts table", zap.String("query", query))
 	rows, err := w.db.Query(query)
 	if err != nil {
 		if apperror.IsTableNotExistsErr(err) {
@@ -318,6 +319,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 		if err != nil {
 			return retStartTsList, isSyncpoints, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
+		log.Info("ddl ts table", zap.Int64("tableId", tableId), zap.String("tableNameInDDLJob", tableNameInDDLJob), zap.String("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Bool("finished", finished), zap.Bool("isSyncpoint", isSyncpoint))
 		if finished {
 			retStartTsList[tableIdIdxMap[tableId]] = ddlTs
 			isSyncpoints[tableIdIdxMap[tableId]] = isSyncpoint
