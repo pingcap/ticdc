@@ -371,7 +371,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	var validEvents []dispatcher.DispatcherEvent
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event) {
-			log.Info("receive data event from a stale epoch, ignore it",
+			log.Debug("receive data event from a stale epoch, ignore it",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.Any("event", events[0].Event),
