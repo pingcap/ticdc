@@ -154,6 +154,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	cfg *config.ChangeFeedInfo,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
+	pdAPI pdutil.PDAPIClient,
 	checkpointTs uint64,
 	newChangefeed bool,
 ) *Maintainer {
@@ -173,7 +174,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		controller: NewController(cfID, checkpointTs, taskScheduler,
+		controller: NewController(cfID, checkpointTs, pdAPI, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
@@ -232,13 +233,14 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	conf *config.SchedulerConfig,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
+	pdAPI pdutil.PDAPIClient,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false)
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI, 1, false)
 	m.cascadeRemoving = true
 	return m
 }

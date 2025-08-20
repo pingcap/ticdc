@@ -384,11 +384,6 @@ type columnSchema struct {
 	// PreSQL is used to restore pre-calculated sqls for insert/update/delete.
 	// When use, we just need to fmt.Sprintf(sql, QuotatableName) to get final SQL.
 	PreSQLs map[int]string `json:"pre_sqls"`
-
-	// UpdateTS is used to record the timestamp of updating the table's schema information.
-	// These changing schema operations don't include 'truncate table', 'rename table',
-	// 'truncate partition' and 'exchange partition'.
-	UpdateTS uint64 `json:"update_timestamp"`
 }
 
 func (s *columnSchema) Marshal() ([]byte, error) {
@@ -437,7 +432,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
 		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
 		PKIndex:          make([]int64, 0),
-		UpdateTS:         tableInfo.UpdateTS,
 	}
 
 	rowColumnsCurrentOffset := 0
