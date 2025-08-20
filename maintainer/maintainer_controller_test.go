@@ -15,9 +15,6 @@ package maintainer
 
 import (
 	"bytes"
-	"context"
-	"fmt"
-	"math/rand"
 	"testing"
 	"time"
 
@@ -30,13 +27,10 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
-	pkgOpearator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/tikv"
 )
 
 func TestSchedule(t *testing.T) {
@@ -54,7 +48,7 @@ func TestSchedule(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, nil, ddlSpan, 9, time.Minute)
+	controller := NewController(cfID, 1, nil, nil, ddlSpan, 9, time.Minute)
 	for i := 0; i < 10; i++ {
 		controller.spanController.AddNewTable(commonEvent.Table{
 			SchemaID: 1,
@@ -85,7 +79,7 @@ func TestRemoveAbsentTask(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, nil, ddlSpan, 9, time.Minute)
+	controller := NewController(cfID, 1, nil, nil, ddlSpan, 9, time.Minute)
 	controller.spanController.AddNewTable(commonEvent.Table{
 		SchemaID: 1,
 		TableID:  int64(1),
@@ -107,7 +101,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
 
 	nodeID := node.ID("node1")
 	for i := 0; i < 100; i++ {
@@ -178,7 +172,7 @@ func TestBalanceGlobalUneven(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
 	for i := 0; i < 100; i++ {
 		// generate 100 groups
 		totalSpan := common.TableIDToComparableSpan(int64(i))
@@ -252,7 +246,7 @@ func TestBalance(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
 	for i := 0; i < 100; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -318,7 +312,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
 	for i := 0; i < 2; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -360,7 +354,7 @@ func TestFinishBootstrap(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, &mockThreadPool{},
+	s := NewController(cfID, 1, &mockThreadPool{},
 		config.GetDefaultReplicaConfig(), ddlSpan, 1000, 0)
 	totalSpan := common.TableIDToComparableSpan(1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
@@ -430,7 +424,7 @@ func TestBalanceUnEvenTask(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, nil, ddlSpan, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, 1000, 0)
 
 	for i := 0; i < 4; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
@@ -666,259 +660,9 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 }
 */
 
-func TestDynamiSplitTableWhenScaleOut(t *testing.T) {
-	t.Skip("skip unimplemented test")
-}
-
-func TestDynamicMergeAndSplitTable(t *testing.T) {
-	t.Skip("skip flaky test")
-	pdAPI := &mockPdAPI{
-		regions: make(map[int64][]pdutil.RegionInfo),
-	}
-	regionCache := newMockRegionCache()
-	appcontext.SetService(appcontext.RegionCache, regionCache)
-	nodeManager := testutil.SetNodeManagerAndMessageCenter()
-	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
-	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		}, "node1")
-	s := NewController(cfID, 1,
-		pdAPI, nil, &config.ReplicaConfig{
-			Scheduler: &config.ChangefeedSchedulerConfig{
-				EnableTableAcrossNodes: true,
-				RegionThreshold:        0,
-				WriteKeyThreshold:      1,
-			},
-		}, ddlSpan, 1000, 0)
-	s.taskPool = &mockThreadPool{}
-
-	totalTables := 10
-	victim := rand.Intn(totalTables) + 1
-	for i := 1; i <= totalTables; i++ {
-		totalSpan := common.TableIDToComparableSpan(int64(i))
-		partialSpans := []*heartbeatpb.TableSpan{
-			{TableID: int64(i), StartKey: totalSpan.StartKey, EndKey: appendNew(totalSpan.StartKey, 'a')},
-			{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')},
-			{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'b'), EndKey: totalSpan.EndKey},
-		}
-		if i == victim {
-			// victim has hole, should not merged
-			k := i % 3
-			old := partialSpans
-			partialSpans = old[:k]
-			partialSpans = append(partialSpans, old[k+1:]...)
-		}
-		for idx, span := range partialSpans {
-			dispatcherID := common.NewDispatcherID()
-			spanReplica := replica.NewWorkingSpanReplication(cfID, dispatcherID, 1, span, &heartbeatpb.TableSpanStatus{
-				ID:                 dispatcherID.ToPB(),
-				ComponentStatus:    heartbeatpb.ComponentState_Working,
-				CheckpointTs:       10,
-				EventSizePerSecond: replica.HotSpanWriteThreshold,
-			}, node.ID(fmt.Sprintf("node%d", idx%2+1)))
-			if idx == 0 {
-				spanReplica.GetStatus().EventSizePerSecond = replica.HotSpanWriteThreshold * 100
-			}
-			s.spanController.AddReplicatingSpan(spanReplica)
-		}
-
-		// new split regions
-		pdAPI.regions[1] = []pdutil.RegionInfo{
-			pdutil.NewTestRegionInfo(1, totalSpan.StartKey, appendNew(totalSpan.StartKey, 'a'), uint64(1)),
-			pdutil.NewTestRegionInfo(2, appendNew(totalSpan.StartKey, 'a'), totalSpan.EndKey, uint64(1)),
-		}
-	}
-	replicas := s.spanController.GetReplicating()
-	require.Equal(t, totalTables*3-1, s.spanController.GetReplicatingSize())
-
-	scheduler := s.schedulerController.GetScheduler(scheduler.SplitScheduler)
-	scheduler.Execute()
-	require.Equal(t, 0, s.spanController.GetSchedulingSize())
-	require.Equal(t, totalTables*3-1, s.operatorController.OperatorSize())
-	finishedCnt := 0
-	for _, task := range replicas {
-		op := s.operatorController.GetOperator(task.ID)
-		op.Schedule()
-		op.Check("node1", &heartbeatpb.TableSpanStatus{
-			ID:              op.ID().ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Stopped,
-			CheckpointTs:    10,
-		})
-		if op.IsFinished() {
-			op.PostFinish()
-			finishedCnt++
-		}
-	}
-	require.Less(t, finishedCnt, totalTables*3-1)
-
-	// total 7 regions,
-	// table 1: split to 4 spans, will be inserted to absent
-	// table 2: split to 3 spans, will be inserted to absent
-	require.Equal(t, 7, s.spanController.GetAbsentSize())
-}
-
-func TestDynamicMergeTableBasic(t *testing.T) {
-	pdAPI := &mockPdAPI{
-		regions: make(map[int64][]pdutil.RegionInfo),
-	}
-	regionCache := newMockRegionCache()
-	appcontext.SetService(appcontext.RegionCache, regionCache)
-	nodeManager := testutil.SetNodeManagerAndMessageCenter()
-	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
-	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		}, "node1")
-	s := NewController(cfID, 1,
-		pdAPI, nil, &config.ReplicaConfig{
-			Scheduler: &config.ChangefeedSchedulerConfig{
-				EnableTableAcrossNodes: true,
-				RegionThreshold:        0,
-				WriteKeyThreshold:      1,
-				SplitNumberPerNode:     1,
-			},
-		}, ddlSpan, 1000, 0)
-	s.taskPool = &mockThreadPool{}
-
-	mockPDClock := pdutil.NewClockWithValue4Test(time.Unix(0, 0))
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
-	totalTables := 10
-	victim := rand.Intn(totalTables) + 1
-	var holeSpan *heartbeatpb.TableSpan
-	for i := 1; i <= totalTables; i++ {
-		totalSpan := common.TableIDToComparableSpan(int64(i))
-		partialSpans := []*heartbeatpb.TableSpan{
-			{TableID: int64(i), StartKey: totalSpan.StartKey, EndKey: appendNew(totalSpan.StartKey, 'a')},
-			{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')},
-			{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'b'), EndKey: totalSpan.EndKey},
-		}
-		if i == victim {
-			// victim has hole, should not merged
-			k := i % 3
-			old := partialSpans
-			holeSpan = old[k]
-			partialSpans = old[:k]
-			partialSpans = append(partialSpans, old[k+1:]...)
-		}
-		for idx, span := range partialSpans {
-			dispatcherID := common.NewDispatcherID()
-			spanReplica := replica.NewWorkingSpanReplication(cfID, dispatcherID, 1, span, &heartbeatpb.TableSpanStatus{
-				ID:                 dispatcherID.ToPB(),
-				ComponentStatus:    heartbeatpb.ComponentState_Working,
-				CheckpointTs:       10,
-				EventSizePerSecond: 0,
-			}, node.ID(fmt.Sprintf("node%d", idx%2+1)))
-			s.spanController.AddReplicatingSpan(spanReplica)
-		}
-	}
-
-	expected := (totalTables - 1) * 3
-	victimExpected := 2
-	replicas := s.spanController.GetReplicating()
-	require.Equal(t, expected+victimExpected, s.spanController.GetReplicatingSize())
-
-	scheduler := s.schedulerController.GetScheduler(scheduler.SplitScheduler)
-	for i := 0; i < replica.DefaultScoreThreshold; i++ {
-		scheduler.Execute()
-	}
-	scheduler.Execute() // dummy execute does not take effect
-	require.Equal(t, victimExpected, s.spanController.GetReplicatingSize())
-	require.Equal(t, expected, s.spanController.GetSchedulingSize())
-	require.Equal(t, expected, s.operatorController.OperatorSize())
-
-	primarys := make(map[int64]pkgOpearator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
-	for _, task := range replicas {
-		op := s.operatorController.GetOperator(task.ID)
-		if op == nil {
-			require.Equal(t, int64(victim), task.Span.GetTableID())
-			continue
-		}
-		op.Schedule()
-		op.Check(task.GetNodeID(), &heartbeatpb.TableSpanStatus{
-			ID:              op.ID().ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Stopped,
-			CheckpointTs:    10,
-		})
-		if op.IsFinished() {
-			op.PostFinish()
-		} else {
-			primarys[task.Span.GetTableID()] = op
-		}
-	}
-	for _, op := range primarys {
-		finished := op.IsFinished()
-		require.True(t, finished)
-		op.PostFinish()
-	}
-
-	require.Equal(t, totalTables-1, s.spanController.GetAbsentSize())
-
-	// merge the hole
-	dispatcherID := common.NewDispatcherID()
-	// the holeSpan is on node0, which is offlined
-	spanReplica := replica.NewWorkingSpanReplication(cfID, dispatcherID, 1, holeSpan, &heartbeatpb.TableSpanStatus{
-		ID:                 dispatcherID.ToPB(),
-		ComponentStatus:    heartbeatpb.ComponentState_Working,
-		CheckpointTs:       10,
-		EventSizePerSecond: 0,
-	}, node.ID(fmt.Sprintf("node%d", 0)))
-	s.spanController.AddReplicatingSpan(spanReplica)
-	replicas = s.spanController.GetReplicating()
-	require.Equal(t, 3, len(replicas))
-	for i := 0; i < replica.DefaultScoreThreshold; i++ {
-		scheduler.Execute()
-	}
-	require.Equal(t, 0, s.spanController.GetReplicatingSize())
-	require.Equal(t, 30, s.operatorController.OperatorSize())
-	primarys = make(map[int64]pkgOpearator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
-	for _, task := range replicas {
-		op := s.operatorController.GetOperator(task.ID)
-		op.Schedule()
-		op.Check(task.GetNodeID(), &heartbeatpb.TableSpanStatus{
-			ID:              op.ID().ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Stopped,
-			CheckpointTs:    10,
-		})
-		if op.IsFinished() {
-			op.PostFinish()
-		} else {
-			primarys[task.Span.GetTableID()] = op
-		}
-	}
-	for _, op := range primarys {
-		finished := op.IsFinished()
-		require.True(t, finished)
-		op.PostFinish()
-	}
-	require.Equal(t, totalTables, s.spanController.GetAbsentSize())
-}
-
 func appendNew(origin []byte, c byte) []byte {
 	nb := bytes.Clone(origin)
 	return append(nb, c)
-}
-
-type mockPdAPI struct {
-	pdutil.PDAPIClient
-	regions map[int64][]pdutil.RegionInfo
-}
-
-func (m *mockPdAPI) ScanRegions(_ context.Context, span heartbeatpb.TableSpan) ([]pdutil.RegionInfo, error) {
-	return m.regions[span.TableID], nil
 }
 
 type mockThreadPool struct {
@@ -931,18 +675,4 @@ func (m *mockThreadPool) Submit(_ threadpool.Task, _ time.Time) *threadpool.Task
 
 func (m *mockThreadPool) SubmitFunc(_ threadpool.FuncTask, _ time.Time) *threadpool.TaskHandle {
 	return nil
-}
-
-// mockCache mocks tikv.RegionCache.
-type mockCache struct{}
-
-// NewMockRegionCache returns a new MockCache.
-func newMockRegionCache() *mockCache {
-	return &mockCache{}
-}
-
-func (m *mockCache) LoadRegionsInKeyRange(
-	bo *tikv.Backoffer, startKey, endKey []byte,
-) (regions []*tikv.Region, err error) {
-	return nil, nil
 }
