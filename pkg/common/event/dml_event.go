@@ -508,13 +508,50 @@ func (t *DMLEvent) encode() ([]byte, error) {
 	return t.encodeV0()
 }
 
+// 	RowTypes []RowType `json:"row_types"`
+// 	// RowKeys is the keys of every row in the transaction.
+// 	RowKeys [][]byte `json:"row_keys"`
+
+// 	// Rows shares BatchDMLEvent rows
+// 	Rows *chunk.Chunk `json:"-"`
+
+// 	// TableInfo is the table info of the transaction.
+// 	// If the DMLEvent is send from a remote eventService, the TableInfo is nil.
+// 	TableInfo *common.TableInfo `json:"table_info"`
+// 	// TableInfoVersion record the table info version from last ddl event.
+// 	// include 'truncate table', 'rename table', 'rename tables', 'truncate partition' and 'exchange partition'.
+// 	TableInfoVersion uint64 `json:"-"`
+
+// 	// The following fields are set and used by dispatcher.
+// 	ReplicatingTs uint64 `json:"replicating_ts"`
+// 	// PostTxnFlushed is the functions to be executed after the transaction is flushed.
+// 	// It is set and used by dispatcher.
+// 	PostTxnFlushed []func() `json:"-"`
+
+// 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
+// 	eventSize int64 `json:"-"`
+// 	// offset is the offset of the current row in the transaction.
+// 	// It is internal field, not exported. So it doesn't need to be marshalled.
+// 	offset int `json:"-"`
+// 	// PreviousTotalOffset accumulates the offsets of all previous DML events to facilitate sharing the same chunk when using batch DML events.
+// 	// It is used to determine the correct offset for the chunk in batch DML operations.
+// 	PreviousTotalOffset int `json:"previous_total_offset"`
+
+// 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
+// 	// and TiCDC set the integrity check level to the correctness.
+// 	Checksum       []*integrity.Checksum `json:"-"`
+// 	checksumOffset int                   `json:"-"`
+// }
+
 func (t *DMLEvent) encodeV0() ([]byte, error) {
 	if t.Version != DMLEventVersion {
 		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
 		return nil, nil
 	}
-	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + len(t.RowTypes)
+	// Version(1) + DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
+	// Seq(8) + Epoch(8) + State(1) + Length(4) + AApproximateSize(8) + PreviousTotalOffset(4)
+	// + size of len(t.RowTypes)(4) + len(t.RowTypes)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + t.State.GetSize() + 4 + 8 + 4*2 + len(t.RowTypes)
 	size += 4 // len(t.RowKeys)
 	for i := 0; i < len(t.RowKeys); i++ {
 		size += 4 + len(t.RowKeys[i]) // size + contents of t.RowKeys[i]
@@ -545,6 +582,9 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	offset += 8
 	// Seq
 	binary.LittleEndian.PutUint64(buf[offset:], t.Seq)
+	offset += 8
+	// Epoch
+	binary.LittleEndian.PutUint64(buf[offset:], t.Epoch)
 	offset += 8
 	// State
 	copy(buf[offset:], t.State.encode())
@@ -587,7 +627,10 @@ func (t *DMLEvent) decode(data []byte) error {
 }
 
 func (t *DMLEvent) decodeV0(data []byte) error {
-	if len(data) < 1+16+8*5+4*3 {
+	// Version(1) + DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
+	// Seq(8) + Epoch(8) + State(1) + Length(4) + AApproximateSize(8) + PreviousTotalOffset(4)
+	// + size of len(t.RowTypes)(4)
+	if len(data) < 1+16+8*5+1+4+8+4*2 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
 	if t.Version != DMLEventVersion {
@@ -607,6 +650,8 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	t.CommitTs = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 	t.Seq = binary.LittleEndian.Uint64(data[offset:])
+	offset += 8
+	t.Epoch = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 	t.State.decode(data[offset:])
 	offset += t.State.GetSize()

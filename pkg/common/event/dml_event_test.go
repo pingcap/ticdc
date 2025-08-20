@@ -128,6 +128,8 @@ func TestEncodeAndDecodeV0(t *testing.T) {
 	require.NotNil(t, ddlJob)
 
 	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
+	dmlEvent.Seq = 1000
+	dmlEvent.Epoch = 10
 	require.NotNil(t, dmlEvent)
 
 	data, err := dmlEvent.encodeV0()
