@@ -30,37 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G01
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G02
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G03
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G04
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G05
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G06
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G07
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G01
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G02
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G03
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G04
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G05
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G06
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G14
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 	# G06
-	'cdc ddl_for_split_tables_with_failover ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
