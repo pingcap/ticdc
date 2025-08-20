@@ -294,6 +294,7 @@ func (e *DispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) boo
 	if e.redoTableTriggerEventDispatcher != nil {
 		e.redoTableTriggerEventDispatcher.UpdateMeta(checkpointTs, resolvedTs)
 	}
+	log.Error("SetGlobalRedoTs", zap.Any("pre", e.redoGlobalTs.Load()), zap.Any("redoGlobalTs", resolvedTs))
 	return util.CompareAndMonotonicIncrease(&e.redoGlobalTs, resolvedTs)
 }
 
