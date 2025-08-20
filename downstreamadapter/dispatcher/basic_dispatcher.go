@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 )
@@ -274,13 +276,15 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 }
 
 func (d *BasicDispatcher) HandleError(err error) {
-	select {
-	case d.sharedInfo.errCh <- err:
-	default:
-		log.Error("error channel is full, discard error",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
-			zap.Stringer("dispatcherID", d.id),
-			zap.Error(err))
+	if !errors.Is(errors.Cause(err), context.Canceled) {
+		select {
+		case d.sharedInfo.errCh <- err:
+		default:
+			log.Error("error channel is full, discard error",
+				zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+				zap.Stringer("dispatcherID", d.id),
+				zap.Error(err))
+		}
 	}
 }
 
