@@ -508,41 +508,6 @@ func (t *DMLEvent) encode() ([]byte, error) {
 	return t.encodeV0()
 }
 
-// 	RowTypes []RowType `json:"row_types"`
-// 	// RowKeys is the keys of every row in the transaction.
-// 	RowKeys [][]byte `json:"row_keys"`
-
-// 	// Rows shares BatchDMLEvent rows
-// 	Rows *chunk.Chunk `json:"-"`
-
-// 	// TableInfo is the table info of the transaction.
-// 	// If the DMLEvent is send from a remote eventService, the TableInfo is nil.
-// 	TableInfo *common.TableInfo `json:"table_info"`
-// 	// TableInfoVersion record the table info version from last ddl event.
-// 	// include 'truncate table', 'rename table', 'rename tables', 'truncate partition' and 'exchange partition'.
-// 	TableInfoVersion uint64 `json:"-"`
-
-// 	// The following fields are set and used by dispatcher.
-// 	ReplicatingTs uint64 `json:"replicating_ts"`
-// 	// PostTxnFlushed is the functions to be executed after the transaction is flushed.
-// 	// It is set and used by dispatcher.
-// 	PostTxnFlushed []func() `json:"-"`
-
-// 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
-// 	eventSize int64 `json:"-"`
-// 	// offset is the offset of the current row in the transaction.
-// 	// It is internal field, not exported. So it doesn't need to be marshalled.
-// 	offset int `json:"-"`
-// 	// PreviousTotalOffset accumulates the offsets of all previous DML events to facilitate sharing the same chunk when using batch DML events.
-// 	// It is used to determine the correct offset for the chunk in batch DML operations.
-// 	PreviousTotalOffset int `json:"previous_total_offset"`
-
-// 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
-// 	// and TiCDC set the integrity check level to the correctness.
-// 	Checksum       []*integrity.Checksum `json:"-"`
-// 	checksumOffset int                   `json:"-"`
-// }
-
 func (t *DMLEvent) encodeV0() ([]byte, error) {
 	if t.Version != DMLEventVersion {
 		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
