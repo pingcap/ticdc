@@ -126,10 +126,3 @@ func (m *StopChangefeedOperator) String() string {
 func (m *StopChangefeedOperator) Type() string {
 	return "stop"
 }
-
-func (m *StopChangefeedOperator) IsRepeat() bool {
-	return false
-}
-
-func (m *StopChangefeedOperator) SetRepeat(repeat bool) {
-}

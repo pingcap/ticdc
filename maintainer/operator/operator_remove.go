@@ -107,11 +107,3 @@ func (m *removeDispatcherOperator) String() string {
 func (m *removeDispatcherOperator) Type() string {
 	return "remove"
 }
-
-func (m *removeDispatcherOperator) IsRepeat() bool {
-	return m.repeat
-}
-
-func (m *removeDispatcherOperator) SetRepeat(repeat bool) {
-	m.repeat = repeat
-}

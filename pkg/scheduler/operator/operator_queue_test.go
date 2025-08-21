@@ -94,13 +94,6 @@ func (m mockOperator) String() string {
 	return m.id.String()
 }
 
-func (m mockOperator) IsRepeat() bool {
-	return false
-}
-
-func (m mockOperator) SetRepeat(repeat bool) {
-}
-
 func TestOperatorQueue(t *testing.T) {
 	queue := make(OperatorQueue[mockReplicationID, mockReplicationStatus], 0)
 

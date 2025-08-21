@@ -148,11 +148,3 @@ func (m *SplitDispatcherOperator) String() string {
 func (m *SplitDispatcherOperator) Type() string {
 	return "split"
 }
-
-func (m *SplitDispatcherOperator) IsRepeat() bool {
-	return m.repeat
-}
-
-func (m *SplitDispatcherOperator) SetRepeat(repeat bool) {
-	m.repeat = repeat
-}

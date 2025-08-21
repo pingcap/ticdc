@@ -17,7 +17,6 @@ import (
 	"container/heap"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -57,11 +56,10 @@ type Controller struct {
 	nodeManager    *watcher.NodeManager
 	splitter       *split.Splitter
 
-	mu           sync.RWMutex // protect the following fields
-	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
-	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
-
-	ops int64
+	mu             sync.RWMutex // protect the following fields
+	operators      map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+	blockOperators map[common.DispatcherID]struct{}
+	runningQueue   operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 }
 
 // NewOperatorController creates a new operator controller
@@ -74,6 +72,7 @@ func NewOperatorController(
 		changefeedID:   changefeedID,
 		batchSize:      batchSize,
 		operators:      make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
+		blockOperators: make(map[common.DispatcherID]struct{}),
 		runningQueue:   make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
 		role:           "maintainer",
 		spanController: spanController,
@@ -93,15 +92,6 @@ func (oc *Controller) Execute() time.Time {
 		}
 		if op == nil {
 			continue
-		}
-
-		if !op.IsRepeat() {
-			switch op.Type() {
-			case "occupy", "merge", "split", "remove":
-			default:
-				atomic.AddInt64(&oc.ops, 1)
-			}
-			op.SetRepeat(true)
 		}
 
 		msg := op.Schedule()
@@ -243,14 +233,6 @@ func (oc *Controller) pollQueueingOperator() (
 	op := item.OP
 	opID := op.ID()
 	if item.IsRemoved {
-		// avoid op not being executed
-		if op.IsRepeat() {
-			switch op.Type() {
-			case "occupy", "merge", "split", "remove":
-			default:
-				atomic.AddInt64(&oc.ops, -1)
-			}
-		}
 		return nil, true
 	}
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
@@ -258,14 +240,7 @@ func (oc *Controller) pollQueueingOperator() (
 		op.PostFinish()
 		item.IsRemoved = true
 		delete(oc.operators, opID)
-		// avoid op not being executed
-		if op.IsRepeat() {
-			switch op.Type() {
-			case "occupy", "merge", "split", "remove":
-			default:
-				atomic.AddInt64(&oc.ops, -1)
-			}
-		}
+		oc.removeBlockOperators(op)
 		metrics.FinishedOperatorCount.WithLabelValues(common.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 		metrics.OperatorDuration.WithLabelValues(common.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
@@ -297,6 +272,7 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.OP.PostFinish()
 		old.IsRemoved = true
 		delete(oc.operators, op.ID())
+		oc.removeBlockOperators(op)
 	}
 	oc.pushOperator(op)
 }
@@ -310,6 +286,7 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 		zap.String("operator", op.String()))
 	withTime := operator.NewOperatorWithTime(op, time.Now())
 	oc.operators[op.ID()] = withTime
+	oc.addBlockOperators(op)
 	op.Start()
 	heap.Push(&oc.runningQueue, withTime)
 	metrics.CreatedOperatorCount.WithLabelValues(common.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
@@ -465,10 +442,6 @@ func (oc *Controller) AddMergeSplitOperator(
 	return true
 }
 
-func (oc *Controller) GetOps() int64 {
-	return atomic.LoadInt64(&oc.ops)
-}
-
 func (oc *Controller) GetLock() *sync.RWMutex {
 	oc.mu.Lock()
 	return &oc.mu
@@ -476,4 +449,24 @@ func (oc *Controller) GetLock() *sync.RWMutex {
 
 func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
 	mutex.Unlock()
+}
+
+func (oc *Controller) BlockOperatorSizeWithLock() int {
+	return len(oc.blockOperators)
+}
+
+func (oc *Controller) addBlockOperators(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
+	switch op.Type() {
+	case "occupy", "merge", "split", "remove":
+	default:
+		oc.blockOperators[op.ID()] = struct{}{}
+	}
+}
+
+func (oc *Controller) removeBlockOperators(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
+	switch op.Type() {
+	case "occupy", "merge", "split", "remove":
+	default:
+		delete(oc.blockOperators, op.ID())
+	}
 }
