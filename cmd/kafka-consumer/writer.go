@@ -194,8 +194,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	}
 	for _, e := range resolvedEvents {
 		e.AddPostFlushFunc(func() {
-			flushed.Inc()
-			if int(flushed.Load()) == total {
+			if flushed.Inc() == int64(total) {
 				close(done)
 			}
 		})
@@ -257,8 +256,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	}
 	for _, e := range resolvedEvents {
 		e.AddPostFlushFunc(func() {
-			flushed.Inc()
-			if int(flushed.Load()) == total {
+			if flushed.Inc() == int64(total) {
 				close(done)
 			}
 		})

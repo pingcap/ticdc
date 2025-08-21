@@ -525,7 +525,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + len(t.RowTypes)
+	size := 1 + t.DispatcherID.GetSize() + 6*8 + 4*3 + t.State.GetSize() + len(t.RowTypes)
 	size += 4 // len(t.RowKeys)
 	for i := 0; i < len(t.RowKeys); i++ {
 		size += 4 + len(t.RowKeys[i]) // size + contents of t.RowKeys[i]
@@ -556,6 +556,9 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	offset += 8
 	// Seq
 	binary.LittleEndian.PutUint64(buf[offset:], t.Seq)
+	offset += 8
+	// Epoch
+	binary.BigEndian.PutUint64(buf[offset:], t.Epoch)
 	offset += 8
 	// State
 	copy(buf[offset:], t.State.encode())
@@ -598,7 +601,7 @@ func (t *DMLEvent) decode(data []byte) error {
 }
 
 func (t *DMLEvent) decodeV0(data []byte) error {
-	if len(data) < 1+16+8*5+4*3 {
+	if len(data) < 1+16+8*6+4*3 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
 	if t.Version != DMLEventVersion {
@@ -618,6 +621,8 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	t.CommitTs = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 	t.Seq = binary.LittleEndian.Uint64(data[offset:])
+	offset += 8
+	t.Epoch = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
 	t.State.decode(data[offset:])
 	offset += t.State.GetSize()
