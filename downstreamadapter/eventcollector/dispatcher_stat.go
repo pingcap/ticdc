@@ -354,6 +354,14 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 }
 
 func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
+	if event.GetType() == commonEvent.TypeBatchDMLEvent {
+		batchDML := event.Event.(*commonEvent.BatchDMLEvent)
+		for _, dml := range batchDML.DMLEvents {
+			if dml.GetEpoch() != d.epoch.Load() {
+				return false
+			}
+		}
+	}
 	return event.GetEpoch() == d.epoch.Load()
 }
 
@@ -371,6 +379,10 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	var validEvents []dispatcher.DispatcherEvent
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event) {
+			log.Info("receive DML/Resolved event from a stale epoch, ignore it",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Any("event", event.Event))
 			continue
 		}
 		if !d.verifyEventSequence(event) {
