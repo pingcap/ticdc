@@ -524,8 +524,10 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
 		return nil, nil
 	}
-	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 6*8 + 4*3 + t.State.GetSize() + len(t.RowTypes)
+	// Version(1) + DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
+	// Seq(8) + Epoch(8) + State(1) + Length(4) + AApproximateSize(8) + PreviousTotalOffset(4)
+	// + size of len(t.RowTypes)(4) + len(t.RowTypes)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + t.State.GetSize() + 4 + 8 + 4*2 + len(t.RowTypes)
 	size += 4 // len(t.RowKeys)
 	for i := 0; i < len(t.RowKeys); i++ {
 		size += 4 + len(t.RowKeys[i]) // size + contents of t.RowKeys[i]
@@ -558,7 +560,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	binary.LittleEndian.PutUint64(buf[offset:], t.Seq)
 	offset += 8
 	// Epoch
-	binary.BigEndian.PutUint64(buf[offset:], t.Epoch)
+	binary.LittleEndian.PutUint64(buf[offset:], t.Epoch)
 	offset += 8
 	// State
 	copy(buf[offset:], t.State.encode())
@@ -601,7 +603,10 @@ func (t *DMLEvent) decode(data []byte) error {
 }
 
 func (t *DMLEvent) decodeV0(data []byte) error {
-	if len(data) < 1+16+8*6+4*3 {
+	// Version(1) + DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
+	// Seq(8) + Epoch(8) + State(1) + Length(4) + AApproximateSize(8) + PreviousTotalOffset(4)
+	// + size of len(t.RowTypes)(4)
+	if len(data) < 1+16+8*5+1+4+8+4*2 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
 	if t.Version != DMLEventVersion {
@@ -622,7 +627,7 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	offset += 8
 	t.Seq = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
-	t.Epoch = binary.BigEndian.Uint64(data[offset:])
+	t.Epoch = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 	t.State.decode(data[offset:])
 	offset += t.State.GetSize()

@@ -8,9 +8,9 @@ check-struct-only = false
 [task]
 output-dir = "/tmp/tidb_cdc_test/ddl_for_split_tables_with_failover/sync_diff/output"
 
-source-instances = ["mysql1"]
+source-instances = ["tidb0"]
 
-target-instance = "tidb0"
+target-instance = "mysql1"
 
 target-check-tables = ["test.*"]
 
