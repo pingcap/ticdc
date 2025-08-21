@@ -129,10 +129,9 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 		event.Rewind()
 		for {
 			row, ok := event.GetNextRow()
-			if !ok {
+			if !ok || s.isClosed.Load() {
 				break
 			}
-
 			s.logBuffer <- &commonEvent.RedoRowEvent{
 				StartTs:   event.StartTs,
 				CommitTs:  event.CommitTs,
@@ -158,10 +157,9 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
 func (s *Sink) Close(_ bool) {
-	if s.isClosed.Load() {
+	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}
-	defer s.isClosed.Store(true)
 	close(s.logBuffer)
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
