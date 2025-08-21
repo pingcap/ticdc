@@ -201,19 +201,15 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
-			if e.redoGlobalTs.Load() > resolvedTs {
-				log.Panic("received resolvedTs less than global resolvedTs",
-					zap.Any("redoGlobalTs", e.redoGlobalTs.Load()),
-					zap.Any("resolvedTs", resolvedTs))
-			}
+			log.Error("send redo msg",
+				zap.Any("previousCheckpointTs", previousCheckpointTs),
+				zap.Any("checkpointTs", checkpointTs),
+				zap.Any("previousResolvedTs", previousResolvedTs),
+				zap.Any("resolvedTs", resolvedTs),
+			)
 			// Avoid invalid message
 			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
-				log.Error("ignored redo msg",
-					zap.Any("previousCheckpointTs", previousCheckpointTs),
-					zap.Any("checkpointTs", checkpointTs),
-					zap.Any("previousResolvedTs", previousResolvedTs),
-					zap.Any("resolvedTs", resolvedTs),
-				)
+				log.Error("send redo msg ignore")
 				continue
 			}
 			// The length of dispatcher map is zero, we should not update the previous ts.
@@ -228,7 +224,6 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 				CheckpointTs: checkpointTs,
 				ResolvedTs:   resolvedTs,
 			}
-			log.Error("send redo msg", zap.Any("msg", message))
 			err := mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),

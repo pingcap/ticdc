@@ -190,5 +190,5 @@ func (c *Controller) checkAdvance(isRedo bool) bool {
 		operatorController.ReleaseLock(operatorLock)
 		barrier.ReleaseLock(barrierLock)
 	}()
-	return operatorController.GetOps() == 0 && spanController.GetAbsentSize() == 0 && !barrier.ShouldBlockCheckpointTs()
+	return operatorController.OperatorSizeWithLock() == 0 && spanController.GetAbsentSize() == 0 && !barrier.ShouldBlockCheckpointTs()
 }
