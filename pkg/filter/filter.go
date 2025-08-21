@@ -16,6 +16,7 @@ package filter
 import (
 	"sync"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
@@ -284,16 +285,22 @@ var (
 	storage *SharedFilterStorage
 )
 
+type FilterWithConfig struct {
+	Filter
+	config   *eventpb.FilterConfig
+	timeZone string
+}
+
 type SharedFilterStorage struct {
 	// Each dispatcher in the same changefeed will share the same filter storage.
-	m     map[common.ChangeFeedID]Filter
+	m     map[common.ChangeFeedID]FilterWithConfig
 	mutex sync.Mutex
 }
 
 func GetSharedFilterStorage() *SharedFilterStorage {
 	once.Do(func() {
 		storage = &SharedFilterStorage{
-			m: make(map[common.ChangeFeedID]Filter),
+			m: make(map[common.ChangeFeedID]FilterWithConfig),
 		}
 	})
 	return storage
@@ -302,13 +309,16 @@ func GetSharedFilterStorage() *SharedFilterStorage {
 func (s *SharedFilterStorage) GetOrSetFilter(
 	changeFeedID common.ChangeFeedID,
 	cfg *eventpb.FilterConfig,
-	tz string,
-	caseSensitive bool,
+	timeZone string,
 ) (Filter, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if f, ok := s.m[changeFeedID]; ok {
-		return f, nil
+		if !isFilterConfigEqual(f.config, cfg) || f.timeZone != timeZone {
+			log.Info("filter config changed, need to rebuild filter", zap.Any("preConfig", f.config), zap.Any("newConfig", cfg), zap.String("preTimeZone", f.timeZone), zap.String("newTimeZone", timeZone))
+		} else {
+			return f.Filter, nil
+		}
 	}
 	// convert eventpb.FilterConfig to config.FilterConfig
 	filterCfg := &config.FilterConfig{
@@ -331,10 +341,30 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 		filterCfg.EventFilters = append(filterCfg.EventFilters, f)
 	}
 	// generate table filter
-	f, err := NewFilter(filterCfg, tz, cfg.CaseSensitive, cfg.ForceReplicate)
+	f, err := NewFilter(filterCfg, timeZone, cfg.CaseSensitive, cfg.ForceReplicate)
 	if err != nil {
 		return nil, err
 	}
-	s.m[changeFeedID] = f
+	s.m[changeFeedID] = FilterWithConfig{
+		Filter:   f,
+		config:   cfg,
+		timeZone: timeZone,
+	}
 	return f, nil
+}
+
+// isFilterConfigEqual compares two FilterConfig for equality by content
+func isFilterConfigEqual(cfg1, cfg2 *eventpb.FilterConfig) bool {
+	// Fast path: if pointers are equal, configs are definitely equal
+	if cfg1 == cfg2 {
+		return true
+	}
+
+	// Handle nil cases
+	if cfg1 == nil || cfg2 == nil {
+		return false
+	}
+
+	// Use protobuf's built-in Equal method for content comparison
+	return proto.Equal(cfg1, cfg2)
 }

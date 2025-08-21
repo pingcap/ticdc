@@ -20,7 +20,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/config"
 	"go.uber.org/zap"
 )
@@ -86,7 +85,7 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) {
 		}
 		o.protocol = protocol
 	}
-	if !helper.IsPulsarSupportedProtocols(o.protocol) {
+	if !config.IsPulsarSupportedProtocols(o.protocol) {
 		log.Panic("unsupported protocol, pulsar sink currently only support these protocols: [canal-json]",
 			zap.String("protocol", s))
 	}

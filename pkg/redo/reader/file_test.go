@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/stretchr/testify/require"
 )
 
