@@ -33,7 +33,6 @@ type OccupyDispatcherOperator struct {
 	finished       atomic.Bool
 	removed        atomic.Bool
 	spanController *span.Controller
-	repeat         bool
 }
 
 func NewOccupyDispatcherOperator(

@@ -42,8 +42,7 @@ type MoveDispatcherOperator struct {
 
 	sendThrottler sendThrottler
 
-	lck    sync.Mutex
-	repeat bool
+	lck sync.Mutex
 }
 
 func NewMoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {

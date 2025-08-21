@@ -44,7 +44,6 @@ type SplitDispatcherOperator struct {
 	lck sync.Mutex
 
 	sendThrottler sendThrottler
-	repeat        bool
 }
 
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator

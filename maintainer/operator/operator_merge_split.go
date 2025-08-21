@@ -48,7 +48,6 @@ type MergeSplitDispatcherOperator struct {
 	affectedReplicaSets []*replica.SpanReplication
 	splitSpans          []*heartbeatpb.TableSpan
 	splitSpanInfo       string
-	repeat              bool
 }
 
 // NewMergeSplitDispatcherOperator creates a new MergeSplitDispatcherOperator

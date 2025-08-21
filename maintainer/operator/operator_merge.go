@@ -48,7 +48,6 @@ type MergeDispatcherOperator struct {
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 
 	sendThrottler sendThrottler
-	repeat        bool
 }
 
 func NewMergeDispatcherOperator(

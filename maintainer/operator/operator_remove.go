@@ -35,7 +35,6 @@ type removeDispatcherOperator struct {
 	spanController *span.Controller
 
 	sendThrottler sendThrottler
-	repeat        bool
 }
 
 func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
