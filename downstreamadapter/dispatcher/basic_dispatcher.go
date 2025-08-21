@@ -303,9 +303,9 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 //
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
 // It will be called when all the events are flushed to downstream successfully.
-func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	// Only return false when all events are resolvedTs Event.
-	block = false
+	block := false
 	dmlWakeOnce := &sync.Once{}
 	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	latestResolvedTs := uint64(0)
@@ -374,7 +374,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			err := ddl.GetError()
 			if err != nil {
 				d.HandleError(err)
-				return
+				return block
 			}
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
@@ -386,6 +386,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				if d.tableSchemaStore != nil {
 					d.tableSchemaStore.AddEvent(ddl)
 				}
+				log.Error("write ddl successed", zap.Any("redo", isRedo), zap.Any("id", d.id))
 				wakeCallback()
 			})
 			d.dealWithBlockEvent(ddl)

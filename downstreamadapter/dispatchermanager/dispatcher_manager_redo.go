@@ -201,6 +201,11 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
+			if e.redoGlobalTs.Load() > resolvedTs {
+				log.Panic("received resolvedTs less than global resolvedTs",
+					zap.Any("redoGlobalTs", e.redoGlobalTs.Load()),
+					zap.Any("resolvedTs", resolvedTs))
+			}
 			// Avoid invalid message
 			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
 				log.Error("ignored redo msg",
