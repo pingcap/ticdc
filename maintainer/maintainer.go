@@ -23,7 +23,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
@@ -667,8 +666,8 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 	if err != nil {
 		return false, errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
-	scheme := helper.GetScheme(sinkURI)
-	return helper.IsMySQLCompatibleScheme(scheme), nil
+	scheme := config.GetScheme(sinkURI)
+	return config.IsMySQLCompatibleScheme(scheme), nil
 }
 
 func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {

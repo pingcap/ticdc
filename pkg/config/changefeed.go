@@ -26,7 +26,6 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
-	"github.com/pingcap/tiflow/pkg/sink"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -436,10 +435,10 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 		return
 	}
 	// blackhole is for testing purpose, no need to remove fields
-	if sink.IsBlackHoleScheme(uri.Scheme) {
+	if IsBlackHoleScheme(uri.Scheme) {
 		return
 	}
-	if !sink.IsMQScheme(uri.Scheme) {
+	if !IsMQScheme(uri.Scheme) {
 		info.rmMQOnlyFields()
 	} else {
 		// remove schema registry for MQ downstream with
@@ -449,11 +448,11 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 		}
 	}
 
-	if !sink.IsStorageScheme(uri.Scheme) {
+	if !IsStorageScheme(uri.Scheme) {
 		info.rmStorageOnlyFields()
 	}
 
-	if !sink.IsMySQLCompatibleScheme(uri.Scheme) {
+	if !IsMySQLCompatibleScheme(uri.Scheme) {
 		info.rmDBOnlyFields()
 	} else {
 		// remove fields only being used by MQ and Storage downstream
@@ -582,7 +581,7 @@ func (info *ChangeFeedInfo) fixMySQLSinkProtocol() {
 		return
 	}
 
-	if sink.IsMQScheme(uri.Scheme) {
+	if IsMQScheme(uri.Scheme) {
 		return
 	}
 
@@ -607,7 +606,7 @@ func (info *ChangeFeedInfo) fixMQSinkProtocol() {
 		return
 	}
 
-	if !sink.IsMQScheme(uri.Scheme) {
+	if !IsMQScheme(uri.Scheme) {
 		return
 	}
 
