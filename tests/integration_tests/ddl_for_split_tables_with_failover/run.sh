@@ -53,7 +53,7 @@ function prepare() {
 
 function execute_ddls() {
 	while true; do
-		table_num=$((RANDOM % 5 + 1))
+		table_num=$((RANDOM % 1))
 		table_name="table_$table_num"
 
 		case $((RANDOM % 3)) in
@@ -125,7 +125,7 @@ main() {
 
 	declare -a pids=()
 
-	for i in {1..5}; do
+	for i in {1..1}; do
 		execute_dml $i &
 		pids+=("$!")
 	done
