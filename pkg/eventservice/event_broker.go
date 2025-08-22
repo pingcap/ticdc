@@ -226,9 +226,8 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	e.Epoch = d.epoch.Load()
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcher", d.id),
-		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
+		zap.Int64("tableID", e.TableID),
 		zap.String("query", e.Query),
-		zap.Int64("eventTableID", e.TableID),
 		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq),
 		zap.Bool("isRedo", d.info.GetIsRedo()))
@@ -457,7 +456,8 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		task.seq.Add(1),
 		task.epoch.Load(),
 		task.startTableInfo.Load())
-	log.Debug("send handshake event to dispatcher", zap.Stringer("dispatcher", task.id),
+	log.Debug("send handshake event to dispatcher",
+		zap.Any("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 		zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
@@ -491,7 +491,9 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			Seq:          d.seq.Add(1),
 			Epoch:        d.epoch.Load(),
 		}
-		log.Debug("send syncpoint event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", event.TypeToString(e.GetType())), zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
+		log.Debug("send syncpoint event to dispatcher",
+			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
 		c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- syncPointEvent
@@ -530,7 +532,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if !c.msgSender.IsReadyToSend(remoteID) {
 		log.Info("The remote target is not ready, skip scan",
 			zap.String("changefeed", changefeedID.String()),
-			zap.String("dispatcher", task.id.String()),
+			zap.String("dispatcherID", task.id.String()),
+			zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 			zap.String("remote", remoteID.String()))
 		return
 	}
@@ -568,7 +571,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
 	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
-		log.Error("scan events failed", zap.Stringer("dispatcher", task.id),
+		log.Error("scan events failed",
+			zap.Stringer("dispatcher", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
@@ -863,10 +867,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	if !success {
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
-				zap.Stringer("dispatcherID", id),
-				zap.String("span", common.FormatTableSpan(span)),
-				zap.Uint64("startTs", info.GetStartTs()),
-			)
+				zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
+				zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)))
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
@@ -875,9 +877,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	err := c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
-			zap.Stringer("dispatcherID", id),
-			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", info.GetStartTs()),
+			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
+			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err),
 		)
 		return err
@@ -885,11 +886,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	tableInfo, err := c.schemaStore.GetTableInfo(span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("get table info from schemaStore failed",
-			zap.Stringer("dispatcherID", id),
-			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", info.GetStartTs()),
-			zap.Error(err),
-		)
+			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
+			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
+			zap.Error(err))
 		return err
 	}
 	dispatcher.updateTableInfo(tableInfo)
@@ -897,10 +896,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
-		zap.Stringer("dispatcherID", id),
-		zap.Bool("isRedo", info.GetIsRedo()),
+		zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
 		zap.String("span", common.FormatTableSpan(span)),
-		zap.Uint64("startTs", startTs),
+		zap.Uint64("startTs", startTs), zap.Bool("isRedo", info.GetIsRedo()),
 		zap.Duration("duration", time.Since(start)))
 	return nil
 }
@@ -937,9 +935,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",
-		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Stringer("changefeedID", changefeedID),
-		zap.Stringer("dispatcherID", id),
+		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
+		zap.Stringer("dispatcherID", id), zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
 }
@@ -950,12 +947,10 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 		return
 	}
 	log.Info("pause dispatcher",
-		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", stat.id),
+		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", stat.id), zap.Int64("tableID", stat.info.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
-		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
-		zap.Uint64("seq", stat.seq.Load()))
+		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()), zap.Uint64("seq", stat.seq.Load()))
 	stat.isReadyReceivingData.Store(false)
 	stat.resetScanLimit()
 }
@@ -967,7 +962,7 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 	log.Info("resume dispatcher",
 		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", stat.id),
+		zap.Stringer("dispatcherID", stat.id), zap.Int64("tableID", stat.info.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
@@ -975,8 +970,10 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
+	dispatcherID := dispatcherInfo.GetID()
+
 	start := time.Now()
-	stat := c.getDispatcher(dispatcherInfo.GetID())
+	stat := c.getDispatcher(dispatcherID)
 	if stat == nil {
 		// The dispatcher is not registered, register it.
 		// FIXME: Handle the error.
@@ -997,8 +994,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	oldSeq := stat.seq.Load()
-	oldSentResolvedTs := stat.sentResolvedTs.Load()
+	originSeq := stat.seq.Load()
+	originSentResolvedTs := stat.sentResolvedTs.Load()
 	stat.resetState(dispatcherInfo.GetStartTs())
 	newEpoch := dispatcherInfo.GetEpoch()
 	for {
@@ -1013,14 +1010,15 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", stat.id),
+		zap.Stringer("dispatcherID", stat.id), zap.Int64("tableID", stat.info.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("originStartTs", stat.info.GetStartTs()),
-		zap.Uint64("oldSeq", oldSeq),
+		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
+		zap.Uint64("originSentResolvedTs", originSentResolvedTs),
+		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()),
+		zap.Uint64("originSeq", originSeq),
 		zap.Uint64("newSeq", stat.seq.Load()),
 		zap.Uint64("newEpoch", newEpoch),
-		zap.Uint64("oldSentResolvedTs", oldSentResolvedTs),
-		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Duration("resetTime", time.Since(start)))
 }
 

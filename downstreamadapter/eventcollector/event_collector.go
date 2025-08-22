@@ -223,7 +223,9 @@ func (c *EventCollector) PrepareAddDispatcher(
 ) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
-		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()), zap.Int("type", target.GetType()))
+		log.Info("add dispatcher done",
+			zap.Stringer("dispatcherID", target.GetId()), zap.Int64("tableID", target.GetTableSpan().GetTableID()),
+			zap.Uint64("startTs", target.GetStartTs()), zap.Int("type", target.GetType()))
 	}()
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
@@ -242,11 +244,12 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
 func (c *EventCollector) CommitAddDispatcher(target dispatcher.Dispatcher, startTs uint64) {
-	log.Info("commit add dispatcher", zap.Stringer("dispatcher", target.GetId()), zap.Uint64("startTs", startTs))
+	log.Info("commit add dispatcher", zap.Stringer("dispatcherID", target.GetId()),
+		zap.Int64("tableID", target.GetTableSpan().GetTableID()), zap.Uint64("startTs", startTs))
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
 		log.Warn("dispatcher not found when commit add dispatcher",
-			zap.Stringer("dispatcher", target.GetId()),
+			zap.Stringer("dispatcherID", target.GetId()), zap.Int64("tableID", target.GetTableSpan().GetTableID()),
 			zap.Uint64("startTs", startTs))
 		return
 	}
@@ -255,9 +258,10 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.Dispatcher, start
 }
 
 func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
-	log.Info("remove dispatcher", zap.Stringer("dispatcher", target.GetId()))
+	log.Info("remove dispatcher", zap.Stringer("dispatcherID", target.GetId()))
 	defer func() {
-		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))
+		log.Info("remove dispatcher done", zap.Stringer("dispatcherID", target.GetId()),
+			zap.Int64("tableID", target.GetTableSpan().GetTableID()))
 	}()
 	isRedo := dispatcher.IsRedoDispatcher(target)
 	value, ok := c.dispatcherMap.Load(target.GetId())
