@@ -20,9 +20,10 @@ import (
 	"math/rand"
 	"sync/atomic"
 
+	"workload/schema"
+
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 const createTable = `
@@ -31,6 +32,8 @@ id bigint NOT NULL,
 k bigint NOT NULL DEFAULT '0',
 c char(30) NOT NULL DEFAULT '',
 pad char(20) NOT NULL DEFAULT '',
+commitTs bigint,
+startTs bigint DEFAULT NULL,
 PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
 `
@@ -79,6 +82,7 @@ type TxnWorkload struct {
 	totalRowCount uint64
 	tableMap      map[int]*atomic.Int64
 	crossTable    bool
+	value         *atomic.Int64
 }
 
 func NewTxnWorkload(totalRowCount uint64, tableCount, startIndex int, crossTable bool) schema.Workload {
@@ -88,6 +92,7 @@ func NewTxnWorkload(totalRowCount uint64, tableCount, startIndex int, crossTable
 		startIndex:    startIndex,
 		crossTable:    crossTable,
 		tableMap:      make(map[int]*atomic.Int64),
+		value:         &atomic.Int64{},
 	}
 }
 
@@ -111,14 +116,15 @@ func (t *TxnWorkload) BuildCreateTableStatement(n int) string {
 func (t *TxnWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	var buf bytes.Buffer
 	buf.WriteString("begin;")
+	tso := t.value.Add(1)
 	for r := 0; r < batchSize; r++ {
 		if t.crossTable {
 			tableN = rand.Intn(t.tableCount) + t.startIndex
 		}
 		idx := t.tableMap[tableN]
 		id := idx.Add(1)
-		buf.WriteString(fmt.Sprintf("insert into sbtest%d (id, k, c, pad) values(%d, %d, 'abcdefghijklmnopsrstuvwxyzabcd', '%s');",
-			tableN, id, rand.Int63(), getPadString()))
+		buf.WriteString(fmt.Sprintf("insert into sbtest%d (id, k, c, pad, commitTs) values(%d, %d, 'abcdefghijklmnopsrstuvwxyzabcd', '%s', '%d');",
+			tableN, id, rand.Int63(), getPadString(), tso))
 	}
 	buf.WriteString("commit;")
 	return buf.String()
@@ -129,6 +135,8 @@ func (t *TxnWorkload) BuildUpdateSql(updateOption schema.UpdateOption) string {
 	tableN := updateOption.TableIndex
 	var buf bytes.Buffer
 	buf.WriteString("begin;")
+	// conflict when only update because the value maybe duplicated with other row
+	tso := t.value.Add(1)
 	for r := 0; r < batchSize; r++ {
 		if t.crossTable {
 			tableN = rand.Intn(t.tableCount) + t.startIndex
@@ -138,8 +146,8 @@ func (t *TxnWorkload) BuildUpdateSql(updateOption schema.UpdateOption) string {
 			log.Panic("failed to load table", zap.Any("tableN", tableN))
 		}
 		id := rand.Int63n(idx.Load()) + 1
-		buf.WriteString(fmt.Sprintf("update sbtest%d set pad = '%s' where id = '%d';",
-			tableN, getPadString(), id))
+		buf.WriteString(fmt.Sprintf("update sbtest%d set pad = '%s', commitTs = '%d' where id = '%d';",
+			tableN, getPadString(), id, tso))
 	}
 	buf.WriteString("commit;")
 	return buf.String()
