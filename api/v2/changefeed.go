@@ -239,7 +239,8 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		return
 	}
 
-	changefeeds, statuses, err := co.ListChangefeeds(c)
+	keyspace := GetNamespaceValueWithDefault(c)
+	changefeeds, statuses, err := co.ListChangefeeds(c, keyspace)
 	if err != nil {
 		_ = c.Error(err)
 		return

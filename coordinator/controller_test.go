@@ -238,7 +238,7 @@ func TestListChangefeed(t *testing.T) {
 	},
 		2, true)
 	changefeedDB.AddStoppedChangefeed(cf3)
-	cfs, status, err := controller.ListChangefeeds(context.Background())
+	cfs, status, err := controller.ListChangefeeds(context.Background(), common.DefaultNamespace)
 	require.Nil(t, err)
 	require.Len(t, cfs, 3)
 	require.Len(t, status, 3)
