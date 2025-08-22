@@ -87,7 +87,6 @@ func NewEventDispatcher(
 		redoGlobalTs: redoGlobalTs,
 	}
 	dispatcher.cacheEvents.events = make(chan cacheEvents, 1)
-	log.Error("NewEventDispatcher", zap.Any("id", id), zap.Any("redoGlobalTs", redoGlobalTs.Load()))
 	return dispatcher
 }
 
