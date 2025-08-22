@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -40,7 +41,7 @@ type Sink struct {
 	ddlWriter writer.RedoLogWriter
 	dmlWriter writer.RedoLogWriter
 
-	logBuffer chan writer.RedoEvent
+	logBuffer *chann.DrainableChann[writer.RedoEvent]
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal   *atomic.Bool
@@ -68,7 +69,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: cfg.MaxLogSize * redo.Megabyte,
 		},
-		logBuffer:  make(chan writer.RedoEvent, 32),
+		logBuffer:  chann.NewAutoDrainChann[writer.RedoEvent](),
 		isNormal:   atomic.NewBool(true),
 		isClosed:   atomic.NewBool(false),
 		statistics: metrics.NewStatistics(changefeedID, "redo"),
@@ -132,16 +133,12 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			if !ok || s.isClosed.Load() {
 				break
 			}
-			select {
-			case <-s.ctx.Done():
-				return 0, 0, errors.ErrDispatcherFailed
-			case s.logBuffer <- &commonEvent.RedoRowEvent{
+			s.logBuffer.In() <- &commonEvent.RedoRowEvent{
 				StartTs:   event.StartTs,
 				CommitTs:  event.CommitTs,
 				Event:     row,
 				TableInfo: event.TableInfo,
 				Callback:  event.PostFlush,
-			}:
 			}
 		}
 		// batchSize, batchWriteBytes, err
@@ -164,6 +161,7 @@ func (s *Sink) Close(_ bool) {
 	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}
+	s.logBuffer.CloseAndDrain()
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close ddl writer",
@@ -183,7 +181,6 @@ func (s *Sink) Close(_ bool) {
 	if s.statistics != nil {
 		s.statistics.Close()
 	}
-	close(s.logBuffer)
 	log.Info("redo manager closed",
 		zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
 		zap.String("changefeed", s.cfg.ChangeFeedID.Name()))
@@ -194,7 +191,7 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case e := <-s.logBuffer:
+		case e := <-s.logBuffer.Out():
 			err := s.dmlWriter.WriteEvents(ctx, e)
 			if err != nil {
 				return err
