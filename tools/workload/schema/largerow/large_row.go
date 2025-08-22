@@ -14,6 +14,7 @@
 package largerow
 
 import (
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -139,6 +140,9 @@ func (l *LargeRowWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		zap.Int("largeRowCount", largeRowCount), zap.Int("length", len(insertSQL)))
 
 	return insertSQL
+}
+
+func (c *LargeRowWorkload) Prepare(db *sql.DB) {
 }
 
 func (l *LargeRowWorkload) BuildUpdateSql(opts schema.UpdateOption) string {

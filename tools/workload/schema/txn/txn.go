@@ -15,14 +15,14 @@ package txn
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"sync/atomic"
 
-	"workload/schema"
-
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
 )
 
 const createTable = `
@@ -31,9 +31,12 @@ id bigint NOT NULL,
 k bigint NOT NULL DEFAULT '0',
 c char(30) NOT NULL DEFAULT '',
 pad char(20) NOT NULL DEFAULT '',
-PRIMARY KEY (id),
-KEY k_1 (k)
+PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+`
+
+const queryCount = `
+SELECT count(*) from sbtest%d
 `
 
 const (
@@ -88,39 +91,53 @@ func NewTxnWorkload(totalRowCount uint64, tableCount, startIndex int, crossTable
 	}
 }
 
+func (t *TxnWorkload) Prepare(db *sql.DB) {
+	var num int64
+	for i := 0; i < t.tableCount; i++ {
+		n := i + t.startIndex
+		t.tableMap[n] = &atomic.Int64{}
+		row := db.QueryRow(fmt.Sprintf(queryCount, n))
+		row.Scan(&num)
+		t.tableMap[n].Store(num)
+	}
+}
+
 // BuildCreateTableStatement returns the create-table sql for both Data and index_Data tables
-func (c *TxnWorkload) BuildCreateTableStatement(n int) string {
+func (t *TxnWorkload) BuildCreateTableStatement(n int) string {
+	t.tableMap[n] = &atomic.Int64{}
 	return fmt.Sprintf(createTable, n)
 }
 
-func (c *TxnWorkload) BuildInsertSql(tableN int, batchSize int) string {
+func (t *TxnWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	var buf bytes.Buffer
 	buf.WriteString("begin;")
 	for r := 0; r < batchSize; r++ {
-		if c.crossTable {
-			tableN = rand.Intn(c.tableCount) + c.startIndex
+		if t.crossTable {
+			tableN = rand.Intn(t.tableCount) + t.startIndex
 		}
-		idx := c.tableMap[tableN]
-		id := idx.Load()
+		idx := t.tableMap[tableN]
+		id := idx.Add(1)
 		buf.WriteString(fmt.Sprintf("insert into sbtest%d (id, k, c, pad) values(%d, %d, 'abcdefghijklmnopsrstuvwxyzabcd', '%s');",
 			tableN, id, rand.Int63(), getPadString()))
-		idx.Add(1)
 	}
 	buf.WriteString("commit;")
 	return buf.String()
 }
 
-func (c *TxnWorkload) BuildUpdateSql(updateOption schema.UpdateOption) string {
+func (t *TxnWorkload) BuildUpdateSql(updateOption schema.UpdateOption) string {
 	batchSize := updateOption.Batch
 	tableN := updateOption.TableIndex
 	var buf bytes.Buffer
 	buf.WriteString("begin;")
 	for r := 0; r < batchSize; r++ {
-		if c.crossTable {
-			tableN = rand.Intn(c.tableCount) + c.startIndex
+		if t.crossTable {
+			tableN = rand.Intn(t.tableCount) + t.startIndex
 		}
-		idx := c.tableMap[tableN]
-		id := rand.Int63n(idx.Load())
+		idx, ok := t.tableMap[tableN]
+		if !ok {
+			log.Panic("failed to load table", zap.Any("tableN", tableN))
+		}
+		id := rand.Int63n(idx.Load()) + 1
 		buf.WriteString(fmt.Sprintf("update sbtest%d set pad = '%s' where id = '%d';",
 			tableN, getPadString(), id))
 	}

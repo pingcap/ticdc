@@ -14,6 +14,7 @@
 package shop
 
 import (
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -70,6 +71,9 @@ func NewShopItemWorkload(totalCount uint64, rowSize int) schema.Workload {
 
 func (s *ShopItemWorkload) BuildCreateTableStatement(n int) string {
 	return fmt.Sprintf(createShopItemTable, n)
+}
+
+func (c *ShopItemWorkload) Prepare(db *sql.DB) {
 }
 
 func (s *ShopItemWorkload) BuildInsertSql(tableN int, batchSize int) string {

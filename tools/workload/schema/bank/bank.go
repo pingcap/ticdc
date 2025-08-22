@@ -15,6 +15,7 @@ package bank
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"math/rand"
 
@@ -98,6 +99,9 @@ func NewBankWorkload() schema.Workload {
 
 func (c *BankWorkload) BuildCreateTableStatement(n int) string {
 	return fmt.Sprintf(createBankTable, n)
+}
+
+func (c *BankWorkload) Prepare(db *sql.DB) {
 }
 
 func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {

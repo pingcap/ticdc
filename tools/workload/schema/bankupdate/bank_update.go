@@ -15,6 +15,7 @@ package bankupdate
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"os"
@@ -115,6 +116,9 @@ func NewBankUpdateWorkload(totalRowCount uint64, updateLargeColumnSize int) sche
 
 func (c *BankUpdateWorkload) BuildCreateTableStatement(n int) string {
 	return fmt.Sprintf(createUpdateBankTable, n, c.updateLargeColumnSize)
+}
+
+func (c *BankUpdateWorkload) Prepare(db *sql.DB) {
 }
 
 func (c *BankUpdateWorkload) BuildInsertSql(tableN int, batchSize int) string {

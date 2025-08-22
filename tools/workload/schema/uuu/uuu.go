@@ -14,6 +14,7 @@
 package uuu
 
 import (
+	"database/sql"
 	"fmt"
 	mrand "math/rand"
 	"strings"
@@ -56,6 +57,9 @@ func (c *UUUWorkload) BuildCreateTableStatement(n int) string {
 		return fmt.Sprintf(createDataTableFormat, n)
 	}
 	return fmt.Sprintf(createIndexTableFormat, n)
+}
+
+func (c *UUUWorkload) Prepare(db *sql.DB) {
 }
 
 func (c *UUUWorkload) BuildInsertSql(tableN int, batchSize int) string {

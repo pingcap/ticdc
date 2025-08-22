@@ -22,6 +22,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
@@ -32,10 +35,6 @@ import (
 	psysbench "workload/schema/sysbench"
 	ptxn "workload/schema/txn"
 	puuu "workload/schema/uuu"
-
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -168,7 +167,7 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 	if app.Config.OnlyDDL {
 		return nil
 	}
-
+	app.Workload.Prepare(app.DBManager.GetDB().DB)
 	app.handleWorkloadExecution(insertConcurrency, updateConcurrency, wg)
 	return nil
 }
@@ -185,10 +184,12 @@ func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.
 		}(db)
 	}
 	wg.Wait()
+	wg = &sync.WaitGroup{}
 	plog.Info("All dbs create tables finished")
 	if app.Config.TotalRowCount != 0 {
 		app.executeInsertWorkers(insertConcurrency, wg)
 	}
+	wg.Wait()
 }
 
 // handleWorkloadExecution handles the workload execution

@@ -81,6 +81,9 @@ func (c *SysbenchWorkload) BuildCreateTableStatement(n int) string {
 	return fmt.Sprintf(createTable, n)
 }
 
+func (c *SysbenchWorkload) Prepare(db *sql.DB) {
+}
+
 func (c *SysbenchWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	n := rand.Int63()
 	var buf bytes.Buffer

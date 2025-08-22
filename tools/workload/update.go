@@ -21,12 +21,11 @@ import (
 	"sync"
 	"time"
 
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 	"workload/schema"
 	pbank2 "workload/schema/bank2"
 	psysbench "workload/schema/sysbench"
-
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 )
 
 // updateTask defines a task for updating data
