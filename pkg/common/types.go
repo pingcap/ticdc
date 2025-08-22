@@ -186,23 +186,32 @@ type ChangeFeedID struct {
 	DisplayName ChangeFeedDisplayName `json:"display"`
 }
 
-func NewChangefeedID() ChangeFeedID {
+func NewChangefeedID(namespace string) ChangeFeedID {
 	cfID := ChangeFeedID{
 		Id: NewGID(),
 	}
+
+	if namespace == "" {
+		namespace = DefaultNamespace
+	}
+
 	cfID.DisplayName = ChangeFeedDisplayName{
 		Name:      cfID.Id.String(),
-		Namespace: DefaultNamespace,
+		Namespace: namespace,
 	}
 	return cfID
 }
 
-func NewChangeFeedIDWithName(name string) ChangeFeedID {
+func NewChangeFeedIDWithName(name string, namespace string) ChangeFeedID {
+	if namespace == "" {
+		namespace = DefaultNamespace
+	}
+
 	return ChangeFeedID{
 		Id: NewGID(),
 		DisplayName: ChangeFeedDisplayName{
 			Name:      name,
-			Namespace: DefaultNamespace,
+			Namespace: namespace,
 		},
 	}
 }

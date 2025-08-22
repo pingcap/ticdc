@@ -69,11 +69,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	namespace := GetNamespaceValueWithDefault(c)
+
 	var changefeedID common.ChangeFeedID
 	if cfg.ID == "" {
-		changefeedID = common.NewChangefeedID()
+		changefeedID = common.NewChangefeedID(namespace)
 	} else {
-		changefeedID = common.NewChangeFeedIDWithName(cfg.ID)
+		changefeedID = common.NewChangeFeedIDWithName(cfg.ID, namespace)
 	}
 	// verify changefeedID
 	if err := common.ValidateChangefeedID(changefeedID.Name()); err != nil {
@@ -1182,7 +1184,7 @@ func (h *OpenAPIV2) syncState(c *gin.Context) {
 }
 
 func GetNamespaceValueWithDefault(c *gin.Context) string {
-	namespace := c.Query(api.APIOpVarNamespace)
+	namespace := c.Query(api.APIOpVarKeyspaceID)
 	if namespace == "" {
 		namespace = common.DefaultNamespace
 	}
