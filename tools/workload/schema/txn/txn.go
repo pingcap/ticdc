@@ -20,10 +20,9 @@ import (
 	"math/rand"
 	"sync/atomic"
 
-	"workload/schema"
-
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
 )
 
 const createTable = `
