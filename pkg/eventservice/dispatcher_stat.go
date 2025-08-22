@@ -226,9 +226,8 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	resetTs := a.resetTs.Load()
 	if startTs < resetTs {
 		log.Warn("resetTs is greater than startTs, set startTs as the resetTs",
-			zap.Uint64("resetTs", resetTs),
-			zap.Uint64("startTs", startTs),
-			zap.Stringer("dispatcherID", a.id))
+			zap.Stringer("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
+			zap.Uint64("resetTs", resetTs), zap.Uint64("startTs", startTs))
 		startTs = resetTs
 	}
 

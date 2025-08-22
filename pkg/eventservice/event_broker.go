@@ -213,7 +213,8 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 	}
 	d.lastScannedCommitTs.Store(lastCommitTs)
 	d.lastScannedStartTs.Store(lastStartTs)
-	log.Info("update scanner progress", zap.Stringer("dispatcher", d.id),
+	log.Info("update scanner progress by send DML", zap.Stringer("dispatcher", d.id),
+		zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 		zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	doSendDML(batchEvent)
 }
@@ -252,7 +253,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	log.Info("update scanner progress by the resolved-ts",
-		zap.Any("dispatcherID", d.id),
+		zap.Any("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 		zap.Uint64("lastCommitTs", d.lastScannedCommitTs.Load()), zap.Uint64("lastStartTs", d.lastScannedStartTs.Load()))
 	metricEventServiceSendResolvedTsCount.Inc()
 }
@@ -383,6 +384,11 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		dataRange.StartTs >= ddlState.MaxEventCommitTs {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
+		log.Warn("send resolved-ts since no data to scan",
+			zap.Any("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
+			zap.Uint64("startTs", dataRange.StartTs), zap.Uint64("lastScannedStartTs", dataRange.LastScannedStartTs),
+			zap.Uint64("endTs", dataRange.EndTs),
+		)
 		c.sendResolvedTs(task, dataRange.EndTs)
 		return false, common.DataRange{}
 	}
