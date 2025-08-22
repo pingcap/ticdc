@@ -301,4 +301,5 @@ const (
 	CloudStorageSinkType
 	BlackHoleSinkType
 	RedoSinkType
+	TxnSinkType
 )

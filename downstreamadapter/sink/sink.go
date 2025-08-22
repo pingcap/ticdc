@@ -22,10 +22,12 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/kafka"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/pulsar"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/txnsink"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	mysqlpkg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 )
 
@@ -50,7 +52,7 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
-		return mysql.New(ctx, changefeedID, cfg, sinkURI)
+		return newTxnSinkAdapter(ctx, changefeedID, cfg, sinkURI)
 	case config.KafkaScheme, config.KafkaSSLScheme:
 		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
@@ -61,6 +63,31 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 		return blackhole.New()
 	}
 	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
+}
+
+// newTxnSinkAdapter creates a txnSink adapter that uses the same database connection as mysqlSink
+func newTxnSinkAdapter(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	config *config.ChangefeedConfig,
+	sinkURI *url.URL,
+) (Sink, error) {
+	// Use the same database connection logic as mysqlSink
+	_, db, err := mysqlpkg.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create txnSink configuration
+	txnConfig := &txnsink.TxnSinkConfig{
+		MaxConcurrentTxns: 16,
+		BatchSize:         16,
+		FlushInterval:     100,
+		MaxSQLBatchSize:   1024 * 16, // 1MB
+	}
+
+	// Create and return txnSink
+	return txnsink.New(ctx, changefeedID, db, txnConfig), nil
 }
 
 func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
