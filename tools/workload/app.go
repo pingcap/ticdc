@@ -22,9 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
@@ -33,7 +30,12 @@ import (
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
+	ptxn "workload/schema/txn"
 	puuu "workload/schema/uuu"
+
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -73,6 +75,7 @@ const (
 	crawler    = "crawler"
 	bank2      = "bank2"
 	bankUpdate = "bank_update"
+	txn        = "txn"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -129,6 +132,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pbank2.NewBank2Workload()
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
+	case txn:
+		workload = ptxn.NewTxnWorkload(app.Config.TotalRowCount, app.Config.TableCount, app.Config.TableStartIndex, app.Config.CrossTable)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
@@ -322,10 +327,20 @@ func (app *WorkloadApp) executeWithValues(conn *sql.Conn, sqlStr string, n int, 
 			return nil, err
 		}
 		// Create table if not exists
-		_, err := conn.ExecContext(context.Background(), app.Workload.BuildCreateTableStatement(n))
-		if err != nil {
-			plog.Info("create table error: ", zap.Error(err))
-			return nil, err
+		if app.Config.Action == txn && app.Config.CrossTable {
+			for tableIndex := 0; tableIndex < app.Config.TableCount; tableIndex++ {
+				sql := app.Workload.BuildCreateTableStatement(tableIndex + app.Config.TableStartIndex)
+				if _, err := conn.ExecContext(context.Background(), sql); err != nil {
+					plog.Info("create table error: ", zap.Error(err))
+					return nil, err
+				}
+			}
+		} else {
+			_, err := conn.ExecContext(context.Background(), app.Workload.BuildCreateTableStatement(n))
+			if err != nil {
+				plog.Info("create table error: ", zap.Error(err))
+				return nil, err
+			}
 		}
 		// Try prepare again
 		stmt, err = conn.PrepareContext(context.Background(), sqlStr)
