@@ -386,7 +386,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				if d.tableSchemaStore != nil {
 					d.tableSchemaStore.AddEvent(ddl)
 				}
-				log.Error("write ddl successed", zap.Any("redo", isRedo), zap.Any("id", d.id))
 				wakeCallback()
 			})
 			d.dealWithBlockEvent(ddl)

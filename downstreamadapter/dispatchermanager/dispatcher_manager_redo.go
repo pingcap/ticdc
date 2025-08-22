@@ -208,17 +208,17 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 				zap.Any("resolvedTs", resolvedTs),
 			)
 			// Avoid invalid message
-			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
-				log.Error("send redo msg ignore")
-				continue
-			}
+			// if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
+			// 	log.Error("send redo msg ignore")
+			// 	continue
+			// }
 			// The length of dispatcher map is zero, we should not update the previous ts.
-			if checkpointTs != math.MaxUint64 {
-				previousCheckpointTs = max(previousCheckpointTs, checkpointTs)
-			}
-			if resolvedTs != math.MaxUint64 {
-				previousResolvedTs = max(previousResolvedTs, resolvedTs)
-			}
+			// if checkpointTs != math.MaxUint64 {
+			// 	previousCheckpointTs = max(previousCheckpointTs, checkpointTs)
+			// }
+			// if resolvedTs != math.MaxUint64 {
+			// 	previousResolvedTs = max(previousResolvedTs, resolvedTs)
+			// }
 			message := &heartbeatpb.RedoTsMessage{
 				ChangefeedID: e.changefeedID.ToPB(),
 				CheckpointTs: checkpointTs,
