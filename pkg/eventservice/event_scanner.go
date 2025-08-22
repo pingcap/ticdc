@@ -173,10 +173,10 @@ func (s *eventScanner) scanAndMergeEvents(
 	merger *eventMerger,
 	iter eventstore.EventIterator,
 ) (bool, error) {
-	processor := newDMLProcessor(s.mounter, s.schemaGetter, session.dispatcherStat.info.IsOutputRawChangeEvent())
-
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
+	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent())
+
 	for {
 		shouldStop, err := s.checkScanConditions(session)
 		if err != nil {
@@ -201,7 +201,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			// table is deleted, still append remaining DDL event and resolved event.
 			if tableInfo == nil {
 				err = finalizeScan(merger, processor, session, rawEvent.CRTs-1)
-				return false, nil
+				return false, err
 			}
 
 			if err = s.commitTxn(session, merger, processor, rawEvent.CRTs, tableInfo.GetUpdateTS()); err != nil {
@@ -474,6 +474,8 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
+	filter filter.Filter
+
 	// insertRowCache is used to cache the split update event's insert part of the current transaction.
 	// It will be used to append to the current DML event when the transaction is finished.
 	// And it will be cleared when the transaction is finished.
@@ -487,10 +489,14 @@ type dmlProcessor struct {
 }
 
 // newDMLProcessor creates a new DML processor
-func newDMLProcessor(mounter event.Mounter, schemaGetter schemaGetter, outputRawChangeEvent bool) *dmlProcessor {
+func newDMLProcessor(
+	mounter event.Mounter, schemaGetter schemaGetter,
+	filter filter.Filter, outputRawChangeEvent bool,
+) *dmlProcessor {
 	return &dmlProcessor{
 		mounter:              mounter,
 		schemaGetter:         schemaGetter,
+		filter:               filter,
 		batchDML:             event.NewBatchDMLEvent(),
 		insertRowCache:       make([]*common.RawKVEntry, 0),
 		outputRawChangeEvent: outputRawChangeEvent,
@@ -514,7 +520,7 @@ func (p *dmlProcessor) startTxn(
 func (p *dmlProcessor) commitTxn() error {
 	if p.currentDML != nil && len(p.insertRowCache) > 0 {
 		for _, insertRow := range p.insertRowCache {
-			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
+			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter); err != nil {
 				return err
 			}
 		}
@@ -555,7 +561,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	}
 
 	if !rawEvent.IsUpdate() {
-		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
+		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
 	var (
@@ -570,7 +576,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	}
 
 	if !shouldSplit {
-		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
+		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
 	log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
@@ -581,7 +587,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		return err
 	}
 	p.insertRowCache = append(p.insertRowCache, insertRow)
-	return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
+	return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter)
 }
 
 // getResolvedBatchDML returns the current batch DML event

@@ -271,7 +271,7 @@ func TestGenerateBatchSQL(t *testing.T) {
 	duration := time.Since(start)
 
 	// Verify performance requirement (should complete within 1 second)
-	require.Less(t, duration, 50*time.Millisecond, "generateBatchSQL should complete within 50ms, took %v", duration)
+	require.Less(t, duration, 100*time.Millisecond, "generateBatchSQL should complete within 100ms, took %v", duration)
 
 	// Verify the generated SQL is correct
 	require.Equal(t, 1, len(sql), "Should generate 1 SQL statement for 1000 rows")

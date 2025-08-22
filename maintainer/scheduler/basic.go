@@ -16,6 +16,7 @@ package scheduler
 import (
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -25,6 +26,7 @@ import (
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
+	"go.uber.org/zap"
 )
 
 // basicScheduler generates operators for the spans, and push them to the operator controller
@@ -114,7 +116,12 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 			scheduleNodeSize[id] = 0
 		}
 		if groupID != pkgreplica.DefaultGroupID {
-			size += s.schedulingTaskCountPerNode - scheduleNodeSize[id]
+			num := s.schedulingTaskCountPerNode - scheduleNodeSize[id]
+			if num >= 0 {
+				size += num
+			} else {
+				log.Warn("available size for scheduler on node is negative", zap.String("node", id.String()), zap.Any("scheduleNodeSize", scheduleNodeSize[id]), zap.Int("schedulingTaskCountPerNode", s.schedulingTaskCountPerNode))
+			}
 		}
 	}
 
@@ -123,6 +130,11 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 			return 0
 		}
 		availableSize = min(availableSize, size)
+	}
+
+	if availableSize <= 0 {
+		log.Warn("available size for scheduler is negative", zap.Int("availableSize", availableSize), zap.Any("groupID", groupID))
+		return 0
 	}
 
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
