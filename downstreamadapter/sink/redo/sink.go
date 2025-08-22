@@ -132,12 +132,16 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			if !ok || s.isClosed.Load() {
 				break
 			}
-			s.logBuffer <- &commonEvent.RedoRowEvent{
+			select {
+			case <-s.ctx.Done():
+				return 0, 0, errors.ErrDispatcherFailed
+			case s.logBuffer <- &commonEvent.RedoRowEvent{
 				StartTs:   event.StartTs,
 				CommitTs:  event.CommitTs,
 				Event:     row,
 				TableInfo: event.TableInfo,
 				Callback:  event.PostFlush,
+			}:
 			}
 		}
 		// batchSize, batchWriteBytes, err
@@ -160,7 +164,6 @@ func (s *Sink) Close(_ bool) {
 	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}
-	close(s.logBuffer)
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close ddl writer",
@@ -180,6 +183,7 @@ func (s *Sink) Close(_ bool) {
 	if s.statistics != nil {
 		s.statistics.Close()
 	}
+	close(s.logBuffer)
 	log.Info("redo manager closed",
 		zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
 		zap.String("changefeed", s.cfg.ChangeFeedID.Name()))
