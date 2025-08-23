@@ -354,13 +354,13 @@ func (e *eventStore) RegisterDispatcher(
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+			zap.Int64("tableID", dispatcherSpan.TableID),
 			zap.Uint64("startTs", startTs),
 			zap.Duration("lag", lag))
 	} else {
 		log.Info("register dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+			zap.Int64("tableID", dispatcherSpan.TableID),
 			zap.Uint64("startTs", startTs))
 	}
 
@@ -368,7 +368,8 @@ func (e *eventStore) RegisterDispatcher(
 	defer func() {
 		log.Info("register dispatcher done",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+			zap.Int64("tableID", dispatcherSpan.TableID),
+			zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs),
 			zap.Duration("duration", time.Since(start)))
 	}()
@@ -403,10 +404,9 @@ func (e *eventStore) RegisterDispatcher(
 					e.dispatcherMeta.Unlock()
 					log.Info("reuse existing subscription with exact span match",
 						zap.Stringer("dispatcherID", dispatcherID),
-						zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
+						zap.Int64("tableID", dispatcherSpan.TableID),
 						zap.Uint64("startTs", startTs),
-						zap.Uint64("subID", uint64(subStat.subID)),
-						zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
+						zap.Uint64("subscriptionID", uint64(subStat.subID)),
 						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
 					return true
 				}
@@ -433,10 +433,11 @@ func (e *eventStore) RegisterDispatcher(
 		e.dispatcherMeta.Unlock()
 		log.Info("reuse existing subscription with smallest containing span",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
+			zap.Int64("tableID", dispatcherSpan.TableID),
 			zap.Uint64("startTs", startTs),
-			zap.Uint64("subID", uint64(bestMatch.subID)),
-			zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
+			zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
+			zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
+			zap.String("matchedSpan", common.FormatTableSpan(bestMatch.tableSpan)),
 			zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
 			zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
 			zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
@@ -519,8 +520,8 @@ func (e *eventStore) RegisterDispatcher(
 	// Note: don't hold any lock when call Subscribe
 	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	log.Info("new subscription created",
-		zap.Uint64("subID", uint64(subStat.subID)),
-		zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)))
+		zap.String("dispatcherID", dispatcherID.String()), zap.Int64("tableID", dispatcherSpan.TableID),
+		zap.Uint64("subscriptionID", uint64(subStat.subID)), zap.Uint64("startTs", startTs))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(subStat.subID),
@@ -730,9 +731,10 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	if len(subStat.dispatchers.notifiers) == 0 {
 		subStat.idleTime.Store(time.Now().UnixMilli())
 		log.Info("subscription is idle, set idle time",
-			zap.Uint64("subID", uint64(subStat.subID)),
-			zap.Int("dbIndex", subStat.dbIndex),
-			zap.Int64("tableID", subStat.tableSpan.TableID))
+			zap.Any("dispatcherID", dispatcherID),
+			zap.Uint64("subscriptionID", uint64(subStat.subID)),
+			zap.Int64("tableID", subStat.tableSpan.TableID),
+			zap.Int("dbIndex", subStat.dbIndex))
 	}
 }
 
@@ -986,7 +988,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 		case change := <-e.subscriptionChangeCh.Out():
 			switch change.ChangeType {
 			case SubscriptionChangeTypeAdd:
-				log.Info("add subscription for upload state", zap.Uint64("subID", change.SubID))
+				log.Info("add subscription for upload state", zap.Uint64("subscriptionID", change.SubID))
 				if tableState, ok := state.TableStates[change.Span.TableID]; ok {
 					tableState.Subscriptions = append(tableState.Subscriptions, &logservicepb.SubscriptionState{
 						SubID:        change.SubID,
@@ -1007,7 +1009,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 			case SubscriptionChangeTypeRemove:
-				log.Info("remove subscription from upload state", zap.Uint64("subID", change.SubID))
+				log.Info("remove subscription from upload state", zap.Uint64("subscriptionID", change.SubID))
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {
 					log.Panic("cannot find table state", zap.Int64("tableID", change.Span.TableID))
@@ -1020,7 +1022,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 				if targetIndex == -1 {
-					log.Panic("cannot find subscription state", zap.Uint64("subID", change.SubID))
+					log.Panic("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 				}
 				tableState.Subscriptions = append(tableState.Subscriptions[:targetIndex], tableState.Subscriptions[targetIndex+1:]...)
 			case SubscriptionChangeTypeUpdate:
@@ -1037,13 +1039,13 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 				if targetIndex == -1 {
-					log.Warn("cannot find subscription state", zap.Uint64("subID", change.SubID))
+					log.Warn("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 					continue
 				}
 				if change.CheckpointTs < tableState.Subscriptions[targetIndex].CheckpointTs ||
 					change.ResolvedTs < tableState.Subscriptions[targetIndex].ResolvedTs {
 					log.Panic("should not happen",
-						zap.Uint64("subID", change.SubID),
+						zap.Uint64("subscriptionID", change.SubID),
 						zap.Uint64("oldCheckpointTs", tableState.Subscriptions[targetIndex].CheckpointTs),
 						zap.Uint64("oldResolvedTs", tableState.Subscriptions[targetIndex].ResolvedTs),
 						zap.Uint64("newCheckpointTs", change.CheckpointTs),
