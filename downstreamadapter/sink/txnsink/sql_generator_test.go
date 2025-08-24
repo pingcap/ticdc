@@ -57,10 +57,10 @@ func TestSQLGenerator_ConvertTxnGroupToSQL(t *testing.T) {
 
 	// Verify transaction structure
 	require.Equal(t, txnGroup, txnSQL.TxnGroup)
-	require.Len(t, txnSQL.SQLs, 1)
+	require.NotEmpty(t, txnSQL.SQL)
 
 	// Verify SQL format: should start with BEGIN and end with COMMIT
-	sql := txnSQL.SQLs[0]
+	sql := txnSQL.SQL
 	require.True(t, strings.HasPrefix(sql, "BEGIN;"))
 	require.True(t, strings.HasSuffix(sql, ";COMMIT;"))
 
@@ -86,8 +86,8 @@ func TestSQLGenerator_ConvertTxnGroupToSQL_EmptyGroup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, txnSQL)
 
-	// Should have empty SQL list
-	require.Len(t, txnSQL.SQLs, 0)
+	// Should have empty SQL
+	require.Empty(t, txnSQL.SQL)
 }
 
 func TestSQLGenerator_ConvertTxnGroupToSQL_MultiTable(t *testing.T) {
@@ -129,8 +129,8 @@ func TestSQLGenerator_ConvertTxnGroupToSQL_MultiTable(t *testing.T) {
 	require.NotNil(t, txnSQL)
 
 	// Should have one transaction SQL
-	require.Len(t, txnSQL.SQLs, 1)
-	sql := txnSQL.SQLs[0]
+	require.NotEmpty(t, txnSQL.SQL)
+	sql := txnSQL.SQL
 
 	// Should contain both tables
 	require.Contains(t, sql, "`test`.`t1`")
@@ -299,8 +299,8 @@ func TestSQLGenerator_MixedOperations(t *testing.T) {
 	require.NotNil(t, txnSQL)
 
 	// Should have one transaction SQL
-	require.Len(t, txnSQL.SQLs, 1)
-	sql := txnSQL.SQLs[0]
+	require.NotEmpty(t, txnSQL.SQL)
+	sql := txnSQL.SQL
 
 	// Verify transaction format
 	require.True(t, strings.HasPrefix(sql, "BEGIN;"))

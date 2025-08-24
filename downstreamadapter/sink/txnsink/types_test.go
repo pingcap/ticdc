@@ -315,7 +315,7 @@ func TestConflictDetector_Creation(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	detector := NewConflictDetector(changefeedID)
+	detector := NewConflictDetector(changefeedID, 16)
 
 	require.NotNil(t, detector)
 	require.NotNil(t, detector.resolvedTxnCaches)
@@ -329,7 +329,7 @@ func TestConflictDetector_GetOutChByCacheID(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	detector := NewConflictDetector(changefeedID)
+	detector := NewConflictDetector(changefeedID, 16)
 
 	// Test valid cache ID
 	ch := detector.GetOutChByCacheID(0)

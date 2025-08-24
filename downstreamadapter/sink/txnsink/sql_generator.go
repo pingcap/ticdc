@@ -16,10 +16,12 @@ package txnsink
 import (
 	"strings"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap"
 )
 
 // SQLGenerator handles SQL generation for transaction groups
@@ -57,27 +59,30 @@ func (g *SQLGenerator) ConvertTxnGroupToSQL(txnGroup *TxnGroup) (*TxnSQL, error)
 		allSQLs = append(allSQLs, sqls...)
 		allArgs = append(allArgs, args...)
 	}
-
 	// Wrap in transaction
-	if len(allSQLs) > 0 {
-		transactionSQL := "BEGIN;" + strings.Join(allSQLs, ";") + ";COMMIT;"
-		transactionArgs := make([]interface{}, 0)
-		for _, arg := range allArgs {
-			transactionArgs = append(transactionArgs, arg...)
-		}
-
-		return &TxnSQL{
-			TxnGroup: txnGroup,
-			SQLs:     []string{transactionSQL},
-			Keys:     txnGroup.ExtractKeys(),
-		}, nil
+	var transactionSQL string
+	if len(allSQLs) == 0 {
+		transactionSQL = ""
+	} else {
+		transactionSQL = "BEGIN;" + strings.Join(allSQLs, ";") + ";COMMIT;"
 	}
+	transactionArgs := make([]interface{}, 0)
+	for _, arg := range allArgs {
+		transactionArgs = append(transactionArgs, arg...)
+	}
+
+	log.Info("hyy generate sql",
+		zap.Any("commitTs", txnGroup.CommitTs),
+		zap.Any("startTs", txnGroup.StartTs),
+		zap.Any("sql", transactionSQL))
 
 	return &TxnSQL{
 		TxnGroup: txnGroup,
-		SQLs:     []string{},
+		SQL:      transactionSQL,
+		Args:     transactionArgs,
 		Keys:     txnGroup.ExtractKeys(),
 	}, nil
+
 }
 
 // generateTableSQL generates SQL statements for events of the same table

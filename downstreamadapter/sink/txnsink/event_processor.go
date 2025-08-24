@@ -10,13 +10,15 @@ import (
 
 // EventProcessor handles DML events and checkpoint processing
 type EventProcessor struct {
-	txnStore *TxnStore
+	txnStore        *TxnStore
+	progressTracker *ProgressTracker
 }
 
 // NewEventProcessor creates a new event processor
-func NewEventProcessor(txnStore *TxnStore) *EventProcessor {
+func NewEventProcessor(txnStore *TxnStore, progressTracker *ProgressTracker) *EventProcessor {
 	return &EventProcessor{
-		txnStore: txnStore,
+		txnStore:        txnStore,
+		progressTracker: progressTracker,
 	}
 }
 
@@ -57,7 +59,7 @@ func (p *EventProcessor) processDMLEvent(event *commonEvent.DMLEvent) {
 	// Add event to the transaction store
 	p.txnStore.AddEvent(event)
 
-	log.Debug("txnSink: processed DML event",
+	log.Info("txnSink: processed DML event",
 		zap.Uint64("commitTs", event.CommitTs),
 		zap.Uint64("startTs", event.StartTs),
 		zap.Int64("tableID", event.GetTableID()),
@@ -66,32 +68,39 @@ func (p *EventProcessor) processDMLEvent(event *commonEvent.DMLEvent) {
 
 // processCheckpoint processes a checkpoint timestamp
 func (p *EventProcessor) processCheckpoint(checkpointTs uint64, txnChan chan<- *TxnGroup) error {
-	// Get all events with commitTs <= checkpointTs
-	events := p.txnStore.GetEventsByCheckpointTs(checkpointTs)
-	if len(events) == 0 {
-		log.Debug("txnSink: no events to process for checkpoint",
+	log.Info("hyy process checkpoint",
+		zap.Uint64("checkpointTs", checkpointTs))
+	// Get all events with commitTs <= checkpointTs (already sorted by commitTs)
+	txnGroups := p.txnStore.GetEventsByCheckpointTs(checkpointTs)
+	if len(txnGroups) == 0 {
+		log.Info("txnSink: no events to process for checkpoint",
 			zap.Uint64("checkpointTs", checkpointTs))
+		p.progressTracker.UpdateCheckpointTs(checkpointTs)
 		return nil
 	}
 
-	// Events are already grouped by TxnStore.GetEventsByCheckpointTs
-	txnGroups := events
+	// Add all transaction groups to pending transactions for progress tracking
+	for _, txnGroup := range txnGroups {
+		p.progressTracker.AddPendingTxn(txnGroup.CommitTs, txnGroup.StartTs)
+	}
 
 	// Send transaction groups to the output channel
 	for _, txnGroup := range txnGroups {
 		txnChan <- txnGroup
-		log.Debug("txnSink: sent transaction group",
+		log.Info("txnSink: sent transaction group",
 			zap.Uint64("commitTs", txnGroup.CommitTs),
 			zap.Uint64("startTs", txnGroup.StartTs),
 			zap.Int("eventCount", len(txnGroup.Events)))
 	}
+
+	// Update checkpoint progress
+	p.progressTracker.UpdateCheckpointTs(checkpointTs)
 
 	// Remove processed events from the store
 	p.txnStore.RemoveEventsByCheckpointTs(checkpointTs)
 
 	log.Info("txnSink: processed checkpoint",
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.Int("eventCount", len(events)),
 		zap.Int("txnGroupCount", len(txnGroups)))
 
 	return nil

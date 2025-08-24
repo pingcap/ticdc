@@ -43,12 +43,13 @@ func TestDBExecutor_ExecuteTransaction(t *testing.T) {
 
 	txnSQL := &TxnSQL{
 		TxnGroup: txnGroup,
-		SQLs:     []string{"BEGIN;INSERT INTO test VALUES (1, 'test');UPDATE test SET name = 'updated' WHERE id = 1;COMMIT;"},
+		SQL:      "BEGIN;INSERT INTO test VALUES (1, 'test');UPDATE test SET name = 'updated' WHERE id = 1;COMMIT;",
+		Args:     []interface{}{},
 		Keys:     map[string]struct{}{"key1": {}},
 	}
 
 	// Set up mock expectations - expect the full SQL with BEGIN/COMMIT
-	mock.ExpectExec("BEGIN;INSERT INTO test VALUES").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("BEGIN;INSERT INTO test VALUES").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute transaction
 	err = executor.ExecuteSQLBatch([]*TxnSQL{txnSQL})
@@ -77,7 +78,8 @@ func TestDBExecutor_ExecuteTransaction_EmptySQL(t *testing.T) {
 
 	txnSQL := &TxnSQL{
 		TxnGroup: txnGroup,
-		SQLs:     []string{},
+		SQL:      "",
+		Args:     []interface{}{},
 		Keys:     map[string]struct{}{},
 	}
 
@@ -108,7 +110,8 @@ func TestDBExecutor_ExecuteTransaction_BeginError(t *testing.T) {
 
 	txnSQL := &TxnSQL{
 		TxnGroup: txnGroup,
-		SQLs:     []string{"BEGIN;INSERT INTO test VALUES (1, 'test');COMMIT;"},
+		SQL:      "BEGIN;INSERT INTO test VALUES (1, 'test');COMMIT;",
+		Args:     []interface{}{},
 		Keys:     map[string]struct{}{"key1": {}},
 	}
 
@@ -143,7 +146,8 @@ func TestDBExecutor_ExecuteTransaction_ExecError(t *testing.T) {
 
 	txnSQL := &TxnSQL{
 		TxnGroup: txnGroup,
-		SQLs:     []string{"BEGIN;INSERT INTO test VALUES (1, 'test');UPDATE test SET name = 'updated' WHERE id = 1;COMMIT;"},
+		SQL:      "BEGIN;INSERT INTO test VALUES (1, 'test');UPDATE test SET name = 'updated' WHERE id = 1;COMMIT;",
+		Args:     []interface{}{},
 		Keys:     map[string]struct{}{"key1": {}},
 	}
 
@@ -178,7 +182,8 @@ func TestDBExecutor_ExecuteTransaction_CommitError(t *testing.T) {
 
 	txnSQL := &TxnSQL{
 		TxnGroup: txnGroup,
-		SQLs:     []string{"BEGIN;INSERT INTO test VALUES (1, 'test');COMMIT;"},
+		SQL:      "BEGIN;INSERT INTO test VALUES (1, 'test');COMMIT;",
+		Args:     []interface{}{},
 		Keys:     map[string]struct{}{"key1": {}},
 	}
 
@@ -213,7 +218,8 @@ func TestDBExecutor_ExecuteTransaction_Timeout(t *testing.T) {
 
 	txnSQL := &TxnSQL{
 		TxnGroup: txnGroup,
-		SQLs:     []string{"BEGIN;INSERT INTO test VALUES (1, 'test');COMMIT;"},
+		SQL:      "BEGIN;INSERT INTO test VALUES (1, 'test');COMMIT;",
+		Args:     []interface{}{},
 		Keys:     map[string]struct{}{"key1": {}},
 	}
 
@@ -249,14 +255,13 @@ func TestDBExecutor_ExecuteTransaction_MultipleSQL(t *testing.T) {
 
 	txnSQL := &TxnSQL{
 		TxnGroup: txnGroup,
-		SQLs: []string{
-			"BEGIN;INSERT INTO users VALUES (1, 'alice');INSERT INTO users VALUES (2, 'bob');UPDATE users SET name = 'alice_updated' WHERE id = 1;DELETE FROM users WHERE id = 2;COMMIT;",
-		},
-		Keys: map[string]struct{}{"user1": {}, "user2": {}},
+		SQL:      "BEGIN;INSERT INTO users VALUES (1, 'alice');INSERT INTO users VALUES (2, 'bob');UPDATE users SET name = 'alice_updated' WHERE id = 1;DELETE FROM users WHERE id = 2;COMMIT;",
+		Args:     []interface{}{},
+		Keys:     map[string]struct{}{"user1": {}, "user2": {}},
 	}
 
 	// Set up mock expectations for the combined SQL
-	mock.ExpectExec("BEGIN;INSERT INTO users VALUES").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("BEGIN;INSERT INTO users VALUES").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute transaction
 	err = executor.ExecuteSQLBatch([]*TxnSQL{txnSQL})
@@ -299,7 +304,7 @@ func createMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, func()) {
 }
 
 // Test helper function to create a test TxnSQL
-func createTestTxnSQL(sqls []string) *TxnSQL {
+func createTestTxnSQL(sql string) *TxnSQL {
 	txnGroup := &TxnGroup{
 		CommitTs: 100,
 		StartTs:  50,
@@ -308,7 +313,8 @@ func createTestTxnSQL(sqls []string) *TxnSQL {
 
 	return &TxnSQL{
 		TxnGroup: txnGroup,
-		SQLs:     sqls,
+		SQL:      sql,
+		Args:     []interface{}{},
 		Keys:     map[string]struct{}{"test_key": {}},
 	}
 }
@@ -321,24 +327,15 @@ func BenchmarkDBExecutor_ExecuteTransaction(b *testing.B) {
 	executor := NewDBExecutor(db)
 
 	// Create test transaction SQL
-	txnSQL := createTestTxnSQL([]string{
-		"INSERT INTO test VALUES (1, 'test')",
-		"UPDATE test SET name = 'updated' WHERE id = 1",
-	})
+	txnSQL := createTestTxnSQL("BEGIN;INSERT INTO test VALUES (1, 'test');UPDATE test SET name = 'updated' WHERE id = 1;COMMIT;")
 
 	// Set up mock expectations
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO test VALUES").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("UPDATE test SET").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	mock.ExpectExec("BEGIN;INSERT INTO test VALUES").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Reset mock expectations for each iteration
-		mock.ExpectBegin()
-		mock.ExpectExec("INSERT INTO test VALUES").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectExec("UPDATE test SET").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectCommit()
+		mock.ExpectExec("BEGIN;INSERT INTO test VALUES").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
 
 		err := executor.ExecuteSQLBatch([]*TxnSQL{txnSQL})
 		require.NoError(b, err)
@@ -352,19 +349,15 @@ func BenchmarkDBExecutor_ExecuteTransaction_SingleSQL(b *testing.B) {
 	executor := NewDBExecutor(db)
 
 	// Create test transaction SQL with single statement
-	txnSQL := createTestTxnSQL([]string{"INSERT INTO test VALUES (1, 'test')"})
+	txnSQL := createTestTxnSQL("BEGIN;INSERT INTO test VALUES (1, 'test');COMMIT;")
 
 	// Set up mock expectations
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO test VALUES").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	mock.ExpectExec("BEGIN;INSERT INTO test VALUES").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Reset mock expectations for each iteration
-		mock.ExpectBegin()
-		mock.ExpectExec("INSERT INTO test VALUES").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectCommit()
+		mock.ExpectExec("BEGIN;INSERT INTO test VALUES").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
 
 		err := executor.ExecuteSQLBatch([]*TxnSQL{txnSQL})
 		require.NoError(b, err)

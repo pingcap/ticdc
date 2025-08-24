@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/binary"
 	"hash/fnv"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +53,11 @@ func NewTxnStore() *TxnStore {
 
 // AddEvent adds a DML event to the store
 func (ts *TxnStore) AddEvent(event *commonEvent.DMLEvent) {
+	log.Info("txnSink: add event",
+		zap.Uint64("commitTs", event.CommitTs),
+		zap.Uint64("startTs", event.StartTs),
+		zap.Int64("tableID", event.GetTableID()),
+		zap.Int32("rowCount", event.Len()))
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -65,6 +71,7 @@ func (ts *TxnStore) AddEvent(event *commonEvent.DMLEvent) {
 }
 
 // GetEventsByCheckpointTs retrieves all events with commitTs <= checkpointTs
+// Returns txnGroups sorted by commitTs in ascending order
 func (ts *TxnStore) GetEventsByCheckpointTs(checkpointTs uint64) []*TxnGroup {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -81,6 +88,12 @@ func (ts *TxnStore) GetEventsByCheckpointTs(checkpointTs uint64) []*TxnGroup {
 			}
 		}
 	}
+
+	// Sort groups by commitTs in ascending order
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].CommitTs < groups[j].CommitTs
+	})
+
 	return groups
 }
 
@@ -137,7 +150,8 @@ func (tg *TxnGroup) PostFlush() {
 // TxnSQL represents the SQL statements for a transaction
 type TxnSQL struct {
 	TxnGroup *TxnGroup
-	SQLs     []string
+	SQL      string
+	Args     []interface{}
 	Keys     map[string]struct{}
 }
 
@@ -376,9 +390,9 @@ type ConflictDetector struct {
 }
 
 // NewConflictDetector creates a new ConflictDetector instance
-func NewConflictDetector(changefeedID common.ChangeFeedID) *ConflictDetector {
+func NewConflictDetector(changefeedID common.ChangeFeedID, maxConcurrentTxns int) *ConflictDetector {
 	opt := TxnCacheOption{
-		Count:         10, // Default worker count
+		Count:         maxConcurrentTxns, // Default worker count
 		Size:          1024,
 		BlockStrategy: BlockStrategyWaitEmpty,
 	}
