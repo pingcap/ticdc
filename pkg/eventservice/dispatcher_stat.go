@@ -138,7 +138,7 @@ func newDispatcherStat(
 		info:               info,
 		filter:             filter,
 	}
-	changefeedStatus.addDispatcher()
+	changefeedStatus.addDispatcher(info.GetServerID())
 
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
@@ -430,6 +430,9 @@ type changefeedStatus struct {
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
 	dispatcherCount atomic.Uint64
 
+	// nodes is the set of nodes that this changefeed dispatches to.
+	nodes *nodes
+
 	dispatcherStatMap sync.Map // nodeID -> dispatcherID -> dispatcherStat
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
@@ -439,15 +442,55 @@ func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 	stat := &changefeedStatus{
 		changefeedID:         changefeedID,
 		isReadyReceivingData: atomic.Bool{},
+		nodes:                newNodes(),
 	}
 	stat.isReadyReceivingData.Store(true)
 	return stat
 }
 
-func (c *changefeedStatus) addDispatcher() {
+func (c *changefeedStatus) addDispatcher(serverID string) {
+	c.nodes.Add(node.ID(serverID))
 	c.dispatcherCount.Inc()
 }
 
-func (c *changefeedStatus) removeDispatcher() {
+func (c *changefeedStatus) removeDispatcher(serverID string) {
 	c.dispatcherCount.Dec()
+	if c.dispatcherCount.Load() == 0 {
+		c.nodes.Remove(node.ID(serverID))
+	}
+}
+
+type nodes struct {
+	m    sync.RWMutex
+	memo map[node.ID]struct{}
+}
+
+func newNodes() *nodes {
+	return &nodes{
+		memo: make(map[node.ID]struct{}),
+	}
+}
+
+// Add the given nodeID to the set, return true if it already exists.
+// otherwise it's a newly added nodeID and return false.
+func (n *nodes) Add(nodeID node.ID) {
+	n.m.Lock()
+	defer n.m.Unlock()
+	if _, ok := n.memo[nodeID]; ok {
+		return
+	}
+	n.memo[nodeID] = struct{}{}
+	return
+}
+
+func (n *nodes) Remove(nodeID node.ID) {
+	n.m.Lock()
+	defer n.m.Unlock()
+	delete(n.memo, nodeID)
+}
+
+func (n *nodes) Len() int {
+	n.m.RLock()
+	defer n.m.RUnlock()
+	return len(n.memo)
 }

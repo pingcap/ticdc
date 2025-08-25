@@ -590,9 +590,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			ratio := float64(portion) / float64(sum)
 			quota := uint64(float64(total) * ratio)
 
-			// todo: this should consider the count of nodes.
-			if quota < uint64(config.GetGlobalServerConfig().Debug.EventService.AvailableLowThresh) {
-				quota = uint64(config.GetGlobalServerConfig().Debug.EventService.AvailableLowThresh)
+			lowest := uint64(config.GetGlobalServerConfig().Debug.EventService.AvailableLowThresh / len(proportions))
+			if quota < lowest {
+				quota = lowest
 			}
 
 			m, ok := result[nodeID]
