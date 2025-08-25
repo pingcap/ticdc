@@ -122,9 +122,9 @@ func (t *TxnWorkload) BuildInsertSql(tableN int, batchSize int) string {
 			tableN = rand.Intn(t.tableCount) + t.startIndex
 		}
 		idx := t.tableMap[tableN]
-		id := idx.Add(1)
-		buf.WriteString(fmt.Sprintf("insert into sbtest%d (id, k, c, pad, commitTs) values(%d, %d, 'abcdefghijklmnopsrstuvwxyzabcd', '%s', '%d');",
-			tableN, id, rand.Int63(), getPadString(), tso))
+
+		query := genInsertSQL(idx, tableN, tso)
+		buf.WriteString(query)
 	}
 	buf.WriteString("commit;")
 	return buf.String()
@@ -133,11 +133,8 @@ func (t *TxnWorkload) BuildInsertSql(tableN int, batchSize int) string {
 func (t *TxnWorkload) BuildUpdateSql(updateOption schema.UpdateOption) string {
 	batchSize := updateOption.Batch
 	tableN := updateOption.TableIndex
-	// include insert
-	if rand.Float32() > 0.5 {
-		return t.BuildInsertSql(tableN, batchSize)
-	}
 	var buf bytes.Buffer
+	var query string
 	buf.WriteString("begin;")
 	// conflict when only update because the value maybe duplicated with other row
 	tso := t.value.Add(1)
@@ -149,10 +146,27 @@ func (t *TxnWorkload) BuildUpdateSql(updateOption schema.UpdateOption) string {
 		if !ok {
 			log.Panic("failed to load table", zap.Any("tableN", tableN))
 		}
-		id := rand.Int63n(idx.Load()) + 1
-		buf.WriteString(fmt.Sprintf("update sbtest%d set pad = '%s', commitTs = '%d' where id = '%d';",
-			tableN, getPadString(), id, tso))
+
+		// include insert
+		if rand.Float32() > 0.5 {
+			query = genInsertSQL(idx, tableN, tso)
+		} else {
+			query = genUpdateSQL(idx, tableN, tso)
+		}
+		buf.WriteString(query)
 	}
 	buf.WriteString("commit;")
 	return buf.String()
+}
+
+func genInsertSQL(idx *atomic.Int64, tableN int, tso int64) string {
+	id := idx.Add(1)
+	return fmt.Sprintf("insert into sbtest%d (id, k, c, pad, commitTs) values(%d, %d, 'abcdefghijklmnopsrstuvwxyzabcd', '%s', '%d');",
+		tableN, id, rand.Int63(), getPadString(), tso)
+}
+
+func genUpdateSQL(idx *atomic.Int64, tableN int, tso int64) string {
+	id := rand.Int63n(idx.Load()) + 1
+	return fmt.Sprintf("update sbtest%d set pad = '%s', commitTs = '%d' where id = '%d';",
+		tableN, getPadString(), id, tso)
 }
