@@ -124,6 +124,44 @@ var (
 			Help:      "Busy ratio (X ms in 1s) for all workers.",
 		}, []string{"namespace", "changefeed", "id"})
 
+	// TxnSinkBatchSize records the batch size of SQL transactions
+	TxnSinkBatchSize = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_sink_batch_size",
+			Help:      "Batch size of SQL transactions in txnSink.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 16), // 1~65536
+		}, []string{"namespace", "changefeed"})
+
+	// TxnSinkBatchDuration records the duration of processing a batch of transactions
+	TxnSinkBatchDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_sink_batch_duration",
+			Help:      "Duration of processing a batch of transactions in txnSink.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
+		}, []string{"namespace", "changefeed"})
+
+	// TxnSinkPendingTxns records the number of pending transactions
+	TxnSinkPendingTxns = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_sink_pending_txns",
+			Help:      "Number of pending transactions in txnSink.",
+		}, []string{"namespace", "changefeed"})
+
+	// TxnSinkTxnStoreSize records the size of transaction store
+	TxnSinkTxnStoreSize = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_sink_txn_store_size",
+			Help:      "Size of transaction store in txnSink.",
+		}, []string{"namespace", "changefeed"})
+
 	SinkDMLBatchCommit = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -215,6 +253,10 @@ func InitSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(WorkerFlushDuration)
 	registry.MustRegister(WorkerTotalDuration)
 	registry.MustRegister(WorkerHandledRows)
+	registry.MustRegister(TxnSinkBatchSize)
+	registry.MustRegister(TxnSinkBatchDuration)
+	registry.MustRegister(TxnSinkPendingTxns)
+	registry.MustRegister(TxnSinkTxnStoreSize)
 	registry.MustRegister(SinkDMLBatchCommit)
 	registry.MustRegister(SinkDMLBatchCallback)
 	registry.MustRegister(PrepareStatementErrors)

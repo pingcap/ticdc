@@ -16,12 +16,10 @@ package txnsink
 import (
 	"strings"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"go.uber.org/zap"
 )
 
 // SQLGenerator handles SQL generation for transaction groups
@@ -70,11 +68,6 @@ func (g *SQLGenerator) ConvertTxnGroupToSQL(txnGroup *TxnGroup) (*TxnSQL, error)
 	for _, arg := range allArgs {
 		transactionArgs = append(transactionArgs, arg...)
 	}
-
-	log.Info("hyy generate sql",
-		zap.Any("commitTs", txnGroup.CommitTs),
-		zap.Any("startTs", txnGroup.StartTs),
-		zap.Any("sql", transactionSQL))
 
 	return &TxnSQL{
 		TxnGroup: txnGroup,

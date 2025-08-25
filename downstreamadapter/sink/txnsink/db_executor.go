@@ -47,79 +47,42 @@ func (e *DBExecutor) ExecuteSQLBatch(batch []*TxnSQL) error {
 
 	// Define the execution function that will be retried
 	tryExec := func() error {
-		// If batch size is 1, execute directly (SQL already contains BEGIN/COMMIT)
-		if len(batch) == 1 {
-			txnSQL := batch[0]
-			// Skip execution if SQL is empty
-			if txnSQL.SQL == "" {
-				log.Debug("txnSink: skipping empty SQL execution",
-					zap.Uint64("commitTs", txnSQL.TxnGroup.CommitTs),
-					zap.Uint64("startTs", txnSQL.TxnGroup.StartTs))
-				return nil
-			}
-
-			log.Info("hyy execute single sql",
-				zap.String("sql", txnSQL.SQL),
-				zap.Uint64("commitTs", txnSQL.TxnGroup.CommitTs),
-				zap.Uint64("startTs", txnSQL.TxnGroup.StartTs))
-
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_, execErr := e.db.ExecContext(ctx, txnSQL.SQL, txnSQL.Args...)
-			cancel()
-
-			if execErr != nil {
-				log.Error("txnSink: failed to execute single SQL",
-					zap.String("sql", txnSQL.SQL),
-					zap.Uint64("commitTs", txnSQL.TxnGroup.CommitTs),
-					zap.Uint64("startTs", txnSQL.TxnGroup.StartTs),
-					zap.Error(execErr))
-				return errors.Trace(execErr)
-			}
-
-			log.Info("txnSink: successfully executed single transaction",
-				zap.Uint64("commitTs", txnSQL.TxnGroup.CommitTs),
-				zap.Uint64("startTs", txnSQL.TxnGroup.StartTs))
-			return nil
-		}
-
-		// For multiple transactions, combine them into a single SQL statement
-		var combinedSQL []string
-		var combinedArgs []interface{}
+		// Filter out empty SQL statements
+		var validSQLs []string
+		var validArgs []interface{}
 
 		for _, txnSQL := range batch {
-			// Skip execution if SQL is empty
-			if txnSQL.SQL == "" {
-				log.Debug("txnSink: skipping empty SQL execution in batch",
-					zap.Uint64("commitTs", txnSQL.TxnGroup.CommitTs),
-					zap.Uint64("startTs", txnSQL.TxnGroup.StartTs))
-				continue
+			if txnSQL.SQL != "" {
+				validSQLs = append(validSQLs, txnSQL.SQL)
+				validArgs = append(validArgs, txnSQL.Args...)
 			}
-
-			combinedSQL = append(combinedSQL, txnSQL.SQL)
-			combinedArgs = append(combinedArgs, txnSQL.Args...)
 		}
 
-		if len(combinedSQL) == 0 {
+		if len(validSQLs) == 0 {
 			log.Debug("txnSink: no valid SQL to execute in batch")
 			return nil
 		}
 
-		// Join all SQL statements with semicolons
-		finalSQL := strings.Join(combinedSQL, ";")
+		// Combine SQL statements with semicolons
+		finalSQL := strings.Join(validSQLs, ";")
+
+		log.Info("executing transaction",
+			zap.String("sql", finalSQL),
+			zap.Any("args", validArgs))
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		_, execErr := e.db.ExecContext(ctx, finalSQL, combinedArgs...)
+		_, execErr := e.db.ExecContext(ctx, finalSQL, validArgs...)
 		cancel()
 
 		if execErr != nil {
-			log.Error("txnSink: failed to execute combined SQL batch",
+			log.Error("txnSink: failed to execute SQL batch",
 				zap.String("sql", finalSQL),
 				zap.Int("batchSize", len(batch)),
 				zap.Error(execErr))
 			return errors.Trace(execErr)
 		}
 
-		log.Debug("txnSink: successfully executed combined SQL batch",
+		log.Debug("txnSink: successfully executed SQL batch",
 			zap.String("sql", finalSQL),
 			zap.Int("batchSize", len(batch)))
 

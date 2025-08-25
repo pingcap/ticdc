@@ -16,12 +16,15 @@ package txnsink
 import (
 	"context"
 	"database/sql"
+	"strconv"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -43,6 +46,11 @@ type Worker struct {
 
 	// Statistics
 	statistics *metrics.Statistics
+
+	// Monitoring metrics
+	workerFlushDuration prometheus.Observer
+	workerTotalDuration prometheus.Observer
+	workerHandledRows   prometheus.Counter
 }
 
 // NewWorker creates a new worker instance
@@ -64,16 +72,24 @@ func NewWorker(
 		},
 	)
 
+	// Initialize monitoring metrics
+	namespace := changefeedID.Namespace()
+	changefeed := changefeedID.Name()
+	workerIDStr := strconv.Itoa(workerID)
+
 	return &Worker{
-		workerID:        workerID,
-		changefeedID:    changefeedID,
-		config:          config,
-		sqlGenerator:    NewSQLGenerator(),
-		dbExecutor:      NewDBExecutor(db),
-		progressTracker: progressTracker,
-		inputCh:         inputCh,
-		sqlChan:         sqlChan,
-		statistics:      statistics,
+		workerID:            workerID,
+		changefeedID:        changefeedID,
+		config:              config,
+		sqlGenerator:        NewSQLGenerator(),
+		dbExecutor:          NewDBExecutor(db),
+		progressTracker:     progressTracker,
+		inputCh:             inputCh,
+		sqlChan:             sqlChan,
+		statistics:          statistics,
+		workerFlushDuration: metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, workerIDStr),
+		workerTotalDuration: metrics.WorkerTotalDuration.WithLabelValues(namespace, changefeed, workerIDStr),
+		workerHandledRows:   metrics.WorkerHandledRows.WithLabelValues(namespace, changefeed, workerIDStr),
 	}
 }
 
@@ -191,6 +207,7 @@ func (w *Worker) executeSQLBatches(ctx context.Context) error {
 
 	buffer := make([]*TxnSQL, 0, w.config.BatchSize)
 	currentBatchSize := 0
+	totalStart := time.Now()
 
 	for {
 		select {
@@ -261,6 +278,10 @@ func (w *Worker) executeSQLBatches(ctx context.Context) error {
 					return err
 				}
 			}
+
+			// Record total duration for worker busy ratio calculation
+			w.workerTotalDuration.Observe(time.Since(totalStart).Seconds())
+			totalStart = time.Now()
 			buffer = buffer[:0]
 		}
 	}
@@ -271,7 +292,7 @@ func (w *Worker) calculateSQLSize(txnSQL *TxnSQL) int {
 	return len(txnSQL.SQL)
 }
 
-// executeSQLBatch executes a batch of SQL transactions
+// executeSQLBatch executes a batch of SQL transactions with monitoring metrics
 func (w *Worker) executeSQLBatch(batch []*TxnSQL) error {
 	namespace := w.changefeedID.Namespace()
 	changefeed := w.changefeedID.Name()
@@ -286,10 +307,42 @@ func (w *Worker) executeSQLBatch(batch []*TxnSQL) error {
 		return nil
 	}
 
-	err := w.dbExecutor.ExecuteSQLBatch(batch)
+	// Calculate total row count for this batch
+	totalRowCount := 0
+	for _, txnSQL := range batch {
+		for _, event := range txnSQL.TxnGroup.Events {
+			totalRowCount += int(event.Len())
+		}
+	}
+
+	// Record batch size metric
+	metrics.TxnSinkBatchSize.WithLabelValues(namespace, changefeed).Observe(float64(len(batch)))
+
+	// Record batch execution with monitoring
+	start := time.Now()
+	err := w.statistics.RecordBatchExecution(func() (int, int64, error) {
+		execErr := w.dbExecutor.ExecuteSQLBatch(batch)
+		if execErr != nil {
+			return 0, 0, execErr
+		}
+		// Return row count and approximate size (using SQL length as approximation)
+		approximateSize := int64(0)
+		for _, txnSQL := range batch {
+			approximateSize += int64(len(txnSQL.SQL))
+		}
+		return totalRowCount, approximateSize, nil
+	})
+
 	if err != nil {
 		return err
 	}
+
+	// Record flush duration and handled rows
+	w.workerFlushDuration.Observe(time.Since(start).Seconds())
+	w.workerHandledRows.Add(float64(totalRowCount))
+
+	// Record batch duration
+	metrics.TxnSinkBatchDuration.WithLabelValues(namespace, changefeed).Observe(time.Since(start).Seconds())
 
 	// Update flushed progress for all transactions in the batch
 	for _, txnSQL := range batch {
@@ -303,4 +356,13 @@ func (w *Worker) executeSQLBatch(batch []*TxnSQL) error {
 func (w *Worker) Close() {
 	w.sqlChan.Close()
 	w.dbExecutor.Close()
+
+	// Clean up monitoring metrics
+	namespace := w.changefeedID.Namespace()
+	changefeed := w.changefeedID.Name()
+	workerIDStr := strconv.Itoa(w.workerID)
+
+	metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, workerIDStr)
+	metrics.WorkerTotalDuration.DeleteLabelValues(namespace, changefeed, workerIDStr)
+	metrics.WorkerHandledRows.DeleteLabelValues(namespace, changefeed, workerIDStr)
 }
