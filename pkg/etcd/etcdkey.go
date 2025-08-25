@@ -44,8 +44,8 @@ const (
 	// DeletionCounterKey is the key path for the counter of deleted keys
 	DeletionCounterKey = metaPrefix + "/meta/ticdc-delete-etcd-key-count"
 
-	// DefaultClusterAndNamespacePrefix is the default prefix of changefeed data
-	DefaultClusterAndNamespacePrefix = "/tidb/cdc/default/default"
+	// DefaultClusterAndKeyspaceIDPrefix is the default prefix of changefeed data
+	DefaultClusterAndKeyspaceIDPrefix = "/tidb/cdc/default/default"
 	// DefaultClusterAndMetaPrefix is the default prefix of cluster meta
 	DefaultClusterAndMetaPrefix = "/tidb/cdc/default" + metaPrefix
 

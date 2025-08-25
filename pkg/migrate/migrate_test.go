@@ -224,7 +224,7 @@ func TestMigration(t *testing.T) {
 	// 7. check new version data in etcd is expected
 	for _, tc := range testCases {
 		infoResp, err := cli.Get(context.Background(),
-			fmt.Sprintf("%s%s/%s", etcd.DefaultClusterAndNamespacePrefix,
+			fmt.Sprintf("%s%s/%s", etcd.DefaultClusterAndKeyspaceIDPrefix,
 				etcd.ChangefeedInfoKey, tc.id))
 		require.NoError(t, err)
 		info := config.ChangeFeedInfo{}
@@ -238,7 +238,7 @@ func TestMigration(t *testing.T) {
 		tc.info.ChangefeedID.DisplayName.Name = info.ChangefeedID.Name()
 		require.Equal(t, tc.info, info)
 		statusResp, err := cli.Get(context.Background(),
-			fmt.Sprintf("%s%s/%s", etcd.DefaultClusterAndNamespacePrefix,
+			fmt.Sprintf("%s%s/%s", etcd.DefaultClusterAndKeyspaceIDPrefix,
 				etcd.ChangefeedStatusKey, tc.id))
 		require.NoError(t, err)
 		status := config.ChangeFeedStatus{}
@@ -268,7 +268,7 @@ func TestMigration(t *testing.T) {
 	}
 	// check cyclic
 	infoResp, err := cli.Get(context.Background(),
-		fmt.Sprintf("%s%s/%s", etcd.DefaultClusterAndNamespacePrefix,
+		fmt.Sprintf("%s%s/%s", etcd.DefaultClusterAndKeyspaceIDPrefix,
 			etcd.ChangefeedInfoKey, "cyclic-test"))
 	require.NoError(t, err)
 	info := config.ChangeFeedInfo{}

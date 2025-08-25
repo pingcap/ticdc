@@ -475,9 +475,9 @@ func (m *migrator) Migrate(ctx context.Context) error {
 	}
 
 	m.keyPrefixes.addPair("/tidb/cdc/changefeed/info",
-		etcd.DefaultClusterAndNamespacePrefix+etcd.ChangefeedInfoKey)
+		etcd.DefaultClusterAndKeyspaceIDPrefix+etcd.ChangefeedInfoKey)
 	m.keyPrefixes.addPair("/tidb/cdc/job",
-		etcd.DefaultClusterAndNamespacePrefix+etcd.ChangefeedStatusKey)
+		etcd.DefaultClusterAndKeyspaceIDPrefix+etcd.ChangefeedStatusKey)
 
 	return m.migrate(ctx, version == noMetaVersion, oldVersion)
 }

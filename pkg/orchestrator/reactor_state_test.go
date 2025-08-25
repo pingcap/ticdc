@@ -86,11 +86,11 @@ func TestChangefeedStateUpdate(t *testing.T) {
 		{ // common case
 			changefeedID: "test1",
 			updateKey: []string{
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/status/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
@@ -151,15 +151,15 @@ func TestChangefeedStateUpdate(t *testing.T) {
 		{ // test multiple capture
 			changefeedID: "test1",
 			updateKey: []string{
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/status/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/666777888/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/666777888",
@@ -223,20 +223,20 @@ func TestChangefeedStateUpdate(t *testing.T) {
 		{ // testing changefeedID not match
 			changefeedID: "test1",
 			updateKey: []string{
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/status/test1",
 
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/info/test-fake",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/status/test-fake",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test-fake",
 			},
 			updateValue: []string{
@@ -298,21 +298,21 @@ func TestChangefeedStateUpdate(t *testing.T) {
 		{ // testing value is nil
 			changefeedID: "test1",
 			updateKey: []string{
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/status/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/666777888/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/changefeed/status/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
@@ -521,11 +521,11 @@ func TestGlobalStateUpdate(t *testing.T) {
 					"/owner/22317526c4fc9a38",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test2",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/upstream/12345",
 			},
 			updateValue: []string{
@@ -577,13 +577,13 @@ func TestGlobalStateUpdate(t *testing.T) {
 					"/owner/22317526c4fc9a38",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test2",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/owner/22317526c4fc9a37",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspaceIDPrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
