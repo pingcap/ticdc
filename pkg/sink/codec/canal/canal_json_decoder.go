@@ -312,11 +312,11 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	case canal.EventType_DELETE:
 		data := formatAllColumnsValue(msg.getData(), columns)
 		common.AppendRow2Chunk(data, columns, result.Rows)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeDelete)
 	case canal.EventType_INSERT:
 		data := formatAllColumnsValue(msg.getData(), columns)
 		common.AppendRow2Chunk(data, columns, result.Rows)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeInsert)
 	case canal.EventType_UPDATE:
 		previous := formatAllColumnsValue(msg.getOld(), columns)
 		data := formatAllColumnsValue(msg.getData(), columns)
@@ -327,8 +327,8 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 		}
 		common.AppendRow2Chunk(previous, columns, result.Rows)
 		common.AppendRow2Chunk(data, columns, result.Rows)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}

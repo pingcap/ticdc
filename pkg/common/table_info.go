@@ -24,6 +24,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -424,6 +425,19 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	_, ok := ti.columnSchema.HandleKeyIDs[colID]
 	return ok
+}
+
+func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
+	return &model.TableInfo{
+		ID:       ti.TableName.TableID,
+		Name:     ast.NewCIStr(ti.TableName.Table),
+		Charset:  ti.Charset,
+		Collate:  ti.Collate,
+		Comment:  ti.Comment,
+		View:     ti.View,
+		Sequence: ti.Sequence,
+		Columns:  ti.columnSchema.Cols(), // Get public state columns, that's enough.
+	}
 }
 
 func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {

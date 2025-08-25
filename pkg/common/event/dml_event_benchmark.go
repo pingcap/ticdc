@@ -116,7 +116,7 @@ func createBatchDMLEvent(b *testing.B, dmlNum, rowNum int) {
 			batchDMLEvent.AppendDMLEvent(dmlEvent)
 			for j := 0; j < rowNum; j++ {
 				for _, rawKV := range rawKvs {
-					err := dmlEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk)
+					err := dmlEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk, nil)
 					require.NoError(b, err)
 				}
 			}
@@ -143,7 +143,7 @@ func createDMLEvents(b *testing.B, dmlNum, rowNum int) {
 			event.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount))
 			for j := 0; j < rowNum; j++ {
 				for _, rawKV := range rawKvs {
-					err := event.AppendRow(rawKV, helper.mounter.DecodeToChunk)
+					err := event.AppendRow(rawKV, helper.mounter.DecodeToChunk, nil)
 					require.NoError(b, err)
 				}
 			}

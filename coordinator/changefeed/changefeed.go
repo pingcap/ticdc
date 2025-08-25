@@ -19,7 +19,6 @@ import (
 	"sync"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -261,13 +260,13 @@ func RemoveMaintainerMessage(id common.ChangeFeedID, server node.ID, casCade boo
 
 // getSinkType returns the sink type of the url.
 func getSinkType(scheme string) common.SinkType {
-	if helper.IsMySQLCompatibleScheme(scheme) {
+	if config.IsMySQLCompatibleScheme(scheme) {
 		return common.MysqlSinkType
 	}
-	if helper.IsMQScheme(scheme) {
+	if config.IsMQScheme(scheme) {
 		return common.KafkaSinkType
 	}
-	if helper.IsStorageScheme(scheme) {
+	if config.IsStorageScheme(scheme) {
 		return common.CloudStorageSinkType
 	}
 	return common.BlackHoleSinkType

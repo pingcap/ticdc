@@ -4,7 +4,7 @@
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
-	unit_test_in_verify_ci integration_test_build integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
+	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
 
 
 FAIL_ON_STDOUT := awk '{ print } END { if (NR > 0) { exit 1  }  }'
@@ -178,6 +178,16 @@ check_third_party_binary:
 	@which bin/bin/schema-registry-start
 
 integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer pulsar_consumer oauth2_server
+	$(FAILPOINT_ENABLE)
+	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
+		-coverpkg=github.com/pingcap/ticdc/... \
+		-o bin/cdc.test github.com/pingcap/ticdc/cmd/cdc \
+	|| { $(FAILPOINT_DISABLE); echo "Failed to build cdc.test"; exit 1; }
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go \
+	|| { $(FAILPOINT_DISABLE); exit 1; }
+	$(FAILPOINT_DISABLE)
+
+integration_test_build_fast:
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \

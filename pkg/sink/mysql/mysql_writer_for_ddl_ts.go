@@ -284,10 +284,11 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 // the startTsIsSyncpoint equals the query result in ddl_ts table, otherwise, the startTsIsSyncpoint is false.
 func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
-	tableIdIdxMap := make(map[int64]int, len(tableIDs))
+	// when split table enabled, there may have some same tableID in tableIDs
+	tableIdIdxMap := make(map[int64][]int, len(tableIDs))
 	isSyncpoints := make([]bool, len(tableIDs))
 	for i, tableID := range tableIDs {
-		tableIdIdxMap[tableID] = i
+		tableIdIdxMap[tableID] = append(tableIdIdxMap[tableID], i)
 		isSyncpoints[i] = false
 	}
 
@@ -319,8 +320,10 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 			return retStartTsList, isSyncpoints, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
 		if finished {
-			retStartTsList[tableIdIdxMap[tableId]] = ddlTs
-			isSyncpoints[tableIdIdxMap[tableId]] = isSyncpoint
+			for _, idx := range tableIdIdxMap[tableId] {
+				retStartTsList[idx] = ddlTs
+				isSyncpoints[idx] = isSyncpoint
+			}
 		} else {
 			if !w.cfg.IsTiDB {
 				log.Panic("ddl ts table is not finished, but downstream is not tidb, FIX IT")
@@ -329,24 +332,32 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 			createdAt, err := time.Parse(time.DateTime, string(createdAtBytes))
 			if err != nil {
 				log.Error("Failed to parse created_at", zap.Any("createdAtBytes", createdAtBytes), zap.Any("error", err))
-				retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
+				for _, idx := range tableIdIdxMap[tableId] {
+					retStartTsList[idx] = ddlTs - 1
+				}
 				continue
 			}
 
 			// query the ddl_jobs table to find whether the ddl is executed and the ddl created time
 			createdTime, ok := w.queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob)
 			if !ok {
-				retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
+				for _, idx := range tableIdIdxMap[tableId] {
+					retStartTsList[idx] = ddlTs - 1
+				}
 			} else {
 				if createdAt.Before(createdTime) {
 					// show the ddl is executed
-					retStartTsList[tableIdIdxMap[tableId]] = ddlTs
-					isSyncpoints[tableIdIdxMap[tableId]] = isSyncpoint
+					for _, idx := range tableIdIdxMap[tableId] {
+						retStartTsList[idx] = ddlTs
+						isSyncpoints[idx] = isSyncpoint
+					}
 					log.Debug("createdTime is larger than createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs))
 					continue
 				} else {
 					// show the ddl is not executed
-					retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
+					for _, idx := range tableIdIdxMap[tableId] {
+						retStartTsList[idx] = ddlTs - 1
+					}
 					log.Debug("createdTime is less than  createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs-1))
 					continue
 				}

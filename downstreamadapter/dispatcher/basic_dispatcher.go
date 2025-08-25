@@ -201,6 +201,14 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
+	if event.GetType() == commonEvent.TypeDDLEvent {
+		ddl := event.(*commonEvent.DDLEvent)
+		if ddl.NotSync {
+			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
+			d.PassBlockEventToSink(event)
+			return nil
+		}
+	}
 	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
 }

@@ -23,7 +23,7 @@ import (
 	"syscall"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/spf13/cobra"
@@ -81,7 +81,7 @@ func run(_ *cobra.Command, _ []string) {
 		log.Panic("invalid upstream-uri", zap.Error(err))
 	}
 	scheme := strings.ToLower(upstreamURI.Scheme)
-	if !helper.IsPulsarScheme(scheme) {
+	if !config.IsPulsarScheme(scheme) {
 		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be pulsar schema",
 			zap.String("schema", scheme),
 			zap.String("upstreamURI", upstreamURIStr))

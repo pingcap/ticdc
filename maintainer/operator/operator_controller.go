@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -239,8 +238,8 @@ func (oc *Controller) pollQueueingOperator() (
 		op.PostFinish()
 		item.IsRemoved = true
 		delete(oc.operators, opID)
-		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
-		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
+		metrics.FinishedOperatorCount.WithLabelValues(common.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
+		metrics.OperatorDuration.WithLabelValues(common.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
@@ -285,7 +284,7 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 	oc.operators[op.ID()] = withTime
 	op.Start()
 	heap.Push(&oc.runningQueue, withTime)
-	metrics.CreatedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
+	metrics.CreatedOperatorCount.WithLabelValues(common.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 }
 
 func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {

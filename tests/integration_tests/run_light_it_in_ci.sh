@@ -32,7 +32,7 @@ group_num=${group#G}
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
-	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
+	'event_filter charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
 	# G01
 	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
 	# G02
@@ -72,7 +72,7 @@ mysql_groups=(
 # 6 CPU, 16 Gi memory.
 kafka_groups=(
 	# G00
-	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
 	# foreign_key
 	'common_1 changefeed_pause_resume fail_over_ddl_B'
@@ -112,7 +112,7 @@ kafka_groups=(
 # 6 CPU, 32 Gi memory.
 pulsar_groups=(
 	# G00
-	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
 	# foreign_key
 	'common_1 changefeed_pause_resume fail_over_ddl_B'
@@ -152,7 +152,7 @@ pulsar_groups=(
 # 6 CPU, 16 Gi memory.
 storage_groups=(
 	# G00
-	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
 	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
 	# G02

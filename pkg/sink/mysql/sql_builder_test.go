@@ -121,11 +121,11 @@ func getRowForTest(t testing.TB) (insert, delete, update pevent.RowChange, table
 	require.True(t, ok)
 	require.NotNil(t, update)
 	update.PreRow = insert.Row
-	update.RowType = pevent.RowTypeUpdate
+	update.RowType = common.RowTypeUpdate
 
 	delete = pevent.RowChange{
 		PreRow:  insert.Row,
-		RowType: pevent.RowTypeDelete,
+		RowType: common.RowTypeDelete,
 	}
 
 	return insert, delete, update, event.TableInfo
@@ -201,7 +201,7 @@ func TestBuildDelete(t *testing.T) {
 	require.NotNil(t, row)
 	// Manually change row type to delete and set PreRow
 	// We do this because the helper does not support delete operation
-	row.RowType = pevent.RowTypeDelete
+	row.RowType = common.RowTypeDelete
 	row.PreRow = row.Row
 
 	expectedSQL := "DELETE FROM `test`.`t` WHERE `id` = ? LIMIT 1"
@@ -222,7 +222,7 @@ func TestBuildDelete(t *testing.T) {
 	row, ok = event.GetNextRow()
 	require.True(t, ok)
 	require.NotNil(t, row)
-	row.RowType = pevent.RowTypeDelete
+	row.RowType = common.RowTypeDelete
 	row.PreRow = row.Row
 
 	expectedSQL = "DELETE FROM `test`.`t2` WHERE `id` = ? LIMIT 1"
@@ -244,7 +244,7 @@ func TestBuildDelete(t *testing.T) {
 	row, ok = event.GetNextRow()
 	require.True(t, ok)
 	require.NotNil(t, row)
-	row.RowType = pevent.RowTypeDelete
+	row.RowType = common.RowTypeDelete
 	row.PreRow = row.Row
 
 	expectedSQL = "DELETE FROM `test`.`t3` WHERE `id` = ? AND `name` = ? LIMIT 1"
@@ -266,7 +266,7 @@ func TestBuildDelete(t *testing.T) {
 	row, ok = event.GetNextRow()
 	require.True(t, ok)
 	require.NotNil(t, row)
-	row.RowType = pevent.RowTypeDelete
+	row.RowType = common.RowTypeDelete
 	row.PreRow = row.Row
 
 	expectedSQL = "DELETE FROM `test`.`t4` WHERE `name` = ? AND `age` = ? LIMIT 1"
@@ -288,7 +288,7 @@ func TestBuildDelete(t *testing.T) {
 	row, ok = event.GetNextRow()
 	require.True(t, ok)
 	require.NotNil(t, row)
-	row.RowType = pevent.RowTypeDelete
+	row.RowType = common.RowTypeDelete
 	row.PreRow = row.Row
 
 	expectedSQL = "DELETE FROM `test`.`t5` WHERE `id` = ? AND `name` = ? AND `age` = ? LIMIT 1"
@@ -325,7 +325,7 @@ func TestBuildUpdate(t *testing.T) {
 	require.True(t, ok)
 	// Manually change row type to update and set PreRow
 	row.PreRow = oldRow.Row
-	row.RowType = pevent.RowTypeUpdate
+	row.RowType = common.RowTypeUpdate
 
 	expectedSQL := "UPDATE `test`.`t` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1"
 	expectedArgs := []interface{}{int64(1), "test2", int64(1)}
@@ -353,7 +353,7 @@ func TestBuildUpdate(t *testing.T) {
 	require.True(t, ok)
 	// Manually change row type to update and set PreRow
 	row.PreRow = oldRow.Row
-	row.RowType = pevent.RowTypeUpdate
+	row.RowType = common.RowTypeUpdate
 
 	expectedSQL = "UPDATE `test`.`t2` SET `id` = ?,`name` = ?,`age` = ? WHERE `name` = ? AND `age` = ? LIMIT 1"
 	expectedArgs = []interface{}{int64(1), "test2", int64(20), "test", int64(20)}
