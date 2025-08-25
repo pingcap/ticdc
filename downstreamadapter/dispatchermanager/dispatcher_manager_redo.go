@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -50,6 +51,14 @@ func initRedoComponet(
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
 	manager.redoSink = redo.New(ctx, changefeedID, startTs, manager.config.Consistent)
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
+
+	totalQuota := manager.sinkQuota
+	consistentMemoryUsage := manager.config.Consistent.MemoryUsage
+	if consistentMemoryUsage == nil {
+		consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
+	}
+	manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
+	manager.sinkQuota = totalQuota - manager.redoQuota
 
 	// init redo table trigger event dispatcher when redoTableTriggerEventDispatcherID is not nil
 	if redoTableTriggerEventDispatcherID != nil {
@@ -133,6 +142,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			tableSpans[idx],
 			uint64(newStartTsList[idx]),
 			schemaIds[idx],
+			e.redoSchemaIDToDispatchers,
 			false, // startTsIsSyncpoint
 			e.redoSink,
 			e.sharedInfo,
@@ -176,8 +186,6 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	ticker := time.NewTicker(redoHeartBeatInterval)
 	defer ticker.Stop()
-	var previousCheckpointTs uint64
-	var previousResolvedTs uint64
 	for {
 		select {
 		case <-ctx.Done():
@@ -191,17 +199,6 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
-			// Avoid invalid message
-			if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
-				continue
-			}
-			// The length of dispatcher map is zero, we should not update the previous ts.
-			if checkpointTs != math.MaxUint64 {
-				previousCheckpointTs = max(previousCheckpointTs, checkpointTs)
-			}
-			if resolvedTs != math.MaxUint64 {
-				previousResolvedTs = max(previousResolvedTs, resolvedTs)
-			}
 			message := &heartbeatpb.RedoTsMessage{
 				ChangefeedID: e.changefeedID.ToPB(),
 				CheckpointTs: checkpointTs,
@@ -242,6 +239,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		mergedSpan,
 		fakeStartTs, // real startTs will be calculated later.
 		schemaID,
+		e.redoSchemaIDToDispatchers,
 		false, // startTsIsSyncpoint
 		e.redoSink,
 		e.sharedInfo,

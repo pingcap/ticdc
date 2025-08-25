@@ -881,7 +881,7 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
-			stat := newDispatcherStat(mockDisp, mockEventCollector, nil, 0)
+			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 			stat.lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			stat.epoch.Store(tt.epoch)
@@ -967,7 +967,7 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
-			stat := newDispatcherStat(mockDisp, mockEventCollector, nil, 0)
+			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 			stat.lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			stat.epoch.Store(tt.epoch)
@@ -1076,7 +1076,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
-			stat := newDispatcherStat(mockDisp, nil, nil, 0)
+			stat := newDispatcherStat(mockDisp, nil, nil)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			stat.epoch.Store(tt.epoch)
 			if tt.tableInfo != nil {

@@ -37,7 +37,7 @@ func TestNewController(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	controller := NewController(cfID, ddlSpan, nil, false)
+	controller := NewController(cfID, ddlSpan, nil, false, false)
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
 	require.False(t, controller.enableTableAcrossNodes)
@@ -59,6 +59,7 @@ func TestController_AddNewTable(t *testing.T) {
 		ddlSpan,
 		nil,   // splitter
 		false, // enableTableAcrossNodes
+		false,
 	)
 
 	table := commonEvent.Table{
@@ -94,6 +95,7 @@ func TestController_GetTaskByID(t *testing.T) {
 		ddlSpan,
 		nil,   // splitter
 		false, // enableTableAcrossNodes
+		false,
 	)
 
 	// Add a table first
@@ -146,6 +148,7 @@ func TestController_GetTasksByTableID(t *testing.T) {
 		ddlSpan,
 		nil,   // splitter
 		false, // enableTableAcrossNodes
+		false,
 	)
 
 	// Add a table
@@ -181,6 +184,7 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 		ddlSpan,
 		nil,   // splitter
 		false, // enableTableAcrossNodes
+		false,
 	)
 
 	// Add tables from the same schema
@@ -220,6 +224,7 @@ func TestController_UpdateSchemaID(t *testing.T) {
 		ddlSpan,
 		nil,   // splitter
 		false, // enableTableAcrossNodes
+		false,
 	)
 
 	// Add a table
@@ -260,6 +265,7 @@ func TestController_Statistics(t *testing.T) {
 		ddlSpan,
 		nil,   // splitter
 		false, // enableTableAcrossNodes
+		false,
 	)
 
 	// Add some tables
@@ -283,7 +289,7 @@ func TestBasicFunction(t *testing.T) {
 	t.Parallel()
 
 	controller := newControllerWithCheckerForTest(t)
-	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1)
+	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, false)
 	controller.AddAbsentReplicaSet(absent)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -441,10 +447,10 @@ func TestRemoveAllTables(t *testing.T) {
 		}, "node1")
 	controller.AddReplicatingSpan(replicaSpan)
 
-	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1)
+	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, false)
 	controller.AddAbsentReplicaSet(absent)
 
-	scheduling := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1)
+	scheduling := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, false)
 	controller.AddAbsentReplicaSet(scheduling)
 	controller.MarkSpanScheduling(scheduling)
 
@@ -469,5 +475,5 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 			CheckpointTs:    1,
 		}, "node1")
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	return NewController(cfID, ddlSpan, nil, true)
+	return NewController(cfID, ddlSpan, nil, true, false)
 }
