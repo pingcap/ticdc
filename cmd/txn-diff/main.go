@@ -52,8 +52,11 @@ func main() {
 	upstream := openDB(upstreamURIStr)
 	downstream := openDB(downstreamURIStr)
 
+	defer upstream.Close()
+	defer downstream.Close()
 	m := make(map[int64]*Column)
 	upMap := make(map[int64][]int64)
+	downMap := make(map[int64][]int64)
 	for i := 0; i < tableCount; i++ {
 		table := tableCount + tableStartIndex
 		query(upstream, fmt.Sprintf(queryCommitTsSql, table), func(tso, id int64) {
@@ -68,6 +71,7 @@ func main() {
 				m[id] = &Column{}
 			}
 			m[id].startTs = tso
+			downMap[tso] = append(downMap[tso], id)
 		})
 	}
 
@@ -75,6 +79,13 @@ func main() {
 	for _, ids := range upMap {
 		for k := 1; k < len(ids); k++ {
 			if m[ids[k]].startTs != m[ids[k-1]].startTs {
+				log.Panic("compare failed", zap.Any("col", m[ids[k]]), zap.Any("id", ids[k]))
+			}
+		}
+	}
+	for _, ids := range downMap {
+		for k := 1; k < len(ids); k++ {
+			if m[ids[k]].commitTs != m[ids[k-1]].commitTs {
 				log.Panic("compare failed", zap.Any("col", m[ids[k]]), zap.Any("id", ids[k]))
 			}
 		}

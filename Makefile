@@ -150,6 +150,9 @@ filter_helper:
 config-converter:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_config_converter ./cmd/config-converter/main.go
 
+txn-diff:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/txn_diff ./cmd/txn-diff/main.go
+
 fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "run gci (format imports)"
 	tools/bin/gci write $(FILES) 2>&1 | $(FAIL_ON_STDOUT)
