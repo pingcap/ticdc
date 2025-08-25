@@ -231,7 +231,7 @@ func (c *CDCEtcdClientImpl) GetChangeFeeds(ctx context.Context) (
 	map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, error,
 ) {
 	// todo: support namespace
-	key := GetEtcdKeyChangeFeedList(c.ClusterID, common.DefaultNamespace)
+	key := GetEtcdKeyChangeFeedList(c.ClusterID, common.DefaultKeyspaceID)
 
 	resp, err := c.Client.Get(ctx, key, clientv3.WithPrefix())
 	if err != nil {
@@ -244,7 +244,7 @@ func (c *CDCEtcdClientImpl) GetChangeFeeds(ctx context.Context) (
 		if err != nil {
 			return 0, nil, err
 		}
-		details[common.NewChangeFeedDisplayName(id, common.DefaultNamespace)] = kv
+		details[common.NewChangeFeedDisplayName(id, common.DefaultKeyspaceID)] = kv
 	}
 	return revision, details, nil
 }
@@ -537,7 +537,7 @@ func (c *CDCEtcdClientImpl) DeleteCaptureInfo(ctx context.Context, captureID str
 	// we need to clean all task position related to this capture when the capture is offline
 	// otherwise the task positions may leak
 	// FIXME (dongmen 2022.9.28): find a way to use changefeed's namespace
-	taskKey := TaskPositionKeyPrefix(c.ClusterID, common.DefaultNamespace)
+	taskKey := TaskPositionKeyPrefix(c.ClusterID, common.DefaultKeyspaceID)
 	// the taskKey format is /tidb/cdc/{clusterID}/{namespace}/task/position/{captureID}
 	taskKey = fmt.Sprintf("%s/%s", taskKey, captureID)
 	_, err = c.Client.Delete(ctx, taskKey, clientv3.WithPrefix())

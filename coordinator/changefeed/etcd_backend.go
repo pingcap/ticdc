@@ -45,7 +45,7 @@ func NewEtcdBackend(etcdClient etcd.CDCEtcdClient) *EtcdBackend {
 }
 
 func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeFeedID]*ChangefeedMetaWrapper, error) {
-	changefeedPrefix := etcd.NamespacedPrefix(b.etcdClient.GetClusterID(), common.DefaultNamespace) + "/changefeed"
+	changefeedPrefix := etcd.NamespacedPrefix(b.etcdClient.GetClusterID(), common.DefaultKeyspaceID) + "/changefeed"
 
 	resp, err := b.etcdClient.GetEtcdClient().Get(ctx, changefeedPrefix, clientv3.WithPrefix())
 	if err != nil {

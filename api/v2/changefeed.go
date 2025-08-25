@@ -84,7 +84,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 	if cfg.Namespace == "" {
-		cfg.Namespace = common.DefaultNamespace
+		cfg.Namespace = common.DefaultKeyspaceID
 	}
 	changefeedID.DisplayName.Namespace = cfg.Namespace
 	// verify changefeed namespace
@@ -1187,7 +1187,7 @@ func (h *OpenAPIV2) syncState(c *gin.Context) {
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
 	keyspaceID := c.Query(api.APIOpVarKeyspaceID)
 	if keyspaceID == "" {
-		keyspaceID = common.DefaultNamespace
+		keyspaceID = common.DefaultKeyspaceID
 	}
 	return keyspaceID
 }

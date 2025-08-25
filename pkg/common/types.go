@@ -27,9 +27,9 @@ import (
 )
 
 const (
-	// DefaultNamespace is the default namespace value,
+	// DefaultKeyspaceID is the default namespace value,
 	// all the old changefeed will be put into default namespace
-	DefaultNamespace = "default"
+	DefaultKeyspaceID = "default"
 )
 
 var DefaultEndian = binary.LittleEndian
@@ -192,7 +192,7 @@ func NewChangefeedID(namespace string) ChangeFeedID {
 	}
 
 	if namespace == "" {
-		namespace = DefaultNamespace
+		namespace = DefaultKeyspaceID
 	}
 
 	cfID.DisplayName = ChangeFeedDisplayName{
@@ -204,7 +204,7 @@ func NewChangefeedID(namespace string) ChangeFeedID {
 
 func NewChangeFeedIDWithName(name string, namespace string) ChangeFeedID {
 	if namespace == "" {
-		namespace = DefaultNamespace
+		namespace = DefaultKeyspaceID
 	}
 
 	return ChangeFeedID{

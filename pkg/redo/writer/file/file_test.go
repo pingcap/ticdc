@@ -80,7 +80,7 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		var fileName string
 		// create a .tmp file
-		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Namespace() == common.DefaultKeyspaceID {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
@@ -102,7 +102,7 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 
 		// after rotate, rename to .log
-		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Namespace() == common.DefaultKeyspaceID {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT)
@@ -116,7 +116,7 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
 		// create a .tmp file with first eventCommitTS as name
-		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Namespace() == common.DefaultKeyspaceID {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 12, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
@@ -133,7 +133,7 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.False(t, w.IsRunning())
 		// safe close, rename to .log with max eventCommitTS as name
-		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Namespace() == common.DefaultKeyspaceID {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 22, uuidGen.NewString(), redo.LogEXT)
@@ -170,7 +170,7 @@ func TestWriterWrite(t *testing.T) {
 		_, err = w1.Write([]byte("tes1t11111"))
 		require.Nil(t, err)
 		// create a .tmp file
-		if w1.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w1.cfg.ChangeFeedID.Namespace() == common.DefaultKeyspaceID {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w1.cfg.CaptureID,
 				w1.cfg.ChangeFeedID.Name(),
 				w1.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT

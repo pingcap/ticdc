@@ -268,7 +268,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	for i := 0; i < cfSize; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:      fmt.Sprintf("%d", i),
-			Namespace: common.DefaultNamespace,
+			Namespace: common.DefaultKeyspaceID,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
@@ -324,7 +324,7 @@ func TestScaleNode(t *testing.T) {
 	for i := 0; i < changefeedNumber; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:      fmt.Sprintf("%d", i),
-			Namespace: common.DefaultNamespace,
+			Namespace: common.DefaultKeyspaceID,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
