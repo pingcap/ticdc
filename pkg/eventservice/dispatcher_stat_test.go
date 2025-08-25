@@ -35,11 +35,8 @@ func TestNewDispatcherStat(t *testing.T) {
 
 	startTs := uint64(50)
 	workerIndex := 1
-	changefeedStatus := &changefeedStatus{
-		changefeedID: info.GetChangefeedID(),
-	}
-
-	stat := newDispatcherStat(startTs, info, info.filter, workerIndex, workerIndex, changefeedStatus)
+	status := newChangefeedStatus(info.GetChangefeedID())
+	stat := newDispatcherStat(startTs, info, info.filter, workerIndex, workerIndex, status)
 
 	require.Equal(t, info.GetID(), stat.id)
 	require.Equal(t, workerIndex, stat.messageWorkerIndex)
@@ -57,10 +54,8 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 	t.Parallel()
 
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	changefeedStatus := &changefeedStatus{
-		changefeedID: info.GetChangefeedID(),
-	}
-	stat := newDispatcherStat(100, info, info.filter, 1, 1, changefeedStatus)
+	status := newChangefeedStatus(info.GetChangefeedID())
+	stat := newDispatcherStat(100, info, info.filter, 1, 1, status)
 
 	// Test normal update
 	updated := stat.onResolvedTs(150)
@@ -76,10 +71,8 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	t.Parallel()
 
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	changefeedStatus := &changefeedStatus{
-		changefeedID: info.GetChangefeedID(),
-	}
-	stat := newDispatcherStat(100, info, info.filter, 1, 1, changefeedStatus)
+	status := newChangefeedStatus(info.GetChangefeedID())
+	stat := newDispatcherStat(100, info, info.filter, 1, 1, status)
 	stat.eventStoreResolvedTs.Store(200)
 
 	// Normal case
