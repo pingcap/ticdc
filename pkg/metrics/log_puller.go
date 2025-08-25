@@ -45,10 +45,28 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "The resolved ts lag of subscription client.",
 		})
+
+	SubscriptionClientRequestedRegionCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "requested_region_count",
+			Help:      "The number of requested regions",
+		}, []string{"state"})
+
+	SubscriptionClientAddRegionRequestCost = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "add_region_request_cost",
+			Help:      "The cost of adding region request",
+		})
 )
 
 func InitLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
+	registry.MustRegister(SubscriptionClientRequestedRegionCount)
+	registry.MustRegister(SubscriptionClientAddRegionRequestCost)
 }
