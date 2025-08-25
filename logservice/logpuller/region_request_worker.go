@@ -348,15 +348,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 	fetchMoreReq := func() (*regionReq, error) {
 		for {
 			// Try to get from cache
-			if req := s.requestCache.pop(); req != nil {
+			if req, err := s.requestCache.pop(ctx); err != nil {
+				return nil, err
+			} else {
 				return req, nil
 			}
-
-			// If cache is empty, wait for new requests to be added by external callers
-			if err := s.requestCache.waitForRequest(ctx); err != nil {
-				return nil, err
-			}
-			// Continue loop to pop from cache
 		}
 	}
 

@@ -15,11 +15,14 @@ package logpuller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/atomic"
+	"go.uber.org/zap"
 )
 
 type regionReqState int
@@ -34,6 +37,7 @@ const (
 type regionReq struct {
 	regionInfo regionInfo
 	state      regionReqState
+	createTime time.Time
 }
 
 // requestCache manages region requests with flow control
@@ -68,7 +72,7 @@ func newRequestCache(maxPendingCount int) *requestCache {
 // It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
 func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) error {
 	start := time.Now()
-	ticker := time.NewTicker(time.Millisecond * 2)
+	ticker := time.NewTicker(time.Millisecond * 1)
 	defer ticker.Stop()
 
 	for {
@@ -78,12 +82,16 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 			req := regionReq{
 				regionInfo: region,
 				state:      regionReqStatePending,
+				createTime: time.Now(),
 			}
 
 			select {
 			case c.pendingQueue <- req:
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
+
+				log.Info("fizz cdc add region request", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.Float64("cost", cost.Seconds()))
+
 				c.pendingCount.Add(1)
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
 				return nil
@@ -105,12 +113,12 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 }
 
 // pop gets the next pending request, returns nil if queue is empty
-func (c *requestCache) pop() *regionReq {
+func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
 	select {
 	case req := <-c.pendingQueue:
-		return &req
-	default:
-		return nil
+		return &req, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -143,6 +151,8 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 			c.sentRequests.Delete(regionID)
 			c.pendingCount.Add(-1)
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
+			cost := time.Since(req.createTime)
+			metrics.RegionRequestFinishScanDuration.WithLabelValues(fmt.Sprintf("%d", regionID)).Observe(cost.Seconds())
 			// Notify waiting add operations that there's space available
 			select {
 			case c.spaceAvailable <- struct{}{}:
@@ -188,20 +198,4 @@ LOOP:
 // getPendingCount returns the current pending count
 func (c *requestCache) getPendingCount() int {
 	return int(c.pendingCount.Load())
-}
-
-// waitForRequest waits for a new request to be available or context cancellation
-func (c *requestCache) waitForRequest(ctx context.Context) error {
-	select {
-	case req := <-c.pendingQueue:
-		// Put it back at the front
-		select {
-		case c.pendingQueue <- req:
-		default:
-			// If we can't put it back immediately, it's still available
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }

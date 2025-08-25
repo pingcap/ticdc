@@ -441,7 +441,7 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Then send a special singleRegionInfo to regionRouter to deregister the table
 	// from all TiKV instances.
 	if rt.stopped.CompareAndSwap(false, true) {
-		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt}))
+		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt}, s.pdClock.CurrentTS()))
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
 		}
@@ -703,7 +703,7 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
-		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region))
+		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)

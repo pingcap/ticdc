@@ -14,7 +14,10 @@
 package logpuller
 
 import (
+	"fmt"
 	"time"
+
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 // TaskType represents the type of region task
@@ -29,14 +32,13 @@ const (
 	TaskLowPrior
 )
 
+const (
+	highPriorityBase = 60 * 60 * 12
+	lowPriorityBase  = 60 * 60 * 24
+)
+
 func (t TaskType) String() string {
-	switch t {
-	case TaskHighPrior:
-		return "high"
-	case TaskLowPrior:
-		return "low"
-	}
-	return "unknown"
+	return fmt.Sprintf("%d", t)
 }
 
 // PriorityTask is the interface for priority-based tasks
@@ -60,15 +62,17 @@ type regionPriorityTask struct {
 	createTime time.Time
 	regionInfo regionInfo
 	heapIndex  int // for heap.Item interface
+	currentTs  uint64
 }
 
 // NewRegionPriorityTask creates a new priority task for region
-func NewRegionPriorityTask(taskType TaskType, regionInfo regionInfo) PriorityTask {
+func NewRegionPriorityTask(taskType TaskType, regionInfo regionInfo, currentTs uint64) PriorityTask {
 	return &regionPriorityTask{
 		taskType:   taskType,
 		createTime: time.Now(),
 		regionInfo: regionInfo,
 		heapIndex:  0, // 0 means not in heap
+		currentTs:  currentTs,
 	}
 }
 
@@ -79,9 +83,9 @@ func (pt *regionPriorityTask) Priority() int {
 	basePriority := 0
 	switch pt.taskType {
 	case TaskHighPrior:
-		basePriority = 0 // Highest priority
+		basePriority = highPriorityBase // Highest priority
 	case TaskLowPrior:
-		basePriority = 3600 // Lowest priority
+		basePriority = lowPriorityBase // Lowest priority
 	}
 
 	// Add time-based priority bonus
@@ -89,9 +93,14 @@ func (pt *regionPriorityTask) Priority() int {
 	waitTime := time.Since(pt.createTime)
 	timeBonus := int(waitTime.Seconds())
 
-	// Total priority = base priority - time bonus
-	// Lower value means higher priority
-	return basePriority - timeBonus
+	resolvedTsLag := oracle.GetTimeFromTS(pt.currentTs).Sub(oracle.GetTimeFromTS(pt.regionInfo.subscribedSpan.resolvedTs.Load()))
+	resolvedTsLagBonus := int(resolvedTsLag.Seconds())
+	priority := basePriority - timeBonus + resolvedTsLagBonus
+
+	if priority < 0 {
+		priority = 0
+	}
+	return priority
 }
 
 // GetRegionInfo returns the underlying regionInfo
