@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -178,7 +179,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 	stepsToRemoved := state.markRemoved()
 	err := state.takeError()
 	if err != nil {
-		log.Debug("region event handler get a region error",
+		log.Info("region event handler get a region error",
 			zap.Uint64("workerID", worker.workerID),
 			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
 			zap.Uint64("regionID", state.region.verID.GetID()),
@@ -218,7 +219,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
-			log.Debug("region is initialized",
+			log.Info("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),
@@ -306,6 +307,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	lastAdvance := span.lastAdvanceTime.Load()
 	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
 		ts := span.rangeLock.GetHeapMinTs()
+		// ts, _ := span.rangeLock.ResolvedTs()
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
 			log.Info("subscription client is initialized",
 				zap.Uint64("subscriptionID", uint64(span.subID)),
@@ -313,12 +315,24 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 				zap.Uint64("resolvedTs", ts))
 		}
 		lastResolvedTs := span.resolvedTs.Load()
+		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
 		// Generally, we don't want to send duplicate resolved ts,
 		// so we check whether `ts` is larger than `lastResolvedTs` before send it.
 		// but when `ts` == `lastResolvedTs` == `span.startTs`,
 		// the span may just be initialized and have not receive any resolved ts before,
 		// so we also send ts in this case for quick notification to downstream.
 		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
+			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
+			if decreaseLag > 10 {
+				log.Warn("resolved ts advance step is too large",
+					zap.Uint64("subID", uint64(span.subID)),
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("resolvedTs", ts),
+					zap.Uint64("lastResolvedTs", lastResolvedTs),
+					zap.Float64("decreaseLag(s)", decreaseLag))
+			}
 			span.resolvedTs.Store(ts)
 			span.resolvedTsUpdated.Store(time.Now().Unix())
 			return ts
