@@ -20,9 +20,10 @@ import (
 	"math/rand"
 	"sync/atomic"
 
+	"workload/schema"
+
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 const createTable = `
@@ -132,6 +133,10 @@ func (t *TxnWorkload) BuildInsertSql(tableN int, batchSize int) string {
 func (t *TxnWorkload) BuildUpdateSql(updateOption schema.UpdateOption) string {
 	batchSize := updateOption.Batch
 	tableN := updateOption.TableIndex
+	// include insert
+	if rand.Float32() > 0.5 {
+		return t.BuildInsertSql(tableN, batchSize)
+	}
 	var buf bytes.Buffer
 	buf.WriteString("begin;")
 	// conflict when only update because the value maybe duplicated with other row
