@@ -14,7 +14,6 @@
 package event
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
@@ -723,14 +722,6 @@ func TestBinary(t *testing.T) {
 	v := common.ExtractColVal(&row.Row, tableInfo.GetColumns()[0], 0)
 	binaryFormat := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A}
 	require.Equal(t, binaryFormat, v)
-}
-
-func TestTablePrefix(t *testing.T) {
-	key := []byte{'t', 1}
-	require.True(t, bytes.HasPrefix(key, tablePrefix))
-
-	key2 := []byte{'b', 1}
-	require.False(t, bytes.HasPrefix(key2, tablePrefix))
 }
 
 func TestDecodeToChunk(t *testing.T) {

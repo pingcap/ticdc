@@ -84,14 +84,14 @@ func NewDefaultSchemaStoreConfig() *SchemaStoreConfig {
 
 // EventServiceConfig represents config for event service
 type EventServiceConfig struct {
-	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan-task-queue-size"`
-	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan-limit-in-bytes"`
+	ScanTaskQueueSize  int `toml:"scan-task-queue-size" json:"scan-task-queue-size"`
+	AvailableLowThresh int `toml:"available-low-thresh" json:"available-low-thresh"`
 }
 
 // NewDefaultEventServiceConfig return the default event service configuration
 func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
-		ScanTaskQueueSize: 1024 * 8,
-		ScanLimitInBytes:  1024 * 1024 * 256, // 256MB
+		ScanTaskQueueSize:  1024 * 8,
+		AvailableLowThresh: 1024 * 1024 * 256, // 256MB
 	}
 }

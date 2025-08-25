@@ -149,6 +149,10 @@ func (g GID) String() string {
 	return buf.String()
 }
 
+func (g GID) GetSize() int {
+	return 16
+}
+
 func NewGIDWithValue(Low uint64, High uint64) GID {
 	return GID{
 		Low:  Low,
@@ -174,7 +178,7 @@ func (r ChangeFeedDisplayName) String() string {
 	return r.Namespace + "/" + r.Name
 }
 
-// ChangefeedID is the unique identifier of a changefeed.
+// ChangeFeedID is the unique identifier of a changefeed.
 // GID is the inner unique identifier of a changefeed.
 // we can use Id to represent the changefeedID in performance-critical scenarios.
 // DisplayName is the user-friendly expression of a changefeed.
