@@ -53,11 +53,6 @@ func NewTxnStore() *TxnStore {
 
 // AddEvent adds a DML event to the store
 func (ts *TxnStore) AddEvent(event *commonEvent.DMLEvent) {
-	log.Info("txnSink: add event",
-		zap.Uint64("commitTs", event.CommitTs),
-		zap.Uint64("startTs", event.StartTs),
-		zap.Int64("tableID", event.GetTableID()),
-		zap.Int32("rowCount", event.Len()))
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -492,6 +487,5 @@ func (cd *ConflictDetector) closeCache() {
 type TxnSinkConfig struct {
 	MaxConcurrentTxns int
 	BatchSize         int
-	FlushInterval     int // milliseconds
 	MaxSQLBatchSize   int // maximum size of SQL batch in bytes
 }

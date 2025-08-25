@@ -346,6 +346,7 @@ func (w *Worker) executeSQLBatch(batch []*TxnSQL) error {
 
 	// Update flushed progress for all transactions in the batch
 	for _, txnSQL := range batch {
+		txnSQL.TxnGroup.PostFlush()
 		w.progressTracker.RemoveCompletedTxn(txnSQL.TxnGroup.CommitTs, txnSQL.TxnGroup.StartTs)
 	}
 

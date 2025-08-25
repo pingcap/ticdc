@@ -63,7 +63,6 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID, db *sql.DB, conf
 		config = &TxnSinkConfig{
 			MaxConcurrentTxns: 16,
 			BatchSize:         256,
-			FlushInterval:     100,
 			MaxSQLBatchSize:   1024 * 16,
 		}
 	}
