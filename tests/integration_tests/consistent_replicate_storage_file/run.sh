@@ -55,7 +55,7 @@ function run() {
 	run_sql "insert into consistent_replicate_storage_file.usertable2 select * from consistent_replicate_storage_file.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 20
+	sleep 60
 
 	storage_path="file://$WORK_DIR/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id

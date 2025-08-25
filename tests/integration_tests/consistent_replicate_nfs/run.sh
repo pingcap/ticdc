@@ -37,7 +37,7 @@ function run() {
 
 	cleanup_process $CDC_BINARY
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 10
+	sleep 60
 
 	storage_path="nfs://$WORK_DIR/nfs/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id

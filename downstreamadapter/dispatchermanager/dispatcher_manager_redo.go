@@ -186,8 +186,6 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	ticker := time.NewTicker(redoHeartBeatInterval)
 	defer ticker.Stop()
-	var previousCheckpointTs uint64
-	var previousResolvedTs uint64
 	for {
 		select {
 		case <-ctx.Done():
@@ -201,24 +199,6 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
-			log.Error("send redo msg",
-				zap.Any("previousCheckpointTs", previousCheckpointTs),
-				zap.Any("checkpointTs", checkpointTs),
-				zap.Any("previousResolvedTs", previousResolvedTs),
-				zap.Any("resolvedTs", resolvedTs),
-			)
-			// Avoid invalid message
-			// if previousCheckpointTs >= checkpointTs && previousResolvedTs >= resolvedTs {
-			// 	log.Error("send redo msg ignore")
-			// 	continue
-			// }
-			// The length of dispatcher map is zero, we should not update the previous ts.
-			// if checkpointTs != math.MaxUint64 {
-			// 	previousCheckpointTs = max(previousCheckpointTs, checkpointTs)
-			// }
-			// if resolvedTs != math.MaxUint64 {
-			// 	previousResolvedTs = max(previousResolvedTs, resolvedTs)
-			// }
 			message := &heartbeatpb.RedoTsMessage{
 				ChangefeedID: e.changefeedID.ToPB(),
 				CheckpointTs: checkpointTs,

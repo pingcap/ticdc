@@ -81,7 +81,7 @@ function run() {
 	run_sql "insert into consistent_replicate_storage_s3.usertable2 select * from consistent_replicate_storage_s3.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 20
+	sleep 60
 
 	storage_path="s3://logbucket/test-changefeed?endpoint=http://127.0.0.1:24927/"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
