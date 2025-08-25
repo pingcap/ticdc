@@ -80,7 +80,7 @@ func newTxnSinkAdapter(
 
 	// Create txnSink configuration
 	txnConfig := &txnsink.TxnSinkConfig{
-		MaxConcurrentTxns: 16,
+		MaxConcurrentTxns: 128,
 		BatchSize:         256,
 		MaxSQLBatchSize:   1024 * 16, // 1MB
 	}
