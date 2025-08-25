@@ -206,7 +206,6 @@ func (w *Worker) executeSQLBatches(ctx context.Context) error {
 		zap.Int("workerID", w.workerID))
 
 	buffer := make([]*TxnSQL, 0, w.config.BatchSize)
-	currentBatchSize := 0
 	totalStart := time.Now()
 
 	for {
@@ -226,8 +225,9 @@ func (w *Worker) executeSQLBatches(ctx context.Context) error {
 			}
 
 			batch := make([]*TxnSQL, 0, w.config.BatchSize)
+			currentBatchSize := 0
 
-			log.Debug("txnSink: got sql batch",
+			log.Info("txnSink: got sql batch",
 				zap.String("namespace", namespace),
 				zap.String("changefeed", changefeed),
 				zap.Int("workerID", w.workerID),
