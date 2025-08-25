@@ -51,17 +51,17 @@ func CaptureInfoKeyPrefix(clusterID string) string {
 
 // TaskPositionKeyPrefix is the prefix of task position keys
 func TaskPositionKeyPrefix(clusterID, namespace string) string {
-	return NamespacedPrefix(clusterID, namespace) + taskPositionKey
+	return KeyspaceIDPrefix(clusterID, namespace) + taskPositionKey
 }
 
 // ChangefeedStatusKeyPrefix is the prefix of changefeed status keys
 func ChangefeedStatusKeyPrefix(clusterID, namespace string) string {
-	return NamespacedPrefix(clusterID, namespace) + ChangefeedStatusKey
+	return KeyspaceIDPrefix(clusterID, namespace) + ChangefeedStatusKey
 }
 
 // GetEtcdKeyChangeFeedList returns the prefix key of all changefeed config
 func GetEtcdKeyChangeFeedList(clusterID, namespace string) string {
-	return fmt.Sprintf("%s/changefeed/info", NamespacedPrefix(clusterID, namespace))
+	return fmt.Sprintf("%s/changefeed/info", KeyspaceIDPrefix(clusterID, namespace))
 }
 
 // GetEtcdKeyChangeFeedInfo returns the key of a changefeed config

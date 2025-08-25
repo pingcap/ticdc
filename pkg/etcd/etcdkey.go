@@ -110,9 +110,9 @@ func BaseKey(clusterID string) string {
 	return fmt.Sprintf("/tidb/cdc/%s", clusterID)
 }
 
-// NamespacedPrefix returns the etcd prefix of changefeed data
-func NamespacedPrefix(clusterID, namespace string) string {
-	return BaseKey(clusterID) + "/" + namespace
+// KeyspaceIDPrefix returns the etcd prefix of changefeed data
+func KeyspaceIDPrefix(clusterID, keyspaceID string) string {
+	return BaseKey(clusterID) + "/" + keyspaceID
 }
 
 // Parse parses the given etcd key
@@ -199,19 +199,19 @@ func (k *CDCKey) String() string {
 	case CDCKeyTypeCapture:
 		return BaseKey(k.ClusterID) + metaPrefix + captureKey + "/" + k.CaptureID
 	case CDCKeyTypeChangefeedInfo:
-		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedInfoKey +
+		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedInfoKey +
 			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeChangeFeedStatus:
-		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedStatusKey +
+		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedStatusKey +
 			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeTaskPosition:
-		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + taskPositionKey +
+		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + taskPositionKey +
 			"/" + k.CaptureID + "/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeMetaVersion:
 		return BaseKey(k.ClusterID) + metaPrefix + metaVersionKey
 	case CDCKeyTypeUpStream:
 		return fmt.Sprintf("%s%s/%d",
-			NamespacedPrefix(k.ClusterID, k.Namespace),
+			KeyspaceIDPrefix(k.ClusterID, k.Namespace),
 			upstreamKey, k.UpstreamID)
 	}
 	log.Panic("unreachable")
