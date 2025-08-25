@@ -39,7 +39,7 @@ func TestWriterWrite(t *testing.T) {
 
 	dir := t.TempDir()
 	cfs := []common.ChangeFeedID{
-		common.NewChangeFeedIDWithName("test-cf"),
+		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceID),
 		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			KeyspaceID: "abcd",
 			Name:       "test-cf",
@@ -47,7 +47,7 @@ func TestWriterWrite(t *testing.T) {
 	}
 
 	cf11s := []common.ChangeFeedID{
-		common.NewChangeFeedIDWithName("test-cf11"),
+		common.NewChangeFeedIDWithName("test-cf11", common.DefaultKeyspaceID),
 		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			KeyspaceID: "abcd",
 			Name:       "test-cf11",

@@ -53,7 +53,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(),
+		common.NewChangefeedID(common.DefaultKeyspaceID),
 		"system",
 		false,
 		false,

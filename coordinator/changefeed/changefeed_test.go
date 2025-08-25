@@ -26,7 +26,7 @@ import (
 )
 
 func TestNewChangefeed(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -42,7 +42,7 @@ func TestNewChangefeed(t *testing.T) {
 }
 
 func TestChangefeed_GetSetInfo(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -60,7 +60,7 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 }
 
 func TestChangefeed_GetSetNodeID(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -74,7 +74,7 @@ func TestChangefeed_GetSetNodeID(t *testing.T) {
 }
 
 func TestChangefeed_UpdateStatus(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -91,7 +91,7 @@ func TestChangefeed_UpdateStatus(t *testing.T) {
 }
 
 func TestChangefeed_IsMQSink(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -103,7 +103,7 @@ func TestChangefeed_IsMQSink(t *testing.T) {
 }
 
 func TestChangefeed_GetSetLastSavedCheckPointTs(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -117,7 +117,7 @@ func TestChangefeed_GetSetLastSavedCheckPointTs(t *testing.T) {
 }
 
 func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -132,7 +132,7 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 }
 
 func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -147,7 +147,7 @@ func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
 }
 
 func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -162,7 +162,7 @@ func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 }
 
 func TestRemoveMaintainerMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	server := node.ID("server-1")
 	msg := RemoveMaintainerMessage(cfID, server, true, true)
 	require.Equal(t, server, msg.To)
