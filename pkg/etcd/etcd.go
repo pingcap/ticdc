@@ -67,7 +67,7 @@ func GetEtcdKeyChangeFeedList(clusterID, namespace string) string {
 // GetEtcdKeyChangeFeedInfo returns the key of a changefeed config
 func GetEtcdKeyChangeFeedInfo(clusterID string, changefeedID common.ChangeFeedDisplayName) string {
 	return fmt.Sprintf("%s/%s", GetEtcdKeyChangeFeedList(clusterID,
-		changefeedID.Namespace), changefeedID.Name)
+		changefeedID.KeyspaceID), changefeedID.Name)
 }
 
 // GetEtcdKeyCaptureInfo returns the key of a capture info
@@ -77,7 +77,7 @@ func GetEtcdKeyCaptureInfo(clusterID, id string) string {
 
 // GetEtcdKeyJob returns the key for a job status
 func GetEtcdKeyJob(clusterID string, changeFeedID common.ChangeFeedDisplayName) string {
-	return ChangefeedStatusKeyPrefix(clusterID, changeFeedID.Namespace) + "/" + changeFeedID.Name
+	return ChangefeedStatusKeyPrefix(clusterID, changeFeedID.KeyspaceID) + "/" + changeFeedID.Name
 }
 
 // MigrateBackupKey is the key of backup data during a migration.
@@ -489,7 +489,7 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 	}
 	if !resp.Succeeded {
 		log.Warn(fmt.Sprintf("unexpected etcd transaction failure, operation: %s", operation),
-			zap.String("namespace", changeFeedID.Namespace),
+			zap.String("namespace", changeFeedID.KeyspaceID),
 			zap.String("changefeed", changeFeedID.Name))
 		errMsg := fmt.Sprintf("%s changefeed %s", operation, changeFeedID)
 		return errors.ErrMetaOpFailed.GenWithStackByArgs(errMsg)

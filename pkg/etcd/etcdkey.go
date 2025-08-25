@@ -199,13 +199,13 @@ func (k *CDCKey) String() string {
 	case CDCKeyTypeCapture:
 		return BaseKey(k.ClusterID) + metaPrefix + captureKey + "/" + k.CaptureID
 	case CDCKeyTypeChangefeedInfo:
-		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedInfoKey +
+		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.KeyspaceID) + ChangefeedInfoKey +
 			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeChangeFeedStatus:
-		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedStatusKey +
+		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.KeyspaceID) + ChangefeedStatusKey +
 			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeTaskPosition:
-		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + taskPositionKey +
+		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.KeyspaceID) + taskPositionKey +
 			"/" + k.CaptureID + "/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeMetaVersion:
 		return BaseKey(k.ClusterID) + metaPrefix + metaVersionKey

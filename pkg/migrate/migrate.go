@@ -236,7 +236,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 					return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
 				}
 				info.UpstreamID = upstreamID
-				info.ChangefeedID.DisplayName.Namespace = common.DefaultKeyspaceID
+				info.ChangefeedID.DisplayName.KeyspaceID = common.DefaultKeyspaceID
 				// changefeed id is a part of etcd key path
 				// for example:  /tidb/cdc/changefeed/info/abcd,  abcd is the changefeed
 				info.ChangefeedID.DisplayName.Name = strings.TrimPrefix(string(v.Key), oldChangefeedPrefix+"/")

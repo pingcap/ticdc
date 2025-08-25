@@ -86,7 +86,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	if cfg.Namespace == "" {
 		cfg.Namespace = common.DefaultKeyspaceID
 	}
-	changefeedID.DisplayName.Namespace = cfg.Namespace
+	changefeedID.DisplayName.KeyspaceID = cfg.Namespace
 	// verify changefeed namespace
 	if err := common.ValidateNamespace(changefeedID.Namespace()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(

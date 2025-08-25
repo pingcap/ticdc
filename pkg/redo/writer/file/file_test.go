@@ -41,16 +41,16 @@ func TestWriterWrite(t *testing.T) {
 	cfs := []common.ChangeFeedID{
 		common.NewChangeFeedIDWithName("test-cf"),
 		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-			Namespace: "abcd",
-			Name:      "test-cf",
+			KeyspaceID: "abcd",
+			Name:       "test-cf",
 		}),
 	}
 
 	cf11s := []common.ChangeFeedID{
 		common.NewChangeFeedIDWithName("test-cf11"),
 		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-			Namespace: "abcd",
-			Name:      "test-cf11",
+			KeyspaceID: "abcd",
+			Name:       "test-cf11",
 		}),
 	}
 
@@ -238,8 +238,8 @@ func TestNewWriter(t *testing.T) {
 		gomock.Any()).Return(nil).Times(1)
 
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-		Namespace: "abcd",
-		Name:      "test",
+		KeyspaceID: "abcd",
+		Name:       "test",
 	})
 	w = &Writer{
 		logType: redo.RedoDDLLogFileType,
@@ -296,8 +296,8 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 	uuidGen.Push("uuid-4")
 	uuidGen.Push("uuid-5")
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-		Namespace: "abcd",
-		Name:      "test",
+		KeyspaceID: "abcd",
+		Name:       "test",
 	})
 	w := &Writer{
 		logType: redo.RedoRowLogFileType,
@@ -363,8 +363,8 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	uuidGen.Push("uuid-5")
 	uuidGen.Push("uuid-6")
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-		Namespace: "abcd",
-		Name:      "test",
+		KeyspaceID: "abcd",
+		Name:       "test",
 	})
 	w := &Writer{
 		logType: redo.RedoDDLLogFileType,

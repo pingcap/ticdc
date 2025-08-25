@@ -234,7 +234,7 @@ func TestMigration(t *testing.T) {
 		tc.info.UpstreamID = info.UpstreamID
 		require.Equal(t, common.DefaultKeyspaceID, info.ChangefeedID.Namespace())
 		require.Equal(t, tc.id, info.ChangefeedID.Name())
-		tc.info.ChangefeedID.DisplayName.Namespace = info.ChangefeedID.Namespace()
+		tc.info.ChangefeedID.DisplayName.KeyspaceID = info.ChangefeedID.Namespace()
 		tc.info.ChangefeedID.DisplayName.Name = info.ChangefeedID.Name()
 		require.Equal(t, tc.info, info)
 		statusResp, err := cli.Get(context.Background(),

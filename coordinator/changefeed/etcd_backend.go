@@ -79,8 +79,8 @@ func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeF
 				log.Warn("load a old version change feed Info, migrate it to new version",
 					zap.String("key", key))
 				detail.ChangefeedID = common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-					Name:      cf,
-					Namespace: ns,
+					Name:       cf,
+					KeyspaceID: ns,
 				})
 				if data, err := detail.Marshal(); err != nil {
 					log.Warn("failed to marshal change feed Info, ignore",

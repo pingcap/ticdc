@@ -168,7 +168,7 @@ func (db *ChangefeedDB) GetAllChangefeedsByKeyspace(keyspace string) []*Changefe
 
 	cfs := make([]*Changefeed, 0, len(db.changefeeds))
 	for _, cf := range db.changefeeds {
-		if cf.ID.DisplayName.Namespace != keyspace {
+		if cf.ID.DisplayName.KeyspaceID != keyspace {
 			continue
 		}
 		cfs = append(cfs, cf)

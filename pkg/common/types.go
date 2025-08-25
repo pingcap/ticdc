@@ -159,19 +159,19 @@ func NewGIDWithValue(Low uint64, High uint64) GID {
 // ChangeFeedDisplayName represents the user-friendly name and namespace of a changefeed.
 // This structure is used for external queries and display purposes.
 type ChangeFeedDisplayName struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
+	Name       string `json:"name"`
+	KeyspaceID string `json:"namespace"`
 }
 
-func NewChangeFeedDisplayName(name string, namespace string) ChangeFeedDisplayName {
+func NewChangeFeedDisplayName(name string, keyspaceID string) ChangeFeedDisplayName {
 	return ChangeFeedDisplayName{
-		Name:      name,
-		Namespace: namespace,
+		Name:       name,
+		KeyspaceID: keyspaceID,
 	}
 }
 
 func (r ChangeFeedDisplayName) String() string {
-	return r.Namespace + "/" + r.Name
+	return r.KeyspaceID + "/" + r.Name
 }
 
 // ChangefeedID is the unique identifier of a changefeed.
@@ -186,32 +186,32 @@ type ChangeFeedID struct {
 	DisplayName ChangeFeedDisplayName `json:"display"`
 }
 
-func NewChangefeedID(namespace string) ChangeFeedID {
+func NewChangefeedID(keyspaceID string) ChangeFeedID {
 	cfID := ChangeFeedID{
 		Id: NewGID(),
 	}
 
-	if namespace == "" {
-		namespace = DefaultKeyspaceID
+	if keyspaceID == "" {
+		keyspaceID = DefaultKeyspaceID
 	}
 
 	cfID.DisplayName = ChangeFeedDisplayName{
-		Name:      cfID.Id.String(),
-		Namespace: namespace,
+		Name:       cfID.Id.String(),
+		KeyspaceID: keyspaceID,
 	}
 	return cfID
 }
 
-func NewChangeFeedIDWithName(name string, namespace string) ChangeFeedID {
-	if namespace == "" {
-		namespace = DefaultKeyspaceID
+func NewChangeFeedIDWithName(name string, keyspaceID string) ChangeFeedID {
+	if keyspaceID == "" {
+		keyspaceID = DefaultKeyspaceID
 	}
 
 	return ChangeFeedID{
 		Id: NewGID(),
 		DisplayName: ChangeFeedDisplayName{
-			Name:      name,
-			Namespace: namespace,
+			Name:       name,
+			KeyspaceID: keyspaceID,
 		},
 	}
 }
@@ -232,7 +232,7 @@ func (cfID ChangeFeedID) Name() string {
 }
 
 func (cfID ChangeFeedID) Namespace() string {
-	return cfID.DisplayName.Namespace
+	return cfID.DisplayName.KeyspaceID
 }
 
 func (cfID ChangeFeedID) ID() GID {
@@ -246,8 +246,8 @@ func NewChangefeedIDFromPB(pb *heartbeatpb.ChangefeedID) ChangeFeedID {
 			High: pb.High,
 		},
 		DisplayName: ChangeFeedDisplayName{
-			Name:      pb.Name,
-			Namespace: pb.Namespace,
+			Name:       pb.Name,
+			KeyspaceID: pb.Namespace,
 		},
 	}
 	return d
@@ -298,8 +298,8 @@ func ValidateNamespace(namespace string) error {
 
 func NewChangefeedID4Test(namespace, name string) ChangeFeedID {
 	return NewChangeFeedIDWithDisplayName(ChangeFeedDisplayName{
-		Name:      name,
-		Namespace: namespace,
+		Name:       name,
+		KeyspaceID: namespace,
 	})
 }
 

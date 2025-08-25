@@ -267,8 +267,8 @@ func TestCoordinatorScheduling(t *testing.T) {
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 	for i := 0; i < cfSize; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-			Name:      fmt.Sprintf("%d", i),
-			Namespace: common.DefaultKeyspaceID,
+			Name:       fmt.Sprintf("%d", i),
+			KeyspaceID: common.DefaultKeyspaceID,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
@@ -323,8 +323,8 @@ func TestScaleNode(t *testing.T) {
 	changefeedNumber := 6
 	for i := 0; i < changefeedNumber; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-			Name:      fmt.Sprintf("%d", i),
-			Namespace: common.DefaultKeyspaceID,
+			Name:       fmt.Sprintf("%d", i),
+			KeyspaceID: common.DefaultKeyspaceID,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
