@@ -24,12 +24,12 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	pclock "github.com/pingcap/ticdc/pkg/clock"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	putil "github.com/pingcap/ticdc/pkg/util"
-	pclock "github.com/pingcap/tiflow/engine/pkg/clock"
 	"github.com/stretchr/testify/require"
 )
 

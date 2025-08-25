@@ -15,9 +15,13 @@ package errors
 
 import (
 	"context"
+	"database/sql/driver"
 	"strings"
 
+	gmysql "github.com/go-mysql-org/go-mysql/mysql"
+	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
+	tmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 )
 
 // WrapError generates a new error based on given `*errors.Error`, wraps the err
@@ -42,6 +46,24 @@ func IsRetryableError(err error) bool {
 		return false
 	}
 	return true
+}
+
+// IsConnectionError tells whether this error should reconnect to Database.
+// Return true also means caller can retry sql safely.
+func IsConnectionError(err error) bool {
+	err = errors.Cause(err)
+	switch err {
+	case driver.ErrBadConn, tmysql.ErrBadConn, gmysql.ErrBadConn:
+		return true
+	}
+	return false
+}
+
+// IsUnretryableConnectionError checks whether it's an unretryable connection error or not.
+func IsUnretryableConnectionError(err error) bool {
+	// Can't ensure whether the last write has reached the downstream or not.
+	// If the last write isn't idempotent, retry it may cause problems.
+	return errors.Cause(err) == dmysql.ErrInvalidConn
 }
 
 // ChangeFeedGCFastFailError is read only.

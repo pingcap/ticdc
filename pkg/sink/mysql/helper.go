@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-semver/semver"
@@ -33,7 +34,7 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	dmutils "github.com/pingcap/tiflow/dm/pkg/conn"
+	tmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
 
@@ -316,7 +317,7 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 
 	// we use default sql mode for downstream because all dmls generated and ddls in ticdc
 	// are based on default sql mode.
-	dsn.Params["sql_mode"], err = dmutils.AdjustSQLModeCompatible(mysql.DefaultSQLMode)
+	dsn.Params["sql_mode"], err = AdjustSQLModeCompatible(mysql.DefaultSQLMode)
 	if err != nil {
 		return "", err
 	}
@@ -512,4 +513,57 @@ func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime
 		return timodel.StrToJobState(result[1]), nil
 	}
 	return timodel.JobStateNone, nil
+}
+
+// AdjustSQLModeCompatible adjust downstream sql mode to compatible.
+// TODO: When upstream's datatime is 2020-00-00, 2020-00-01, 2020-06-00
+// and so on, downstream will be 2019-11-30, 2019-12-01, 2020-05-31,
+// as if set the 'NO_ZERO_IN_DATE', 'NO_ZERO_DATE'.
+// This is because the implementation of go-mysql, that you can see
+// https://github.com/go-mysql-org/go-mysql/blob/master/replication/row_event.go#L1063-L1087
+func AdjustSQLModeCompatible(sqlModes string) (string, error) {
+	needDisable := []string{
+		"NO_ZERO_IN_DATE",
+		"NO_ZERO_DATE",
+		"ERROR_FOR_DIVISION_BY_ZERO",
+		"NO_AUTO_CREATE_USER",
+		"STRICT_TRANS_TABLES",
+		"STRICT_ALL_TABLES",
+	}
+	needEnable := []string{
+		"IGNORE_SPACE",
+		"NO_AUTO_VALUE_ON_ZERO",
+		"ALLOW_INVALID_DATES",
+	}
+	disable := strings.Join(needDisable, ",")
+	enable := strings.Join(needEnable, ",")
+
+	mode, err := tmysql.GetSQLMode(sqlModes)
+	if err != nil {
+		return sqlModes, err
+	}
+	disableMode, err2 := tmysql.GetSQLMode(disable)
+	if err2 != nil {
+		return sqlModes, err2
+	}
+	enableMode, err3 := tmysql.GetSQLMode(enable)
+	if err3 != nil {
+		return sqlModes, err3
+	}
+	// About this bit manipulation, details can be seen
+	// https://github.com/pingcap/dm/pull/1869#discussion_r669771966
+	mode = (mode &^ disableMode) | enableMode
+
+	return GetSQLModeStrBySQLMode(mode), nil
+}
+
+// GetSQLModeStrBySQLMode get string represent of sql_mode by sql_mode.
+func GetSQLModeStrBySQLMode(sqlMode tmysql.SQLMode) string {
+	var sqlModeStr []string
+	for str, SQLMode := range tmysql.Str2SQLMode {
+		if sqlMode&SQLMode != 0 {
+			sqlModeStr = append(sqlModeStr, str)
+		}
+	}
+	return strings.Join(sqlModeStr, ",")
 }

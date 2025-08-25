@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/dbterror"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
-	dmretry "github.com/pingcap/tiflow/dm/pkg/retry"
 	v3rpc "go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 )
 
@@ -73,7 +72,7 @@ func IsRetryableDMLError(err error) bool {
 		return false
 	}
 	// Check if the error is connection errors that can retry safely.
-	if dmretry.IsConnectionError(err) {
+	if cerror.IsConnectionError(err) {
 		return true
 	}
 	// Check if the error is a retriable TiDB error or MySQL error.
@@ -87,7 +86,7 @@ func IsRetryableDDLError(err error) bool {
 	}
 
 	// All DDLs should be idempotent in theory.
-	if dmretry.IsUnretryableConnectionError(err) {
+	if cerror.IsUnretryableConnectionError(err) {
 		return true
 	}
 
