@@ -69,7 +69,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID, db *sql.DB, conf
 
 	txnStore := NewTxnStore()
 	conflictDetector := NewConflictDetector(changefeedID, config.MaxConcurrentTxns)
-	progressTracker := NewProgressTrackerWithMonitor(changefeedID.Name())
+	progressTracker := NewProgressTrackerWithMonitor(changefeedID.Namespace(), changefeedID.Name())
 	eventProcessor := NewEventProcessor(txnStore, progressTracker)
 
 	// Create workers

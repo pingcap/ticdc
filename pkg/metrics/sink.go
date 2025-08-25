@@ -162,6 +162,15 @@ var (
 			Help:      "Size of transaction store in txnSink.",
 		}, []string{"namespace", "changefeed"})
 
+	// TxnSinkProgressLagGauge records the lag of progress tracker in txnSink
+	TxnSinkProgressLagGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_sink_progress_lag",
+			Help:      "Progress lag of txnSink in seconds (based on effectiveTs).",
+		}, []string{"namespace", "changefeed"})
+
 	SinkDMLBatchCommit = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -257,6 +266,7 @@ func InitSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(TxnSinkBatchDuration)
 	registry.MustRegister(TxnSinkPendingTxns)
 	registry.MustRegister(TxnSinkTxnStoreSize)
+	registry.MustRegister(TxnSinkProgressLagGauge)
 	registry.MustRegister(SinkDMLBatchCommit)
 	registry.MustRegister(SinkDMLBatchCallback)
 	registry.MustRegister(PrepareStatementErrors)

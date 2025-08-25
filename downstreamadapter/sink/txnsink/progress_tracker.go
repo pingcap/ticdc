@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -47,6 +48,7 @@ type ProgressTracker struct {
 	// Monitoring
 	pdClock        pdutil.Clock
 	cancelMonitor  context.CancelFunc
+	namespace      string
 	changefeedName string
 }
 
@@ -60,11 +62,12 @@ func NewProgressTracker() *ProgressTracker {
 }
 
 // NewProgressTrackerWithMonitor creates a new progress tracker with monitoring enabled
-func NewProgressTrackerWithMonitor(changefeedName string) *ProgressTracker {
+func NewProgressTrackerWithMonitor(namespace, changefeedName string) *ProgressTracker {
 	pt := &ProgressTracker{
 		checkpointTs:   0,
 		list:           list.New(),
 		elemMap:        make(map[TxnKey]*list.Element),
+		namespace:      namespace,
 		changefeedName: changefeedName,
 	}
 
@@ -181,6 +184,9 @@ func (pt *ProgressTracker) printProgress() {
 	pdTime := pt.pdClock.CurrentTime()
 	phyEffectiveTs := oracle.ExtractPhysical(effectiveTs)
 	lag := float64(oracle.GetPhysical(pdTime)-phyEffectiveTs) / 1e3 // Convert to seconds
+
+	// Update monitoring metrics
+	metrics.TxnSinkProgressLagGauge.WithLabelValues(pt.namespace, pt.changefeedName).Set(lag)
 
 	log.Info("txnSink: Progress status",
 		zap.String("changefeed", pt.changefeedName),

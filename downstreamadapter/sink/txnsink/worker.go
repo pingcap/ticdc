@@ -328,7 +328,9 @@ func (w *Worker) executeSQLBatch(batch []*TxnSQL) error {
 		// Return row count and approximate size (using SQL length as approximation)
 		approximateSize := int64(0)
 		for _, txnSQL := range batch {
-			approximateSize += int64(len(txnSQL.SQL))
+			for _, event := range txnSQL.TxnGroup.Events {
+				approximateSize += int64(event.GetSize())
+			}
 		}
 		return totalRowCount, approximateSize, nil
 	})
