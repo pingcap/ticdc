@@ -43,7 +43,7 @@ require (
 	github.com/jarcoal/httpmock v1.2.0
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.18.0
-	github.com/linkedin/goavro/v2 v2.11.1
+	github.com/linkedin/goavro/v2 v2.14.0
 	github.com/mailru/easyjson v0.7.7
 	github.com/phayes/freeport v0.0.0-20180830031419-95f893ade6f2
 	github.com/pierrec/lz4/v4 v4.1.18
@@ -54,7 +54,7 @@ require (
 	github.com/pingcap/tidb v1.1.0-beta.0.20250415053443-ea52376d91c8
 	github.com/pingcap/tidb-dashboard v0.0.0-20240326110213-9768844ff5d7
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20250415053443-ea52376d91c8
-	github.com/pingcap/tiflow v0.0.0-20250707050724-ac2fcf466cf3
+	github.com/pingcap/tiflow v0.0.0-20250825101649-1599c95336c2
 	github.com/prometheus/client_golang v1.22.0
 	github.com/r3labs/diff v1.1.0
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
