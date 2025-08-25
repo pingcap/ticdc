@@ -105,10 +105,8 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	startTs := uint64(100)
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	changefeedStatus := &changefeedStatus{
-		changefeedID: info.GetChangefeedID(),
-	}
-	stat := newDispatcherStat(startTs, info, info.filter, 1, 1, changefeedStatus)
+	status := newChangefeedStatus(info.GetChangefeedID())
+	stat := newDispatcherStat(startTs, info, info.filter, 1, 1, status)
 
 	// Case 1: no new events, only watermark change
 	stat.onResolvedTs(200)
