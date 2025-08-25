@@ -91,14 +91,14 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		_ = dispManager.Run(ctx)
 	}()
 	cfConfig := &config.ChangeFeedInfo{
-		ChangefeedID: common.NewChangeFeedIDWithName("test"),
+		ChangefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID),
 		Config:       config.GetDefaultReplicaConfig(),
 	}
 	data, err := json.Marshal(cfConfig)
 	require.NoError(t, err)
 
 	// Case 1: Add new changefeed
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	_ = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic, &heartbeatpb.AddMaintainerRequest{
 			Id:           cfID.ToPB(),
@@ -319,7 +319,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	go func() {
 		_ = dispManager.Run(ctx)
 	}()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	cfConfig := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -414,7 +414,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	go func() {
 		_ = dispManager.Run(ctx)
 	}()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
 	_ = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID, messaging.MaintainerManagerTopic, &heartbeatpb.RemoveMaintainerRequest{
 		Id:      cfID.ToPB(),
 		Cascade: true,

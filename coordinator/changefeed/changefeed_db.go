@@ -161,6 +161,21 @@ func (db *ChangefeedDB) GetAllChangefeeds() []*Changefeed {
 	return cfs
 }
 
+// GetAllChangefeedsByKeyspace returns all changefeeds by keyspace
+func (db *ChangefeedDB) GetAllChangefeedsByKeyspace(keyspace string) []*Changefeed {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+
+	cfs := make([]*Changefeed, 0, len(db.changefeeds))
+	for _, cf := range db.changefeeds {
+		if cf.ID.DisplayName.KeyspaceID != keyspace {
+			continue
+		}
+		cfs = append(cfs, cf)
+	}
+	return cfs
+}
+
 // BindChangefeedToNode binds the changefeed to the node, it will remove the task from the old node and add it to the new node
 // ,and it also marks the task as scheduling
 func (db *ChangefeedDB) BindChangefeedToNode(old, new node.ID, task *Changefeed) {

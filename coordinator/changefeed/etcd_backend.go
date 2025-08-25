@@ -45,7 +45,7 @@ func NewEtcdBackend(etcdClient etcd.CDCEtcdClient) *EtcdBackend {
 }
 
 func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeFeedID]*ChangefeedMetaWrapper, error) {
-	changefeedPrefix := etcd.NamespacedPrefix(b.etcdClient.GetClusterID(), common.DefaultNamespace) + "/changefeed"
+	changefeedPrefix := etcd.KeyspaceIDPrefix(b.etcdClient.GetClusterID(), common.DefaultKeyspaceID) + "/changefeed"
 
 	resp, err := b.etcdClient.GetEtcdClient().Get(ctx, changefeedPrefix, clientv3.WithPrefix())
 	if err != nil {
@@ -79,8 +79,8 @@ func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeF
 				log.Warn("load a old version change feed Info, migrate it to new version",
 					zap.String("key", key))
 				detail.ChangefeedID = common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-					Name:      cf,
-					Namespace: ns,
+					Name:       cf,
+					KeyspaceID: ns,
 				})
 				if data, err := detail.Marshal(); err != nil {
 					log.Warn("failed to marshal change feed Info, ignore",
