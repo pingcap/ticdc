@@ -246,6 +246,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.String("state", string(cfg.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
+		zap.String("redoTs", m.redoTs.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
 
