@@ -73,7 +73,7 @@ type EventStore interface {
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
-	// GetIterator return an iterator which scan the data in ts range (dataRange.StartTs, dataRange.EndTs]
+	// GetIterator return an iterator which scan the data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd]
 	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
 }
 
@@ -632,13 +632,13 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 			return nil
 		}
 		checkpointTs := subStat.checkpointTs.Load()
-		if dataRange.StartTs < checkpointTs {
+		if dataRange.CommitTsStart < checkpointTs {
 			log.Panic("dataRange startTs is smaller than subscriptionStat checkpointTs, it should not happen",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Uint64("startTs", dataRange.StartTs),
+				zap.Uint64("startTs", dataRange.CommitTsStart),
 				zap.Uint64("checkpointTs", checkpointTs))
 		}
-		if dataRange.EndTs > subStat.resolvedTs.Load() {
+		if dataRange.CommitTsEnd > subStat.resolvedTs.Load() {
 			return nil
 		}
 		return e.dbs[subStat.dbIndex]
@@ -660,8 +660,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		log.Panic("fail to find db for dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.String("span", common.FormatTableSpan(stat.tableSpan)),
-			zap.Uint64("startTs", dataRange.StartTs),
-			zap.Uint64("endTs", dataRange.EndTs))
+			zap.Uint64("startTs", dataRange.CommitTsStart),
+			zap.Uint64("endTs", dataRange.CommitTsEnd))
 	}
 	if needUpgradeLock {
 		e.dispatcherMeta.RUnlock()
@@ -687,12 +687,12 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 
 	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
 	var start []byte
-	if dataRange.LastScannedStartTs != 0 {
-		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.StartTs, dataRange.LastScannedStartTs+1)
+	if dataRange.LastScannedTxnStartTs != 0 {
+		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart, dataRange.LastScannedTxnStartTs+1)
 	} else {
-		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.StartTs+1)
+		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
 	}
-	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.EndTs+1)
+	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
 	// TODO: optimize read performance
 	// it's impossible return error here
 	iter, _ := db.NewIter(&pebble.IterOptions{
@@ -716,8 +716,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		innerIter:     iter,
 		prevStartTs:   0,
 		prevCommitTs:  0,
-		startTs:       dataRange.StartTs,
-		endTs:         dataRange.EndTs,
+		startTs:       dataRange.CommitTsStart,
+		endTs:         dataRange.CommitTsEnd,
 		rowCount:      0,
 	}
 }

@@ -85,7 +85,7 @@ func TestEventServiceBasic(t *testing.T) {
 	require.NotNil(t, broker)
 
 	controlM := commonEvent.NewCongestionControl()
-	controlM.AddAvailableMemory(dispatcherInfo.GetChangefeedID().Id, broker.scanLimitInBytes+1024*1024)
+	controlM.AddAvailableMemory(dispatcherInfo.GetChangefeedID().Id, broker.availableLowThresh+1024*1024)
 	broker.handleCongestionControl(node.ID(dispatcherInfo.serverID), controlM)
 
 	// add events to eventStore`
@@ -313,7 +313,7 @@ func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange
 
 	entries := make([]*common.RawKVEntry, 0)
 	for _, e := range events {
-		if e.CRTs > dataRange.StartTs && e.CRTs <= dataRange.EndTs {
+		if e.CRTs > dataRange.CommitTsStart && e.CRTs <= dataRange.CommitTsEnd {
 			entries = append(entries, e)
 		}
 	}

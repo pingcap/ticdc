@@ -395,8 +395,8 @@ func TestEventStoreGetIterator(t *testing.T) {
 				StartKey: []byte("b"),
 				EndKey:   []byte("h"),
 			},
-			StartTs: 100,
-			EndTs:   150,
+			CommitTsStart: 100,
+			CommitTsEnd:   150,
 		})
 		iterImpl := iter.(*eventStoreIter)
 		require.True(t, iterImpl.needCheckSpan)
@@ -418,8 +418,8 @@ func TestEventStoreGetIterator(t *testing.T) {
 				StartKey: []byte("b"),
 				EndKey:   []byte("h"),
 			},
-			StartTs: 100,
-			EndTs:   150,
+			CommitTsStart: 100,
+			CommitTsEnd:   150,
 		})
 		iterImpl := iter.(*eventStoreIter)
 		require.False(t, iterImpl.needCheckSpan)

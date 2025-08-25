@@ -42,7 +42,6 @@ type schemaGetter interface {
 }
 
 // ScanLimit defines the limits for a scan operation
-// todo: should consider the bytes of decoded events.
 type scanLimit struct {
 	// maxDMLBytes is the maximum number of bytes to scan
 	maxDMLBytes int64
@@ -109,11 +108,6 @@ func (s *eventScanner) scan(
 	dataRange common.DataRange,
 	limit scanLimit,
 ) ([]event.Event, bool, error) {
-	log.Info("scanner starts scanning",
-		zap.Any("dispatcherID", dispatcherStat.id), zap.Int64("tableID", dataRange.Span.TableID),
-		zap.Uint64("startTs", dataRange.StartTs), zap.Uint64("lastScannedStartTs", dataRange.LastScannedStartTs),
-		zap.Uint64("endTs", dataRange.EndTs))
-
 	// Initialize scan session
 	sess := newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
@@ -126,7 +120,7 @@ func (s *eventScanner) scan(
 
 	iter := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
 	if iter == nil {
-		resolved := event.NewResolvedEvent(dataRange.EndTs, dispatcherStat.id, dispatcherStat.epoch.Load())
+		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch.Load())
 		events = append(events, resolved)
 		sess.appendEvents(events)
 		return sess.events, false, nil
@@ -143,9 +137,10 @@ func (s *eventScanner) scan(
 func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.DataRange) ([]event.Event, error) {
 	dispatcherID := stat.info.GetID()
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
-		dispatcherID, dataRange.Span.TableID, stat.filter, dataRange.StartTs, dataRange.EndTs)
+		dispatcherID, dataRange.Span.TableID, stat.filter, dataRange.CommitTsStart, dataRange.CommitTsEnd)
 	if err != nil {
-		log.Error("get ddl events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+		log.Error("get ddl events failed", zap.Stringer("dispatcherID", dispatcherID),
+			zap.Int64("tableID", dataRange.Span.TableID), zap.Error(err))
 		return nil, err
 	}
 
@@ -187,7 +182,7 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
-			err = finalizeScan(merger, processor, session, session.dataRange.EndTs)
+			err = finalizeScan(merger, processor, session, session.dataRange.CommitTsEnd)
 			return false, err
 		}
 

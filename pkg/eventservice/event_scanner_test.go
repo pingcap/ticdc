@@ -131,7 +131,7 @@ func TestEventScanner(t *testing.T) {
 
 	disp.eventStoreResolvedTs.Store(resolvedTs)
 	require.True(t, ok)
-	dataRange.StartTs = ddlEvent.GetCommitTs()
+	dataRange.CommitTsStart = ddlEvent.GetCommitTs()
 
 	sl = scanLimit{
 		maxDMLBytes: 1000,
@@ -1145,9 +1145,9 @@ func TestScanSession(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
 		dataRange := common.DataRange{
-			Span:    &heartbeatpb.TableSpan{TableID: 123},
-			StartTs: 100,
-			EndTs:   200,
+			Span:          &heartbeatpb.TableSpan{TableID: 123},
+			CommitTsStart: 100,
+			CommitTsEnd:   200,
 		}
 		limit := scanLimit{maxDMLBytes: 1000, timeout: time.Second}
 
@@ -1474,8 +1474,8 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 		Span: &heartbeatpb.TableSpan{
 			TableID: tableID,
 		},
-		StartTs: updateEvent.StartTs,
-		EndTs:   updateEvent.CRTs + 100,
+		CommitTsStart: updateEvent.StartTs,
+		CommitTsEnd:   updateEvent.CRTs + 100,
 	}
 
 	limit := scanLimit{
@@ -1532,7 +1532,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	resolvedEvent, ok := events[1].(event.ResolvedEvent)
 	require.True(t, ok)
 	require.Equal(t, dispatcherID, resolvedEvent.DispatcherID)
-	require.Equal(t, dataRange.EndTs, resolvedEvent.ResolvedTs)
+	require.Equal(t, dataRange.CommitTsEnd, resolvedEvent.ResolvedTs)
 
 	// Verify sess state was updated correctly
 	require.Equal(t, updateEvent.CRTs, merger.lastCommitTs)

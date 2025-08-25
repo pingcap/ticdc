@@ -77,7 +77,9 @@ type eventBroker struct {
 	messageCh     []chan *wrapEvent
 	redoMessageCh []chan *wrapEvent
 
-	scanLimitInBytes uint64
+	// if the available memory quota of a changefeed is less than availableLowThresh,
+	// skip the current scan.
+	availableLowThresh uint64
 
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
 	cancel context.CancelFunc
@@ -128,9 +130,9 @@ func newEventBroker(
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
 
-		scanLimitInBytes: uint64(config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes),
-		cancel:           cancel,
-		g:                g,
+		availableLowThresh: uint64(config.GetGlobalServerConfig().Debug.EventService.AvailableLowThresh),
+		cancel:             cancel,
+		g:                  g,
 	}
 
 	// Initialize metrics collector
@@ -171,7 +173,7 @@ func newEventBroker(
 		return c.metricsCollector.Run(ctx)
 	})
 
-	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
+	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("availableLowThresh", c.availableLowThresh))
 	return c
 }
 
@@ -210,12 +212,12 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 
 		lastStartTs = dml.GetStartTs()
 		lastCommitTs = dml.GetCommitTs()
+		log.Debug("send dml event to dispatcher",
+			zap.Stringer("dispatcher", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
 	d.lastScannedCommitTs.Store(lastCommitTs)
 	d.lastScannedStartTs.Store(lastStartTs)
-	log.Info("update scanner progress by send DML", zap.Stringer("dispatcher", d.id),
-		zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
-		zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	doSendDML(batchEvent)
 }
 
@@ -224,13 +226,6 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
 	e.Epoch = d.epoch.Load()
-	log.Info("send ddl event to dispatcher",
-		zap.Stringer("dispatcher", d.id),
-		zap.Int64("tableID", e.TableID),
-		zap.String("query", e.Query),
-		zap.Uint64("commitTs", e.FinishedTs),
-		zap.Uint64("seq", e.Seq),
-		zap.Bool("isRedo", d.info.GetIsRedo()))
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
@@ -239,21 +234,19 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	case c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- ddlEvent:
 		metricEventServiceSendDDLCount.Inc()
 	}
+	log.Info("send ddl event to dispatcher",
+		zap.Stringer("dispatcher", d.id), zap.Int64("tableID", e.TableID),
+		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
+		zap.Uint64("seq", e.Seq), zap.Bool("isRedo", d.info.GetIsRedo()))
 }
 
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
 	re := event.NewResolvedEvent(watermark, d.id, d.epoch.Load())
-	resolvedEvent := newWrapResolvedEvent(
-		remoteID,
-		re,
-		d.getEventSenderState())
+	resolvedEvent := newWrapResolvedEvent(remoteID, re, d.getEventSenderState())
 	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
-	log.Info("update scanner progress by the resolved-ts",
-		zap.Any("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
-		zap.Uint64("lastCommitTs", d.lastScannedCommitTs.Load()), zap.Uint64("lastStartTs", d.lastScannedStartTs.Load()))
 	metricEventServiceSendResolvedTsCount.Inc()
 }
 
@@ -370,25 +363,20 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	// 2. Constrain the data range by the ddl state of the table.
 	ddlState := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().TableID)
-	dataRange.EndTs = min(dataRange.EndTs, ddlState.ResolvedTs)
+	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 
-	if dataRange.EndTs <= dataRange.StartTs {
+	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		metricEventServiceSkipResolvedTsCount.Inc()
 		return false, common.DataRange{}
 	}
 
 	// 3. Check whether there is any events in the data range
-	// Note: target range is (dataRange.StartTs, dataRange.EndTs]
-	if dataRange.StartTs >= task.latestCommitTs.Load() &&
-		dataRange.StartTs >= ddlState.MaxEventCommitTs {
+	// Note: target range is (dataRange.CommitTsStart, dataRange.CommitTsEnd]
+	if dataRange.CommitTsStart >= task.latestCommitTs.Load() &&
+		dataRange.CommitTsStart >= ddlState.MaxEventCommitTs {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
-		log.Warn("send resolved-ts since no data to scan",
-			zap.Any("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Uint64("startTs", dataRange.StartTs), zap.Uint64("lastScannedStartTs", dataRange.LastScannedStartTs),
-			zap.Uint64("endTs", dataRange.EndTs),
-		)
-		c.sendResolvedTs(task, dataRange.EndTs)
+		c.sendResolvedTs(task, dataRange.CommitTsEnd)
 		return false, common.DataRange{}
 	}
 	return true, dataRange
@@ -557,7 +545,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	available := item.(*atomic.Uint64)
 
-	if available.Load() < c.scanLimitInBytes {
+	if available.Load() < c.availableLowThresh {
 		task.resetScanLimit()
 		return
 	}

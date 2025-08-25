@@ -85,8 +85,8 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	// Normal case
 	r, ok := stat.getDataRange()
 	require.True(t, ok)
-	require.Equal(t, uint64(100), r.StartTs)
-	require.Equal(t, uint64(200), r.EndTs)
+	require.Equal(t, uint64(100), r.CommitTsStart)
+	require.Equal(t, uint64(200), r.CommitTsEnd)
 	require.Equal(t, info.GetTableSpan(), r.Span)
 
 	// When watermark equals resolvedTs
@@ -99,7 +99,7 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	stat.resetState(150)
 	r, ok = stat.getDataRange()
 	require.True(t, ok)
-	require.Equal(t, uint64(150), r.StartTs)
+	require.Equal(t, uint64(150), r.CommitTsStart)
 }
 
 func TestDispatcherStatUpdateWatermark(t *testing.T) {

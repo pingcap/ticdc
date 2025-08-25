@@ -29,7 +29,7 @@ function prepare() {
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopSplitScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
-	# run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -53,7 +53,7 @@ function prepare() {
 
 function execute_ddls() {
 	while true; do
-		table_num=$((RANDOM % 1))
+		table_num=$((RANDOM % 5 + 1))
 		table_name="table_$table_num"
 
 		case $((RANDOM % 3)) in
@@ -101,19 +101,19 @@ function kill_server() {
 			sleep 15
 			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
 			;;
-			# 1)
-			# 	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
-			# 	if [ -z "$cdc_pid_2" ]; then
-			# 		continue
-			# 	fi
-			# 	kill_cdc_pid $cdc_pid_2
+		1)
+			cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+			if [ -z "$cdc_pid_2" ]; then
+				continue
+			fi
+			kill_cdc_pid $cdc_pid_2
 
-			# 	sleep 15
-			# 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
-			# 	;;
+			sleep 15
+			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
+			;;
 		esac
 		count=$((count + 1))
-		sleep 30
+		sleep 15
 	done
 }
 
@@ -125,7 +125,7 @@ main() {
 
 	declare -a pids=()
 
-	for i in {1..1}; do
+	for i in {1..5}; do
 		execute_dml $i &
 		pids+=("$!")
 	done
