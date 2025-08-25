@@ -61,7 +61,7 @@ type Sink struct {
 func New(ctx context.Context, changefeedID common.ChangeFeedID, db *sql.DB, config *TxnSinkConfig) *Sink {
 	if config == nil {
 		config = &TxnSinkConfig{
-			MaxConcurrentTxns: 16,
+			MaxConcurrentTxns: 32,
 			BatchSize:         256,
 			MaxSQLBatchSize:   1024 * 16,
 		}
