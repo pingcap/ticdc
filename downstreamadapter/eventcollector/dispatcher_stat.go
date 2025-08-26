@@ -346,7 +346,8 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeDMLEvent,
-		commonEvent.TypeBatchDMLEvent:
+		commonEvent.TypeBatchDMLEvent,
+		commonEvent.TypeSyncPointEvent:
 		d.lastEventCommitTs.Store(event.GetCommitTs())
 	}
 
