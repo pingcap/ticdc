@@ -115,7 +115,7 @@ type dispatcherStat struct {
 	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
-	// lastEventCommitTs is the commitTs of the last received DDL/DML events.
+	// lastEventCommitTs is the commitTs of the last received DDL/DML/SyncPoint events.
 	lastEventCommitTs atomic.Uint64
 	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
 	gotDDLOnTs atomic.Bool
