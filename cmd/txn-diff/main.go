@@ -4,12 +4,10 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"net/url"
 	"os"
-	"strings"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/config"
 	"go.uber.org/zap"
 )
 
@@ -18,8 +16,9 @@ var (
 	downstreamURIStr string
 	tableCount       int
 	tableStartIndex  int
-	queryCommitTsSql = `select commitTs,id from table sbtest%d`
-	queryStartTsSql  = `select startTs,id from table sbtest%d`
+	tablePrefix      string
+	queryCommitTsSql = `select commitTs,id from table %s%d`
+	queryStartTsSql  = `select startTs,id from table %s%d`
 )
 
 type Column struct {
@@ -27,27 +26,13 @@ type Column struct {
 	startTs  int64
 }
 
-func validURL(URIStr string) {
-	uri, err := url.Parse(URIStr)
-	if err != nil {
-		log.Error("invalid upstream-uri", zap.Error(err))
-		os.Exit(1)
-	}
-	scheme := strings.ToLower(uri.Scheme)
-	if !config.IsMQScheme(scheme) {
-		log.Error("invalid scheme, the scheme of upstream-uri must be mysql")
-		os.Exit(1)
-	}
-}
 func main() {
-	flag.StringVar(&upstreamURIStr, "upstream-uri", "", "storage uri")
-	flag.StringVar(&downstreamURIStr, "downstream-uri", "", "downstream sink uri")
+	flag.StringVar(&upstreamURIStr, "upstream-uri", "root@tcp(127.0.0.1:4000)/test", "upstream uri")
+	flag.StringVar(&downstreamURIStr, "downstream-uri", "root@tcp(127.0.0.1:3306)/test", "downstream uri")
+	flag.StringVar(&tablePrefix, "tablePrefix", "sbtest", "table name prefix")
 	flag.IntVar(&tableCount, "table-count", tableCount, "table count of the workload")
 	flag.IntVar(&tableStartIndex, "table-start-index", tableStartIndex, "table start index, sbtest<index>")
 	flag.Parse()
-
-	validURL(upstreamURIStr)
-	validURL(downstreamURIStr)
 
 	upstream := openDB(upstreamURIStr)
 	downstream := openDB(downstreamURIStr)
@@ -59,14 +44,14 @@ func main() {
 	downMap := make(map[int64][]int64)
 	for i := 0; i < tableCount; i++ {
 		table := tableCount + tableStartIndex
-		query(upstream, fmt.Sprintf(queryCommitTsSql, table), func(tso, id int64) {
+		query(upstream, fmt.Sprintf(queryCommitTsSql, tablePrefix, table), func(tso, id int64) {
 			if _, ok := m[id]; !ok {
 				m[id] = &Column{}
 			}
 			m[id].commitTs = tso
 			upMap[tso] = append(upMap[tso], id)
 		})
-		query(downstream, fmt.Sprintf(queryStartTsSql, table), func(tso, id int64) {
+		query(downstream, fmt.Sprintf(queryStartTsSql, tablePrefix, table), func(tso, id int64) {
 			if _, ok := m[id]; !ok {
 				m[id] = &Column{}
 			}
@@ -93,10 +78,10 @@ func main() {
 	log.Info("compare success")
 }
 
-func openDB(uri string) *sql.DB {
-	db, err := sql.Open("mysql", uri)
+func openDB(dsn string) *sql.DB {
+	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		log.Error("open mysql failed", zap.Error(err))
+		log.Error("open mysql failed", zap.Error(err), zap.Any("dsn", dsn))
 		os.Exit(1)
 		return nil
 	}
