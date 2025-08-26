@@ -26,6 +26,11 @@ type Column struct {
 	startTs  int64
 }
 
+type Pair struct {
+	id    int64
+	table int
+}
+
 func main() {
 	flag.StringVar(&upstreamURIStr, "upstream-uri", "root@tcp(127.0.0.1:4000)/test", "upstream uri")
 	flag.StringVar(&downstreamURIStr, "downstream-uri", "root@tcp(127.0.0.1:3306)/test", "downstream uri")
@@ -39,39 +44,59 @@ func main() {
 
 	defer upstream.Close()
 	defer downstream.Close()
-	m := make(map[int64]*Column)
-	upMap := make(map[int64][]int64)
-	downMap := make(map[int64][]int64)
+	m := make(map[int]map[int64]*Column)
+	upMap := make(map[int64][]Pair)
+	downMap := make(map[int64][]Pair)
 	for i := 0; i < tableCount; i++ {
-		table := tableCount + tableStartIndex
+		table := i + tableStartIndex
 		query(upstream, fmt.Sprintf(queryCommitTsSql, tablePrefix, table), func(tso, id int64) {
-			if _, ok := m[id]; !ok {
-				m[id] = &Column{}
+			if _, ok := m[table]; !ok {
+				m[table] = make(map[int64]*Column)
 			}
-			m[id].commitTs = tso
-			upMap[tso] = append(upMap[tso], id)
+			m[table][id] = &Column{}
+			m[table][id].commitTs = tso
+			upMap[tso] = append(upMap[tso], Pair{id: id, table: table})
 		})
 		query(downstream, fmt.Sprintf(queryStartTsSql, tablePrefix, table), func(tso, id int64) {
-			if _, ok := m[id]; !ok {
-				m[id] = &Column{}
+			if _, ok := m[table]; !ok {
+				m[table] = make(map[int64]*Column)
 			}
-			m[id].startTs = tso
-			downMap[tso] = append(downMap[tso], id)
+			m[table][id] = &Column{}
+			m[table][id].startTs = tso
+			downMap[tso] = append(downMap[tso], Pair{id: id, table: table})
 		})
 	}
 
 	// compare
 	for _, ids := range upMap {
 		for k := 1; k < len(ids); k++ {
-			if m[ids[k]].startTs != m[ids[k-1]].startTs {
-				log.Panic("compare failed", zap.Any("col", m[ids[k]]), zap.Any("id", ids[k]))
+			if m[ids[k].table][ids[k].id].startTs != m[ids[k-1].table][ids[k-1].id].startTs {
+				log.Panic("compare failed",
+					zap.Any("preCommitTs", m[ids[k-1].table][ids[k-1].id].commitTs),
+					zap.Any("curCommitTs", m[ids[k].table][ids[k].id].commitTs),
+					zap.Any("preStartTs", m[ids[k-1].table][ids[k-1].id].startTs),
+					zap.Any("curStartTs", m[ids[k].table][ids[k].id].startTs),
+					zap.Any("preid", ids[k-1].id),
+					zap.Any("curid", ids[k]),
+					zap.Any("pretable", ids[k-1].table),
+					zap.Any("curtable", ids[k].table),
+				)
 			}
 		}
 	}
 	for _, ids := range downMap {
 		for k := 1; k < len(ids); k++ {
-			if m[ids[k]].commitTs != m[ids[k-1]].commitTs {
-				log.Panic("compare failed", zap.Any("col", m[ids[k]]), zap.Any("id", ids[k]))
+			if m[ids[k].table][ids[k].id].commitTs != m[ids[k-1].table][ids[k-1].id].commitTs {
+				log.Panic("compare failed",
+					zap.Any("preCommitTs", m[ids[k-1].table][ids[k-1].id].commitTs),
+					zap.Any("curCommitTs", m[ids[k].table][ids[k].id].commitTs),
+					zap.Any("preStartTs", m[ids[k-1].table][ids[k-1].id].startTs),
+					zap.Any("curStartTs", m[ids[k].table][ids[k].id].startTs),
+					zap.Any("preid", ids[k-1].id),
+					zap.Any("curid", ids[k].id),
+					zap.Any("pretable", ids[k-1].table),
+					zap.Any("curtable", ids[k].table),
+				)
 			}
 		}
 	}
@@ -100,13 +125,9 @@ func query(db *sql.DB, query string, fn func(tso, id int64)) {
 		log.Error("mysql query failed", zap.Error(err))
 		return
 	}
+	defer rows.Close()
+
 	var tso, id int64
-	err = rows.Scan(&tso, &id)
-	if err != nil {
-		log.Error("mysql scan failed", zap.Error(err))
-		return
-	}
-	fn(tso, id)
 	for rows.Next() {
 		err = rows.Scan(&tso, &id)
 		if err != nil {
