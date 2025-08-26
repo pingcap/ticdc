@@ -336,6 +336,7 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 		d.gotDDLOnTs.Store(false)
 		d.gotSyncpointOnTS.Store(false)
 	}
+
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		d.gotDDLOnTs.Store(true)
