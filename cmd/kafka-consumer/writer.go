@@ -75,8 +75,9 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Of
 }
 
 type writer struct {
-	progresses []*partitionProgress
-	ddlList    []*commonEvent.DDLEvent
+	progresses         []*partitionProgress
+	ddlList            []*commonEvent.DDLEvent
+	ddlWithMaxCommitTs map[int64]uint64
 
 	// this should only be used by the canal-json protocol
 	partitionTableAccessor *partitionTableAccessor
@@ -144,28 +145,6 @@ func (w *writer) run(ctx context.Context) error {
 }
 
 func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) error {
-	// The DDL event is delivered after all messages belongs to the tables which are blocked by the DDL event
-	// so we can make assumption that the all DMLs received before the DDL event.
-	// since one table's events may be produced to the different partitions, so we have to flush all partitions.
-	// if block the whole database, flush all tables, otherwise flush the blocked tables.
-	tableIDs := make(map[int64]struct{})
-	switch ddl.GetBlockedTables().InfluenceType {
-	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
-		for _, progress := range w.progresses {
-			for tableID := range progress.eventGroups {
-				tableIDs[tableID] = struct{}{}
-			}
-		}
-	case commonEvent.InfluenceTypeNormal:
-		// include self
-		tableIDs[ddl.TableID] = struct{}{}
-		for _, item := range ddl.GetBlockedTables().TableIDs {
-			tableIDs[item] = struct{}{}
-		}
-	default:
-		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
-	}
-
 	var (
 		done = make(chan struct{}, 1)
 
@@ -173,6 +152,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 		flushed atomic.Int64
 	)
 
+	tableIDs := w.getBlockTableIDs(ddl)
 	commitTs := ddl.GetCommitTs()
 	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	for tableID := range tableIDs {
@@ -220,6 +200,61 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 	}
 	return w.mysqlSink.WriteBlockEvent(ddl)
+}
+
+func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} {
+	// The DDL event is delivered after all messages belongs to the tables which are blocked by the DDL event
+	// so we can make assumption that the all DMLs received before the DDL event.
+	// since one table's events may be produced to the different partitions, so we have to flush all partitions.
+	// if block the whole database, flush all tables, otherwise flush the blocked tables.
+	tableIDs := make(map[int64]struct{})
+	switch ddl.GetBlockedTables().InfluenceType {
+	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
+		for _, progress := range w.progresses {
+			for tableID := range progress.eventGroups {
+				tableIDs[tableID] = struct{}{}
+			}
+		}
+	case commonEvent.InfluenceTypeNormal:
+		// include self
+		tableIDs[ddl.TableID] = struct{}{}
+		for _, item := range ddl.GetBlockedTables().TableIDs {
+			tableIDs[item] = struct{}{}
+		}
+	default:
+		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
+	}
+	return tableIDs
+}
+
+// append DDL wait to be handled, only consider the constraint among DDLs.
+// for DDL a / b received in the order, a.CommitTs < b.CommitTs should be true.
+func (w *writer) appendDDL(ddl *commonEvent.DDLEvent) {
+	// DDL CommitTs fallback, just crash it to indicate the bug.
+	tableIDs := w.getBlockTableIDs(ddl)
+	for tableID := range tableIDs {
+		maxCommitTs, ok := w.ddlWithMaxCommitTs[tableID]
+		if ok && ddl.GetCommitTs() < maxCommitTs {
+			log.Warn("DDL CommitTs < maxCommitTsDDL.CommitTs",
+				zap.Uint64("commitTs", ddl.GetCommitTs()),
+				zap.Uint64("maxCommitTs", maxCommitTs),
+				zap.String("DDL", ddl.Query))
+			return
+		}
+	}
+
+	// A rename tables DDL job contains multiple DDL events with same CommitTs.
+	// So to tell if a DDL is redundant or not, we must check the equivalence of
+	// the current DDL and the DDL with max CommitTs.
+	if maxCommitTs, ok := w.ddlWithMaxCommitTs[ddl.TableID]; ok && maxCommitTs == ddl.GetCommitTs() {
+		log.Warn("ignore redundant DDL, the DDL is equal to ddlWithMaxCommitTs",
+			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("DDL", ddl.Query))
+		return
+	}
+	w.ddlList = append(w.ddlList, ddl)
+	for tableID := range tableIDs {
+		w.ddlWithMaxCommitTs[tableID] = ddl.GetCommitTs()
+	}
 }
 
 func (w *writer) globalWatermark() uint64 {
@@ -343,8 +378,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		if ddl.Query == "" {
 			return false
 		}
-
-		w.ddlList = append(w.ddlList, ddl)
+		w.appendDDL(ddl)
 		log.Info("DDL event received",
 			zap.Int32("partition", partition), zap.Any("offset", offset),
 			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
