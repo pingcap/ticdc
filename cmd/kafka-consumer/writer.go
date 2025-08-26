@@ -225,6 +225,7 @@ func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} 
 	default:
 		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
 	}
+	log.Error("getBlockTableIDs", zap.Any("tableIDs", tableIDs), zap.Any("ddl", ddl.Query))
 	return tableIDs
 }
 
