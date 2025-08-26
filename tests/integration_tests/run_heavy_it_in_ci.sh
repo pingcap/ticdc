@@ -66,42 +66,22 @@ mysql_groups=(
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
-	# G01
-	# ddl_for_split_tables_with_random_move_table
-	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
-	# G02
-	'canal_json_handle_key_only'
-	# G03
-	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
-	# G04
-	'open_protocol_claim_check open_protocol_handle_key_only'
-	# G05
-	'move_table drop_many_tables'
-	# G06
-	'cdc default_value'
-	# G07
-	# merge_table
-	'resolve_lock force_replicate_table'
-	# G08
-	'tidb_mysql_test'
-	# G09
-	'mq_sink_error_resume'
-	# G10
-	'kafka_column_selector kafka_column_selector_avro'
-	# fail_over_ddl_mix_with_syncpoint
-	# ddl_with_random_move_table
-	# fail_over_ddl_mix
-	# G11
-	'fail_over region_merge'
-	# G12
-	''
-	# G13
-	'debezium01'
-	# G14
-	'debezium02'
-	# G15
-	'debezium03'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
+	'default_value'
 )
 
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
