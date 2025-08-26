@@ -76,6 +76,7 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Of
 
 type writer struct {
 	progresses []*partitionProgress
+	ddlList    []*commonEvent.DDLEvent
 
 	// this should only be used by the canal-json protocol
 	partitionTableAccessor *partitionTableAccessor
@@ -94,6 +95,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		maxBatchSize:           o.maxBatchSize,
 		progresses:             make([]*partitionProgress, o.partitionNum),
 		partitionTableAccessor: newPartitionTableAccessor(),
+		ddlList:                make([]*commonEvent.DDLEvent, 0),
 	}
 	var (
 		db  *sql.DB
@@ -305,17 +307,12 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		log.Panic("try to fetch the next event failed, this should not happen", zap.Bool("hasNext", hasNext))
 	}
 
+	needFlush := false
 	switch messageType {
 	case common.MessageTypeResolved:
 		newWatermark := progress.decoder.NextResolvedEvent()
 		progress.updateWatermark(newWatermark, offset)
-
-		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
-		err := w.flushDMLEventsByWatermark(ctx)
-		if err != nil {
-			log.Panic("flush dml events by the watermark failed", zap.Error(err))
-		}
-		return true
+		needFlush = true
 	case common.MessageTypeDDL:
 		// for some protocol, DDL would be dispatched to all partitions,
 		// Consider that DDL a, b, c received from partition-0, the latest DDL is c,
@@ -347,17 +344,14 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			return false
 		}
 
+		w.ddlList = append(w.ddlList, ddl)
 		log.Info("DDL event received",
 			zap.Int32("partition", partition), zap.Any("offset", offset),
 			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
 			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
 			zap.Any("blockedTables", ddl.GetBlockedTables()))
 
-		err := w.flushDDLEvent(ctx, ddl)
-		if err != nil {
-			log.Error("flush DDL event failed", zap.String("DDL", ddl.Query), zap.Error(err))
-		}
-		return true
+		needFlush = true
 	case common.MessageTypeRow:
 		var counter int
 		row := progress.decoder.NextDMLEvent()
@@ -390,7 +384,48 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		log.Panic("unknown message type", zap.Any("messageType", messageType),
 			zap.Int32("partition", partition), zap.Any("offset", offset))
 	}
+	if needFlush {
+		return w.Write(ctx, messageType)
+	}
 	return false
+}
+
+// Write will synchronously write data downstream
+func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool {
+	watermark := w.globalWatermark()
+	ddlList := make([]*commonEvent.DDLEvent, 0)
+	for _, todoDDL := range w.ddlList {
+		// watermark is the min value for all partitions,
+		// the DDL only executed by the first partition, other partitions may be slow
+		// so that the watermark can be smaller than the DDL's commitTs,
+		// which means some DML events may not be consumed yet, so cannot execute the DDL right now.
+		if todoDDL.GetCommitTs() > watermark {
+			ddlList = append(ddlList, todoDDL)
+			continue
+		}
+		if err := w.flushDDLEvent(ctx, todoDDL); err != nil {
+			log.Panic("write DDL event failed", zap.Error(err),
+				zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.GetCommitTs()))
+		}
+	}
+
+	if messageType == common.MessageTypeResolved {
+		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
+		err := w.flushDMLEventsByWatermark(ctx)
+		if err != nil {
+			log.Panic("flush dml events by the watermark failed", zap.Error(err))
+		}
+	}
+
+	w.ddlList = ddlList
+	// The DDL events will only execute in partition0
+	if messageType == common.MessageTypeDDL && len(w.ddlList) != 0 {
+		log.Info("some DDL events will be flushed in the future",
+			zap.Uint64("watermark", watermark),
+			zap.Int("length", len(w.ddlList)))
+		return false
+	}
+	return true
 }
 
 type tableKey struct {
