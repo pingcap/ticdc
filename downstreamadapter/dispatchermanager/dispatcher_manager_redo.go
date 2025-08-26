@@ -191,17 +191,12 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			var checkpointTs uint64 = math.MaxUint64
 			var resolvedTs uint64 = math.MaxUint64
-			e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
-				checkpointTs = min(checkpointTs, dispatcher.GetCheckpointTs())
-			})
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
 			message := &heartbeatpb.RedoTsMessage{
 				ChangefeedID: e.changefeedID.ToPB(),
-				CheckpointTs: checkpointTs,
 				ResolvedTs:   resolvedTs,
 			}
 			err := mc.SendCommand(

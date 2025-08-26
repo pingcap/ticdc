@@ -180,15 +180,12 @@ func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
 }
 
-func (c *Controller) checkAdvance(isRedo bool) bool {
-	spanController := c.getSpanController(isRedo)
-	operatorController := c.getOperatorController(isRedo)
-	barrier := c.getBarrier(isRedo)
-	operatorLock := operatorController.GetLock()
-	barrierLock := barrier.GetLock()
+func (c *Controller) checkRedoAdvance() bool {
+	operatorLock := c.redoOperatorController.GetLock()
+	barrierLock := c.redoBarrier.GetLock()
 	defer func() {
-		operatorController.ReleaseLock(operatorLock)
-		barrier.ReleaseLock(barrierLock)
+		c.redoOperatorController.ReleaseLock(operatorLock)
+		c.redoBarrier.ReleaseLock(barrierLock)
 	}()
-	return operatorController.BlockOperatorSizeWithLock() == 0 && spanController.GetAbsentSize() == 0 && !barrier.ShouldBlockCheckpointTs()
+	return c.redoOperatorController.BlockOperatorSizeWithLock() == 0 && c.redoSpanController.GetAbsentSize() == 0 && !c.redoBarrier.ShouldBlockCheckpointTs()
 }

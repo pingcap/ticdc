@@ -482,31 +482,28 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 		return
 	}
 	var (
-		checkpointTs uint64 = math.MaxUint64
-		resolvedTs   uint64 = math.MaxUint64
+		resolvedTs uint64 = math.MaxUint64
 	)
 	m.redoTsMap[id] = msg
 	for _, redoTs := range m.redoTsMap {
-		checkpointTs = min(checkpointTs, redoTs.CheckpointTs)
 		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
 	}
-	advance := m.controller.checkAdvance(false)
-	redoAdvance := m.controller.checkAdvance(true)
+	redoAdvance := m.controller.checkRedoAdvance()
 	needUpdate := false
 	// need to consider if all dispatcher are removed
 	// this leads resolvedTs is math.MaxUint64
-	if m.redoTs.CheckpointTs < checkpointTs && checkpointTs != math.MaxUint64 && advance {
-		m.redoTs.CheckpointTs = checkpointTs
-		needUpdate = true
-	}
 	if m.redoTs.ResolvedTs < resolvedTs && resolvedTs != math.MaxUint64 && redoAdvance {
 		m.redoTs.ResolvedTs = resolvedTs
 		needUpdate = true
 	}
-	log.Debug("received redo ts message", zap.Bool("advance", advance), zap.Bool("redoAdvance", redoAdvance),
+	if m.redoTs.CheckpointTs < m.getWatermark().CheckpointTs {
+		m.redoTs.CheckpointTs = m.getWatermark().CheckpointTs
+		needUpdate = true
+	}
+	log.Debug("received redo ts message", zap.Bool("redoAdvance", redoAdvance),
 		zap.Any("needUpdate", needUpdate), zap.Any("mapLength", len(m.redoTsMap)), zap.Any("nodeId", id),
 		zap.Any("message", msg), zap.Any("globalRedoTs", m.redoTs),
-		zap.Any("checkpointTs", checkpointTs), zap.Any("resolvedTs", resolvedTs),
+		zap.Any("checkpointTs", m.getWatermark().CheckpointTs), zap.Any("resolvedTs", resolvedTs),
 	)
 	if needUpdate {
 		msgs := make([]*messaging.TargetMessage, 0, len(m.redoTsMap))
