@@ -97,6 +97,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		progresses:             make([]*partitionProgress, o.partitionNum),
 		partitionTableAccessor: newPartitionTableAccessor(),
 		ddlList:                make([]*commonEvent.DDLEvent, 0),
+		ddlWithMaxCommitTs:     make(map[int64]uint64),
 	}
 	var (
 		db  *sql.DB
