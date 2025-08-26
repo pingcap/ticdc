@@ -85,7 +85,7 @@ func TestEventServiceBasic(t *testing.T) {
 	require.NotNil(t, broker)
 
 	controlM := commonEvent.NewCongestionControl()
-	controlM.AddAvailableMemory(dispatcherInfo.GetChangefeedID().Id, broker.availableLowThresh+1024*1024)
+	controlM.AddAvailableMemory(dispatcherInfo.GetChangefeedID().Id, broker.scanLimitInBytes+1024*1024)
 	broker.handleCongestionControl(node.ID(dispatcherInfo.serverID), controlM)
 
 	// add events to eventStore`

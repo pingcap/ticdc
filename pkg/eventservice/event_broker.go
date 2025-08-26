@@ -77,9 +77,7 @@ type eventBroker struct {
 	messageCh     []chan *wrapEvent
 	redoMessageCh []chan *wrapEvent
 
-	// if the available memory quota of a changefeed is less than availableLowThresh,
-	// skip the current scan.
-	availableLowThresh uint64
+	scanLimitInBytes uint64
 
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
 	cancel context.CancelFunc
@@ -130,9 +128,9 @@ func newEventBroker(
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
 
-		availableLowThresh: uint64(config.GetGlobalServerConfig().Debug.EventService.AvailableLowThresh),
-		cancel:             cancel,
-		g:                  g,
+		scanLimitInBytes: uint64(config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes),
+		cancel:           cancel,
+		g:                g,
 	}
 
 	// Initialize metrics collector
@@ -173,7 +171,7 @@ func newEventBroker(
 		return c.metricsCollector.Run(ctx)
 	})
 
-	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("availableLowThresh", c.availableLowThresh))
+	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
 }
 
@@ -539,13 +537,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	status := item.(*changefeedStatus)
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
-		log.Info("The available memory quota is not set, skip scan",
+		log.Info("available memory quota is not set, skip scan",
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 		return
 	}
 	available := item.(*atomic.Uint64)
 
-	lowest := c.availableLowThresh / uint64(task.changefeedStat.nodes.Len())
+	lowest := c.scanLimitInBytes / uint64(task.changefeedStat.nodes.Len())
 	if available.Load() < lowest {
 		task.resetScanLimit()
 		return

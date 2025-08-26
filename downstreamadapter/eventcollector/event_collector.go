@@ -570,7 +570,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		changefeedID := stat.target.GetChangefeedID()
 		holder, ok := proportions[changefeedID]
 		if !ok {
-			holder = make(map[node.ID]uint64, len(availables))
+			holder = make(map[node.ID]uint64)
 			proportions[changefeedID] = holder
 		}
 		holder[eventServiceID]++
@@ -585,12 +585,15 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		for _, portion := range proportion {
 			sum += portion
 		}
+		if sum == 0 {
+			continue
+		}
 
 		for nodeID, portion := range proportion {
 			ratio := float64(portion) / float64(sum)
 			quota := uint64(float64(total) * ratio)
 
-			lowest := uint64(config.GetGlobalServerConfig().Debug.EventService.AvailableLowThresh / len(proportions))
+			lowest := uint64(float64(config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes) * ratio)
 			if quota < lowest {
 				quota = lowest
 			}

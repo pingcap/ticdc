@@ -152,7 +152,7 @@ func TestOnNotify(t *testing.T) {
 
 	// Case 4: Do scan, it will update the sentResolvedTs.
 	status := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
-	status.availableMemoryQuota.Store(node.ID(task.info.GetServerID()), atomic.NewUint64(broker.availableLowThresh))
+	status.availableMemoryQuota.Store(node.ID(task.info.GetServerID()), atomic.NewUint64(broker.scanLimitInBytes))
 
 	broker.doScan(context.TODO(), task)
 	require.False(t, disp.isTaskScanning.Load())
