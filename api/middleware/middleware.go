@@ -220,7 +220,7 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 	}
 }
 
-// KeyspaceCheckerMiddleware check the request keyspace_id
+// KeyspaceCheckerMiddleware check if the request keyspace_id is valid
 func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		strKeyspaceID := c.Query(api.APIOpVarKeyspaceID)
