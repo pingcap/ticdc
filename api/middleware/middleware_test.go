@@ -16,13 +16,18 @@ package middleware
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
+	"github.com/pingcap/ticdc/pkg/api"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -213,4 +218,100 @@ func (s *mockServer) SelfInfo() (*node.Info, error) {
 
 func (s *mockServer) GetCoordinatorInfo(ctx context.Context) (*node.Info, error) {
 	return s.coordinatorInfo, s.coordinatorErr
+}
+
+type mockPDAPIClient struct {
+	pdutil.PDAPIClient
+	keyspace *keyspacepb.KeyspaceMeta
+	err      error
+}
+
+func (m *mockPDAPIClient) LoadKeyspaceByID(ctx context.Context, id string) (*keyspacepb.KeyspaceMeta, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.keyspace, nil
+}
+
+func TestKeyspaceCheckerMiddleware(t *testing.T) {
+	tests := []struct {
+		name           string
+		keyspaceID     string
+		mockPDClient   *mockPDAPIClient
+		expectedStatus int
+		expectAbort    bool
+	}{
+		{
+			name:           "No keyspace_id",
+			keyspaceID:     "",
+			expectedStatus: http.StatusOK,
+			expectAbort:    false,
+		},
+		{
+			name:           "keyspace_id is 0",
+			keyspaceID:     "0",
+			expectedStatus: http.StatusOK,
+			expectAbort:    false,
+		},
+		{
+			name:           "Invalid keyspace_id",
+			keyspaceID:     "abc",
+			expectedStatus: http.StatusBadRequest,
+			expectAbort:    true,
+		},
+		{
+			name:       "Keyspace not found",
+			keyspaceID: "1",
+			mockPDClient: &mockPDAPIClient{
+				err: errors.New("keyspace not found"),
+			},
+			expectedStatus: http.StatusInternalServerError,
+			expectAbort:    true,
+		},
+		{
+			name:       "Keyspace not enabled",
+			keyspaceID: "1",
+			mockPDClient: &mockPDAPIClient{
+				keyspace: &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_DISABLED},
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectAbort:    true,
+		},
+		{
+			name:       "Keyspace enabled",
+			keyspaceID: "1",
+			mockPDClient: &mockPDAPIClient{
+				keyspace: &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_ENABLED},
+			},
+			expectedStatus: http.StatusOK,
+			expectAbort:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// setup context
+			ctx := context.Background()
+			if tt.mockPDClient != nil {
+				appcontext.SetService(appcontext.PDAPIClient, tt.mockPDClient)
+			}
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("/?%s=%s", api.APIOpVarKeyspaceID, tt.keyspaceID), nil)
+
+			// setup gin
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = req
+
+			// execute middleware
+			KeyspaceCheckerMiddleware()(c)
+
+			// check results
+			if tt.expectAbort {
+				assert.True(t, c.IsAborted())
+				assert.Equal(t, tt.expectedStatus, w.Code)
+			} else {
+				assert.False(t, c.IsAborted())
+			}
+		})
+	}
 }
