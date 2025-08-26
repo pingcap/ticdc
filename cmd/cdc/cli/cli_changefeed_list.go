@@ -83,7 +83,7 @@ func (o *listChangefeedOptions) run(cmd *cobra.Command) error {
 		}
 		cfci := &changefeedCommonInfo{
 			ID:        cf.ID,
-			Namespace: cf.Namespace,
+			Namespace: cf.KeyspaceID,
 			Summary: &owner.ChangefeedResp{
 				FeedState:    string(cf.FeedState),
 				TSO:          cf.CheckpointTSO,

@@ -129,7 +129,7 @@ func newCluster() (*cluster, error) {
 		for _, nodeTableInfo := range nodeTableInfos {
 			for _, tableID := range nodeTableInfo.TableIDs {
 				serversMap[nodeTableInfo.NodeID] = append(serversMap[nodeTableInfo.NodeID], tableInfo{
-					changefeedNameSpace: changefeed.Namespace,
+					changefeedNameSpace: changefeed.KeyspaceID,
 					changefeedName:      changefeed.ID,
 					id:                  tableID,
 				})

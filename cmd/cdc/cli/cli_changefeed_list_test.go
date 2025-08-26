@@ -40,7 +40,7 @@ func TestChangefeedListCli(t *testing.T) {
 	cf.EXPECT().List(gomock.Any(), gomock.Any(), gomock.Any()).Return([]v2.ChangefeedCommonInfo{
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			KeyspaceID:     "default",
 			ID:             "pending-1",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -48,7 +48,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			KeyspaceID:     "default",
 			ID:             "normal-2",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -56,7 +56,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			KeyspaceID:     "default",
 			ID:             "failed-3",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -64,7 +64,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			KeyspaceID:     "default",
 			ID:             "removed-4",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -72,7 +72,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			KeyspaceID:     "default",
 			ID:             "finished-5",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -80,7 +80,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			KeyspaceID:     "default",
 			ID:             "stopped-6",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -88,7 +88,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			KeyspaceID:     "default",
 			ID:             "warning-7",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,

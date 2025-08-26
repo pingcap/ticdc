@@ -69,13 +69,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	namespace := GetKeyspaceValueWithDefault(c)
+	keyspaceID := GetKeyspaceValueWithDefault(c)
 
 	var changefeedID common.ChangeFeedID
 	if cfg.ID == "" {
-		changefeedID = common.NewChangefeedID(namespace)
+		changefeedID = common.NewChangefeedID(keyspaceID)
 	} else {
-		changefeedID = common.NewChangeFeedIDWithName(cfg.ID, namespace)
+		changefeedID = common.NewChangeFeedIDWithName(cfg.ID, keyspaceID)
 	}
 	// verify changefeedID
 	if err := common.ValidateChangefeedID(changefeedID.Name()); err != nil {
@@ -83,14 +83,14 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			"invalid changefeed_id: %s", cfg.ID))
 		return
 	}
-	if cfg.Namespace == "" {
-		cfg.Namespace = common.DefaultKeyspaceID
+	if cfg.KeyspaceID == "" {
+		cfg.KeyspaceID = common.DefaultKeyspaceID
 	}
-	changefeedID.DisplayName.KeyspaceID = cfg.Namespace
-	// verify changefeed namespace
+	changefeedID.DisplayName.KeyspaceID = cfg.KeyspaceID
+	// verify changefeed keyspace_id
 	if err := common.ValidateNamespace(changefeedID.Namespace()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
-			"invalid namespace: %s", cfg.ID))
+			"invalid keyspace_id: %s", cfg.ID))
 		return
 	}
 
@@ -262,7 +262,7 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		commonInfos = append(commonInfos, ChangefeedCommonInfo{
 			UpstreamID:     changefeed.UpstreamID,
 			ID:             changefeed.ChangefeedID.Name(),
-			Namespace:      changefeed.ChangefeedID.Namespace(),
+			KeyspaceID:     changefeed.ChangefeedID.Namespace(),
 			FeedState:      changefeed.State,
 			CheckpointTSO:  status.CheckpointTs,
 			CheckpointTime: api.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
@@ -343,7 +343,7 @@ func CfInfoToAPIModel(
 	apiInfoModel := &ChangeFeedInfo{
 		UpstreamID:     info.UpstreamID,
 		ID:             info.ChangefeedID.Name(),
-		Namespace:      info.ChangefeedID.Namespace(),
+		KeyspaceID:     info.ChangefeedID.Namespace(),
 		SinkURI:        sinkURI,
 		CreateTime:     info.CreateTime,
 		StartTs:        info.StartTs,
@@ -739,7 +739,7 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -813,7 +813,7 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -886,7 +886,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -957,7 +957,7 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -1017,7 +1017,7 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -1086,7 +1086,7 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()

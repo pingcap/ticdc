@@ -224,7 +224,7 @@ func getV2ChangefeedConfig(changefeedConfig changefeedConfig) *v2.ChangefeedConf
 
 	return &v2.ChangefeedConfig{
 		ID:            changefeedConfig.ID,
-		Namespace:     changefeedConfig.Namespace,
+		KeyspaceID:    changefeedConfig.Namespace,
 		StartTs:       changefeedConfig.StartTS,
 		TargetTs:      changefeedConfig.TargetTS,
 		SinkURI:       changefeedConfig.SinkURI,

@@ -214,7 +214,7 @@ func (o *createChangefeedOptions) getChangefeedConfig() *v2.ChangefeedConfig {
 	upstreamConfig := o.getUpstreamConfig()
 	return &v2.ChangefeedConfig{
 		ID:            o.changefeedID,
-		Namespace:     o.namespace,
+		KeyspaceID:    o.namespace,
 		StartTs:       o.startTs,
 		TargetTs:      o.commonChangefeedOptions.targetTs,
 		SinkURI:       o.commonChangefeedOptions.sinkURI,
