@@ -244,14 +244,6 @@ func (w *writer) appendDDL(ddl *commonEvent.DDLEvent) {
 		}
 	}
 
-	// A rename tables DDL job contains multiple DDL events with same CommitTs.
-	// So to tell if a DDL is redundant or not, we must check the equivalence of
-	// the current DDL and the DDL with max CommitTs.
-	if maxCommitTs, ok := w.ddlWithMaxCommitTs[ddl.TableID]; ok && maxCommitTs == ddl.GetCommitTs() {
-		log.Warn("ignore redundant DDL, the DDL is equal to ddlWithMaxCommitTs",
-			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("DDL", ddl.Query))
-		return
-	}
 	w.ddlList = append(w.ddlList, ddl)
 	for tableID := range tableIDs {
 		w.ddlWithMaxCommitTs[tableID] = ddl.GetCommitTs()
