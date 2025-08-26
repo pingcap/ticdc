@@ -353,11 +353,10 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 			expectedSyncOnTs: true,
 			expectedCommitTs: 101,
 		},
-		// Same syncpoint should be ignored
 		{
 			name:              "SyncPoint event with same commit ts and not got SyncPoint",
 			lastEventCommitTs: 100,
-			gotSyncpointOnTS:  true,
+			gotSyncpointOnTS:  false,
 			event: dispatcher.DispatcherEvent{
 				Event: &mockEvent{
 					eventType: commonEvent.TypeSyncPointEvent,
@@ -369,7 +368,6 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 			expectedSyncOnTs: true,
 			expectedCommitTs: 101,
 		},
-
 		{
 			name:              "SyncPoint event with same commit ts should be ignored",
 			lastEventCommitTs: 101,
