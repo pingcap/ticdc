@@ -903,7 +903,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
-		metrics.EventStoreScanBytes.Add(float64(len(value)))
+		metrics.EventStoreScanBytes.WithLabelValues("scanned").Add(float64(len(value)))
 		if !iter.needCheckSpan {
 			break
 		}
@@ -917,6 +917,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			zap.String("key", hex.EncodeToString(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs))
+		metrics.EventStoreScanBytes.WithLabelValues("skipped").Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
 	isNewTxn := false
