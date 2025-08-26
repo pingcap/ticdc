@@ -295,7 +295,7 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			if tt.mockPDClient != nil {
 				appcontext.SetService(appcontext.PDAPIClient, tt.mockPDClient)
 			}
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("/?%s=%s", api.APIOpVarKeyspaceID, tt.keyspaceID), nil)
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("/?%s=%s", api.APIOpVarKeyspace, tt.keyspaceID), nil)
 
 			// setup gin
 			w := httptest.NewRecorder()

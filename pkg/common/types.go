@@ -27,9 +27,9 @@ import (
 )
 
 const (
-	// DefaultKeyspaceID is the default namespace value,
+	// DefaultKeyspace is the default namespace value,
 	// all the old changefeed will be put into default namespace
-	DefaultKeyspaceID = "default"
+	DefaultKeyspace = "default"
 )
 
 var DefaultEndian = binary.LittleEndian
@@ -159,19 +159,19 @@ func NewGIDWithValue(Low uint64, High uint64) GID {
 // ChangeFeedDisplayName represents the user-friendly name and namespace of a changefeed.
 // This structure is used for external queries and display purposes.
 type ChangeFeedDisplayName struct {
-	Name       string `json:"name"`
-	KeyspaceID string `json:"namespace"`
+	Name     string `json:"name"`
+	Keyspace string `json:"Keyspace"`
 }
 
-func NewChangeFeedDisplayName(name string, keyspaceID string) ChangeFeedDisplayName {
+func NewChangeFeedDisplayName(name string, keyspace string) ChangeFeedDisplayName {
 	return ChangeFeedDisplayName{
-		Name:       name,
-		KeyspaceID: keyspaceID,
+		Name:     name,
+		Keyspace: keyspace,
 	}
 }
 
 func (r ChangeFeedDisplayName) String() string {
-	return r.KeyspaceID + "/" + r.Name
+	return r.Keyspace + "/" + r.Name
 }
 
 // ChangefeedID is the unique identifier of a changefeed.
@@ -186,32 +186,32 @@ type ChangeFeedID struct {
 	DisplayName ChangeFeedDisplayName `json:"display"`
 }
 
-func NewChangefeedID(keyspaceID string) ChangeFeedID {
+func NewChangefeedID(keyspace string) ChangeFeedID {
 	cfID := ChangeFeedID{
 		Id: NewGID(),
 	}
 
-	if keyspaceID == "" {
-		keyspaceID = DefaultKeyspaceID
+	if keyspace == "" {
+		keyspace = DefaultKeyspace
 	}
 
 	cfID.DisplayName = ChangeFeedDisplayName{
-		Name:       cfID.Id.String(),
-		KeyspaceID: keyspaceID,
+		Name:     cfID.Id.String(),
+		Keyspace: keyspace,
 	}
 	return cfID
 }
 
-func NewChangeFeedIDWithName(name string, keyspaceID string) ChangeFeedID {
-	if keyspaceID == "" {
-		keyspaceID = DefaultKeyspaceID
+func NewChangeFeedIDWithName(name string, keyspace string) ChangeFeedID {
+	if keyspace == "" {
+		keyspace = DefaultKeyspace
 	}
 
 	return ChangeFeedID{
 		Id: NewGID(),
 		DisplayName: ChangeFeedDisplayName{
-			Name:       name,
-			KeyspaceID: keyspaceID,
+			Name:     name,
+			Keyspace: keyspace,
 		},
 	}
 }
@@ -232,7 +232,7 @@ func (cfID ChangeFeedID) Name() string {
 }
 
 func (cfID ChangeFeedID) Namespace() string {
-	return cfID.DisplayName.KeyspaceID
+	return cfID.DisplayName.Keyspace
 }
 
 func (cfID ChangeFeedID) ID() GID {
@@ -246,8 +246,8 @@ func NewChangefeedIDFromPB(pb *heartbeatpb.ChangefeedID) ChangeFeedID {
 			High: pb.High,
 		},
 		DisplayName: ChangeFeedDisplayName{
-			Name:       pb.Name,
-			KeyspaceID: pb.Namespace,
+			Name:     pb.Name,
+			Keyspace: pb.Namespace,
 		},
 	}
 	return d
@@ -286,20 +286,20 @@ const namespaceMaxLen = 128
 
 var namespaceRe = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
 
-// ValidateNamespace returns true if the namespace matches
+// ValidateKeyspace returns true if the namespace matches
 // the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$",
 // length no more than "changeFeedIDMaxLen", eg, "simple-changefeed-task".
-func ValidateNamespace(namespace string) error {
-	if !namespaceRe.MatchString(namespace) || len(namespace) > namespaceMaxLen {
-		return errors.ErrInvalidNamespace.GenWithStackByArgs(namespaceRe)
+func ValidateKeyspace(keyspace string) error {
+	if !namespaceRe.MatchString(keyspace) || len(keyspace) > namespaceMaxLen {
+		return errors.ErrInvalidKeyspace.GenWithStackByArgs(namespaceRe)
 	}
 	return nil
 }
 
 func NewChangefeedID4Test(namespace, name string) ChangeFeedID {
 	return NewChangeFeedIDWithDisplayName(ChangeFeedDisplayName{
-		Name:       name,
-		KeyspaceID: namespace,
+		Name:     name,
+		Keyspace: namespace,
 	})
 }
 

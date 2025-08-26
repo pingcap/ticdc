@@ -40,7 +40,7 @@ func TestSchedule(t *testing.T) {
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	nodeManager.GetAliveNodes()["node3"] = &node.Info{ID: "node3"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
@@ -71,7 +71,7 @@ func TestSchedule(t *testing.T) {
 func TestRemoveAbsentTask(t *testing.T) {
 	testutil.SetNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
@@ -93,7 +93,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
@@ -164,7 +164,7 @@ func TestBalanceGlobalUneven(t *testing.T) {
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
@@ -238,7 +238,7 @@ func TestBalance(t *testing.T) {
 	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
@@ -305,7 +305,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID, common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
@@ -346,7 +346,7 @@ func TestFinishBootstrap(t *testing.T) {
 	nodeManager := testutil.SetNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
@@ -416,7 +416,7 @@ func TestBalanceUnEvenTask(t *testing.T) {
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
@@ -502,7 +502,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
 		pdClock, common.DDLSpanSchemaID,
@@ -586,7 +586,7 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
 		pdClock, common.DDLSpanSchemaID,

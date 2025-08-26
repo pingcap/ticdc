@@ -56,7 +56,7 @@ func (m *mockEventDispatcher) GetBDRMode() bool {
 }
 
 func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
-	return common.NewChangefeedID(common.DefaultKeyspaceID)
+	return common.NewChangefeedID(common.DefaultKeyspace)
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {

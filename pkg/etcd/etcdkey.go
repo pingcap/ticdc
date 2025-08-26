@@ -44,8 +44,8 @@ const (
 	// DeletionCounterKey is the key path for the counter of deleted keys
 	DeletionCounterKey = metaPrefix + "/meta/ticdc-delete-etcd-key-count"
 
-	// DefaultClusterAndKeyspaceIDPrefix is the default prefix of changefeed data
-	DefaultClusterAndKeyspaceIDPrefix = "/tidb/cdc/default/default"
+	// DefaultClusterAndKeyspacePrefix is the default prefix of changefeed data
+	DefaultClusterAndKeyspacePrefix = "/tidb/cdc/default/default"
 	// DefaultClusterAndMetaPrefix is the default prefix of cluster meta
 	DefaultClusterAndMetaPrefix = "/tidb/cdc/default" + metaPrefix
 
@@ -110,9 +110,9 @@ func BaseKey(clusterID string) string {
 	return fmt.Sprintf("/tidb/cdc/%s", clusterID)
 }
 
-// KeyspaceIDPrefix returns the etcd prefix of changefeed data
-func KeyspaceIDPrefix(clusterID, keyspaceID string) string {
-	return BaseKey(clusterID) + "/" + keyspaceID
+// KeyspacePrefix returns the etcd prefix of changefeed data
+func KeyspacePrefix(clusterID, keyspace string) string {
+	return BaseKey(clusterID) + "/" + keyspace
 }
 
 // Parse parses the given etcd key
@@ -199,19 +199,19 @@ func (k *CDCKey) String() string {
 	case CDCKeyTypeCapture:
 		return BaseKey(k.ClusterID) + metaPrefix + captureKey + "/" + k.CaptureID
 	case CDCKeyTypeChangefeedInfo:
-		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.KeyspaceID) + ChangefeedInfoKey +
+		return KeyspacePrefix(k.ClusterID, k.ChangefeedID.DisplayName.Keyspace) + ChangefeedInfoKey +
 			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeChangeFeedStatus:
-		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.KeyspaceID) + ChangefeedStatusKey +
+		return KeyspacePrefix(k.ClusterID, k.ChangefeedID.DisplayName.Keyspace) + ChangefeedStatusKey +
 			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeTaskPosition:
-		return KeyspaceIDPrefix(k.ClusterID, k.ChangefeedID.DisplayName.KeyspaceID) + taskPositionKey +
+		return KeyspacePrefix(k.ClusterID, k.ChangefeedID.DisplayName.Keyspace) + taskPositionKey +
 			"/" + k.CaptureID + "/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeMetaVersion:
 		return BaseKey(k.ClusterID) + metaPrefix + metaVersionKey
 	case CDCKeyTypeUpStream:
 		return fmt.Sprintf("%s%s/%d",
-			KeyspaceIDPrefix(k.ClusterID, k.Namespace),
+			KeyspacePrefix(k.ClusterID, k.Namespace),
 			upstreamKey, k.UpstreamID)
 	}
 	log.Panic("unreachable")

@@ -39,7 +39,7 @@ func TestChangefeedResumeCli(t *testing.T) {
 	// 1. test changefeed resume with non-nil changefeed get result, non-nil tso get result
 	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(&v2.ChangeFeedInfo{
 		UpstreamID:     1,
-		KeyspaceID:     "default",
+		Keyspace:       "default",
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
@@ -64,7 +64,7 @@ func TestChangefeedResumeCli(t *testing.T) {
 	// 3. test changefeed resume with nil tso get result
 	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(&v2.ChangeFeedInfo{
 		UpstreamID:     1,
-		KeyspaceID:     "default",
+		Keyspace:       "default",
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		CheckpointTs:   2,
@@ -76,7 +76,7 @@ func TestChangefeedResumeCli(t *testing.T) {
 	// and confirmation checking
 	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(&v2.ChangeFeedInfo{
 		UpstreamID:     1,
-		KeyspaceID:     "default",
+		Keyspace:       "default",
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		CheckpointTs:   2,
@@ -111,7 +111,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 	// 1. test changefeed resume with valid overwritten checkpointTs
 	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(&v2.ChangeFeedInfo{
 		UpstreamID:     1,
-		KeyspaceID:     "default",
+		Keyspace:       "default",
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
@@ -132,7 +132,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 	// 2. test changefeed resume with invalid overwritten checkpointTs
 	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(&v2.ChangeFeedInfo{
 		UpstreamID:     1,
-		KeyspaceID:     "default",
+		Keyspace:       "default",
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
@@ -146,7 +146,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 	// 3. test changefeed resume with checkpointTs larger than current tso
 	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(&v2.ChangeFeedInfo{
 		UpstreamID:     1,
-		KeyspaceID:     "default",
+		Keyspace:       "default",
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
@@ -158,7 +158,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 	// 4. test changefeed resume with checkpointTs smaller than gcSafePoint
 	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(&v2.ChangeFeedInfo{
 		UpstreamID:     1,
-		KeyspaceID:     "default",
+		Keyspace:       "default",
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,

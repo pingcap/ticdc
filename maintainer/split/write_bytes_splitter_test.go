@@ -56,7 +56,7 @@ func TestSplitRegionsByWrittenKeysUniform(t *testing.T) {
 	preTest()
 	re := require.New(t)
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{100, 100, 100, 100, 100, 100, 100}) // region id: [2,3,4,5,6,7,8]
 	splitter := newWriteSplitter(cfID, 0)
@@ -121,7 +121,7 @@ func TestSplitRegionsByWrittenKeysHotspot1(t *testing.T) {
 	re := require.New(t)
 
 	// Hotspots
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{100, 1, 100, 1, 1, 1, 100})
 	splitter := newWriteSplitter(cfID, 4)
@@ -152,7 +152,7 @@ func TestSplitRegionsByWrittenKeysHotspot2(t *testing.T) {
 	re := require.New(t)
 
 	// Hotspots
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{1000, 1, 1, 1, 100, 1, 99})
 	splitter := newWriteSplitter(cfID, 4)
@@ -176,7 +176,7 @@ func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
 	}()
 	re := require.New(t)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	splitter := newWriteSplitter(cfID, 0)
 	baseSpanNum := getSpansNumber(2, 1)
 	require.Equal(t, 3, baseSpanNum)
@@ -207,7 +207,7 @@ func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
 		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
 	}()
 	re := require.New(t)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	splitter := newWriteSplitter(cfID, 1)
 	baseSpanNum := getSpansNumber(2, 1)
 	require.Equal(t, 3, baseSpanNum)
@@ -226,7 +226,7 @@ func TestSplitRegionsByWrittenKeysConfig(t *testing.T) {
 	preTest()
 	re := require.New(t)
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	splitter := newWriteSplitter(cfID, math.MaxInt)
 	regions, startKeys, endKeys := prepareRegionsInfo([]int{1, 1, 1, 1, 1, 1, 1})
 	info := splitter.splitRegionsByWrittenKeysV1(1, regions, 3) // [2,3,4,5,6,7,8]
@@ -257,7 +257,7 @@ func TestSplitRegionEven(t *testing.T) {
 			WrittenKeys: 2,
 		}
 	}
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	splitter := newWriteSplitter(cfID, 4)
 	info := splitter.splitRegionsByWrittenKeysV1(tblID, regions, 5)
 	require.Len(t, info.RegionCounts, 5)
@@ -273,7 +273,7 @@ func TestSplitRegionEven(t *testing.T) {
 
 /*
 func TestSpanRegionLimitBase(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	splitter := newWriteSplitter(cfID, nil, 0)
 	var regions []pdutil.RegionInfo
 	// test spanRegionLimit works
@@ -343,7 +343,7 @@ func TestSpanRegionLimit(t *testing.T) {
 	// 70% hot written region is in the left side of the region list
 	writtenKeys = shuffle(writtenKeys, 0.7)
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	splitter := newWriteSplitter(cfID, 0)
 	var regions []pdutil.RegionInfo
 	// region number is 500,000

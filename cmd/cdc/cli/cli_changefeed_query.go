@@ -103,7 +103,7 @@ func (o *queryChangefeedOptions) run(cmd *cobra.Command) error {
 	meta := &cfMeta{
 		UpstreamID:     detail.UpstreamID,
 		ID:             detail.ID,
-		Namespace:      detail.KeyspaceID,
+		Namespace:      detail.Keyspace,
 		SinkURI:        detail.SinkURI,
 		Config:         detail.Config,
 		CreateTime:     api.JSONTime(detail.CreateTime),

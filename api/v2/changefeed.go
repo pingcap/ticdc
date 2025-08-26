@@ -69,13 +69,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	keyspaceID := GetKeyspaceValueWithDefault(c)
+	keyspace := GetKeyspaceValueWithDefault(c)
 
 	var changefeedID common.ChangeFeedID
 	if cfg.ID == "" {
-		changefeedID = common.NewChangefeedID(keyspaceID)
+		changefeedID = common.NewChangefeedID(keyspace)
 	} else {
-		changefeedID = common.NewChangeFeedIDWithName(cfg.ID, keyspaceID)
+		changefeedID = common.NewChangeFeedIDWithName(cfg.ID, keyspace)
 	}
 	// verify changefeedID
 	if err := common.ValidateChangefeedID(changefeedID.Name()); err != nil {
@@ -83,12 +83,12 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			"invalid changefeed_id: %s", cfg.ID))
 		return
 	}
-	if cfg.KeyspaceID == "" {
-		cfg.KeyspaceID = common.DefaultKeyspaceID
+	if cfg.Keyspace == "" {
+		cfg.Keyspace = common.DefaultKeyspace
 	}
-	changefeedID.DisplayName.KeyspaceID = cfg.KeyspaceID
-	// verify changefeed keyspace_id
-	if err := common.ValidateNamespace(changefeedID.Namespace()); err != nil {
+	changefeedID.DisplayName.Keyspace = cfg.Keyspace
+	// verify changefeed keyspace
+	if err := common.ValidateKeyspace(changefeedID.Namespace()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
 			"invalid keyspace_id: %s", cfg.ID))
 		return
@@ -262,7 +262,7 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		commonInfos = append(commonInfos, ChangefeedCommonInfo{
 			UpstreamID:     changefeed.UpstreamID,
 			ID:             changefeed.ChangefeedID.Name(),
-			KeyspaceID:     changefeed.ChangefeedID.Namespace(),
+			Keyspace:       changefeed.ChangefeedID.Namespace(),
 			FeedState:      changefeed.State,
 			CheckpointTSO:  status.CheckpointTs,
 			CheckpointTime: api.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
@@ -343,7 +343,7 @@ func CfInfoToAPIModel(
 	apiInfoModel := &ChangeFeedInfo{
 		UpstreamID:     info.UpstreamID,
 		ID:             info.ChangefeedID.Name(),
-		KeyspaceID:     info.ChangefeedID.Namespace(),
+		Keyspace:       info.ChangefeedID.Namespace(),
 		SinkURI:        sinkURI,
 		CreateTime:     info.CreateTime,
 		StartTs:        info.StartTs,
@@ -739,7 +739,7 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -813,7 +813,7 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -886,7 +886,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -957,7 +957,7 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -1017,7 +1017,7 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -1086,7 +1086,7 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.KeyspaceID),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -1185,9 +1185,9 @@ func (h *OpenAPIV2) syncState(c *gin.Context) {
 }
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
-	keyspaceID := c.Query(api.APIOpVarKeyspaceID)
-	if keyspaceID == "" {
-		keyspaceID = common.DefaultKeyspaceID
+	keyspace := c.Query(api.APIOpVarKeyspace)
+	if keyspace == "" {
+		keyspace = common.DefaultKeyspace
 	}
-	return keyspaceID
+	return keyspace
 }
