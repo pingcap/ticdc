@@ -481,9 +481,7 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 			zap.String("changefeed", m.id.Name()))
 		return
 	}
-	var (
-		resolvedTs uint64 = math.MaxUint64
-	)
+	var resolvedTs uint64 = math.MaxUint64
 	m.redoTsMap[id] = msg
 	for _, redoTs := range m.redoTsMap {
 		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
