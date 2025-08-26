@@ -140,6 +140,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	event.Query = d.valuePayload["ddl"].(string)
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
+	event.TableID = tableIDAllocator.Allocate(event.SchemaName, event.TableName)
+	tableInfoAccessor.AddBlockTableID(event.SchemaName, event.TableName, event.TableID)
 
 	if d.idx == 0 {
 		event.BlockedTables = common.GetBlockedTables(tableInfoAccessor, event)

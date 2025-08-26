@@ -546,6 +546,8 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
 	result.TableID = tableInfo.TableName.TableID
+	d.blockedTablesMemo.add(result.SchemaName, result.TableName, result.TableID)
+
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
 		result.ExtraTableName = preTableInfo.GetTableName()

@@ -178,6 +178,8 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.FinishedTs = b.nextKey.Ts
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
+	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
+	tableInfoAccessor.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
 
 	// only the DDL comes from the first partition will be processed.
 	// since tableInfoAccessor is global, we need to make sure the table info
