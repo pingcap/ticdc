@@ -227,6 +227,15 @@ func GenUpdateSQL(changes ...*RowChange) (string, []any) {
 // Input `changes` should have same target table and same modifiable columns,
 // otherwise the behaviour is undefined.
 func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
+	return GenInsertSQLWithStartTs(tp, 0, 0, changes...)
+}
+
+// GenInsertSQLWithStartTs generates the INSERT SQL and its arguments with optional start_ts column.
+// Input `changes` should have same target table and same modifiable columns,
+// otherwise the behaviour is undefined.
+// If startTs is greater than 0, the last column (start_ts) will be set to startTs value instead of NULL.
+// If commitTs is greater than 0, the last column (origin_ts) will be set to commitTs value instead of NULL.
+func GenInsertSQLWithStartTs(tp DMLType, startTs uint64, commitTs uint64, changes ...*RowChange) (string, []interface{}) {
 	if len(changes) == 0 {
 		log.L().DPanic("row changes is empty")
 		return "", nil
@@ -260,6 +269,7 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 		columnNum++
 		buf.WriteString(common.QuoteName(col.Name.O))
 	}
+
 	buf.WriteString(") VALUES ")
 	holder := valuesHolder(columnNum)
 	for i := range changes {
@@ -285,23 +295,42 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 			writtenFirstCol = true
 
 			colName := common.QuoteName(col.Name.O)
-			buf.WriteString(colName + "=VALUES(" + colName + ")")
+			tableName := first.targetTable.QuoteString()
+
+			// For all columns, use conditional update logic
+			buf.WriteString(colName + "=IF((@cond := (IFNULL(" + tableName + "." + colName + ", " + tableName + ".commit_ts) <= VALUES(" + colName + "))),VALUES(" + colName + "), " + tableName + "." + colName + ")")
 		}
 	}
 
 	args := make([]interface{}, 0, len(changes)*(len(first.sourceTableInfo.GetColumns())-len(skipColIdx)))
 	for _, change := range changes {
-		i := 0 // used as index of skipColIdx
+		i := 0        // used as index of skipColIdx
+		colIndex := 0 // used to track the actual column index
 		for j, val := range change.postValues {
-			if i >= len(skipColIdx) {
-				args = append(args, change.postValues[j:]...)
-				break
-			}
-			if skipColIdx[i] == j {
+			if i < len(skipColIdx) && skipColIdx[i] == j {
 				i++
 				continue
 			}
-			args = append(args, val)
+
+			// If this is the last column and commitTs is provided, replace NULL with commitTs
+			if commitTs > 0 && colIndex == len(first.sourceTableInfo.GetColumns())-len(skipColIdx)-1 {
+				// This is the last column (origin_ts), replace NULL with commitTs
+				if val == nil {
+					args = append(args, commitTs)
+				} else {
+					args = append(args, val)
+				}
+			} else if startTs > 0 && colIndex == len(first.sourceTableInfo.GetColumns())-len(skipColIdx)-1 {
+				// This is the last column (start_ts), replace NULL with startTs
+				if val == nil {
+					args = append(args, startTs)
+				} else {
+					args = append(args, val)
+				}
+			} else {
+				args = append(args, val)
+			}
+			colIndex++
 		}
 	}
 	return buf.String(), args

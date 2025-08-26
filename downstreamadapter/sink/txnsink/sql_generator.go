@@ -85,6 +85,8 @@ func (g *SQLGenerator) generateTableSQL(events []*commonEvent.DMLEvent) ([]strin
 	}
 
 	tableInfo := events[0].TableInfo
+	startTs := events[0].StartTs
+	commitTs := events[0].CommitTs
 
 	// Group rows by type (insert, update, delete)
 	insertRows, updateRows, deleteRows := g.groupRowsByType(events, tableInfo)
@@ -104,7 +106,7 @@ func (g *SQLGenerator) generateTableSQL(events []*commonEvent.DMLEvent) ([]strin
 	// Handle update operations - use INSERT ON DUPLICATE KEY UPDATE
 	if len(updateRows) > 0 {
 		for _, rows := range updateRows {
-			sql, value := g.genInsertOnDuplicateUpdateSQL(rows...)
+			sql, value := g.genInsertOnDuplicateUpdateSQL(startTs, commitTs, rows...)
 			sqls = append(sqls, sql)
 			args = append(args, value)
 		}
@@ -113,7 +115,7 @@ func (g *SQLGenerator) generateTableSQL(events []*commonEvent.DMLEvent) ([]strin
 	// Handle insert operations - use INSERT ON DUPLICATE KEY UPDATE
 	if len(insertRows) > 0 {
 		for _, rows := range insertRows {
-			sql, value := g.genInsertOnDuplicateUpdateSQL(rows...)
+			sql, value := g.genInsertOnDuplicateUpdateSQL(startTs, commitTs, rows...)
 			sqls = append(sqls, sql)
 			args = append(args, value)
 		}
@@ -196,8 +198,8 @@ func (g *SQLGenerator) genDeleteSQL(rows ...*sqlmodel.RowChange) (string, []inte
 }
 
 // genInsertOnDuplicateUpdateSQL generates INSERT ON DUPLICATE KEY UPDATE SQL
-func (g *SQLGenerator) genInsertOnDuplicateUpdateSQL(rows ...*sqlmodel.RowChange) (string, []interface{}) {
-	return sqlmodel.GenInsertSQL(sqlmodel.DMLInsertOnDuplicateUpdate, rows...)
+func (g *SQLGenerator) genInsertOnDuplicateUpdateSQL(startTs uint64, commitTs uint64, rows ...*sqlmodel.RowChange) (string, []interface{}) {
+	return sqlmodel.GenInsertSQLWithStartTs(sqlmodel.DMLInsertOnDuplicateUpdate, startTs, commitTs, rows...)
 }
 
 // getArgsWithGeneratedColumn extracts column values including generated columns
