@@ -199,7 +199,7 @@ func (g *SQLGenerator) genDeleteSQL(rows ...*sqlmodel.RowChange) (string, []inte
 
 // genInsertOnDuplicateUpdateSQL generates INSERT ON DUPLICATE KEY UPDATE SQL
 func (g *SQLGenerator) genInsertOnDuplicateUpdateSQL(startTs uint64, commitTs uint64, rows ...*sqlmodel.RowChange) (string, []interface{}) {
-	return sqlmodel.GenInsertSQLWithStartTs(sqlmodel.DMLInsertOnDuplicateUpdate, startTs, commitTs, rows...)
+	return sqlmodel.GenInsertSQLWithCommitTs(sqlmodel.DMLInsertOnDuplicateUpdate, startTs, commitTs, rows...)
 }
 
 // getArgsWithGeneratedColumn extracts column values including generated columns

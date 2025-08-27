@@ -231,9 +231,7 @@ func (w *Writer) generateSQLForSingleEvent(event *commonEvent.DMLEvent, inDataSa
 		}
 		rowLists = append(rowLists, &row)
 	}
-	startTs := event.StartTs
-	commitTs := event.CommitTs
-	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode, startTs, commitTs)
+	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode)
 }
 
 func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
@@ -406,9 +404,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 	}
 
 	// Step 3. generate sqls based on finalRowLists
-	startTs := events[0].StartTs
-	commitTs := events[0].CommitTs
-	return w.batchSingleTxnDmls(finalRowLists, tableInfo, true, startTs, commitTs)
+	return w.batchSingleTxnDmls(finalRowLists, tableInfo, true)
 }
 
 func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
@@ -501,9 +497,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		rowsList = append(rowsList, rowChanges[len(rowChanges)-1])
 	}
 	// step 3. generate sqls based on rowsList
-	startTs := events[0].StartTs
-	commitTs := events[0].CommitTs
-	return w.batchSingleTxnDmls(rowsList, tableInfo, false, startTs, commitTs)
+	return w.batchSingleTxnDmls(rowsList, tableInfo, false)
 }
 
 func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
@@ -750,8 +744,6 @@ func (w *Writer) batchSingleTxnDmls(
 	rows []*commonEvent.RowChange,
 	tableInfo *common.TableInfo,
 	translateToInsert bool,
-	startTs uint64,
-	commitTs uint64,
 ) (sqls []string, values [][]interface{}) {
 	insertRows, updateRows, deleteRows := w.groupRowsByType(rows, tableInfo)
 
@@ -790,11 +782,11 @@ func (w *Writer) batchSingleTxnDmls(
 	if len(insertRows) > 0 {
 		for _, rows := range insertRows {
 			if translateToInsert {
-				sql, value := sqlmodel.GenInsertSQLWithStartTs(sqlmodel.DMLInsert, startTs, commitTs, rows...)
+				sql, value := sqlmodel.GenInsertSQL(sqlmodel.DMLInsert, rows...)
 				sqls = append(sqls, sql)
 				values = append(values, value)
 			} else {
-				sql, value := sqlmodel.GenInsertSQLWithStartTs(sqlmodel.DMLReplace, startTs, commitTs, rows...)
+				sql, value := sqlmodel.GenInsertSQL(sqlmodel.DMLReplace, rows...)
 				sqls = append(sqls, sql)
 				values = append(values, value)
 			}

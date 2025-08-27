@@ -16,6 +16,7 @@ package sink
 import (
 	"context"
 	"net/url"
+	"strconv"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/blackhole"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
@@ -52,7 +53,12 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
-		return newTxnSinkAdapter(ctx, changefeedID, cfg, sinkURI)
+		// Check if enable-transaction-atomic is set to true
+		if isTransactionAtomicEnabled(sinkURI) {
+			return newTxnSinkAdapter(ctx, changefeedID, cfg, sinkURI)
+		}
+		// Use mysqlSink if enable-transaction-atomic is not set or set to false
+		return mysql.New(ctx, changefeedID, cfg, sinkURI)
 	case config.KafkaScheme, config.KafkaSSLScheme:
 		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
@@ -63,6 +69,21 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 		return blackhole.New()
 	}
 	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
+}
+
+// isTransactionAtomicEnabled checks if enable-transaction-atomic parameter is set to true in sink URI
+func isTransactionAtomicEnabled(sinkURI *url.URL) bool {
+	query := sinkURI.Query()
+	s := query.Get("enable-transaction-atomic")
+	if len(s) == 0 {
+		return false
+	}
+	enabled, err := strconv.ParseBool(s)
+	if err != nil {
+		// If the parameter value is invalid, default to false
+		return false
+	}
+	return enabled
 }
 
 // newTxnSinkAdapter creates a txnSink adapter that uses the same database connection as mysqlSink
