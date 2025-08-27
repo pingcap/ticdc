@@ -535,6 +535,15 @@ func (m *Maintainer) onNodeChanged() {
 		}
 	}
 	if m.redoDDLSpan != nil {
+		for node := range activeNodes {
+			if _, ok := m.redoTsMap[node]; !ok {
+				m.redoTsMap[node] = &heartbeatpb.RedoTsMessage{
+					ChangefeedID: m.redoTs.ChangefeedID,
+					CheckpointTs: m.redoTs.CheckpointTs,
+					ResolvedTs:   m.redoTs.ResolvedTs,
+				}
+			}
+		}
 		for rid := range m.redoTsMap {
 			if _, ok := activeNodes[rid]; !ok {
 				delete(m.redoTsMap, rid)
