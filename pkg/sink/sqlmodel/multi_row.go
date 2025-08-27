@@ -393,7 +393,7 @@ func GenInsertSQLWithCommitTs(tp DMLType, startTs uint64, commitTs uint64, chang
 			tableName := first.targetTable.QuoteString()
 
 			// For all columns, use _tidb_origin_ts as comparison basis
-			buf.WriteString(colName + "=IF((@cond := (IFNULL(" + tableName + "._tidb_origin_ts, " + tableName + "._tidb_commit_ts) <= VALUES(" + common.QuoteName("_tidb_origin_ts") + "))),VALUES(" + colName + "), " + tableName + "." + colName + ")")
+			buf.WriteString(colName + "=IF(((IFNULL(" + tableName + "._tidb_origin_ts, " + tableName + "._tidb_commit_ts) <= VALUES(" + common.QuoteName("_tidb_origin_ts") + "))),VALUES(" + colName + "), " + tableName + "." + colName + ")")
 		}
 
 		// Add _tidb_origin_ts to ON DUPLICATE KEY UPDATE if it doesn't exist in source but we're adding it
@@ -402,7 +402,7 @@ func GenInsertSQLWithCommitTs(tp DMLType, startTs uint64, commitTs uint64, chang
 				buf.WriteByte(',')
 			}
 			tableName := first.targetTable.QuoteString()
-			buf.WriteString(common.QuoteName("_tidb_origin_ts") + "=IF((@cond := (IFNULL(" + tableName + "._tidb_origin_ts, " + tableName + "._tidb_commit_ts) <= VALUES(" + common.QuoteName("_tidb_origin_ts") + "))),VALUES(" + common.QuoteName("_tidb_origin_ts") + "), " + tableName + "._tidb_origin_ts)")
+			buf.WriteString(common.QuoteName("_tidb_origin_ts") + "=IF(((IFNULL(" + tableName + "._tidb_origin_ts, " + tableName + "._tidb_commit_ts) <= VALUES(" + common.QuoteName("_tidb_origin_ts") + "))),VALUES(" + common.QuoteName("_tidb_origin_ts") + "), " + tableName + "._tidb_origin_ts)")
 		}
 	}
 
@@ -431,13 +431,6 @@ func GenInsertSQLWithCommitTs(tp DMLType, startTs uint64, commitTs uint64, chang
 				// This is the origin_ts column, replace NULL with commitTs
 				if val == nil {
 					args = append(args, commitTs)
-				} else {
-					args = append(args, val)
-				}
-			} else if startTs > 0 && colIndex == len(first.sourceTableInfo.GetColumns())-len(skipColIdx)-1 {
-				// This is the last column (start_ts), replace NULL with startTs
-				if val == nil {
-					args = append(args, startTs)
 				} else {
 					args = append(args, val)
 				}
