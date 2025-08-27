@@ -30,7 +30,7 @@ func NewStatistics(
 		changefeedID: changefeed,
 	}
 
-	namespace := changefeed.Namespace()
+	namespace := changefeed.Keyspace()
 	changefeedID := changefeed.Name()
 	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(namespace, changefeedID, sinkType)
 	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(namespace, changefeedID, sinkType)
@@ -86,7 +86,7 @@ func (b *Statistics) RecordDDLExecution(executor func() error) error {
 
 // Close release some internal resources.
 func (b *Statistics) Close() {
-	namespace := b.changefeedID.Namespace()
+	namespace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
 	ExecDDLHistogram.DeleteLabelValues(namespace, changefeedID)
 	ExecBatchHistogram.DeleteLabelValues(namespace, changefeedID)

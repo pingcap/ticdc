@@ -136,7 +136,7 @@ func (s *Sink) Run(ctx context.Context) error {
 }
 
 func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
-	namespace := s.changefeedID.Namespace()
+	namespace := s.changefeedID.Keyspace()
 	changefeed := s.changefeedID.Name()
 
 	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
@@ -238,7 +238,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		err = s.ddlWriter.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
 	default:
 		log.Panic("mysql sink meet unknown event type",
-			zap.String("namespace", s.changefeedID.Namespace()),
+			zap.String("namespace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("event", event))
 	}

@@ -79,7 +79,7 @@ func (m *saramaMetricsCollector) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			log.Info("kafka metrics collector stopped",
-				zap.String("namespace", m.changefeedID.Namespace()),
+				zap.String("namespace", m.changefeedID.Keyspace()),
 				zap.String("changefeed", m.changefeedID.Name()))
 			return
 		case <-refreshMetricsTicker.C:
@@ -99,7 +99,7 @@ func (m *saramaMetricsCollector) updateBrokers(ctx context.Context) {
 }
 
 func (m *saramaMetricsCollector) collectProducerMetrics() {
-	namespace := m.changefeedID.Namespace()
+	namespace := m.changefeedID.Keyspace()
 	changefeedID := m.changefeedID.Name()
 	compressionRatioMetric := m.registry.Get(compressionRatioMetricName)
 	if histogram, ok := compressionRatioMetric.(metrics.Histogram); ok {
@@ -122,7 +122,7 @@ func (m *saramaMetricsCollector) collectProducerMetrics() {
 }
 
 func (m *saramaMetricsCollector) collectBrokerMetrics() {
-	namespace := m.changefeedID.Namespace()
+	namespace := m.changefeedID.Keyspace()
 	changefeedID := m.changefeedID.Name()
 	for id := range m.brokers {
 		brokerID := strconv.Itoa(int(id))
@@ -177,18 +177,18 @@ func getBrokerMetricName(prefix, brokerID string) string {
 
 func (m *saramaMetricsCollector) cleanupProducerMetrics() {
 	compressionRatioGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), avg)
+		DeleteLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), avg)
 	compressionRatioGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), p99)
+		DeleteLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), p99)
 
 	recordsPerRequestGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), avg)
+		DeleteLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), avg)
 	recordsPerRequestGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), p99)
+		DeleteLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), p99)
 }
 
 func (m *saramaMetricsCollector) cleanupBrokerMetrics() {
-	namespace := m.changefeedID.Namespace()
+	namespace := m.changefeedID.Keyspace()
 	changefeedID := m.changefeedID.Name()
 	for id := range m.brokers {
 		brokerID := strconv.Itoa(int(id))

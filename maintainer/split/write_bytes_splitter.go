@@ -67,7 +67,7 @@ func (m *writeSplitter) split(
 	if err != nil {
 		// Skip split.
 		log.Warn("scan regions failed, skip split span",
-			zap.String("namespace", m.changefeedID.Namespace()),
+			zap.String("namespace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
 			zap.Error(err))
@@ -78,7 +78,7 @@ func (m *writeSplitter) split(
 	if spansNum <= 1 {
 		log.Warn("only one capture and the regions number less than"+
 			" the maxSpanRegionLimit, skip split span",
-			zap.String("namespace", m.changefeedID.Namespace()),
+			zap.String("namespace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
 			zap.Int("captureNum", captureNum),
@@ -89,7 +89,7 @@ func (m *writeSplitter) split(
 
 	splitInfo := m.splitRegionsByWrittenKeysV1(span.TableID, regions, spansNum)
 	log.Info("split span by written keys",
-		zap.String("namespace", m.changefeedID.Namespace()),
+		zap.String("namespace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("span", span.String()),
 		zap.Ints("perSpanRegionCounts", splitInfo.RegionCounts),

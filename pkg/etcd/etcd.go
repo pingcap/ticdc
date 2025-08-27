@@ -422,7 +422,7 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 			Tp:         CDCKeyTypeUpStream,
 			ClusterID:  c.ClusterID,
 			UpstreamID: upstreamInfo.ID,
-			Namespace:  info.ChangefeedID.Namespace(),
+			Namespace:  info.ChangefeedID.Keyspace(),
 		}
 		upstreamEtcdKeyStr := upstreamInfoKey.String()
 		upstreamResp, err := c.Client.Get(ctx, upstreamEtcdKeyStr)
@@ -446,7 +446,7 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 		}
 	}
 
-	changeFeedID := common.NewChangeFeedDisplayName(info.ChangefeedID.Name(), info.ChangefeedID.Namespace())
+	changeFeedID := common.NewChangeFeedDisplayName(info.ChangefeedID.Name(), info.ChangefeedID.Keyspace())
 	infoKey := GetEtcdKeyChangeFeedInfo(c.ClusterID, changeFeedID)
 	jobKey := GetEtcdKeyJob(c.ClusterID, changeFeedID)
 	infoData, err := info.Marshal()

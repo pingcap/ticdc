@@ -121,7 +121,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.mutex.Lock()
 		m.dispatcherManagers[cfId] = manager
 		m.mutex.Unlock()
-		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Namespace(), cfId.Name()).Inc()
+		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	} else {
 		// Check and potentially add a table trigger event dispatcher.
 		// This is necessary during maintainer node migration, as the existing
@@ -251,7 +251,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	if manager, ok := m.dispatcherManagers[cfId]; ok {
 		if closed := manager.TryClose(req.Removed); closed {
 			delete(m.dispatcherManagers, cfId)
-			metrics.DispatcherManagerGauge.WithLabelValues(cfId.Namespace(), cfId.Name()).Dec()
+			metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
 			response.Success = true
 		} else {
 			response.Success = false

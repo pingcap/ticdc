@@ -138,9 +138,9 @@ func newFileWorkerGroup(
 		},
 		flushCh: make(chan *fileCache, 32),
 		metricWriteBytes: misc.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
 	}
 }
 
@@ -150,7 +150,7 @@ func (f *fileWorkerGroup) Run(
 	defer func() {
 		f.close()
 		log.Warn("redo file workers closed",
-			zap.String("namespace", f.cfg.ChangeFeedID.Namespace()),
+			zap.String("namespace", f.cfg.ChangeFeedID.Keyspace()),
 			zap.String("changefeed", f.cfg.ChangeFeedID.Name()),
 			zap.Error(err))
 	}()
@@ -165,7 +165,7 @@ func (f *fileWorkerGroup) Run(
 		})
 	}
 	log.Info("redo file workers started",
-		zap.String("namespace", f.cfg.ChangeFeedID.Namespace()),
+		zap.String("namespace", f.cfg.ChangeFeedID.Keyspace()),
 		zap.String("changefeed", f.cfg.ChangeFeedID.Name()),
 		zap.Int("workerNum", f.workerNum))
 	return eg.Wait()
@@ -173,9 +173,9 @@ func (f *fileWorkerGroup) Run(
 
 func (f *fileWorkerGroup) close() {
 	misc.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
+		DeleteLabelValues(f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(), f.logType)
 	misc.RedoWriteBytesGauge.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
+		DeleteLabelValues(f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(), f.logType)
 }
 
 func (f *fileWorkerGroup) input(ctx context.Context, event writer.RedoEvent) error {
@@ -431,12 +431,12 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 		return f.op.GetLogFileName()
 	}
 	uid := f.uuidGenerator.NewString()
-	if common.DefaultKeyspace == f.cfg.ChangeFeedID.Namespace() {
+	if common.DefaultKeyspace == f.cfg.ChangeFeedID.Keyspace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
 			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.logType,
 			maxCommitTS, uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
-		f.cfg.CaptureID, f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(),
+		f.cfg.CaptureID, f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(),
 		f.logType, maxCommitTS, uid, redo.LogEXT)
 }

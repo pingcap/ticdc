@@ -56,7 +56,7 @@ func NewAvroEncoder(ctx context.Context, config *common.Config) (common.EventEnc
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(schemaRegistryType)
 	}
 	return &BatchEncoder{
-		namespace: config.ChangefeedID.Namespace(),
+		namespace: config.ChangefeedID.Keyspace(),
 		schemaM:   schemaM,
 		result:    make([]*common.Message, 0, 1),
 		config:    config,

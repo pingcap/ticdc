@@ -88,7 +88,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	changefeedID.DisplayName.Keyspace = cfg.Keyspace
 	// verify changefeed keyspace
-	if err := common.ValidateKeyspace(changefeedID.Namespace()); err != nil {
+	if err := common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
 			"invalid keyspace_id: %s", cfg.ID))
 		return
@@ -228,7 +228,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param state query string false "state"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Success 200 {array} ChangefeedCommonInfo
 // @Failure 500 {object} common.HTTPError
 // @Router /api/v2/changefeeds [get]
@@ -246,10 +246,9 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		return
 	}
 	state := c.Query(api.APIOpVarChangefeedState)
-	namespace := GetKeyspaceValueWithDefault(c)
 	commonInfos := make([]ChangefeedCommonInfo, 0)
 	for idx, changefeed := range changefeeds {
-		if !changefeed.State.IsNeeded(state) || changefeed.ChangefeedID.Namespace() != namespace {
+		if !changefeed.State.IsNeeded(state) || changefeed.ChangefeedID.Keyspace() != keyspace {
 			continue
 		}
 		status := statuses[idx]
@@ -262,7 +261,7 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		commonInfos = append(commonInfos, ChangefeedCommonInfo{
 			UpstreamID:     changefeed.UpstreamID,
 			ID:             changefeed.ChangefeedID.Name(),
-			Keyspace:       changefeed.ChangefeedID.Namespace(),
+			Keyspace:       changefeed.ChangefeedID.Keyspace(),
 			FeedState:      changefeed.State,
 			CheckpointTSO:  status.CheckpointTs,
 			CheckpointTime: api.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
@@ -287,7 +286,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param changefeed_id  path  string  true  "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Success 200 {object} ChangeFeedInfo
 // @Failure 500,400 {object} common.HTTPError
 // @Router /api/v2/changefeeds/{changefeed_id} [get]
@@ -343,7 +342,7 @@ func CfInfoToAPIModel(
 	apiInfoModel := &ChangeFeedInfo{
 		UpstreamID:     info.UpstreamID,
 		ID:             info.ChangefeedID.Name(),
-		Keyspace:       info.ChangefeedID.Namespace(),
+		Keyspace:       info.ChangefeedID.Keyspace(),
 		SinkURI:        sinkURI,
 		CreateTime:     info.CreateTime,
 		StartTs:        info.StartTs,
@@ -370,7 +369,7 @@ func CfInfoToAPIModel(
 // @Accept json
 // @Produce json
 // @Param changefeed_id path string true "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Success 200 {object} EmptyResponse
 // @Failure 500,400 {object} common.HTTPError
 // @Router	/api/v2/changefeeds/{changefeed_id} [delete]
@@ -412,7 +411,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param changefeed_id  path  string  true  "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Success 200 {object} EmptyResponse
 // @Failure 500,400 {object} common.HTTPError
 // @Router /api/v2/changefeeds/{changefeed_id}/pause [post]
@@ -451,7 +450,7 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param changefeed_id path string true "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Param resumeConfig body ResumeChangefeedConfig true "resume config"
 // @Success 200 {object} EmptyResponse
 // @Failure 500,400 {object} common.HTTPError
@@ -547,7 +546,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param changefeed_id  path  string  true  "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Param changefeedConfig body ChangefeedConfig true "changefeed config"
 // @Success 200 {object} ChangeFeedInfo
 // @Failure 500,400 {object} common.HTTPError

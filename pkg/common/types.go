@@ -231,7 +231,7 @@ func (cfID ChangeFeedID) Name() string {
 	return cfID.DisplayName.Name
 }
 
-func (cfID ChangeFeedID) Namespace() string {
+func (cfID ChangeFeedID) Keyspace() string {
 	return cfID.DisplayName.Keyspace
 }
 
@@ -265,7 +265,7 @@ func (c ChangeFeedID) ToPB() *heartbeatpb.ChangefeedID {
 		Low:       c.Id.Low,
 		High:      c.Id.High,
 		Name:      c.Name(),
-		Namespace: c.Namespace(),
+		Namespace: c.Keyspace(),
 	}
 }
 
