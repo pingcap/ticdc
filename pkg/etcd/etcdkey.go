@@ -99,7 +99,7 @@ type CDCKey struct {
 	OwnerLeaseID string
 	ClusterID    string
 	UpstreamID   config.UpstreamID
-	Namespace    string
+	Keyspace     string
 }
 
 // BaseKey is the common prefix of the keys with cluster id in CDC
@@ -145,15 +145,15 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 			return errors.ErrInvalidEtcdKey.GenWithStackByArgs(key)
 		}
 	} else {
-		namespace := parts[2]
-		key = key[len(namespace)+1:]
-		k.Namespace = namespace
+		keyspace := parts[2]
+		key = key[len(keyspace)+1:]
+		k.Keyspace = keyspace
 		switch {
 		case strings.HasPrefix(key, ChangefeedInfoKey):
 			k.Tp = CDCKeyTypeChangefeedInfo
 			k.CaptureID = ""
 			k.ChangefeedID = common.ChangeFeedID{
-				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedInfoKey)+1:], namespace),
+				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedInfoKey)+1:], keyspace),
 			}
 			k.OwnerLeaseID = ""
 		case strings.HasPrefix(key, upstreamKey):
@@ -168,7 +168,7 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 			k.Tp = CDCKeyTypeChangeFeedStatus
 			k.CaptureID = ""
 			k.ChangefeedID = common.ChangeFeedID{
-				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedStatusKey)+1:], namespace),
+				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedStatusKey)+1:], keyspace),
 			}
 			k.OwnerLeaseID = ""
 		case strings.HasPrefix(key, taskPositionKey):
@@ -179,7 +179,7 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 			k.Tp = CDCKeyTypeTaskPosition
 			k.CaptureID = splitKey[0]
 			k.ChangefeedID = common.ChangeFeedID{
-				DisplayName: common.NewChangeFeedDisplayName(splitKey[1], namespace),
+				DisplayName: common.NewChangeFeedDisplayName(splitKey[1], keyspace),
 			}
 			k.OwnerLeaseID = ""
 		default:
@@ -211,7 +211,7 @@ func (k *CDCKey) String() string {
 		return BaseKey(k.ClusterID) + metaPrefix + metaVersionKey
 	case CDCKeyTypeUpStream:
 		return fmt.Sprintf("%s%s/%d",
-			KeyspacePrefix(k.ClusterID, k.Namespace),
+			KeyspacePrefix(k.ClusterID, k.Keyspace),
 			upstreamKey, k.UpstreamID)
 	}
 	log.Panic("unreachable")

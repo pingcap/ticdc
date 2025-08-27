@@ -540,7 +540,7 @@ func (m *migrator) saveUpstreamInfo(ctx context.Context) error {
 		Tp:         etcd.CDCKeyTypeUpStream,
 		ClusterID:  m.cli.GetClusterID(),
 		UpstreamID: upstreamID,
-		Namespace:  common.DefaultKeyspace,
+		Keyspace:   common.DefaultKeyspace,
 	}
 	upstreamKeyStr := upstreamKey.String()
 	upstreamInfo := &config.UpstreamInfo{

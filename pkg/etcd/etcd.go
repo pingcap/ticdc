@@ -422,7 +422,7 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 			Tp:         CDCKeyTypeUpStream,
 			ClusterID:  c.ClusterID,
 			UpstreamID: upstreamInfo.ID,
-			Namespace:  info.ChangefeedID.Keyspace(),
+			Keyspace:   info.ChangefeedID.Keyspace(),
 		}
 		upstreamEtcdKeyStr := upstreamInfoKey.String()
 		upstreamResp, err := c.Client.Get(ctx, upstreamEtcdKeyStr)
@@ -594,13 +594,13 @@ func (c *CDCEtcdClientImpl) GetEnsureGCServiceID(tag string) string {
 // GetUpstreamInfo get a upstreamInfo from etcd server
 func (c *CDCEtcdClientImpl) GetUpstreamInfo(ctx context.Context,
 	upstreamID config.UpstreamID,
-	namespace string,
+	keyspace string,
 ) (*config.UpstreamInfo, error) {
 	Key := CDCKey{
 		Tp:         CDCKeyTypeUpStream,
 		ClusterID:  c.ClusterID,
 		UpstreamID: upstreamID,
-		Namespace:  namespace,
+		Keyspace:   keyspace,
 	}
 	KeyStr := Key.String()
 	resp, err := c.Client.Get(ctx, KeyStr)
