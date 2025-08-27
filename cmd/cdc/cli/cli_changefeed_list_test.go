@@ -96,7 +96,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 	}, nil).Times(2)
 	// when --all=false, should contains StateNormal, StateWarning, StateFailed, StateStopped changefeed
-	os.Args = []string{"list", "--all=false", "--namespace=default"}
+	os.Args = []string{"list", "--all=false", "--keyspace=default"}
 	require.Nil(t, cmd.Execute())
 	out, err := io.ReadAll(b)
 	require.Nil(t, err)
@@ -107,7 +107,7 @@ func TestChangefeedListCli(t *testing.T) {
 	require.Contains(t, string(out), "warning-7")
 
 	// when --all=true, should contains all changefeed
-	os.Args = []string{"list", "--all=true", "--namespace=default"}
+	os.Args = []string{"list", "--all=true", "--keyspace=default"}
 	require.Nil(t, cmd.Execute())
 	out, err = io.ReadAll(b)
 	require.Nil(t, err)

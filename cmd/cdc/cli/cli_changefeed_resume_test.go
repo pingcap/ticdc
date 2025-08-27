@@ -50,15 +50,15 @@ func TestChangefeedResumeCli(t *testing.T) {
 	f.changefeeds.EXPECT().Resume(gomock.Any(), &v2.ResumeChangefeedConfig{
 		OverwriteCheckpointTs: 0,
 	}, "ns", "abc").Return(nil)
-	os.Args = []string{"resume", "--no-confirm=true", "--changefeed-id=abc", "--namespace=ns"}
+	os.Args = []string{"resume", "--no-confirm=true", "--changefeed-id=abc", "--keyspace=ns"}
 	require.Nil(t, cmd.Execute())
 
 	// 2. test changefeed resume with nil changfeed get result
 	f.changefeeds.EXPECT().Get(gomock.Any(), "ns", "abc").Return(&v2.ChangeFeedInfo{}, nil)
-	os.Args = []string{"resume", "--no-confirm=false", "--changefeed-id=abc", "--namespace=ns"}
+	os.Args = []string{"resume", "--no-confirm=false", "--changefeed-id=abc", "--keyspace=ns"}
 	o.noConfirm = false
 	o.changefeedID = "abc"
-	o.namespace = "ns"
+	o.keyspace = "ks"
 	require.NotNil(t, o.run(cmd))
 
 	// 3. test changefeed resume with nil tso get result
