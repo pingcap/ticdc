@@ -36,8 +36,7 @@ import (
 )
 
 var (
-	tableIDAllocator  = common.NewTableIDAllocator()
-	tableInfoAccessor = common.NewTableInfoAccessor()
+	tableIDAllocator = common.NewTableIDAllocator()
 )
 
 type decoder struct {
@@ -78,7 +77,6 @@ func NewDecoder(
 	}
 
 	tableIDAllocator.Clean()
-	tableInfoAccessor.Clean()
 	return &decoder{
 		idx:          idx,
 		config:       config,
@@ -181,11 +179,9 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
 
 	// only the DDL comes from the first partition will be processed.
-	// since tableInfoAccessor is global, we need to make sure the table info
-	// is not removed by other partitions' decoder.
 	if b.idx == 0 {
-		tableInfoAccessor.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
-		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
+		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
+		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	}
 
 	b.nextKey = nil
@@ -333,7 +329,7 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 	if key.Partition != nil {
 		tableInfo.TableName.TableID = *key.Partition
 	}
-	tableInfoAccessor.AddBlockTableID(key.Schema, key.Table, tableInfo.TableName.TableID)
+	tableIDAllocator.AddBlockTableID(key.Schema, key.Table, tableInfo.TableName.TableID)
 	return tableInfo
 }
 

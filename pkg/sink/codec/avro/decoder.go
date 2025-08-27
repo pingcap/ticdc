@@ -37,8 +37,7 @@ import (
 )
 
 var (
-	tableIDAllocator  = common.NewTableIDAllocator()
-	tableInfoAccessor = common.NewTableInfoAccessor()
+	tableIDAllocator = common.NewTableIDAllocator()
 )
 
 type decoder struct {
@@ -63,7 +62,6 @@ func NewDecoder(
 	db *sql.DB,
 ) common.Decoder {
 	tableIDAllocator.Clean()
-	tableInfoAccessor.Clean()
 	return &decoder{
 		idx:          idx,
 		config:       config,
@@ -284,7 +282,7 @@ func assembleEvent(
 
 func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
 	tableInfo := newTableInfo(schemaName, tableName, columns, keyMap)
-	tableInfoAccessor.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
 	return tableInfo
 }
 
@@ -465,8 +463,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
 
 	if d.idx == 0 {
-		tableInfoAccessor.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
-		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
+		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
+		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	}
 	return result
 }

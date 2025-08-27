@@ -86,8 +86,7 @@ type decoder struct {
 }
 
 var (
-	tableIDAllocator  = common.NewTableIDAllocator()
-	tableInfoAccessor = common.NewTableInfoAccessor()
+	tableIDAllocator = common.NewTableIDAllocator()
 )
 
 // NewDecoder return a decoder for canal-json
@@ -113,7 +112,6 @@ func NewDecoder(
 	}
 
 	tableIDAllocator.Clean()
-	tableInfoAccessor.Clean()
 	return &decoder{
 		config:       codecConfig,
 		decoder:      newBufferedJSONDecoder(),
@@ -351,9 +349,9 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
-	tableInfoAccessor.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
+	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
 
-	result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
+	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	return result
 }
 
@@ -510,7 +508,7 @@ func queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	table := *msg.getTable()
 
 	tableInfo := newTableInfo(msg)
-	tableInfoAccessor.AddBlockTableID(schema, table, tableInfo.TableName.TableID)
+	tableIDAllocator.AddBlockTableID(schema, table, tableInfo.TableName.TableID)
 	return tableInfo
 }
 

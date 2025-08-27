@@ -38,8 +38,7 @@ import (
 )
 
 var (
-	tableIDAllocator  = common.NewTableIDAllocator()
-	tableInfoAccessor = common.NewTableInfoAccessor()
+	tableIDAllocator = common.NewTableIDAllocator()
 )
 
 // decoder implement the Decoder interface
@@ -62,7 +61,6 @@ func NewDecoder(
 	db *sql.DB,
 ) common.Decoder {
 	tableIDAllocator.Clean()
-	tableInfoAccessor.Clean()
 	return &decoder{
 		idx:          idx,
 		config:       config,
@@ -143,8 +141,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	event.TableID = tableIDAllocator.Allocate(event.SchemaName, event.TableName)
 
 	if d.idx == 0 {
-		tableInfoAccessor.AddBlockTableID(event.SchemaName, event.TableName, event.TableID)
-		event.BlockedTables = common.GetBlockedTables(tableInfoAccessor, event)
+		tableIDAllocator.AddBlockTableID(event.SchemaName, event.TableName, event.TableID)
+		event.BlockedTables = common.GetBlockedTables(tableIDAllocator, event)
 		if event.Type == byte(timodel.ActionRenameTable) {
 			schemaName = event.ExtraSchemaName
 			tableName = event.ExtraTableName
