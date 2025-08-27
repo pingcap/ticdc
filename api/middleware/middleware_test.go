@@ -226,7 +226,7 @@ type mockPDAPIClient struct {
 	err      error
 }
 
-func (m *mockPDAPIClient) LoadKeyspaceByID(ctx context.Context, id string) (*keyspacepb.KeyspaceMeta, error) {
+func (m *mockPDAPIClient) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -236,82 +236,78 @@ func (m *mockPDAPIClient) LoadKeyspaceByID(ctx context.Context, id string) (*key
 func TestKeyspaceCheckerMiddleware(t *testing.T) {
 	tests := []struct {
 		name           string
-		keyspaceID     string
-		mockPDClient   *mockPDAPIClient
+		keyspace       string
+		mockKeyspace   *keyspacepb.KeyspaceMeta
+		mockError      error
 		expectedStatus int
-		expectAbort    bool
+		expectedAbort  bool
 	}{
 		{
-			name:           "No keyspace_id",
-			keyspaceID:     "",
+			name:           "default keyspace",
+			keyspace:       "",
 			expectedStatus: http.StatusOK,
-			expectAbort:    false,
+			expectedAbort:  false,
 		},
 		{
-			name:           "keyspace_id is 0",
-			keyspaceID:     "0",
+			name:           "valid keyspace",
+			keyspace:       "test_keyspace",
+			mockKeyspace:   &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_ENABLED},
 			expectedStatus: http.StatusOK,
-			expectAbort:    false,
+			expectedAbort:  false,
 		},
 		{
-			name:           "Invalid keyspace_id",
-			keyspaceID:     "abc",
+			name:           "disabled keyspace",
+			keyspace:       "test_keyspace",
+			mockKeyspace:   &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_DISABLED},
 			expectedStatus: http.StatusBadRequest,
-			expectAbort:    true,
+			expectedAbort:  true,
 		},
 		{
-			name:       "Keyspace not found",
-			keyspaceID: "1",
-			mockPDClient: &mockPDAPIClient{
-				err: errors.New("keyspace not found"),
-			},
+			name:           "archived keyspace",
+			keyspace:       "test_keyspace",
+			mockKeyspace:   &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_ARCHIVED},
+			expectedStatus: http.StatusBadRequest,
+			expectedAbort:  true,
+		},
+		{
+			name:           "tombstone keyspace",
+			keyspace:       "test_keyspace",
+			mockKeyspace:   &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_TOMBSTONE},
+			expectedStatus: http.StatusBadRequest,
+			expectedAbort:  true,
+		},
+		{
+			name:           "load keyspace error",
+			keyspace:       "test_keyspace",
+			mockError:      errors.New("load keyspace error"),
 			expectedStatus: http.StatusInternalServerError,
-			expectAbort:    true,
-		},
-		{
-			name:       "Keyspace not enabled",
-			keyspaceID: "1",
-			mockPDClient: &mockPDAPIClient{
-				keyspace: &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_DISABLED},
-			},
-			expectedStatus: http.StatusBadRequest,
-			expectAbort:    true,
-		},
-		{
-			name:       "Keyspace enabled",
-			keyspaceID: "1",
-			mockPDClient: &mockPDAPIClient{
-				keyspace: &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_ENABLED},
-			},
-			expectedStatus: http.StatusOK,
-			expectAbort:    false,
+			expectedAbort:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// setup context
-			ctx := context.Background()
-			if tt.mockPDClient != nil {
-				appcontext.SetService(appcontext.PDAPIClient, tt.mockPDClient)
+			// Create mock PD API client
+			mockPDClient := &mockPDAPIClient{
+				keyspace: tt.mockKeyspace,
+				err:      tt.mockError,
 			}
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("/?%s=%s", api.APIOpVarKeyspace, tt.keyspaceID), nil)
 
-			// setup gin
+			// Set up context with mock client
+			ctx := context.Background()
+			appcontext.SetService(appcontext.PDAPIClient, mockPDClient)
+
+			// Create test request
+			req := httptest.NewRequestWithContext(ctx, "GET", fmt.Sprintf("/test?%s=%s", api.APIOpVarKeyspace, tt.keyspace), nil)
+
+			// Create gin context
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
 			c.Request = req
-
-			// execute middleware
 			KeyspaceCheckerMiddleware()(c)
 
-			// check results
-			if tt.expectAbort {
-				assert.True(t, c.IsAborted())
-				assert.Equal(t, tt.expectedStatus, w.Code)
-			} else {
-				assert.False(t, c.IsAborted())
-			}
+			assert.Equal(t, tt.expectedAbort, c.IsAborted())
+			assert.Equal(t, tt.expectedStatus, w.Code)
 		})
 	}
 }

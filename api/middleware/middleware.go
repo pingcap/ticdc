@@ -223,22 +223,11 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 // KeyspaceCheckerMiddleware check if the request keyspace_id is valid
 func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		strKeyspaceID := c.Query(api.APIOpVarKeyspace)
-		var keyspaceID uint32
-		if strKeyspaceID != "" && strKeyspaceID != common.DefaultKeyspace {
-			id, err := strconv.ParseUint(strKeyspaceID, 10, 32)
-			if err != nil {
-				c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
-				c.Abort()
-				return
-			}
-			keyspaceID = uint32(id)
-		}
-
-		if keyspaceID != 0 {
+		keyspace := c.Query(api.APIOpVarKeyspace)
+		if keyspace != "" && keyspace != common.DefaultKeyspace {
 			pdAPIClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
 
-			meta, err := pdAPIClient.LoadKeyspaceByID(c.Request.Context(), strKeyspaceID)
+			meta, err := pdAPIClient.LoadKeyspace(c.Request.Context(), keyspace)
 			if err != nil {
 				c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
 				c.Abort()
@@ -250,8 +239,8 @@ func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-
-			c.Next()
 		}
+
+		c.Next()
 	}
 }
