@@ -130,12 +130,12 @@ func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
 // markSent marks a request as sent and adds it to sent requests
 func (c *requestCache) markSent(req *regionReq) {
 	req.state = regionReqStateSent
-	c.sentRequests.Store(req.regionInfo.span, *req)
+	c.sentRequests.Store(req.regionInfo.span.String(), *req)
 }
 
 // markStopped removes a sent request without changing pending count (for stopped regions)
 func (c *requestCache) markStopped(span heartbeatpb.TableSpan) {
-	if _, exists := c.sentRequests.LoadAndDelete(span); exists {
+	if _, exists := c.sentRequests.LoadAndDelete(span.String()); exists {
 		c.pendingCount.Add(-1)
 		log.Info("fizz cdc mark stopped region request", zap.String("span", span.String()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
@@ -149,11 +149,11 @@ func (c *requestCache) markStopped(span heartbeatpb.TableSpan) {
 
 // resolve marks a region as initialized and removes it from sent requests
 func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64, span heartbeatpb.TableSpan) bool {
-	if value, exists := c.sentRequests.Load(span); exists {
+	if value, exists := c.sentRequests.Load(span.String()); exists {
 		req := value.(regionReq)
 		// Check if the subscription ID matches
 		if req.regionInfo.subscribedSpan.subID == subscriptionID {
-			c.sentRequests.Delete(span)
+			c.sentRequests.Delete(span.String())
 			c.pendingCount.Add(-1)
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 			cost := time.Since(req.createTime)
