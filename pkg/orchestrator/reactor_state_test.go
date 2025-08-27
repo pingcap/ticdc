@@ -343,7 +343,7 @@ func TestChangefeedStateUpdate(t *testing.T) {
 	}
 	for i, tc := range testCases {
 		state := NewChangefeedReactorState(etcd.DefaultCDCClusterID,
-			common.NewChangeFeedIDWithName(tc.changefeedID))
+			common.NewChangeFeedIDWithName(tc.changefeedID, common.DefaultKeyspace))
 		for i, k := range tc.updateKey {
 			value := []byte(tc.updateValue[i])
 			if len(value) == 0 {
