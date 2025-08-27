@@ -35,9 +35,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	tableIDAllocator = common.NewTableIDAllocator()
-)
+var tableIDAllocator = common.NewTableIDAllocator()
 
 type decoder struct {
 	keyBytes   []byte
@@ -326,18 +324,12 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	tableInfo := b.newTableInfo(key, value)
-	if key.Partition != nil {
-		tableInfo.TableName.TableID = *key.Partition
-	}
-	tableIDAllocator.AddBlockTableID(key.Schema, key.Table, tableInfo.TableName.TableID)
 	return tableInfo
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	if key.Partition == nil {
-		physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
-		key.Partition = &physicalTableID
-	}
+	physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
+	key.Partition = &physicalTableID
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = *key.Partition
 	tableInfo.Name = ast.NewCIStr(key.Table)

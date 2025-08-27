@@ -549,11 +549,10 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]))
-		// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns))
 		return
 	}
 	switch w.protocol {
-	case config.ProtocolSimple, config.ProtocolOpen, config.ProtocolDebezium:
+	case config.ProtocolSimple, config.ProtocolDebezium:
 		// simple protocol set the table id for all row message, it can be known which table the row message belongs to,
 		// also consider the table partition.
 		// open protocol set the partition table id if the table is partitioned.
@@ -568,11 +567,11 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
 		return
-	case config.ProtocolCanalJSON:
-		// for partition table, the canal-json message cannot assign physical table id to each dml message,
+	case config.ProtocolCanalJSON, config.ProtocolOpen:
+		// for partition table, the canal-json and open-protocol message cannot assign physical table id to each dml message,
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
 		if w.partitionTableAccessor.isPartitionTable(schema, table) {
-			log.Warn("DML events fallback, but it's canal-json and partition table, still append it",
+			log.Warn("DML events fallback, but it's canal-json or open-protocol and the table is a partition table, still append it",
 				zap.Int32("partition", group.partition), zap.Any("offset", offset),
 				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
 				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),

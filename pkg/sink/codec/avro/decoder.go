@@ -36,9 +36,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	tableIDAllocator = common.NewTableIDAllocator()
-)
+var tableIDAllocator = common.NewTableIDAllocator()
 
 type decoder struct {
 	idx    int
@@ -282,7 +280,6 @@ func assembleEvent(
 
 func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
 	tableInfo := newTableInfo(schemaName, tableName, columns, keyMap)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
 	return tableInfo
 }
 

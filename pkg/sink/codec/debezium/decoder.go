@@ -37,9 +37,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	tableIDAllocator = common.NewTableIDAllocator()
-)
+var tableIDAllocator = common.NewTableIDAllocator()
 
 // decoder implement the Decoder interface
 type decoder struct {

@@ -85,9 +85,7 @@ type decoder struct {
 	upstreamTiDB *sql.DB
 }
 
-var (
-	tableIDAllocator = common.NewTableIDAllocator()
-)
+var tableIDAllocator = common.NewTableIDAllocator()
 
 // NewDecoder return a decoder for canal-json
 func NewDecoder(
@@ -504,11 +502,7 @@ func formatValue(value any, ft types.FieldType) any {
 }
 
 func queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
-	schema := *msg.getSchema()
-	table := *msg.getTable()
-
 	tableInfo := newTableInfo(msg)
-	tableIDAllocator.AddBlockTableID(schema, table, tableInfo.TableName.TableID)
 	return tableInfo
 }
 

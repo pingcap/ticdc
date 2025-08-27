@@ -129,7 +129,6 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			log.Error("read message failed, just continue to retry", zap.Error(err))
 			continue
 		}
-		log.Info("read message", zap.String("detail", msg.TopicPartition.String()))
 		needCommit := c.writer.WriteMessage(ctx, msg)
 		if !needCommit {
 			continue
