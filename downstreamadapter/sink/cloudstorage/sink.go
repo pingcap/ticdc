@@ -173,7 +173,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		err = s.writeDDLEvent(e)
 	default:
 		log.Panic("sink doesn't support this type of block event",
-			zap.String("namespace", s.changefeedID.Keyspace()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("eventType", event.GetType()))
 	}
@@ -257,7 +257,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		case checkpoint, ok = <-s.checkpointChan:
 			if !ok {
 				log.Warn("cloud storage sink checkpoint channel closed",
-					zap.String("namespace", s.changefeedID.Keyspace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
@@ -274,7 +274,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		message, err := json.Marshal(map[string]uint64{"checkpoint-ts": checkpoint})
 		if err != nil {
 			log.Panic("CloudStorageSink marshal checkpoint failed, this should never happen",
-				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Uint64("checkpoint", checkpoint),
 				zap.Duration("duration", time.Since(start)),
@@ -283,7 +283,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
 			log.Error("CloudStorageSink storage write file failed",
-				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
@@ -321,7 +321,7 @@ func (s *sink) initCron(
 func (s *sink) bgCleanup(ctx context.Context) {
 	if s.cfg.DateSeparator != config.DateSeparatorDay.String() || s.cfg.FileExpirationDays <= 0 {
 		log.Info("skip cleanup expired files for storage sink",
-			zap.String("namespace", s.changefeedID.Keyspace()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", s.changefeedID.ID()),
 			zap.String("dateSeparator", s.cfg.DateSeparator),
 			zap.Int("expiredFileTTL", s.cfg.FileExpirationDays))
@@ -331,7 +331,7 @@ func (s *sink) bgCleanup(ctx context.Context) {
 	s.cron.Start()
 	defer s.cron.Stop()
 	log.Info("start schedule cleanup expired files for storage sink",
-		zap.String("namespace", s.changefeedID.Keyspace()),
+		zap.String("keyspace", s.changefeedID.Keyspace()),
 		zap.Stringer("changefeedID", s.changefeedID.ID()),
 		zap.String("dateSeparator", s.cfg.DateSeparator),
 		zap.Int("expiredFileTTL", s.cfg.FileExpirationDays))
@@ -339,7 +339,7 @@ func (s *sink) bgCleanup(ctx context.Context) {
 	// wait for the context done
 	<-ctx.Done()
 	log.Info("stop schedule cleanup expired files for storage sink",
-		zap.String("namespace", s.changefeedID.Keyspace()),
+		zap.String("keyspace", s.changefeedID.Keyspace()),
 		zap.Stringer("changefeedID", s.changefeedID.ID()),
 		zap.Error(ctx.Err()))
 }
@@ -353,7 +353,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 		ret = append(ret, func() {
 			if !isRemoveEmptyDirsRunning.CompareAndSwap(false, true) {
 				log.Warn("remove empty dirs is already running, skip this round",
-					zap.String("namespace", s.changefeedID.Keyspace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.Stringer("changefeedID", s.changefeedID.ID()))
 				return
 			}
@@ -363,7 +363,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 			cnt, err := cloudstorage.RemoveEmptyDirs(ctx, s.changefeedID, uri.Path)
 			if err != nil {
 				log.Error("failed to remove empty dirs",
-					zap.String("namespace", s.changefeedID.Keyspace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.Stringer("changefeedID", s.changefeedID.ID()),
 					zap.Uint64("checkpointTs", checkpointTs),
 					zap.Duration("cost", time.Since(start)),
@@ -372,7 +372,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 				return
 			}
 			log.Info("remove empty dirs",
-				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.Stringer("changefeedID", s.changefeedID.ID()),
 				zap.Uint64("checkpointTs", checkpointTs),
 				zap.Uint64("count", cnt),
@@ -384,7 +384,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 	ret = append(ret, func() {
 		if !isCleanupRunning.CompareAndSwap(false, true) {
 			log.Warn("cleanup expired files is already running, skip this round",
-				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.Stringer("changefeedID", s.changefeedID.ID()))
 			return
 		}
@@ -395,7 +395,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 		cnt, err := cloudstorage.RemoveExpiredFiles(ctx, s.changefeedID, s.storage, s.cfg, checkpointTs)
 		if err != nil {
 			log.Error("failed to remove expired files",
-				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.Stringer("changefeedID", s.changefeedID.ID()),
 				zap.Uint64("checkpointTs", checkpointTs),
 				zap.Duration("cost", time.Since(start)),
@@ -404,7 +404,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 			return
 		}
 		log.Info("remove expired files",
-			zap.String("namespace", s.changefeedID.Keyspace()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", s.changefeedID.ID()),
 			zap.Uint64("checkpointTs", checkpointTs),
 			zap.Uint64("count", cnt),

@@ -45,7 +45,7 @@ func TestPulsarSyncSendMessage(t *testing.T) {
 			args: args{
 				ctx:          context.Background(),
 				topic:        "test",
-				changefeedID: commonType.NewChangefeedID4Test("test_namespace", "test"),
+				changefeedID: commonType.NewChangefeedID4Test("test_keyspace", "test"),
 				message: &common.Message{
 					Value:        []byte("this value for test input data"),
 					PartitionKey: str2Pointer("test_key"),
@@ -88,7 +88,7 @@ func TestPulsarSyncBroadcastMessage(t *testing.T) {
 				ctx:          context.Background(),
 				topic:        "test",
 				partition:    1,
-				changefeedID: commonType.NewChangefeedID4Test("test_namespace", "test"),
+				changefeedID: commonType.NewChangefeedID4Test("test_keyspace", "test"),
 				message: &common.Message{
 					Value:        []byte("this value for test input data"),
 					PartitionKey: str2Pointer("test_key"),

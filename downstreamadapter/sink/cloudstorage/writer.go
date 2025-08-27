@@ -138,7 +138,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.Int("workerID", d.id),
-						zap.String("namespace", d.changeFeedID.Keyspace()),
+						zap.String("keyspace", d.changeFeedID.Keyspace()),
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.Error(err))
 					return errors.Trace(err)
@@ -153,7 +153,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				if err != nil {
 					log.Error("failed to generate data file path",
 						zap.Int("workerID", d.id),
-						zap.String("namespace", d.changeFeedID.Keyspace()),
+						zap.String("keyspace", d.changeFeedID.Keyspace()),
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.Error(err))
 					return errors.Trace(err)
@@ -166,7 +166,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				if err != nil {
 					log.Error("failed to write index file to external storage",
 						zap.Int("workerID", d.id),
-						zap.String("namespace", d.changeFeedID.Keyspace()),
+						zap.String("keyspace", d.changeFeedID.Keyspace()),
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.String("path", indexFilePath),
 						zap.Error(err))
@@ -177,7 +177,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				if err != nil {
 					log.Error("failed to write data file to external storage",
 						zap.Int("workerID", d.id),
-						zap.String("namespace", d.changeFeedID.Keyspace()),
+						zap.String("keyspace", d.changeFeedID.Keyspace()),
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.String("path", dataFilePath),
 						zap.Error(err))
@@ -185,7 +185,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				}
 
 				log.Debug("write file to storage success", zap.Int("workerID", d.id),
-					zap.String("namespace", d.changeFeedID.Keyspace()),
+					zap.String("keyspace", d.changeFeedID.Keyspace()),
 					zap.Stringer("changefeed", d.changeFeedID.ID()),
 					zap.String("schema", table.TableNameWithPhysicTableID.Schema),
 					zap.String("table", table.TableNameWithPhysicTableID.Table),
@@ -240,7 +240,7 @@ func (d *writer) writeDataFile(ctx context.Context, path string, task *singleTab
 				log.Error("failed to close writer", zap.Error(closeErr),
 					zap.Int("workerID", d.id),
 					zap.Any("table", task.tableInfo.TableName),
-					zap.String("namespace", d.changeFeedID.Keyspace()),
+					zap.String("keyspace", d.changeFeedID.Keyspace()),
 					zap.Stringer("changefeed", d.changeFeedID.ID()))
 				if inErr == nil {
 					inErr = closeErr

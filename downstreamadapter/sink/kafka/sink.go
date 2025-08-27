@@ -155,7 +155,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		err = s.sendDDLEvent(v)
 	default:
 		log.Panic("kafka sink doesn't support this type of block event",
-			zap.String("namespace", s.changefeedID.Keyspace()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("eventType", event.GetType()))
 	}
@@ -208,7 +208,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			event, ok := s.eventChan.Get()
 			if !ok {
 				log.Info("kafka sink event channel closed",
-					zap.String("namespace", s.changefeedID.Keyspace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
@@ -280,7 +280,7 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 			event, ok := s.rowChan.Get()
 			if !ok {
 				log.Info("kafka sink event channel closed",
-					zap.String("namespace", s.changefeedID.Keyspace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
@@ -305,7 +305,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		msgs, err := s.batch(ctx, msgsBuf)
 		if err != nil {
 			log.Error("kafka sink batch dml events failed",
-				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Error(err))
 			return err
@@ -338,7 +338,7 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*
 		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
 			log.Info("kafka sink event channel closed",
-				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
@@ -371,7 +371,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 		case future, ok := <-outCh:
 			if !ok {
 				log.Info("kafka sink encoder's output channel closed",
-					zap.String("namespace", s.changefeedID.Keyspace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
@@ -389,7 +389,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						future.Key.Partition,
 						message); err != nil {
 						log.Error("kafka sink send message failed",
-							zap.String("namespace", s.changefeedID.Keyspace()),
+							zap.String("keyspace", s.changefeedID.Keyspace()),
 							zap.String("changefeed", s.changefeedID.Name()),
 							zap.Error(err))
 						return 0, 0, err
@@ -439,7 +439,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 	}
 	log.Info("kafka sink send DDL event",
-		zap.String("namespace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
 		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
 		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
@@ -469,7 +469,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
 				log.Warn("kafka sink checkpoint channel closed",
-					zap.String("namespace", s.changefeedID.Keyspace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
@@ -523,7 +523,7 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	if s.tableSchemaStore == nil {
 		log.Warn("kafka sink table schema store is not set",
-			zap.String("namespace", s.changefeedID.Keyspace()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Uint64("ts", ts))
 		return nil
