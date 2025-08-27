@@ -106,7 +106,7 @@ func (pt *regionPriorityTask) Priority() int {
 
 	priority := basePriority - timeBonus + resolvedTsLagBonus
 
-	log.Info("fizz cdc region task priority", zap.String("regionID", fmt.Sprintf("%d", pt.regionInfo.verID.GetID())), zap.Uint64("currentTs", pt.currentTs), zap.Int("priority", priority), zap.Int("basePriority", basePriority), zap.Int("timeBonus", timeBonus), zap.Int("resolvedTsLagBonus", resolvedTsLagBonus))
+	log.Debug("fizz cdc region task priority", zap.String("regionID", fmt.Sprintf("%d", pt.regionInfo.verID.GetID())), zap.Uint64("currentTs", pt.currentTs), zap.Int("priority", priority), zap.Int("basePriority", basePriority), zap.Int("timeBonus", timeBonus), zap.Int("resolvedTsLagBonus", resolvedTsLagBonus))
 
 	if priority < 0 {
 		priority = 0

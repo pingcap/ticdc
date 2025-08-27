@@ -92,12 +92,13 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
 
-				log.Info("fizz cdc add region request", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.Float64("cost", cost.Seconds()))
-
+				log.Info("fizz cdc add region request success", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.Float64("cost", cost.Seconds()))
 				c.pendingCount.Add(1)
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
 				return nil
 			case <-ctx.Done():
+				log.Info("fizz cdc add region request cancelled", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.Error(ctx.Err()), zap.Int("pendingCount", int(current)), zap.Int("pendingQueueLen", len(c.pendingQueue)))
+
 				return ctx.Err()
 			}
 		}
@@ -105,6 +106,7 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 		// Wait for space to become available
 		select {
 		case <-ticker.C:
+			log.Info("fizz cdc add region request wait for space", zap.Int("pendingCount", int(current)), zap.Int("maxPendingCount", int(c.maxPendingCount)), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())))
 			continue
 		case <-c.spaceAvailable:
 			continue // Retry
