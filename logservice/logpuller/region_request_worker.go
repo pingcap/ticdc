@@ -307,9 +307,8 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 				worker:     s,
 				resolvedTs: resolvedTsEvent.Ts,
 			})
-
 			// Try to resolve in cache (marks region as initialized)
-			if s.requestCache.resolve(subscriptionID, regionID) {
+			if s.requestCache.resolve(subscriptionID, regionID, state.getRegionInfo().span) {
 				log.Info("fizz region request worker resolved region in cache",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
@@ -397,12 +396,14 @@ func (s *regionRequestWorker) processRegionSendTask(
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
 			// For stopped regions, mark as stopped in cache (decreases pending count)
-			s.requestCache.markStopped(region.verID.GetID())
+			s.requestCache.markStopped(region.span)
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
 			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
+			s.requestCache.markStopped(region.span)
+
 		} else {
 			state := newRegionFeedState(region, uint64(subID))
 			state.start()

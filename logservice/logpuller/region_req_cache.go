@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -66,7 +67,7 @@ func newRequestCache(maxPendingCount int) *requestCache {
 		sentRequests:    sync.Map{},
 		pendingCount:    atomic.Int64{},
 		maxPendingCount: int64(maxPendingCount),
-		spaceAvailable:  make(chan struct{}, 1), // Buffered to avoid blocking
+		spaceAvailable:  make(chan struct{}, 8), // Buffered to avoid blocking
 	}
 }
 
@@ -92,7 +93,7 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
 
-				log.Info("fizz cdc add region request success", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.Float64("cost", cost.Seconds()))
+				log.Info("fizz cdc add region request success", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(current)), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 				c.pendingCount.Add(1)
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
 				return nil
@@ -129,14 +130,14 @@ func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
 // markSent marks a request as sent and adds it to sent requests
 func (c *requestCache) markSent(req *regionReq) {
 	req.state = regionReqStateSent
-	regionID := req.regionInfo.verID.GetID()
-	c.sentRequests.Store(regionID, *req)
+	c.sentRequests.Store(req.regionInfo.span, *req)
 }
 
 // markStopped removes a sent request without changing pending count (for stopped regions)
-func (c *requestCache) markStopped(regionID uint64) {
-	if _, exists := c.sentRequests.LoadAndDelete(regionID); exists {
+func (c *requestCache) markStopped(span heartbeatpb.TableSpan) {
+	if _, exists := c.sentRequests.LoadAndDelete(span); exists {
 		c.pendingCount.Add(-1)
+		log.Info("fizz cdc mark stopped region request", zap.String("span", span.String()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 		// Notify waiting add operations that there's space available
 		select {
@@ -147,16 +148,16 @@ func (c *requestCache) markStopped(regionID uint64) {
 }
 
 // resolve marks a region as initialized and removes it from sent requests
-func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) bool {
-	if value, exists := c.sentRequests.Load(regionID); exists {
+func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64, span heartbeatpb.TableSpan) bool {
+	if value, exists := c.sentRequests.Load(span); exists {
 		req := value.(regionReq)
 		// Check if the subscription ID matches
 		if req.regionInfo.subscribedSpan.subID == subscriptionID {
-			c.sentRequests.Delete(regionID)
+			c.sentRequests.Delete(span)
 			c.pendingCount.Add(-1)
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 			cost := time.Since(req.createTime)
-			log.Info("fizz cdc resolve region request", zap.String("regionID", fmt.Sprintf("%d", regionID)), zap.Float64("cost", cost.Seconds()))
+			log.Info("fizz cdc resolve region request", zap.String("regionID", fmt.Sprintf("%d", regionID)), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 			metrics.RegionRequestFinishScanDuration.WithLabelValues(fmt.Sprintf("%d", regionID)).Observe(cost.Seconds())
 			// Notify waiting add operations that there's space available
 			select {
@@ -184,15 +185,6 @@ LOOP:
 			break LOOP
 		}
 	}
-
-	// sentRequests:
-	// 	// Collect sent requests
-	// 	c.sentRequests.Range(func(key, value interface{}) bool {
-	// 		req := value.(regionReq)
-	// 		regions = append(regions, req.regionInfo)
-	// 		c.sentRequests.Delete(key)
-	// 		return true
-	// 	})
 
 	// Reset counter
 	c.pendingCount.Store(0)
