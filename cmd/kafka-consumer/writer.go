@@ -217,15 +217,12 @@ func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} 
 			}
 		}
 	case commonEvent.InfluenceTypeNormal:
-		// include self
-		tableIDs[ddl.TableID] = struct{}{}
 		for _, item := range ddl.GetBlockedTables().TableIDs {
 			tableIDs[item] = struct{}{}
 		}
 	default:
 		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
 	}
-	log.Error("getBlockTableIDs", zap.Any("tableIDs", tableIDs), zap.Any("ddl", ddl.Query))
 	return tableIDs
 }
 

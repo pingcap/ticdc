@@ -141,9 +141,9 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
 	event.TableID = tableIDAllocator.Allocate(event.SchemaName, event.TableName)
-	tableInfoAccessor.AddBlockTableID(event.SchemaName, event.TableName, event.TableID)
 
 	if d.idx == 0 {
+		tableInfoAccessor.AddBlockTableID(event.SchemaName, event.TableName, event.TableID)
 		event.BlockedTables = common.GetBlockedTables(tableInfoAccessor, event)
 		if event.Type == byte(timodel.ActionRenameTable) {
 			schemaName = event.ExtraSchemaName
