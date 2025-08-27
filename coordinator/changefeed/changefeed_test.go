@@ -173,10 +173,10 @@ func TestChangefeedGetCloneStatus(t *testing.T) {
 	// Prepare test data
 	originalStatus := &heartbeatpb.MaintainerStatus{
 		ChangefeedID: &heartbeatpb.ChangefeedID{
-			High:      123,
-			Low:       456,
-			Name:      "test-changefeed",
-			Namespace: "test-namespace",
+			High:     123,
+			Low:      456,
+			Name:     "test-changefeed",
+			Keyspace: "test-namespace",
 		},
 		CheckpointTs: 789,
 		FeedState:    "normal",
@@ -203,7 +203,7 @@ func TestChangefeedGetCloneStatus(t *testing.T) {
 	require.Equal(t, originalStatus.ChangefeedID.High, clonedStatus.ChangefeedID.High)
 	require.Equal(t, originalStatus.ChangefeedID.Low, clonedStatus.ChangefeedID.Low)
 	require.Equal(t, originalStatus.ChangefeedID.Name, clonedStatus.ChangefeedID.Name)
-	require.Equal(t, originalStatus.ChangefeedID.Namespace, clonedStatus.ChangefeedID.Namespace)
+	require.Equal(t, originalStatus.ChangefeedID.Keyspace, clonedStatus.ChangefeedID.Keyspace)
 	require.Equal(t, originalStatus.CheckpointTs, clonedStatus.CheckpointTs)
 	require.Equal(t, originalStatus.FeedState, clonedStatus.FeedState)
 	require.Equal(t, originalStatus.State, clonedStatus.State)
