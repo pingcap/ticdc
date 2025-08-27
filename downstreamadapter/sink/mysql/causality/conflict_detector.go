@@ -147,6 +147,6 @@ func (d *ConflictDetector) closeCache() {
 	}
 }
 
-func (d *ConflictDetector) Close() {
+func (d *ConflictDetector) CloseNotifiedNodes() {
 	d.notifiedNodes.Close()
 }
