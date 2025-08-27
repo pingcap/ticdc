@@ -294,7 +294,7 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 	for _, change := range changes {
 		i := 0 // used as index of skipColIdx
 		for j, val := range change.postValues {
-			if i < len(skipColIdx) {
+			if i >= len(skipColIdx) {
 				args = append(args, change.postValues[j:]...)
 				break
 			}
@@ -302,6 +302,7 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 				i++
 				continue
 			}
+			args = append(args, val)
 		}
 	}
 	return buf.String(), args
