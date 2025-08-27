@@ -121,4 +121,5 @@ func InitPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(clientChannelSize)
 	registry.MustRegister(LockResolveDuration)
 	registry.MustRegister(regionWorkerQueueDuration)
+	registry.MustRegister(RegionRequestFinishScanDuration)
 }
