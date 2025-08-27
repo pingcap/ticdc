@@ -547,7 +547,11 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		store := getStore(region.rpcCtx.Addr)
 		worker := store.getRequestWorker()
-		force := regionTask.Priority() == int(TaskHighPrior)
+		force := regionTask.Priority() <= int(2*TaskHighPrior)
+
+		if force {
+			log.Info("fizz cdc add region request force", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.String("priority", TaskType(regionTask.Priority()).String()))
+		}
 
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Millisecond)
 		err := worker.add(ctx, region, force)
@@ -752,12 +756,12 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
 			s.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
+			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskRegionError)
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskRegionError)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {

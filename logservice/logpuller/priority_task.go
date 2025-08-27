@@ -26,17 +26,20 @@ import (
 type TaskType int
 
 const (
+	// TaskRegionError represents region error
+	TaskRegionError TaskType = iota
 	// TaskHighPrior represents region error or region change
 	// This type has the highest priority
-	TaskHighPrior TaskType = iota
+	TaskHighPrior
 	// TaskLowPrior represents new subscription
 	// This type has the lowest priority
 	TaskLowPrior
 )
 
 const (
-	highPriorityBase = 60 * 60 * 12
-	lowPriorityBase  = 60 * 60 * 24
+	regionErrorPriority = 0
+	highPriorityBase    = 60 * 30      // 30 minutes
+	lowPriorityBase     = 60 * 60 * 24 // 1 day
 )
 
 func (t TaskType) String() string {
@@ -88,6 +91,8 @@ func (pt *regionPriorityTask) Priority() int {
 		basePriority = highPriorityBase // Highest priority
 	case TaskLowPrior:
 		basePriority = lowPriorityBase // Lowest priority
+	case TaskRegionError:
+		basePriority = regionErrorPriority // Lowest priority
 	}
 
 	// Add time-based priority bonus
