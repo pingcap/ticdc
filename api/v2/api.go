@@ -48,19 +48,17 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
 	v2.GET("health", coordinatorMiddleware, api.ServerHealth)
 
-	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()
-
 	// changefeed apis
 	changefeedGroup := v2.Group("/changefeeds")
-	changefeedGroup.GET("/:changefeed_id", keyspaceCheckerMiddleware, coordinatorMiddleware, api.GetChangeFeed)
-	changefeedGroup.POST("", keyspaceCheckerMiddleware, coordinatorMiddleware, authenticateMiddleware, api.CreateChangefeed)
-	changefeedGroup.GET("", keyspaceCheckerMiddleware, coordinatorMiddleware, api.ListChangeFeeds)
-	changefeedGroup.PUT("/:changefeed_id", keyspaceCheckerMiddleware, coordinatorMiddleware, authenticateMiddleware, api.UpdateChangefeed)
-	changefeedGroup.POST("/:changefeed_id/resume", keyspaceCheckerMiddleware, coordinatorMiddleware, authenticateMiddleware, api.ResumeChangefeed)
-	changefeedGroup.POST("/:changefeed_id/pause", keyspaceCheckerMiddleware, coordinatorMiddleware, authenticateMiddleware, api.PauseChangefeed)
-	changefeedGroup.DELETE("/:changefeed_id", keyspaceCheckerMiddleware, coordinatorMiddleware, authenticateMiddleware, api.DeleteChangefeed)
-	changefeedGroup.GET("/:changefeed_id/status", keyspaceCheckerMiddleware, coordinatorMiddleware, authenticateMiddleware, api.status)
-	changefeedGroup.GET("/:changefeed_id/synced", keyspaceCheckerMiddleware, coordinatorMiddleware, authenticateMiddleware, api.syncState)
+	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, api.GetChangeFeed)
+	changefeedGroup.POST("", coordinatorMiddleware, authenticateMiddleware, api.CreateChangefeed)
+	changefeedGroup.GET("", coordinatorMiddleware, api.ListChangeFeeds)
+	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.UpdateChangefeed)
+	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, authenticateMiddleware, api.ResumeChangefeed)
+	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, api.PauseChangefeed)
+	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.DeleteChangefeed)
+	changefeedGroup.GET("/:changefeed_id/status", coordinatorMiddleware, authenticateMiddleware, api.status)
+	changefeedGroup.GET("/:changefeed_id/synced", coordinatorMiddleware, authenticateMiddleware, api.syncState)
 
 	// internal APIs
 	changefeedGroup.POST("/:changefeed_id/move_table", authenticateMiddleware, api.MoveTable)

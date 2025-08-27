@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -44,7 +43,6 @@ const (
 	gcServiceSafePointURL = "/pd/api/v1/gc/safepoint"
 	healthyAPI            = "/pd/api/v1/health"
 	scanRegionAPI         = "/pd/api/v1/regions/key"
-	loadKeyspaceByIDURL   = "/pd/api/v2/keyspaces/id/"
 
 	// Split the default rule by following keys to keep metadata region isolated
 	// from the normal data area.
@@ -103,7 +101,6 @@ type PDAPIClient interface {
 	CollectMemberEndpoints(ctx context.Context) ([]string, error)
 	Healthy(ctx context.Context, endpoint string) error
 	ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]RegionInfo, error)
-	LoadKeyspaceByID(ctx context.Context, id string) (*keyspacepb.KeyspaceMeta, error)
 	Close()
 }
 
@@ -274,40 +271,6 @@ func (pc *pdAPIClient) scanRegions(
 	}
 
 	return regions, nil
-}
-
-func (pc *pdAPIClient) LoadKeyspaceByID(ctx context.Context, id string) (*keyspacepb.KeyspaceMeta, error) {
-	if id == "" {
-		return nil, errors.New("Keyspace ID cannot be empty")
-	}
-
-	// TODO tenfyzhong 2025-08-26 15:23:50 we can use the pd sdk to get the
-	// keyspace meta after @Haizhi Geng implements it
-	uri := loadKeyspaceByIDURL + id
-	url := pc.grpcClient.GetLeaderURL() + uri
-
-	resp, err := pc.httpClient.Get(ctx, url)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	// PD will return 500 if the keyspace does not exist
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.Errorf("http status code %d", resp.StatusCode)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	defer resp.Body.Close()
-
-	meta := &keyspacepb.KeyspaceMeta{}
-	if err := json.Unmarshal(data, meta); err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	return meta, nil
 }
 
 // ServiceSafePoint contains gc service safe point
