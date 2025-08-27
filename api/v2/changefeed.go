@@ -90,7 +90,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	// verify changefeed keyspace
 	if err := common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
-			"invalid keyspace_id: %s", cfg.ID))
+			"invalid keyspace: %s", cfg.ID))
 		return
 	}
 
