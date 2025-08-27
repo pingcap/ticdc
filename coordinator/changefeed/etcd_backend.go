@@ -355,8 +355,8 @@ func (b *EtcdBackend) UpdateChangefeedCheckpointTs(ctx context.Context, cps map[
 }
 
 // extractKeySuffix extracts the suffix of an etcd key, such as extracting
-// "6a6c6dd290bc8732" from /tidb/cdc/cluster/namespace/changefeed/info/6a6c6dd290bc8732
-// or from /tidb/cdc/cluster/namespace/changefeed/status/6a6c6dd290bc8732
+// "6a6c6dd290bc8732" from /tidb/cdc/cluster/keyspace/changefeed/info/6a6c6dd290bc8732
+// or from /tidb/cdc/cluster/keyspace/changefeed/status/6a6c6dd290bc8732
 func extractKeySuffix(key string) (string, string, bool) {
 	subs := strings.Split(key, "/")
 	return subs[len(subs)-4], subs[len(subs)-1], subs[len(subs)-2] == "status"

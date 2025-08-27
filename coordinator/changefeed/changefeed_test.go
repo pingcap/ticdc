@@ -176,7 +176,7 @@ func TestChangefeedGetCloneStatus(t *testing.T) {
 			High:     123,
 			Low:      456,
 			Name:     "test-changefeed",
-			Keyspace: "test-namespace",
+			Keyspace: "test-keyspace",
 		},
 		CheckpointTs: 789,
 		FeedState:    "normal",
