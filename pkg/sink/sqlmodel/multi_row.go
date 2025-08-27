@@ -392,8 +392,8 @@ func GenInsertSQLWithCommitTs(tp DMLType, startTs uint64, commitTs uint64, chang
 			colName := common.QuoteName(col.Name.O)
 			tableName := first.targetTable.QuoteString()
 
-			// For all columns, use conditional update logic
-			buf.WriteString(colName + "=IF((@cond := (IFNULL(" + tableName + "." + colName + ", " + tableName + "._tidb_commit_ts) <= VALUES(" + colName + "))),VALUES(" + colName + "), " + tableName + "." + colName + ")")
+			// For all columns, use _tidb_origin_ts as comparison basis
+			buf.WriteString(colName + "=IF((@cond := (IFNULL(" + tableName + "._tidb_origin_ts, " + tableName + "._tidb_commit_ts) <= VALUES(" + common.QuoteName("_tidb_origin_ts") + "))),VALUES(" + colName + "), " + tableName + "." + colName + ")")
 		}
 
 		// Add _tidb_origin_ts to ON DUPLICATE KEY UPDATE if it doesn't exist in source but we're adding it
