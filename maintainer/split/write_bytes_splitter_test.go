@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -391,6 +392,10 @@ func (m *mockPDAPIClient) CollectMemberEndpoints(ctx context.Context) ([]string,
 
 func (m *mockPDAPIClient) Healthy(ctx context.Context, endpoint string) error {
 	return nil
+}
+
+func (m *mockPDAPIClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
 }
 
 func preTest() {
