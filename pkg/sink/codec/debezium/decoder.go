@@ -149,7 +149,6 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 			schemaName = event.ExtraSchemaName
 			tableName = event.ExtraTableName
 		}
-		tableInfoAccessor.Remove(schemaName, tableName)
 	}
 	return event
 }
@@ -232,11 +231,6 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 	schemaName := d.getSchemaName()
 	tableName := d.getTableName()
 
-	tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
-	if ok {
-		return tableInfo
-	}
-
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
@@ -262,7 +256,7 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 				fieldType.SetDecimal(6)
 			}
 		}
-		if _, ok = d.keyPayload[colName]; ok {
+		if _, ok := d.keyPayload[colName]; ok {
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
 				Name:   ast.NewCIStr(colName),
 				Offset: idx,
@@ -284,7 +278,6 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 		Primary: true,
 	})
 	result := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
-	tableInfoAccessor.Add(schemaName, tableName, result)
 	return result
 }
 

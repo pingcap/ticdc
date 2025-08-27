@@ -186,13 +186,6 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if b.idx == 0 {
 		tableInfoAccessor.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
 		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
-		schemaName := result.SchemaName
-		tableName := result.TableName
-		if result.Type == byte(timodel.ActionRenameTable) {
-			schemaName = result.ExtraSchemaName
-			tableName = result.ExtraTableName
-		}
-		tableInfoAccessor.Remove(schemaName, tableName)
 	}
 
 	b.nextKey = nil
@@ -336,11 +329,7 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	tableInfo, ok := tableInfoAccessor.Get(key.Schema, key.Table)
-	if !ok {
-		tableInfo = b.newTableInfo(key, value)
-		tableInfoAccessor.Add(key.Schema, key.Table, tableInfo)
-	}
+	tableInfo := b.newTableInfo(key, value)
 	if key.Partition != nil {
 		tableInfo.TableName.TableID = *key.Partition
 	}

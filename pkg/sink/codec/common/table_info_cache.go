@@ -15,7 +15,6 @@ package common
 
 import (
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"go.uber.org/zap"
 )
 
@@ -31,21 +30,13 @@ type accessKey struct {
 // tableInfoAccessor provide table information, to helper
 // the decoder set table info to the event
 type tableInfoAccessor struct {
-	memo            map[accessKey]*commonType.TableInfo
 	blockedTableIDs map[accessKey]map[int64]struct{}
 }
 
 func NewTableInfoAccessor() *tableInfoAccessor {
 	return &tableInfoAccessor{
-		memo:            make(map[accessKey]*commonType.TableInfo),
 		blockedTableIDs: make(map[accessKey]map[int64]struct{}),
 	}
-}
-
-func (a *tableInfoAccessor) Get(schema, table string) (*commonType.TableInfo, bool) {
-	key := accessKey{schema, table}
-	tableInfo, ok := a.memo[key]
-	return tableInfo, ok
 }
 
 func (a *tableInfoAccessor) GetBlockedTables(schema, table string) []int64 {
@@ -71,21 +62,7 @@ func (a *tableInfoAccessor) AddBlockTableID(schema string, table string, physica
 	}
 }
 
-func (a *tableInfoAccessor) Add(schema, table string, tableInfo *commonType.TableInfo) {
-	key := accessKey{schema, table}
-	if _, ok := a.memo[key]; !ok {
-		a.memo[key] = tableInfo
-		log.Info("add table info to cache", zap.String("schema", schema), zap.String("table", table))
-	}
-}
-
-func (a *tableInfoAccessor) Remove(schema, table string) {
-	key := accessKey{schema, table}
-	delete(a.memo, key)
-}
-
 func (a *tableInfoAccessor) Clean() {
-	clear(a.memo)
 	clear(a.blockedTableIDs)
 }
 

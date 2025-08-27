@@ -354,13 +354,6 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	tableInfoAccessor.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
 
 	result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
-	schemaName := result.SchemaName
-	tableName := result.TableName
-	if result.Type == byte(timodel.ActionRenameTable) {
-		schemaName = result.ExtraSchemaName
-		tableName = result.ExtraTableName
-	}
-	tableInfoAccessor.Remove(schemaName, tableName)
 	return result
 }
 
@@ -516,13 +509,7 @@ func queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schema := *msg.getSchema()
 	table := *msg.getTable()
 
-	tableInfo, ok := tableInfoAccessor.Get(schema, table)
-	if ok {
-		return tableInfo
-	}
-
-	tableInfo = newTableInfo(msg)
-	tableInfoAccessor.Add(schema, table, tableInfo)
+	tableInfo := newTableInfo(msg)
 	tableInfoAccessor.AddBlockTableID(schema, table, tableInfo.TableName.TableID)
 	return tableInfo
 }

@@ -283,12 +283,7 @@ func assembleEvent(
 }
 
 func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
-	tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
-	if ok {
-		return tableInfo
-	}
-	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
-	tableInfoAccessor.Add(schemaName, tableName, tableInfo)
+	tableInfo := newTableInfo(schemaName, tableName, columns, keyMap)
 	tableInfoAccessor.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
 	return tableInfo
 }
@@ -472,13 +467,6 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if d.idx == 0 {
 		tableInfoAccessor.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
 		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
-		schemaName := result.SchemaName
-		tableName := result.TableName
-		if result.Type == byte(timodel.ActionRenameTable) {
-			schemaName = result.ExtraSchemaName
-			tableName = result.ExtraTableName
-		}
-		tableInfoAccessor.Remove(schemaName, tableName)
 	}
 	return result
 }
