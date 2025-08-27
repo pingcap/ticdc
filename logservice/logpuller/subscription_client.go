@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -548,12 +549,13 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		worker := store.getRequestWorker()
 		force := regionTask.Priority() == int(TaskHighPrior)
 
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Millisecond)
 		err := worker.add(ctx, region, force)
 		cancel()
 
 		if err != nil {
 			if errors.Cause(err) == context.DeadlineExceeded {
+				log.Info("fizz cdc add region request timeout, put it back", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())))
 				s.regionTaskQueue.Push(regionTask)
 				continue
 			} else {

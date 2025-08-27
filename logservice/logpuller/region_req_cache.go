@@ -59,6 +59,8 @@ type requestCache struct {
 }
 
 func newRequestCache(maxPendingCount int) *requestCache {
+	log.Info("fizz cdc new request cache", zap.Int("maxPendingCount", maxPendingCount))
+
 	return &requestCache{
 		pendingQueue:    make(chan regionReq, maxPendingCount), // Large buffer to reduce blocking
 		sentRequests:    sync.Map{},
@@ -152,6 +154,7 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 			c.pendingCount.Add(-1)
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 			cost := time.Since(req.createTime)
+			log.Info("fizz cdc resolve region request", zap.String("regionID", fmt.Sprintf("%d", regionID)), zap.Float64("cost", cost.Seconds()))
 			metrics.RegionRequestFinishScanDuration.WithLabelValues(fmt.Sprintf("%d", regionID)).Observe(cost.Seconds())
 			// Notify waiting add operations that there's space available
 			select {

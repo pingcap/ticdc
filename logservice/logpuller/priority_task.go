@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/zap"
 )
 
 // TaskType represents the type of region task
@@ -89,13 +91,17 @@ func (pt *regionPriorityTask) Priority() int {
 	}
 
 	// Add time-based priority bonus
-	// Wait time in milliseconds, longer wait time means higher priority (lower value)
+	// Wait time in seconds, longer wait time means higher priority (lower value)
 	waitTime := time.Since(pt.createTime)
 	timeBonus := int(waitTime.Seconds())
 
+	// ResolvedTsLag in seconds, longer lag means lower priority (higher value)
 	resolvedTsLag := oracle.GetTimeFromTS(pt.currentTs).Sub(oracle.GetTimeFromTS(pt.regionInfo.subscribedSpan.resolvedTs.Load()))
 	resolvedTsLagBonus := int(resolvedTsLag.Seconds())
+
 	priority := basePriority - timeBonus + resolvedTsLagBonus
+
+	log.Info("fizz cdc region task priority", zap.String("regionID", fmt.Sprintf("%d", pt.regionInfo.verID.GetID())), zap.Uint64("currentTs", pt.currentTs), zap.Int("priority", priority), zap.Int("basePriority", basePriority), zap.Int("timeBonus", timeBonus), zap.Int("resolvedTsLagBonus", resolvedTsLagBonus))
 
 	if priority < 0 {
 		priority = 0
