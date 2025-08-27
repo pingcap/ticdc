@@ -128,7 +128,7 @@ func (p *saramaSyncProducer) SendMessages(
 func (p *saramaSyncProducer) Close() {
 	if p.closed {
 		log.Warn("kafka DDL producer already closed",
-			zap.String("namespace", p.id.Keyspace()),
+			zap.String("keyspace", p.id.Keyspace()),
 			zap.String("changefeed", p.id.Name()))
 		return
 	}
@@ -137,14 +137,14 @@ func (p *saramaSyncProducer) Close() {
 	err := p.producer.Close()
 	if err != nil {
 		log.Error("Close Kafka DDL producer with error",
-			zap.String("namespace", p.id.Keyspace()),
+			zap.String("keyspace", p.id.Keyspace()),
 			zap.String("changefeed", p.id.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
 		return
 	}
 	log.Info("Kafka DDL producer closed",
-		zap.String("namespace", p.id.Keyspace()),
+		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
 		zap.Duration("duration", time.Since(start)))
 }
@@ -182,13 +182,13 @@ func (p *saramaAsyncProducer) Close() {
 		start := time.Now()
 		if err := p.client.Close(); err != nil {
 			log.Warn("Close kafka async producer client error",
-				zap.String("namespace", p.changefeedID.Keyspace()),
+				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		} else {
 			log.Info("Close kafka async producer client success",
-				zap.String("namespace", p.changefeedID.Keyspace()),
+				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)))
 		}
@@ -196,13 +196,13 @@ func (p *saramaAsyncProducer) Close() {
 		start = time.Now()
 		if err := p.producer.Close(); err != nil {
 			log.Warn("Close kafka async producer error",
-				zap.String("namespace", p.changefeedID.Keyspace()),
+				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		} else {
 			log.Info("Close kafka async producer success",
-				zap.String("namespace", p.changefeedID.Keyspace()),
+				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)))
 		}
@@ -217,12 +217,12 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 		select {
 		case <-ctx.Done():
 			log.Info("async producer exit since context is done",
-				zap.String("namespace", p.changefeedID.Keyspace()),
+				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()))
 			return errors.Trace(ctx.Err())
 		case err := <-p.failpointCh:
 			log.Warn("Receive from failpoint chan in kafka DML producer",
-				zap.String("namespace", p.changefeedID.Keyspace()),
+				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Error(err))
 			return errors.Trace(err)
@@ -258,7 +258,7 @@ func (p *saramaAsyncProducer) AsyncSend(
 	failpoint.Inject("KafkaSinkAsyncSendError", func() {
 		// simulate sending message to input channel successfully but flushing
 		// message to Kafka meets error
-		log.Info("KafkaSinkAsyncSendError error injected", zap.String("namespace", p.changefeedID.Keyspace()),
+		log.Info("KafkaSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.Name()))
 		p.failpointCh <- errors.New("kafka sink injected error")
 		failpoint.Return(nil)

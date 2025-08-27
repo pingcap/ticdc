@@ -54,7 +54,7 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 	}
 
 	log.Info("claim check enabled, start create the external storage",
-		zap.String("namespace", changefeedID.Keyspace()),
+		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeed", changefeedID.Name()),
 		zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)))
 
@@ -62,7 +62,7 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 	externalStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, config.ClaimCheckStorageURI)
 	if err != nil {
 		log.Error("create external storage failed",
-			zap.String("namespace", changefeedID.Keyspace()),
+			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
 			zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)),
 			zap.Duration("duration", time.Since(start)),
@@ -71,7 +71,7 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 	}
 
 	log.Info("claim-check create the external storage success",
-		zap.String("namespace", changefeedID.Keyspace()),
+		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeed", changefeedID.Name()),
 		zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)),
 		zap.Duration("duration", time.Since(start)))

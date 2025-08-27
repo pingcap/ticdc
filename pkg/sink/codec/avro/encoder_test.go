@@ -25,12 +25,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newAvroEncoderForTest(namespace string, schemaM SchemaManager, config *common.Config) common.EventEncoder {
+func newAvroEncoderForTest(keyspace string, schemaM SchemaManager, config *common.Config) common.EventEncoder {
 	return &BatchEncoder{
-		namespace: namespace,
-		schemaM:   schemaM,
-		result:    make([]*common.Message, 0, 1),
-		config:    config,
+		keyspace: keyspace,
+		schemaM:  schemaM,
+		result:   make([]*common.Message, 0, 1),
+		config:   config,
 	}
 }
 

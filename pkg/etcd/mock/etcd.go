@@ -285,18 +285,18 @@ func (mr *MockCDCEtcdClientMockRecorder) GetOwnerRevision(arg0, arg1 interface{}
 }
 
 // GetUpstreamInfo mocks base method.
-func (m *MockCDCEtcdClient) GetUpstreamInfo(ctx context.Context, upstreamID config.UpstreamID, namespace string) (*config.UpstreamInfo, error) {
+func (m *MockCDCEtcdClient) GetUpstreamInfo(ctx context.Context, upstreamID config.UpstreamID, keyspace string) (*config.UpstreamInfo, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetUpstreamInfo", ctx, upstreamID, namespace)
+	ret := m.ctrl.Call(m, "GetUpstreamInfo", ctx, upstreamID, keyspace)
 	ret0, _ := ret[0].(*config.UpstreamInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetUpstreamInfo indicates an expected call of GetUpstreamInfo.
-func (mr *MockCDCEtcdClientMockRecorder) GetUpstreamInfo(ctx, upstreamID, namespace interface{}) *gomock.Call {
+func (mr *MockCDCEtcdClientMockRecorder) GetUpstreamInfo(ctx, upstreamID, keyspace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUpstreamInfo", reflect.TypeOf((*MockCDCEtcdClient)(nil).GetUpstreamInfo), ctx, upstreamID, namespace)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUpstreamInfo", reflect.TypeOf((*MockCDCEtcdClient)(nil).GetUpstreamInfo), ctx, upstreamID, keyspace)
 }
 
 // PutCaptureInfo mocks base method.

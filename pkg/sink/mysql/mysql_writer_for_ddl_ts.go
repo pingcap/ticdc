@@ -301,7 +301,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 		if apperror.IsTableNotExistsErr(err) {
 			// If this table is not existed, this means the table is first being synced
 			log.Info("ddl ts table is not found",
-				zap.String("namespace", w.ChangefeedID.Keyspace()),
+				zap.String("keyspace", w.ChangefeedID.Keyspace()),
 				zap.String("changefeedID", w.ChangefeedID.Name()),
 				zap.Error(err))
 			return retStartTsList, isSyncpoints, nil
@@ -460,7 +460,7 @@ func (w *Writer) RemoveDDLTsItem() error {
 		if apperror.IsTableNotExistsErr(err) {
 			// If this table is not existed, this means the changefeed has not table, so we just return nil.
 			log.Info("ddl ts table is not found when RemoveDDLTsItem",
-				zap.String("namespace", w.ChangefeedID.Keyspace()),
+				zap.String("keyspace", w.ChangefeedID.Keyspace()),
 				zap.String("changefeedID", w.ChangefeedID.Name()),
 				zap.Error(err))
 			return nil

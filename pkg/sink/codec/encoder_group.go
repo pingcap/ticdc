@@ -119,7 +119,7 @@ func (g *encoderGroup) Run(ctx context.Context) error {
 	defer func() {
 		g.cleanMetrics()
 		log.Info("encoder group exited",
-			zap.String("namespace", g.changefeedID.Keyspace()),
+			zap.String("keyspace", g.changefeedID.Keyspace()),
 			zap.String("changefeed", g.changefeedID.Name()))
 	}()
 	eg, ctx := errgroup.WithContext(ctx)

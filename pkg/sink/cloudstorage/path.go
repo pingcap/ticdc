@@ -181,7 +181,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	if !def.IsTableSchema() {
 		// only check schema for table
 		log.Error("invalid table schema",
-			zap.String("namespace", f.changefeedID.Keyspace()),
+			zap.String("keyspace", f.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
 			zap.Any("tableInfo", tableInfo))
@@ -219,7 +219,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		version, parsedChecksum := mustParseSchemaName(path)
 		if parsedChecksum != checksum {
 			log.Error("invalid schema file name",
-				zap.String("namespace", f.changefeedID.Keyspace()),
+				zap.String("keyspace", f.changefeedID.Keyspace()),
 				zap.Stringer("changefeedID", f.changefeedID.ID()),
 				zap.String("path", path), zap.Any("checksum", checksum))
 			errMsg := fmt.Sprintf("invalid schema filename in storage sink, "+
@@ -246,7 +246,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	//  b. the schema file is deleted by the consumer. We write schema file to external storage too.
 	if schemaFileCnt != 0 && lastVersion == 0 {
 		log.Warn("no table schema file found in an non-empty meta path",
-			zap.String("namespace", f.changefeedID.Keyspace()),
+			zap.String("keyspace", f.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
 			zap.Uint32("checksum", checksum))
@@ -478,7 +478,7 @@ func RemoveEmptyDirs(
 			files, err := os.ReadDir(path)
 			if err == nil && len(files) == 0 {
 				log.Debug("Deleting empty directory",
-					zap.String("namespace", id.Keyspace()),
+					zap.String("keyspace", id.Keyspace()),
 					zap.Stringer("changeFeedID", id.ID()),
 					zap.String("path", path))
 				os.Remove(path)

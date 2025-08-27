@@ -50,18 +50,18 @@ func CaptureInfoKeyPrefix(clusterID string) string {
 }
 
 // TaskPositionKeyPrefix is the prefix of task position keys
-func TaskPositionKeyPrefix(clusterID, namespace string) string {
-	return KeyspacePrefix(clusterID, namespace) + taskPositionKey
+func TaskPositionKeyPrefix(clusterID, keyspace string) string {
+	return KeyspacePrefix(clusterID, keyspace) + taskPositionKey
 }
 
 // ChangefeedStatusKeyPrefix is the prefix of changefeed status keys
-func ChangefeedStatusKeyPrefix(clusterID, namespace string) string {
-	return KeyspacePrefix(clusterID, namespace) + ChangefeedStatusKey
+func ChangefeedStatusKeyPrefix(clusterID, keyspace string) string {
+	return KeyspacePrefix(clusterID, keyspace) + ChangefeedStatusKey
 }
 
 // GetEtcdKeyChangeFeedList returns the prefix key of all changefeed config
-func GetEtcdKeyChangeFeedList(clusterID, namespace string) string {
-	return fmt.Sprintf("%s/changefeed/info", KeyspacePrefix(clusterID, namespace))
+func GetEtcdKeyChangeFeedList(clusterID, keyspace string) string {
+	return fmt.Sprintf("%s/changefeed/info", KeyspacePrefix(clusterID, keyspace))
 }
 
 // GetEtcdKeyChangeFeedInfo returns the key of a changefeed config
@@ -117,7 +117,7 @@ type CDCEtcdClient interface {
 
 	GetUpstreamInfo(ctx context.Context,
 		upstreamID config.UpstreamID,
-		namespace string,
+		keyspace string,
 	) (*config.UpstreamInfo, error)
 
 	GetGCServiceID() string
@@ -230,7 +230,7 @@ func (c *CDCEtcdClientImpl) GetChangeFeeds(ctx context.Context) (
 	int64,
 	map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, error,
 ) {
-	// todo: support namespace
+	// todo: support keyspace
 	key := GetEtcdKeyChangeFeedList(c.ClusterID, common.DefaultKeyspace)
 
 	resp, err := c.Client.Get(ctx, key, clientv3.WithPrefix())
@@ -489,7 +489,7 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 	}
 	if !resp.Succeeded {
 		log.Warn(fmt.Sprintf("unexpected etcd transaction failure, operation: %s", operation),
-			zap.String("namespace", changeFeedID.Keyspace),
+			zap.String("keyspace", changeFeedID.Keyspace),
 			zap.String("changefeed", changeFeedID.Name))
 		errMsg := fmt.Sprintf("%s changefeed %s", operation, changeFeedID)
 		return errors.ErrMetaOpFailed.GenWithStackByArgs(errMsg)
@@ -536,9 +536,9 @@ func (c *CDCEtcdClientImpl) DeleteCaptureInfo(ctx context.Context, captureID str
 	}
 	// we need to clean all task position related to this capture when the capture is offline
 	// otherwise the task positions may leak
-	// FIXME (dongmen 2022.9.28): find a way to use changefeed's namespace
+	// FIXME (dongmen 2022.9.28): find a way to use changefeed's keyspace
 	taskKey := TaskPositionKeyPrefix(c.ClusterID, common.DefaultKeyspace)
-	// the taskKey format is /tidb/cdc/{clusterID}/{namespace}/task/position/{captureID}
+	// the taskKey format is /tidb/cdc/{clusterID}/{keyspace}/task/position/{captureID}
 	taskKey = fmt.Sprintf("%s/%s", taskKey, captureID)
 	_, err = c.Client.Delete(ctx, taskKey, clientv3.WithPrefix())
 	if err != nil {
@@ -665,7 +665,7 @@ func SetupEmbedEtcd(dir string) (clientURL *url.URL, e *embed.Etcd, err error) {
 }
 
 // extractKeySuffix extracts the suffix of an etcd key, such as extracting
-// "6a6c6dd290bc8732" from /tidb/cdc/cluster/namespace/changefeed/info/6a6c6dd290bc8732
+// "6a6c6dd290bc8732" from /tidb/cdc/cluster/keyspace/changefeed/info/6a6c6dd290bc8732
 func extractKeySuffix(key string) (string, error) {
 	subs := strings.Split(key, "/")
 	if len(subs) < 2 {

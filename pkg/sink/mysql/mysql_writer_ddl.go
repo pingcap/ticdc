@@ -205,7 +205,7 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 		err := w.checkAndWaitAsyncDDLDoneDownstream(tableID)
 		if err != nil {
 			log.Error("check previous asynchronous ddl failed",
-				zap.String("namespace", w.ChangefeedID.Keyspace()),
+				zap.String("keyspace", w.ChangefeedID.Keyspace()),
 				zap.Stringer("changefeed", w.ChangefeedID),
 				zap.Error(err))
 		}

@@ -27,8 +27,8 @@ import (
 )
 
 const (
-	// DefaultKeyspace is the default namespace value,
-	// all the old changefeed will be put into default namespace
+	// DefaultKeyspace is the default keyspace value,
+	// all the old changefeed will be put into default keyspace
 	DefaultKeyspace = "default"
 )
 
@@ -156,7 +156,7 @@ func NewGIDWithValue(Low uint64, High uint64) GID {
 	}
 }
 
-// ChangeFeedDisplayName represents the user-friendly name and namespace of a changefeed.
+// ChangeFeedDisplayName represents the user-friendly name and keyspace of a changefeed.
 // This structure is used for external queries and display purposes.
 type ChangeFeedDisplayName struct {
 	Name     string `json:"name"`
@@ -247,7 +247,7 @@ func NewChangefeedIDFromPB(pb *heartbeatpb.ChangefeedID) ChangeFeedID {
 		},
 		DisplayName: ChangeFeedDisplayName{
 			Name:     pb.Name,
-			Keyspace: pb.Namespace,
+			Keyspace: pb.Keyspace,
 		},
 	}
 	return d
@@ -285,24 +285,24 @@ func ValidateChangefeedID(changefeedID string) error {
 	return nil
 }
 
-const namespaceMaxLen = 128
+const keyspaceMaxLen = 128
 
-var namespaceRe = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
+var keyspaceRe = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
 
-// ValidateKeyspace returns true if the namespace matches
+// ValidateKeyspace returns true if the keyspace matches
 // the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$",
 // length no more than "changeFeedIDMaxLen", eg, "simple-changefeed-task".
 func ValidateKeyspace(keyspace string) error {
-	if !namespaceRe.MatchString(keyspace) || len(keyspace) > namespaceMaxLen {
-		return errors.ErrInvalidKeyspace.GenWithStackByArgs(namespaceRe)
+	if !keyspaceRe.MatchString(keyspace) || len(keyspace) > keyspaceMaxLen {
+		return errors.ErrInvalidKeyspace.GenWithStackByArgs(keyspaceRe)
 	}
 	return nil
 }
 
-func NewChangefeedID4Test(namespace, name string) ChangeFeedID {
+func NewChangefeedID4Test(keyspace, name string) ChangeFeedID {
 	return NewChangeFeedIDWithDisplayName(ChangeFeedDisplayName{
 		Name:     name,
-		Keyspace: namespace,
+		Keyspace: keyspace,
 	})
 }
 

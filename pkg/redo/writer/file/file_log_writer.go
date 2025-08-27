@@ -85,7 +85,7 @@ func (l *logWriter) writeEvents(ctx context.Context, events ...writer.RedoEvent)
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("namespace", l.cfg.ChangeFeedID.Keyspace()),
+				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
 				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
 				zap.String("capture", l.cfg.CaptureID))
 			continue
@@ -101,7 +101,7 @@ func (l *logWriter) asyncWriteEvents(ctx context.Context, events ...writer.RedoE
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("namespace", l.cfg.ChangeFeedID.Keyspace()),
+				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
 				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
 				zap.String("capture", l.cfg.CaptureID))
 			continue
