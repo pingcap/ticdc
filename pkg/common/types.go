@@ -160,7 +160,7 @@ func NewGIDWithValue(Low uint64, High uint64) GID {
 // This structure is used for external queries and display purposes.
 type ChangeFeedDisplayName struct {
 	Name     string `json:"name"`
-	Keyspace string `json:"Keyspace"`
+	Keyspace string `json:"keyspace"`
 }
 
 func NewChangeFeedDisplayName(name string, keyspace string) ChangeFeedDisplayName {
