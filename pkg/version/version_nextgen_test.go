@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetRawInfoContainsKeynelType(t *testing.T) {
+func TestGetRawInfoContainsKernelType(t *testing.T) {
 	info := GetRawInfo()
 	require.Contains(t, info, "Kernel Type: Next Generation\n")
 }
