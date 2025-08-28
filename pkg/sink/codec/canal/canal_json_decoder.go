@@ -511,6 +511,7 @@ func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	tableName := *msg.getTable()
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableInfo.ID)
 	tableInfo.Name = ast.NewCIStr(tableName)
 
 	columns := newTiColumns(msg)

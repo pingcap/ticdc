@@ -229,6 +229,7 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 	fields := d.valueSchema["fields"].([]interface{})

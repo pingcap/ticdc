@@ -1059,9 +1059,9 @@ func TestE2EPartitionTable(t *testing.T) {
 
 		decodedEvent := dec.NextDMLEvent()
 		// table id should be set to the partition table id, the PhysicalTableID
-		require.Equal(t, decodedEvent.GetTableID(), e.GetTableID())
+		require.Equal(t, decodedEvent.GetTableID(), tableIDAllocator.Allocate(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
 
-		require.Contains(t, tableIDAllocator.GetBlockedTables("test", "t"), e.GetTableID())
+		require.Contains(t, tableIDAllocator.GetBlockedTables("test", "t"), tableIDAllocator.Allocate(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
 	}
 
 	createTable2DDL := helper.DDL2Event(`create table t2 (a int primary key, b int)`)

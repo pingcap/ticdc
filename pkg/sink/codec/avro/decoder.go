@@ -286,6 +286,7 @@ func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo,
 func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)

@@ -329,6 +329,7 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
+	tableIDAllocator.AddBlockTableID(key.Schema, key.Table, physicalTableID)
 	key.Partition = &physicalTableID
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = *key.Partition
