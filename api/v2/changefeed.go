@@ -248,7 +248,7 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 	state := c.Query(api.APIOpVarChangefeedState)
 	commonInfos := make([]ChangefeedCommonInfo, 0)
 	for idx, changefeed := range changefeeds {
-		if !changefeed.State.IsNeeded(state) || changefeed.ChangefeedID.Keyspace() != keyspace {
+		if !changefeed.State.IsNeeded(state) {
 			continue
 		}
 		status := statuses[idx]
