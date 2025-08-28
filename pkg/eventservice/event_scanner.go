@@ -111,6 +111,9 @@ func (s *eventScanner) scan(
 	// Initialize scan session
 	sess := newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
+	log.Info("scanner start to scan", zap.Any("dispatcherID", dispatcherStat.id),
+		zap.Any("tableID", dataRange.Span.TableID), zap.Uint64("startTs", dataRange.CommitTsStart),
+		zap.Uint64("lastScannedStartTs", dataRange.LastScannedTxnStartTs), zap.Uint64("endTs", dataRange.CommitTsEnd))
 
 	// Fetch DDL events
 	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
@@ -336,7 +339,15 @@ func interruptScan(
 		events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
 		resolve := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
 		events = append(events, resolve)
+
+		log.Warn("scan interrupted due to limit reached, also send resolved-ts",
+			zap.Any("dispatcherID", session.dispatcherStat.id), zap.Any("tableID", session.dataRange.Span.TableID),
+			zap.Uint64("resolvedTs", merger.lastCommitTs))
+		return
 	}
+	log.Warn("scan interrupted due to limit reached, no resolved-ts",
+		zap.Any("dispatcherID", session.dispatcherStat.id), zap.Any("tableID", session.dataRange.Span.TableID),
+		zap.Uint64("lastScannedCommitTs", newCommitTs))
 	session.appendEvents(events)
 }
 
