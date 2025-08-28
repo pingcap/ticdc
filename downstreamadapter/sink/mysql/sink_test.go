@@ -171,7 +171,6 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
 	}
-	dmlEvent.CommitTs = 2
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
