@@ -84,9 +84,8 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 	if cfg.Keyspace == "" {
-		cfg.Keyspace = common.DefaultKeyspace
+		cfg.Keyspace = keyspace
 	}
-	changefeedID.DisplayName.Keyspace = cfg.Keyspace
 	// verify changefeed keyspace
 	if err := common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
