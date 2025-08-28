@@ -471,12 +471,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		if len(commitTsList) > 16 {
 			newCommitTsList = commitTsList[:16]
 		}
-		e := &event.SyncPointEvent{
-			DispatcherID: d.id,
-			CommitTsList: newCommitTsList,
-			Seq:          d.seq.Add(1),
-			Epoch:        d.epoch.Load(),
-		}
+		e := event.NewSyncPointEvent(d.id, newCommitTsList, d.seq.Add(1), d.epoch.Load())
 		log.Debug("send syncpoint event to dispatcher",
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))

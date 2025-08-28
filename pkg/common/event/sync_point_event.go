@@ -45,6 +45,16 @@ type SyncPointEvent struct {
 	PostTxnFlushed []func()
 }
 
+func NewSyncPointEvent(id common.DispatcherID, commitTsList []uint64, seq uint64, epoch uint64) *SyncPointEvent {
+	return &SyncPointEvent{
+		DispatcherID: id,
+		CommitTsList: commitTsList,
+		Seq:          seq,
+		Epoch:        epoch,
+		Version:      SyncPointEventVersion,
+	}
+}
+
 func (e *SyncPointEvent) GetType() int {
 	return TypeSyncPointEvent
 }
