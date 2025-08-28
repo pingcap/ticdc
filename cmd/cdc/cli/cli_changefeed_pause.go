@@ -38,7 +38,7 @@ func newPauseChangefeedOptions() *pauseChangefeedOptions {
 // addFlags receives a *cobra.Command reference and binds
 // flags related to template printing to it.
 func (o *pauseChangefeedOptions) addFlags(cmd *cobra.Command) {
-	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "n", "default", "Replication task (changefeed) Keyspace")
+	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", "default", "Replication task (changefeed) Keyspace")
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 }
