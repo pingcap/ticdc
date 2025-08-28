@@ -108,14 +108,14 @@ func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	// Case 2: new events, and watermark increase
 	stat.onLatestCommitTs(300)
 	stat.onResolvedTs(400)
-	require.Equal(t, uint64(300), stat.latestCommitTs.Load())
+	require.Equal(t, uint64(300), stat.eventStoreCommitTs.Load())
 	require.Equal(t, uint64(400), stat.eventStoreResolvedTs.Load())
 
 	// Case 3: new events, and watermark decrease
 	// watermark should not decrease
 	stat.onLatestCommitTs(500)
 	stat.onResolvedTs(300)
-	require.Equal(t, uint64(500), stat.latestCommitTs.Load())
+	require.Equal(t, uint64(500), stat.eventStoreCommitTs.Load())
 	require.Equal(t, uint64(400), stat.eventStoreResolvedTs.Load())
 }
 

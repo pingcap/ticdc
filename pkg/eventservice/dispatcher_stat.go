@@ -58,16 +58,16 @@ type dispatcherStat struct {
 	// The max resolved ts received from event store.
 	eventStoreResolvedTs atomic.Uint64
 	// The max latest commit ts received from event store.
-	latestCommitTs atomic.Uint64
-
-	// The last scanned DML event start-ts.
-	lastScannedCommitTs atomic.Uint64
-	lastScannedStartTs  atomic.Uint64
+	eventStoreCommitTs atomic.Uint64
 
 	// The sentResolvedTs of the events that have been sent to the dispatcher.
-	// We use this value to generate data range for the next scan task.
 	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
 	sentResolvedTs atomic.Uint64
+
+	// The last scanned DML event start-ts.
+	// These two values are used to construct the scan range for the next scan task.
+	lastScannedCommitTs atomic.Uint64
+	lastScannedStartTs  atomic.Uint64
 
 	// checkpointTs is the ts that reported by the downstream dispatcher.
 	// events <= checkpointTs will not needed anymore, so we can inform eventStore to GC them.
@@ -177,8 +177,6 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 	// Only update the sentResolvedTs when the dispatcher is handshaked.
 	if a.isHandshaked.Load() {
 		a.sentResolvedTs.Store(resolvedTs)
-		a.lastScannedCommitTs.Store(resolvedTs)
-		a.lastScannedStartTs.Store(0)
 		a.lastSentResolvedTsTime.Store(time.Now())
 	}
 }
@@ -187,10 +185,10 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 func (a *dispatcherStat) resetState(resetTs uint64) {
 	// Do this first to prevent the dispatcher's sentResolvedTs being updated by other goroutines.
 	a.isHandshaked.Store(false)
+
 	// Reset the sentResolvedTs to the resetTs.
 	// Because when the dispatcher is reset, the downstream want to resend the events from the resetTs.
 	a.sentResolvedTs.Store(resetTs)
-
 	a.lastScannedCommitTs.Store(resetTs)
 	a.lastScannedStartTs.Store(0)
 
@@ -217,7 +215,7 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 }
 
 func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
-	return util.CompareAndMonotonicIncrease(&a.latestCommitTs, latestCommitTs)
+	return util.CompareAndMonotonicIncrease(&a.eventStoreCommitTs, latestCommitTs)
 }
 
 // getDataRange returns the data range that the dispatcher needs to scan.
@@ -248,7 +246,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 }
 
 func (a *dispatcherStat) IsReadyRecevingData() bool {
-	return a.isReadyReceivingData.Load() && a.changefeedStat.isReadyReceivingData.Load()
+	return a.isReadyReceivingData.Load()
 }
 
 // getCurrentScanLimitInBytes returns the current scan limit in bytes.
@@ -423,13 +421,9 @@ func (c *resolvedTsCache) reset() {
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
-	// isReadyReceivingData is used to indicate whether the changefeed is running.
-	// It will be set to false, after it receives the pause event from the dispatcher.
-	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
-	isReadyReceivingData atomic.Bool
+
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
 	dispatcherCount atomic.Uint64
-
 	// nodes is the set of nodes that this changefeed dispatches to.
 	nodes *nodes
 
@@ -440,11 +434,9 @@ type changefeedStatus struct {
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 	stat := &changefeedStatus{
-		changefeedID:         changefeedID,
-		isReadyReceivingData: atomic.Bool{},
-		nodes:                newNodes(),
+		changefeedID: changefeedID,
+		nodes:        newNodes(),
 	}
-	stat.isReadyReceivingData.Store(true)
 	return stat
 }
 

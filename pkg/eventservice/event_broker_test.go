@@ -63,10 +63,10 @@ func TestCheckNeedScan(t *testing.T) {
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 
 	disp := newDispatcherStat(100, newMockDispatcherInfoForTest(t), nil, 0, 0, changefeedStatus)
-	// Set the eventStoreResolvedTs and latestCommitTs to 102 and 101.
+	// Set the eventStoreResolvedTs and eventStoreCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
 	disp.eventStoreResolvedTs.Store(102)
-	disp.latestCommitTs.Store(101)
+	disp.eventStoreCommitTs.Store(101)
 
 	// Case 1: Is scanning, and mustCheck is false, it should return false.
 	disp.isTaskScanning.Store(true)
@@ -127,7 +127,7 @@ func TestOnNotify(t *testing.T) {
 	require.Equal(t, uint64(101), disp.eventStoreResolvedTs.Load())
 	log.Info("Pass case 1")
 
-	// Case 2: The latestCommitTs is greater than the startTs, it triggers a scan task.
+	// Case 2: The eventStoreCommitTs is greater than the startTs, it triggers a scan task.
 	notifyMsgs = notifyMsg{102, 101}
 	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
 	require.Equal(t, uint64(102), disp.eventStoreResolvedTs.Load())
@@ -146,7 +146,7 @@ func TestOnNotify(t *testing.T) {
 	case <-after:
 		log.Info("Pass case 3")
 	case task := <-broker.taskChan[disp.scanWorkerIndex]:
-		log.Info("trigger a new scan task", zap.Any("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("latestCommitTs", task.latestCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
+		log.Info("trigger a new scan task", zap.Any("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("eventStoreCommitTs", task.eventStoreCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
 		require.Fail(t, "should not trigger a new scan task")
 	}
 
@@ -246,7 +246,7 @@ func TestHandleResolvedTs(t *testing.T) {
 // 	disp.isHandshaked.Store(true)
 // 	disp.isReadyReceivingData.Store(true)
 // 	disp.eventStoreResolvedTs.Store(200)
-// 	disp.latestCommitTs.Store(200)
+// 	disp.eventStoreCommitTs.Store(200)
 
 // 	// Test Case 1: Normal operation - should allow within burst capacity
 // 	// Reset the scan limit to minimum value (1MB)

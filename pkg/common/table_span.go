@@ -27,6 +27,7 @@ type DataRange struct {
 	CommitTsEnd   uint64
 
 	// LastScannedTxnStartTs is the start-ts of the last scanned DML event.
+	// it should less than the CommitTsStart
 	LastScannedTxnStartTs uint64
 }
 

@@ -370,7 +370,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	// 3. Check whether there is any events in the data range
 	// Note: target range is (dataRange.CommitTsStart, dataRange.CommitTsEnd]
-	if dataRange.CommitTsStart >= task.latestCommitTs.Load() &&
+	if dataRange.CommitTsStart >= task.eventStoreCommitTs.Load() &&
 		dataRange.CommitTsStart >= ddlState.MaxEventCommitTs {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
@@ -403,6 +403,8 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 	if !task.IsReadyRecevingData() {
 		// If the dispatcher is not ready to receive data event,
 		// we still need to send the last resolvedTs to the dispatcher.
+		// the dispatcher may be paused, send resolved-ts so that the event-collector knows about
+		// this dispatcher is still alive, and will resume it later.
 		resolvedTs := task.sentResolvedTs.Load()
 		c.sendResolvedTs(task, resolvedTs)
 		return false
@@ -596,6 +598,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
 			c.sendResolvedTs(task, re.ResolvedTs)
+			// DO NOT update the lastScannedCommitTs/lastScannedStartTs by the method sendResolvedTs
+			// since it's also called if the dispatcher is paused or can skip scan. If do so, may meet
+			// duplicate event.
+			// **Only update they after make sure the resolved-ts is sent under the normal scanning**
+			task.lastScannedCommitTs.Store(re.ResolvedTs)
+			task.lastScannedStartTs.Store(0)
 		default:
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
@@ -774,11 +782,11 @@ func (c *eventBroker) close() {
 	_ = c.g.Wait()
 }
 
-func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommitTs uint64) {
+func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs uint64) {
 	if d.onResolvedTs(resolvedTs) {
 		d.lastReceivedResolvedTsTime.Store(time.Now())
 		metricEventStoreOutputResolved.Inc()
-		d.onLatestCommitTs(latestCommitTs)
+		d.onLatestCommitTs(commitTs)
 		if c.scanReady(d) {
 			c.pushTask(d, true)
 		}
@@ -1008,10 +1016,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 	stat, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
 		stat = newChangefeedStatus(changefeedID)
-		log.Info("new changefeed status",
-			zap.Stringer("changefeedID", changefeedID),
-			zap.Bool("isRunning", stat.(*changefeedStatus).isReadyReceivingData.Load()),
-		)
+		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
 		c.changefeedMap.Store(changefeedID, stat)
 	}
 	return stat.(*changefeedStatus)
