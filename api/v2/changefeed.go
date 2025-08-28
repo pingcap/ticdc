@@ -50,6 +50,7 @@ import (
 // @Accept json
 // @Produce json
 // @Param changefeed body ChangefeedConfig true "changefeed config"
+// @Param keyspace query string false "default"
 // @Success 200 {object} ChangeFeedInfo
 // @Failure 500,400 {object} common.HTTPError
 // @Router	/api/v2/changefeeds [post]
@@ -83,9 +84,10 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			"invalid changefeed_id: %s", cfg.ID))
 		return
 	}
-	if cfg.Keyspace == "" {
-		cfg.Keyspace = keyspace
-	}
+
+	// We use the keyspace in the query parameter
+	cfg.Keyspace = keyspace
+
 	// verify changefeed keyspace
 	if err := common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
