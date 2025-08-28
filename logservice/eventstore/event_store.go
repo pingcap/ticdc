@@ -434,7 +434,7 @@ func (e *eventStore) RegisterDispatcher(
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs),
-			zap.Uint64(subscriptionID, uint64(bestMatch.subID)),
+			zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
 			zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
 			zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
 			zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
