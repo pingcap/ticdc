@@ -34,7 +34,7 @@ func redoCallback() {
 
 func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *RedoDispatcher {
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(),
+		common.NewChangefeedID(common.DefaultKeyspace),
 		"system",
 		false,
 		false,

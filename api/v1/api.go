@@ -224,7 +224,7 @@ func getV2ChangefeedConfig(changefeedConfig changefeedConfig) *v2.ChangefeedConf
 
 	return &v2.ChangefeedConfig{
 		ID:            changefeedConfig.ID,
-		Namespace:     changefeedConfig.Namespace,
+		Keyspace:      changefeedConfig.Keyspace,
 		StartTs:       changefeedConfig.StartTS,
 		TargetTs:      changefeedConfig.TargetTS,
 		SinkURI:       changefeedConfig.SinkURI,
@@ -233,11 +233,11 @@ func getV2ChangefeedConfig(changefeedConfig changefeedConfig) *v2.ChangefeedConf
 }
 
 type changefeedConfig struct {
-	Namespace string `json:"namespace"`
-	ID        string `json:"changefeed_id"`
-	StartTS   uint64 `json:"start_ts"`
-	TargetTS  uint64 `json:"target_ts"`
-	SinkURI   string `json:"sink_uri"`
+	Keyspace string `json:"keyspace"`
+	ID       string `json:"changefeed_id"`
+	StartTS  uint64 `json:"start_ts"`
+	TargetTS uint64 `json:"target_ts"`
+	SinkURI  string `json:"sink_uri"`
 	// timezone used when checking sink uri
 	TimeZone string `json:"timezone" default:"system"`
 	// if true, force to replicate some ineligible tables

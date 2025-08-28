@@ -397,8 +397,8 @@ func (c *coordinator) UpdateChangefeed(ctx context.Context, change *config.Chang
 	return c.controller.UpdateChangefeed(ctx, change)
 }
 
-func (c *coordinator) ListChangefeeds(ctx context.Context) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
-	return c.controller.ListChangefeeds(ctx)
+func (c *coordinator) ListChangefeeds(ctx context.Context, keyspace string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
+	return c.controller.ListChangefeeds(ctx, keyspace)
 }
 
 func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {

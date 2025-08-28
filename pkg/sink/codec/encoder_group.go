@@ -119,7 +119,7 @@ func (g *encoderGroup) Run(ctx context.Context) error {
 	defer func() {
 		g.cleanMetrics()
 		log.Info("encoder group exited",
-			zap.String("namespace", g.changefeedID.Namespace()),
+			zap.String("keyspace", g.changefeedID.Keyspace()),
 			zap.String("changefeed", g.changefeedID.Name()))
 	}()
 	eg, ctx := errgroup.WithContext(ctx)
@@ -142,7 +142,7 @@ func (g *encoderGroup) Run(ctx context.Context) error {
 func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
 	inputCh := g.inputCh[idx]
 	metric := encoderGroupInputChanSizeGauge.
-		WithLabelValues(g.changefeedID.Namespace(), g.changefeedID.Name(), strconv.Itoa(idx))
+		WithLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name(), strconv.Itoa(idx))
 	ticker := time.NewTicker(defaultMetricInterval)
 	defer ticker.Stop()
 	for {
@@ -200,7 +200,7 @@ func (g *encoderGroup) Output() <-chan *future {
 }
 
 func (g *encoderGroup) cleanMetrics() {
-	encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Namespace(), g.changefeedID.Name())
+	encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
 	for _, encoder := range g.rowEventEncoders {
 		encoder.Clean()
 	}

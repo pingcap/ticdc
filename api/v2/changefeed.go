@@ -50,6 +50,7 @@ import (
 // @Accept json
 // @Produce json
 // @Param changefeed body ChangefeedConfig true "changefeed config"
+// @Param keyspace query string false "default"
 // @Success 200 {object} ChangeFeedInfo
 // @Failure 500,400 {object} common.HTTPError
 // @Router	/api/v2/changefeeds [post]
@@ -69,11 +70,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	keyspace := GetKeyspaceValueWithDefault(c)
+
 	var changefeedID common.ChangeFeedID
 	if cfg.ID == "" {
-		changefeedID = common.NewChangefeedID()
+		changefeedID = common.NewChangefeedID(keyspace)
 	} else {
-		changefeedID = common.NewChangeFeedIDWithName(cfg.ID)
+		changefeedID = common.NewChangeFeedIDWithName(cfg.ID, keyspace)
 	}
 	// verify changefeedID
 	if err := common.ValidateChangefeedID(changefeedID.Name()); err != nil {
@@ -81,14 +84,14 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			"invalid changefeed_id: %s", cfg.ID))
 		return
 	}
-	if cfg.Namespace == "" {
-		cfg.Namespace = common.DefaultNamespace
-	}
-	changefeedID.DisplayName.Namespace = cfg.Namespace
-	// verify changefeed namespace
-	if err := common.ValidateNamespace(changefeedID.Namespace()); err != nil {
+
+	// We use the keyspace in the query parameter
+	cfg.Keyspace = keyspace
+
+	// verify changefeed keyspace
+	if err := common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
-			"invalid namespace: %s", cfg.ID))
+			"invalid keyspace: %s", cfg.ID))
 		return
 	}
 
@@ -226,7 +229,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param state query string false "state"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Success 200 {array} ChangefeedCommonInfo
 // @Failure 500 {object} common.HTTPError
 // @Router /api/v2/changefeeds [get]
@@ -237,16 +240,16 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		return
 	}
 
-	changefeeds, statuses, err := co.ListChangefeeds(c)
+	keyspace := GetKeyspaceValueWithDefault(c)
+	changefeeds, statuses, err := co.ListChangefeeds(c, keyspace)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 	state := c.Query(api.APIOpVarChangefeedState)
-	namespace := GetNamespaceValueWithDefault(c)
 	commonInfos := make([]ChangefeedCommonInfo, 0)
 	for idx, changefeed := range changefeeds {
-		if !changefeed.State.IsNeeded(state) || changefeed.ChangefeedID.Namespace() != namespace {
+		if !changefeed.State.IsNeeded(state) {
 			continue
 		}
 		status := statuses[idx]
@@ -259,7 +262,7 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		commonInfos = append(commonInfos, ChangefeedCommonInfo{
 			UpstreamID:     changefeed.UpstreamID,
 			ID:             changefeed.ChangefeedID.Name(),
-			Namespace:      changefeed.ChangefeedID.Namespace(),
+			Keyspace:       changefeed.ChangefeedID.Keyspace(),
 			FeedState:      changefeed.State,
 			CheckpointTSO:  status.CheckpointTs,
 			CheckpointTime: api.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
@@ -284,12 +287,12 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param changefeed_id  path  string  true  "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Success 200 {object} ChangeFeedInfo
 // @Failure 500,400 {object} common.HTTPError
 // @Router /api/v2/changefeeds/{changefeed_id} [get]
 func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	co, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
@@ -340,7 +343,7 @@ func CfInfoToAPIModel(
 	apiInfoModel := &ChangeFeedInfo{
 		UpstreamID:     info.UpstreamID,
 		ID:             info.ChangefeedID.Name(),
-		Namespace:      info.ChangefeedID.Namespace(),
+		Keyspace:       info.ChangefeedID.Keyspace(),
 		SinkURI:        sinkURI,
 		CreateTime:     info.CreateTime,
 		StartTs:        info.StartTs,
@@ -367,13 +370,13 @@ func CfInfoToAPIModel(
 // @Accept json
 // @Produce json
 // @Param changefeed_id path string true "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Success 200 {object} EmptyResponse
 // @Failure 500,400 {object} common.HTTPError
 // @Router	/api/v2/changefeeds/{changefeed_id} [delete]
 func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -409,13 +412,13 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param changefeed_id  path  string  true  "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Success 200 {object} EmptyResponse
 // @Failure 500,400 {object} common.HTTPError
 // @Router /api/v2/changefeeds/{changefeed_id}/pause [post]
 func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -448,14 +451,14 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param changefeed_id path string true "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Param resumeConfig body ResumeChangefeedConfig true "resume config"
 // @Success 200 {object} EmptyResponse
 // @Failure 500,400 {object} common.HTTPError
 // @Router	/api/v2/changefeeds/{changefeed_id}/resume [post]
 func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -544,7 +547,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param changefeed_id  path  string  true  "changefeed_id"
-// @Param namespace query string false "default"
+// @Param keyspace query string false "default"
 // @Param changefeedConfig body ChangefeedConfig true "changefeed config"
 // @Success 200 {object} ChangeFeedInfo
 // @Failure 500,400 {object} common.HTTPError
@@ -552,7 +555,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -702,7 +705,7 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -736,7 +739,7 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -776,7 +779,7 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -810,7 +813,7 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -849,7 +852,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -883,7 +886,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -920,7 +923,7 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -954,7 +957,7 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -980,7 +983,7 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 // curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/tables
 // Note: This api is for inner test use, not public use. It may be changed or removed in the future.
 func (h *OpenAPIV2) ListTables(c *gin.Context) {
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -1014,7 +1017,7 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -1050,7 +1053,7 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 // getDispatcherCount returns the count of dispatcher.
 // getDispatcherCount is just for inner test use, not public use.
 func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -1083,7 +1086,7 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 
 	changefeedID := common.ChangeFeedID{
 		Id:          cfInfo.GID,
-		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Keyspace),
 	}
 
 	maintainerManager := h.server.GetMaintainerManager()
@@ -1103,7 +1106,7 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 // Usage:
 // curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/status
 func (h *OpenAPIV2) status(c *gin.Context) {
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	co, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
@@ -1150,7 +1153,7 @@ func (h *OpenAPIV2) status(c *gin.Context) {
 // Note: This feature has not been implemented yet. It will be implemented in the future.
 // Currently, it always returns false.
 func (h *OpenAPIV2) syncState(c *gin.Context) {
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	co, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
@@ -1181,10 +1184,10 @@ func (h *OpenAPIV2) syncState(c *gin.Context) {
 	})
 }
 
-func GetNamespaceValueWithDefault(c *gin.Context) string {
-	namespace := c.Query(api.APIOpVarNamespace)
-	if namespace == "" {
-		namespace = common.DefaultNamespace
+func GetKeyspaceValueWithDefault(c *gin.Context) string {
+	keyspace := c.Query(api.APIOpVarKeyspace)
+	if keyspace == "" {
+		keyspace = common.DefaultKeyspace
 	}
-	return namespace
+	return keyspace
 }

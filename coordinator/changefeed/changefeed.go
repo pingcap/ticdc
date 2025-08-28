@@ -209,6 +209,7 @@ func (c *Changefeed) GetClonedStatus() *heartbeatpb.MaintainerStatus {
 			Low:       cfID.Low,
 			Name:      cfID.Name,
 			Namespace: cfID.Namespace,
+			Keyspace:  cfID.Keyspace,
 		}
 	}
 
