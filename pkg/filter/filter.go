@@ -84,7 +84,7 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 	if err != nil {
 		return nil, err
 	}
-	sqlEventFilter, err := newSQLEventFilter(cfg)
+	sqlEventFilter, err := newSQLEventFilter(cfg, caseSensitive)
 	if err != nil {
 		return nil, err
 	}

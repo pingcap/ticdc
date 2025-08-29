@@ -38,8 +38,6 @@ const (
 	binlogFilterTablePlaceholder = "binlogFilterTable"
 	// dmlQuery is a place holder to call binlog filter to filter dml event.
 	dmlQuery = ""
-	// caseSensitive is use to create bf.BinlogEvent.
-	caseSensitive = false
 )
 
 // sqlEventRule only be used by sqlEventFilter.
@@ -51,12 +49,15 @@ type sqlEventRule struct {
 	bf *bf.BinlogEvent
 }
 
-func newSQLEventFilterRule(cfg *config.EventFilterRule) (*sqlEventRule, error) {
+func newSQLEventFilterRule(cfg *config.EventFilterRule, caseSensitive bool) (*sqlEventRule, error) {
 	tf, err := tfilter.Parse(cfg.Matcher)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, cfg.Matcher)
 	}
 
+	if !caseSensitive {
+		tf = tfilter.CaseInsensitive(tf)
+	}
 	res := &sqlEventRule{
 		tf: tf,
 	}
@@ -99,18 +100,18 @@ type sqlEventFilter struct {
 	rules []*sqlEventRule
 }
 
-func newSQLEventFilter(cfg *config.FilterConfig) (*sqlEventFilter, error) {
+func newSQLEventFilter(cfg *config.FilterConfig, caseSensitive bool) (*sqlEventFilter, error) {
 	res := &sqlEventFilter{}
 	for _, rule := range cfg.EventFilters {
-		if err := res.addRule(rule); err != nil {
+		if err := res.addRule(rule, caseSensitive); err != nil {
 			return nil, errors.Trace(err)
 		}
 	}
 	return res, nil
 }
 
-func (f *sqlEventFilter) addRule(cfg *config.EventFilterRule) error {
-	rule, err := newSQLEventFilterRule(cfg)
+func (f *sqlEventFilter) addRule(cfg *config.EventFilterRule, caseSensitive bool) error {
+	rule, err := newSQLEventFilterRule(cfg, caseSensitive)
 	if err != nil {
 		return errors.Trace(err)
 	}
