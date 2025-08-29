@@ -108,7 +108,6 @@ type dispatcherStat struct {
 
 	connState dispatcherConnState
 
-	memoryQuota uint64
 	// epoch is used to filter invalid events.
 	// It is incremented when the dispatcher is reset.
 	epoch atomic.Uint64
@@ -132,13 +131,11 @@ func newDispatcherStat(
 	target dispatcher.DispatcherService,
 	eventCollector *EventCollector,
 	readyCallback func(),
-	memoryQuota uint64,
 ) *dispatcherStat {
 	stat := &dispatcherStat{
 		target:         target,
 		eventCollector: eventCollector,
 		readyCallback:  readyCallback,
-		memoryQuota:    memoryQuota,
 	}
 	stat.lastEventSeq.Store(0)
 	stat.lastEventCommitTs.Store(target.GetStartTs())

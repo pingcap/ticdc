@@ -274,19 +274,19 @@ func (s *Sink) GetStartTsList(
 		isSyncpointList := make([]bool, len(startTsList))
 		return startTsList, isSyncpointList, nil
 	}
-
 	ddlTsList, isSyncpointList, err := s.ddlWriter.GetStartTsList(tableIds)
 	if err != nil {
 		s.isNormal.Store(false)
 		return nil, nil, err
 	}
+	newStartTsList := make([]int64, len(startTsList))
 	for idx, ddlTs := range ddlTsList {
 		if startTsList[idx] > ddlTs {
 			isSyncpointList[idx] = false
 		}
-		startTsList[idx] = max(ddlTs, startTsList[idx])
+		newStartTsList[idx] = max(ddlTs, startTsList[idx])
 	}
-	return startTsList, isSyncpointList, nil
+	return newStartTsList, isSyncpointList, nil
 }
 
 func (s *Sink) Close(removeChangefeed bool) {

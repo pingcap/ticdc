@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -33,8 +34,8 @@ import (
 // it generates add operator for the absent spans, and move operator for the unbalanced replicating spans
 // currently, it only supports balance the spans by size
 type basicScheduler struct {
-	id        string
-	batchSize int
+	changefeedID common.ChangeFeedID
+	batchSize    int
 	// the max scheduling task count for each group in each node.
 	// TODO: we need to select a good value
 	schedulingTaskCountPerNode int
@@ -42,21 +43,24 @@ type basicScheduler struct {
 	operatorController *operator.Controller
 	spanController     *span.Controller
 	nodeManager        *watcher.NodeManager
+	isRedo             bool
 }
 
 func NewBasicScheduler(
-	id string, batchSize int,
+	changefeedID common.ChangeFeedID, batchSize int,
 	oc *operator.Controller,
 	spanController *span.Controller,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	isRedo bool,
 ) *basicScheduler {
 	scheduler := &basicScheduler{
-		id:                         id,
+		changefeedID:               changefeedID,
 		batchSize:                  batchSize,
 		operatorController:         oc,
 		spanController:             spanController,
 		nodeManager:                appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		schedulingTaskCountPerNode: 1,
+		isRedo:                     isRedo,
 	}
 
 	if schedulerCfg != nil && schedulerCfg.SchedulingTaskCountPerNode > 0 {
@@ -146,5 +150,8 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 }
 
 func (s *basicScheduler) Name() string {
-	return "basic-scheduler"
+	if s.isRedo {
+		return pkgScheduler.RedoBasicScheduler
+	}
+	return pkgScheduler.BasicScheduler
 }

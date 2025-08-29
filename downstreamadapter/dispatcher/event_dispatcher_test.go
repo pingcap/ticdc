@@ -65,7 +65,6 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		}, // syncPointConfig
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
-		NewSchemaIDToDispatchers(),
 		make(chan error, 1),
 	)
 	return NewEventDispatcher(
@@ -73,6 +72,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		tableSpan,
 		common.Ts(0), // startTs
 		1,            // schemaID
+		NewSchemaIDToDispatchers(),
 		false,
 		common.Ts(0), // pdTs
 		TypeDispatcherEvent,

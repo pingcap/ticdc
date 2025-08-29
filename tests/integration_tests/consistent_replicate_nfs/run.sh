@@ -37,7 +37,7 @@ function run() {
 
 	cleanup_process $CDC_BINARY
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 10
+	sleep 60
 
 	storage_path="nfs://$WORK_DIR/nfs/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
@@ -46,7 +46,7 @@ function run() {
 	sed "s/<placeholder>/$rts/g" $CUR/conf/diff_config.toml >$WORK_DIR/diff_config.toml
 
 	cat $WORK_DIR/diff_config.toml
-	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/"
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml
 }
 

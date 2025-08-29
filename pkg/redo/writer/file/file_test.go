@@ -23,8 +23,8 @@ import (
 	backuppb "github.com/pingcap/kvproto/pkg/brpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/fsutil"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
-	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
@@ -66,11 +66,11 @@ func TestWriterWrite(t *testing.T) {
 			},
 			uint64buf: make([]byte, 8),
 			running:   *atomic.NewBool(true),
-			metricWriteBytes: misc.RedoWriteBytesGauge.
+			metricWriteBytes: metrics.RedoWriteBytesGauge.
 				WithLabelValues("default", "test-cf", redo.RedoRowLogFileType),
-			metricFsyncDuration: misc.RedoFsyncDurationHistogram.
+			metricFsyncDuration: metrics.RedoFsyncDurationHistogram.
 				WithLabelValues("default", "test-cf", redo.RedoRowLogFileType),
-			metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
+			metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 				WithLabelValues("default", "test-cf", redo.RedoRowLogFileType),
 			uuidGenerator: uuidGen,
 		}
@@ -157,11 +157,11 @@ func TestWriterWrite(t *testing.T) {
 			},
 			uint64buf: make([]byte, 8),
 			running:   *atomic.NewBool(true),
-			metricWriteBytes: misc.RedoWriteBytesGauge.
+			metricWriteBytes: metrics.RedoWriteBytesGauge.
 				WithLabelValues("default", "test-cf11", redo.RedoRowLogFileType),
-			metricFsyncDuration: misc.RedoFsyncDurationHistogram.
+			metricFsyncDuration: metrics.RedoFsyncDurationHistogram.
 				WithLabelValues("default", "test-cf11", redo.RedoRowLogFileType),
-			metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
+			metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 				WithLabelValues("default", "test-cf11", redo.RedoRowLogFileType),
 			uuidGenerator: uuidGen,
 		}
@@ -253,11 +253,11 @@ func TestNewWriter(t *testing.T) {
 		},
 		uint64buf: make([]byte, 8),
 		storage:   mockStorage,
-		metricWriteBytes: misc.RedoWriteBytesGauge.
+		metricWriteBytes: metrics.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
-		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
+		metricFsyncDuration: metrics.RedoFsyncDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
-		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
 		uuidGenerator: uuidGen,
 	}
@@ -310,11 +310,11 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
 		},
 		uint64buf: make([]byte, 8),
-		metricWriteBytes: misc.RedoWriteBytesGauge.
+		metricWriteBytes: metrics.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
-		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
+		metricFsyncDuration: metrics.RedoFsyncDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
-		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
 		storage:       mockStorage,
 		uuidGenerator: uuidGen,
@@ -377,11 +377,11 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
 		},
 		uint64buf: make([]byte, 8),
-		metricWriteBytes: misc.RedoWriteBytesGauge.
+		metricWriteBytes: metrics.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoDDLLogFileType),
-		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
+		metricFsyncDuration: metrics.RedoFsyncDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoDDLLogFileType),
-		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoDDLLogFileType),
 		storage:       mockStorage,
 		uuidGenerator: uuidGen,
