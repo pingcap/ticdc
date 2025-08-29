@@ -149,10 +149,10 @@ func newDispatcherStat(
 	dispStat.checkpointTs.Store(startTs)
 
 	dispStat.sentResolvedTs.Store(startTs)
-	dispStat.lastScannedCommitTs.Store(startTs)
-	dispStat.lastScannedStartTs.Store(0)
 
 	dispStat.isReadyReceivingData.Store(true)
+	dispStat.updateScanRange(startTs, 0)
+
 	dispStat.resetScanLimit()
 
 	now := time.Now()
@@ -175,31 +175,19 @@ func (a *dispatcherStat) updateTableInfo(tableInfo *common.TableInfo) {
 
 func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 	// Only update the sentResolvedTs when the dispatcher is handshaked.
-	if !a.isHandshaked.Load() {
-		log.Warn("cannot update resolved-ts, since it's not handshaked yet",
-			zap.Any("dispatcherID", a.id), zap.Any("tableID", a.info.GetTableSpan().GetTableID()),
-			zap.Uint64("resolvedTs", resolvedTs))
-		return
+	if a.isHandshaked.Load() {
+		a.sentResolvedTs.Store(resolvedTs)
+		a.lastSentResolvedTsTime.Store(time.Now())
 	}
 
-	a.sentResolvedTs.Store(resolvedTs)
-	a.lastSentResolvedTsTime.Store(time.Now())
+	a.updateScanRange(resolvedTs, 0)
+}
 
-	ready := a.IsReadyRecevingData()
-	if !ready {
-		log.Warn("cannot update scan range after send resolved-ts",
-			zap.Any("dispatcherID", a.id), zap.Any("tableID", a.info.GetTableSpan().GetTableID()),
-			zap.Uint64("lastScannedCommitTs", a.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", resolvedTs),
-			zap.Bool("isReadyReceivingData", ready))
-		return
+func (a *dispatcherStat) updateScanRange(commitTs, startTs uint64) {
+	if a.IsReadyRecevingData() {
+		a.lastScannedCommitTs.Store(commitTs)
+		a.lastScannedStartTs.Store(startTs)
 	}
-
-	// Only update they after make sure the resolved-ts is sent when the dispatcher is not paused
-	a.lastScannedCommitTs.Store(resolvedTs)
-	a.lastScannedStartTs.Store(0)
-	log.Info("update scan range after send resolved-ts",
-		zap.Any("dispatcherID", a.id), zap.Any("tableID", a.info.GetTableSpan().GetTableID()),
-		zap.Uint64("lastScannedCommitTs", a.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", resolvedTs))
 }
 
 // resetState is used to reset the state of the dispatcher.
@@ -210,8 +198,6 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	// Reset the sentResolvedTs to the resetTs.
 	// Because when the dispatcher is reset, the downstream want to resend the events from the resetTs.
 	a.sentResolvedTs.Store(resetTs)
-	a.lastScannedCommitTs.Store(resetTs)
-	a.lastScannedStartTs.Store(0)
 
 	a.resetTs.Store(resetTs)
 	a.seq.Store(0)
@@ -219,6 +205,7 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.isTaskScanning.Store(false)
 
 	a.isReadyReceivingData.Store(true)
+	a.updateScanRange(resetTs, 0)
 	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 }
 
@@ -228,7 +215,8 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 		return false
 	}
 	if !a.isReceivedFirstResolvedTs.Load() {
-		log.Info("received first resolved ts from event store", zap.Uint64("resolvedTs", resolvedTs), zap.Stringer("dispatcherID", a.id))
+		log.Info("received first resolved ts from event store",
+			zap.Stringer("dispatcherID", a.id), zap.Uint64("resolvedTs", resolvedTs))
 		a.lastUpdateScanLimitTime.Store(time.Now())
 		a.isReceivedFirstResolvedTs.Store(true)
 	}
@@ -244,10 +232,9 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	startTs := a.lastScannedCommitTs.Load()
 	resetTs := a.resetTs.Load()
 	if startTs < resetTs {
-		log.Warn("resetTs is greater than startTs, set startTs as the resetTs",
+		log.Panic("startTs less than the resetTs, this should not happen",
 			zap.Stringer("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
 			zap.Uint64("resetTs", resetTs), zap.Uint64("startTs", startTs))
-		startTs = resetTs
 	}
 
 	// the data not received by the event store yet, so just skip it.

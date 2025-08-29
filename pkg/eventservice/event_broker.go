@@ -214,8 +214,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 			zap.Stringer("dispatcher", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
-	d.lastScannedCommitTs.Store(lastCommitTs)
-	d.lastScannedStartTs.Store(lastStartTs)
+	d.updateScanRange(lastCommitTs, lastStartTs)
 	doSendDML(batchEvent)
 }
 
@@ -309,9 +308,6 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
 					c.sendResolvedTs(stat, endTs)
-					log.Info("send resolved-ts due to tick table trigger dispatcher",
-						zap.Any("dispatcherID", stat.id), zap.Any("tableID", stat.info.GetTableSpan().GetTableID()),
-						zap.Uint64("lastScannedCommitTs", stat.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", endTs))
 				}
 				return true
 			})
@@ -572,7 +568,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	// Check whether the task is ready to receive data events again before sending events.
-	if !task.isReadyReceivingData.Load() {
+	if !task.IsReadyRecevingData() {
 		log.Warn("skip sending events, since the task is not ready to receive data events")
 		return
 	}
