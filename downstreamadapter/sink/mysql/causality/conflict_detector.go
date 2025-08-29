@@ -147,10 +147,10 @@ func (d *ConflictDetector) closeCache() {
 	}
 }
 
-func (d *ConflictDetector) WakeNotifiedNodes() {
-	d.notifiedNodes.Push(func() {})
-}
-
 func (d *ConflictDetector) CloseNotifiedNodes() {
 	d.notifiedNodes.Close()
+}
+
+func (d *ConflictDetector) Close() {
+	d.CloseNotifiedNodes()
 }
