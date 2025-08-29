@@ -35,6 +35,8 @@ const (
 
 var _ Event = &BatchDMLEvent{}
 
+// BatchDMLEvent holds multiple DMLEvent if they have the same table info,
+// the Rows is shared by the BatchDMLEvent and DMLEvents.
 type BatchDMLEvent struct {
 	// Version is the version of the BatchDMLEvent struct.
 	Version   byte        `json:"version"`
@@ -100,8 +102,6 @@ func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) {
 		pre := b.DMLEvents[len(b.DMLEvents)-1]
 		dmlEvent.PreviousTotalOffset = pre.PreviousTotalOffset + len(pre.RowTypes)
 	}
-	// Set the shared Rows chunk
-	dmlEvent.Rows = b.Rows
 	b.DMLEvents = append(b.DMLEvents, dmlEvent)
 }
 
@@ -242,8 +242,8 @@ func (b *BatchDMLEvent) IsPaused() bool {
 // Len returns the number of DML events in the batch.
 func (b *BatchDMLEvent) Len() int32 {
 	var length int32
-	for _, dml := range b.DMLEvents {
-		length += dml.Len()
+	for _, item := range b.DMLEvents {
+		length += item.Len()
 	}
 	return length
 }

@@ -616,13 +616,12 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 }
 
 func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
-	log.Info("set remote candidates",
-		zap.Strings("nodes", nodes),
-		zap.Stringer("dispatcherID", d.getDispatcherID()))
 	if len(nodes) == 0 {
 		return
 	}
 	if d.connState.trySetRemoteCandidates(nodes) {
+		log.Info("set remote candidates", zap.Stringer("dispatcherID", d.getDispatcherID()),
+			zap.Int64("tableID", d.target.GetTableSpan().TableID), zap.Strings("nodes", nodes))
 		candidate := d.connState.getNextRemoteCandidate()
 		d.registerTo(candidate)
 	}

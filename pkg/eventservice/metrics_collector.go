@@ -104,8 +104,8 @@ func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 	// If there are no dispatchers, use current time as resolved timestamps
 	if snapshot.dispatcherCount == 0 {
 		pdTSO := oracle.GoTimeToTS(snapshot.pdTime)
-		snapshot.receivedMinResolvedTs = uint64(pdTSO)
-		snapshot.sentMinResolvedTs = uint64(pdTSO)
+		snapshot.receivedMinResolvedTs = pdTSO
+		snapshot.sentMinResolvedTs = pdTSO
 	}
 
 	return snapshot
@@ -117,7 +117,7 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		snapshot.dispatcherCount++
 		dispatcher := value.(*dispatcherStat)
 
-		if dispatcher.isReadyRecevingData.Load() {
+		if dispatcher.IsReadyRecevingData() {
 			snapshot.runningDispatcherCount++
 		} else {
 			snapshot.pausedDispatcherCount++
@@ -191,7 +191,7 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 		zap.Duration("updateDiff",
 			time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())-
 				time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())),
-		zap.Bool("isPaused", !snapshot.slowestDispatcher.isReadyRecevingData.Load()),
+		zap.Bool("isPaused", !snapshot.slowestDispatcher.IsReadyRecevingData()),
 		zap.Bool("isHandshaked", snapshot.slowestDispatcher.isHandshaked.Load()),
 		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
 	)

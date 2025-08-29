@@ -100,8 +100,8 @@ func (p *ddlJobFetcher) tryAdvanceResolvedTs(subID logpuller.SubscriptionID, new
 	defer p.resolvedTsTracker.Unlock()
 	item, ok := p.resolvedTsTracker.resolvedTsItemMap[subID]
 	if !ok {
-		log.Panic("unknown zubscriptionID, should not happen",
-			zap.Uint64("subID", uint64(subID)))
+		log.Panic("unknown subscriptionID, should not happen",
+			zap.Uint64("subscriptionID", uint64(subID)))
 	}
 	if newResolvedTs < item.resolvedTs {
 		log.Panic("resolved ts should not fallback",
