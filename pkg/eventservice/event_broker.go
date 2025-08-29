@@ -607,15 +607,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
 			c.sendResolvedTs(task, re.ResolvedTs)
-			// DO NOT update the lastScannedCommitTs/lastScannedStartTs by the method sendResolvedTs
-			// since it's also called if the dispatcher is paused or can skip scan. If do so, may meet
-			// duplicate event.
-			// **Only update they after make sure the resolved-ts is sent under the normal scanning**
-			task.lastScannedCommitTs.Store(re.ResolvedTs)
-			task.lastScannedStartTs.Store(0)
-			log.Info("update scan range after send resolved-ts",
-				zap.Any("dispatcherID", task.id), zap.Any("tableID", task.info.GetTableSpan().GetTableID()),
-				zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", re.ResolvedTs))
 		default:
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
