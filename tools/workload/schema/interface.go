@@ -13,9 +13,14 @@
 
 package schema
 
-import "sync/atomic"
+import (
+	"database/sql"
+	"sync/atomic"
+)
 
 type Workload interface {
+	// Prepare should be called before write
+	Prepare(db *sql.DB)
 	// BuildCreateTableStatement returns the create-table sql of the table n
 	BuildCreateTableStatement(n int) string
 	// BuildInsertSql returns the insert sql statement of the tableN, insert batchSize records

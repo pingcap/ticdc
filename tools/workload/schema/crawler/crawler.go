@@ -16,6 +16,7 @@ package crawler
 import (
 	"bytes"
 	"container/list"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"sync"
@@ -82,6 +83,9 @@ func (c *CrawlerWorkload) getExistingRowKey() (string, bool) {
 // BuildCreateTableStatement returns the create-table sql of the table n
 func (c *CrawlerWorkload) BuildCreateTableStatement(n int) string {
 	return fmt.Sprintf(createContentTable, n)
+}
+
+func (c *CrawlerWorkload) Prepare(db *sql.DB) {
 }
 
 func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {

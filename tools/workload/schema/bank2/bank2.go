@@ -14,6 +14,7 @@
 package bank2
 
 import (
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -258,6 +259,9 @@ func (c *Bank2Workload) BuildCreateTableStatement(n int) string {
 	default:
 		panic("unknown table")
 	}
+}
+
+func (c *Bank2Workload) Prepare(db *sql.DB) {
 }
 
 func (c *Bank2Workload) BuildInsertSql(tableN int, batchSize int) string {
