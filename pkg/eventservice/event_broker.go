@@ -543,8 +543,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	available := item.(*atomic.Uint64)
 
-	lowest := c.scanLimitInBytes
-	if available.Load() < lowest {
+	if available.Load() < c.scanLimitInBytes {
 		task.resetScanLimit()
 	}
 
@@ -902,7 +901,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		c.tableTriggerDispatchers.Delete(id)
 	}
 
-	stat.(*dispatcherStat).changefeedStat.removeDispatcher(dispatcherInfo.GetServerID())
+	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
 	changefeedID := dispatcherInfo.GetChangefeedID()
 
 	if stat.(*dispatcherStat).changefeedStat.dispatcherCount.Load() == 0 {
