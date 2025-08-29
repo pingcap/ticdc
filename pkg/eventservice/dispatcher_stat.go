@@ -55,9 +55,13 @@ type dispatcherStat struct {
 	// The reset ts send by the dispatcher.
 	// It is also the start ts of the dispatcher.
 	resetTs atomic.Uint64
+
 	// The max resolved ts received from event store.
+	// it's updated after the event store receive resolved-ts event.
 	eventStoreResolvedTs atomic.Uint64
+
 	// The max latest commit ts received from event store.
+	// it's updated after the event store receive DML events.
 	eventStoreCommitTs atomic.Uint64
 
 	// The sentResolvedTs of the events that have been sent to the dispatcher.

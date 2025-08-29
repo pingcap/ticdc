@@ -370,13 +370,11 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// 3. Check whether there is any events in the data range
 	// Note: target range is (dataRange.CommitTsStart, dataRange.CommitTsEnd]
 	if dataRange.CommitTsStart >= task.eventStoreCommitTs.Load() &&
+		dataRange.LastScannedTxnStartTs != 0 &&
 		dataRange.CommitTsStart >= ddlState.MaxEventCommitTs {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
-		log.Info("send resolved-ts due to no data in the range to scan",
-			zap.Any("dispatcherID", task.id), zap.Any("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", dataRange.CommitTsEnd))
 		return false, common.DataRange{}
 	}
 	return true, dataRange
@@ -545,10 +543,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	available := item.(*atomic.Uint64)
 
-	lowest := c.scanLimitInBytes / uint64(task.changefeedStat.nodes.Len())
+	lowest := c.scanLimitInBytes
 	if available.Load() < lowest {
 		task.resetScanLimit()
-		return
 	}
 
 	sl := c.calculateScanLimit(task)
