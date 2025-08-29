@@ -127,7 +127,7 @@ func TestAvroEnvelope(t *testing.T) {
 	t.Parallel()
 	cManager := &confluentSchemaManager{}
 	gManager := &glueSchemaManager{}
-	avroCodec, err := goavro.NewCodec(`
+	avroCodec, err := GenCodec(`
        {
          "type": "record",
          "name": "testdb.avroenvelope",
@@ -183,4 +183,39 @@ func TestAvroEnvelope(t *testing.T) {
 	id, exists = parsed.(map[string]interface{})["id"]
 	require.True(t, exists)
 	require.Equal(t, int32(7), id)
+}
+
+func TestStringNull(t *testing.T) {
+	_, err := goavro.NewCodecWithOptions(`{
+		"type": "record",
+		"name": "test",
+		"fields":
+		  [
+			{
+			 "type": [
+				 "string",
+				 "null"
+			 ],
+			 "default": "null",
+			 "name": "field"
+			}
+		   ]
+	  }`, &goavro.CodecOption{EnableStringNull: true})
+	require.Error(t, err)
+	_, err = goavro.NewCodecWithOptions(`{
+		"type": "record",
+		"name": "test",
+		"fields":
+		  [
+			{
+			 "type": [
+				 "string",
+				 "null"
+			 ],
+			 "default": "null",
+			 "name": "field"
+			}
+		   ]
+	  }`, &goavro.CodecOption{EnableStringNull: false})
+	require.NoError(t, err)
 }

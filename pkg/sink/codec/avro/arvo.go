@@ -719,3 +719,10 @@ func SetupEncoderAndSchemaRegistry4Testing(
 func TeardownEncoderAndSchemaRegistry4Testing() {
 	stopHTTPInterceptForTestingRegistry()
 }
+
+// GenCodec generate avro codec.
+// Don't treat string literal "null" as null, because we can distinguish them.
+// See https://github.com/pingcap/tiflow/issues/11994
+func GenCodec(schema string) (*goavro.Codec, error) {
+	return goavro.NewCodecWithOptions(schema, &goavro.CodecOption{EnableStringNull: false})
+}
