@@ -311,7 +311,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					c.sendResolvedTs(stat, endTs)
 					log.Info("send resolved-ts due to tick table trigger dispatcher",
 						zap.Any("dispatcherID", stat.id), zap.Any("tableID", stat.info.GetTableSpan().GetTableID()),
-						zap.Uint64("lastScannedCommitTs", stat.lastScannedCommitTs.Load()), zap.Uint64("resolved-ts", endTs))
+						zap.Uint64("lastScannedCommitTs", stat.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", endTs))
 				}
 				return true
 			})
@@ -380,7 +380,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
 		log.Info("send resolved-ts due to no data in the range to scan",
 			zap.Any("dispatcherID", task.id), zap.Any("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("resolved-ts", dataRange.CommitTsEnd))
+			zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", dataRange.CommitTsEnd))
 		return false, common.DataRange{}
 	}
 	return true, dataRange
@@ -415,7 +415,7 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 		c.sendResolvedTs(task, resolvedTs)
 		log.Info("send resolved-ts due to task is not ready to scan",
 			zap.Any("dispatcherID", task.id), zap.Any("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("resolved-ts", resolvedTs))
+			zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", resolvedTs))
 		return false
 	}
 
@@ -615,7 +615,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			task.lastScannedStartTs.Store(0)
 			log.Info("update scan range after send resolved-ts",
 				zap.Any("dispatcherID", task.id), zap.Any("tableID", task.info.GetTableSpan().GetTableID()),
-				zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("resolved-ts", re.ResolvedTs))
+				zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", re.ResolvedTs))
 		default:
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
