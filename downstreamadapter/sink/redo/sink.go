@@ -101,6 +101,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 func (s *Sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
+		defer s.logBuffer.Close()
 		return s.dmlWriter.Run(ctx)
 	})
 	g.Go(func() error {
