@@ -176,13 +176,21 @@ func (a *dispatcherStat) updateTableInfo(tableInfo *common.TableInfo) {
 func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 	// Only update the sentResolvedTs when the dispatcher is handshaked.
 	if !a.isHandshaked.Load() {
+		log.Warn("cannot update resolved-ts, since it's not handshaked yet",
+			zap.Any("dispatcherID", a.id), zap.Any("tableID", a.info.GetTableSpan().GetTableID()),
+			zap.Uint64("resolvedTs", resolvedTs))
 		return
 	}
 
 	a.sentResolvedTs.Store(resolvedTs)
 	a.lastSentResolvedTsTime.Store(time.Now())
 
-	if !a.IsReadyRecevingData() {
+	ready := a.IsReadyRecevingData()
+	if !ready {
+		log.Warn("cannot update scan range after send resolved-ts",
+			zap.Any("dispatcherID", a.id), zap.Any("tableID", a.info.GetTableSpan().GetTableID()),
+			zap.Uint64("lastScannedCommitTs", a.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", resolvedTs),
+			zap.Bool("isReadyReceivingData", ready))
 		return
 	}
 

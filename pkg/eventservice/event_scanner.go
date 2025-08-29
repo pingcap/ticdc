@@ -343,6 +343,7 @@ func interruptScan(
 		log.Warn("scan interrupted due to limit reached, also send resolved-ts",
 			zap.Any("dispatcherID", session.dispatcherStat.id), zap.Any("tableID", session.dataRange.Span.TableID),
 			zap.Uint64("resolvedTs", merger.lastCommitTs))
+		session.appendEvents(events)
 		return
 	}
 	log.Warn("scan interrupted due to limit reached, no resolved-ts",
