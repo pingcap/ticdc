@@ -95,6 +95,7 @@ function test_kill_capture() {
 	run_sql "REPLACE INTO test.availability1(id, val) VALUES (2, 2);"
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=2 and val=2'
 
+	echo "test_kill_capture: pass"
 	cleanup_process $CDC_BINARY
 }
 
@@ -124,6 +125,7 @@ function test_hang_up_capture() {
 	run_sql "REPLACE INTO test.availability1(id, val) VALUES (3, 3);"
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=3 and val=3'
 	kill -CONT $owner_pid
+	echo "test_hang_up_capture: pass"
 	cleanup_process $CDC_BINARY
 }
 
@@ -152,8 +154,11 @@ function test_expire_capture() {
 	# resume the owner
 	kill -SIGCONT $owner_pid
 
-	run_sql "UPDATE test.availability1 set val = 22 where id = 2;"
+	# delete id=3 before update id=2 to ensure downstream sync, 
+	# since we only verify id=2 in this case.
 	run_sql "DELETE from test.availability1 where id = 3;"
+	run_sql "UPDATE test.availability1 set val = 22 where id = 2;"
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=2 and val=22'
+	echo "test_expire_capture: pass"
 	cleanup_process $CDC_BINARY
 }
