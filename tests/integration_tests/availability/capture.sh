@@ -155,7 +155,7 @@ function test_expire_capture() {
 	kill -SIGCONT $owner_pid
 
 	# delete id=3 before update id=2 to ensure downstream sync, 
-	# since we only verify id=2 in this case.
+	# since we wait the change with id=2 in this test case.
 	run_sql "DELETE from test.availability1 where id = 3;"
 	run_sql "UPDATE test.availability1 set val = 22 where id = 2;"
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=2 and val=22'
