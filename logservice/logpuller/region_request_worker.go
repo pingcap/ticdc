@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -50,8 +51,8 @@ type regionRequestWorker struct {
 	// only in this way we can avoid to try to connect to an offline store infinitely.
 	preFetchForConnecting *regionInfo
 
-	// used to receive region requests from outside.
-	requestsCh chan regionInfo
+	// request cache with flow control
+	requestCache *requestCache
 
 	// all regions maintained by this worker.
 	requestedRegions struct {
@@ -68,11 +69,15 @@ func newRegionRequestWorker(
 	g *errgroup.Group,
 	store *requestedStore,
 ) *regionRequestWorker {
+
+	config := config.GetGlobalServerConfig()
+	maxPendingCount := config.Debug.Puller.PendingRegionRequestQueueSize
+
 	worker := &regionRequestWorker{
-		workerID:   workerIDGen.Add(1),
-		client:     client,
-		store:      store,
-		requestsCh: make(chan regionInfo, 256), // 256 is an arbitrary number.
+		workerID:     workerIDGen.Add(1),
+		client:       client,
+		store:        store,
+		requestCache: newRequestCache(maxPendingCount),
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
@@ -86,10 +91,10 @@ func newRegionRequestWorker(
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case region := <-worker.requestsCh:
-				if !region.isStopped() {
+			case region := <-worker.requestCache.pendingQueue:
+				if !region.regionInfo.isStopped() {
 					worker.preFetchForConnecting = new(regionInfo)
-					*worker.preFetchForConnecting = region
+					*worker.preFetchForConnecting = region.regionInfo
 					return nil
 				}
 			}
@@ -302,6 +307,14 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 				worker:     s,
 				resolvedTs: resolvedTsEvent.Ts,
 			})
+			// Try to resolve in cache (marks region as initialized)
+			if s.requestCache.resolve(subscriptionID, regionID, state.getRegionInfo().span) {
+				log.Info("fizz region request worker resolved region in cache",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", regionID),
+					zap.Int("pendingCount", s.requestCache.getPendingCount()))
+			}
 		} else {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
@@ -331,22 +344,28 @@ func (s *regionRequestWorker) processRegionSendTask(
 		return nil
 	}
 
-	fetchMoreReq := func() (regionInfo, error) {
+	fetchMoreReq := func() (*regionReq, error) {
 		for {
-			var region regionInfo
-			select {
-			case <-ctx.Done():
-				return region, ctx.Err()
-			case region = <-s.requestsCh:
-				return region, nil
+			// Try to get from cache
+			if req, err := s.requestCache.pop(ctx); err != nil {
+				return nil, err
+			} else {
+				return req, nil
 			}
 		}
 	}
 
+	// Handle pre-fetched region first
 	region := *s.preFetchForConnecting
 	s.preFetchForConnecting = nil
+	regionReq := &regionReq{
+		regionInfo: region,
+		state:      regionReqStatePending,
+	}
+	var err error
+
 	for {
-		// TODO: can region be nil?
+		region := regionReq.regionInfo
 		subID := region.subscribedSpan.subID
 		log.Debug("region request worker gets a singleRegionInfo",
 			zap.Uint64("workerID", s.workerID),
@@ -376,11 +395,15 @@ func (s *regionRequestWorker) processRegionSendTask(
 				}
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
+			// For stopped regions, mark as stopped in cache (decreases pending count)
+			s.requestCache.markStopped(region.span)
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
 			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
+			s.requestCache.markStopped(region.span)
+
 		} else {
 			state := newRegionFeedState(region, uint64(subID))
 			state.start()
@@ -389,10 +412,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 			if err := doSend(s.createRegionRequest(region)); err != nil {
 				return err
 			}
+			// Mark as sent in cache (increases pending count)
+			s.requestCache.markSent(regionReq)
 		}
-
-		var err error
-		if region, err = fetchMoreReq(); err != nil {
+		regionReq, err = fetchMoreReq()
+		if err != nil {
 			return err
 		}
 	}
@@ -462,16 +486,25 @@ func (s *regionRequestWorker) clearRegionStates() map[SubscriptionID]regionFeedS
 	return subscriptions
 }
 
+// add adds a region request to the worker's cache
+// It blocks if the cache is full until there's space or ctx is cancelled
+func (s *regionRequestWorker) add(ctx context.Context, region regionInfo, force bool) error {
+	return s.requestCache.add(ctx, region, force)
+}
+
 func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
-	regions := make([]regionInfo, 0, len(s.requestsCh))
+	var regions []regionInfo
+
+	// Clear pre-fetched region
 	if s.preFetchForConnecting != nil {
 		region := *s.preFetchForConnecting
 		s.preFetchForConnecting = nil
 		regions = append(regions, region)
 	}
-	// TODO: do we need to start with i := 0(i := len(regions)) if s.preFetchForConnecting is nil?
-	for i := 1; i < cap(regions); i++ {
-		regions = append(regions, <-s.requestsCh)
-	}
+
+	// Clear all regions from cache
+	cacheRegions := s.requestCache.clear()
+	regions = append(regions, cacheRegions...)
+
 	return regions
 }
