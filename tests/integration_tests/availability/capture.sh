@@ -154,11 +154,10 @@ function test_expire_capture() {
 	# resume the owner
 	kill -SIGCONT $owner_pid
 
-	# delete id=3 before update id=2 to ensure downstream sync, 
-	# since we wait the change with id=2 in this test case.
-	run_sql "DELETE from test.availability1 where id = 3;"
 	run_sql "UPDATE test.availability1 set val = 22 where id = 2;"
+	run_sql "DELETE from test.availability1 where id = 3;"
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=2 and val=22'
+	ensure $MAX_RETRIES empty 'select id from test.availability1 where id=3'
 	echo "test_expire_capture: pass"
 	cleanup_process $CDC_BINARY
 }
