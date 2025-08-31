@@ -33,8 +33,9 @@ function run() {
 	run_sql "alter table test.t add index (col);"
 	# make sure all tables are equal in upstream and downstream
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 180
-	# make sure `add index` ddl can finish before the test finish
-	# because `truncate table` and `create table` are all send to table trigger dispatcher
+	# use `truncate table` ddl as a barrier to ensure the slow `add index` operation
+	# completes before the test finishes.
+	# because `truncate table` and `create table` are processed sequentially by table trigger dispatcher.
 	run_sql "truncate table test.t;"
 	run_sql "create table test.finish_mark (a int primary key);"
 	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
