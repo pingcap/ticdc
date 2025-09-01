@@ -606,7 +606,7 @@ func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 			return ctx.Err()
 		case task := <-s.rangeTaskCh:
 			g.Go(func() error {
-				return s.divideSpanAndScheduleRegionRequests(ctx, task.span, task.subscribedSpan, task.filterLoop)
+				return s.divideSpanAndScheduleRegionRequests(ctx, task.span, task.subscribedSpan, task.filterLoop, task.priority)
 			})
 		}
 	}
@@ -622,6 +622,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
+	taskType TaskType,
 ) error {
 	// Limit the number of regions loaded at a time to make the load more stable.
 	limit := 1024
@@ -684,7 +685,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, filterLoop)
 
 			// Schedule a region request to subscribe the region.
-			s.scheduleRegionRequest(ctx, regionInfo, TaskLowPrior)
+			s.scheduleRegionRequest(ctx, regionInfo, taskType)
 
 			nextSpan.StartKey = regionMeta.EndKey
 			// If the nextSpan.StartKey is larger than the subscribedSpan.span.EndKey,
@@ -746,12 +747,13 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 
 func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
+	log.Info("fizz cdc region error",
+		zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
+		zap.Error(err))
+
 	switch eerr := err.(type) {
 	case *eventError:
 		innerErr := eerr.err
-		log.Info("fizz cdc region error",
-			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Stringer("error", innerErr))
 
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
