@@ -26,6 +26,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// maxSpanCount is the maximum number of spans that can be created when splitting a table
+// based on regionCountPerSpan. If splitting by regionCountPerSpan would result in more
+// than maxSpanCount spans, the splitting will be limited to maxSpanCount spans instead.
+const maxSpanCount = 1000
+
 // regionCountSplitter is a splitter that splits spans by region count.
 // regionCountSplitter has two modes:
 // 1. if spansNum > 0, means we split the span to spansNum spans
@@ -152,6 +157,17 @@ func newEvenlySplitStepper(totalRegion int, maxRegionPerSpan int, spansNum int) 
 			remain:        totalRegion % spansNum,
 		}
 	}
+
+	// if splitted by maxRegionPerSpan would result in more than maxSpanCount spans,
+	// the splitting will be limited to maxSpanCount spans instead.
+	if totalRegion/maxRegionPerSpan > maxSpanCount {
+		return evenlySplitStepper{
+			regionPerSpan: totalRegion / maxSpanCount,
+			spanCount:     maxSpanCount,
+			remain:        totalRegion % maxSpanCount,
+		}
+	}
+
 	// split based on the maxRegionPerSpan
 	if totalRegion%maxRegionPerSpan == 0 {
 		return evenlySplitStepper{

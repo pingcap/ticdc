@@ -148,10 +148,8 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		EndKey:   span.EndKey,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
-	if c.enableTableAcrossNodes && c.splitter != nil {
-		if table.Splitable {
-			tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
-		}
+	if c.enableTableAcrossNodes && c.splitter != nil && table.Splitable {
+		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
 }

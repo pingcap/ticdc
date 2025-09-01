@@ -128,7 +128,7 @@ func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
 	oc.mu.RLock()
 	if _, ok := oc.operators[op.ID()]; ok {
-		oc.mu.Unlock()
+		oc.mu.RUnlock()
 		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
