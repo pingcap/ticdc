@@ -193,7 +193,9 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
 	cloudStorageSink.AddDMLEvent(event)
-	time.Sleep(5 * time.Second)
+	require.Eventually(t, func() bool {
+		return atomic.LoadUint64(&cnt) == uint64(batch)
+	}, 30*time.Second, time.Second, "wait for event consumed")
 
 	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
@@ -206,7 +208,6 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
 	require.Nil(t, err)
 	require.Equal(t, "CDC000001.csv\n", string(content))
-	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
 
 	cancel()
 	time.Sleep(5 * time.Second)
@@ -232,7 +233,9 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
 	cloudStorageSink.AddDMLEvent(event)
-	time.Sleep(5 * time.Second)
+	require.Eventually(t, func() bool {
+		return atomic.LoadUint64(&cnt) == 2*uint64(batch)
+	}, 30*time.Second, time.Second, "wait for event consumed")
 
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
@@ -244,7 +247,6 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
 	require.NoError(t, err)
 	require.Equal(t, "CDC000002.csv\n", string(content))
-	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
 	cancel()
 
 	time.Sleep(5 * time.Second)
@@ -275,7 +277,9 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
 	cloudStorageSink.AddDMLEvent(event)
-	time.Sleep(5 * time.Second)
+	require.Eventually(t, func() bool {
+		return atomic.LoadUint64(&cnt) == 3*uint64(batch)
+	}, 30*time.Second, time.Second, "wait for event consumed")
 
 	tableDir = path.Join(parentDir, fmt.Sprintf("test/table1/%d/2023-03-09", event.TableInfoVersion))
 	fileNames = getTableFiles(t, tableDir)
@@ -315,7 +319,9 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
 	cloudStorageSink.AddDMLEvent(event)
-	time.Sleep(5 * time.Second)
+	require.Eventually(t, func() bool {
+		return atomic.LoadUint64(&cnt) == uint64(batch)
+	}, 30*time.Second, time.Second, "wait for event consumed")
 
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
@@ -327,7 +333,6 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
 	require.NoError(t, err)
 	require.Equal(t, "CDC000002.csv\n", string(content))
-	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
 
 	cancel()
 }

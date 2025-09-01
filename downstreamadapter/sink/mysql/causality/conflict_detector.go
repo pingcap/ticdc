@@ -44,7 +44,7 @@ type ConflictDetector struct {
 	// nextCacheID is used to dispatch transactions round-robin.
 	nextCacheID atomic.Int64
 
-	notifiedNodes *chann.DrainableChann[func()]
+	notifiedNodes *chann.UnlimitedChannel[func(), any]
 
 	changefeedID                 common.ChangeFeedID
 	metricConflictDetectDuration prometheus.Observer
@@ -57,7 +57,7 @@ func New(
 	ret := &ConflictDetector{
 		resolvedTxnCaches:            make([]txnCache, opt.Count),
 		slots:                        NewSlots(numSlots),
-		notifiedNodes:                chann.NewAutoDrainChann[func()](),
+		notifiedNodes:                chann.NewUnlimitedChannelDefault[func()](),
 		metricConflictDetectDuration: metrics.ConflictDetectDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 
 		changefeedID: changefeedID,
@@ -80,9 +80,12 @@ func (d *ConflictDetector) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case notifyCallback := <-d.notifiedNodes.Out():
-			if notifyCallback != nil {
+		default:
+			if notifyCallback, ok := d.notifiedNodes.Get(); ok {
 				notifyCallback()
+			} else {
+				log.Info("notifiedNodes is closed, return")
+				return nil
 			}
 		}
 	}
@@ -119,7 +122,7 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 				log.Warn("failed to send notification, channel might be closed", zap.Any("error", r))
 			}
 		}()
-		d.notifiedNodes.In() <- callback
+		d.notifiedNodes.Push(callback)
 	}
 	d.slots.Add(node)
 }
@@ -144,6 +147,10 @@ func (d *ConflictDetector) closeCache() {
 	}
 }
 
+func (d *ConflictDetector) CloseNotifiedNodes() {
+	d.notifiedNodes.Close()
+}
+
 func (d *ConflictDetector) Close() {
-	d.notifiedNodes.CloseAndDrain()
+	d.CloseNotifiedNodes()
 }
