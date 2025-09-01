@@ -34,6 +34,10 @@ import (
 	"go.uber.org/zap"
 )
 
+func init() {
+	SetMinTrafficBalanceThreshold(1)
+}
+
 type mockPDAPIClient struct {
 	scanRegionsError error
 }
@@ -136,7 +140,6 @@ func TestSplitTableSpanIntoMultiple_Properties(t *testing.T) {
 
 func TestSplitSpanChecker_AddReplica(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -169,7 +172,6 @@ func TestSplitSpanChecker_AddReplica(t *testing.T) {
 
 func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -211,7 +213,6 @@ func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 
 func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -285,7 +286,6 @@ func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 
 func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -351,7 +351,6 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 
 func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -390,7 +389,6 @@ func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -443,7 +441,6 @@ func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -492,7 +489,6 @@ func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 
 func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -535,7 +531,6 @@ func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 
 func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -580,7 +575,6 @@ func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 
 func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -621,7 +615,6 @@ func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -681,7 +674,6 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -726,9 +718,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
-	minTrafficBalanceThreshold = 1
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold: 1000,
@@ -776,7 +766,6 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -819,7 +808,6 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -890,7 +878,6 @@ func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -926,7 +913,6 @@ func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -981,7 +967,6 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1040,7 +1025,6 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 	require.Len(t, results, 1)
 
 	moveResult := results.([]SplitSpanCheckResult)[0]
-	log.Info("moveResult", zap.Any("moveResult", moveResult))
 	require.Equal(t, OpMove, moveResult.OpType)
 	require.Equal(t, "node2", string(moveResult.TargetNode))
 	require.Len(t, moveResult.MoveSpans, 1)
@@ -1049,7 +1033,6 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1098,17 +1081,17 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 
 	// Test exchange move decision
 	results := checker.Check(10)
-	require.Len(t, results, 2) // Should have two move operations for exchange
+	require.Len(t, results, 4)
 
 	// Verify exchange moves
 	moveResults := results.([]SplitSpanCheckResult)
-	require.Equal(t, OpMove, moveResults[0].OpType)
-	require.Equal(t, OpMove, moveResults[1].OpType)
+	for _, result := range moveResults {
+		require.Equal(t, OpMove, result.OpType)
+	}
 }
 
 func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1182,7 +1165,6 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 
 func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1256,7 +1238,6 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 
 func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1330,7 +1311,6 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 
 func TestSplitSpanChecker_Check_PerformanceWithManySpans(t *testing.T) {
 	testutil.SetUpTestServices()
-	minTrafficBalanceThreshold = 1
 	cfID := common.NewChangeFeedIDWithName("test")
 
 	spanCount := 10000

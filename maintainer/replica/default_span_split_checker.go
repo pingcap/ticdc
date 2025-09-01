@@ -65,14 +65,14 @@ type defaultSpanSplitChecker struct {
 	// regionThreshold defines the maximum number of regions allowed before split
 	regionThreshold int
 
-	regionCache RegionCache
+	regionCache split.RegionCache
 }
 
 func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig) *defaultSpanSplitChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
-	regionCache := appcontext.GetService[RegionCache](appcontext.RegionCache)
+	regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
 	return &defaultSpanSplitChecker{
 		changefeedID:    changefeedID,
 		allTasks:        make(map[common.DispatcherID]*spanSplitStatus),
@@ -147,7 +147,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 		status.regionCheckTime = time.Now()
 	}
 
-	log.Debug("default span split checker: update status", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
+	log.Info("default span split checker: update status", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
 
 	if status.trafficScore >= trafficScoreThreshold || (s.regionThreshold > 0 && status.regionCount >= s.regionThreshold) {
 		if _, ok := s.splitReadyTasks[status.ID]; !ok {
@@ -211,14 +211,4 @@ func (s *defaultSpanSplitChecker) Stat() string {
 		res.WriteString("];")
 	}
 	return res.String()
-}
-
-// TODO:it's a temp way to avoid import cycle, remove it after refactor the region cache
-// RegionCache is a simplified interface of tikv.RegionCache.
-// It is useful to restrict RegionCache usage and mocking in tests.
-type RegionCache interface {
-	// LoadRegionsInKeyRange loads regions in [startKey,endKey].
-	LoadRegionsInKeyRange(
-		bo *tikv.Backoffer, startKey, endKey []byte,
-	) (regions []*tikv.Region, err error)
 }

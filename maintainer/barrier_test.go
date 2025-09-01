@@ -1156,7 +1156,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 // 3. The event selection logic works properly with the reallocated dispatchers
 // 4. The barrier maintains consistency when dispatcher IDs change but the same table spans are covered
 func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -1167,7 +1167,7 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	tableID := int64(1)
@@ -1362,7 +1362,7 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 // 2. When dispatcher A enters scheduling state and table trigger event dispatcher reports DDL, DDL should not execute
 // 3. When dispatcher A finishes scheduling and reports DDL again, DDL should execute
 func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 
 	// Setup table trigger event dispatcher (DDL dispatcher)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1374,7 +1374,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	// Setup dispatcher A

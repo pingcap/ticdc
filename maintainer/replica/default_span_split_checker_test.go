@@ -280,6 +280,7 @@ func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 
 	// Set region count above threshold
 	spanStatus := checker.allTasks[replica.ID]
+	spanStatus.regionCheckTime = time.Now() // set region check time to now, to skip get region from query
 	spanStatus.regionCount = 10
 	checker.UpdateStatus(replica)
 
