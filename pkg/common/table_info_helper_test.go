@@ -228,8 +228,8 @@ func TestColumnsByNames(t *testing.T) {
 
 	names = []string{"col1", "col-not-found"}
 	offsets, err = tableInfo.OffsetsByNames(names)
-	require.NoError(t, err)
-
+	require.ErrorIs(t, err, errors.ErrDispatcherFailed)
+	require.ErrorContains(t, err, "columns not found")
 	require.Nil(t, offsets)
 
 	names = []string{"Col1", "COL2", "CoL3"}
