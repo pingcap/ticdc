@@ -401,7 +401,9 @@ type partitionTableAccessor struct {
 }
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
-	if w.protocol != config.ProtocolCanalJSON {
+	switch w.protocol {
+	case config.ProtocolCanalJSON, config.ProtocolOpen:
+	default:
 		return
 	}
 	if ddl.Type != byte(timodel.ActionCreateTable) {
