@@ -239,6 +239,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 		log.Info("startTs less than the resetTs, set startTs to the resetTs",
 			zap.Stringer("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
 			zap.Uint64("resetTs", resetTs), zap.Uint64("startTs", startTs))
+		startTs = resetTs
 	}
 
 	// the data not received by the event store yet, so just skip it.
