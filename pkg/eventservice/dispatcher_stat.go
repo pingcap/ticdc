@@ -236,7 +236,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	startTs := a.lastScannedCommitTs.Load()
 	resetTs := a.resetTs.Load()
 	if startTs < resetTs {
-		log.Panic("startTs less than the resetTs, this should not happen",
+		log.Info("startTs less than the resetTs, set startTs to the resetTs",
 			zap.Stringer("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
 			zap.Uint64("resetTs", resetTs), zap.Uint64("startTs", startTs))
 	}
