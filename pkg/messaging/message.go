@@ -209,7 +209,7 @@ func (r DispatcherRequest) GetFilter() filter.Filter {
 	changefeedID := r.GetChangefeedID()
 	filter, err := filter.
 		GetSharedFilterStorage().
-		GetOrSetFilter(changefeedID, r.DispatcherRequest.FilterConfig, "", false)
+		GetOrSetFilter(changefeedID, r.DispatcherRequest.FilterConfig, r.GetTimezone().String())
 	if err != nil {
 		log.Panic("create filter failed", zap.Error(err), zap.Any("filterConfig", r.DispatcherRequest.FilterConfig))
 	}

@@ -127,6 +127,7 @@ func (s *Sink) Run(ctx context.Context) error {
 	})
 	for idx := range s.dmlWriter {
 		g.Go(func() error {
+			defer s.conflictDetector.CloseNotifiedNodes()
 			return s.runDMLWriter(ctx, idx)
 		})
 	}
@@ -297,7 +298,7 @@ func (s *Sink) Close(removeChangefeed bool) {
 		}
 	}
 
-	s.conflictDetector.Close()
+	s.conflictDetector.CloseNotifiedNodes()
 	s.ddlWriter.Close()
 	for _, w := range s.dmlWriter {
 		w.Close()

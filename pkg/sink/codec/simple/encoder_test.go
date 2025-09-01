@@ -841,7 +841,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			// require.Nil(t, event.MultipleTableInfos[0])
 
 			item := dec.memo.Read(createTableDDLEvent.TableInfo.TableName.Schema,
-				createTableDDLEvent.TableInfo.TableName.Table, createTableDDLEvent.TableInfo.UpdateTS())
+				createTableDDLEvent.TableInfo.TableName.Table, createTableDDLEvent.TableInfo.GetUpdateTS())
 			require.NotNil(t, item)
 
 			row, ok := insertEvent.GetNextRow()
@@ -890,7 +890,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			require.NotNil(t, event.MultipleTableInfos)
 
 			item = dec.memo.Read(renameTableDDLEvent.TableInfo.TableName.Schema,
-				renameTableDDLEvent.TableInfo.TableName.Table, renameTableDDLEvent.TableInfo.UpdateTS())
+				renameTableDDLEvent.TableInfo.TableName.Table, renameTableDDLEvent.TableInfo.GetUpdateTS())
 			require.NotNil(t, item)
 
 			row, ok = insertEvent2.GetNextRow()
@@ -1360,7 +1360,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 			require.Equal(t, len(ddlEvent.TableInfo.GetIndices()), len(event.TableInfo.GetIndices()))
 
 			item := dec.memo.Read(ddlEvent.TableInfo.TableName.Schema,
-				ddlEvent.TableInfo.TableName.Table, ddlEvent.TableInfo.UpdateTS())
+				ddlEvent.TableInfo.TableName.Table, ddlEvent.TableInfo.GetUpdateTS())
 			require.NotNil(t, item)
 
 			row, ok := dmlEvent.GetNextRow()

@@ -97,6 +97,16 @@ type DDLEvent struct {
 
 	// for simple protocol
 	IsBootstrap bool `msg:"-"`
+	// NotSync is used to indicate whether the event should be synced to downstream.
+	// If it is true, sink should not sync this event to downstream.
+	// It is used for some special DDL events that do not need to be synced,
+	// but only need to be sent to the table trigger.
+	// For example, if a `TRUNCATE TABLE` DDL is filtered by event filter,
+	// we don't need to sync it to downstream, but the DML events of the new truncated table
+	// should be sent to downstream.
+	// So we should send the `TRUNCATE TABLE` DDL event to table trigger,
+	// to ensure the new truncated table can be handled correctly.
+	NotSync bool `msg:"not_sync"`
 }
 
 func (d *DDLEvent) String() string {

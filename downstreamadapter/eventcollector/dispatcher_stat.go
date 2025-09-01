@@ -115,7 +115,7 @@ type dispatcherStat struct {
 	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
-	// lastEventCommitTs is the commitTs of the last received DDL/DML events.
+	// lastEventCommitTs is the commitTs of the last received DDL/DML/SyncPoint events.
 	lastEventCommitTs atomic.Uint64
 	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
 	gotDDLOnTs atomic.Bool
@@ -336,6 +336,7 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 		d.gotDDLOnTs.Store(false)
 		d.gotSyncpointOnTS.Store(false)
 	}
+
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		d.gotDDLOnTs.Store(true)
@@ -346,7 +347,8 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeDMLEvent,
-		commonEvent.TypeBatchDMLEvent:
+		commonEvent.TypeBatchDMLEvent,
+		commonEvent.TypeSyncPointEvent:
 		d.lastEventCommitTs.Store(event.GetCommitTs())
 	}
 
@@ -354,6 +356,14 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 }
 
 func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
+	if event.GetType() == commonEvent.TypeBatchDMLEvent {
+		batchDML := event.Event.(*commonEvent.BatchDMLEvent)
+		for _, dml := range batchDML.DMLEvents {
+			if dml.GetEpoch() != d.epoch.Load() {
+				return false
+			}
+		}
+	}
 	return event.GetEpoch() == d.epoch.Load()
 }
 
@@ -371,6 +381,10 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	var validEvents []dispatcher.DispatcherEvent
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event) {
+			log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Any("event", event.Event))
 			continue
 		}
 		if !d.verifyEventSequence(event) {
@@ -398,6 +412,10 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
+				// DMLs in the same batch share the same updateTs in their table info,
+				// but they may reference different table info objects,
+				// so each needs to be initialized separately.
+				dml.TableInfo.InitPrivateFields()
 				dml.TableInfoVersion = tableInfoVersion
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.filterAndUpdateEventByCommitTs(dmlEvent) {

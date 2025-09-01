@@ -186,12 +186,12 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	if ok1 && ok2 {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeUpdate)
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeUpdate)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate)
 	} else if ok1 {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeDelete)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeDelete)
 	} else if ok2 {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeInsert)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
 	} else {
 		log.Panic("unknown event type for the DML event")
 	}

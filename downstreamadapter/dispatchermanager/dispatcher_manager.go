@@ -73,12 +73,7 @@ type DispatcherManager struct {
 
 	pdClock pdutil.Clock
 
-	config          *config.ChangefeedConfig
-	integrityConfig *eventpb.IntegrityConfig
-	filterConfig    *eventpb.FilterConfig
-	// only not nil when enable sync point
-	// TODO: changefeed update config
-	syncPointConfig *syncpoint.SyncPointConfig
+	config *config.ChangefeedConfig
 
 	// tableTriggerEventDispatcher is a special dispatcher, that is responsible for handling ddl and checkpoint events.
 	tableTriggerEventDispatcher *dispatcher.EventDispatcher
@@ -88,14 +83,8 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including redo table trigger event dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
-	// schemaIDToDispatchers is store the schemaID info for all event dispatchers.
-	schemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
 	// redoSchemaIDToDispatchers is store the schemaID info for all redo dispatchers.
 	redoSchemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
-
-	// statusesChan is used to store the status of dispatchers when status changed
-	// and push to heartbeatRequestQueue
-	statusesChan chan dispatcher.TableSpanStatusWithSeq
 	// heartbeatRequestQueue is used to store the heartbeat request from all the dispatchers.
 	// heartbeat collector will consume the heartbeat request from the queue and send the response to each dispatcher.
 	heartbeatRequestQueue *HeartbeatRequestQueue
@@ -104,9 +93,6 @@ type DispatcherManager struct {
 	// and report to the maintainer periodicity.
 	heartBeatTask *HeartBeatTask
 
-	// blockStatusesChan will fetch the block status about ddl event and sync point event
-	// and push to blockStatusRequestQueue
-	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
 	// blockStatusRequestQueue is used to store the block status request from all the dispatchers.
 	// heartbeat collector will consume the block status request from the queue and report to the maintainer.
 	blockStatusRequestQueue *BlockStatusRequestQueue
@@ -121,10 +107,6 @@ type DispatcherManager struct {
 
 	latestWatermark Watermark
 
-	// collect the error in all the dispatchers and sink module
-	// when we get the error, we will report the error to the maintainer
-	errCh chan error
-
 	closing atomic.Bool
 	closed  atomic.Bool
 	cancel  context.CancelFunc
@@ -133,9 +115,8 @@ type DispatcherManager struct {
 	sinkQuota uint64
 	redoQuota uint64
 
-	// For the Kafka and Storage sink, the outputRawChangeEvent parameter is introduced to control
-	// split behavior. TiCDC only output original change event if outputRawChangeEvent is true.
-	outputRawChangeEvent bool
+	// Shared info for all dispatchers
+	sharedInfo *dispatcher.SharedInfo
 
 	metricTableTriggerEventDispatcherCount prometheus.Gauge
 	metricEventDispatcherCount             prometheus.Gauge
@@ -184,14 +165,8 @@ func NewDispatcherManager(
 		dispatcherMap:                          newDispatcherMap[*dispatcher.EventDispatcher](),
 		changefeedID:                           changefeedID,
 		pdClock:                                pdClock,
-		statusesChan:                           make(chan dispatcher.TableSpanStatusWithSeq, 8192),
-		blockStatusesChan:                      make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
-		errCh:                                  make(chan error, 1),
 		cancel:                                 cancel,
 		config:                                 cfConfig,
-		integrityConfig:                        integrityCfg,
-		filterConfig:                           filterCfg,
-		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(0),
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "eventDispatcher"),
 		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "eventDispatcher"),
@@ -207,9 +182,10 @@ func NewDispatcherManager(
 	manager.meta.maintainerID = maintainerID
 
 	// Set Sync Point Config
+	var syncPointConfig *syncpoint.SyncPointConfig
 	if cfConfig.EnableSyncPoint {
 		// TODO: confirm that parameter validation is done at the setting location, so no need to check again here
-		manager.syncPointConfig = &syncpoint.SyncPointConfig{
+		syncPointConfig = &syncpoint.SyncPointConfig{
 			SyncPointInterval:  cfConfig.SyncPointInterval,
 			SyncPointRetention: cfConfig.SyncPointRetention,
 		}
@@ -235,12 +211,29 @@ func NewDispatcherManager(
 		return nil, 0, errors.Trace(err)
 	}
 
+	// Determine outputRawChangeEvent based on sink type
+	var outputRawChangeEvent bool
 	switch manager.sink.SinkType() {
 	case common.CloudStorageSinkType:
-		manager.outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
+		outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
 	case common.KafkaSinkType:
-		manager.outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
+		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
+
+	// Create shared info for all dispatchers
+	manager.sharedInfo = dispatcher.NewSharedInfo(
+		manager.changefeedID,
+		manager.config.TimeZone,
+		manager.config.BDRMode,
+		outputRawChangeEvent,
+		integrityCfg,
+		filterCfg,
+		syncPointConfig,
+		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
+		dispatcher.NewSchemaIDToDispatchers(),
+		make(chan error, 1),
+	)
 
 	// Register Event Dispatcher Manager in HeartBeatCollector,
 	// which is responsible for communication with the maintainer.
@@ -298,7 +291,7 @@ func NewDispatcherManager(
 		zap.Uint64("sinkQuota", manager.sinkQuota),
 		zap.Uint64("redoQuota", manager.redoQuota),
 		zap.Bool("redoEnable", manager.RedoEnable),
-		zap.Bool("outputRawChangeEvent", manager.outputRawChangeEvent),
+		zap.Bool("outputRawChangeEvent", manager.sharedInfo.IsOutputRawChangeEvent()),
 	)
 	return manager, tableTriggerStartTs, nil
 }
@@ -307,14 +300,15 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 	if e.tableTriggerEventDispatcher != nil {
 		log.Error("table trigger event dispatcher existed!")
 	}
-	err := e.newEventDispatchers([]dispatcherCreateInfo{
-		{
-			Id:        common.NewDispatcherIDFromPB(id),
-			TableSpan: common.DDLSpan,
-			StartTs:   startTs,
-			SchemaID:  0,
-		},
-	}, newChangefeed)
+	infos := map[common.DispatcherID]dispatcherCreateInfo{}
+	dispatcherID := common.NewDispatcherIDFromPB(id)
+	infos[dispatcherID] = dispatcherCreateInfo{
+		Id:        dispatcherID,
+		TableSpan: common.DDLSpan,
+		StartTs:   startTs,
+		SchemaID:  0,
+	}
+	err := e.newEventDispatchers(infos, newChangefeed)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
@@ -387,7 +381,7 @@ func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int6
 // removeDDLTs is true only when meet the following conditions:
 // 1. newEventDispatchers is called by NewTableTriggerEventDispatcher(just means when creating table trigger event dispatcher)
 // 2. changefeed is total new created, or resumed with overwriteCheckpointTs
-func (e *DispatcherManager) newEventDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
+func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
 	currentPdTs := e.pdClock.CurrentTS()
 
@@ -426,22 +420,15 @@ func (e *DispatcherManager) newEventDispatchers(infos []dispatcherCreateInfo, re
 
 	for idx, id := range dispatcherIds {
 		d := dispatcher.NewEventDispatcher(
-			e.changefeedID,
-			id, tableSpans[idx], e.sink,
+			id,
+			tableSpans[idx],
 			uint64(newStartTsList[idx]),
-			e.statusesChan,
-			e.blockStatusesChan,
 			schemaIds[idx],
-			e.schemaIDToDispatchers,
-			e.config.TimeZone,
-			e.integrityConfig,
-			e.syncPointConfig,
 			startTsIsSyncpointList[idx],
-			e.filterConfig,
 			currentPdTs,
-			e.errCh,
-			e.config.BDRMode,
-			e.outputRawChangeEvent,
+			dispatcher.TypeDispatcherEvent,
+			e.sink,
+			e.sharedInfo,
 			e.RedoEnable,
 			&e.redoGlobalTs,
 		)
@@ -455,7 +442,7 @@ func (e *DispatcherManager) newEventDispatchers(infos []dispatcherCreateInfo, re
 			}
 			e.tableTriggerEventDispatcher = d
 		} else {
-			e.schemaIDToDispatchers.Set(schemaIds[idx], id)
+			e.sharedInfo.GetSchemaIDToDispatchers().Set(schemaIds[idx], id)
 			// we don't register table trigger event dispatcher in event collector, when created.
 			// Table trigger event dispatcher is a special dispatcher,
 			// it need to wait get the initial table schema store from the maintainer, then will register to event collector to receive events.
@@ -491,7 +478,7 @@ func (e *DispatcherManager) handleError(ctx context.Context, err error) {
 		select {
 		case <-ctx.Done():
 			return
-		case e.errCh <- err:
+		case e.sharedInfo.GetErrCh() <- err:
 		default:
 			log.Error("error channel is full, discard error",
 				zap.Stringer("changefeedID", e.changefeedID),
@@ -507,7 +494,7 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case err := <-e.errCh:
+		case err := <-e.sharedInfo.GetErrCh():
 			if !errors.Is(errors.Cause(err), context.Canceled) {
 				log.Error("Event Dispatcher Manager Meets Error",
 					zap.Stringer("changefeedID", e.changefeedID),
@@ -551,13 +538,13 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case blockStatus := <-e.blockStatusesChan:
+		case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
 			blockStatusMessage = append(blockStatusMessage, blockStatus)
 			delay.Reset(10 * time.Millisecond)
 		loop:
 			for {
 				select {
-				case blockStatus := <-e.blockStatusesChan:
+				case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
 					blockStatusMessage = append(blockStatusMessage, blockStatus)
 				case <-delay.C:
 					break loop
@@ -590,7 +577,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 		select {
 		case <-ctx.Done():
 			return
-		case tableSpanStatus := <-e.statusesChan:
+		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
 			if !tableSpanStatus.IsRedo {
 				newWatermark.Seq = tableSpanStatus.Seq
@@ -602,7 +589,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 		loop:
 			for {
 				select {
-				case tableSpanStatus := <-e.statusesChan:
+				case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
 					if !tableSpanStatus.IsRedo {
 						if newWatermark.Seq < tableSpanStatus.Seq {
@@ -733,7 +720,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 	//         4. whether the dispatcherIDs have consecutive ranges
 	//         5. whether the dispatcher in working status.
 
-	ok := prepareMergeDispatcher(e.changefeedID, dispatcherIDs, e.dispatcherMap, mergedDispatcherID, e.statusesChan)
+	ok := prepareMergeDispatcher(e.changefeedID, dispatcherIDs, e.dispatcherMap, mergedDispatcherID, e.sharedInfo.GetStatusesChan())
 	if !ok {
 		return nil
 	}
@@ -744,24 +731,15 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 	}
 
 	mergedDispatcher := dispatcher.NewEventDispatcher(
-		e.changefeedID,
 		mergedDispatcherID,
 		mergedSpan,
-		e.sink,
 		fakeStartTs, // real startTs will be calculated later.
-		e.statusesChan,
-		e.blockStatusesChan,
 		schemaID,
-		e.schemaIDToDispatchers,
-		e.config.TimeZone,
-		e.integrityConfig,
-		e.syncPointConfig,
 		false,
-		e.filterConfig,
 		0, // currentPDTs will be calculated later.
-		e.errCh,
-		e.config.BDRMode,
-		e.outputRawChangeEvent,
+		dispatcher.TypeDispatcherEvent,
+		e.sink,
+		e.sharedInfo,
 		e.RedoEnable,
 		&e.redoGlobalTs,
 	)
@@ -771,7 +749,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		zap.Stringer("dispatcherID", mergedDispatcherID),
 		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
 
-	registerMergeDispatcher(e.changefeedID, dispatcherIDs, e.dispatcherMap, mergedDispatcherID, mergedDispatcher, e.schemaIDToDispatchers, e.metricEventDispatcherCount, e.sinkQuota)
+	registerMergeDispatcher(e.changefeedID, dispatcherIDs, e.dispatcherMap, mergedDispatcherID, mergedDispatcher, e.sharedInfo.GetSchemaIDToDispatchers(), e.metricEventDispatcherCount, e.sinkQuota)
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 
@@ -844,7 +822,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
 	e.dispatcherMap.Delete(id)
-	e.schemaIDToDispatchers.Delete(schemaID, id)
+	e.sharedInfo.GetSchemaIDToDispatchers().Delete(schemaID, id)
 	if e.tableTriggerEventDispatcher != nil && e.tableTriggerEventDispatcher.GetId() == id {
 		e.tableTriggerEventDispatcher = nil
 		e.metricTableTriggerEventDispatcherCount.Dec()

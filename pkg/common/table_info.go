@@ -24,6 +24,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -86,6 +87,11 @@ type TableInfo struct {
 	View *model.ViewInfo `json:"view"`
 
 	Sequence *model.SequenceInfo `json:"sequence"`
+
+	// UpdateTS is used to record the timestamp of updating the table's schema information.
+	// These changing schema operations don't include 'truncate table', 'rename table',
+	// 'truncate partition' and 'exchange partition'.
+	UpdateTS uint64 `json:"update_timestamp"`
 
 	preSQLs struct {
 		isInitialized atomic.Bool
@@ -194,11 +200,11 @@ func (ti *TableInfo) GetPKIndex() []int64 {
 	return ti.columnSchema.PKIndex
 }
 
-// UpdateTS returns the UpdateTS of columnSchema
+// GetUpdateTS() returns the GetUpdateTS() of columnSchema
 // These changing schema operations don't include 'truncate table', 'rename table',
 // 'rename tables', 'truncate partition' and 'exchange partition'.
-func (ti *TableInfo) UpdateTS() uint64 {
-	return ti.columnSchema.UpdateTS
+func (ti *TableInfo) GetUpdateTS() uint64 {
+	return ti.UpdateTS
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
@@ -421,6 +427,19 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	return ok
 }
 
+func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
+	return &model.TableInfo{
+		ID:       ti.TableName.TableID,
+		Name:     ast.NewCIStr(ti.TableName.Table),
+		Charset:  ti.Charset,
+		Collate:  ti.Collate,
+		Comment:  ti.Comment,
+		View:     ti.View,
+		Sequence: ti.Sequence,
+		Columns:  ti.columnSchema.Cols(), // Get public state columns, that's enough.
+	}
+}
+
 func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	return &TableInfo{
 		TableName: TableName{
@@ -435,6 +454,7 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 		Charset:      tableInfo.Charset,
 		Collate:      tableInfo.Collate,
 		Comment:      tableInfo.Comment,
+		UpdateTS:     tableInfo.UpdateTS,
 	}
 }
 

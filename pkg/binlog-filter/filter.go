@@ -77,6 +77,8 @@ const (
 	AddTablePartition      EventType = "add table partition"
 	DropTablePartition     EventType = "drop table partition"
 	TruncateTablePartition EventType = "truncate table partition"
+	AddForeignKey          EventType = "add foreign key"
+	DropForeignKey         EventType = "drop foreign key"
 	// if need, add more	AlertTableOption     = "alert table option"
 
 	IncompatibleDDLChanges EventType = "incompatible ddl changes"
@@ -250,6 +252,7 @@ func NewBinlogEvent(caseSensitive bool, rules []*BinlogEventRule) (*BinlogEvent,
 	for _, rule := range rules {
 		if err := b.AddRule(rule); err != nil {
 			log.Error("invalid binlog event rule", zap.Any("rule", rule), zap.Error(err))
+			return nil, errors.Trace(err)
 		}
 	}
 

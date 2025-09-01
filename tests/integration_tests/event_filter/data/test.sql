@@ -90,3 +90,31 @@ CREATE TABLE t_alter
   DEFAULT CHARSET = utf8
   COLLATE = utf8_bin;
   
+
+CREATE TABLE t_name (
+                    id INT,
+                    name varchar(128),
+                    PRIMARY KEY (id)
+);
+CREATE TABLE t_name1 (
+                    id INT,
+                    name varchar(128),
+                    PRIMARY KEY (id)
+);
+CREATE TABLE t_name2 (
+                    id INT,
+                    name varchar(128),
+                    PRIMARY KEY (id)
+);
+CREATE TABLE t_name3 (
+                    id INT,
+                    name varchar(128),
+                    PRIMARY KEY (id)
+);
+CREATE TABLE t_rename4 (
+                    id INT,
+                    name varchar(128),
+                    PRIMARY KEY (id)
+);
+
+CREATE TABLE t_create (id INT PRIMARY KEY, val INT);

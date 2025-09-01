@@ -372,6 +372,7 @@ func (p *persistentStorage) getMaxEventCommitTs(tableID int64, ts uint64) uint64
 }
 
 // TODO: not all ddl in p.tablesDDLHistory should be sent to the dispatcher, verify dispatcher will set the right range
+// fetch table ddl events in the range (start, end]
 func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
 	// TODO: check a dispatcher won't fetch the ddl events that create it(create table/rename table)
 	p.mu.RLock()
@@ -410,9 +411,19 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
-		ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
+		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
 		if ok {
 			events = append(events, ddlEvent)
+		} else {
+			log.Info("skip fetch ddl event",
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Int64("tableID", tableID),
+				zap.Uint64("ts", ts),
+				zap.String("type", model.ActionType(rawEvent.Type).String()),
+				zap.String("query", rawEvent.Query))
 		}
 	}
 	log.Debug("fetchTableDDLEvents",
@@ -470,7 +481,10 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
+			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
 			if ok {
 				events = append(events, ddlEvent)
 			}
@@ -810,7 +824,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	return false
 }
 
-func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
+func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))

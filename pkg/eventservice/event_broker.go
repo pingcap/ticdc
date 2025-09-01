@@ -464,12 +464,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		if len(commitTsList) > 16 {
 			newCommitTsList = commitTsList[:16]
 		}
-		e := &pevent.SyncPointEvent{
-			DispatcherID: d.id,
-			CommitTsList: newCommitTsList,
-			Seq:          d.seq.Add(1),
-			Epoch:        d.epoch.Load(),
-		}
+		e := pevent.NewSyncPointEvent(d.id, newCommitTsList, d.seq.Add(1), d.epoch.Load())
 		log.Debug("send syncpoint event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(e.GetType())), zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())

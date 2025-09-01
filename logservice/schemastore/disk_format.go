@@ -794,6 +794,7 @@ func loadAllPhysicalTablesAtTs(
 			log.Panic("table info not found", zap.Int64("tableID", tableID))
 		}
 		if tableFilter != nil && tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name, fullTableInfo) {
+			log.Info("ignore table by filter", zap.String("schema", schemaName), zap.String("table", tableInfo.Name), zap.Any("tableInfo", fullTableInfo))
 			continue
 		}
 		splitable := isSplitable(fullTableInfo)

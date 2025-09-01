@@ -14,6 +14,7 @@
 package dispatchermanager
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 
@@ -221,35 +222,17 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 			}
 		}
 	}
-	handleErr := func(err error) {
-		select {
-		case dispatcherManager.errCh <- err:
-			log.Error("new redo dispatcher meet error", zap.String("ChangefeedID", dispatcherManager.changefeedID.String()),
-				zap.Error(err))
-		default:
-			log.Error("error channel is full, discard error",
-				zap.Any("ChangefeedID", dispatcherManager.changefeedID.String()),
-				zap.Error(err))
-		}
-	}
+
 	if len(redoInfos) > 0 {
-		redoInfoList := make([]dispatcherCreateInfo, 0, len(redoInfos))
-		for _, info := range redoInfos {
-			redoInfoList = append(redoInfoList, info)
-		}
-		err := dispatcherManager.newRedoDispatchers(redoInfoList, false)
+		err := dispatcherManager.newRedoDispatchers(redoInfos, false)
 		if err != nil {
-			handleErr(err)
+			dispatcherManager.handleError(context.Background(), err)
 		}
 	}
 	if len(infos) > 0 {
-		infoList := make([]dispatcherCreateInfo, 0, len(infos))
-		for _, info := range infos {
-			infoList = append(infoList, info)
-		}
-		err := dispatcherManager.newEventDispatchers(infoList, false)
+		err := dispatcherManager.newEventDispatchers(infos, false)
 		if err != nil {
-			handleErr(err)
+			dispatcherManager.handleError(context.Background(), err)
 		}
 	}
 	return false
