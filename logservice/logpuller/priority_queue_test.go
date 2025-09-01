@@ -15,198 +15,431 @@ package logpuller
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
-func TestPriorityQueue(t *testing.T) {
-	// Create a mock regionInfo for testing
-	mockRegionInfo := regionInfo{
-		verID: tikv.NewRegionVerID(1, 1, 1),
-		span: heartbeatpb.TableSpan{
-			TableID:  1,
-			StartKey: []byte("a"),
-			EndKey:   []byte("b"),
-		},
+// mockPriorityTask is a simple mock implementation of PriorityTask for testing
+type mockPriorityTask struct {
+	priority    int
+	heapIndex   int
+	regionInfo  regionInfo
+	description string
+}
+
+func newMockPriorityTask(priority int, description string) *mockPriorityTask {
+	// Create a minimal regionInfo for testing
+	verID := tikv.NewRegionVerID(1, 1, 1)
+	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+
+	// Create a subscribedSpan with atomic resolvedTs
+	subscribedSpan := &subscribedSpan{
+		resolvedTs: atomic.Uint64{},
+	}
+	subscribedSpan.resolvedTs.Store(oracle.GoTimeToTS(time.Now()))
+
+	regionInfo := regionInfo{
+		verID:          verID,
+		span:           span,
+		subscribedSpan: subscribedSpan,
 	}
 
-	t.Run("test basic operations", func(t *testing.T) {
-		pq := NewPriorityQueue()
-		defer pq.Close()
+	return &mockPriorityTask{
+		priority:    priority,
+		heapIndex:   0,
+		regionInfo:  regionInfo,
+		description: description,
+	}
+}
 
-		// Test empty queue
-		require.True(t, pq.IsEmpty())
-		require.Equal(t, 0, pq.Len())
-		require.Nil(t, pq.Peek())
-		require.Nil(t, pq.TryPop())
+func (m *mockPriorityTask) Priority() int {
+	return m.priority
+}
 
-		// Add a task
-		task := NewRegionPriorityTask(TaskHighPrior, mockRegionInfo)
-		pq.Push(task)
+func (m *mockPriorityTask) GetRegionInfo() regionInfo {
+	return m.regionInfo
+}
 
-		require.False(t, pq.IsEmpty())
-		require.Equal(t, 1, pq.Len())
+func (m *mockPriorityTask) SetHeapIndex(index int) {
+	m.heapIndex = index
+}
 
-		// Peek should return the task without removing it
-		peeked := pq.Peek()
-		require.Equal(t, task, peeked)
-		require.Equal(t, 1, pq.Len())
+func (m *mockPriorityTask) GetHeapIndex() int {
+	return m.heapIndex
+}
 
-		// TryPop should return and remove the task
-		popped := pq.TryPop()
-		require.Equal(t, task, popped)
-		require.True(t, pq.IsEmpty())
-		require.Equal(t, 0, pq.Len())
-	})
+func (m *mockPriorityTask) LessThan(other PriorityTask) bool {
+	return m.Priority() < other.Priority()
+}
 
-	t.Run("test priority ordering", func(t *testing.T) {
-		pq := NewPriorityQueue()
-		defer pq.Close()
+func TestNewPriorityQueue(t *testing.T) {
+	pq := NewPriorityQueue()
+	require.NotNil(t, pq)
+	require.NotNil(t, pq.heap)
+	require.NotNil(t, pq.signal)
+	require.Equal(t, 0, pq.Len())
+}
 
-		// Create tasks with different priorities
-		regionChangeTask := NewRegionPriorityTask(TaskHighPrior, mockRegionInfo)
-		newSubTask := NewRegionPriorityTask(TaskLowPrior, mockRegionInfo)
+func TestPriorityQueue_Push(t *testing.T) {
+	pq := NewPriorityQueue()
 
-		// Add them in reverse order
-		pq.Push(newSubTask)
-		pq.Push(regionChangeTask)
+	task1 := newMockPriorityTask(10, "task1")
+	task2 := newMockPriorityTask(5, "task2")
 
-		// Region change task should be popped first (higher priority)
-		first := pq.TryPop()
-		require.Equal(t, regionChangeTask, first)
+	// Test pushing single task
+	pq.Push(task1)
+	require.Equal(t, 1, pq.Len())
 
-		// New subscription task should be popped second
-		second := pq.TryPop()
-		require.Equal(t, newSubTask, second)
+	// Test pushing multiple tasks
+	pq.Push(task2)
+	require.Equal(t, 2, pq.Len())
 
-		require.True(t, pq.IsEmpty())
-	})
+	// Verify signal channel receives notifications
+	select {
+	case <-pq.signal:
+		// Expected - signal received
+	case <-time.After(time.Millisecond * 100):
+		t.Fatal("Expected signal but none received")
+	}
+}
 
-	t.Run("test time-based priority", func(t *testing.T) {
-		pq := NewPriorityQueue()
-		defer pq.Close()
+func TestPriorityQueue_Peek(t *testing.T) {
+	pq := NewPriorityQueue()
 
-		// Create two tasks of the same type
-		task1 := NewRegionPriorityTask(TaskLowPrior, mockRegionInfo)
+	// Test peek on empty queue
+	task := pq.Peek()
+	require.Nil(t, task)
 
-		// Wait a bit
-		time.Sleep(10 * time.Millisecond)
+	// Add tasks with different priorities
+	task1 := newMockPriorityTask(10, "task1")
+	task2 := newMockPriorityTask(5, "task2") // Higher priority (lower value)
+	task3 := newMockPriorityTask(15, "task3")
 
-		task2 := NewRegionPriorityTask(TaskLowPrior, mockRegionInfo)
+	pq.Push(task1)
+	pq.Push(task2)
+	pq.Push(task3)
 
-		// Add them in reverse order
-		pq.Push(task2)
-		pq.Push(task1)
+	// Peek should return highest priority task (lowest value)
+	topTask := pq.Peek()
+	require.NotNil(t, topTask)
+	require.Equal(t, 5, topTask.Priority())
+	require.Equal(t, "task2", topTask.(*mockPriorityTask).description)
 
-		// task1 should be popped first (waited longer, higher priority)
-		first := pq.TryPop()
-		require.Equal(t, task1, first)
+	// Verify peek doesn't remove the task
+	require.Equal(t, 3, pq.Len())
 
-		second := pq.TryPop()
-		require.Equal(t, task2, second)
-	})
+	// Peek again should return the same task
+	topTaskAgain := pq.Peek()
+	require.Equal(t, topTask, topTaskAgain)
+}
 
-	t.Run("test remove operation", func(t *testing.T) {
-		pq := NewPriorityQueue()
-		defer pq.Close()
+func TestPriorityQueue_PopBlocking(t *testing.T) {
+	pq := NewPriorityQueue()
 
-		task1 := NewRegionPriorityTask(TaskHighPrior, mockRegionInfo)
-		task2 := NewRegionPriorityTask(TaskLowPrior, mockRegionInfo)
-
-		pq.Push(task1)
-		pq.Push(task2)
-
-		require.Equal(t, 2, pq.Len())
-
-		// Remove task1
-		removed := pq.Remove(task1)
-		require.True(t, removed)
-		require.Equal(t, 1, pq.Len())
-
-		// task2 should still be there
-		popped := pq.TryPop()
-		require.Equal(t, task2, popped)
-
-		// Try to remove non-existent task
-		removed = pq.Remove(task1)
-		require.False(t, removed)
-	})
-
-	t.Run("test blocking pop", func(t *testing.T) {
-		pq := NewPriorityQueue()
-		defer pq.Close()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Test pop on empty queue with context cancellation
+	t.Run("PopWithCancellation", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 		defer cancel()
 
-		// Try to pop from empty queue with timeout
 		start := time.Now()
 		task := pq.Pop(ctx)
-		duration := time.Since(start)
+		elapsed := time.Since(start)
 
 		require.Nil(t, task)
-		require.GreaterOrEqual(t, duration, 90*time.Millisecond) // Should wait almost the full timeout
+		require.True(t, elapsed >= time.Millisecond*50)
 	})
 
-	t.Run("test blocking pop with signal", func(t *testing.T) {
-		pq := NewPriorityQueue()
-		defer pq.Close()
+	// Test pop with signal
+	t.Run("PopWithSignal", func(t *testing.T) {
+		ctx := context.Background()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		defer cancel()
-
-		// Start a goroutine to push a task after a short delay
+		// Add a task in a goroutine after a short delay
 		go func() {
-			time.Sleep(10 * time.Millisecond)
-			task := NewRegionPriorityTask(TaskHighPrior, mockRegionInfo)
-			pq.Push(task)
+			time.Sleep(time.Millisecond * 50)
+			task1 := newMockPriorityTask(10, "task1")
+			pq.Push(task1)
 		}()
 
-		// Pop should return the task after signal
 		start := time.Now()
 		task := pq.Pop(ctx)
-		duration := time.Since(start)
+		elapsed := time.Since(start)
 
 		require.NotNil(t, task)
-		require.Less(t, duration, 100*time.Millisecond) // Should return quickly after signal
+		require.Equal(t, 10, task.Priority())
+		require.True(t, elapsed >= time.Millisecond*50)
+		require.True(t, elapsed < time.Millisecond*200) // Should not wait too long
 	})
+}
 
-	t.Run("test concurrent operations", func(t *testing.T) {
-		pq := NewPriorityQueue()
-		defer pq.Close()
+func TestPriorityQueue_PopOrder(t *testing.T) {
+	pq := NewPriorityQueue()
+	ctx := context.Background()
 
-		// Test that the queue is thread-safe
-		done := make(chan bool, 2)
+	// Add tasks with different priorities
+	tasks := []*mockPriorityTask{
+		newMockPriorityTask(10, "task1"),
+		newMockPriorityTask(5, "task2"), // Highest priority
+		newMockPriorityTask(15, "task3"),
+		newMockPriorityTask(7, "task4"),
+		newMockPriorityTask(12, "task5"),
+	}
 
-		// Goroutine 1: Push tasks
-		go func() {
-			for i := 0; i < 100; i++ {
-				task := NewRegionPriorityTask(TaskHighPrior, mockRegionInfo)
-				pq.Push(task)
-			}
-			done <- true
-		}()
+	for _, task := range tasks {
+		pq.Push(task)
+	}
 
-		// Goroutine 2: Pop tasks
-		go func() {
-			for i := 0; i < 100; i++ {
-				for pq.IsEmpty() {
-					time.Sleep(1 * time.Millisecond)
+	// Pop tasks and verify they come out in priority order
+	expectedOrder := []string{"task2", "task4", "task1", "task5", "task3"}
+	expectedPriorities := []int{5, 7, 10, 12, 15}
+
+	for i, expectedDesc := range expectedOrder {
+		task := pq.Pop(ctx)
+		require.NotNil(t, task)
+		require.Equal(t, expectedPriorities[i], task.Priority())
+		require.Equal(t, expectedDesc, task.(*mockPriorityTask).description)
+	}
+
+	// Verify queue is empty
+	require.Equal(t, 0, pq.Len())
+}
+
+func TestPriorityQueue_Len(t *testing.T) {
+	pq := NewPriorityQueue()
+
+	// Test empty queue
+	require.Equal(t, 0, pq.Len())
+
+	// Add tasks and verify length
+	for i := 0; i < 5; i++ {
+		task := newMockPriorityTask(i, "task")
+		pq.Push(task)
+		require.Equal(t, i+1, pq.Len())
+	}
+
+	// Remove tasks and verify length
+	ctx := context.Background()
+	for i := 4; i >= 0; i-- {
+		pq.Pop(ctx)
+		require.Equal(t, i, pq.Len())
+	}
+}
+
+func TestPriorityQueue_ConcurrentOperations(t *testing.T) {
+	pq := NewPriorityQueue()
+
+	numProducers := 3
+	numConsumers := 2
+	tasksPerProducer := 10
+	totalTasks := numProducers * tasksPerProducer
+
+	var wg sync.WaitGroup
+	var consumedCount int64
+	var mu sync.Mutex
+	consumedTasks := make([]PriorityTask, 0, totalTasks)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start consumers
+	for i := 0; i < numConsumers; i++ {
+		wg.Add(1)
+		go func(consumerID int) {
+			defer wg.Done()
+			for {
+				task := pq.Pop(ctx)
+				if task == nil {
+					return
 				}
-				task := pq.TryPop()
-				require.NotNil(t, task)
+
+				mu.Lock()
+				consumedTasks = append(consumedTasks, task)
+				count := atomic.AddInt64(&consumedCount, 1)
+				mu.Unlock()
+
+				if count >= int64(totalTasks) {
+					cancel() // Signal other consumers to stop
+					return
+				}
 			}
-			done <- true
-		}()
+		}(i)
+	}
 
-		// Wait for both goroutines to complete
-		<-done
-		<-done
+	// Start producers
+	for i := 0; i < numProducers; i++ {
+		wg.Add(1)
+		go func(producerID int) {
+			defer wg.Done()
+			for j := 0; j < tasksPerProducer; j++ {
+				priority := (producerID * tasksPerProducer) + j
+				task := newMockPriorityTask(priority, "concurrent_task")
+				pq.Push(task)
+				time.Sleep(time.Microsecond * 10) // Small delay to simulate real work
+			}
+		}(i)
+	}
 
-		require.True(t, pq.IsEmpty())
+	// Wait for all producers to finish
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	// Wait with timeout
+	select {
+	case <-done:
+		// Success
+	case <-time.After(time.Second * 5):
+		cancel() // Cancel to stop consumers
+		t.Fatal("Test timed out")
+	}
+
+	// Verify all tasks were consumed
+	require.Equal(t, int64(totalTasks), atomic.LoadInt64(&consumedCount))
+	require.Equal(t, totalTasks, len(consumedTasks))
+
+	// Verify all tasks were processed
+	for i := 0; i < len(consumedTasks); i++ {
+		require.NotNil(t, consumedTasks[i])
+	}
+}
+
+func TestPriorityQueue_SignalChannelFull(t *testing.T) {
+	pq := NewPriorityQueue()
+
+	// Fill the signal channel to capacity
+	for i := 0; i < cap(pq.signal); i++ {
+		select {
+		case pq.signal <- struct{}{}:
+		default:
+			t.Fatalf("Failed to fill signal channel at iteration %d", i)
+		}
+	}
+
+	// Push a task when signal channel is full - should not block
+	task := newMockPriorityTask(10, "task")
+	start := time.Now()
+	pq.Push(task)
+	elapsed := time.Since(start)
+
+	// Should complete quickly even though signal channel is full
+	require.True(t, elapsed < time.Millisecond*100)
+	require.Equal(t, 1, pq.Len())
+}
+
+func TestPriorityQueue_UpdateExistingTask(t *testing.T) {
+	pq := NewPriorityQueue()
+
+	// Create a task and add it to queue
+	task := newMockPriorityTask(10, "task")
+	pq.Push(task)
+	require.Equal(t, 1, pq.Len())
+
+	// Update the task's priority and push again
+	task.priority = 5
+	pq.Push(task)
+
+	// Length should still be 1 (task was updated, not added)
+	require.Equal(t, 1, pq.Len())
+
+	// Verify the task has the updated priority
+	ctx := context.Background()
+	poppedTask := pq.Pop(ctx)
+	require.NotNil(t, poppedTask)
+	require.Equal(t, 5, poppedTask.Priority())
+}
+
+func TestPriorityQueue_Close(t *testing.T) {
+	pq := NewPriorityQueue()
+
+	// Add 3 task before closing
+	task := newMockPriorityTask(10, "task")
+	pq.Push(task)
+	require.Equal(t, 1, pq.Len())
+	task2 := newMockPriorityTask(5, "task2")
+	pq.Push(task2)
+	require.Equal(t, 2, pq.Len())
+	task3 := newMockPriorityTask(15, "task3")
+	pq.Push(task3)
+	require.Equal(t, 3, pq.Len())
+
+	// Test that close doesn't panic
+	require.NotPanics(t, func() {
+		pq.Close()
 	})
+
+	// Test that the tasks are popped
+	require.Equal(t, 0, pq.Len())
+}
+
+func TestPriorityQueue_EmptyQueueOperations(t *testing.T) {
+	pq := NewPriorityQueue()
+
+	// Test peek on empty queue
+	task := pq.Peek()
+	require.Nil(t, task)
+
+	// Test len on empty queue
+	require.Equal(t, 0, pq.Len())
+
+	// Test pop on empty queue with immediate cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	task = pq.Pop(ctx)
+	require.Nil(t, task)
+}
+
+func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
+	pq := NewPriorityQueue()
+	ctx := context.Background()
+	currentTs := oracle.GoTimeToTS(time.Now())
+
+	// Create real priority tasks with different types
+	verID := tikv.NewRegionVerID(1, 1, 1)
+	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+
+	subscribedSpan := &subscribedSpan{
+		resolvedTs: atomic.Uint64{},
+	}
+	subscribedSpan.resolvedTs.Store(oracle.GoTimeToTS(time.Now().Add(-time.Second)))
+
+	regionInfo := regionInfo{
+		verID:          verID,
+		span:           span,
+		subscribedSpan: subscribedSpan,
+	}
+
+	// Create tasks with different priorities
+	errorTask := NewRegionPriorityTask(TaskRegionError, regionInfo, currentTs)
+	highTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs)
+	lowTask := NewRegionPriorityTask(TaskLowPrior, regionInfo, currentTs)
+
+	// Add tasks in non-priority order
+	pq.Push(lowTask)
+	pq.Push(errorTask)
+	pq.Push(highTask)
+
+	require.Equal(t, 3, pq.Len())
+
+	// Pop tasks and verify they come out in priority order
+	// TaskRegionError should have highest priority (lowest value)
+	first := pq.Pop(ctx)
+	require.NotNil(t, first)
+	require.Equal(t, TaskRegionError, first.(*regionPriorityTask).taskType)
+
+	second := pq.Pop(ctx)
+	require.NotNil(t, second)
+	require.Equal(t, TaskHighPrior, second.(*regionPriorityTask).taskType)
+
+	third := pq.Pop(ctx)
+	require.NotNil(t, third)
+	require.Equal(t, TaskLowPrior, third.(*regionPriorityTask).taskType)
+
+	require.Equal(t, 0, pq.Len())
 }

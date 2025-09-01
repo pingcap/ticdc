@@ -102,11 +102,11 @@ func (pt *regionPriorityTask) Priority() int {
 
 	// ResolvedTsLag in seconds, longer lag means lower priority (higher value)
 	resolvedTsLag := oracle.GetTimeFromTS(pt.currentTs).Sub(oracle.GetTimeFromTS(pt.regionInfo.subscribedSpan.resolvedTs.Load()))
-	resolvedTsLagBonus := int(resolvedTsLag.Seconds())
+	resolvedTsLagPenalty := int(resolvedTsLag.Seconds())
 
-	priority := basePriority - timeBonus + resolvedTsLagBonus
+	priority := basePriority - timeBonus + resolvedTsLagPenalty
 
-	log.Debug("fizz cdc region task priority", zap.String("regionID", fmt.Sprintf("%d", pt.regionInfo.verID.GetID())), zap.Uint64("currentTs", pt.currentTs), zap.Int("priority", priority), zap.Int("basePriority", basePriority), zap.Int("timeBonus", timeBonus), zap.Int("resolvedTsLagBonus", resolvedTsLagBonus))
+	log.Debug("fizz cdc region task priority", zap.String("regionID", fmt.Sprintf("%d", pt.regionInfo.verID.GetID())), zap.Uint64("currentTs", pt.currentTs), zap.Int("priority", priority), zap.Int("basePriority", basePriority), zap.Int("timeBonus", timeBonus), zap.Int("resolvedTsLagPenalty", resolvedTsLagPenalty))
 
 	if priority < 0 {
 		priority = 0

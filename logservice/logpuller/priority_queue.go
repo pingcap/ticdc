@@ -112,20 +112,11 @@ func (pq *PriorityQueue) Len() int {
 	return pq.heap.Len()
 }
 
-// IsEmpty returns true if the queue is empty
-func (pq *PriorityQueue) IsEmpty() bool {
-	return pq.Len() == 0
-}
-
-// Remove removes a specific task from the queue
-func (pq *PriorityQueue) Remove(task PriorityTask) bool {
-	pq.mu.Lock()
-	defer pq.mu.Unlock()
-
-	return pq.heap.Remove(task)
-}
-
 // Close closes the signal channel
 func (pq *PriorityQueue) Close() {
+	// pop all tasks
+	for pq.Len() > 0 {
+		pq.TryPop()
+	}
 	close(pq.signal)
 }
