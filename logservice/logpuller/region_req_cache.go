@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -37,7 +36,6 @@ const (
 // regionReq represents a wrapped region request with state
 type regionReq struct {
 	regionInfo regionInfo
-	state      regionReqState
 	createTime time.Time
 }
 
@@ -46,8 +44,11 @@ type requestCache struct {
 	// pending requests waiting to be sent
 	pendingQueue chan regionReq
 
-	// sent requests waiting for initialization (regionID -> regionReq)
-	sentRequests sync.Map
+	// sent requests waiting for initialization (subscriptionID -> regions -> regionReq)
+	sentRequests struct {
+		sync.RWMutex
+		regionReqs map[SubscriptionID]map[uint64]regionReq
+	}
 
 	// counter for sent but not initialized requests
 	pendingCount atomic.Int64
@@ -63,11 +64,14 @@ func newRequestCache(maxPendingCount int) *requestCache {
 	log.Info("fizz cdc new request cache", zap.Int("maxPendingCount", maxPendingCount))
 
 	return &requestCache{
-		pendingQueue:    make(chan regionReq, maxPendingCount), // Large buffer to reduce blocking
-		sentRequests:    sync.Map{},
+		pendingQueue: make(chan regionReq, maxPendingCount), // Large buffer to reduce blocking
+		sentRequests: struct {
+			sync.RWMutex
+			regionReqs map[SubscriptionID]map[uint64]regionReq
+		}{regionReqs: make(map[SubscriptionID]map[uint64]regionReq)},
 		pendingCount:    atomic.Int64{},
 		maxPendingCount: int64(maxPendingCount),
-		spaceAvailable:  make(chan struct{}, 8), // Buffered to avoid blocking
+		spaceAvailable:  make(chan struct{}, 16), // Buffered to avoid blocking
 	}
 }
 
@@ -84,7 +88,6 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 			// Try to add the request
 			req := regionReq{
 				regionInfo: region,
-				state:      regionReqStatePending,
 				createTime: time.Now(),
 			}
 
@@ -128,45 +131,77 @@ func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
 }
 
 // markSent marks a request as sent and adds it to sent requests
-func (c *requestCache) markSent(req *regionReq) {
-	req.state = regionReqStateSent
-	c.sentRequests.Store(req.regionInfo.span.String(), *req)
+func (c *requestCache) markSent(req regionReq) {
+	c.sentRequests.Lock()
+	defer c.sentRequests.Unlock()
+	log.Info("fizz cdc mark sent region request", zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)), zap.Uint64("regionID", req.regionInfo.verID.GetID()))
+	if _, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID]; !ok {
+		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID] = make(map[uint64]regionReq)
+	}
+	c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID][req.regionInfo.verID.GetID()] = req
 }
 
 // markStopped removes a sent request without changing pending count (for stopped regions)
-func (c *requestCache) markStopped(span heartbeatpb.TableSpan) {
-	if _, exists := c.sentRequests.LoadAndDelete(span.String()); exists {
+func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
+	c.sentRequests.Lock()
+	defer c.sentRequests.Unlock()
+
+	regionReqs, ok := c.sentRequests.regionReqs[subID]
+	if !ok {
+		log.Info("fizz cdc mark stopped region request not found", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID))
+		return
+	}
+
+	_, exists := regionReqs[regionID]
+	if !exists {
+		log.Info("fizz cdc mark stopped region request not found", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID))
+		return
+	}
+
+	delete(regionReqs, regionID)
+	c.pendingCount.Add(-1)
+	log.Info("fizz cdc mark stopped region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
+	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
+	// Notify waiting add operations that there's space available
+	select {
+	case c.spaceAvailable <- struct{}{}:
+	default: // If channel is full, skip notification
+	}
+}
+
+// resolve marks a region as initialized and removes it from sent requests
+func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) bool {
+	c.sentRequests.Lock()
+	defer c.sentRequests.Unlock()
+
+	regionReqs, ok := c.sentRequests.regionReqs[subscriptionID]
+	if !ok {
+		log.Info("fizz cdc resolve region request not found", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID))
+		return false
+	}
+
+	req, exists := regionReqs[regionID]
+	if !exists {
+		log.Info("fizz cdc resolve region request not found", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID))
+		return false
+	}
+
+	// Check if the subscription ID matches
+	if req.regionInfo.subscribedSpan.subID == subscriptionID {
+		delete(regionReqs, regionID)
 		c.pendingCount.Add(-1)
-		log.Info("fizz cdc mark stopped region request", zap.String("span", span.String()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
+		cost := time.Since(req.createTime)
+		log.Info("fizz cdc resolve region request", zap.String("regionID", fmt.Sprintf("%d", regionID)), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
+		metrics.RegionRequestFinishScanDuration.WithLabelValues(fmt.Sprintf("%d", regionID)).Observe(cost.Seconds())
 		// Notify waiting add operations that there's space available
 		select {
 		case c.spaceAvailable <- struct{}{}:
 		default: // If channel is full, skip notification
 		}
+		return true
 	}
-}
 
-// resolve marks a region as initialized and removes it from sent requests
-func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64, span heartbeatpb.TableSpan) bool {
-	if value, exists := c.sentRequests.Load(span.String()); exists {
-		req := value.(regionReq)
-		// Check if the subscription ID matches
-		if req.regionInfo.subscribedSpan.subID == subscriptionID {
-			c.sentRequests.Delete(span.String())
-			c.pendingCount.Add(-1)
-			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
-			cost := time.Since(req.createTime)
-			log.Info("fizz cdc resolve region request", zap.String("regionID", fmt.Sprintf("%d", regionID)), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
-			metrics.RegionRequestFinishScanDuration.WithLabelValues(fmt.Sprintf("%d", regionID)).Observe(cost.Seconds())
-			// Notify waiting add operations that there's space available
-			select {
-			case c.spaceAvailable <- struct{}{}:
-			default: // If channel is full, skip notification
-			}
-			return true
-		}
-	}
 	return false
 }
 

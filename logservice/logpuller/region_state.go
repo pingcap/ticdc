@@ -102,6 +102,8 @@ type regionFeedState struct {
 		// `err` is used to retrieve errors generated outside.
 		err error
 	}
+
+	worker *regionRequestWorker
 }
 
 func newRegionFeedState(region regionInfo, requestID uint64) *regionFeedState {

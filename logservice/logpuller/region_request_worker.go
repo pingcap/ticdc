@@ -307,14 +307,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 				worker:     s,
 				resolvedTs: resolvedTsEvent.Ts,
 			})
-			// Try to resolve in cache (marks region as initialized)
-			if s.requestCache.resolve(subscriptionID, regionID, state.getRegionInfo().span) {
-				log.Info("fizz region request worker resolved region in cache",
-					zap.Uint64("workerID", s.workerID),
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Uint64("regionID", regionID),
-					zap.Int("pendingCount", s.requestCache.getPendingCount()))
-			}
+
 		} else {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
@@ -360,7 +353,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 	s.preFetchForConnecting = nil
 	regionReq := &regionReq{
 		regionInfo: region,
-		state:      regionReqStatePending,
 	}
 	var err error
 
@@ -396,13 +388,13 @@ func (s *regionRequestWorker) processRegionSendTask(
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
 			// For stopped regions, mark as stopped in cache (decreases pending count)
-			s.requestCache.markStopped(region.span)
+			s.requestCache.markStopped(subID, region.verID.GetID())
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
 			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
-			s.requestCache.markStopped(region.span)
+			s.requestCache.markStopped(subID, region.verID.GetID())
 
 		} else {
 			state := newRegionFeedState(region, uint64(subID))
@@ -413,7 +405,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				return err
 			}
 			// Mark as sent in cache (increases pending count)
-			s.requestCache.markSent(regionReq)
+			s.requestCache.markSent(*regionReq)
 		}
 		regionReq, err = fetchMoreReq()
 		if err != nil {
@@ -444,6 +436,8 @@ func (s *regionRequestWorker) addRegionState(subscriptionID SubscriptionID, regi
 		states = make(regionFeedStates)
 		s.requestedRegions.subscriptions[subscriptionID] = states
 	}
+
+	state.worker = s
 	states[regionID] = state
 }
 

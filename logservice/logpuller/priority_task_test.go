@@ -30,37 +30,37 @@ func TestPriorityCalculationLogic(t *testing.T) {
 	tests := []struct {
 		name                    string
 		taskType                TaskType
-		resolvedTsOffsetSeconds int64 // 相对于currentTs的偏移（负数表示resolvedTs更旧）
-		waitTimeSeconds         int   // 任务等待时间
+		resolvedTsOffsetSeconds int64 // Offset relative to currentTs (negative means resolvedTs is older)
+		waitTimeSeconds         int   // Task wait time
 		description             string
 	}{
 		{
-			name:                    "高优先级_新resolvedTs",
+			name:                    "high_priority_new_resolvedTs",
 			taskType:                TaskHighPrior,
-			resolvedTsOffsetSeconds: -5, // resolvedTs 比 currentTs 早5秒
-			waitTimeSeconds:         10, // 等待了10秒
-			description:             "高优先级任务，resolvedTs较新",
+			resolvedTsOffsetSeconds: -5, // resolvedTs is 5 seconds earlier than currentTs
+			waitTimeSeconds:         10, // Waited for 10 seconds
+			description:             "High priority task with newer resolvedTs",
 		},
 		{
-			name:                    "高优先级_旧resolvedTs",
+			name:                    "high_priority_old_resolvedTs",
 			taskType:                TaskHighPrior,
-			resolvedTsOffsetSeconds: -30, // resolvedTs 比 currentTs 早30秒
-			waitTimeSeconds:         10,  // 等待了10秒
-			description:             "高优先级任务，resolvedTs较旧",
+			resolvedTsOffsetSeconds: -30, // resolvedTs is 30 seconds earlier than currentTs
+			waitTimeSeconds:         10,  // Waited for 10 seconds
+			description:             "High priority task with older resolvedTs",
 		},
 		{
-			name:                    "低优先级_新resolvedTs",
+			name:                    "low_priority_new_resolvedTs",
 			taskType:                TaskLowPrior,
-			resolvedTsOffsetSeconds: -5, // resolvedTs 比 currentTs 早5秒
-			waitTimeSeconds:         10, // 等待了10秒
-			description:             "低优先级任务，resolvedTs较新",
+			resolvedTsOffsetSeconds: -5, // resolvedTs is 5 seconds earlier than currentTs
+			waitTimeSeconds:         10, // Waited for 10 seconds
+			description:             "Low priority task with newer resolvedTs",
 		},
 		{
-			name:                    "低优先级_旧resolvedTs",
+			name:                    "low_priority_old_resolvedTs",
 			taskType:                TaskLowPrior,
-			resolvedTsOffsetSeconds: -30, // resolvedTs 比 currentTs 早30秒
-			waitTimeSeconds:         10,  // 等待了10秒
-			description:             "低优先级任务，resolvedTs较旧",
+			resolvedTsOffsetSeconds: -30, // resolvedTs is 30 seconds earlier than currentTs
+			waitTimeSeconds:         10,  // Waited for 10 seconds
+			description:             "Low priority task with older resolvedTs",
 		},
 	}
 
@@ -69,11 +69,11 @@ func TestPriorityCalculationLogic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// 计算 resolvedTs：currentTs + offset
+			// Calculate resolvedTs: currentTs + offset
 			resolvedTime := oracle.GetTimeFromTS(currentTs).Add(time.Duration(tt.resolvedTsOffsetSeconds) * time.Second)
 			resolvedTs := oracle.GoTimeToTS(resolvedTime)
 
-			// 模拟优先级计算逻辑
+			// Simulate priority calculation logic
 			priority := calculatePriorityDirectly(tt.taskType, currentTs, resolvedTs, tt.waitTimeSeconds)
 
 			t.Logf("%s: Priority = %d", tt.description, priority)
@@ -82,36 +82,36 @@ func TestPriorityCalculationLogic(t *testing.T) {
 		})
 	}
 
-	// 验证优先级顺序
-	t.Run("验证优先级顺序", func(t *testing.T) {
+	// Verify priority order
+	t.Run("verify_priority_order", func(t *testing.T) {
 		require.Equal(t, 4, len(priorities))
 
-		highPriorNewResolvedTs := priorities[0] // 高优先级_新resolvedTs
-		highPriorOldResolvedTs := priorities[1] // 高优先级_旧resolvedTs
-		lowPriorNewResolvedTs := priorities[2]  // 低优先级_新resolvedTs
-		lowPriorOldResolvedTs := priorities[3]  // 低优先级_旧resolvedTs
+		highPriorNewResolvedTs := priorities[0] // High priority with new resolvedTs
+		highPriorOldResolvedTs := priorities[1] // High priority with old resolvedTs
+		lowPriorNewResolvedTs := priorities[2]  // Low priority with new resolvedTs
+		lowPriorOldResolvedTs := priorities[3]  // Low priority with old resolvedTs
 
-		t.Logf("优先级对比:")
+		t.Logf("Priority comparison:")
 		for i, desc := range taskDescriptions {
 			t.Logf("  %s: %d", desc, priorities[i])
 		}
 
-		// 核心验证：相同任务类型下，resolvedTs越新（lag越小），优先级越高（数值越小）
+		// Core verification: For the same task type, newer resolvedTs (smaller lag) should have higher priority (smaller value)
 		require.Less(t, highPriorNewResolvedTs, highPriorOldResolvedTs,
-			"相同任务类型下，resolvedTs越新的任务优先级应该越高")
+			"For the same task type, tasks with newer resolvedTs should have higher priority")
 		require.Less(t, lowPriorNewResolvedTs, lowPriorOldResolvedTs,
-			"相同任务类型下，resolvedTs越新的任务优先级应该越高")
+			"For the same task type, tasks with newer resolvedTs should have higher priority")
 
-		// 验证：高优先级任务总是比低优先级任务优先级高
+		// Verify: High priority tasks always have higher priority than low priority tasks
 		require.Less(t, highPriorNewResolvedTs, lowPriorNewResolvedTs,
-			"高优先级任务应该比低优先级任务优先级高")
+			"High priority tasks should have higher priority than low priority tasks")
 		require.Less(t, highPriorOldResolvedTs, lowPriorOldResolvedTs,
-			"即使resolvedTs较旧，高优先级任务仍应比低优先级任务优先级高")
+			"Even with older resolvedTs, high priority tasks should still have higher priority than low priority tasks")
 	})
 }
 
-// calculatePriorityDirectly 直接计算优先级，用于测试
-// 复制了 regionPriorityTask.Priority() 的逻辑
+// calculatePriorityDirectly directly calculates priority for testing
+// Copies the logic from regionPriorityTask.Priority()
 func calculatePriorityDirectly(taskType TaskType, currentTs, resolvedTs uint64, waitTimeSeconds int) int {
 	// Base priority based on task type
 	basePriority := 0
@@ -142,30 +142,30 @@ func TestResolvedTsLagLogic(t *testing.T) {
 	currentTime := time.Now()
 	currentTs := oracle.GoTimeToTS(currentTime)
 
-	t.Run("测试resolvedTs lag计算逻辑", func(t *testing.T) {
-		// 场景1：resolvedTs比currentTs早10秒（resolvedTs更旧）
+	t.Run("test_resolvedTs_lag_calculation_logic", func(t *testing.T) {
+		// Scenario 1: resolvedTs is 10 seconds earlier than currentTs (resolvedTs is older)
 		resolvedTs1 := oracle.GoTimeToTS(currentTime.Add(-10 * time.Second))
 		lag1 := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(resolvedTs1))
-		t.Logf("resolvedTs早10秒，lag = %v (%.0f 秒)", lag1, lag1.Seconds())
+		t.Logf("resolvedTs is 10 seconds earlier, lag = %v (%.0f seconds)", lag1, lag1.Seconds())
 
-		// 场景2：resolvedTs比currentTs早1秒（resolvedTs较新）
+		// Scenario 2: resolvedTs is 1 second earlier than currentTs (resolvedTs is newer)
 		resolvedTs2 := oracle.GoTimeToTS(currentTime.Add(-1 * time.Second))
 		lag2 := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(resolvedTs2))
-		t.Logf("resolvedTs早1秒，lag = %v (%.0f 秒)", lag2, lag2.Seconds())
+		t.Logf("resolvedTs is 1 second earlier, lag = %v (%.0f seconds)", lag2, lag2.Seconds())
 
-		// 验证：resolvedTs越新，lag越小
-		require.Less(t, lag2, lag1, "resolvedTs越新，lag应该越小")
+		// Verify: newer resolvedTs should have smaller lag
+		require.Less(t, lag2, lag1, "newer resolvedTs should have smaller lag")
 
-		// 计算对优先级的影响
+		// Calculate the impact on priority
 		priority1 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs1, 5)
 		priority2 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs2, 5)
 
-		t.Logf("resolvedTs旧10秒的优先级: %d", priority1)
-		t.Logf("resolvedTs新1秒的优先级: %d", priority2)
+		t.Logf("Priority with resolvedTs 10 seconds old: %d", priority1)
+		t.Logf("Priority with resolvedTs 1 second old: %d", priority2)
 
-		// 验证：resolvedTs越新，优先级越高（数值越小）
+		// Verify: newer resolvedTs should have higher priority (smaller value)
 		require.Less(t, priority2, priority1,
-			"resolvedTs越新的任务优先级应该越高")
+			"tasks with newer resolvedTs should have higher priority")
 	})
 }
 
@@ -173,30 +173,30 @@ func TestEdgeCases(t *testing.T) {
 	currentTime := time.Now()
 	currentTs := oracle.GoTimeToTS(currentTime)
 
-	t.Run("resolvedTs在未来的情况", func(t *testing.T) {
+	t.Run("resolvedTs in the future", func(t *testing.T) {
 		// resolvedTs比currentTs晚5秒（在未来）
 		resolvedTs := oracle.GoTimeToTS(currentTime.Add(5 * time.Second))
 
 		lag := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(resolvedTs))
-		t.Logf("resolvedTs在未来5秒，lag = %v (%.0f 秒)", lag, lag.Seconds())
+		t.Logf("resolvedTs in the future 5 seconds, lag = %v (%.0f seconds)", lag, lag.Seconds())
 
 		priority := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs, 5)
-		t.Logf("resolvedTs在未来的优先级: %d", priority)
+		t.Logf("resolvedTs in the future priority: %d", priority)
 
 		// 当resolvedTs在未来时，lag为负数，会降低优先级数值，提高实际优先级
-		require.GreaterOrEqual(t, priority, 0, "优先级不应该小于0")
+		require.GreaterOrEqual(t, priority, 0, "priority should not be less than 0")
 	})
 
-	t.Run("不同等待时间的影响", func(t *testing.T) {
+	t.Run("different wait time impact", func(t *testing.T) {
 		resolvedTs := oracle.GoTimeToTS(currentTime.Add(-10 * time.Second))
 
-		priority1 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs, 2)  // 等待2秒
-		priority2 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs, 10) // 等待10秒
+		priority1 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs, 2)
+		priority2 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs, 10)
 
-		t.Logf("等待2秒的优先级: %d", priority1)
-		t.Logf("等待10秒的优先级: %d", priority2)
+		t.Logf("wait 2 seconds priority: %d", priority1)
+		t.Logf("wait 10 seconds priority: %d", priority2)
 
-		// 等待时间越长，优先级越高（数值越小）
-		require.Less(t, priority2, priority1, "等待时间越长的任务优先级应该越高")
+		// wait time longer task priority should be higher
+		require.Less(t, priority2, priority1, "wait time longer task priority should be higher")
 	})
 }
