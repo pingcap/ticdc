@@ -139,6 +139,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 	replications := c.spanController.GetTasksByTableID(tableID)
 	if len(replications) > 1 {
 		log.Info("More then one replications; There is no need to do split", zap.Any("tableID", tableID))
+		return nil
 	}
 
 	span := common.TableIDToComparableSpan(tableID)

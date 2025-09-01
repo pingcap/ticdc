@@ -109,6 +109,14 @@ func (p *TableProgress) Empty() bool {
 	return p.list.Len() == 0
 }
 
+// Pass updates the maxCommitTs with the given event's commit timestamp.
+func (p *TableProgress) Pass(event commonEvent.FlushableEvent) {
+	p.rwMutex.Lock()
+	defer p.rwMutex.Unlock()
+
+	p.maxCommitTs = getFinalCommitTs(event)
+}
+
 func (p *TableProgress) Len() int {
 	p.rwMutex.RLock()
 	defer p.rwMutex.RUnlock()
@@ -119,14 +127,6 @@ func (p *TableProgress) MaxCommitTs() uint64 {
 	p.rwMutex.RLock()
 	defer p.rwMutex.RUnlock()
 	return p.maxCommitTs
-}
-
-// Pass updates the maxCommitTs with the given event's commit timestamp.
-func (p *TableProgress) Pass(event commonEvent.FlushableEvent) {
-	p.rwMutex.Lock()
-	defer p.rwMutex.Unlock()
-
-	p.maxCommitTs = getFinalCommitTs(event)
 }
 
 // GetCheckpointTs returns the current checkpoint timestamp for the table span.

@@ -55,7 +55,7 @@ type Controller struct {
 	nodeManager    *watcher.NodeManager
 	splitter       *split.Splitter
 
-	mu           sync.RWMutex // protect the following fields // TODO:use a struct instead of a mu+map
+	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 }
@@ -414,7 +414,6 @@ func (oc *Controller) AddMergeOperator(
 	return mergeOperator
 }
 
-// =========== following func only for test ===========
 func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
 	oc.mu.RLock()
 	defer oc.mu.RUnlock()
@@ -427,6 +426,7 @@ func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID,
 	return operators
 }
 
+// =========== following func only for test ===========
 func (oc *Controller) RemoveOp(id common.DispatcherID) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()

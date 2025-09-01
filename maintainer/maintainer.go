@@ -48,36 +48,6 @@ const (
 	periodEventInterval = time.Millisecond * 100
 )
 
-type CheckpointTsCaptureMap struct {
-	mu sync.RWMutex
-	m  map[node.ID]heartbeatpb.Watermark
-}
-
-func newCheckpointTsCaptureMap() *CheckpointTsCaptureMap {
-	return &CheckpointTsCaptureMap{
-		m: make(map[node.ID]heartbeatpb.Watermark),
-	}
-}
-
-func (c *CheckpointTsCaptureMap) Get(nodeID node.ID) (heartbeatpb.Watermark, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	watermark, ok := c.m[nodeID]
-	return watermark, ok
-}
-
-func (c *CheckpointTsCaptureMap) Set(nodeID node.ID, watermark heartbeatpb.Watermark) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.m[nodeID] = watermark
-}
-
-func (c *CheckpointTsCaptureMap) Delete(nodeID node.ID) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.m, nodeID)
-}
-
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
 // 1. schedule tables to dispatcher manager
 // 2. calculate changefeed checkpoint ts
@@ -524,23 +494,11 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				break
 			}
 
-			// make sure there is no task running
-			// the dispatcher changing come from:
-			// 1. node change
-			// 2. ddl
-			// 3. interval scheduling, like balance, split
+			// the min checkpointTs is taken from the minimum of three sources: dispatcher reported checkpointTs,
+			// minimum checkpointTs of new tables undergoing DDL, and checkpointTs of tasks in scheduling.
 
-			// Thus, to ensure the whole process atomic, we first obtain the lock of operator and barrier
-			// then do the basic check.
-			// We ensure only the operator and barrier can generate absent replica, so we don't need to obtain the lock of replicationDB
-			// If all check is successfully, we begin to do the checkpointTs calculation,
-			// otherwise, we just return.
-			// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
-
-			// TODO: consider how can we simplify the logic better
 			minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
 			minCheckpointTsForBarrier := m.barrier.GetMinBlockedCheckpointTsForNewTables()
-			log.Info("checkpointTs", zap.Any("minCheckpointTsForScheduler", minCheckpointTsForScheduler), zap.Any("minCheckpointTsForBarrier", minCheckpointTsForBarrier))
 
 			newWatermark := heartbeatpb.NewMaxWatermark()
 			// if there is no tables, there must be a table trigger dispatcher
@@ -562,7 +520,6 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				}
 				newWatermark.UpdateMin(watermark)
 			}
-			log.Info("newWatermark", zap.Any("newWatermark", newWatermark))
 
 			if !updateCheckpointTs {
 				break
@@ -575,7 +532,7 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
 			}
 
-			log.Info("can advance checkpointTs",
+			log.Debug("can advance checkpointTs",
 				zap.String("changefeed", m.id.Name()),
 				zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
@@ -963,38 +920,4 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	if newWatermark.ResolvedTs != math.MaxUint64 {
 		m.watermark.ResolvedTs = newWatermark.ResolvedTs
 	}
-}
-
-// ========================== Exported methods for HTTP API ==========================
-
-// GetDispatcherCount returns the number of dispatchers.
-func (m *Maintainer) GetDispatcherCount() int {
-	return len(m.controller.spanController.GetAllTasks())
-}
-
-// MoveTable moves a table to a specific node.
-func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
-	return m.controller.moveTable(tableId, targetNode)
-}
-
-// MoveSplitTable moves all the dispatchers in a split table to a specific node.
-func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
-	return m.controller.moveSplitTable(tableId, targetNode)
-}
-
-// GetTables returns all tables.
-func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.controller.spanController.GetAllTasks()
-}
-
-// SplitTableByRegionCount split table based on region count
-// it can split the table whether the table have one dispatcher or multiple dispatchers
-func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
-	return m.controller.splitTableByRegionCount(tableId)
-}
-
-// MergeTable merge two dispatchers in this table into one dispatcher,
-// so after merge table, the table may also have multiple dispatchers
-func (m *Maintainer) MergeTable(tableId int64) error {
-	return m.controller.mergeTable(tableId)
 }

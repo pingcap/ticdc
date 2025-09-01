@@ -296,7 +296,6 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
 
-	// TODO: check if we need to lock the mu here, or we can add a lock inner the checker
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	checker.UpdateStatus(span)

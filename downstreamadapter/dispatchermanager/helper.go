@@ -481,8 +481,7 @@ func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) interface{} {
 func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
-		&MergeDispatcherRequestHandler{},
-	)
+		&MergeDispatcherRequestHandler{})
 	ds.Start()
 	return ds
 }

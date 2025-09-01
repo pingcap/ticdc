@@ -220,7 +220,6 @@ func (db *replicationDB[T, R]) GetReplicatingSize() int {
 	db.withRLock(func() {
 		for _, g := range db.taskGroups {
 			size += g.GetReplicatingSize()
-			log.Info("hyy GetReplicatingSize group", zap.String("group", g.id), zap.Int("GetReplicatingSize", g.GetReplicatingSize()), zap.Any("size", size))
 		}
 	})
 	return size

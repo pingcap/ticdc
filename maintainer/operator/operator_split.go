@@ -29,7 +29,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// TODO: need a test
 // SplitDispatcherOperator support two kinds of split operator:
 // 1. just split the span to some new spans. It does not determine in which node the new span will be stored.
 // 2. split the span to some new spans, and still store the span in the origin node.

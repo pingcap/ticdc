@@ -223,8 +223,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Uint64("checkpointTs", req.CheckpointTs),
 			zap.Any("config", cfConfig))
 	}
-	maintainer := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
-		req.CheckpointTs, req.IsNewChangefeed)
+	maintainer := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed)
 	m.maintainers.Store(cfID, maintainer)
 	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	return nil
