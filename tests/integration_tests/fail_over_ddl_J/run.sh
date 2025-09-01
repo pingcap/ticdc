@@ -92,7 +92,6 @@ function failOverCaseJ-1() {
 
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	# For kafka/pulsar consumer, ddl event will be flushed after received the global minimum watermark
-	# kafka and storage is not supported yet.
 	if [ "$SINK_TYPE" == "mysql" ]; then
 		ensure 30 "run_sql 'show databases;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'fail_over_ddl_test'"
 	fi
@@ -151,7 +150,6 @@ function failOverCaseJ-2() {
 
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	# For kafka/pulsar consumer, ddl event will be flushed after received the global minimum watermark
-	# kafka and storage is not supported yet.
 	if [ "$SINK_TYPE" == "mysql" ]; then
 		ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1'"
 	fi
@@ -216,7 +214,6 @@ function failOverCaseJ-3() {
 
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	# For kafka/pulsar consumer, ddl event will be flushed after received the global minimum watermark
-	# kafka and storage is not supported yet.
 	if [ "$SINK_TYPE" == "mysql" ]; then
 		ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test4'"
 	fi
@@ -286,7 +283,6 @@ function failOverCaseJ-4() {
 
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	# For kafka/pulsar consumer, ddl event will be flushed after received the global minimum watermark
-	# kafka and storage is not supported yet.
 	if [ "$SINK_TYPE" == "mysql" ]; then
 		ensure 30 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains '2'"
 	fi
