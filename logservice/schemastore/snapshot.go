@@ -24,13 +24,22 @@ import (
 	"github.com/google/btree"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
+	tidbkv "github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/meta"
 	timeta "github.com/pingcap/tidb/pkg/meta"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tiflow/cdc/model"
+	timodel "github.com/pingcap/tidb/pkg/meta/common"
+	"github.com/pingcap/tiflow/cdc/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/filter"
 	"go.uber.org/zap"
 )
+
+// GetSnapshotMeta returns tidb meta information
+func GetSnapshotMeta(tiStore tidbkv.Storage, ts uint64) meta.Reader {
+	snapshot := tiStore.GetSnapshot(tidbkv.NewVersion(ts))
+	return meta.NewReader(snapshot)
+}
 
 // Snapshot stores the source TiDB all schema information.
 // If no special comments, all public methods are thread-safe.
@@ -40,7 +49,7 @@ type Snapshot struct {
 }
 
 // PreTableInfo returns the table info which will be overwritten by the specified job
-func (s *Snapshot) PreTableInfo(job *timodel.Job) (*model.TableInfo, error) {
+func (s *Snapshot) PreTableInfo(job *timodel.Job) (*common.TableInfo, error) {
 	switch job.Type {
 	case timodel.ActionCreateSchema, timodel.ActionModifySchemaCharsetAndCollate, timodel.ActionDropSchema:
 		return nil, nil
@@ -107,7 +116,7 @@ func (s *Snapshot) FillSchemaName(job *timodel.Job) error {
 
 // NewSnapshotFromMeta creates a schema snapshot from meta.
 func NewSnapshotFromMeta(
-	id model.ChangeFeedID,
+	id common.ChangeFeedID,
 	meta timeta.Reader,
 	currentTs uint64,
 	forceReplicate bool,
@@ -174,7 +183,7 @@ func NewSnapshotFromMeta(
 		}
 
 		for _, tableInfo := range tableInfos {
-			tableInfo := model.WrapTableInfo(dbinfo.ID, dbinfo.Name.O, currentTs, tableInfo)
+			tableInfo := common.WrapTableInfo(dbinfo.ID, dbinfo.Name.O, currentTs, tableInfo)
 			tableCount++
 			snap.inner.tables.ReplaceOrInsert(versionedID{
 				id:     tableInfo.ID,
@@ -260,7 +269,7 @@ func (s *Snapshot) PrintStatus(logger func(msg string, fields ...zap.Field)) {
 	})
 
 	availableTables := make(map[int64]struct{}, s.inner.tables.Len())
-	s.IterTables(true, func(tableInfo *model.TableInfo) {
+	s.IterTables(true, func(tableInfo *common.TableInfo) {
 		availableTables[tableInfo.ID] = struct{}{}
 		logger("[SchemaSnap] --> Tables", zap.Int64("tableID", tableInfo.ID),
 			zap.Stringer("tableInfo", tableInfo),
@@ -277,7 +286,7 @@ func (s *Snapshot) PrintStatus(logger func(msg string, fields ...zap.Field)) {
 		}
 	})
 
-	s.IterPartitions(true, func(pid int64, table *model.TableInfo) {
+	s.IterPartitions(true, func(pid int64, table *common.TableInfo) {
 		logger("[SchemaSnap] --> Partitions", zap.Int64("partitionID", pid), zap.Int64("tableID", table.ID),
 			zap.Bool("ineligible", s.inner.isIneligibleTableID(pid)))
 	})
@@ -298,7 +307,7 @@ func (s *Snapshot) IterSchemaNames(f func(schema string, target int64)) {
 }
 
 // IterTables iterates all tables in the snapshot.
-func (s *Snapshot) IterTables(includeIneligible bool, f func(i *model.TableInfo)) {
+func (s *Snapshot) IterTables(includeIneligible bool, f func(i *common.TableInfo)) {
 	s.rwlock.RLock()
 	defer s.rwlock.RUnlock()
 	s.inner.iterTables(includeIneligible, f)
@@ -312,7 +321,7 @@ func (s *Snapshot) IterTableNames(f func(schema int64, table string, target int6
 }
 
 // IterPartitions iterates all partitions in the snapshot.
-func (s *Snapshot) IterPartitions(includeIneligible bool, f func(id int64, i *model.TableInfo)) {
+func (s *Snapshot) IterPartitions(includeIneligible bool, f func(id int64, i *common.TableInfo)) {
 	s.rwlock.RLock()
 	defer s.rwlock.RUnlock()
 	s.inner.iterPartitions(includeIneligible, f)
@@ -330,7 +339,7 @@ func (s *Snapshot) SchemaByID(id int64) (*timodel.DBInfo, bool) {
 // PhysicalTableByID returns the TableInfo by table id or partition id.
 // The second returned value is false if no table with the specified id is found.
 // NOTE: The returned table info should always be READ-ONLY!
-func (s *Snapshot) PhysicalTableByID(id int64) (*model.TableInfo, bool) {
+func (s *Snapshot) PhysicalTableByID(id int64) (*common.TableInfo, bool) {
 	s.rwlock.RLock()
 	defer s.rwlock.RUnlock()
 	return s.inner.physicalTableByID(id)
@@ -354,7 +363,7 @@ func (s *Snapshot) TableIDByName(schema string, table string) (int64, bool) {
 // TableByName queries a table by name,
 // The second returned value is false if no table with the specified name is found.
 // NOTE: The returned table info should always be READ-ONLY!
-func (s *Snapshot) TableByName(schema, table string) (*model.TableInfo, bool) {
+func (s *Snapshot) TableByName(schema, table string) (*common.TableInfo, bool) {
 	s.rwlock.RLock()
 	defer s.rwlock.RUnlock()
 	return s.inner.tableByName(schema, table)
@@ -407,9 +416,8 @@ func (s *Snapshot) Drop() {
 	s.inner.drop()
 }
 
-func getWrapTableInfo(job *timodel.Job) *model.TableInfo {
-	return model.WrapTableInfo(job.SchemaID, job.SchemaName,
-		job.BinlogInfo.FinishedTS,
+func getWrapTableInfo(job *timodel.Job) *common.TableInfo {
+	return common.WrapTableInfo(job.SchemaID, job.SchemaName,
 		job.BinlogInfo.TableInfo)
 }
 
@@ -461,8 +469,7 @@ func (s *Snapshot) DoHandleDDL(job *timodel.Job) error {
 	case timodel.ActionCreateTables:
 		multiTableInfos := job.BinlogInfo.MultipleTableInfos
 		for _, tableInfo := range multiTableInfos {
-			err := s.inner.createTable(model.WrapTableInfo(job.SchemaID, job.SchemaName,
-				job.BinlogInfo.FinishedTS, tableInfo), job.BinlogInfo.FinishedTS)
+			err := s.inner.createTable(common.WrapTableInfo(job.SchemaID, job.SchemaName, tableInfo), job.BinlogInfo.FinishedTS)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -532,7 +539,7 @@ func (s *Snapshot) DoHandleDDL(job *timodel.Job) error {
 func (s *Snapshot) TableCount(includeIneligible bool,
 	filter func(schema, table string) bool,
 ) (count int) {
-	s.IterTables(includeIneligible, func(i *model.TableInfo) {
+	s.IterTables(includeIneligible, func(i *common.TableInfo) {
 		if filter(i.TableName.Schema, i.TableName.Table) {
 			count++
 		}
@@ -554,12 +561,12 @@ func (s *Snapshot) DumpToString() string {
 	})
 
 	tables := make([]string, 0, s.inner.tables.Len())
-	s.IterTables(true, func(tbInfo *model.TableInfo) {
+	s.IterTables(true, func(tbInfo *common.TableInfo) {
 		tables = append(tables, fmt.Sprintf("%v", tbInfo))
 	})
 
 	partitions := make([]string, 0, s.inner.partitions.Len())
-	s.IterPartitions(true, func(id int64, _ *model.TableInfo) {
+	s.IterPartitions(true, func(id int64, _ *common.TableInfo) {
 		partitions = append(partitions, fmt.Sprintf("%d", id))
 	})
 
@@ -594,11 +601,11 @@ type snapshot struct {
 	// The target can be `nil` which means the entity is deleted.
 	schemas *btree.BTreeG[versionedID]
 
-	// map[versionedID] -> *model.TableInfo
+	// map[versionedID] -> *common.TableInfo
 	// The target can be `nil` which means the entity is deleted.
 	tables *btree.BTreeG[versionedID]
 
-	// map[versionedID] -> *model.TableInfo
+	// map[versionedID] -> *common.TableInfo
 	partitions *btree.BTreeG[versionedID]
 
 	// map[versionedID] -> struct{}
@@ -626,7 +633,7 @@ func (s *snapshot) schemaByID(id int64) (val *timodel.DBInfo, ok bool) {
 	return
 }
 
-func (s *snapshot) physicalTableByID(id int64) (tableInfo *model.TableInfo, ok bool) {
+func (s *snapshot) physicalTableByID(id int64) (tableInfo *common.TableInfo, ok bool) {
 	tag := negative(s.currentTs)
 	start := versionedID{id: id, tag: tag, target: nil}
 	end := versionedID{id: id, tag: negative(uint64(0)), target: nil}
@@ -674,7 +681,7 @@ func (s *snapshot) tableIDByName(schema string, table string) (id int64, ok bool
 	return
 }
 
-func (s *snapshot) tableByName(schema, table string) (info *model.TableInfo, ok bool) {
+func (s *snapshot) tableByName(schema, table string) (info *common.TableInfo, ok bool) {
 	id, ok := s.tableIDByName(schema, table)
 	if !ok {
 		return nil, ok
@@ -789,7 +796,7 @@ func (s *snapshot) dropTable(id int64, currentTs uint64) error {
 	return nil
 }
 
-func (s *snapshot) doDropTable(tbInfo *model.TableInfo, currentTs uint64) {
+func (s *snapshot) doDropTable(tbInfo *common.TableInfo, currentTs uint64) {
 	tag := negative(currentTs)
 	s.tables.ReplaceOrInsert(newVersionedID(tbInfo.ID, tag))
 	s.tableNameToID.ReplaceOrInsert(newVersionedEntityName(tbInfo.SchemaID, tbInfo.TableName.Table, tag))
@@ -804,7 +811,7 @@ func (s *snapshot) doDropTable(tbInfo *model.TableInfo, currentTs uint64) {
 // NOTE: after a table is truncated:
 //   - physicalTableByID(id) will return nil;
 //   - IsTruncateTableID(id) should return true.
-func (s *snapshot) truncateTable(id int64, tbInfo *model.TableInfo, currentTs uint64) (err error) {
+func (s *snapshot) truncateTable(id int64, tbInfo *common.TableInfo, currentTs uint64) (err error) {
 	old, ok := s.physicalTableByID(id)
 	if !ok {
 		return cerror.ErrSnapshotTableNotFound.GenWithStackByArgs(id)
@@ -821,7 +828,7 @@ func (s *snapshot) truncateTable(id int64, tbInfo *model.TableInfo, currentTs ui
 }
 
 // Create a new table in the snapshot. `tbInfo` will be deeply copied.
-func (s *snapshot) createTable(tbInfo *model.TableInfo, currentTs uint64) error {
+func (s *snapshot) createTable(tbInfo *common.TableInfo, currentTs uint64) error {
 	if _, ok := s.schemaByID(tbInfo.SchemaID); !ok {
 		return cerror.ErrSnapshotSchemaNotFound.GenWithStack("table's schema(%d)", tbInfo.SchemaID)
 	}
@@ -836,7 +843,7 @@ func (s *snapshot) createTable(tbInfo *model.TableInfo, currentTs uint64) error 
 }
 
 // ReplaceTable replace the table by new tableInfo
-func (s *snapshot) replaceTable(tbInfo *model.TableInfo, currentTs uint64) error {
+func (s *snapshot) replaceTable(tbInfo *common.TableInfo, currentTs uint64) error {
 	if _, ok := s.schemaByID(tbInfo.SchemaID); !ok {
 		return cerror.ErrSnapshotSchemaNotFound.GenWithStack("table's schema(%d)", tbInfo.SchemaID)
 	}
@@ -849,7 +856,7 @@ func (s *snapshot) replaceTable(tbInfo *model.TableInfo, currentTs uint64) error
 	return nil
 }
 
-func (s *snapshot) doCreateTable(tbInfo *model.TableInfo, currentTs uint64) {
+func (s *snapshot) doCreateTable(tbInfo *common.TableInfo, currentTs uint64) {
 	tbInfo = tbInfo.Clone()
 	tag := negative(currentTs)
 	vid := newVersionedID(tbInfo.ID, tag)
@@ -884,7 +891,7 @@ func (s *snapshot) doCreateTable(tbInfo *model.TableInfo, currentTs uint64) {
 }
 
 // updatePartition updates partition info for `tbInfo`.
-func (s *snapshot) updatePartition(tbInfo *model.TableInfo, isTruncate bool, currentTs uint64) error {
+func (s *snapshot) updatePartition(tbInfo *common.TableInfo, isTruncate bool, currentTs uint64) error {
 	oldTbInfo, ok := s.physicalTableByID(tbInfo.ID)
 	if !ok {
 		return cerror.ErrSnapshotTableNotFound.GenWithStackByArgs(tbInfo.ID)
@@ -936,7 +943,7 @@ func (s *snapshot) updatePartition(tbInfo *model.TableInfo, isTruncate bool, cur
 	return nil
 }
 
-func (s *snapshot) getSourceTable(targetTable *timodel.TableInfo) (*model.TableInfo, int64, error) {
+func (s *snapshot) getSourceTable(targetTable *timodel.TableInfo) (*common.TableInfo, int64, error) {
 	oldTable, ok := s.physicalTableByID(targetTable.ID)
 	if !ok {
 		return nil, 0, cerror.ErrSnapshotTableNotFound.GenWithStackByArgs(targetTable.ID)
@@ -999,8 +1006,8 @@ func (s *snapshot) getSourceTable(targetTable *timodel.TableInfo) (*model.TableI
 // and find the sourceTable's id in the new table info of targetTable.
 // Then set sourceTable's id to the partition's id, which make the exchange happen in snapshot.
 // Finally, update both the targetTable's info and the sourceTable's info in snapshot.
-func (s *snapshot) exchangePartition(targetTable *model.TableInfo, currentTS uint64) error {
-	var sourceTable *model.TableInfo
+func (s *snapshot) exchangePartition(targetTable *common.TableInfo, currentTS uint64) error {
+	var sourceTable *common.TableInfo
 	sourceTable, exchangedPartitionID, err := s.getSourceTable(targetTable.TableInfo)
 	if err != nil {
 		return errors.Trace(err)
@@ -1019,7 +1026,7 @@ func (s *snapshot) exchangePartition(targetTable *model.TableInfo, currentTS uin
 		return errors.Trace(err)
 	}
 
-	newSourceTable := model.WrapTableInfo(sourceTable.SchemaID, sourceTable.TableName.Schema,
+	newSourceTable := common.WrapTableInfo(sourceTable.SchemaID, sourceTable.TableName.Schema,
 		currentTS, sourceTable.TableInfo.Clone())
 	// 5.update the sourceTable
 	err = s.dropTable(sourceTable.ID, currentTS)
@@ -1048,7 +1055,7 @@ func (s *snapshot) alterPartitioning(job *timodel.Job) error {
 		return errors.Trace(err)
 	}
 	// (re)create table, again will work with both partitioned and non-paritioned tables
-	// it uses the model.TableInfo written to the job.BinlogInfo, which is the final one
+	// it uses the common.TableInfo written to the job.BinlogInfo, which is the final one
 	err = s.createTable(getWrapTableInfo(job), job.BinlogInfo.FinishedTS)
 	if err != nil {
 		return errors.Trace(err)
@@ -1082,7 +1089,7 @@ func (s *snapshot) renameTables(job *timodel.Job, currentTs uint64) error {
 			return cerror.ErrSnapshotSchemaNotFound.GenWithStackByArgs(info.NewSchemaID)
 		}
 		newSchemaName := newSchema.Name.O
-		tbInfo := model.WrapTableInfo(info.NewSchemaID, newSchemaName, job.BinlogInfo.FinishedTS, tableInfo)
+		tbInfo := common.WrapTableInfo(info.NewSchemaID, newSchemaName, job.BinlogInfo.FinishedTS, tableInfo)
 		err = s.createTable(tbInfo, currentTs)
 		if err != nil {
 			return errors.Trace(err)
@@ -1091,7 +1098,7 @@ func (s *snapshot) renameTables(job *timodel.Job, currentTs uint64) error {
 	return nil
 }
 
-func (s *snapshot) iterTables(includeIneligible bool, f func(i *model.TableInfo)) {
+func (s *snapshot) iterTables(includeIneligible bool, f func(i *common.TableInfo)) {
 	tag := negative(s.currentTs)
 	var tableID int64 = -1
 	s.tables.Ascend(func(x versionedID) bool {
@@ -1106,7 +1113,7 @@ func (s *snapshot) iterTables(includeIneligible bool, f func(i *model.TableInfo)
 	})
 }
 
-func (s *snapshot) iterPartitions(includeIneligible bool, f func(id int64, i *model.TableInfo)) {
+func (s *snapshot) iterPartitions(includeIneligible bool, f func(id int64, i *common.TableInfo)) {
 	tag := negative(s.currentTs)
 	var partitionID int64 = -1
 	s.partitions.Ascend(func(x versionedID) bool {
@@ -1354,11 +1361,11 @@ func newVersionedID(id int64, tag uint64) versionedID {
 	return versionedID{id, tag, target}
 }
 
-func targetToTableInfo(target interface{}) *model.TableInfo {
+func targetToTableInfo(target interface{}) *common.TableInfo {
 	if target == nil {
 		return nil
 	}
-	return target.(*model.TableInfo)
+	return target.(*common.TableInfo)
 }
 
 func targetToDBInfo(target interface{}) *timodel.DBInfo {

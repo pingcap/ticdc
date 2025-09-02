@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
@@ -104,12 +103,12 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 	_, status, err := co.GetChangefeed(ctx, common.NewChangeFeedDisplayName(cfg.ID, cfg.Namespace))
-	if err != nil && cerror.ErrChangeFeedNotExists.NotEqual(err) {
+	if err != nil && errors.ErrChangeFeedNotExists.NotEqual(err) {
 		_ = c.Error(err)
 		return
 	}
 	if status != nil {
-		err = cerror.ErrChangeFeedAlreadyExists.GenWithStackByArgs(cfg.ID)
+		err = errors.ErrChangeFeedAlreadyExists.GenWithStackByArgs(cfg.ID)
 		_ = c.Error(err)
 		return
 	}
@@ -189,7 +188,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	if !replicaCfg.ForceReplicate && !cfg.ReplicaConfig.IgnoreIneligibleTable {
 		if len(ineligibleTables) != 0 {
-			_ = c.Error(cerror.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
 			return
 		}
 	}
@@ -660,12 +659,12 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	// use checkpointTs get snapshot from kv storage
 	ineligibleTables, _, err := getVerifiedTables(ctx, oldCfInfo.Config, h.server.GetKVStorage(), status.CheckpointTs, scheme, topic, protocol)
 	if err != nil {
-		_ = c.Error(cerror.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
+		_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 		return
 	}
 	if !oldCfInfo.Config.ForceReplicate && !oldCfInfo.Config.IgnoreIneligibleTable {
 		if len(ineligibleTables) != 0 {
-			_ = c.Error(cerror.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
 			return
 		}
 	}
