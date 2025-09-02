@@ -121,6 +121,12 @@ func (s *eventScanner) scan(
 	iter := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
 	if iter == nil {
 		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch.Load())
+		if resolved.ResolvedTs == 0 {
+			log.Warn("get nil iterator from event store, and the endTs is 0",
+				zap.Stringer("dispatcherID", dispatcherStat.id),
+				zap.Int64("tableID", dataRange.Span.TableID),
+				zap.String("dataRange", dataRange.String()))
+		}
 		events = append(events, resolved)
 		sess.appendEvents(events)
 		return sess.events, false, nil
@@ -310,6 +316,12 @@ func finalizeScan(
 	events = append(events, merger.resolveDDLEvents(endTs)...)
 
 	resolveTs := event.NewResolvedEvent(endTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch.Load())
+	if resolveTs.ResolvedTs == 0 {
+		log.Panic("get nil iterator from event store, and the endTs is 0",
+			zap.Stringer("dispatcherID", sess.dispatcherStat.id),
+			zap.Int64("tableID", sess.dataRange.Span.TableID),
+			zap.String("dataRange", sess.dataRange.String()))
+	}
 	events = append(events, resolveTs)
 	sess.appendEvents(events)
 	return nil
@@ -329,8 +341,14 @@ func interruptScan(
 	events := merger.appendDMLEvent(processor.getResolvedBatchDML())
 	if newCommitTs != merger.lastCommitTs {
 		events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
-		resolve := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
-		events = append(events, resolve)
+		resolvedTs := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
+		if resolvedTs.ResolvedTs == 0 {
+			log.Panic("get nil iterator from event store, and the endTs is 0",
+				zap.Stringer("dispatcherID", session.dispatcherStat.id),
+				zap.Int64("tableID", session.dataRange.Span.TableID),
+				zap.String("dataRange", session.dataRange.String()))
+		}
+		events = append(events, resolvedTs)
 	}
 	session.appendEvents(events)
 }

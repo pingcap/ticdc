@@ -191,12 +191,6 @@ func (a *dispatcherStat) updateScanRange(commitTs, startTs uint64) {
 	if a.IsReadyRecevingData() {
 		a.lastScannedCommitTs.Store(commitTs)
 		a.lastScannedStartTs.Store(startTs)
-
-		if commitTs == uint64(0) {
-			log.Panic("last scanned commit ts should not be 0",
-				zap.Any("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
-				zap.Uint64("commitTs", commitTs), zap.Uint64("startTs", startTs))
-		}
 	}
 }
 
