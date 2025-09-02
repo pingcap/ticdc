@@ -14,6 +14,7 @@
 package bootstrap
 
 import (
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -36,6 +37,7 @@ type Bootstrapper[T any] struct {
 	// bootstrapped is true when the bootstrapper is bootstrapped
 	bootstrapped bool
 
+	mutex sync.RWMutex
 	// nodes is a map of node id to node status
 	nodes map[node.ID]*NodeStatus[T]
 	// newBootstrapMsg is a factory function that returns a new bootstrap message
@@ -62,6 +64,7 @@ func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapMessageFn) *B
 func (b *Bootstrapper[T]) HandleNewNodes(nodes []*node.Info) []*messaging.TargetMessage {
 	msgs := make([]*messaging.TargetMessage, 0, len(nodes))
 	for _, info := range nodes {
+		b.mutex.Lock()
 		if _, ok := b.nodes[info.ID]; !ok {
 			// A new node is found, send a bootstrap message to it.
 			b.nodes[info.ID] = NewNodeStatus[T](info)
@@ -72,6 +75,7 @@ func (b *Bootstrapper[T]) HandleNewNodes(nodes []*node.Info) []*messaging.Target
 			msgs = append(msgs, b.newBootstrapMsg(info.ID))
 			b.nodes[info.ID].lastBootstrapTime = b.currentTime()
 		}
+		b.mutex.Unlock()
 	}
 	return msgs
 }
@@ -81,6 +85,7 @@ func (b *Bootstrapper[T]) HandleNewNodes(nodes []*node.Info) []*messaging.Target
 // return cached bootstrap
 func (b *Bootstrapper[T]) HandleRemoveNodes(nodeIDs []node.ID) map[node.ID]*T {
 	for _, id := range nodeIDs {
+		b.mutex.Lock()
 		status, ok := b.nodes[id]
 		if ok {
 			delete(b.nodes, id)
@@ -93,6 +98,7 @@ func (b *Bootstrapper[T]) HandleRemoveNodes(nodeIDs []node.ID) map[node.ID]*T {
 				zap.String("changefeed", b.id),
 				zap.Any("nodeID", id))
 		}
+		b.mutex.Unlock()
 	}
 	return b.collectInitialBootstrapResponses()
 }
@@ -105,7 +111,9 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 	from node.ID,
 	msg *T,
 ) map[node.ID]*T {
+	b.mutex.RLock()
 	nodeStatus, ok := b.nodes[from]
+	b.mutex.RUnlock()
 	if !ok {
 		log.Warn("received bootstrap response from untracked node, ignore it",
 			zap.String("changefeed", b.id),
@@ -122,6 +130,8 @@ func (b *Bootstrapper[T]) ResendBootstrapMessage() []*messaging.TargetMessage {
 	var msgs []*messaging.TargetMessage
 	if !b.CheckAllNodeInitialized() {
 		now := b.currentTime()
+		b.mutex.RLock()
+		defer b.mutex.RUnlock()
 		for id, status := range b.nodes {
 			if status.state == NodeStateUninitialized &&
 				now.Sub(status.lastBootstrapTime) >= b.resendInterval {
@@ -134,13 +144,21 @@ func (b *Bootstrapper[T]) ResendBootstrapMessage() []*messaging.TargetMessage {
 }
 
 // GetAllNodes return all nodes the tracked by bootstrapper, the returned value must not be modified
-func (b *Bootstrapper[T]) GetAllNodes() map[node.ID]*NodeStatus[T] {
-	return b.nodes
+func (b *Bootstrapper[T]) GetAllNodeIDs() map[node.ID]interface{} {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	nodes := make(map[node.ID]interface{}, len(b.nodes))
+	for id := range b.nodes {
+		nodes[id] = nil
+	}
+	return nodes
 }
 
 func (b *Bootstrapper[T]) PrintBootstrapStatus() {
 	bootstrappedNodes := make([]node.ID, 0)
 	unbootstrappedNodes := make([]node.ID, 0)
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
 	for id, status := range b.nodes {
 		if status.state == NodeStateInitialized {
 			bootstrappedNodes = append(bootstrappedNodes, id)
@@ -165,6 +183,8 @@ func (b *Bootstrapper[T]) CheckAllNodeInitialized() bool {
 
 // return true if all nodes have reported bootstrap response
 func (b *Bootstrapper[T]) checkAllNodeInitialized() bool {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
 	if len(b.nodes) == 0 {
 		return false
 	}
@@ -189,6 +209,8 @@ func (b *Bootstrapper[T]) checkAllNodeInitialized() bool {
 func (b *Bootstrapper[T]) collectInitialBootstrapResponses() map[node.ID]*T {
 	if !b.bootstrapped && b.checkAllNodeInitialized() {
 		b.bootstrapped = true
+		b.mutex.RLock()
+		defer b.mutex.RUnlock()
 		nodeBootstrapResponses := make(map[node.ID]*T, len(b.nodes))
 		for _, status := range b.nodes {
 			nodeBootstrapResponses[status.node.ID] = status.cachedBootstrapResp

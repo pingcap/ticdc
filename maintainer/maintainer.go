@@ -446,7 +446,7 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 }
 
 func (m *Maintainer) onNodeChanged() {
-	currentNodes := m.bootstrapper.GetAllNodes()
+	currentNodes := m.bootstrapper.GetAllNodeIDs()
 
 	activeNodes := m.nodeManager.GetAliveNodes()
 	newNodes := make([]*node.Info, 0, len(activeNodes))
@@ -502,7 +502,7 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 
 			newWatermark := heartbeatpb.NewMaxWatermark()
 			// if there is no tables, there must be a table trigger dispatcher
-			for id := range m.bootstrapper.GetAllNodes() {
+			for id := range m.bootstrapper.GetAllNodeIDs() {
 				// maintainer node has the table trigger dispatcher
 				if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
 					continue

@@ -256,7 +256,7 @@ func (oc *Controller) pollQueueingOperator() (
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("operator", opID.String()),
 			zap.String("operator", op.String()),
-			zap.Any("time since created", time.Since(item.CreatedAt)))
+			zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
 	}
 	now := time.Now()
 	oc.mu.Lock()

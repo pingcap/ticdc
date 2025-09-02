@@ -610,7 +610,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			controller.spanController.UpdateStatus(spanReplica, status)
 		}
 
-		log.Info("spanReplica", zap.Any("j is", j), zap.Any("id", spanReplica.ID), zap.Any("span", common.FormatTableSpan(spanReplica.Span)))
+		log.Info("spanReplica", zap.Any("j", j), zap.Any("id", spanReplica.ID), zap.Any("span", common.FormatTableSpan(spanReplica.Span)))
 	}
 
 	// first keep the system is balanced

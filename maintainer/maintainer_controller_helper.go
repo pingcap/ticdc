@@ -262,7 +262,7 @@ func (c *Controller) mergeTable(tableID int64) error {
 		log.Info("wait for merge table table operator finished", zap.Int("count", count), zap.Any("operator", operator.String()))
 	}
 
-	log.Info("successfully merge table", zap.Any("tableID", tableID), zap.Any("rest replications len", len(replications)-1))
+	log.Info("successfully merge table", zap.Any("tableID", tableID), zap.Any("restReplicationsLen", len(replications)-1))
 
 	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
 }
