@@ -184,7 +184,7 @@ func (m *MoveDispatcherOperator) Start() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	if m.dest == m.origin && !m.originNodeStopped {
+	if m.dest == m.origin && !m.originNodeStopped.Load() {
 		log.Info("origin and dest are the same, no need to move",
 			zap.String("origin", m.origin.String()),
 			zap.String("dest", m.dest.String()),
