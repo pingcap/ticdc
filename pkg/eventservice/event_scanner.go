@@ -354,7 +354,8 @@ func interruptScan(
 				zap.Int64("tableID", session.dataRange.Span.TableID),
 				zap.String("dataRange", session.dataRange.String()),
 				zap.Int("totalEventCount", len(events)), zap.Int("ddlCount", len(ddl)),
-				zap.Duration("duration", time.Since(session.startTime)), zap.Int64("eventBytes", session.eventBytes))
+				zap.Duration("duration", time.Since(session.startTime)), zap.Int64("eventBytes", session.eventBytes),
+				zap.Int("scannedEntryCount", session.scannedEntryCount))
 		}
 
 	}
