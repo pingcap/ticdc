@@ -40,7 +40,7 @@ func VerifyTables(
 	}
 
 	snap.IterTables(true, func(tableInfo *common.TableInfo) {
-		if f.ShouldIgnoreTable(tableInfo.TableName.Schema, tableInfo.TableName.Table, tableInfo.TableInfo) {
+		if f.ShouldIgnoreTable(tableInfo.TableName.Schema, tableInfo.TableName.Table, tableInfo.ToTiDBTableInfo()) {
 			return
 		}
 		// Sequence is not supported yet, TiCDC needs to filter all sequence tables.

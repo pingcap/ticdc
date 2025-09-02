@@ -59,7 +59,7 @@ func (s *Snapshot) PreTableInfo(job *timodel.Job) (*common.TableInfo, error) {
 		return nil, nil
 	case timodel.ActionExchangeTablePartition:
 		// get the table will be exchanged
-		table, _, err := s.inner.getSourceTable(job.BinlogInfo.TableInfo)
+		table, _, err := s.inner.getSourceTable(getWrapTableInfo(job))
 		return table, err
 	default:
 		binlogInfo := job.BinlogInfo
@@ -216,13 +216,13 @@ func NewSnapshotFromMeta(
 // NewEmptySnapshot creates an empty schema snapshot.
 func NewEmptySnapshot(forceReplicate bool) *Snapshot {
 	inner := snapshot{
-		tableNameToID:    btree.NewG[versionedEntityName](16, versionedEntityNameLess),
-		schemaNameToID:   btree.NewG[versionedEntityName](16, versionedEntityNameLess),
-		schemas:          btree.NewG[versionedID](16, versionedIDLess),
-		tables:           btree.NewG[versionedID](16, versionedIDLess),
-		partitions:       btree.NewG[versionedID](16, versionedIDLess),
-		truncatedTables:  btree.NewG[versionedID](16, versionedIDLess),
-		ineligibleTables: btree.NewG[versionedID](16, versionedIDLess),
+		tableNameToID:    btree.NewG(16, versionedEntityNameLess),
+		schemaNameToID:   btree.NewG(16, versionedEntityNameLess),
+		schemas:          btree.NewG(16, versionedIDLess),
+		tables:           btree.NewG(16, versionedIDLess),
+		partitions:       btree.NewG(16, versionedIDLess),
+		truncatedTables:  btree.NewG(16, versionedIDLess),
+		ineligibleTables: btree.NewG(16, versionedIDLess),
 		forceReplicate:   forceReplicate,
 		currentTs:        0,
 	}
@@ -933,22 +933,22 @@ func (s *snapshot) updatePartition(tbInfo *common.TableInfo, isTruncate bool, cu
 	return nil
 }
 
-func (s *snapshot) getSourceTable(targetTable *timodel.TableInfo) (*common.TableInfo, int64, error) {
-	oldTable, ok := s.physicalTableByID(targetTable.ID)
+func (s *snapshot) getSourceTable(targetTable *common.TableInfo) (*common.TableInfo, int64, error) {
+	oldTable, ok := s.physicalTableByID(targetTable.TableName.TableID)
 	if !ok {
-		return nil, 0, cerror.ErrSnapshotTableNotFound.GenWithStackByArgs(targetTable.ID)
+		return nil, 0, cerror.ErrSnapshotTableNotFound.GenWithStackByArgs(targetTable.TableName.TableID)
 	}
 
 	oldPartitions := oldTable.GetPartitionInfo()
 	if oldPartitions == nil {
 		return nil, 0, cerror.ErrSnapshotTableNotFound.
-			GenWithStack("table %d is not a partitioned table", oldTable.ID)
+			GenWithStack("table %d is not a partitioned table", oldTable.TableName.TableID)
 	}
 
 	newPartitions := targetTable.GetPartitionInfo()
 	if newPartitions == nil {
 		return nil, 0, cerror.ErrSnapshotTableNotFound.
-			GenWithStack("table %d is not a partitioned table", targetTable.ID)
+			GenWithStack("table %d is not a partitioned table", targetTable.TableName.TableID)
 	}
 
 	oldIDs := make(map[int64]struct{}, len(oldPartitions.Definitions))
@@ -998,14 +998,14 @@ func (s *snapshot) getSourceTable(targetTable *timodel.TableInfo) (*common.Table
 // Finally, update both the targetTable's info and the sourceTable's info in snapshot.
 func (s *snapshot) exchangePartition(targetTable *common.TableInfo, currentTS uint64) error {
 	var sourceTable *common.TableInfo
-	sourceTable, exchangedPartitionID, err := s.getSourceTable(targetTable.TableInfo)
+	sourceTable, exchangedPartitionID, err := s.getSourceTable(targetTable)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	// 4.update the targetTable
-	oldTable, ok := s.physicalTableByID(targetTable.ID)
+	oldTable, ok := s.physicalTableByID(targetTable.TableName.TableID)
 	if !ok {
-		return cerror.ErrSnapshotTableNotFound.GenWithStackByArgs(targetTable.ID)
+		return cerror.ErrSnapshotTableNotFound.GenWithStackByArgs(targetTable.TableName.TableID)
 	}
 	// TODO: remove this after job is fixed by TiDB.
 	// ref: https://github.com/pingcap/tidb/issues/43819
@@ -1016,13 +1016,13 @@ func (s *snapshot) exchangePartition(targetTable *common.TableInfo, currentTS ui
 		return errors.Trace(err)
 	}
 
-	newSourceTable := common.WrapTableInfo(sourceTable.SchemaID, sourceTable.TableName.Schema, sourceTable.TableInfo.Clone())
+	newSourceTable := common.WrapTableInfo(sourceTable.SchemaID, sourceTable.TableName.Schema, sourceTable.ToTiDBTableInfo())
 	// 5.update the sourceTable
-	err = s.dropTable(sourceTable.ID, currentTS)
+	err = s.dropTable(sourceTable.TableName.TableID, currentTS)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	newSourceTable.ID = exchangedPartitionID
+	newSourceTable.TableName.TableID = exchangedPartitionID
 	err = s.createTable(newSourceTable, currentTS)
 	if err != nil {
 		return errors.Trace(err)

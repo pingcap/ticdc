@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -67,8 +68,9 @@ const (
 
 // TableInfo provides meta data describing a DB table.
 type TableInfo struct {
-	*model.TableInfo
 	SchemaID int64
+	// PartitionInfo provides table partition info.
+	Partition *model.PartitionInfo
 	// NOTICE: We probably store the logical ID inside TableName,
 	// not the physical ID.
 	// For normal table, there is only one ID, which is the physical ID.
@@ -360,9 +362,17 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 	return len(ti.columnSchema.HandleKeyIDs) != 0
 }
 
+// GetPartitionInfo returns the partition information.
+func (t *TableInfo) GetPartitionInfo() *model.PartitionInfo {
+	if t.Partition != nil && t.Partition.Enable {
+		return t.Partition
+	}
+	return nil
+}
+
 // Clone clones the TableInfo
 func (ti *TableInfo) Clone() *TableInfo {
-	return WrapTableInfo(ti.SchemaID, ti.TableName.Schema, ti.TableInfo.Clone())
+	return WrapTableInfo(ti.SchemaID, ti.TableName.Schema, ti.ToTiDBTableInfo())
 }
 
 // GetIndex return the corresponding index by the given name.
@@ -462,23 +472,22 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 }
 
 func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
-	return ti.TableInfo
-	// return &model.TableInfo{
-	// 	ID:       ti.TableName.TableID,
-	// 	Name:     ast.NewCIStr(ti.TableName.Table),
-	// 	Charset:  ti.Charset,
-	// 	Collate:  ti.Collate,
-	// 	Comment:  ti.Comment,
-	// 	View:     ti.View,
-	// 	Sequence: ti.Sequence,
-	// 	Columns:  ti.columnSchema.Cols(), // Get public state columns, that's enough.
-	// }
+	return &model.TableInfo{
+		ID:        ti.TableName.TableID,
+		Name:      ast.NewCIStr(ti.TableName.Table),
+		Charset:   ti.Charset,
+		Collate:   ti.Collate,
+		Comment:   ti.Comment,
+		View:      ti.View,
+		Sequence:  ti.Sequence,
+		Columns:   ti.columnSchema.Cols(), // Get public state columns, that's enough.
+		Partition: ti.Partition,
+	}
 }
 
 func newTableInfo(schemaID int64, schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	return &TableInfo{
-		TableInfo: tableInfo,
-		SchemaID:  schemaID,
+		SchemaID: schemaID,
 		TableName: TableName{
 			Schema:      schema,
 			Table:       table,
@@ -492,6 +501,7 @@ func newTableInfo(schemaID int64, schema string, table string, tableID int64, is
 		Collate:      tableInfo.Collate,
 		Comment:      tableInfo.Comment,
 		UpdateTS:     tableInfo.UpdateTS,
+		Partition:    tableInfo.Partition,
 	}
 }
 

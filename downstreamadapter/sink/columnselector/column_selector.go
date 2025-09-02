@@ -115,7 +115,7 @@ func (c *ColumnSelectors) VerifyTables(
 			}
 
 			retainedColumns := make(map[string]struct{})
-			for _, columnInfo := range table.Columns {
+			for _, columnInfo := range table.GetColumns() {
 				// columnInfo, ok := table.GetColumnInfo(columnID)
 				// if !ok {
 				// 	return errors.ErrColumnSelectorFailed.GenWithStack(
@@ -169,7 +169,7 @@ func verifyIndices(table *common.TableInfo, retainedColumns map[string]struct{})
 	}
 
 	// at least one unique key columns are retained, return true.
-	for _, index := range table.Indices {
+	for _, index := range table.GetIndices() {
 		if !index.Unique {
 			continue
 		}
