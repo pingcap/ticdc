@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -287,5 +288,5 @@ func TestSpanRegionLimit(t *testing.T) {
 }
 
 func preTest() {
-	appcontext.SetService(appcontext.PDAPIClient, &mockPDAPIClient{})
+	appcontext.SetService(appcontext.PDAPIClient, testutil.NewMockPDAPIClient())
 }

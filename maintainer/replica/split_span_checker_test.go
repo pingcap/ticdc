@@ -14,7 +14,6 @@
 package replica
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -26,7 +25,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -35,38 +33,8 @@ import (
 )
 
 func init() {
-	SetMinTrafficBalanceThreshold(1)
-}
-
-type mockPDAPIClient struct {
-	scanRegionsError error
-}
-
-func (m *mockPDAPIClient) ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]pdutil.RegionInfo, error) {
-	if m.scanRegionsError != nil {
-		return nil, m.scanRegionsError
-	}
-	return []pdutil.RegionInfo{}, nil
-}
-
-func (m *mockPDAPIClient) Close() {
-	// Mock implementation - do nothing
-}
-
-func (m *mockPDAPIClient) UpdateMetaLabel(ctx context.Context) error {
-	return nil
-}
-
-func (m *mockPDAPIClient) ListGcServiceSafePoint(ctx context.Context) (*pdutil.ListServiceGCSafepoint, error) {
-	return nil, nil
-}
-
-func (m *mockPDAPIClient) CollectMemberEndpoints(ctx context.Context) ([]string, error) {
-	return nil, nil
-}
-
-func (m *mockPDAPIClient) Healthy(ctx context.Context, endpoint string) error {
-	return nil
+	SetEasyThresholdForTest()
+	log.SetLevel(zap.DebugLevel)
 }
 
 // count should be in [1, 10000]
@@ -642,6 +610,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	spanStatus1 := checker.allTasks[replicas[0].ID]
 	spanStatus1.trafficScore = 0
 	spanStatus1.lastThreeTraffic = []float64{1200, 1200, 1200}
+
 	spanStatus2 := checker.allTasks[replicas[1].ID]
 	spanStatus2.trafficScore = 0
 	spanStatus2.lastThreeTraffic = []float64{800, 800, 800}
@@ -659,7 +628,9 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	// Set region counts
 	for _, spanStatus := range []*splitSpanStatus{spanStatus1, spanStatus2, spanStatus3, spanStatus4} {
 		spanStatus.regionCount = 3
+		spanStatus.GetStatus().CheckpointTs = oracle.ComposeTS(int64(time.Now().Add(-10*time.Second).UnixNano()), 0)
 	}
+	checker.balanceCondition.statusUpdated = true
 
 	// Test traffic balance decision
 	results := checker.Check(10)
@@ -753,7 +724,11 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 
 	// Set region counts
 	spanStatus1.regionCount = 5
+	spanStatus1.GetStatus().CheckpointTs = oracle.ComposeTS(int64(time.Now().Add(-10*time.Second).UnixNano()), 0)
 	spanStatus2.regionCount = 5
+	spanStatus2.GetStatus().CheckpointTs = oracle.ComposeTS(int64(time.Now().Add(-10*time.Second).UnixNano()), 0)
+
+	checker.balanceCondition.statusUpdated = true
 
 	// Test traffic balance decision - should split span from max traffic node
 	results := checker.Check(10)

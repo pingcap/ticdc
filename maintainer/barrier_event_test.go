@@ -47,7 +47,7 @@ func TestScheduleEvent(t *testing.T) {
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked:         true,
 		BlockTs:           10,
-		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_All},
+		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_Normal, TableIDs: []int64{1}},
 		NeedAddedTables:   []*heartbeatpb.Table{{2, 1, true}, {3, 1, true}},
 	}, true)
 	event.scheduleBlockEvent()

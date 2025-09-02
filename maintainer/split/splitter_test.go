@@ -18,10 +18,10 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +34,7 @@ func TestNewSplitter(t *testing.T) {
 	appcontext.SetService(appcontext.RegionCache, cache)
 
 	// Set up PDAPIClient service for testing
-	mockPDClient := &mockPDAPIClient{}
+	mockPDClient := testutil.NewMockPDAPIClient()
 	appcontext.SetService(appcontext.PDAPIClient, mockPDClient)
 
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -86,35 +86,4 @@ func TestSplitter_Split_ByRegion(t *testing.T) {
 	re.Equal(2, len(spans))
 	re.Equal(&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, spans[0])
 	re.Equal(&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, spans[1])
-}
-
-type mockPDAPIClient struct {
-	scanRegionsError error
-}
-
-func (m *mockPDAPIClient) ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]pdutil.RegionInfo, error) {
-	if m.scanRegionsError != nil {
-		return nil, m.scanRegionsError
-	}
-	return []pdutil.RegionInfo{}, nil
-}
-
-func (m *mockPDAPIClient) Close() {
-	// Mock implementation - do nothing
-}
-
-func (m *mockPDAPIClient) UpdateMetaLabel(ctx context.Context) error {
-	return nil
-}
-
-func (m *mockPDAPIClient) ListGcServiceSafePoint(ctx context.Context) (*pdutil.ListServiceGCSafepoint, error) {
-	return nil, nil
-}
-
-func (m *mockPDAPIClient) CollectMemberEndpoints(ctx context.Context) ([]string, error) {
-	return nil, nil
-}
-
-func (m *mockPDAPIClient) Healthy(ctx context.Context, endpoint string) error {
-	return nil
 }

@@ -55,6 +55,9 @@ func SetUpTestServices() {
 
 	regionCache := NewMockRegionCache()
 	appcontext.SetService(appcontext.RegionCache, regionCache)
+
+	pdAPIClient := NewMockPDAPIClient()
+	appcontext.SetService(appcontext.PDAPIClient, pdAPIClient)
 }
 
 type MockCache struct {
@@ -105,4 +108,47 @@ func MockRegionWithID(id uint64) *tikv.Region {
 	})(unsafe.Pointer(region))
 	regionPtr.meta = meta
 	return region
+}
+
+type MockPDAPIClient struct {
+	scanRegionsError  error
+	scnaRegionsResult map[string][]pdutil.RegionInfo
+}
+
+func NewMockPDAPIClient() *MockPDAPIClient {
+	return &MockPDAPIClient{
+		scanRegionsError:  nil,
+		scnaRegionsResult: make(map[string][]pdutil.RegionInfo),
+	}
+}
+
+func (m *MockPDAPIClient) SetScanRegionsResult(key string, result []pdutil.RegionInfo) {
+	m.scnaRegionsResult[key] = result
+}
+
+func (m *MockPDAPIClient) ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]pdutil.RegionInfo, error) {
+	if m.scanRegionsError != nil {
+		return nil, m.scanRegionsError
+	}
+	return m.scnaRegionsResult[fmt.Sprintf("%s-%s", span.StartKey, span.EndKey)], nil
+}
+
+func (m *MockPDAPIClient) Close() {
+	// Mock implementation - do nothing
+}
+
+func (m *MockPDAPIClient) UpdateMetaLabel(ctx context.Context) error {
+	return nil
+}
+
+func (m *MockPDAPIClient) ListGcServiceSafePoint(ctx context.Context) (*pdutil.ListServiceGCSafepoint, error) {
+	return nil, nil
+}
+
+func (m *MockPDAPIClient) CollectMemberEndpoints(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
+
+func (m *MockPDAPIClient) Healthy(ctx context.Context, endpoint string) error {
+	return nil
 }
