@@ -670,20 +670,29 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	operators := controller.operatorController.GetAllOperators()
 	require.Equal(t, operators[0].Type(), "add")
 	require.Equal(t, operators[1].Type(), "add")
-	spanReplicaID7 := operators[0].ID()
-	spanReplica7 := controller.spanController.GetTaskByID(spanReplicaID7)
+	var spanReplica7, spanReplica8 *replica.SpanReplication
+	var spanReplicaID7, spanReplicaID8 common.DispatcherID
+	spanTmp1 := operators[0].ID()
+	spanTmp2 := operators[1].ID()
+	spanReplicaTmp1 := controller.spanController.GetTaskByID(spanTmp1)
+	spanReplicaTmp2 := controller.spanController.GetTaskByID(spanTmp2)
+	if spanReplicaTmp1.GetNodeID() == "node1" {
+		spanReplica7 = spanReplicaTmp1
+		spanReplicaID7 = spanTmp1
+		spanReplica8 = spanReplicaTmp2
+		spanReplicaID8 = spanTmp2
+	} else {
+		spanReplica7 = spanReplicaTmp2
+		spanReplicaID7 = spanTmp2
+		spanReplica8 = spanReplicaTmp1
+		spanReplicaID8 = spanTmp1
+	}
+
 	log.Info("spanReplica7", zap.Any("id", spanReplica7.ID), zap.Any("span", common.FormatTableSpan(spanReplica7.Span)))
-	spanReplicaID8 := operators[1].ID()
-	spanReplica8 := controller.spanController.GetTaskByID(spanReplicaID8)
 	log.Info("spanReplica8", zap.Any("id", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
 	trafficForSpanReplica7 := 50
-	trafficForSpanReplica8 := 50
-	if spanReplica7.GetNodeID() == "node1" {
-		trafficForSpanReplica8 = 150
-	}
-	if spanReplica8.GetNodeID() == "node1" {
-		trafficForSpanReplica7 = 150
-	}
+	trafficForSpanReplica8 := 150
+
 	operators[0].Start()
 	operators[0].PostFinish()
 	operators[1].Start()
@@ -754,11 +763,25 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	operators = controller.operatorController.GetAllOperators()
 	require.Equal(t, operators[0].Type(), "add")
 	require.Equal(t, operators[1].Type(), "add")
-	spanReplicaID9 := operators[0].ID()
-	spanReplica9 := controller.spanController.GetTaskByID(spanReplicaID9)
+	spanID1 := operators[0].ID()
+	spanID2 := operators[1].ID()
+	spanReplica1 := controller.spanController.GetTaskByID(spanID1)
+	spanReplica2 := controller.spanController.GetTaskByID(spanID2)
+	var spanReplica9, spanReplica10 *replica.SpanReplication
+	var spanReplicaID9, spanReplicaID10 common.DispatcherID
+	if spanReplica1.GetNodeID() == "node1" {
+		spanReplica9 = spanReplica1
+		spanReplica10 = spanReplica2
+		spanReplicaID9 = spanID1
+		spanReplicaID10 = spanID2
+	} else {
+		spanReplica10 = spanReplica1
+		spanReplica9 = spanReplica2
+		spanReplicaID10 = spanID1
+		spanReplicaID9 = spanID2
+	}
+
 	log.Info("spanReplica9", zap.Any("id", spanReplica9.ID), zap.Any("span", common.FormatTableSpan(spanReplica9.Span)))
-	spanReplicaID10 := operators[1].ID()
-	spanReplica10 := controller.spanController.GetTaskByID(spanReplicaID10)
 	log.Info("spanReplica10", zap.Any("id", spanReplica10.ID), zap.Any("span", common.FormatTableSpan(spanReplica10.Span)))
 	operators[0].Start()
 	operators[0].PostFinish()
@@ -800,7 +823,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// trigger merge, merge spanReplica7 and spanReplica9
 	// node1 | node2 | node3
 	// 200   | 600   | 500
-	// 200   | 50   | 200
+	// 200   | 50    | 200
 	// 150   |       |
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	require.Equal(t, controller.operatorController.OperatorSize(), 3)
@@ -901,13 +924,29 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	require.Contains(t, relatedIDs, spanLists[1].ID)
 	require.Contains(t, relatedIDs, spanLists[3].ID)
 	require.Contains(t, relatedIDs, spanLists[4].ID)
-	spanReplicaID12 := typeCount["merge"][0].ID()
-	spanReplica12 := controller.spanController.GetTaskByID(spanReplicaID12)
+
+	spanTmp1 = typeCount["merge"][0].ID()
+	spanTmp2 = typeCount["merge"][1].ID()
+	spanReplicaTmp1 = controller.spanController.GetTaskByID(spanTmp1)
+	spanReplicaTmp2 = controller.spanController.GetTaskByID(spanTmp2)
+
+	var spanReplica12, spanReplica13 *replica.SpanReplication
+	var spanReplicaID12, spanReplicaID13 common.DispatcherID
+	if spanReplicaTmp1.GetNodeID() == "node1" {
+		spanReplica12 = spanReplicaTmp1
+		spanReplicaID12 = spanTmp1
+		spanReplica13 = spanReplicaTmp2
+		spanReplicaID13 = spanTmp2
+	} else {
+		spanReplica12 = spanReplicaTmp2
+		spanReplicaID12 = spanTmp2
+		spanReplica13 = spanReplicaTmp1
+		spanReplicaID13 = spanTmp1
+	}
+
 	typeCount["merge"][0].Start()
 	typeCount["merge"][0].PostFinish()
 
-	spanReplicaID13 := typeCount["merge"][1].ID()
-	spanReplica13 := controller.spanController.GetTaskByID(spanReplicaID13)
 	typeCount["merge"][1].Start()
 	typeCount["merge"][1].PostFinish()
 
