@@ -42,12 +42,14 @@ import (
 
 const latestTrafficIndex = 0
 
-var minTrafficBalanceThreshold = float64(1024 * 1024) // 1MB
-var maxMoveSpansCountForTrafficBalance = 4
-var balanceScoreThreshold = 10
-var maxMoveSpansCountForMerge = 16
-var minTrafficPercentage = 0.9
-var maxTrafficPercentage = 1.1
+var (
+	minTrafficBalanceThreshold         = float64(1024 * 1024) // 1MB
+	maxMoveSpansCountForTrafficBalance = 4
+	balanceScoreThreshold              = 10
+	maxMoveSpansCountForMerge          = 16
+	minTrafficPercentage               = 0.9
+	maxTrafficPercentage               = 1.1
+)
 
 type BalanceCause string
 
@@ -905,7 +907,6 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 	}
 	results = append(results, ret)
 	return results
-
 }
 
 // chooseSplitSpans checks all split spans and determines whether any spans should be split again based on traffic and region thresholds.
