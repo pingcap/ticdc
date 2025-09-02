@@ -340,15 +340,23 @@ func interruptScan(
 	// Append current batch
 	events := merger.appendDMLEvent(processor.getResolvedBatchDML())
 	if newCommitTs != merger.lastCommitTs {
-		events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
+		ddl := merger.resolveDDLEvents(merger.lastCommitTs)
+		events = append(events, ddl...)
 		resolvedTs := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
+		events = append(events, resolvedTs)
 		if resolvedTs.ResolvedTs == 0 {
+			for _, item := range events {
+				session.events = append(session.events, item)
+				session.eventBytes += item.GetSize()
+			}
 			log.Panic("get nil iterator from event store, and the endTs is 0",
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", session.dataRange.Span.TableID),
-				zap.String("dataRange", session.dataRange.String()))
+				zap.String("dataRange", session.dataRange.String()),
+				zap.Int("totalEventCount", len(events)), zap.Int("ddlCount", len(ddl)),
+				zap.Duration("duration", time.Since(session.startTime)), zap.Int64("eventBytes", session.eventBytes))
 		}
-		events = append(events, resolvedTs)
+
 	}
 	session.appendEvents(events)
 }
