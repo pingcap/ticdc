@@ -23,7 +23,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/httputil"
+	"github.com/pingcap/tiflow/pkg/httputil"
 	"go.uber.org/zap"
 )
 
@@ -80,7 +80,7 @@ var cases = []func(ctx context.Context, client *CDCRESTClient) error{
 	testCreateChangefeed,
 	testRemoveChangefeed,
 	testCapture,
-	// testProcessor,
+	testProcessor,
 	testResignOwner,
 	testSetLogLevel,
 }

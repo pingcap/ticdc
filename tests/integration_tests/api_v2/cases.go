@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tiflow/pkg/config"
+	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -56,7 +56,14 @@ var customReplicaConfig = &ReplicaConfig{
 		WorkerNum: 17,
 	},
 	Sink: &SinkConfig{
-		Protocol: "arvo",
+		Protocol: "simple",
+		DispatchRules: []*DispatchRule{
+			{
+				Matcher:       []string{"*.*"},
+				PartitionRule: "columns",
+				Columns:       []string{"id"},
+			},
+		},
 		ColumnSelectors: []*ColumnSelector{
 			{
 				[]string{"a.b"},
@@ -188,6 +195,7 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	if err := json.Unmarshal(resp.body, changefeedInfo1); err != nil {
 		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
 	}
+
 	ensureChangefeed(ctx, client, changefeedInfo1.ID, "normal")
 	resp = client.Get().WithURI("/changefeeds/" + changefeedInfo1.ID + "?namespace=test").Do(ctx)
 	assertResponseIsOK(resp)
@@ -341,30 +349,30 @@ func testCapture(ctx context.Context, client *CDCRESTClient) error {
 	return nil
 }
 
-// func testProcessor(ctx context.Context, client *CDCRESTClient) error {
-// 	resp := client.Get().WithURI("processors").Do(ctx)
-// 	assertResponseIsOK(resp)
-// 	processors := &ListResponse[ProcessorCommonInfo]{}
-// 	if err := json.Unmarshal(resp.body, processors); err != nil {
-// 		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
-// 	}
-// 	if len(processors.Items) == 0 {
-// 		log.Panic("processor size is 0", zap.Any("resp", resp))
-// 	}
+func testProcessor(ctx context.Context, client *CDCRESTClient) error {
+	resp := client.Get().WithURI("processors").Do(ctx)
+	assertResponseIsOK(resp)
+	processors := &ListResponse[ProcessorCommonInfo]{}
+	if err := json.Unmarshal(resp.body, processors); err != nil {
+		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
+	}
+	if len(processors.Items) == 0 {
+		log.Panic("processor size is 0", zap.Any("resp", resp))
+	}
 
-// 	processorDetail := &ProcessorDetail{}
-// 	resp = client.Get().
-// 		WithURI("processors/" + processors.Items[0].ChangeFeedID + "/" +
-// 			processors.Items[0].CaptureID +
-// 			"?namespace=" + processors.Items[0].Namespace).
-// 		Do(ctx)
-// 	assertResponseIsOK(resp)
-// 	if err := json.Unmarshal(resp.body, processorDetail); err != nil {
-// 		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
-// 	}
-// 	println("pass test: processor apis")
-// 	return nil
-// }
+	processorDetail := &ProcessorDetail{}
+	resp = client.Get().
+		WithURI("processors/" + processors.Items[0].ChangeFeedID + "/" +
+			processors.Items[0].CaptureID +
+			"?namespace=" + processors.Items[0].Namespace).
+		Do(ctx)
+	assertResponseIsOK(resp)
+	if err := json.Unmarshal(resp.body, processorDetail); err != nil {
+		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
+	}
+	println("pass test: processor apis")
+	return nil
+}
 
 func testResignOwner(ctx context.Context, client *CDCRESTClient) error {
 	old := listCaptures(ctx, client)
@@ -428,7 +436,7 @@ func ensureChangefeed(ctx context.Context, client *CDCRESTClient, id, state stri
 				return
 			}
 		}
-		log.Info("check changefeed failed", zap.Int("time", i), zap.ByteString("body", resp.body))
+		log.Info("check changefeed failed", zap.Int("time", i), zap.Any("info", info))
 		time.Sleep(2 * time.Second)
 	}
 	log.Panic("ensure changefeed failed")

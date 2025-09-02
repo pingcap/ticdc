@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,12 +27,12 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/api/middleware"
-	"github.com/pingcap/ticdc/pkg/api"
-	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/httputil"
-	"github.com/pingcap/ticdc/pkg/retry"
-	"github.com/pingcap/ticdc/pkg/version"
+	"github.com/pingcap/tiflow/cdc/api/middleware"
+	"github.com/pingcap/tiflow/cdc/model"
+	cerrors "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/tiflow/pkg/httputil"
+	"github.com/pingcap/tiflow/pkg/retry"
+	"github.com/pingcap/tiflow/pkg/version"
 	"go.uber.org/zap"
 )
 
@@ -373,8 +374,8 @@ func (r *Request) Do(ctx context.Context) (res *Result) {
 		}
 		// rewind the request body when r.body is not nil
 		if seeker, ok := r.body.(io.Seeker); ok && r.body != nil {
-			if _, err = seeker.Seek(0, 0); err != nil {
-				return errors.ErrRewindRequestBodyError
+			if _, err := seeker.Seek(0, 0); err != nil {
+				return cerrors.ErrRewindRequestBodyError
 			}
 		}
 
@@ -407,7 +408,7 @@ func (r *Request) Do(ctx context.Context) (res *Result) {
 			retry.WithBackoffBaseDelay(baseDelay),
 			retry.WithBackoffMaxDelay(maxDelay),
 			retry.WithMaxTries(maxRetries),
-			retry.WithIsRetryableErr(errors.IsRetryableError),
+			retry.WithIsRetryableErr(cerrors.IsRetryableError),
 		)
 	} else {
 		err = fn()
@@ -433,7 +434,7 @@ func (r *Request) checkResponse(resp *http.Response) *Result {
 
 	contentType := resp.Header.Get("Content-Type")
 	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusPartialContent {
-		var jsonErr api.HTTPError
+		var jsonErr model.HTTPError
 		err := json.Unmarshal(body, &jsonErr)
 		if err == nil {
 			err = errors.New(jsonErr.Error)
@@ -485,7 +486,7 @@ func (r Result) Into(obj interface{}) error {
 	}
 
 	if len(r.body) == 0 {
-		return errors.ErrZeroLengthResponseBody.GenWithStackByArgs(r.statusCode)
+		return cerrors.ErrZeroLengthResponseBody.GenWithStackByArgs(r.statusCode)
 	}
 
 	return json.Unmarshal(r.body, obj)
