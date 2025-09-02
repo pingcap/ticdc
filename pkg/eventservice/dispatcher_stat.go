@@ -154,9 +154,9 @@ func newDispatcherStat(
 
 	dispStat.sentResolvedTs.Store(startTs)
 
+	dispStat.lastScannedCommitTs.Store(startTs)
+	dispStat.lastScannedStartTs.Store(0)
 	dispStat.isReadyReceivingData.Store(true)
-	dispStat.updateScanRange(startTs, 0)
-
 	dispStat.resetScanLimit()
 
 	now := time.Now()
@@ -191,6 +191,12 @@ func (a *dispatcherStat) updateScanRange(commitTs, startTs uint64) {
 	if a.IsReadyRecevingData() {
 		a.lastScannedCommitTs.Store(commitTs)
 		a.lastScannedStartTs.Store(startTs)
+
+		if commitTs == uint64(0) {
+			log.Panic("last scanned commit ts should not be 0",
+				zap.Any("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
+				zap.Uint64("commitTs", commitTs), zap.Uint64("startTs", startTs))
+		}
 	}
 }
 
@@ -209,6 +215,11 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.isTaskScanning.Store(false)
 
 	a.lastScannedCommitTs.Store(resetTs)
+	if a.lastScannedCommitTs.Load() == uint64(0) {
+		log.Panic("last scanned commit ts should not be 0",
+			zap.Any("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
+			zap.Uint64("resetTs", resetTs))
+	}
 	a.lastScannedStartTs.Store(0)
 	a.isReadyReceivingData.Store(true)
 	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())

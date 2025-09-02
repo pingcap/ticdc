@@ -211,7 +211,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastStartTs = dml.GetStartTs()
 		lastCommitTs = dml.GetCommitTs()
 		log.Debug("send dml event to dispatcher",
-			zap.Stringer("dispatcher", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
 	if lastCommitTs != 0 {
@@ -234,7 +234,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		metricEventServiceSendDDLCount.Inc()
 	}
 	log.Info("send ddl event to dispatcher",
-		zap.Stringer("dispatcher", d.id), zap.Int64("tableID", e.TableID),
+		zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", e.TableID),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Bool("isRedo", d.info.GetIsRedo()))
 }
@@ -300,7 +300,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				// TODO: maybe limit 1 is enough.
 				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.filter, startTs, 100)
 				if err != nil {
-					log.Error("table trigger ddl events fetch failed", zap.Stringer("dispatcher", stat.id), zap.Error(err))
+					log.Error("table trigger ddl events fetch failed", zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
 				}
 				for _, e := range ddlEvents {
@@ -328,14 +328,14 @@ func (c *eventBroker) logUnresetDispatchers(ctx context.Context) error {
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
 				if dispatcher.resetTs.Load() == 0 {
-					log.Info("dispatcher not reset", zap.Any("dispatcher", dispatcher.id))
+					log.Info("dispatcher not reset", zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
 			})
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
 				if dispatcher.resetTs.Load() == 0 {
-					log.Info("table trigger dispatcher not reset", zap.Any("dispatcher", dispatcher.id))
+					log.Info("table trigger dispatcher not reset", zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
 			})
@@ -409,9 +409,6 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 		// this dispatcher is still alive, and will resume it later.
 		resolvedTs := task.sentResolvedTs.Load()
 		c.sendResolvedTs(task, resolvedTs)
-		log.Info("send resolved-ts due to task is not ready to scan",
-			zap.Any("dispatcherID", task.id), zap.Any("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("resolvedTs", resolvedTs))
 		return false
 	}
 
@@ -560,7 +557,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed",
-			zap.Stringer("dispatcher", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
+			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
