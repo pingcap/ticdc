@@ -56,8 +56,9 @@ type Controller struct {
 	nodeManager    *watcher.NodeManager
 	splitter       *split.Splitter
 
-	mu             sync.RWMutex // protect the following fields
-	operators      map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+	mu        sync.RWMutex // protect the following fields
+	operators map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+	// for redo
 	blockOperators map[common.DispatcherID]struct{}
 	runningQueue   operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 }
@@ -451,6 +452,9 @@ func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
 	mutex.Unlock()
 }
 
+// BlockOperatorSizeWithLock return the blockOperators of controller.
+// There may be incorrect redoTs when scheduling
+// these operators are not impact the redoTs: "occupy", "merge", "split", "remove"
 func (oc *Controller) BlockOperatorSizeWithLock() int {
 	return len(oc.blockOperators)
 }

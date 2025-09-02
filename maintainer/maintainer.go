@@ -162,29 +162,9 @@ func NewMaintainer(cfID common.ChangeFeedID,
 ) *Maintainer {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    checkpointTs,
-		}, selfNode.ID)
-	// redo releated
-	var (
-		redoDDLSpan *replica.SpanReplication
-	)
-	if redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
-		redoTableTriggerEventDispatcherID := common.NewDispatcherID()
-		redoDDLSpan = replica.NewWorkingSpanReplication(cfID, redoTableTriggerEventDispatcherID,
-			common.DDLSpanSchemaID,
-			common.DDLSpan, &heartbeatpb.TableSpanStatus{
-				ID:              redoTableTriggerEventDispatcherID.ToPB(),
-				ComponentStatus: heartbeatpb.ComponentState_Working,
-				CheckpointTs:    checkpointTs,
-				IsRedo:          true,
-			}, selfNode.ID)
-	}
+
+	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, false)
+	_, redoDDLSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, true)
 	m := &Maintainer{
 		id:                cfID,
 		selfNode:          selfNode,
@@ -473,7 +453,6 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 }
 
 // onRedoTsPersisted forwards the redoTs message to the dispatcher manager.
-// - CheckpointTs: All events with Commit-Ts less than or equal to this value have been written to the downstream system.
 // - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
 func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessage) {
 	if !m.bootstrapped.Load() {
@@ -535,15 +514,6 @@ func (m *Maintainer) onNodeChanged() {
 		}
 	}
 	if m.redoDDLSpan != nil {
-		for node := range activeNodes {
-			if _, ok := m.redoTsMap[node]; !ok {
-				m.redoTsMap[node] = &heartbeatpb.RedoTsMessage{
-					ChangefeedID: m.redoTs.ChangefeedID,
-					CheckpointTs: m.redoTs.CheckpointTs,
-					ResolvedTs:   m.redoTs.ResolvedTs,
-				}
-			}
-		}
 		for rid := range m.redoTsMap {
 			if _, ok := activeNodes[rid]; !ok {
 				delete(m.redoTsMap, rid)
@@ -769,6 +739,22 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 	}
 	scheme := config.GetScheme(sinkURI)
 	return config.IsMySQLCompatibleScheme(scheme), nil
+}
+
+func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, isRedo bool) (common.DispatcherID, *replica.SpanReplication) {
+	if isRedo && !redo.IsConsistentEnabled(replicaConfig.Consistent.Level) {
+		return common.DispatcherID{}, nil
+	}
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    checkpointTs,
+			IsRedo:          isRedo,
+		}, selfNode.ID)
+	return tableTriggerEventDispatcherID, ddlSpan
 }
 
 func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
