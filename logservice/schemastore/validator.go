@@ -16,8 +16,8 @@ package schemastore
 import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/filter"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tiflow/pkg/filter"
 )
 
 // VerifyTables catalog tables specified by ReplicaConfig into
@@ -31,7 +31,7 @@ func VerifyTables(
 	eligibleTables []string,
 	err error,
 ) {
-	meta := GetSnapshotMeta(storage, startTs)
+	meta := getSnapshotMeta(storage, startTs)
 	snap, err := NewSnapshotFromMeta(
 		common.NewChangefeedID4Test("api", "verifyTable"),
 		meta, startTs, false /* explicitTables */, f)
@@ -40,7 +40,7 @@ func VerifyTables(
 	}
 
 	snap.IterTables(true, func(tableInfo *common.TableInfo) {
-		if f.ShouldIgnoreTable(tableInfo.TableName.Schema, tableInfo.TableName.Table) {
+		if f.ShouldIgnoreTable(tableInfo.TableName.Schema, tableInfo.TableName.Table, tableInfo.TableInfo) {
 			return
 		}
 		// Sequence is not supported yet, TiCDC needs to filter all sequence tables.

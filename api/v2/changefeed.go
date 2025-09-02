@@ -27,11 +27,12 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
@@ -40,7 +41,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tiflow/cdc/entry"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -1230,12 +1230,12 @@ func getVerifiedTables(
 	replicaConfig *config.ReplicaConfig,
 	storage tidbkv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
-) ([]common.TableName, []common.TableName, error) {
+) ([]string, []string, error) {
 	f, err := filter.NewFilter(replicaConfig.Filter, "", replicaConfig.CaseSensitive, replicaConfig.ForceReplicate)
 	if err != nil {
 		return nil, nil, err
 	}
-	tableInfos, ineligibleTables, eligibleTables, err := entry.
+	tableInfos, ineligibleTables, eligibleTables, err := schemastore.
 		VerifyTables(f, storage, startTs)
 	if err != nil {
 		return nil, nil, err

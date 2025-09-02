@@ -25,21 +25,12 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	tidbkv "github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tidb/pkg/meta"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	timeta "github.com/pingcap/tidb/pkg/meta"
-	timodel "github.com/pingcap/tidb/pkg/meta/common"
-	"github.com/pingcap/tiflow/cdc/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/filter"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
-
-// GetSnapshotMeta returns tidb meta information
-func GetSnapshotMeta(tiStore tidbkv.Storage, ts uint64) meta.Reader {
-	snapshot := tiStore.GetSnapshot(tidbkv.NewVersion(ts))
-	return meta.NewReader(snapshot)
-}
 
 // Snapshot stores the source TiDB all schema information.
 // If no special comments, all public methods are thread-safe.
@@ -182,26 +173,26 @@ func NewSnapshotFromMeta(
 			tableInfos = append(tableInfos, tbInfo)
 		}
 
-		for _, tableInfo := range tableInfos {
-			tableInfo := common.WrapTableInfo(dbinfo.ID, dbinfo.Name.O, currentTs, tableInfo)
+		for _, tidbTableInfo := range tableInfos {
+			tableInfo := common.WrapTableInfo(dbinfo.ID, dbinfo.Name.O, tidbTableInfo)
 			tableCount++
 			snap.inner.tables.ReplaceOrInsert(versionedID{
-				id:     tableInfo.ID,
+				id:     tidbTableInfo.ID,
 				tag:    tag,
 				target: tableInfo,
 			})
 			snap.inner.tableNameToID.ReplaceOrInsert(versionedEntityName{
 				prefix: dbinfo.ID,
-				entity: tableInfo.Name.O,
+				entity: tidbTableInfo.Name.O,
 				tag:    tag,
-				target: tableInfo.ID,
+				target: tidbTableInfo.ID,
 			})
 
 			eligible := tableInfo.IsEligible(forceReplicate)
 			if !eligible {
-				snap.inner.ineligibleTables.ReplaceOrInsert(versionedID{id: tableInfo.ID, tag: tag})
+				snap.inner.ineligibleTables.ReplaceOrInsert(versionedID{id: tidbTableInfo.ID, tag: tag})
 			}
-			if pi := tableInfo.GetPartitionInfo(); pi != nil {
+			if pi := tidbTableInfo.GetPartitionInfo(); pi != nil {
 				for _, partition := range pi.Definitions {
 					vid := newVersionedID(partition.ID, tag)
 					vid.target = tableInfo
@@ -270,12 +261,12 @@ func (s *Snapshot) PrintStatus(logger func(msg string, fields ...zap.Field)) {
 
 	availableTables := make(map[int64]struct{}, s.inner.tables.Len())
 	s.IterTables(true, func(tableInfo *common.TableInfo) {
-		availableTables[tableInfo.ID] = struct{}{}
-		logger("[SchemaSnap] --> Tables", zap.Int64("tableID", tableInfo.ID),
-			zap.Stringer("tableInfo", tableInfo),
-			zap.Bool("ineligible", s.inner.isIneligibleTableID(tableInfo.ID)))
+		availableTables[tableInfo.TableName.GetTableID()] = struct{}{}
+		logger("[SchemaSnap] --> Tables", zap.Int64("tableID", tableInfo.TableName.GetTableID()),
+			zap.Any("tableInfo", tableInfo),
+			zap.Bool("ineligible", s.inner.isIneligibleTableID(tableInfo.TableName.GetTableID())))
 		id, ok := s.inner.tableIDByName(tableInfo.TableName.Schema, tableInfo.TableName.Table)
-		if !ok || id != tableInfo.ID {
+		if !ok || id != tableInfo.TableName.GetTableID() {
 			logger("[SchemaSnap] ----> tableNameToID item lost", zap.Stringer("name", tableInfo.TableName), zap.Int64("tableNameToID", id))
 		}
 	})
@@ -287,7 +278,7 @@ func (s *Snapshot) PrintStatus(logger func(msg string, fields ...zap.Field)) {
 	})
 
 	s.IterPartitions(true, func(pid int64, table *common.TableInfo) {
-		logger("[SchemaSnap] --> Partitions", zap.Int64("partitionID", pid), zap.Int64("tableID", table.ID),
+		logger("[SchemaSnap] --> Partitions", zap.Int64("partitionID", pid), zap.Int64("tableID", table.TableName.GetTableID()),
 			zap.Bool("ineligible", s.inner.isIneligibleTableID(pid)))
 	})
 }
@@ -792,15 +783,15 @@ func (s *snapshot) dropTable(id int64, currentTs uint64) error {
 	log.Debug("drop table success",
 		zap.String("schema", tbInfo.TableName.Schema),
 		zap.String("table", tbInfo.TableName.Table),
-		zap.Int64("id", tbInfo.ID))
+		zap.Int64("id", tbInfo.TableName.TableID))
 	return nil
 }
 
 func (s *snapshot) doDropTable(tbInfo *common.TableInfo, currentTs uint64) {
 	tag := negative(currentTs)
-	s.tables.ReplaceOrInsert(newVersionedID(tbInfo.ID, tag))
+	s.tables.ReplaceOrInsert(newVersionedID(tbInfo.TableName.TableID, tag))
 	s.tableNameToID.ReplaceOrInsert(newVersionedEntityName(tbInfo.SchemaID, tbInfo.TableName.Table, tag))
-	if pi := tbInfo.GetPartitionInfo(); pi != nil {
+	if pi := tbInfo.Partition; pi != nil {
 		for _, partition := range pi.Definitions {
 			s.partitions.ReplaceOrInsert(newVersionedID(partition.ID, tag))
 		}
@@ -823,7 +814,7 @@ func (s *snapshot) truncateTable(id int64, tbInfo *common.TableInfo, currentTs u
 	log.Debug("truncate table success",
 		zap.String("schema", tbInfo.TableName.Schema),
 		zap.String("table", tbInfo.TableName.Table),
-		zap.Int64("id", tbInfo.ID))
+		zap.Int64("id", tbInfo.TableName.TableID))
 	return
 }
 
@@ -832,12 +823,12 @@ func (s *snapshot) createTable(tbInfo *common.TableInfo, currentTs uint64) error
 	if _, ok := s.schemaByID(tbInfo.SchemaID); !ok {
 		return cerror.ErrSnapshotSchemaNotFound.GenWithStack("table's schema(%d)", tbInfo.SchemaID)
 	}
-	if _, ok := s.physicalTableByID(tbInfo.ID); ok {
+	if _, ok := s.physicalTableByID(tbInfo.TableName.TableID); ok {
 		return cerror.ErrSnapshotTableExists.GenWithStackByArgs(tbInfo.TableName.Schema, tbInfo.TableName.Table)
 	}
 	s.doCreateTable(tbInfo, currentTs)
 	s.currentTs = currentTs
-	log.Debug("create table success", zap.Int64("id", tbInfo.ID),
+	log.Debug("create table success", zap.Int64("id", tbInfo.TableName.TableID),
 		zap.String("name", fmt.Sprintf("%s.%s", tbInfo.TableName.Schema, tbInfo.TableName.Table)))
 	return nil
 }
@@ -847,24 +838,24 @@ func (s *snapshot) replaceTable(tbInfo *common.TableInfo, currentTs uint64) erro
 	if _, ok := s.schemaByID(tbInfo.SchemaID); !ok {
 		return cerror.ErrSnapshotSchemaNotFound.GenWithStack("table's schema(%d)", tbInfo.SchemaID)
 	}
-	if _, ok := s.physicalTableByID(tbInfo.ID); !ok {
-		return cerror.ErrSnapshotTableNotFound.GenWithStack("table %s(%d)", tbInfo.Name, tbInfo.ID)
+	if _, ok := s.physicalTableByID(tbInfo.TableName.TableID); !ok {
+		return cerror.ErrSnapshotTableNotFound.GenWithStack("table %s(%d)", tbInfo.GetTableName(), tbInfo.TableName.TableID)
 	}
 	s.doCreateTable(tbInfo, currentTs)
 	s.currentTs = currentTs
-	log.Debug("replace table success", zap.String("name", tbInfo.Name.O), zap.Int64("id", tbInfo.ID))
+	log.Debug("replace table success", zap.String("name", tbInfo.GetTableName()), zap.Int64("id", tbInfo.TableName.TableID))
 	return nil
 }
 
 func (s *snapshot) doCreateTable(tbInfo *common.TableInfo, currentTs uint64) {
 	tbInfo = tbInfo.Clone()
 	tag := negative(currentTs)
-	vid := newVersionedID(tbInfo.ID, tag)
+	vid := newVersionedID(tbInfo.TableName.TableID, tag)
 	vid.target = tbInfo
 	s.tables.ReplaceOrInsert(vid)
 
 	vname := newVersionedEntityName(tbInfo.SchemaID, tbInfo.TableName.Table, tag)
-	vname.target = tbInfo.ID
+	vname.target = tbInfo.TableName.TableID
 	s.tableNameToID.ReplaceOrInsert(vname)
 
 	ineligible := !tbInfo.IsEligible(s.forceReplicate)
@@ -874,9 +865,9 @@ func (s *snapshot) doCreateTable(tbInfo *common.TableInfo, currentTs uint64) {
 		// See https://github.com/pingcap/tiflow/issues/4559
 		if !tbInfo.IsSequence() {
 			log.Warn("this table is ineligible to replicate",
-				zap.String("tableName", tbInfo.Name.O), zap.Int64("tableID", tbInfo.ID))
+				zap.String("tableName", tbInfo.GetTableName()), zap.Int64("tableID", tbInfo.TableName.TableID))
 		}
-		s.ineligibleTables.ReplaceOrInsert(newVersionedID(tbInfo.ID, tag))
+		s.ineligibleTables.ReplaceOrInsert(newVersionedID(tbInfo.TableName.TableID, tag))
 	}
 	if pi := tbInfo.GetPartitionInfo(); pi != nil {
 		for _, partition := range pi.Definitions {
@@ -892,26 +883,26 @@ func (s *snapshot) doCreateTable(tbInfo *common.TableInfo, currentTs uint64) {
 
 // updatePartition updates partition info for `tbInfo`.
 func (s *snapshot) updatePartition(tbInfo *common.TableInfo, isTruncate bool, currentTs uint64) error {
-	oldTbInfo, ok := s.physicalTableByID(tbInfo.ID)
+	oldTbInfo, ok := s.physicalTableByID(tbInfo.TableName.TableID)
 	if !ok {
-		return cerror.ErrSnapshotTableNotFound.GenWithStackByArgs(tbInfo.ID)
+		return cerror.ErrSnapshotTableNotFound.GenWithStackByArgs(tbInfo.TableName.TableID)
 	}
 	oldPi := oldTbInfo.GetPartitionInfo()
 	if oldPi == nil {
-		return cerror.ErrSnapshotTableNotFound.GenWithStack("table %d is not a partition table", tbInfo.ID)
+		return cerror.ErrSnapshotTableNotFound.GenWithStack("table %d is not a partition table", tbInfo.TableName.TableID)
 	}
 	newPi := tbInfo.GetPartitionInfo()
 	if newPi == nil {
-		return cerror.ErrSnapshotTableNotFound.GenWithStack("table %d is not a partition table", tbInfo.ID)
+		return cerror.ErrSnapshotTableNotFound.GenWithStack("table %d is not a partition table", tbInfo.TableName.TableID)
 	}
 
 	tag := negative(currentTs)
-	vid := newVersionedID(tbInfo.ID, tag)
+	vid := newVersionedID(tbInfo.TableName.TableID, tag)
 	vid.target = tbInfo.Clone()
 	s.tables.ReplaceOrInsert(vid)
 	ineligible := !tbInfo.IsEligible(s.forceReplicate)
 	if ineligible {
-		s.ineligibleTables.ReplaceOrInsert(newVersionedID(tbInfo.ID, tag))
+		s.ineligibleTables.ReplaceOrInsert(newVersionedID(tbInfo.TableName.TableID, tag))
 	}
 	for _, partition := range oldPi.Definitions {
 		s.partitions.ReplaceOrInsert(newVersionedID(partition.ID, tag))
@@ -1026,8 +1017,7 @@ func (s *snapshot) exchangePartition(targetTable *common.TableInfo, currentTS ui
 		return errors.Trace(err)
 	}
 
-	newSourceTable := common.WrapTableInfo(sourceTable.SchemaID, sourceTable.TableName.Schema,
-		currentTS, sourceTable.TableInfo.Clone())
+	newSourceTable := common.WrapTableInfo(sourceTable.SchemaID, sourceTable.TableName.Schema, sourceTable.TableInfo.Clone())
 	// 5.update the sourceTable
 	err = s.dropTable(sourceTable.ID, currentTS)
 	if err != nil {
@@ -1089,7 +1079,7 @@ func (s *snapshot) renameTables(job *timodel.Job, currentTs uint64) error {
 			return cerror.ErrSnapshotSchemaNotFound.GenWithStackByArgs(info.NewSchemaID)
 		}
 		newSchemaName := newSchema.Name.O
-		tbInfo := common.WrapTableInfo(info.NewSchemaID, newSchemaName, job.BinlogInfo.FinishedTS, tableInfo)
+		tbInfo := common.WrapTableInfo(info.NewSchemaID, newSchemaName, tableInfo)
 		err = s.createTable(tbInfo, currentTs)
 		if err != nil {
 			return errors.Trace(err)

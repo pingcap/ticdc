@@ -130,7 +130,7 @@ func TestColumnIndex(t *testing.T) {
 		{ID: 102, Name: ast.NewCIStr("b"), FieldType: *newFieldTypeWithFlag(mysql.UniqueKeyFlag)},
 		{ID: 103, Name: ast.NewCIStr("c"), FieldType: *newFieldTypeWithFlag()},
 	}
-	tableInfo := WrapTableInfo("test", &model.TableInfo{
+	tableInfo := WrapTableInfo(100, "test", &model.TableInfo{
 		PKIsHandle: true,
 		Columns:    columns,
 	})
@@ -141,7 +141,7 @@ func TestColumnIndex(t *testing.T) {
 		{ID: 1, Primary: true, Columns: []*model.IndexColumn{{Offset: 0}}},
 		{ID: 2, Unique: true, Columns: []*model.IndexColumn{{Offset: 1}, {Offset: 2}}},
 	}
-	tableInfo = WrapTableInfo("test", &model.TableInfo{
+	tableInfo = WrapTableInfo(100, "test", &model.TableInfo{
 		Columns: columns,
 		Indices: indices,
 	})
@@ -150,7 +150,7 @@ func TestColumnIndex(t *testing.T) {
 }
 
 func TestIndexByName(t *testing.T) {
-	tableInfo := WrapTableInfo("test", &model.TableInfo{
+	tableInfo := WrapTableInfo(100, "test", &model.TableInfo{
 		Indices: nil,
 	})
 	names, offsets, ok := tableInfo.IndexByName("idx1")
@@ -158,7 +158,7 @@ func TestIndexByName(t *testing.T) {
 	require.Nil(t, names)
 	require.Nil(t, offsets)
 
-	tableInfo = WrapTableInfo("test", &model.TableInfo{
+	tableInfo = WrapTableInfo(100, "test", &model.TableInfo{
 		Indices: []*model.IndexInfo{
 			{
 				Name: ast.NewCIStr("idx1"),
@@ -193,7 +193,7 @@ func TestIndexByName(t *testing.T) {
 }
 
 func TestColumnsByNames(t *testing.T) {
-	tableInfo := WrapTableInfo("test", &model.TableInfo{
+	tableInfo := WrapTableInfo(100, "test", &model.TableInfo{
 		Columns: []*model.ColumnInfo{
 			{
 				Name: ast.NewCIStr("col2"),

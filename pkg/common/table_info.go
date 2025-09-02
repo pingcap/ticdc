@@ -24,7 +24,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -67,6 +66,8 @@ const (
 
 // TableInfo provides meta data describing a DB table.
 type TableInfo struct {
+	*model.TableInfo
+	SchemaID int64
 	// NOTICE: We probably store the logical ID inside TableName,
 	// not the physical ID.
 	// For normal table, there is only one ID, which is the physical ID.
@@ -358,6 +359,11 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 	return len(ti.columnSchema.HandleKeyIDs) != 0
 }
 
+// Clone clones the TableInfo
+func (ti *TableInfo) Clone() *TableInfo {
+	return WrapTableInfo(ti.SchemaID, ti.TableName.Schema, ti.TableInfo.Clone())
+}
+
 // GetIndex return the corresponding index by the given name.
 func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 	for _, index := range ti.columnSchema.Indices {
@@ -444,20 +450,23 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 }
 
 func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
-	return &model.TableInfo{
-		ID:       ti.TableName.TableID,
-		Name:     ast.NewCIStr(ti.TableName.Table),
-		Charset:  ti.Charset,
-		Collate:  ti.Collate,
-		Comment:  ti.Comment,
-		View:     ti.View,
-		Sequence: ti.Sequence,
-		Columns:  ti.columnSchema.Cols(), // Get public state columns, that's enough.
-	}
+	return ti.TableInfo
+	// return &model.TableInfo{
+	// 	ID:       ti.TableName.TableID,
+	// 	Name:     ast.NewCIStr(ti.TableName.Table),
+	// 	Charset:  ti.Charset,
+	// 	Collate:  ti.Collate,
+	// 	Comment:  ti.Comment,
+	// 	View:     ti.View,
+	// 	Sequence: ti.Sequence,
+	// 	Columns:  ti.columnSchema.Cols(), // Get public state columns, that's enough.
+	// }
 }
 
-func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
+func newTableInfo(schemaID int64, schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	return &TableInfo{
+		TableInfo: tableInfo,
+		SchemaID:  schemaID,
 		TableName: TableName{
 			Schema:      schema,
 			Table:       table,
@@ -474,8 +483,8 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 	}
 }
 
-func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
-	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema, tableInfo)
+func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
+	ti := newTableInfo(schemaID, schemaName, tableName, tableID, isPartition, columnSchema, tableInfo)
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
@@ -487,18 +496,18 @@ func NewTableInfo(schemaName string, tableName string, tableID int64, isPartitio
 }
 
 // WrapTableInfo creates a TableInfo from a model.TableInfo
-func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
+func WrapTableInfo(schemaID int64, schemaName string, info *model.TableInfo) *TableInfo {
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
-	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
+	return NewTableInfo(schemaID, schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
 }
 
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := newColumnSchema4Decoder(tableInfo)
-	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
+	result := newTableInfo(0, schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 	result.InitPrivateFields()
 	return result
 }
