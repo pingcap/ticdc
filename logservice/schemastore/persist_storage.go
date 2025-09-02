@@ -411,7 +411,10 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
-		ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
+		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
 		if ok {
 			events = append(events, ddlEvent)
 		} else {
@@ -478,7 +481,10 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
+			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
 			if ok {
 				events = append(events, ddlEvent)
 			}
@@ -818,7 +824,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	return false
 }
 
-func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
+func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))

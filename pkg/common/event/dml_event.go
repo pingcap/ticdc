@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
@@ -269,10 +270,10 @@ type DMLEvent struct {
 	// it's based on the raw entry size, use for the sink throughput calculation.
 	ApproximateSize int64 `json:"approximate_size"`
 	// RowTypes is the types of every row in the transaction.
-	RowTypes []RowType `json:"row_types"`
+
+	RowTypes []common.RowType `json:"row_types"`
 	// RowKeys is the keys of every row in the transaction.
 	RowKeys [][]byte `json:"row_keys"`
-
 	// Rows shares BatchDMLEvent rows
 	Rows *chunk.Chunk `json:"-"`
 
@@ -319,7 +320,7 @@ func NewDMLEvent(
 		StartTs:         startTs,
 		CommitTs:        commitTs,
 		TableInfo:       tableInfo,
-		RowTypes:        make([]RowType, 0),
+		RowTypes:        make([]common.RowType, 0),
 	}
 }
 
@@ -336,7 +337,10 @@ func (t *DMLEvent) SetRows(rows *chunk.Chunk) {
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	decode func(
 		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error),
+		tableInfo *common.TableInfo,
+		chk *chunk.Chunk,
+	) (int, *integrity.Checksum, error),
+	filter filter.Filter,
 ) error {
 	// Some transactions could generate empty row change event, such as
 	// begin; insert into t (id) values (1); delete from t where id=1; commit;
@@ -346,12 +350,13 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		log.Debug("the value and old_value of the raw kv entry are both nil, skip it", zap.String("raw", raw.String()))
 		return nil
 	}
-	rowType := RowTypeInsert
+
+	rowType := common.RowTypeInsert
 	if raw.IsDelete() {
-		rowType = RowTypeDelete
+		rowType = common.RowTypeDelete
 	}
 	if raw.IsUpdate() {
-		rowType = RowTypeUpdate
+		rowType = common.RowTypeUpdate
 	}
 
 	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
@@ -361,17 +366,57 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if count <= 0 {
 		log.Panic("DMLEvent.AppendRow: no rows decoded from the raw KV entry", zap.String("raw", raw.String()))
 	}
-	for range count {
-		t.RowTypes = append(t.RowTypes, rowType)
 
-		keyCopy := make([]byte, len(raw.Key))
-		copy(keyCopy, raw.Key)
-		t.RowKeys = append(t.RowKeys, keyCopy)
+	var preRow, row chunk.Row
+	switch rowType {
+	case common.RowTypeInsert:
+		if count != 1 {
+			log.Panic("DMLEvent.AppendRow: insert row count should be 1",
+				zap.Int("count", count), zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+		}
+		row = t.Rows.GetRow(t.Rows.NumRows() - 1)
+	case common.RowTypeDelete:
+		if count != 1 {
+			log.Panic("DMLEvent.AppendRow: delete row count should be 1",
+				zap.Int("count", count), zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+		}
+		preRow = t.Rows.GetRow(t.Rows.NumRows() - 1)
+	case common.RowTypeUpdate:
+		if count != 2 {
+			log.Panic("DMLEvent.AppendRow: update row count should be 2",
+				zap.Int("count", count), zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+		}
+		preRow = t.Rows.GetRow(t.Rows.NumRows() - 2)
+		row = t.Rows.GetRow(t.Rows.NumRows() - 1)
+	default:
+		log.Panic("DMLEvent.AppendRow: invalid row type", zap.Uint8("rowType", uint8(rowType)),
+			zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
 	}
-	t.Length += 1
-	t.ApproximateSize += raw.GetSize()
-	if checksum != nil {
-		t.Checksum = append(t.Checksum, checksum)
+
+	if filter != nil {
+		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if skip {
+			log.Info("ignore DML by filter", zap.Any("tableInfo", t.TableInfo), zap.Any("raw", raw))
+			t.Rows.TruncateTo(t.Rows.NumRows() - count) // Remove the rows that were added
+			return nil
+		}
+	}
+
+	if count != 0 {
+		for range count {
+			t.RowTypes = append(t.RowTypes, rowType)
+			keyCopy := make([]byte, len(raw.Key))
+			copy(keyCopy, raw.Key)
+			t.RowKeys = append(t.RowKeys, keyCopy)
+		}
+		t.Length += 1
+		t.ApproximateSize += raw.GetSize()
+		if checksum != nil {
+			t.Checksum = append(t.Checksum, checksum)
+		}
 	}
 	return nil
 }
@@ -449,7 +494,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		rowKey = t.RowKeys[t.offset]
 	}
 	switch rowType {
-	case RowTypeInsert:
+	case common.RowTypeInsert:
 		row := RowChange{
 			Row:      t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
 			RowType:  rowType,
@@ -458,7 +503,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		}
 		t.offset++
 		return row, true
-	case RowTypeDelete:
+	case common.RowTypeDelete:
 		row := RowChange{
 			PreRow:   t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
 			RowType:  rowType,
@@ -467,7 +512,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		}
 		t.offset++
 		return row, true
-	case RowTypeUpdate:
+	case common.RowTypeUpdate:
 		row := RowChange{
 			PreRow:   t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
 			Row:      t.Rows.GetRow(t.PreviousTotalOffset + t.offset + 1),
@@ -639,9 +684,9 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	offset += 4
 	length := int32(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4
-	t.RowTypes = make([]RowType, length)
+	t.RowTypes = make([]common.RowType, length)
 	for i := 0; i < int(length); i++ {
-		t.RowTypes[i] = RowType(data[offset])
+		t.RowTypes[i] = common.RowType(data[offset])
 		offset++
 	}
 	rowKeysLen := int32(binary.LittleEndian.Uint32(data[offset:]))
@@ -660,32 +705,7 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 type RowChange struct {
 	PreRow   chunk.Row
 	Row      chunk.Row
-	RowType  RowType
+	RowType  common.RowType
 	Checksum *integrity.Checksum
 	RowKey   []byte
-}
-
-type RowType byte
-
-const (
-	// RowTypeDelete represents a delete row.
-	RowTypeDelete RowType = iota
-	// RowTypeInsert represents a insert row.
-	RowTypeInsert
-	// RowTypeUpdate represents a update row.
-	RowTypeUpdate
-)
-
-func (r RowType) String() string {
-	switch r {
-	case RowTypeDelete:
-		return "delete"
-	case RowTypeInsert:
-		return "insert"
-	case RowTypeUpdate:
-		return "update"
-	default:
-	}
-	log.Panic("RowType: invalid row type", zap.Uint8("rowType", uint8(r)))
-	return ""
 }

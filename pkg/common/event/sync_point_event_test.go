@@ -21,14 +21,8 @@ import (
 )
 
 func TestSyncpointEvent(t *testing.T) {
-	e := SyncPointEvent{
-		State:        EventSenderStatePaused,
-		DispatcherID: common.NewDispatcherID(),
-		CommitTsList: []uint64{100, 102},
-		Seq:          1000,
-		Epoch:        10,
-		Version:      SyncPointEventVersion,
-	}
+	e := NewSyncPointEvent(common.NewDispatcherID(), []uint64{100, 102}, 1000, 10)
+	e.State = EventSenderStatePaused
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize()))
@@ -36,18 +30,12 @@ func TestSyncpointEvent(t *testing.T) {
 	var e2 SyncPointEvent
 	err = e2.Unmarshal(data)
 	require.NoError(t, err)
-	require.Equal(t, e, e2)
+	require.Equal(t, *e, e2)
 }
 
 func TestSyncpointEventWithEmtpyCommitTsList(t *testing.T) {
-	e := SyncPointEvent{
-		State:        EventSenderStateNormal,
-		DispatcherID: common.NewDispatcherID(),
-		CommitTsList: []uint64{},
-		Seq:          1000,
-		Epoch:        10,
-		Version:      SyncPointEventVersion,
-	}
+	e := NewSyncPointEvent(common.NewDispatcherID(), []uint64{}, 1000, 10)
+	e.State = EventSenderStateNormal
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize()))
@@ -55,5 +43,5 @@ func TestSyncpointEventWithEmtpyCommitTsList(t *testing.T) {
 	var e2 SyncPointEvent
 	err = e2.Unmarshal(data)
 	require.NoError(t, err)
-	require.Equal(t, e, e2)
+	require.Equal(t, *e, e2)
 }

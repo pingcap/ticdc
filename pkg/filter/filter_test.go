@@ -15,18 +15,476 @@ package filter
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/eventpb"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
-func TestFilterValue(t *testing.T) {
-	ft, err := NewFilter(&config.FilterConfig{}, "", false, false)
+// Helper to create a model.ColumnInfo
+func newColumnInfo(id int64, name string, tp byte, flag uint) *model.ColumnInfo {
+	ft := types.NewFieldType(tp)
+	ft.AddFlag(flag)
+	return &model.ColumnInfo{
+		ID:        id,
+		Name:      ast.NewCIStr(name),
+		FieldType: *ft,
+		State:     model.StatePublic,
+		Version:   model.CurrLatestColumnInfoVersion,
+	}
+}
+
+// Helper to create a model.IndexInfo
+func newIndexInfo(name string, cols []*model.IndexColumn, isPrimary, isUnique bool) *model.IndexInfo {
+	return &model.IndexInfo{
+		Name:    ast.NewCIStr(name),
+		Columns: cols,
+		Primary: isPrimary,
+		Unique:  isUnique,
+		State:   model.StatePublic,
+	}
+}
+
+// Helper to create a common.TableInfo for testing
+func mustNewCommonTableInfo(schema, table string, cols []*model.ColumnInfo, indices []*model.IndexInfo) *common.TableInfo {
+	ti := &model.TableInfo{
+		ID:      time.Now().UnixNano(),
+		Name:    ast.NewCIStr(table),
+		Columns: cols,
+		Indices: indices,
+		State:   model.StatePublic,
+		Charset: "utf8mb4",
+		Collate: "utf8mb4_bin",
+	}
+
+	for i, col := range ti.Columns {
+		col.Offset = i
+	}
+
+	for _, col := range ti.Columns {
+		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			ti.PKIsHandle = true
+			break
+		}
+	}
+	return common.WrapTableInfo(schema, ti)
+}
+
+// mustNewModelTableInfo is a helper to create a model.TableInfo for testing.
+func mustNewModelTableInfo(table string, cols []*model.ColumnInfo, indices []*model.IndexInfo) *model.TableInfo {
+	ti := &model.TableInfo{
+		ID:      time.Now().UnixNano(),
+		Name:    ast.NewCIStr(table),
+		Columns: cols,
+		Indices: indices,
+		State:   model.StatePublic,
+		Charset: "utf8mb4",
+		Collate: "utf8mb4_bin",
+	}
+
+	for i, col := range ti.Columns {
+		col.Offset = i
+	}
+
+	for _, col := range ti.Columns {
+		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			ti.PKIsHandle = true
+			break
+		}
+	}
+	return ti
+}
+
+// datumsToChunkRow converts datums to a chunk.Row for testing.
+// Note: This is a simplified helper for testing purposes. A real implementation might exist in a helper package.
+func datumsToChunkRow(datums []types.Datum, ti *common.TableInfo) chunk.Row {
+	fieldTypes := make([]*types.FieldType, len(ti.GetColumns()))
+	for i, col := range ti.GetColumns() {
+		fieldTypes[i] = &col.FieldType
+	}
+	chk := chunk.NewChunkWithCapacity(fieldTypes, 1)
+	for i, d := range datums {
+		chk.AppendDatum(i, &d)
+	}
+	return chk.GetRow(0)
+}
+
+func TestShouldUseDefaultRules(t *testing.T) {
+	t.Parallel()
+
+	filter, err := NewFilter(config.NewDefaultFilterConfig(), "", false, false)
 	require.Nil(t, err)
-	ok := ft.ShouldIgnoreSchema(TiDBWorkloadSchema)
-	require.True(t, ok)
+	require.True(t, filter.ShouldIgnoreTable("information_schema", "", nil))
+	require.True(t, filter.ShouldIgnoreTable("information_schema", "statistics", nil))
+	require.True(t, filter.ShouldIgnoreTable("performance_schema", "", nil))
+	require.True(t, filter.ShouldIgnoreTable(TiDBWorkloadSchema, "hist_snapshots", nil))
+	require.False(t, filter.ShouldIgnoreTable("metric_schema", "query_duration", nil))
+	require.False(t, filter.ShouldIgnoreTable("sns", "user", nil))
+	require.True(t, filter.ShouldIgnoreTable("tidb_cdc", "repl_mark_a_a", nil))
+	require.True(t, filter.ShouldIgnoreTable("lightning_task_info", "conflict_records", nil))
+}
+
+func TestShouldUseCustomRules(t *testing.T) {
+	t.Parallel()
+
+	filter, err := NewFilter(&config.FilterConfig{
+		Rules: []string{"sns.*", "ecom.*", "!sns.log", "!ecom.test"},
+	}, "", false, false)
+	require.Nil(t, err)
+	require.True(t, filter.ShouldIgnoreTable("other", "", nil))
+	require.True(t, filter.ShouldIgnoreTable("other", "what", nil))
+	require.False(t, filter.ShouldIgnoreTable("sns", "", nil))
+	require.False(t, filter.ShouldIgnoreTable("ecom", "order", nil))
+	require.False(t, filter.ShouldIgnoreTable("ecom", "order", nil))
+	require.True(t, filter.ShouldIgnoreTable("ecom", "test", nil))
+	require.True(t, filter.ShouldIgnoreTable("sns", "log", nil))
+	require.True(t, filter.ShouldIgnoreTable("information_schema", "", nil))
+
+	filter, err = NewFilter(&config.FilterConfig{
+		// 1. match all schema and table
+		// 2. do not match test.season
+		// 3. match all table of schema school
+		// 4. do not match table school.teacher
+		Rules: []string{"*.*", "!test.season", "school.*", "!school.teacher"},
+	}, "", false, false)
+	require.True(t, filter.ShouldIgnoreTable("test", "season", nil))
+	require.False(t, filter.ShouldIgnoreTable("other", "", nil))
+	require.False(t, filter.ShouldIgnoreTable("school", "student", nil))
+	require.True(t, filter.ShouldIgnoreTable("school", "teacher", nil))
+	require.Nil(t, err)
+
+	filter, err = NewFilter(&config.FilterConfig{
+		// 1. match all schema and table
+		// 2. do not match test.season
+		// 3. match all table of schema school
+		// 4. do not match table school.teacher
+		Rules: []string{"*.*", "!test.t1", "!test.t2"},
+	}, "", false, false)
+	require.False(t, filter.ShouldIgnoreTable("test", "season", nil))
+	require.True(t, filter.ShouldIgnoreTable("test", "t1", nil))
+	require.True(t, filter.ShouldIgnoreTable("test", "t2", nil))
+	require.Nil(t, err)
+}
+
+func TestIsEligible(t *testing.T) {
+	t.Parallel()
+
+	// 1. Table with PK
+	tiWithPK := mustNewModelTableInfo("t1",
+		[]*model.ColumnInfo{
+			newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag),
+		}, nil)
+
+	// 2. Table with UK on not-null column
+	tiWithUK := mustNewModelTableInfo("t2",
+		[]*model.ColumnInfo{
+			newColumnInfo(1, "id", mysql.TypeLong, mysql.NotNullFlag),
+		},
+		[]*model.IndexInfo{
+			newIndexInfo("uk_id", []*model.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}}, false, true),
+		})
+
+	// 3. Table with UK on nullable column (ineligible)
+	tiWithNullableUK := mustNewModelTableInfo("t3",
+		[]*model.ColumnInfo{
+			newColumnInfo(1, "id", mysql.TypeLong, 0),
+		},
+		[]*model.IndexInfo{
+			newIndexInfo("uk_id", []*model.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}}, false, true),
+		})
+
+	// 4. Table with no PK or UK (ineligible)
+	tiNoKey := mustNewModelTableInfo("t4",
+		[]*model.ColumnInfo{
+			newColumnInfo(1, "id", mysql.TypeLong, 0),
+		}, nil)
+
+	// 5. View (eligible)
+	tiView := mustNewModelTableInfo("v1", nil, nil)
+	tiView.View = &model.ViewInfo{}
+
+	// 6. Sequence (ineligible)
+	tiSeq := mustNewModelTableInfo("s1", nil, nil)
+	tiSeq.Sequence = &model.SequenceInfo{}
+
+	cfg := config.NewDefaultFilterConfig()
+	// test with forceReplicate = false
+	f, err := NewFilter(cfg, "UTC", true, false)
+	require.NoError(t, err)
+	filterImpl := f.(*filter)
+	require.True(t, filterImpl.IsEligible(tiWithPK))
+	require.True(t, filterImpl.IsEligible(tiWithUK))
+	require.False(t, filterImpl.IsEligible(tiWithNullableUK))
+	require.False(t, filterImpl.IsEligible(tiNoKey))
+	require.True(t, filterImpl.IsEligible(tiView))
+	require.False(t, filterImpl.IsEligible(tiSeq))
+
+	// test with forceReplicate = true
+	f, err = NewFilter(cfg, "UTC", true, true)
+	require.NoError(t, err)
+	filterImpl = f.(*filter)
+	require.True(t, filterImpl.IsEligible(tiWithPK))
+	require.True(t, filterImpl.IsEligible(tiWithUK))
+	require.True(t, filterImpl.IsEligible(tiWithNullableUK))
+	require.True(t, filterImpl.IsEligible(tiNoKey))
+	require.True(t, filterImpl.IsEligible(tiView))
+	require.False(t, filterImpl.IsEligible(tiSeq), "Sequence should always be ineligible")
+}
+
+func TestShouldIgnoreTable(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		rules     []string
+		schema    string
+		table     string
+		shouldBeA bool // A stands for accept
+	}{
+		{
+			name: "Replicate all tables",
+			rules: []string{
+				"*.*",
+			},
+			schema: "test", table: "t1", shouldBeA: true,
+		},
+		{
+			name: "Replicate all tables in test1",
+			rules: []string{
+				"test1.*",
+			},
+			schema: "test1", table: "t1", shouldBeA: true,
+		},
+		{
+			name: "Replicate all tables in test1, but input is test2",
+			rules: []string{
+				"test1.*",
+			},
+			schema: "test2", table: "t1", shouldBeA: false,
+		},
+		{
+			name: "Replicate all tables except scm1.tbl2",
+			rules: []string{
+				"*.*",
+				"!scm1.tbl2",
+			},
+			schema: "scm1", table: "tbl2", shouldBeA: false,
+		},
+		{
+			name: "Replicate all tables except scm1.tbl2, but input is scm1.tbl1",
+			rules: []string{
+				"*.*",
+				"!scm1.tbl2",
+			},
+			schema: "scm1", table: "tbl1", shouldBeA: true,
+		},
+		{
+			name: "Only replicate tables scm1.tbl2 and scm1.tbl3",
+			rules: []string{
+				"scm1.tbl2",
+				"scm1.tbl3",
+			},
+			schema: "scm1", table: "tbl2", shouldBeA: true,
+		},
+		{
+			name: "Only replicate tables scm1.tbl2 and scm1.tbl3, but input is scm1.tbl1",
+			rules: []string{
+				"scm1.tbl2",
+				"scm1.tbl3",
+			},
+			schema: "scm1", table: "tbl1", shouldBeA: false,
+		},
+		{
+			name: "Replicate tables whose names start with tidb_ in scm1",
+			rules: []string{
+				"scm1.tidb_*",
+			},
+			schema: "scm1", table: "tidb_t1", shouldBeA: true,
+		},
+		{
+			name: "Replicate tables whose names start with tidb_ in scm1, but input is scm1.t1",
+			rules: []string{
+				"scm1.tidb_*",
+			},
+			schema: "scm1", table: "t1", shouldBeA: false,
+		},
+		{
+			name:   "Ignore system schemas",
+			rules:  []string{"*.*"},
+			schema: "mysql", table: "users", shouldBeA: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := &config.FilterConfig{
+				Rules: c.rules,
+			}
+			f, err := NewFilter(cfg, "UTC", false, false)
+			require.NoError(t, err)
+			require.Equal(t, !c.shouldBeA, f.ShouldIgnoreTable(c.schema, c.table, nil))
+		})
+	}
+
+	// Test case insensitive
+	cfg := &config.FilterConfig{Rules: []string{"TEST.*"}}
+	f, err := NewFilter(cfg, "UTC", false, false) // case-insensitive
+	require.NoError(t, err)
+	require.False(t, f.ShouldIgnoreTable("test", "t1", nil))
+	require.False(t, f.ShouldIgnoreTable("Test", "t1", nil))
+
+	f, err = NewFilter(cfg, "UTC", true, false) // case-sensitive
+	require.NoError(t, err)
+	require.True(t, f.ShouldIgnoreTable("test", "t1", nil))
+	require.False(t, f.ShouldIgnoreTable("TEST", "t1", nil))
+}
+
+func TestShouldIgnoreDDL(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.FilterConfig{
+		Rules: []string{"test.*"},
+		EventFilters: []*config.EventFilterRule{
+			{
+				Matcher:     []string{"test.t1"},
+				IgnoreEvent: []bf.EventType{bf.DropTable},
+			},
+			{
+				Matcher:   []string{"test.t2"},
+				IgnoreSQL: []string{"^DROP"},
+			},
+		},
+	}
+
+	f, err := NewFilter(cfg, "UTC", false, false)
+	require.NoError(t, err)
+
+	// DDL not in whitelist, should ignore
+	ignore, err := f.ShouldIgnoreDDL("test", "t", "ALTER TABLE t CACHE", model.ActionAlterCacheTable, nil)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
+	// DDL for a table that doesn't match the rule, should ignore
+	ignore, err = f.ShouldIgnoreDDL("otherdb", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, nil)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
+	// DDL matches an event filter rule (drop table), should ignore
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "DROP TABLE t1", model.ActionDropTable, nil)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
+	// DDL (create table) does not match event filter, should not ignore
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, nil)
+	require.NoError(t, err)
+	require.False(t, ignore)
+
+	// DDL matches an SQL regex rule, should ignore
+	ignore, err = f.ShouldIgnoreDDL("test", "t2", "DROP TABLE t2", model.ActionDropTable, nil)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
+	// DDL does not match any rule, should not ignore
+	ignore, err = f.ShouldIgnoreDDL("test", "t3", "CREATE TABLE t3(id int)", model.ActionCreateTable, nil)
+	require.NoError(t, err)
+	require.False(t, ignore)
+}
+
+func TestShouldIgnoreDML(t *testing.T) {
+	t.Parallel()
+	cfg := &config.FilterConfig{
+		// Rules allow test.t1, test.t2, test.t3
+		Rules: []string{"test.*", "!test.t4"},
+		EventFilters: []*config.EventFilterRule{
+			{ // Rule 1: ignore insert on t2
+				Matcher:     []string{"test.t2"},
+				IgnoreEvent: []bf.EventType{bf.InsertEvent},
+			},
+			{ // Rule 2: ignore insert on t3 where id > 10
+				Matcher:               []string{"test.t3"},
+				IgnoreInsertValueExpr: "id > 10",
+			},
+		},
+	}
+	f, err := NewFilter(cfg, "UTC", false, false)
+	require.NoError(t, err)
+
+	ti1 := mustNewCommonTableInfo("test", "t1", []*model.ColumnInfo{newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag)}, nil)
+	ti2 := mustNewCommonTableInfo("test", "t2", []*model.ColumnInfo{newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag)}, nil)
+	ti4 := mustNewCommonTableInfo("test", "t4", []*model.ColumnInfo{newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag)}, nil)
+
+	// Dummy row data for cases where it doesn't affect logic but is required by function signature.
+	dummyRowData := datumsToChunkRow(types.MakeDatums(int64(1)), ti1)
+	emptyRow := chunk.Row{}
+
+	// Case 1: DML on `test.t4`, should be ignored by table filter (highest precedence).
+	ignore, err := f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, dummyRowData, ti4)
+	require.NoError(t, err)
+	require.True(t, ignore, "Should be ignored by table filter")
+
+	// Case 2: INSERT on `test.t2`, should be ignored by SQL event filter (second precedence).
+	ignore, err = f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, dummyRowData, ti2)
+	require.NoError(t, err)
+	require.True(t, ignore, "Should be ignored by SQL event filter")
+
+	// Case 3: UPDATE on `test.t2`, should pass SQL event filter.
+	updatePreRow := datumsToChunkRow(types.MakeDatums(int64(1)), ti2)
+	updateRow := datumsToChunkRow(types.MakeDatums(int64(2)), ti2)
+	ignore, err = f.ShouldIgnoreDML(common.RowTypeUpdate, updatePreRow, updateRow, ti2)
+	require.NoError(t, err)
+	require.False(t, ignore, "Should pass SQL event filter as no expression is configured")
+
+	// Case 4: DML on `test.t1`, should pass all filters.
+	insertRow := datumsToChunkRow(types.MakeDatums(int64(1)), ti1)
+	ignore, err = f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, insertRow, ti1)
+	require.NoError(t, err)
+	require.False(t, ignore, "Should pass all filters")
+}
+
+func TestIsAllowedDDL(t *testing.T) {
+	require.Len(t, ddlWhiteListMap, 38)
+	type testCase struct {
+		model.ActionType
+		allowed bool
+	}
+	testCases := make([]testCase, 0, len(ddlWhiteListMap))
+	for ddlType := range ddlWhiteListMap {
+		testCases = append(testCases, testCase{ddlType, true})
+	}
+	testCases = append(testCases, testCase{model.ActionAddForeignKey, false})
+	testCases = append(testCases, testCase{model.ActionDropForeignKey, false})
+	testCases = append(testCases, testCase{model.ActionCreateSequence, false})
+	testCases = append(testCases, testCase{model.ActionAlterSequence, false})
+	testCases = append(testCases, testCase{model.ActionDropSequence, false})
+	for _, tc := range testCases {
+		require.Equal(t, tc.allowed, isAllowedDDL(tc.ActionType), "%#v", tc)
+	}
+}
+
+func TestIsSchemaDDL(t *testing.T) {
+	cases := []struct {
+		actionType model.ActionType
+		isSchema   bool
+	}{
+		{model.ActionCreateSchema, true},
+		{model.ActionDropSchema, true},
+		{model.ActionModifySchemaCharsetAndCollate, true},
+		{model.ActionCreateTable, false},
+		{model.ActionDropTable, false},
+		{model.ActionTruncateTable, false},
+		{model.ActionAddColumn, false},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.isSchema, IsSchemaDDL(tc.actionType), "%#v", tc)
+	}
 }
 
 // Helper functions to create test configurations

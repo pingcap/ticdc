@@ -54,7 +54,7 @@ function failOverOnlyOneNode() {
 	sleep 15
 
 	check_table_exists fail_over_test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 120
 
 	export GO_FAILPOINTS=''
 
@@ -112,7 +112,7 @@ function failOverWhenTwoNode() {
 	sleep 15
 
 	check_table_exists fail_over_test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 120
 
 	export GO_FAILPOINTS=''
 

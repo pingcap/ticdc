@@ -85,10 +85,7 @@ type decoder struct {
 	upstreamTiDB *sql.DB
 }
 
-var (
-	tableIDAllocator  = common.NewTableIDAllocator()
-	tableInfoAccessor = common.NewTableInfoAccessor()
-)
+var tableIDAllocator = common.NewTableIDAllocator()
 
 // NewDecoder return a decoder for canal-json
 func NewDecoder(
@@ -113,7 +110,6 @@ func NewDecoder(
 	}
 
 	tableIDAllocator.Clean()
-	tableInfoAccessor.Clean()
 	return &decoder{
 		config:       codecConfig,
 		decoder:      newBufferedJSONDecoder(),
@@ -312,11 +308,11 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	case canal.EventType_DELETE:
 		data := formatAllColumnsValue(msg.getData(), columns)
 		common.AppendRow2Chunk(data, columns, result.Rows)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeDelete)
 	case canal.EventType_INSERT:
 		data := formatAllColumnsValue(msg.getData(), columns)
 		common.AppendRow2Chunk(data, columns, result.Rows)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeInsert)
 	case canal.EventType_UPDATE:
 		previous := formatAllColumnsValue(msg.getOld(), columns)
 		data := formatAllColumnsValue(msg.getData(), columns)
@@ -327,8 +323,8 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 		}
 		common.AppendRow2Chunk(previous, columns, result.Rows)
 		common.AppendRow2Chunk(data, columns, result.Rows)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
@@ -350,15 +346,10 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.Query = b.msg.getQuery()
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
+	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
+	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
 
-	result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
-	schemaName := result.SchemaName
-	tableName := result.TableName
-	if result.Type == byte(timodel.ActionRenameTable) {
-		schemaName = result.ExtraSchemaName
-		tableName = result.ExtraTableName
-	}
-	tableInfoAccessor.Remove(schemaName, tableName)
+	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	return result
 }
 
@@ -511,17 +502,7 @@ func formatValue(value any, ft types.FieldType) any {
 }
 
 func queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
-	schema := *msg.getSchema()
-	table := *msg.getTable()
-
-	tableInfo, ok := tableInfoAccessor.Get(schema, table)
-	if ok {
-		return tableInfo
-	}
-
-	tableInfo = newTableInfo(msg)
-	tableInfoAccessor.Add(schema, table, tableInfo)
-	tableInfoAccessor.AddBlockTableID(schema, table, tableInfo.TableName.TableID)
+	tableInfo := newTableInfo(msg)
 	return tableInfo
 }
 
@@ -530,6 +511,7 @@ func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	tableName := *msg.getTable()
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableInfo.ID)
 	tableInfo.Name = ast.NewCIStr(tableName)
 
 	columns := newTiColumns(msg)

@@ -54,6 +54,10 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID, isRedo bool) e
 
 	replication := replications[0]
 
+	if replication.GetNodeID() == targetNode {
+		log.Info("table is already on the target node", zap.Int64("tableID", tableId), zap.String("targetNode", targetNode.String()))
+		return nil
+	}
 	op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
 	ret := operatorController.AddOperator(op)
 	if !ret {
