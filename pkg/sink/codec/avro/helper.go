@@ -16,7 +16,6 @@ package avro
 import (
 	"strings"
 
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -100,7 +99,7 @@ type avroEncodeInput struct {
 	row            *chunk.Row
 	index          []int
 	colInfos       []*timodel.ColumnInfo
-	columnselector event.Selector
+	columnselector commonEvent.Selector
 }
 
 type avroSchema struct {

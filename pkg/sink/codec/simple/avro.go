@@ -19,7 +19,6 @@ import (
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -364,7 +363,7 @@ func recycleMap(m map[string]interface{}) {
 }
 
 func (a *avroMarshaller) collectColumns(
-	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool, columnSelector event.Selector,
+	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool, columnSelector commonEvent.Selector,
 ) map[string]interface{} {
 	result := rowMapPool.Get().(map[string]interface{})
 	for i, colInfo := range tableInfo.GetColumns() {

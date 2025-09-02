@@ -28,6 +28,10 @@ type ColumnSelector struct {
 	columnM filter.ColumnFilter
 }
 
+func NewDefaultColumnSelector() *ColumnSelector {
+	return &ColumnSelector{}
+}
+
 func newColumnSelector(
 	rule *config.ColumnSelector, caseSensitive bool,
 ) (*ColumnSelector, error) {

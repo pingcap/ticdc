@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -48,7 +47,7 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 	fieldName string,
 	row *chunk.Row,
 	tableInfo *commonType.TableInfo,
-	columnSelector event.Selector,
+	columnSelector commonEvent.Selector,
 ) error {
 	var err error
 	writer.WriteObjectField(fieldName, func() {

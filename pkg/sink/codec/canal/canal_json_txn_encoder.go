@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/log"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -41,7 +40,7 @@ type JSONTxnEventEncoder struct {
 	txnSchema   *string
 	txnTable    *string
 
-	columnSelector event.Selector
+	columnSelector commonEvent.Selector
 }
 
 // NewJSONTxnEventEncoder creates a new JSONTxnEventEncoder

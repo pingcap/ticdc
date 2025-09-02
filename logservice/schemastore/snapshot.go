@@ -159,16 +159,15 @@ func NewSnapshotFromMeta(
 				return nil, errors.Trace(err)
 			}
 
-			if filter.ShouldIgnoreTable(dbinfo.Name.O, tbName.Name.O) {
-				log.Debug("ignore table", zap.String("db", dbinfo.Name.O),
-					zap.String("table", tbName.Name.O))
-				continue
-			}
-
 			tbInfo := &timodel.TableInfo{}
 			err = json.Unmarshal(r.Value, tbInfo)
 			if err != nil {
 				return nil, errors.Trace(err)
+			}
+			if filter.ShouldIgnoreTable(dbinfo.Name.O, tbName.Name.O, tbInfo) {
+				log.Debug("ignore table", zap.String("db", dbinfo.Name.O),
+					zap.String("table", tbName.Name.O))
+				continue
 			}
 			tableInfos = append(tableInfos, tbInfo)
 		}

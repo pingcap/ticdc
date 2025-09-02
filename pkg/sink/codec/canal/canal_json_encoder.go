@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -39,7 +38,7 @@ func fillColumns(
 	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	out *jwriter.Writer,
-	columnSelector event.Selector,
+	columnSelector commonEvent.Selector,
 ) error {
 	if len(tableInfo.GetColumns()) == 0 {
 		out.RawString("null")

@@ -155,7 +155,7 @@ func TestWriteDDLEvent(t *testing.T) {
 
 	go cloudStorageSink.Run(ctx)
 
-	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+	tableInfo := common.WrapTableInfo(100, "test", &timodel.TableInfo{
 		ID:   20,
 		Name: ast.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{

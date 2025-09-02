@@ -24,7 +24,6 @@ import (
 	"github.com/golang/mock/gomock"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
