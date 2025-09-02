@@ -547,6 +547,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	if available.Load() < c.scanLimitInBytes {
 		task.resetScanLimit()
+		return
 	}
 
 	sl := c.calculateScanLimit(task)
