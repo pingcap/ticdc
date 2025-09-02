@@ -119,6 +119,11 @@ func TestOnNotify(t *testing.T) {
 	broker.resetDispatcher(disInfo)
 
 	disp.resetState(100)
+	require.Equal(t, disp.isHandshaked.Load(), false)
+	require.Equal(t, disp.isReadyReceivingData.Load(), true)
+	require.Equal(t, disp.lastScannedCommitTs.Load(), uint64(100))
+	require.Equal(t, disp.lastScannedStartTs.Load(), uint64(0))
+
 	disp.isHandshaked.Store(true)
 
 	// Case 1: The resolvedTs is greater than the startTs, it should be updated.
