@@ -214,7 +214,9 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 			zap.Stringer("dispatcher", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
-	d.updateScanRange(lastCommitTs, lastStartTs)
+	if lastCommitTs != 0 {
+		d.updateScanRange(lastCommitTs, lastStartTs)
+	}
 	doSendDML(batchEvent)
 }
 
