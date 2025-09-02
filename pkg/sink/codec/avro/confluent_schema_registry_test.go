@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linkedin/goavro/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,7 +46,7 @@ func TestSchemaRegistry(t *testing.T) {
 	_, err = manager.Lookup(ctx, topic, schemaID{confluentSchemaID: 1})
 	require.Regexp(t, `.*not\sfound.*`, err)
 
-	codec, err := goavro.NewCodec(`{
+	codec, err := GenCodec(`{
        "type": "record",
        "name": "test",
        "fields":
@@ -67,7 +66,7 @@ func TestSchemaRegistry(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, codec.CanonicalSchema(), codec2.CanonicalSchema())
 
-	codec, err = goavro.NewCodec(`{
+	codec, err = GenCodec(`{
        "type": "record",
        "name": "test",
        "fields":
@@ -83,7 +82,15 @@ func TestSchemaRegistry(t *testing.T) {
              ],
              "default": null,
              "name": "field2"
-           }
+		   },
+		   {
+			"type": [
+				"string",
+				"null"
+			],
+			"default": "null",
+			"name": "field3"
+		   }
           ]
      }`)
 	require.NoError(t, err)
@@ -122,7 +129,7 @@ func TestSchemaRegistryIdempotent(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	codec, err := goavro.NewCodec(`{
+	codec, err := GenCodec(`{
        "type": "record",
        "name": "test",
        "fields":

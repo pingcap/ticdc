@@ -36,10 +36,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	tableIDAllocator  = common.NewTableIDAllocator()
-	tableInfoAccessor = common.NewTableInfoAccessor()
-)
+var tableIDAllocator = common.NewTableIDAllocator()
 
 type decoder struct {
 	idx    int
@@ -63,7 +60,6 @@ func NewDecoder(
 	db *sql.DB,
 ) common.Decoder {
 	tableIDAllocator.Clean()
-	tableInfoAccessor.Clean()
 	return &decoder{
 		idx:          idx,
 		config:       config,
@@ -283,19 +279,14 @@ func assembleEvent(
 }
 
 func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
-	tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
-	if ok {
-		return tableInfo
-	}
-	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
-	tableInfoAccessor.Add(schemaName, tableName, tableInfo)
-	tableInfoAccessor.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
+	tableInfo := newTableInfo(schemaName, tableName, columns, keyMap)
 	return tableInfo
 }
 
 func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)
@@ -467,16 +458,11 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.FinishedTs = baseDDLEvent.CommitTs
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
+	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
 
 	if d.idx == 0 {
-		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
-		schemaName := result.SchemaName
-		tableName := result.TableName
-		if result.Type == byte(timodel.ActionRenameTable) {
-			schemaName = result.ExtraSchemaName
-			tableName = result.ExtraTableName
-		}
-		tableInfoAccessor.Remove(schemaName, tableName)
+		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
+		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	}
 	return result
 }
