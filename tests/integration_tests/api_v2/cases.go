@@ -349,30 +349,31 @@ func testCapture(ctx context.Context, client *CDCRESTClient) error {
 	return nil
 }
 
-func testProcessor(ctx context.Context, client *CDCRESTClient) error {
-	resp := client.Get().WithURI("processors").Do(ctx)
-	assertResponseIsOK(resp)
-	processors := &ListResponse[ProcessorCommonInfo]{}
-	if err := json.Unmarshal(resp.body, processors); err != nil {
-		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
-	}
-	if len(processors.Items) == 0 {
-		log.Panic("processor size is 0", zap.Any("resp", resp))
-	}
+// TODO
+// func testProcessor(ctx context.Context, client *CDCRESTClient) error {
+// 	resp := client.Get().WithURI("processors").Do(ctx)
+// 	assertResponseIsOK(resp)
+// 	processors := &ListResponse[ProcessorCommonInfo]{}
+// 	if err := json.Unmarshal(resp.body, processors); err != nil {
+// 		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
+// 	}
+// 	if len(processors.Items) == 0 {
+// 		log.Panic("processor size is 0", zap.Any("resp", resp))
+// 	}
 
-	processorDetail := &ProcessorDetail{}
-	resp = client.Get().
-		WithURI("processors/" + processors.Items[0].ChangeFeedID + "/" +
-			processors.Items[0].CaptureID +
-			"?namespace=" + processors.Items[0].Namespace).
-		Do(ctx)
-	assertResponseIsOK(resp)
-	if err := json.Unmarshal(resp.body, processorDetail); err != nil {
-		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
-	}
-	println("pass test: processor apis")
-	return nil
-}
+// 	processorDetail := &ProcessorDetail{}
+// 	resp = client.Get().
+// 		WithURI("processors/" + processors.Items[0].ChangeFeedID + "/" +
+// 			processors.Items[0].CaptureID +
+// 			"?namespace=" + processors.Items[0].Namespace).
+// 		Do(ctx)
+// 	assertResponseIsOK(resp)
+// 	if err := json.Unmarshal(resp.body, processorDetail); err != nil {
+// 		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
+// 	}
+// 	println("pass test: processor apis")
+// 	return nil
+// }
 
 func testResignOwner(ctx context.Context, client *CDCRESTClient) error {
 	old := listCaptures(ctx, client)

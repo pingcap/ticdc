@@ -98,7 +98,7 @@ def create_changefeed(sink_uri):
     assert resp.status_code == rq.codes.bad_request
 
     # create changefeed fail because dispatcher is invalid
-    url = BASE_URL1_V2+"/changefeeds"
+    url = BASE_URL1+"/changefeeds"
     data = json.dumps({
         "changefeed_id": "changefeed-test-v2",
         "sink_uri": "kafka://127.0.0.1:9092/http_api_tls?protocol=simple",
@@ -232,7 +232,7 @@ def update_changefeed():
     assert resp.status_code == rq.codes.bad_request
 
     # can't update dispatchers
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
+    url = BASE_URL0+"/changefeeds/changefeed-test2"
     data = json.dumps({
         "sink_uri": "kafka://127.0.0.1:9092/http_api_tls?protocol=simple",
         "replica_config": {
