@@ -149,10 +149,8 @@ function failOverCaseK-2() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
-		check_not_contains "test1" &&
-		check_contains "test2" &&
-		ret=$?
+	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test2'"
+	ret=$?
 	if [ "$ret" != 0 ]; then
 		exit 1
 	fi
@@ -208,10 +206,7 @@ function failOverCaseK-3() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
-		check_not_contains "test1" &&
-		check_contains "test2" &&
-		check_contains "test4"
+	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test2' && check_contains 'test4'"
 
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -273,9 +268,7 @@ function failOverCaseK-4() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
-		check_contains "test1" &&
-		check_contains "test2"
+	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains 'test1' && check_contains 'test2'"
 
 	ret=$?
 	if [ "$ret" != 0 ]; then

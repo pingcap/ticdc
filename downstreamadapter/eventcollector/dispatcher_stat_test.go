@@ -345,13 +345,13 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 			event: dispatcher.DispatcherEvent{
 				Event: &mockEvent{
 					eventType: commonEvent.TypeSyncPointEvent,
-					commitTs:  100,
+					commitTs:  101,
 				},
 			},
-			expectedResult:   false,
+			expectedResult:   true,
 			expectedDDLOnTs:  false,
 			expectedSyncOnTs: true,
-			expectedCommitTs: 100,
+			expectedCommitTs: 101,
 		},
 		{
 			name:              "SyncPoint event with same commit ts and not got SyncPoint",
@@ -360,14 +360,30 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 			event: dispatcher.DispatcherEvent{
 				Event: &mockEvent{
 					eventType: commonEvent.TypeSyncPointEvent,
-					commitTs:  100,
+					commitTs:  101,
 				},
 			},
 			expectedResult:   true,
 			expectedDDLOnTs:  false,
 			expectedSyncOnTs: true,
-			expectedCommitTs: 100,
+			expectedCommitTs: 101,
 		},
+		{
+			name:              "SyncPoint event with same commit ts should be ignored",
+			lastEventCommitTs: 101,
+			gotSyncpointOnTS:  true,
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeSyncPointEvent,
+					commitTs:  101,
+				},
+			},
+			expectedResult:   false,
+			expectedDDLOnTs:  false,
+			expectedSyncOnTs: true,
+			expectedCommitTs: 101,
+		},
+
 		{
 			name:              "DML event with larger commit ts",
 			lastEventCommitTs: 100,

@@ -129,6 +129,12 @@ generate_mock: ## Generate mock code.
 generate_mock: tools/bin/mockgen
 	scripts/generate-mock.sh
 
+build-cdc-with-failpoint: check_failpoint_ctl
+build-cdc-with-failpoint: ## Build cdc with failpoint enabled.
+	$(FAILPOINT_ENABLE)
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go
+	$(FAILPOINT_DISABLE)
+	
 cdc:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
 

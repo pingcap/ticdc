@@ -335,6 +335,7 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 			log.Info("unexisted dispatcher, remove it from barrier event",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
+				zap.Uint64("commitTs", be.commitTs),
 			)
 			needDoubleCheck = true
 			delete(be.reportedDispatchers, dispatcherID)
@@ -343,6 +344,7 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 				log.Info("unreplicating dispatcher, remove it from barrier event",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.String("dispatcher", dispatcherID.String()),
+					zap.Uint64("commitTs", be.commitTs),
 				)
 				needDoubleCheck = true
 				delete(be.reportedDispatchers, dispatcherID)
