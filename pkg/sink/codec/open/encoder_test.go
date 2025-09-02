@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/log"
-
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"

@@ -18,7 +18,6 @@ import (
 	"time"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
-
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"

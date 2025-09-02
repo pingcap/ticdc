@@ -19,7 +19,6 @@ import (
 	"strconv"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
-
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
