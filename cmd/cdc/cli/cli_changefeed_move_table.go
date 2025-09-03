@@ -49,7 +49,6 @@ func (o *moveTableChangefeedOptions) addFlags(cmd *cobra.Command) {
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 	_ = cmd.MarkPersistentFlagRequired("table-id")
 	_ = cmd.MarkPersistentFlagRequired("target-node-id")
-	_ = cmd.MarkPersistentFlagRequired("consistent")
 }
 
 // complete adapts from the command line args to the data and client required.

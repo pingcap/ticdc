@@ -46,7 +46,6 @@ func (o *mergeTableChangefeedOptions) addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&o.consistent, "consistent", "false", "enable redo")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 	_ = cmd.MarkPersistentFlagRequired("table-id")
-	_ = cmd.MarkPersistentFlagRequired("consistent")
 }
 
 // complete adapts from the command line args to the data and client required.
