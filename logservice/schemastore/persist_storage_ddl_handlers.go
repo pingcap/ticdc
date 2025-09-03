@@ -2176,8 +2176,8 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		log.Panic("rename tables length is not equal table infos", zap.Any("querys", querys), zap.Any("tableInfos", rawEvent.MultipleTableInfos))
 	}
 	for i, tableInfo := range rawEvent.MultipleTableInfos {
-		ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], common.WrapTableInfo(rawEvent.ExtraSchemaID, rawEvent.ExtraSchemaNames[i], rawEvent.TableInfo))
-		ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaNames[i], tableInfo.Name.O, common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaNames[i], rawEvent.TableInfo))
+		ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], common.WrapTableInfo(rawEvent.ExtraSchemaID, rawEvent.ExtraSchemaNames[i], tableInfo))
+		ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaNames[i], tableInfo.Name.O, common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaNames[i], tableInfo))
 		if ignorePrevTable && ignoreCurrentTable {
 			continue
 		}
@@ -2295,7 +2295,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	logicalTableCount := 0
 	allFiltered := true
 	for _, info := range rawEvent.MultipleTableInfos {
-		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, info.Name.O, common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaName, rawEvent.TableInfo)) {
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, info.Name.O, common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaName, info)) {
 			continue
 		}
 		allFiltered = false
@@ -2324,7 +2324,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	resultQuerys := make([]string, 0, logicalTableCount)
 	tableInfos := make([]*common.TableInfo, 0, logicalTableCount)
 	for i, info := range rawEvent.MultipleTableInfos {
-		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, info.Name.O, common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaName, rawEvent.TableInfo)) {
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, info.Name.O, common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaName, info)) {
 			log.Info("build ddl event for create tables filter table",
 				zap.String("schemaName", rawEvent.SchemaName),
 				zap.String("tableName", info.Name.O))
