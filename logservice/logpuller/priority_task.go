@@ -38,6 +38,7 @@ const (
 	regionErrorPriority = 0
 	highPriorityBase    = 60 * 30      // 30 minutes
 	lowPriorityBase     = 60 * 60 * 24 // 1 day
+	forcedPriorityBase  = highPriorityBase * 2
 )
 
 func (t TaskType) String() string {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -27,7 +28,9 @@ import (
 
 const (
 	checkStaleRequestInterval = time.Second * 5
-	requestGCLifeTime         = time.Minute * 20
+	requestGCLifeTime         = time.Minute * 5
+	addReqRetryInterval       = time.Millisecond * 1
+	addReqRetryLimit          = 3
 )
 
 // regionReq represents a wrapped region request with state
@@ -81,8 +84,10 @@ func newRequestCache(maxPendingCount int) *requestCache {
 // It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
 func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) error {
 	start := time.Now()
-	ticker := time.NewTicker(time.Millisecond * 1)
+	ticker := time.NewTicker(addReqRetryInterval)
 	defer ticker.Stop()
+
+	addReqRetryLimit := addReqRetryLimit
 
 	c.clearStaleRequest()
 	for {
@@ -93,7 +98,6 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 				regionInfo: region,
 				createTime: time.Now(),
 			}
-
 			select {
 			case c.pendingQueue <- req:
 				cost := time.Since(start)
@@ -106,13 +110,16 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 				return ctx.Err()
 			}
 		}
-
 		// Wait for space to become available
 		select {
 		case <-ticker.C:
+			addReqRetryLimit--
+			if addReqRetryLimit <= 0 {
+				return cerrors.ErrAddRegionRequestRetryLimitExceeded
+			}
 			continue
 		case <-c.spaceAvailable:
-			continue // Retry
+			continue
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -210,7 +217,7 @@ func (c *requestCache) clearStaleRequest() {
 			if regionReq.regionInfo.isStopped() || regionReq.isStale() {
 				c.pendingCount.Add(-1)
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
-				log.Info("fizz cdc delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()))
+				log.Info("fizz cdc delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()), zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
 			}
 		}

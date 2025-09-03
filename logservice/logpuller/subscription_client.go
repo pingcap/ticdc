@@ -15,7 +15,6 @@ package logpuller
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -547,18 +547,16 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		store := getStore(region.rpcCtx.Addr)
 		worker := store.getRequestWorker()
-		force := regionTask.Priority() <= int(2*TaskHighPrior)
+		force := regionTask.Priority() <= forcedPriorityBase
 
 		if force {
-			log.Info("fizz cdc add region request force", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.String("priority", TaskType(regionTask.Priority()).String()))
+			log.Info("fizz cdc add region request force", zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)), zap.Uint64("regionID", region.verID.GetID()), zap.Int("priority", regionTask.Priority()))
 		}
 
-		ctx, cancel := context.WithTimeout(ctx, 3*time.Millisecond)
 		err := worker.add(ctx, region, force)
-		cancel()
-
 		if err != nil {
-			if errors.Cause(err) == context.DeadlineExceeded {
+			if errors.Cause(err) == cerrors.ErrAddRegionRequestRetryLimitExceeded {
+				log.Info("fizz cdc add region request retry limit exceeded", zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)), zap.Uint64("regionID", region.verID.GetID()), zap.Int("priority", regionTask.Priority()))
 				s.regionTaskQueue.Push(regionTask)
 				continue
 			} else {
