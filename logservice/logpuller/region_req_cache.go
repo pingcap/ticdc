@@ -101,9 +101,7 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 			case <-ctx.Done():
 				return ctx.Err()
 			case c.pendingQueue <- req:
-				c.pendingCount.Inc()
-				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
-
+				c.incPendingCount()
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
 				log.Info("fizz cdc add region request success", zap.Uint64("subID", uint64(region.subscribedSpan.subID)), zap.Uint64("regionID", region.verID.GetID()), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(current)), zap.Int("pendingQueueLen", len(c.pendingQueue)))
@@ -176,10 +174,8 @@ func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 	}
 
 	delete(regionReqs, regionID)
-	c.pendingCount.Dec()
-
+	c.decPendingCount()
 	log.Info("fizz cdc mark stopped region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
-	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 	// Notify waiting add operations that there's space available
 	select {
 	case c.spaceAvailable <- struct{}{}:
@@ -206,7 +202,7 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 	// Check if the subscription ID matches
 	if req.regionInfo.subscribedSpan.subID == subscriptionID {
 		delete(regionReqs, regionID)
-		c.pendingCount.Dec()
+		c.decPendingCount()
 		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 		cost := time.Since(req.createTime)
 		log.Info("fizz cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
@@ -234,7 +230,7 @@ func (c *requestCache) clearStaleRequest() {
 	for subID, regionReqs := range c.sentRequests.regionReqs {
 		for regionID, regionReq := range regionReqs {
 			if regionReq.regionInfo.isStopped() || regionReq.isStale() {
-				c.pendingCount.Dec()
+				c.decPendingCount()
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 				log.Info("region worker delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()), zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
@@ -266,7 +262,7 @@ LOOP:
 		select {
 		case req := <-c.pendingQueue:
 			regions = append(regions, req.regionInfo)
-			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
+			c.decPendingCount()
 		default:
 			break LOOP
 		}
@@ -278,17 +274,32 @@ LOOP:
 	for subID, regionReqs := range c.sentRequests.regionReqs {
 		for regionID := range regionReqs {
 			regions = append(regions, regionReqs[regionID].regionInfo)
-			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 			delete(regionReqs, regionID)
+			c.decPendingCount()
 		}
 		delete(c.sentRequests.regionReqs, subID)
 	}
-	// Reset counter
-	c.pendingCount.Store(0)
 	return regions
 }
 
 // getPendingCount returns the current pending count
 func (c *requestCache) getPendingCount() int {
 	return int(c.pendingCount.Load())
+}
+
+func (c *requestCache) incPendingCount() {
+	c.pendingCount.Inc()
+	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
+}
+
+func (c *requestCache) decPendingCount() {
+	// Ensure pendingCount doesn't go below 0
+	current := c.pendingCount.Load()
+	newCount := current - int64(1)
+	if newCount < 0 {
+		c.pendingCount.Store(0)
+		return
+	}
+	c.pendingCount.Dec()
+	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 }
