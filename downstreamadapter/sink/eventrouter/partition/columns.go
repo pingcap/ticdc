@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/hash"
 	"go.uber.org/zap"
 )
@@ -54,13 +53,10 @@ func (r *ColumnsPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEven
 		rowData = row.PreRow
 	}
 
-	offsets, ok := tableInfo.OffsetsByNames(r.Columns)
-	if !ok {
-		log.Error("columns not found when dispatch event",
-			zap.Any("tableName", tableInfo.GetTableName()),
-			zap.Strings("columns", r.Columns))
-		return 0, "", errors.ErrDispatcherFailed.GenWithStack(
-			"columns not found when dispatch event, table: %v, columns: %v", tableInfo.GetTableName(), r.Columns)
+	offsets, err := tableInfo.OffsetsByNames(r.Columns)
+	if err != nil {
+		log.Error("dispatch event failed", zap.Error(err))
+		return 0, "", err
 	}
 
 	for _, idx := range offsets {
