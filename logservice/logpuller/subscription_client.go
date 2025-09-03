@@ -526,7 +526,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		region := regionTask.GetRegionInfo()
 		log.Info("fizz cdc handle region task",
-			zap.String("priority", TaskType(regionTask.Priority()).String()),
+			zap.Uint("priority", uint(regionTask.Priority())),
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()))
 
@@ -559,7 +559,6 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		if err != nil {
 			if errors.Cause(err) == context.DeadlineExceeded {
-				log.Info("fizz cdc add region request timeout, put it back", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())))
 				s.regionTaskQueue.Push(regionTask)
 				continue
 			} else {
@@ -749,12 +748,12 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 	err := errors.Cause(errInfo.err)
 	log.Info("fizz cdc region error",
 		zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
+		zap.Uint64("regionID", errInfo.verID.GetID()),
 		zap.Error(err))
 
 	switch eerr := err.(type) {
 	case *eventError:
 		innerErr := eerr.err
-
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
 			s.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
@@ -768,7 +767,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskRegionError)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {

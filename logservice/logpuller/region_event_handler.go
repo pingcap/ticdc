@@ -188,7 +188,6 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 	if stepsToRemoved {
 		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
 		h.subClient.onRegionFail(newRegionErrorInfo(state.getRegionInfo(), err))
-		worker.requestCache.markStopped(state.region.subscribedSpan.subID, state.region.verID.GetID())
 	}
 }
 
@@ -218,17 +217,8 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 	for _, entry := range entries.Entries.GetEntries() {
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
-			// Try to resolve in cache
-			if !state.isInitialized() && state.worker.requestCache.resolve(span.subID, regionID) {
-				log.Info("fizz region request worker resolved region in cache",
-					zap.Uint64("workerID", state.worker.workerID),
-					zap.Uint64("subscriptionID", uint64(span.subID)),
-					zap.Uint64("regionID", regionID),
-					zap.Int("pendingCount", state.worker.requestCache.getPendingCount()))
-			}
-
 			state.setInitialized()
-			log.Info("region is initialized",
+			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),

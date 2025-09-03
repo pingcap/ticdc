@@ -25,18 +25,19 @@ import (
 	"go.uber.org/zap"
 )
 
-type regionReqState int
-
 const (
-	regionReqStatePending regionReqState = iota
-	regionReqStateSent
-	regionReqStateInitialized
+	checkStaleRequestInterval = time.Second * 5
+	requestGCLifeTime         = time.Minute * 20
 )
 
 // regionReq represents a wrapped region request with state
 type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
+}
+
+func (r *regionReq) isStale() bool {
+	return time.Since(r.createTime) > requestGCLifeTime
 }
 
 // requestCache manages region requests with flow control
@@ -52,26 +53,27 @@ type requestCache struct {
 
 	// counter for sent but not initialized requests
 	pendingCount atomic.Int64
-
 	// maximum number of pending requests allowed
 	maxPendingCount int64
 
 	// channel to signal when space becomes available
 	spaceAvailable chan struct{}
+
+	lastCheckStaleRequestTime time.Time
 }
 
 func newRequestCache(maxPendingCount int) *requestCache {
 	log.Info("fizz cdc new request cache", zap.Int("maxPendingCount", maxPendingCount))
-
 	return &requestCache{
 		pendingQueue: make(chan regionReq, maxPendingCount), // Large buffer to reduce blocking
 		sentRequests: struct {
 			sync.RWMutex
 			regionReqs map[SubscriptionID]map[uint64]regionReq
 		}{regionReqs: make(map[SubscriptionID]map[uint64]regionReq)},
-		pendingCount:    atomic.Int64{},
-		maxPendingCount: int64(maxPendingCount),
-		spaceAvailable:  make(chan struct{}, 16), // Buffered to avoid blocking
+		pendingCount:              atomic.Int64{},
+		maxPendingCount:           int64(maxPendingCount),
+		spaceAvailable:            make(chan struct{}, 16), // Buffered to avoid blocking
+		lastCheckStaleRequestTime: time.Now(),
 	}
 }
 
@@ -82,6 +84,7 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 	ticker := time.NewTicker(time.Millisecond * 1)
 	defer ticker.Stop()
 
+	c.clearStaleRequest()
 	for {
 		current := c.pendingCount.Load()
 		if current < c.maxPendingCount || force {
@@ -95,14 +98,11 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 			case c.pendingQueue <- req:
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
-
 				log.Info("fizz cdc add region request success", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(current)), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 				c.pendingCount.Add(1)
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
 				return nil
 			case <-ctx.Done():
-				log.Info("fizz cdc add region request cancelled", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.Error(ctx.Err()), zap.Int("pendingCount", int(current)), zap.Int("pendingQueueLen", len(c.pendingQueue)))
-
 				return ctx.Err()
 			}
 		}
@@ -110,7 +110,6 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 		// Wait for space to become available
 		select {
 		case <-ticker.C:
-			log.Info("fizz cdc add region request wait for space", zap.Int("pendingCount", int(current)), zap.Int("maxPendingCount", int(c.maxPendingCount)), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())))
 			continue
 		case <-c.spaceAvailable:
 			continue // Retry
@@ -134,7 +133,6 @@ func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
 func (c *requestCache) markSent(req regionReq) {
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
-	log.Info("fizz cdc mark sent region request", zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)), zap.Uint64("regionID", req.regionInfo.verID.GetID()))
 	if _, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID]; !ok {
 		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID] = make(map[uint64]regionReq)
 	}
@@ -148,13 +146,11 @@ func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 
 	regionReqs, ok := c.sentRequests.regionReqs[subID]
 	if !ok {
-		log.Info("fizz cdc mark stopped region request not found", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID))
 		return
 	}
 
 	_, exists := regionReqs[regionID]
 	if !exists {
-		log.Info("fizz cdc mark stopped region request not found", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID))
 		return
 	}
 
@@ -176,13 +172,11 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 
 	regionReqs, ok := c.sentRequests.regionReqs[subscriptionID]
 	if !ok {
-		log.Info("fizz cdc resolve region request not found", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID))
 		return false
 	}
 
 	req, exists := regionReqs[regionID]
 	if !exists {
-		log.Info("fizz cdc resolve region request not found", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID))
 		return false
 	}
 
@@ -205,6 +199,29 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 	return false
 }
 
+func (c *requestCache) clearStaleRequest() {
+	if time.Since(c.lastCheckStaleRequestTime) < checkStaleRequestInterval {
+		return
+	}
+	c.sentRequests.Lock()
+	defer c.sentRequests.Unlock()
+	for subID, regionReqs := range c.sentRequests.regionReqs {
+		for regionID, regionReq := range regionReqs {
+			if regionReq.regionInfo.isStopped() || regionReq.isStale() {
+				c.pendingCount.Add(-1)
+				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
+				log.Info("fizz cdc delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()))
+				delete(regionReqs, regionID)
+			}
+		}
+		if len(regionReqs) == 0 {
+			delete(c.sentRequests.regionReqs, subID)
+		}
+	}
+
+	c.lastCheckStaleRequestTime = time.Now()
+}
+
 // clear removes all requests and returns them
 func (c *requestCache) clear() []regionInfo {
 	var regions []regionInfo
@@ -221,9 +238,19 @@ LOOP:
 		}
 	}
 
+	c.sentRequests.Lock()
+	defer c.sentRequests.Unlock()
+
+	for subID, regionReqs := range c.sentRequests.regionReqs {
+		for regionID := range regionReqs {
+			regions = append(regions, regionReqs[regionID].regionInfo)
+			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
+			delete(regionReqs, regionID)
+		}
+		delete(c.sentRequests.regionReqs, subID)
+	}
 	// Reset counter
 	c.pendingCount.Store(0)
-
 	return regions
 }
 

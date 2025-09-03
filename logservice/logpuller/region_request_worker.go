@@ -387,24 +387,19 @@ func (s *regionRequestWorker) processRegionSendTask(
 				}
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
-			// For stopped regions, mark as stopped in cache (decreases pending count)
-			s.requestCache.markStopped(subID, region.verID.GetID())
+
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
 			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
-			s.requestCache.markStopped(subID, region.verID.GetID())
-
 		} else {
 			state := newRegionFeedState(region, uint64(subID))
 			state.start()
 			s.addRegionState(subID, region.verID.GetID(), state)
-
 			if err := doSend(s.createRegionRequest(region)); err != nil {
 				return err
 			}
-			// Mark as sent in cache (increases pending count)
 			s.requestCache.markSent(*regionReq)
 		}
 		regionReq, err = fetchMoreReq()
@@ -499,6 +494,5 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 	// Clear all regions from cache
 	cacheRegions := s.requestCache.clear()
 	regions = append(regions, cacheRegions...)
-
 	return regions
 }
