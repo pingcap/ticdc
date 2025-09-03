@@ -37,7 +37,8 @@ const (
 type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
-	addCount   int
+
+	addCount int
 }
 
 func (r *regionReq) isStale() bool {
@@ -97,6 +98,7 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 			req := regionReq{
 				regionInfo: region,
 				createTime: time.Now(),
+				addCount:   1,
 			}
 			select {
 			case <-ctx.Done():
@@ -144,23 +146,22 @@ func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
 }
 
 // markSent marks a request as sent and adds it to sent requests
-func (c *requestCache) markSent(req regionReq) {
+func (c *requestCache) markSent(newReq regionReq) {
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
 
 	c.pendingCount.Add(1)
 	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
 
-	if _, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID]; !ok {
-		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID] = make(map[uint64]regionReq)
+	if _, ok := c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID]; !ok {
+		c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID] = make(map[uint64]regionReq)
 	}
 
-	if req, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID][req.regionInfo.verID.GetID()]; ok {
-		req.addCount++
-	} else {
-		req.addCount = 1
-		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID][req.regionInfo.verID.GetID()] = req
+	if oldReq, ok := c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID][newReq.regionInfo.verID.GetID()]; ok {
+		newReq.addCount += oldReq.addCount
 	}
+
+	c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID][newReq.regionInfo.verID.GetID()] = newReq
 }
 
 // markStopped removes a sent request without changing pending count (for stopped regions)
@@ -224,24 +225,34 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 	return false
 }
 
+// clearStaleRequest clears stale requests from the cache
+// Note: This situation has not been observed so far. This code is designed as a preventive measure, because if such an issue ever occurs, it may prevent resolvedTs from advancing, and the only solution would be to restart the server.
 func (c *requestCache) clearStaleRequest() {
 	if time.Since(c.lastCheckStaleRequestTime) < checkStaleRequestInterval {
 		return
 	}
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
+	reqCount := 0
 	for subID, regionReqs := range c.sentRequests.regionReqs {
 		for regionID, regionReq := range regionReqs {
+			reqCount += regionReq.addCount
 			if regionReq.regionInfo.isStopped() || regionReq.isStale() {
 				c.pendingCount.Add(-int64(regionReq.addCount))
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Sub(float64(regionReq.addCount))
-				log.Info("fizz cdc delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()), zap.Time("createTime", regionReq.createTime))
+				log.Info("region worker delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()), zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
 			}
 		}
 		if len(regionReqs) == 0 {
 			delete(c.sentRequests.regionReqs, subID)
 		}
+	}
+
+	if c.pendingCount.Load() >= int64(reqCount) {
+		log.Info("region worker pending request count is greater than actual region request count", zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("actualReqCount", reqCount))
+		c.pendingCount.Store(int64(reqCount))
+		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(reqCount))
 	}
 
 	c.lastCheckStaleRequestTime = time.Now()
