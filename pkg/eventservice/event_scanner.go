@@ -328,10 +328,20 @@ func interruptScan(
 	// Append current batch
 	events := merger.appendDMLEvent(processor.getResolvedBatchDML())
 	// lastCommitTs may be 0, if the scanner timeout and no one row scanned.
-	if newCommitTs != merger.lastCommitTs && merger.lastCommitTs != 0 {
-		events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
-		resolvedTs := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
-		events = append(events, resolvedTs)
+	if newCommitTs != merger.lastCommitTs {
+		if merger.lastCommitTs == 0 {
+			log.Warn("interrupt scan when no DML event is scanned",
+				zap.Stringer("dispatcherID", session.dispatcherStat.id),
+				zap.Int64("tableID", session.dataRange.Span.TableID),
+				zap.Uint64("newCommitTs", newCommitTs),
+				zap.Int("scannedEntryCount", session.scannedEntryCount),
+				zap.Int("txnCount", session.dmlCount),
+				zap.Duration("duration", time.Since(session.startTime)))
+		} else {
+			events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
+			resolvedTs := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
+			events = append(events, resolvedTs)
+		}
 	}
 	session.appendEvents(events)
 }
