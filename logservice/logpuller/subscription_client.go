@@ -184,6 +184,8 @@ type subscriptionClient struct {
 	pdClock      pdutil.Clock
 	lockResolver txnutil.LockResolver
 
+	stores map[string]*requestedStore
+
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
@@ -222,6 +224,7 @@ func NewSubscriptionClient(
 	subClient := &subscriptionClient{
 		config: config,
 
+		stores:       make(map[string]*requestedStore),
 		pd:           pd,
 		regionCache:  appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
 		pdClock:      appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
@@ -301,6 +304,14 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 					"default",
 				).Set(float64(areaMetric.MemoryUsage()))
 			}
+
+			pendingRegionReqCount := 0
+			for _, store := range s.stores {
+				for _, worker := range store.requestWorkers {
+					pendingRegionReqCount += worker.requestCache.getPendingCount()
+				}
+			}
+			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
 		}
 	}
 }
@@ -492,7 +503,7 @@ func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
 // handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
 // then send them to corresponding requestedStore.
 func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
-	stores := make(map[string]*requestedStore) // storeAddr -> requestedStore
+	stores := s.stores
 	getStore := func(storeAddr string) *requestedStore {
 		var rs *requestedStore
 		if rs = stores[storeAddr]; rs != nil {

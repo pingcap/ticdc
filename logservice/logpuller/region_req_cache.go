@@ -244,7 +244,6 @@ func (c *requestCache) clearStaleRequest() {
 	if reqCount == 0 && c.pendingCount.Load() != 0 {
 		log.Info("region worker pending request count is not equal to actual region request count, correct it", zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("actualReqCount", reqCount))
 		c.pendingCount.Store(0)
-		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(0)
 	}
 
 	c.lastCheckStaleRequestTime = time.Now()
@@ -287,7 +286,6 @@ func (c *requestCache) getPendingCount() int {
 
 func (c *requestCache) incPendingCount() {
 	c.pendingCount.Inc()
-	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
 }
 
 func (c *requestCache) decPendingCount() {
@@ -299,5 +297,4 @@ func (c *requestCache) decPendingCount() {
 		return
 	}
 	c.pendingCount.Dec()
-	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 }
