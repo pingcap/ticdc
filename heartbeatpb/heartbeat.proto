@@ -68,13 +68,13 @@ message CheckpointTsMessage {
 
 message RedoHeartbeatMessage {
     ChangefeedID changefeedID = 1;
-    uint64 resolvedTs = 3;
+    uint64 resolvedTs = 2;
 }
 
 message RedoMessage {
     ChangefeedID changefeedID = 1;
-    uint64 checkpointTs = 2;
-    uint64 resolvedTs = 3;
+    uint64 resolvedTs = 2;
+    uint64 checkpointTs = 3;
 }
 
 enum ScheduleAction {

@@ -72,7 +72,7 @@ func initRedoComponet(
 	manager.metricRedoEventDispatcherCount = metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redoDispatcher")
 	manager.metricRedoCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redoDispatcher")
 
-	// RedoTsMessageDs need register on every node
+	// RedoMessageDs need register on every node
 	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoMessageDs(manager)
 	manager.wg.Add(2)
 	go func() {
