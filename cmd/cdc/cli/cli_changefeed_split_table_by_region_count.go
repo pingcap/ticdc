@@ -29,7 +29,7 @@ type splitTableByRegionCountChangefeedOptions struct {
 	changefeedID string
 	namespace    string
 	tableId      int64
-	consistent   bool
+	consistent   string
 }
 
 // newCreateChangefeedOptions creates new options for the `cli changefeed create` command.
@@ -43,9 +43,10 @@ func (o *splitTableByRegionCountChangefeedOptions) addFlags(cmd *cobra.Command) 
 	cmd.PersistentFlags().StringVarP(&o.namespace, "namespace", "n", "default", "Replication task (changefeed) Namespace")
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	cmd.PersistentFlags().Int64VarP(&o.tableId, "table-id", "t", 0, "the id of table to move")
-	cmd.PersistentFlags().BoolVar(&o.consistent, "consistent", false, "enable redo")
+	cmd.PersistentFlags().StringVar(&o.consistent, "consistent", "false", "enable redo")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 	_ = cmd.MarkPersistentFlagRequired("table-id")
+	_ = cmd.MarkPersistentFlagRequired("consistent")
 }
 
 // complete adapts from the command line args to the data and client required.

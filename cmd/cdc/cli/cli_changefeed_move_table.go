@@ -30,7 +30,7 @@ type moveTableChangefeedOptions struct {
 	namespace    string
 	tableId      int64
 	targetNodeID string
-	consistent   bool
+	consistent   string
 }
 
 // newCreateChangefeedOptions creates new options for the `cli changefeed create` command.
@@ -45,10 +45,11 @@ func (o *moveTableChangefeedOptions) addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	cmd.PersistentFlags().Int64VarP(&o.tableId, "table-id", "t", 0, "the id of table to move")
 	cmd.PersistentFlags().StringVarP(&o.targetNodeID, "target-node-id", "d", "", "the dest for the table to move")
-	cmd.PersistentFlags().BoolVar(&o.consistent, "consistent", false, "enable redo")
+	cmd.PersistentFlags().StringVar(&o.consistent, "consistent", "false", "enable redo")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 	_ = cmd.MarkPersistentFlagRequired("table-id")
 	_ = cmd.MarkPersistentFlagRequired("target-node-id")
+	_ = cmd.MarkPersistentFlagRequired("consistent")
 }
 
 // complete adapts from the command line args to the data and client required.

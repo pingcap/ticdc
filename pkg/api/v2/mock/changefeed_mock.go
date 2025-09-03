@@ -133,7 +133,7 @@ func (mr *MockChangefeedInterfaceMockRecorder) List(ctx, namespace, state interf
 }
 
 // MergeTable mocks base method.
-func (m *MockChangefeedInterface) MergeTable(ctx context.Context, namespace, name string, tableID int64, consistent bool) error {
+func (m *MockChangefeedInterface) MergeTable(ctx context.Context, namespace, name string, tableID int64, consistent string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "MergeTable", ctx, namespace, name, tableID, consistent)
 	ret0, _ := ret[0].(error)
@@ -147,7 +147,7 @@ func (mr *MockChangefeedInterfaceMockRecorder) MergeTable(ctx, namespace, name, 
 }
 
 // MoveSplitTable mocks base method.
-func (m *MockChangefeedInterface) MoveSplitTable(ctx context.Context, namespace, name string, tableID int64, targetNode string, consistent bool) error {
+func (m *MockChangefeedInterface) MoveSplitTable(ctx context.Context, namespace, name string, tableID int64, targetNode, consistent string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "MoveSplitTable", ctx, namespace, name, tableID, targetNode, consistent)
 	ret0, _ := ret[0].(error)
@@ -161,7 +161,7 @@ func (mr *MockChangefeedInterfaceMockRecorder) MoveSplitTable(ctx, namespace, na
 }
 
 // MoveTable mocks base method.
-func (m *MockChangefeedInterface) MoveTable(ctx context.Context, namespace, name string, tableID int64, targetNode string, consistent bool) error {
+func (m *MockChangefeedInterface) MoveTable(ctx context.Context, namespace, name string, tableID int64, targetNode, consistent string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "MoveTable", ctx, namespace, name, tableID, targetNode, consistent)
 	ret0, _ := ret[0].(error)
@@ -203,7 +203,7 @@ func (mr *MockChangefeedInterfaceMockRecorder) Resume(ctx, cfg, namespace, name 
 }
 
 // SplitTableByRegionCount mocks base method.
-func (m *MockChangefeedInterface) SplitTableByRegionCount(ctx context.Context, namespace, name string, tableID int64, consistent bool) error {
+func (m *MockChangefeedInterface) SplitTableByRegionCount(ctx context.Context, namespace, name string, tableID int64, consistent string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SplitTableByRegionCount", ctx, namespace, name, tableID, consistent)
 	ret0, _ := ret[0].(error)
