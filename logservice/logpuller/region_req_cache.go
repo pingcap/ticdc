@@ -153,15 +153,18 @@ func (c *requestCache) markSent(newReq regionReq) {
 	c.pendingCount.Add(1)
 	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
 
-	if _, ok := c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID]; !ok {
-		c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID] = make(map[uint64]regionReq)
+	m, ok := c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID]
+
+	if !ok {
+		m = make(map[uint64]regionReq)
+		c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID] = m
 	}
 
-	if oldReq, ok := c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID][newReq.regionInfo.verID.GetID()]; ok {
+	if oldReq, ok := m[newReq.regionInfo.verID.GetID()]; ok {
 		newReq.addCount += oldReq.addCount
 	}
 
-	c.sentRequests.regionReqs[newReq.regionInfo.subscribedSpan.subID][newReq.regionInfo.verID.GetID()] = newReq
+	m[newReq.regionInfo.verID.GetID()] = newReq
 }
 
 // markStopped removes a sent request without changing pending count (for stopped regions)
