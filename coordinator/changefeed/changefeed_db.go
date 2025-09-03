@@ -121,6 +121,7 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	if remove {
 		log.Info("remove changefeed", zap.String("changefeed", cf.ID.String()))
 		delete(db.changefeeds, cfID)
+		delete(db.stopped, cfID)
 	} else {
 		log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
 		db.stopped[cfID] = cf
