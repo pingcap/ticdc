@@ -1,5 +1,0 @@
-enable-sync-point = true
-sync-point-interval = "30s"
-[consistent]
-level = "eventual"
-storage = "file:///tmp/tidb_cdc_test/consistent_fail_over_ddl_mix_with_syncpoint/redo"
