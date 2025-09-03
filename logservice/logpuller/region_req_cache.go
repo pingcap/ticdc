@@ -189,9 +189,10 @@ func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 
 // resolve marks a region as initialized and removes it from sent requests
 func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) bool {
+	defer c.clearStaleRequest()
+
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
-
 	regionReqs, ok := c.sentRequests.regionReqs[subscriptionID]
 	if !ok {
 		return false
@@ -205,7 +206,7 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 	// Check if the subscription ID matches
 	if req.regionInfo.subscribedSpan.subID == subscriptionID {
 		delete(regionReqs, regionID)
-		c.pendingCount.Add(-1)
+		c.pendingCount.Dec()
 		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 		cost := time.Since(req.createTime)
 		log.Info("fizz cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
@@ -234,7 +235,7 @@ func (c *requestCache) clearStaleRequest() {
 		for regionID, regionReq := range regionReqs {
 			reqCount += 1
 			if regionReq.regionInfo.isStopped() || regionReq.isStale() {
-				c.pendingCount.Add(-1)
+				c.pendingCount.Dec()
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 				log.Info("region worker delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()), zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
@@ -245,7 +246,7 @@ func (c *requestCache) clearStaleRequest() {
 		}
 	}
 
-	if c.pendingCount.Load() >= int64(reqCount) {
+	if c.pendingCount.Load() > int64(reqCount) {
 		log.Info("region worker pending request count is greater than actual region request count", zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("actualReqCount", reqCount))
 		c.pendingCount.Store(int64(reqCount))
 		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(reqCount))
