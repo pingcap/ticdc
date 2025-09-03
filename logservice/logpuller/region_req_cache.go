@@ -37,6 +37,7 @@ const (
 type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
+	addCount   int
 }
 
 func (r *regionReq) isStale() bool {
@@ -153,7 +154,13 @@ func (c *requestCache) markSent(req regionReq) {
 	if _, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID]; !ok {
 		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID] = make(map[uint64]regionReq)
 	}
-	c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID][req.regionInfo.verID.GetID()] = req
+
+	if req, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID][req.regionInfo.verID.GetID()]; ok {
+		req.addCount++
+	} else {
+		req.addCount = 1
+		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID][req.regionInfo.verID.GetID()] = req
+	}
 }
 
 // markStopped removes a sent request without changing pending count (for stopped regions)
@@ -166,15 +173,16 @@ func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 		return
 	}
 
-	_, exists := regionReqs[regionID]
+	req, exists := regionReqs[regionID]
 	if !exists {
 		return
 	}
 
 	delete(regionReqs, regionID)
-	c.pendingCount.Add(-1)
-	log.Info("fizz cdc mark stopped region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
-	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
+	c.pendingCount.Add(-int64(req.addCount))
+
+	log.Info("fizz cdc mark stopped region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("addCount", req.addCount), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
+	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Sub(float64(req.addCount))
 	// Notify waiting add operations that there's space available
 	select {
 	case c.spaceAvailable <- struct{}{}:
@@ -200,8 +208,8 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 	// Check if the subscription ID matches
 	if req.regionInfo.subscribedSpan.subID == subscriptionID {
 		delete(regionReqs, regionID)
-		c.pendingCount.Add(-1)
-		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
+		c.pendingCount.Add(-int64(req.addCount))
+		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Sub(float64(req.addCount))
 		cost := time.Since(req.createTime)
 		log.Info("fizz cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 		metrics.RegionRequestFinishScanDuration.WithLabelValues(fmt.Sprintf("%d", regionID)).Observe(cost.Seconds())
@@ -225,8 +233,8 @@ func (c *requestCache) clearStaleRequest() {
 	for subID, regionReqs := range c.sentRequests.regionReqs {
 		for regionID, regionReq := range regionReqs {
 			if regionReq.regionInfo.isStopped() || regionReq.isStale() {
-				c.pendingCount.Add(-1)
-				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
+				c.pendingCount.Add(-int64(regionReq.addCount))
+				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Sub(float64(regionReq.addCount))
 				log.Info("fizz cdc delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()), zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
 			}
