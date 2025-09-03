@@ -246,8 +246,8 @@ func (c *requestCache) clearStaleRequest() {
 		}
 	}
 
-	if c.pendingCount.Load() > int64(reqCount) {
-		log.Info("region worker pending request count is greater than actual region request count", zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("actualReqCount", reqCount))
+	if c.pendingCount.Load() != int64(reqCount) {
+		log.Info("region worker pending request count is not equal to actual region request count", zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("actualReqCount", reqCount))
 		c.pendingCount.Store(int64(reqCount))
 		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(reqCount))
 	}
