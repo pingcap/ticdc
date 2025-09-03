@@ -86,10 +86,9 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 	start := time.Now()
 	ticker := time.NewTicker(addReqRetryInterval)
 	defer ticker.Stop()
-
 	addReqRetryLimit := addReqRetryLimit
-
 	c.clearStaleRequest()
+
 	for {
 		current := c.pendingCount.Load()
 		if current < c.maxPendingCount || force {
@@ -99,17 +98,24 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 				createTime: time.Now(),
 			}
 			select {
+			case <-ctx.Done():
+				return ctx.Err()
 			case c.pendingQueue <- req:
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
-				log.Info("fizz cdc add region request success", zap.String("regionID", fmt.Sprintf("%d", region.verID.GetID())), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(current)), zap.Int("pendingQueueLen", len(c.pendingQueue)))
-				c.pendingCount.Add(1)
-				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
+				log.Info("fizz cdc add region request success", zap.Uint64("subID", uint64(region.subscribedSpan.subID)), zap.Uint64("regionID", region.verID.GetID()), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(current)), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 				return nil
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-c.spaceAvailable:
+				continue
+			case <-ticker.C:
+				addReqRetryLimit--
+				if addReqRetryLimit <= 0 {
+					return cerrors.ErrAddRegionRequestRetryLimitExceeded
+				}
+				continue
 			}
 		}
+
 		// Wait for space to become available
 		select {
 		case <-ticker.C:
@@ -140,6 +146,10 @@ func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
 func (c *requestCache) markSent(req regionReq) {
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
+
+	c.pendingCount.Add(1)
+	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
+
 	if _, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID]; !ok {
 		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID] = make(map[uint64]regionReq)
 	}
@@ -193,7 +203,7 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 		c.pendingCount.Add(-1)
 		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 		cost := time.Since(req.createTime)
-		log.Info("fizz cdc resolve region request", zap.String("regionID", fmt.Sprintf("%d", regionID)), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
+		log.Info("fizz cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 		metrics.RegionRequestFinishScanDuration.WithLabelValues(fmt.Sprintf("%d", regionID)).Observe(cost.Seconds())
 		// Notify waiting add operations that there's space available
 		select {
