@@ -43,7 +43,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -117,8 +117,8 @@ function kill_server() {
 	done
 }
 
-main() {
-	prepare
+main1() {
+	prepare changefeed
 
 	execute_ddls &
 	NORMAL_TABLE_DDL_PID=$!
@@ -139,12 +139,50 @@ main() {
 
 	sleep 10
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+	check_sync_diff $WORK_DIR $CUR/conf/${diff_config}.toml 100
 
 	cleanup_process $CDC_BINARY
 }
 
+main2() {
+	prepare consistent_changefeed
+
+	execute_ddls &
+	NORMAL_TABLE_DDL_PID=$!
+
+	declare -a pids=()
+
+	for i in {1..5}; do
+		execute_dml $i &
+		pids+=("$!")
+	done
+
+	kill_server &
+	KILL_SERVER_PID=$!
+
+	sleep 500
+
+	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $KILL_SERVER_PID
+
+	cleanup_process $CDC_BINARY
+	# to ensure row changed events have been replicated to TiCDC
+	sleep 10
+	changefeed_id="test"
+	storage_path="file://$WORK_DIR/redo"
+	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
+
+	sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
+
+	cat $WORK_DIR/consistent_diff_config.toml
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml
+}
+
 trap stop_tidb_cluster EXIT
-main
+main1
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+main2
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run redo test case $TEST_NAME success! >>>>>>"

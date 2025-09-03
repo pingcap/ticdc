@@ -4,4 +4,4 @@ region-threshold=10
 region-count-per-span=10
 [consistent]
 level = "eventual"
-storage = "file:///tmp/tidb_cdc_test/consistent_ddl_for_split_tables_with_failover/redo"
+storage = "file:///tmp/tidb_cdc_test/ddl_for_split_tables_with_failover/redo"
