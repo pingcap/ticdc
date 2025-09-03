@@ -146,7 +146,7 @@ func NewSnapshotFromMeta(
 		if err != nil {
 			return nil, cerror.WrapError(cerror.ErrMetaListDatabases, err)
 		}
-		tableInfos := make([]*timodel.TableInfo, 0, len(rawTables)/2)
+		tableInfos := make([]*common.TableInfo, 0, len(rawTables)/2)
 		for _, r := range rawTables {
 			tableKey := string(r.Field)
 			if !strings.HasPrefix(tableKey, mTablePrefix) {
@@ -164,34 +164,34 @@ func NewSnapshotFromMeta(
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
-			if filter.ShouldIgnoreTable(dbinfo.Name.O, tbName.Name.O, tbInfo) {
+			tableInfo := common.WrapTableInfo(dbinfo.ID, dbinfo.Name.O, tbInfo)
+			if filter.ShouldIgnoreTable(dbinfo.Name.O, tbName.Name.O, tableInfo) {
 				log.Debug("ignore table", zap.String("db", dbinfo.Name.O),
 					zap.String("table", tbName.Name.O))
 				continue
 			}
-			tableInfos = append(tableInfos, tbInfo)
+			tableInfos = append(tableInfos, tableInfo)
 		}
 
-		for _, tidbTableInfo := range tableInfos {
-			tableInfo := common.WrapTableInfo(dbinfo.ID, dbinfo.Name.O, tidbTableInfo)
+		for _, tableInfo := range tableInfos {
 			tableCount++
 			snap.inner.tables.ReplaceOrInsert(versionedID{
-				id:     tidbTableInfo.ID,
+				id:     tableInfo.TableName.TableID,
 				tag:    tag,
 				target: tableInfo,
 			})
 			snap.inner.tableNameToID.ReplaceOrInsert(versionedEntityName{
 				prefix: dbinfo.ID,
-				entity: tidbTableInfo.Name.O,
+				entity: tableInfo.GetTableName(),
 				tag:    tag,
-				target: tidbTableInfo.ID,
+				target: tableInfo.TableName.TableID,
 			})
 
 			eligible := tableInfo.IsEligible(forceReplicate)
 			if !eligible {
-				snap.inner.ineligibleTables.ReplaceOrInsert(versionedID{id: tidbTableInfo.ID, tag: tag})
+				snap.inner.ineligibleTables.ReplaceOrInsert(versionedID{id: tableInfo.TableName.TableID, tag: tag})
 			}
-			if pi := tidbTableInfo.GetPartitionInfo(); pi != nil {
+			if pi := tableInfo.GetPartitionInfo(); pi != nil {
 				for _, partition := range pi.Definitions {
 					vid := newVersionedID(partition.ID, tag)
 					vid.target = tableInfo

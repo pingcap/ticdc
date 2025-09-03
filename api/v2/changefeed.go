@@ -167,14 +167,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	// verify changefeed filter
-	_, err = filter.NewFilter(replicaCfg.Filter, "", replicaCfg.CaseSensitive, replicaCfg.ForceReplicate)
-	if err != nil {
-		_ = c.Error(errors.ErrChangefeedUpdateRefused.
-			GenWithStackByArgs(errors.Cause(err).Error()))
-		return
-	}
-
 	scheme := sinkURIParsed.Scheme
 	topic := strings.TrimFunc(sinkURIParsed.Path, func(r rune) bool {
 		return r == '/'
@@ -1254,10 +1246,12 @@ func getVerifiedTables(
 		return nil, nil, err
 	}
 	err = eventRouter.VerifyTables(tableInfos)
+	log.Error("NewEventRouter", zap.Error(err), zap.Any("tableInfos", tableInfos), zap.Any("startTs", startTs))
 	if err != nil {
 		return nil, nil, err
 	}
 
+	log.Error("columnselector.New")
 	selectors, err := columnselector.New(replicaConfig.Sink)
 	if err != nil {
 		return nil, nil, err

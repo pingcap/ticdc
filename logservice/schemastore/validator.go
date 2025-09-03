@@ -15,9 +15,11 @@ package schemastore
 
 import (
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/filter"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
+	"go.uber.org/zap"
 )
 
 // VerifyTables catalog tables specified by ReplicaConfig into
@@ -40,7 +42,8 @@ func VerifyTables(
 	}
 
 	snap.IterTables(true, func(tableInfo *common.TableInfo) {
-		if f.ShouldIgnoreTable(tableInfo.TableName.Schema, tableInfo.TableName.Table, tableInfo.ToTiDBTableInfo()) {
+		log.Error("tableInfo", zap.Any("tableInfo", tableInfo))
+		if f.ShouldIgnoreTable(tableInfo.TableName.Schema, tableInfo.TableName.Table, tableInfo) {
 			return
 		}
 		// Sequence is not supported yet, TiCDC needs to filter all sequence tables.

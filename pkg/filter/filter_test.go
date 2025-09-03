@@ -42,17 +42,6 @@ func newColumnInfo(id int64, name string, tp byte, flag uint) *model.ColumnInfo 
 	}
 }
 
-// Helper to create a model.IndexInfo
-func newIndexInfo(name string, cols []*model.IndexColumn, isPrimary, isUnique bool) *model.IndexInfo {
-	return &model.IndexInfo{
-		Name:    ast.NewCIStr(name),
-		Columns: cols,
-		Primary: isPrimary,
-		Unique:  isUnique,
-		State:   model.StatePublic,
-	}
-}
-
 // Helper to create a common.TableInfo for testing
 func mustNewCommonTableInfo(schema, table string, cols []*model.ColumnInfo, indices []*model.IndexInfo) *common.TableInfo {
 	ti := &model.TableInfo{
@@ -172,71 +161,6 @@ func TestShouldUseCustomRules(t *testing.T) {
 	require.True(t, filter.ShouldIgnoreTable("test", "t1", nil))
 	require.True(t, filter.ShouldIgnoreTable("test", "t2", nil))
 	require.Nil(t, err)
-}
-
-func TestIsEligible(t *testing.T) {
-	t.Parallel()
-
-	// 1. Table with PK
-	tiWithPK := mustNewModelTableInfo("t1",
-		[]*model.ColumnInfo{
-			newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag),
-		}, nil)
-
-	// 2. Table with UK on not-null column
-	tiWithUK := mustNewModelTableInfo("t2",
-		[]*model.ColumnInfo{
-			newColumnInfo(1, "id", mysql.TypeLong, mysql.NotNullFlag),
-		},
-		[]*model.IndexInfo{
-			newIndexInfo("uk_id", []*model.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}}, false, true),
-		})
-
-	// 3. Table with UK on nullable column (ineligible)
-	tiWithNullableUK := mustNewModelTableInfo("t3",
-		[]*model.ColumnInfo{
-			newColumnInfo(1, "id", mysql.TypeLong, 0),
-		},
-		[]*model.IndexInfo{
-			newIndexInfo("uk_id", []*model.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}}, false, true),
-		})
-
-	// 4. Table with no PK or UK (ineligible)
-	tiNoKey := mustNewModelTableInfo("t4",
-		[]*model.ColumnInfo{
-			newColumnInfo(1, "id", mysql.TypeLong, 0),
-		}, nil)
-
-	// 5. View (eligible)
-	tiView := mustNewModelTableInfo("v1", nil, nil)
-	tiView.View = &model.ViewInfo{}
-
-	// 6. Sequence (ineligible)
-	tiSeq := mustNewModelTableInfo("s1", nil, nil)
-	tiSeq.Sequence = &model.SequenceInfo{}
-
-	cfg := config.NewDefaultFilterConfig()
-	// test with forceReplicate = false
-	f, err := NewFilter(cfg, "UTC", true, false)
-	require.NoError(t, err)
-	filterImpl := f.(*filter)
-	require.True(t, filterImpl.IsEligible(tiWithPK))
-	require.True(t, filterImpl.IsEligible(tiWithUK))
-	require.False(t, filterImpl.IsEligible(tiWithNullableUK))
-	require.False(t, filterImpl.IsEligible(tiNoKey))
-	require.True(t, filterImpl.IsEligible(tiView))
-	require.False(t, filterImpl.IsEligible(tiSeq))
-
-	// test with forceReplicate = true
-	f, err = NewFilter(cfg, "UTC", true, true)
-	require.NoError(t, err)
-	filterImpl = f.(*filter)
-	require.True(t, filterImpl.IsEligible(tiWithPK))
-	require.True(t, filterImpl.IsEligible(tiWithUK))
-	require.True(t, filterImpl.IsEligible(tiWithNullableUK))
-	require.True(t, filterImpl.IsEligible(tiNoKey))
-	require.True(t, filterImpl.IsEligible(tiView))
-	require.False(t, filterImpl.IsEligible(tiSeq), "Sequence should always be ineligible")
 }
 
 func TestShouldIgnoreTable(t *testing.T) {
