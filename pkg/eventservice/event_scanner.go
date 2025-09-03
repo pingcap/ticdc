@@ -415,7 +415,8 @@ func (s *session) appendEvents(events []event.Event) {
 }
 
 func (s *session) limitCheck(nBytes int64) bool {
-	return (s.eventBytes+nBytes) >= s.limit.maxDMLBytes || time.Since(s.startTime) > s.limit.timeout
+	return (s.eventBytes + nBytes) >= s.limit.maxDMLBytes
+	// || time.Since(s.startTime) > s.limit.timeout
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
