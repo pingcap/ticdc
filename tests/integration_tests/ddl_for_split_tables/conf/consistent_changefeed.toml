@@ -3,4 +3,4 @@ enable-table-across-nodes = true
 region-threshold = 2
 [consistent]
 level = "eventual"
-storage = "file:///tmp/tidb_cdc_test/consistent_ddl_for_split_tables/redo"
+storage = "file:///tmp/tidb_cdc_test/ddl_for_split_tables/redo"

@@ -117,7 +117,7 @@ function kill_server() {
 	done
 }
 
-main1() {
+main() {
 	prepare changefeed
 
 	execute_ddls &
@@ -144,7 +144,10 @@ main1() {
 	cleanup_process $CDC_BINARY
 }
 
-main2() {
+main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
 	prepare consistent_changefeed
 
 	execute_ddls &
@@ -180,9 +183,9 @@ main2() {
 }
 
 trap stop_tidb_cluster EXIT
-main1
+main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
-main2
+main_with_consistent
 check_logs $WORK_DIR
-echo "[$(date)] <<<<<< run redo test case $TEST_NAME success! >>>>>>"
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
