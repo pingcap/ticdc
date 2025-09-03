@@ -101,6 +101,9 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 			case <-ctx.Done():
 				return ctx.Err()
 			case c.pendingQueue <- req:
+				c.pendingCount.Inc()
+				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
+
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
 				log.Info("fizz cdc add region request success", zap.Uint64("subID", uint64(region.subscribedSpan.subID)), zap.Uint64("regionID", region.verID.GetID()), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(current)), zap.Int("pendingQueueLen", len(c.pendingQueue)))
@@ -147,9 +150,6 @@ func (c *requestCache) markSent(req regionReq) {
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
 
-	c.pendingCount.Add(1)
-	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Inc()
-
 	m, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID]
 
 	if !ok {
@@ -176,7 +176,7 @@ func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 	}
 
 	delete(regionReqs, regionID)
-	c.pendingCount.Add(-1)
+	c.pendingCount.Dec()
 
 	log.Info("fizz cdc mark stopped region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
@@ -233,12 +233,13 @@ func (c *requestCache) clearStaleRequest() {
 	reqCount := 0
 	for subID, regionReqs := range c.sentRequests.regionReqs {
 		for regionID, regionReq := range regionReqs {
-			reqCount += 1
 			if regionReq.regionInfo.isStopped() || regionReq.isStale() {
 				c.pendingCount.Dec()
 				metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Dec()
 				log.Info("region worker delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()), zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
+			} else {
+				reqCount += 1
 			}
 		}
 		if len(regionReqs) == 0 {
@@ -246,10 +247,10 @@ func (c *requestCache) clearStaleRequest() {
 		}
 	}
 
-	if c.pendingCount.Load() != int64(reqCount) {
+	if reqCount == 0 && c.pendingCount.Load() != 0 {
 		log.Info("region worker pending request count is not equal to actual region request count", zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("actualReqCount", reqCount))
-		c.pendingCount.Store(int64(reqCount))
-		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(reqCount))
+		c.pendingCount.Store(0)
+		metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(0)
 	}
 
 	c.lastCheckStaleRequestTime = time.Now()
