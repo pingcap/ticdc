@@ -141,7 +141,7 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 	return r.status.Load()
 }
 
-func (r *SpanReplication) GetRedo() bool {
+func (r *SpanReplication) IsRedoReplication() bool {
 	return r.status.Load().IsRedo
 }
 
@@ -223,14 +223,14 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 				SchemaID:     r.schemaID,
 				Span:         r.Span,
 				StartTs:      r.status.Load().CheckpointTs,
-				IsRedo:       r.GetRedo(),
+				IsRedo:       r.IsRedoReplication(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		}), nil
 }
 
 func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.GetRedo())
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.IsRedoReplication())
 }
 
 func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, isRedo bool) *messaging.TargetMessage {

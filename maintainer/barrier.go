@@ -42,6 +42,7 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
+	isRedo             bool
 }
 
 type BlockedEventMap struct {
@@ -111,8 +112,9 @@ func NewBarrier(spanController *span.Controller,
 		spanController:     spanController,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
+		isRedo:             isRedo,
 	}
-	barrier.handleBootstrapResponse(bootstrapRespMap, isRedo)
+	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
 }
 
@@ -200,10 +202,10 @@ func (b *Barrier) HandleStatus(from node.ID,
 }
 
 // handleBootstrapResponse rebuild the block event from the bootstrap response
-func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse, isRedo bool) {
+func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
 	for _, resp := range bootstrapRespMap {
 		for _, span := range resp.Spans {
-			if isRedo != span.IsRedo {
+			if b.isRedo != span.IsRedo {
 				continue
 			}
 			// we only care about the WAITING, WRITING and DONE stage
@@ -260,13 +262,13 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 }
 
 // Resend resends the message to the dispatcher manger, the pass action is handle here
-func (b *Barrier) Resend(isRedo bool) []*messaging.TargetMessage {
+func (b *Barrier) Resend() []*messaging.TargetMessage {
 	var msgs []*messaging.TargetMessage
 
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
-		msgs = append(msgs, barrierEvent.resend(isRedo)...)
+		msgs = append(msgs, barrierEvent.resend(b.isRedo)...)
 
 		eventList = append(eventList, barrierEvent)
 		return true

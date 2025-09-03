@@ -66,7 +66,12 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-message RedoTsMessage {
+message RedoHeartbeatMessage {
+    ChangefeedID changefeedID = 1;
+    uint64 resolvedTs = 3;
+}
+
+message RedoMessage {
     ChangefeedID changefeedID = 1;
     uint64 checkpointTs = 2;
     uint64 resolvedTs = 3;

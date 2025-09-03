@@ -391,7 +391,7 @@ func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplicatio
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
 			span, checkpointTs,
-			old.GetRedo())
+			old.IsRedoReplication())
 		news = append(news, new)
 	}
 

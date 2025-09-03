@@ -91,9 +91,9 @@ type Maintainer struct {
 	// It is sent to dispatcher managers during bootstrap to initialize their
 	// checkpointTs.
 	startCheckpointTs uint64
-	redoTsMap         map[node.ID]*heartbeatpb.RedoTsMessage
+	redoTsMap         map[node.ID]*heartbeatpb.RedoHeartbeatMessage
 	// redoTs is global ts to forward
-	redoTs      *heartbeatpb.RedoTsMessage
+	redoTs      *heartbeatpb.RedoMessage
 	redoDDLSpan *replica.SpanReplication
 
 	// ddlSpan represents the table trigger event dispatcher that handles DDL events.
@@ -164,13 +164,16 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, false)
-	_, redoDDLSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, true)
+	var redoDDLSpan *replica.SpanReplication
+	if !redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
+		_, redoDDLSpan = newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, true)
+	}
 	m := &Maintainer{
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		redoTsMap:         make(map[node.ID]*heartbeatpb.RedoTsMessage),
+		redoTsMap:         make(map[node.ID]*heartbeatpb.RedoHeartbeatMessage),
 		controller: NewController(cfID, checkpointTs, taskScheduler,
 			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
@@ -204,7 +207,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
-	m.redoTs = &heartbeatpb.RedoTsMessage{
+	m.redoTs = &heartbeatpb.RedoMessage{
 		ChangefeedID: cfID.ToPB(),
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
@@ -418,8 +421,8 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		m.onCheckpointTsPersisted(req)
-	case messaging.TypeRedoTsMessage:
-		req := msg.Message[0].(*heartbeatpb.RedoTsMessage)
+	case messaging.TypeRedoHeartbeatMessage:
+		req := msg.Message[0].(*heartbeatpb.RedoHeartbeatMessage)
 		m.onRedoTsPersisted(msg.From, req)
 	default:
 		log.Panic("unexpected message type",
@@ -454,7 +457,7 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 
 // onRedoTsPersisted forwards the redoTs message to the dispatcher manager.
 // - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
-func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessage) {
+func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoHeartbeatMessage) {
 	if !m.bootstrapped.Load() {
 		log.Warn("can not advance redoTs since not bootstrapped",
 			zap.String("changefeed", m.id.Name()))
@@ -485,7 +488,7 @@ func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoTsMessag
 	if needUpdate {
 		msgs := make([]*messaging.TargetMessage, 0, len(m.redoTsMap))
 		for id := range m.redoTsMap {
-			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoTsMessage{
+			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
 				ChangefeedID: m.redoTs.ChangefeedID,
 				CheckpointTs: m.redoTs.CheckpointTs,
 				ResolvedTs:   m.redoTs.ResolvedTs,
@@ -510,14 +513,8 @@ func (m *Maintainer) onNodeChanged() {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
 			delete(m.checkpointTsByCapture, id)
+			delete(m.redoTsMap, id)
 			m.controller.RemoveNode(id)
-		}
-	}
-	if m.redoDDLSpan != nil {
-		for rid := range m.redoTsMap {
-			if _, ok := activeNodes[rid]; !ok {
-				delete(m.redoTsMap, rid)
-			}
 		}
 	}
 	log.Info("maintainer node changed", zap.String("id", m.id.String()),
@@ -742,9 +739,6 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 }
 
 func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, isRedo bool) (common.DispatcherID, *replica.SpanReplication) {
-	if isRedo && !redo.IsConsistentEnabled(replicaConfig.Consistent.Level) {
-		return common.DispatcherID{}, nil
-	}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
@@ -814,11 +808,11 @@ func (m *Maintainer) handleResendMessage() {
 	}
 	if m.controller.redoBarrier != nil {
 		// resend redo barrier ack messages
-		m.sendMessages(m.controller.redoBarrier.Resend(true))
+		m.sendMessages(m.controller.redoBarrier.Resend())
 	}
 	if m.controller.barrier != nil {
 		// resend barrier ack messages
-		m.sendMessages(m.controller.barrier.Resend(false))
+		m.sendMessages(m.controller.barrier.Resend())
 	}
 }
 
@@ -1023,50 +1017,40 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 
 // ========================== Exported methods for HTTP API ==========================
 
-// GetDispatcherCount returns the number of dispatchers.
-func (m *Maintainer) GetDispatcherCount() int {
+// GetDispatcherCount returns the number of event dispatchers.
+func (m *Maintainer) GetDispatcherCount(isRedo bool) int {
+	if isRedo {
+		return len(m.controller.redoSpanController.GetAllTasks())
+	}
 	return len(m.controller.spanController.GetAllTasks())
 }
 
 // MoveTable moves a table to a specific node.
-func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
-	err := m.controller.moveTable(tableId, targetNode, true)
-	if err != nil {
-		return err
-	}
-	return m.controller.moveTable(tableId, targetNode, false)
+func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID, isRedo bool) error {
+	return m.controller.moveTable(tableId, targetNode, isRedo)
 }
 
 // MoveSplitTable moves all the dispatchers in a split table to a specific node.
-func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
-	err := m.controller.moveSplitTable(tableId, targetNode, true)
-	if err != nil {
-		return err
-	}
-	return m.controller.moveSplitTable(tableId, targetNode, false)
+func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID, isRedo bool) error {
+	return m.controller.moveSplitTable(tableId, targetNode, isRedo)
 }
 
 // GetTables returns all tables.
-func (m *Maintainer) GetTables() []*replica.SpanReplication {
+func (m *Maintainer) GetTables(isRedo bool) []*replica.SpanReplication {
+	if isRedo {
+		return m.controller.redoSpanController.GetAllTasks()
+	}
 	return m.controller.spanController.GetAllTasks()
 }
 
 // SplitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
-func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
-	err := m.controller.splitTableByRegionCount(tableId, true)
-	if err != nil {
-		return err
-	}
-	return m.controller.splitTableByRegionCount(tableId, false)
+func (m *Maintainer) SplitTableByRegionCount(tableId int64, isRedo bool) error {
+	return m.controller.splitTableByRegionCount(tableId, isRedo)
 }
 
 // MergeTable merge two dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
-func (m *Maintainer) MergeTable(tableId int64) error {
-	err := m.controller.mergeTable(tableId, true)
-	if err != nil {
-		return err
-	}
-	return m.controller.mergeTable(tableId, false)
+func (m *Maintainer) MergeTable(tableId int64, isRedo bool) error {
+	return m.controller.mergeTable(tableId, isRedo)
 }

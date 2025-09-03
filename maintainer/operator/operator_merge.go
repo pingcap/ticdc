@@ -112,7 +112,7 @@ func NewMergeDispatcherOperator(
 		toMergedReplicaSets[0].GetSchemaID(),
 		mergeTableSpan,
 		1, // use a fake checkpointTs here.
-		toMergedReplicaSets[0].GetRedo())
+		toMergedReplicaSets[0].IsRedoReplication())
 
 	spanController.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 
@@ -189,7 +189,7 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 			ChangefeedID:       m.toMergedReplicaSets[0].ChangefeedID.ToPB(),
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
-			IsRedo:             m.newReplicaSet.GetRedo(),
+			IsRedo:             m.newReplicaSet.IsRedoReplication(),
 		})
 }
 

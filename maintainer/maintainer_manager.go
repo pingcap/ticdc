@@ -111,8 +111,8 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
-	case messaging.TypeRedoTsMessage:
-		req := msg.Message[0].(*heartbeatpb.RedoTsMessage)
+	case messaging.TypeRedoMessage:
+		req := msg.Message[0].(*heartbeatpb.RedoMessage)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))

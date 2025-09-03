@@ -73,7 +73,7 @@ func initRedoComponet(
 	manager.metricRedoCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redoDispatcher")
 
 	// RedoTsMessageDs need register on every node
-	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoTsMessageDs(manager)
+	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoMessageDs(manager)
 	manager.wg.Add(2)
 	go func() {
 		defer manager.wg.Done()
@@ -195,7 +195,7 @@ func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
 			})
-			message := &heartbeatpb.RedoTsMessage{
+			message := &heartbeatpb.RedoHeartbeatMessage{
 				ChangefeedID: e.changefeedID.ToPB(),
 				ResolvedTs:   resolvedTs,
 			}

@@ -618,7 +618,7 @@ func TestSchemaBlock(t *testing.T) {
 		},
 	}, false)
 	// pass action message to,false no node, because tables are removed
-	msgs := barrier.Resend(false)
+	msgs := barrier.Resend()
 	require.Len(t, msgs, 0)
 	require.Len(t, barrier.blockedEvents.m, 0)
 
@@ -763,7 +763,7 @@ func TestSyncPointBlock(t *testing.T) {
 			},
 		},
 	}, false)
-	msgs := barrier.Resend(false)
+	msgs := barrier.Resend()
 	// 2 pass action messages to one node
 	require.Len(t, msgs, 2)
 	require.Len(t, barrier.blockedEvents.m, 1)

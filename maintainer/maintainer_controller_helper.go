@@ -347,10 +347,3 @@ func (c *Controller) getSpanController(isRedo bool) *span.Controller {
 	}
 	return c.spanController
 }
-
-func (c *Controller) getBarrier(isRedo bool) *Barrier {
-	if isRedo {
-		return c.redoBarrier
-	}
-	return c.barrier
-}

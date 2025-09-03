@@ -418,34 +418,34 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 	return nil
 }
 
-// redoTsMessageDynamicStream is responsible for push RedoTsMessage to the corresponding table trigger event dispatcher.
-func newRedoTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoTsMessage, *DispatcherManager, *RedoTsMessageHandler] {
+// redoMessageDynamicStream is responsible for push RedoMessage to the corresponding table trigger event dispatcher.
+func newRedoMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMessage, *DispatcherManager, *RedoMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
-		&RedoTsMessageHandler{})
+		&RedoMessageHandler{})
 	ds.Start()
 	return ds
 }
 
-type RedoTsMessage struct {
-	*heartbeatpb.RedoTsMessage
+type RedoMessage struct {
+	*heartbeatpb.RedoMessage
 }
 
-func NewRedoTsMessage(msg *heartbeatpb.RedoTsMessage) RedoTsMessage {
-	return RedoTsMessage{msg}
+func NewRedoMessage(msg *heartbeatpb.RedoMessage) RedoMessage {
+	return RedoMessage{msg}
 }
 
-type RedoTsMessageHandler struct{}
+type RedoMessageHandler struct{}
 
-func NewRedoTsMessageHandler() RedoTsMessageHandler {
-	return RedoTsMessageHandler{}
+func NewRedoMessageHandler() RedoMessageHandler {
+	return RedoMessageHandler{}
 }
 
-func (h *RedoTsMessageHandler) Path(redoTsMessage RedoTsMessage) common.GID {
-	return common.NewChangefeedGIDFromPB(redoTsMessage.ChangefeedID)
+func (h *RedoMessageHandler) Path(redoMessage RedoMessage) common.GID {
+	return common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID)
 }
 
-func (h *RedoTsMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoTsMessage) bool {
+func (h *RedoMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoMessage) bool {
 	if len(messages) != 1 {
 		// TODO: Support batch
 		panic("invalid message count")
@@ -460,21 +460,21 @@ func (h *RedoTsMessageHandler) Handle(dispatcherManager *DispatcherManager, mess
 	return false
 }
 
-func (h *RedoTsMessageHandler) GetSize(event RedoTsMessage) int   { return 0 }
-func (h *RedoTsMessageHandler) IsPaused(event RedoTsMessage) bool { return false }
-func (h *RedoTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *RedoMessageHandler) GetSize(event RedoMessage) int   { return 0 }
+func (h *RedoMessageHandler) IsPaused(event RedoMessage) bool { return false }
+func (h *RedoMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
-func (h *RedoTsMessageHandler) GetTimestamp(event RedoTsMessage) dynstream.Timestamp {
+func (h *RedoMessageHandler) GetTimestamp(event RedoMessage) dynstream.Timestamp {
 	return 0
 }
 
-func (h *RedoTsMessageHandler) GetType(event RedoTsMessage) dynstream.EventType {
+func (h *RedoMessageHandler) GetType(event RedoMessage) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
 
-func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) interface{} {
+func (h *RedoMessageHandler) OnDrop(event RedoMessage) interface{} {
 	return nil
 }
 
