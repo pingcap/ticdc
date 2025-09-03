@@ -139,7 +139,7 @@ main1() {
 
 	sleep 10
 
-	check_sync_diff $WORK_DIR $CUR/conf/${diff_config}.toml 100
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 
 	cleanup_process $CDC_BINARY
 }
