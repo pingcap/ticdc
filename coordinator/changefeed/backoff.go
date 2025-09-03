@@ -106,7 +106,7 @@ func (m *Backoff) shouldFailWhenRetry() bool {
 // resetErrRetry reset the error retry related fields
 func (m *Backoff) resetErrRetry() {
 	m.errBackoff.Reset()
-	m.nextRetryTime = atomic.NewTime(time.Time{})
+	m.nextRetryTime.Store(time.Time{})
 	m.failed.Store(false)
 	m.retrying.Store(false)
 }
@@ -203,7 +203,7 @@ func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbea
 	}
 	// set the next retry time
 	m.backoffInterval = m.errBackoff.NextBackOff()
-	m.nextRetryTime = atomic.NewTime(time.Now().Add(m.backoffInterval))
+	m.nextRetryTime.Store(time.Now().Add(m.backoffInterval))
 
 	// check if we exceed the maxElapsedTime
 	if m.shouldFailWhenRetry() {
