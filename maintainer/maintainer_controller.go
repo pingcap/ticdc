@@ -126,8 +126,8 @@ func NewController(changefeedID common.ChangeFeedID,
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		operatorController := c.getOperatorController(status.IsRedo)
-		spanController := c.getSpanController(status.IsRedo)
+		operatorController := c.getOperatorController(status.Consistent)
+		spanController := c.getSpanController(status.Consistent)
 
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm := spanController.GetTaskByID(dispatcherID)
@@ -144,7 +144,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// if the span is not found, and the status is working, we need to remove it from dispatcher
-				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, status.IsRedo))
+				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, status.Consistent))
 			}
 			continue
 		}

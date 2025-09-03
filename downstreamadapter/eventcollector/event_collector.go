@@ -255,7 +255,7 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
-	isRedo := dispatcher.IsRedoDispatcher(target)
+	consistent := dispatcher.IsRedoDispatcher(target)
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
 		return
@@ -263,7 +263,7 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 	stat := value.(*dispatcherStat)
 	stat.remove()
 
-	ds := c.getDynamicStream(isRedo)
+	ds := c.getDynamicStream(consistent)
 	err := ds.RemovePath(target.GetId())
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
@@ -478,9 +478,9 @@ func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessa
 // runDispatchMessage dispatches messages from the input channel to the dynamic stream.
 // Note: Avoid implementing any message handling logic within this function
 // as messages may be stale and need be verified before process.
-func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage, isRedo bool) error {
-	ds := c.getDynamicStream(isRedo)
-	metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(isRedo)
+func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage, consistent bool) error {
+	ds := c.getDynamicStream(consistent)
+	metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(consistent)
 	for {
 		select {
 		case <-ctx.Done():
@@ -545,15 +545,15 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	}
 }
 
-func (c *EventCollector) getDynamicStream(isRedo bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
-	if isRedo {
+func (c *EventCollector) getDynamicStream(consistent bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+	if consistent {
 		return c.redoDs
 	}
 	return c.ds
 }
 
-func (c *EventCollector) getMetric(isRedo bool) (prometheus.Counter, prometheus.Counter) {
-	if isRedo {
+func (c *EventCollector) getMetric(consistent bool) (prometheus.Counter, prometheus.Counter) {
+	if consistent {
 		return c.metricRedoDispatcherReceivedKVEventCount, c.metricRedoDispatcherReceivedResolvedTsEventCount
 	}
 	return c.metricDispatcherReceivedKVEventCount, c.metricDispatcherReceivedResolvedTsEventCount

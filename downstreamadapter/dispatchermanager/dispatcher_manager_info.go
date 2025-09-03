@@ -30,9 +30,9 @@ type dispatcherCreateInfo struct {
 }
 
 type cleanMap struct {
-	id       common.DispatcherID
-	schemaID int64
-	redo     bool
+	id         common.DispatcherID
+	schemaID   int64
+	consistent bool
 }
 
 func (e *DispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.EventDispatcher] {

@@ -152,12 +152,12 @@ func (c *Controller) buildWorkingTaskMap(
 	for node, resp := range allNodesResp {
 		for _, spanInfo := range resp.Spans {
 			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
-			spanController := c.getSpanController(spanInfo.IsRedo)
+			spanController := c.getSpanController(spanInfo.Consistent)
 			if spanController.IsDDLDispatcher(dispatcherID) {
 				continue
 			}
 			spanReplication := c.createSpanReplication(spanInfo, node)
-			if spanInfo.IsRedo {
+			if spanInfo.Consistent {
 				addToWorkingTaskMap(redoWorkingTaskMap, spanInfo.Span, spanReplication)
 			} else {
 				addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
@@ -199,10 +199,10 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 func (c *Controller) processTableSpans(
 	table commonEvent.Table,
 	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-	isRedo bool,
+	consistent bool,
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
-	spanController := c.getSpanController(isRedo)
+	spanController := c.getSpanController(consistent)
 
 	// Add new table if not working
 	if isTableWorking {
@@ -290,7 +290,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		ComponentStatus: spanInfo.ComponentStatus,
 		ID:              spanInfo.ID,
 		CheckpointTs:    spanInfo.CheckpointTs,
-		IsRedo:          spanInfo.IsRedo,
+		Consistent:      spanInfo.Consistent,
 	}
 
 	return replica.NewWorkingSpanReplication(

@@ -50,13 +50,13 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
-	isRedo bool,
+	consistent bool,
 ) *SpanReplication {
 	r := newSpanReplication(cfID, id, SchemaID, span)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
 		ID:           id.ToPB(),
 		CheckpointTs: checkpointTs,
-		IsRedo:       isRedo,
+		Consistent:   consistent,
 	})
 	log.Info("new span replication created",
 		zap.String("changefeedID", cfID.Name()),
@@ -141,8 +141,8 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 	return r.status.Load()
 }
 
-func (r *SpanReplication) IsRedoReplication() bool {
-	return r.status.Load().IsRedo
+func (r *SpanReplication) IsConsistent() bool {
+	return r.status.Load().Consistent
 }
 
 // UpdateStatus updates the replication status with the following rules:
@@ -223,24 +223,24 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 				SchemaID:     r.schemaID,
 				Span:         r.Span,
 				StartTs:      r.status.Load().CheckpointTs,
-				IsRedo:       r.IsRedoReplication(),
+				Consistent:   r.IsConsistent(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		}), nil
 }
 
 func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.IsRedoReplication())
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.IsConsistent())
 }
 
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, isRedo bool) *messaging.TargetMessage {
+func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, consistent bool) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: cfID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
 				DispatcherID: dispatcherID,
-				IsRedo:       isRedo,
+				Consistent:   consistent,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
 		})

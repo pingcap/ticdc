@@ -46,15 +46,15 @@ type splitScheduler struct {
 	checkInterval time.Duration
 	lastCheckTime time.Time
 
-	batchSize int
-	isRedo    bool
+	batchSize  int
+	consistent bool
 }
 
 func NewSplitScheduler(
 	changefeedID common.ChangeFeedID, batchSize int, splitter *split.Splitter,
 	oc *operator.Controller, sc *span.Controller,
 	checkInterval time.Duration,
-	isRedo bool,
+	consistent bool,
 ) *splitScheduler {
 	return &splitScheduler{
 		changefeedID:   changefeedID,
@@ -65,7 +65,7 @@ func NewSplitScheduler(
 		batchSize:      batchSize,
 		maxCheckTime:   time.Second * 500,
 		checkInterval:  checkInterval,
-		isRedo:         isRedo,
+		consistent:     consistent,
 	}
 }
 
@@ -100,7 +100,7 @@ func (s *splitScheduler) Execute() time.Time {
 }
 
 func (s *splitScheduler) Name() string {
-	if s.isRedo {
+	if s.consistent {
 		return pkgScheduler.RedoSplitScheduler
 	}
 	return pkgScheduler.SplitScheduler

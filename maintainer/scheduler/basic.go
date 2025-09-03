@@ -43,7 +43,7 @@ type basicScheduler struct {
 	operatorController *operator.Controller
 	spanController     *span.Controller
 	nodeManager        *watcher.NodeManager
-	isRedo             bool
+	consistent         bool
 }
 
 func NewBasicScheduler(
@@ -51,7 +51,7 @@ func NewBasicScheduler(
 	oc *operator.Controller,
 	spanController *span.Controller,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
-	isRedo bool,
+	consistent bool,
 ) *basicScheduler {
 	scheduler := &basicScheduler{
 		changefeedID:               changefeedID,
@@ -60,7 +60,7 @@ func NewBasicScheduler(
 		spanController:             spanController,
 		nodeManager:                appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		schedulingTaskCountPerNode: 1,
-		isRedo:                     isRedo,
+		consistent:                 consistent,
 	}
 
 	if schedulerCfg != nil && schedulerCfg.SchedulingTaskCountPerNode > 0 {
@@ -150,7 +150,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 }
 
 func (s *basicScheduler) Name() string {
-	if s.isRedo {
+	if s.consistent {
 		return pkgScheduler.RedoBasicScheduler
 	}
 	return pkgScheduler.BasicScheduler

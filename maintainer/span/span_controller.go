@@ -72,7 +72,7 @@ type Controller struct {
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
 	ddlDispatcherID        common.DispatcherID
-	isRedo                 bool
+	consistent             bool
 }
 
 // NewController creates a new span controller
@@ -81,7 +81,7 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	enableTableAcrossNodes bool,
-	isRedo bool,
+	consistent bool,
 ) *Controller {
 	c := &Controller{
 		changefeedID:           changefeedID,
@@ -91,7 +91,7 @@ func NewController(
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		ddlDispatcherID:        ddlSpan.ID,
-		isRedo:                 isRedo,
+		consistent:             consistent,
 	}
 
 	c.reset(c.ddlSpan)
@@ -165,7 +165,7 @@ func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.isRedo)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.consistent)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -391,7 +391,7 @@ func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplicatio
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
 			span, checkpointTs,
-			old.IsRedoReplication())
+			old.IsConsistent())
 		news = append(news, new)
 	}
 

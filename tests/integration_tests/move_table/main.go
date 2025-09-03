@@ -60,7 +60,7 @@ func main() {
 
 	sourceNode, targetNode := getSourceAndTargetNode(cluster)
 
-	err = cluster.moveAllTables(sourceNode, targetNode)
+	err = cluster.moveAllTables(sourceNode, targetNode, false)
 	if err != nil {
 		log.Fatal("failed to move tables", zap.Error(err))
 	}
@@ -149,7 +149,7 @@ func newCluster() (*cluster, error) {
 }
 
 // moveAllTables moves all tables from source node to target node
-func (c *cluster) moveAllTables(sourceNode, targetNode string) error {
+func (c *cluster) moveAllTables(sourceNode, targetNode string, consistent bool) error {
 	for _, table := range c.servers[sourceNode] {
 		if table.id == 0 {
 			// table trigger dispatcher is not support to move, except the maintainer is crashed
@@ -159,7 +159,7 @@ func (c *cluster) moveAllTables(sourceNode, targetNode string) error {
 		err := c.
 			client.
 			Changefeeds().
-			MoveTable(ctx, table.changefeedNameSpace, table.changefeedName, table.id, targetNode)
+			MoveTable(ctx, table.changefeedNameSpace, table.changefeedName, table.id, targetNode, consistent)
 
 		log.Info("move table",
 			zap.String("sourceNode", sourceNode),

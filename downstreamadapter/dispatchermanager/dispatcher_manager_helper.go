@@ -46,7 +46,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
 				CheckpointTs:    watermark.CheckpointTs,
-				IsRedo:          dispatcher.IsRedoDispatcher(dispatcherItem),
+				Consistent:      dispatcher.IsRedoDispatcher(dispatcherItem),
 			}, &cleanMap{dispatcherItem.GetId(), dispatcherItem.GetSchemaID(), dispatcher.IsRedoDispatcher(dispatcherItem)}, &watermark
 		}
 	}
@@ -65,7 +65,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 			ComponentStatus:    heartBeatInfo.ComponentStatus,
 			CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 			EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
-			IsRedo:             dispatcher.IsRedoDispatcher(dispatcherItem),
+			Consistent:         dispatcher.IsRedoDispatcher(dispatcherItem),
 		}, nil, &heartBeatInfo.Watermark
 	}
 	return nil, nil, &heartBeatInfo.Watermark
@@ -113,7 +113,7 @@ func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeF
 					ID:              mergedDispatcherID.ToPB(),
 					CheckpointTs:    dispatcherItem.GetCheckpointTs(),
 					ComponentStatus: heartbeatpb.ComponentState_Working,
-					IsRedo:          dispatcher.IsRedoDispatcher(dispatcherItem),
+					Consistent:      dispatcher.IsRedoDispatcher(dispatcherItem),
 				},
 				Seq: dispatcherMap.GetSeq(),
 			}
@@ -146,7 +146,7 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 			log.Error("merge dispatcher failed, the dispatcher is not working",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Any("dispatcherID", id),
-				zap.Bool("isRedo", dispatcher.IsRedoDispatcher(dispatcherItem)),
+				zap.Bool("consistent", dispatcher.IsRedoDispatcher(dispatcherItem)),
 				zap.Any("componentStatus", dispatcherItem.GetComponentStatus()))
 			return nil, 0, 0
 		}
@@ -163,7 +163,7 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 				log.Error("merge dispatcher failed, the dispatcherIDs are not consecutive",
 					zap.Stringer("changefeedID", changefeedID),
 					zap.Any("dispatcherIDs", dispatcherIDs),
-					zap.Bool("isRedo", dispatcher.IsRedoDispatcher(dispatcherItem)),
+					zap.Bool("consistent", dispatcher.IsRedoDispatcher(dispatcherItem)),
 					zap.Any("prevTableSpan", prevTableSpan),
 					zap.Any("currentTableSpan", currentTableSpan),
 				)
@@ -214,7 +214,7 @@ func registerMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.Change
 			log.Info("merge dispatcher is ready",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", mergedDispatcher.GetId()),
-				zap.Bool("isRedo", dispatcher.IsRedoDispatcher(mergedDispatcher)),
+				zap.Bool("consistent", dispatcher.IsRedoDispatcher(mergedDispatcher)),
 				zap.Any("tableSpan", common.FormatTableSpan(mergedDispatcher.GetTableSpan())),
 			)
 		})
@@ -258,7 +258,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 				log.Info("waiting for dispatcher to close",
 					zap.Stringer("changefeedID", changefeedID),
 					zap.Stringer("dispatcherID", dispatcherItem.GetId()),
-					zap.Bool("isRedo", dispatcher.IsRedoDispatcher(dispatcherItem)),
+					zap.Bool("consistent", dispatcher.IsRedoDispatcher(dispatcherItem)),
 					zap.Any("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
 					zap.Int("count", count),
 				)
@@ -273,7 +273,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
 				// If the dispatcherItem is not existed, we use sinkType to check
-				IsRedo: sinkType == common.RedoSinkType,
+				Consistent: sinkType == common.RedoSinkType,
 			},
 			Seq: dispatcherMap.GetSeq(),
 		}

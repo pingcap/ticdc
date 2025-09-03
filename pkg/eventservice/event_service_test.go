@@ -538,7 +538,7 @@ type mockDispatcherInfo struct {
 	bdrMode    bool
 	integrity  *integrity.Config
 	tz         *time.Location
-	redo       bool
+	consistent bool
 }
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -634,8 +634,8 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
-func (m *mockDispatcherInfo) GetIsRedo() bool {
-	return m.redo
+func (m *mockDispatcherInfo) GetConsistent() bool {
+	return m.consistent
 }
 
 func (m *mockDispatcherInfo) GetEpoch() uint64 {

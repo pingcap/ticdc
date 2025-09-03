@@ -749,8 +749,8 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 	}
 
 	targetNodeID := c.Query("targetNodeID")
-	isRedo, _ := strconv.ParseBool(c.Query("isRedo"))
-	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID), isRedo)
+	consistent, _ := strconv.ParseBool(c.Query("consistent"))
+	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID), consistent)
 	if err != nil {
 		log.Error("failed to move table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)
@@ -824,8 +824,8 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 	}
 
 	targetNodeID := c.Query("targetNodeID")
-	isRedo, _ := strconv.ParseBool(c.Query("isRedo"))
-	err = maintainer.MoveSplitTable(int64(tableId), node.ID(targetNodeID), isRedo)
+	consistent, _ := strconv.ParseBool(c.Query("consistent"))
+	err = maintainer.MoveSplitTable(int64(tableId), node.ID(targetNodeID), consistent)
 	if err != nil {
 		log.Error("failed to move split table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)
@@ -896,8 +896,8 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 		_ = c.Error(apperror.ErrMaintainerNotFounded)
 		return
 	}
-	isRedo, _ := strconv.ParseBool(c.Query("isRedo"))
-	err = maintainer.SplitTableByRegionCount(int64(tableId), isRedo)
+	consistent, _ := strconv.ParseBool(c.Query("consistent"))
+	err = maintainer.SplitTableByRegionCount(int64(tableId), consistent)
 	if err != nil {
 		log.Error("failed to split table by region count", zap.Error(err), zap.Int64("tableID", tableId))
 		_ = c.Error(err)
@@ -968,8 +968,8 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 		return
 	}
 
-	isRedo, _ := strconv.ParseBool(c.Query("isRedo"))
-	err = maintainer.MergeTable(int64(tableId), isRedo)
+	consistent, _ := strconv.ParseBool(c.Query("consistent"))
+	err = maintainer.MergeTable(int64(tableId), consistent)
 	if err != nil {
 		log.Error("failed to merge table", zap.Error(err), zap.Int64("tableID", tableId))
 		_ = c.Error(err)
@@ -1028,8 +1028,8 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 		return
 	}
 
-	isRedo, _ := strconv.ParseBool(c.Query("isRedo"))
-	tables := maintainer.GetTables(isRedo)
+	consistent, _ := strconv.ParseBool(c.Query("consistent"))
+	tables := maintainer.GetTables(consistent)
 
 	nodeTableInfoMap := make(map[string]*NodeTableInfo)
 
@@ -1099,8 +1099,8 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 		return
 	}
 
-	isRedo, _ := strconv.ParseBool(c.Query("isRedo"))
-	number := maintainer.GetDispatcherCount(isRedo)
+	consistent, _ := strconv.ParseBool(c.Query("consistent"))
+	number := maintainer.GetDispatcherCount(consistent)
 	c.JSON(http.StatusOK, &DispatcherCount{Count: number})
 }
 

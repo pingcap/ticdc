@@ -738,7 +738,7 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 	return config.IsMySQLCompatibleScheme(scheme), nil
 }
 
-func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, isRedo bool) (common.DispatcherID, *replica.SpanReplication) {
+func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, consistent bool) (common.DispatcherID, *replica.SpanReplication) {
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
@@ -746,7 +746,7 @@ func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, c
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
-			IsRedo:          isRedo,
+			Consistent:      consistent,
 		}, selfNode.ID)
 	return tableTriggerEventDispatcherID, ddlSpan
 }
@@ -1018,26 +1018,26 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 // ========================== Exported methods for HTTP API ==========================
 
 // GetDispatcherCount returns the number of event dispatchers.
-func (m *Maintainer) GetDispatcherCount(isRedo bool) int {
-	if isRedo {
+func (m *Maintainer) GetDispatcherCount(consistent bool) int {
+	if consistent {
 		return len(m.controller.redoSpanController.GetAllTasks())
 	}
 	return len(m.controller.spanController.GetAllTasks())
 }
 
 // MoveTable moves a table to a specific node.
-func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID, isRedo bool) error {
-	return m.controller.moveTable(tableId, targetNode, isRedo)
+func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID, consistent bool) error {
+	return m.controller.moveTable(tableId, targetNode, consistent)
 }
 
 // MoveSplitTable moves all the dispatchers in a split table to a specific node.
-func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID, isRedo bool) error {
-	return m.controller.moveSplitTable(tableId, targetNode, isRedo)
+func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID, consistent bool) error {
+	return m.controller.moveSplitTable(tableId, targetNode, consistent)
 }
 
 // GetTables returns all tables.
-func (m *Maintainer) GetTables(isRedo bool) []*replica.SpanReplication {
-	if isRedo {
+func (m *Maintainer) GetTables(consistent bool) []*replica.SpanReplication {
+	if consistent {
 		return m.controller.redoSpanController.GetAllTasks()
 	}
 	return m.controller.spanController.GetAllTasks()
@@ -1045,12 +1045,12 @@ func (m *Maintainer) GetTables(isRedo bool) []*replica.SpanReplication {
 
 // SplitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
-func (m *Maintainer) SplitTableByRegionCount(tableId int64, isRedo bool) error {
-	return m.controller.splitTableByRegionCount(tableId, isRedo)
+func (m *Maintainer) SplitTableByRegionCount(tableId int64, consistent bool) error {
+	return m.controller.splitTableByRegionCount(tableId, consistent)
 }
 
 // MergeTable merge two dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
-func (m *Maintainer) MergeTable(tableId int64, isRedo bool) error {
-	return m.controller.mergeTable(tableId, isRedo)
+func (m *Maintainer) MergeTable(tableId int64, consistent bool) error {
+	return m.controller.mergeTable(tableId, consistent)
 }

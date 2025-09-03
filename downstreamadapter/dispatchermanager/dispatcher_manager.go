@@ -577,7 +577,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			return
 		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			if !tableSpanStatus.IsRedo {
+			if !tableSpanStatus.Consistent {
 				newWatermark.Seq = tableSpanStatus.Seq
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
@@ -589,7 +589,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 				select {
 				case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if !tableSpanStatus.IsRedo {
+					if !tableSpanStatus.Consistent {
 						if newWatermark.Seq < tableSpanStatus.Seq {
 							newWatermark.Seq = tableSpanStatus.Seq
 						}
@@ -663,7 +663,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
 			dispatcherCount--
-			if m.redo {
+			if m.consistent {
 				e.cleanRedoDispatcher(m.id, m.schemaID)
 			} else {
 				e.cleanEventDispatcher(m.id, m.schemaID)
@@ -702,8 +702,8 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	return &message
 }
 
-func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, isRedo bool) *MergeCheckTask {
-	if isRedo {
+func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, consistent bool) *MergeCheckTask {
+	if consistent {
 		return e.mergeRedoDispatcher(dispatcherIDs, mergedDispatcherID)
 	}
 	return e.mergeEventDispatcher(dispatcherIDs, mergedDispatcherID)

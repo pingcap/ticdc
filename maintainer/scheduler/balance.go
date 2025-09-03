@@ -50,14 +50,14 @@ type balanceScheduler struct {
 	// `Schedule`.
 	// It speeds up rebalance.
 	forceBalance bool
-	isRedo       bool
+	consistent   bool
 }
 
 func NewBalanceScheduler(
 	changefeedID common.ChangeFeedID, batchSize int,
 	oc *operator.Controller, sc *span.Controller,
 	balanceInterval time.Duration,
-	isRedo bool,
+	consistent bool,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:         changefeedID,
@@ -68,7 +68,7 @@ func NewBalanceScheduler(
 		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),
-		isRedo:               isRedo,
+		consistent:           consistent,
 	}
 }
 
@@ -102,7 +102,7 @@ func (s *balanceScheduler) Execute() time.Time {
 }
 
 func (s *balanceScheduler) Name() string {
-	if s.isRedo {
+	if s.consistent {
 		return pkgScheduler.RedoBalanceScheduler
 	}
 	return pkgScheduler.BalanceScheduler

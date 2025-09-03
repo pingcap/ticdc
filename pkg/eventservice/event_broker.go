@@ -178,7 +178,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
-			c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+			c.getMessageCh(d.messageWorkerIndex, d.info.GetConsistent()) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
 			metricEventServiceSendKvCount.Add(float64(e.Len()))
 		}
 	}
@@ -219,13 +219,13 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 		zap.Int64("eventTableID", e.TableID),
 		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq),
-		zap.Bool("isRedo", d.info.GetIsRedo()))
+		zap.Bool("consistent", d.info.GetConsistent()))
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
 		return
-	case c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- ddlEvent:
+	case c.getMessageCh(d.messageWorkerIndex, d.info.GetConsistent()) <- ddlEvent:
 		metricEventServiceSendDDLCount.Inc()
 	}
 }
@@ -238,7 +238,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 		remoteID,
 		re,
 		d.getEventSenderState())
-	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- resolvedEvent
+	c.getMessageCh(d.messageWorkerIndex, d.info.GetConsistent()) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	metricEventServiceSendResolvedTsCount.Inc()
 }
@@ -251,12 +251,12 @@ func (c *eventBroker) sendNotReusableEvent(
 	wrapEvent := newWrapNotReusableEvent(server, event)
 
 	// must success unless we can do retry later
-	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- wrapEvent
+	c.getMessageCh(d.messageWorkerIndex, d.info.GetConsistent()) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
 }
 
-func (c *eventBroker) getMessageCh(workerIndex int, isRedo bool) chan *wrapEvent {
-	if isRedo {
+func (c *eventBroker) getMessageCh(workerIndex int, consistent bool) chan *wrapEvent {
+	if consistent {
 		return c.redoMessageCh[workerIndex]
 	}
 	return c.messageCh[workerIndex]
@@ -413,7 +413,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		remoteID := node.ID(task.info.GetServerID())
 		event := pevent.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
-		c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
+		c.getMessageCh(task.messageWorkerIndex, task.info.GetConsistent()) <- wrapEvent
 		metricEventServiceSendCommandCount.Inc()
 		return false
 	}
@@ -439,7 +439,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		task.startTableInfo.Load())
 	log.Debug("send handshake event to dispatcher", zap.Stringer("dispatcher", task.id), zap.String("eventType", pevent.TypeToString(event.GetType())), zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
-	c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
+	c.getMessageCh(task.messageWorkerIndex, task.info.GetConsistent()) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
 }
 
@@ -468,7 +468,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		log.Debug("send syncpoint event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("eventType", pevent.TypeToString(e.GetType())), zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
-		c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- syncPointEvent
+		c.getMessageCh(d.messageWorkerIndex, d.info.GetConsistent()) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
 			commitTsList = commitTsList[16:]
@@ -854,7 +854,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
-		zap.Bool("isRedo", info.GetIsRedo()),
+		zap.Bool("consistent", info.GetConsistent()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", startTs),
 		zap.Duration("duration", time.Since(start)))

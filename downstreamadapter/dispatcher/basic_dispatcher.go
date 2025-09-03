@@ -280,7 +280,7 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 			ID:              d.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    d.GetCheckpointTs(),
-			IsRedo:          IsRedoDispatcher(d),
+			Consistent:      IsRedoDispatcher(d),
 		},
 		Seq: d.seq,
 	}
@@ -317,11 +317,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	dmlWakeOnce := &sync.Once{}
 	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	latestResolvedTs := uint64(0)
-	isRedo := IsRedoDispatcher(d)
+	consistent := IsRedoDispatcher(d)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
-			zap.Stringer("dispatcher", d.id), zap.Bool("isRedo", isRedo),
+			zap.Stringer("dispatcher", d.id), zap.Bool("consistent", consistent),
 			zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
 			zap.Any("event", dispatcherEvent.Event))
 		failpoint.Inject("HandleEventsSlowly", func() {
@@ -398,7 +398,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			})
 			d.dealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
-			if isRedo {
+			if consistent {
 				continue
 			}
 			if len(dispatcherEvents) != 1 {
@@ -516,7 +516,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
-			IsRedo: IsRedoDispatcher(d),
+			Consistent: IsRedoDispatcher(d),
 		}
 	}
 }
@@ -574,7 +574,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false, // sync point event must should block
 					Stage:             heartbeatpb.BlockStage_NONE,
 				},
-				IsRedo: IsRedoDispatcher(d),
+				Consistent: IsRedoDispatcher(d),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
@@ -628,7 +628,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 						IsSyncPoint:       true,
 						Stage:             heartbeatpb.BlockStage_WAITING,
 					},
-					IsRedo: IsRedoDispatcher(d),
+					Consistent: IsRedoDispatcher(d),
 				}
 				identifier := BlockEventIdentifier{
 					CommitTs:    commitTs,
@@ -650,7 +650,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false,
 					Stage:             heartbeatpb.BlockStage_WAITING,
 				},
-				IsRedo: IsRedoDispatcher(d),
+				Consistent: IsRedoDispatcher(d),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
@@ -748,7 +748,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		log.Info("dispatcher component has stopped and is ready for cleanup",
 			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 			zap.Stringer("dispatcher", d.id),
-			zap.Bool("isRedo", IsRedoDispatcher(d)),
+			zap.Bool("consistent", IsRedoDispatcher(d)),
 			zap.String("table", common.FormatTableSpan(d.tableSpan)),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 			zap.Uint64("resolvedTs", d.GetResolvedTs()),
@@ -757,7 +757,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	}
 	log.Info("dispatcher is not ready to close",
 		zap.Stringer("dispatcher", d.id),
-		zap.Bool("isRedo", IsRedoDispatcher(d)),
+		zap.Bool("consistent", IsRedoDispatcher(d)),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
 		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
@@ -769,7 +769,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 func (d *BasicDispatcher) removeDispatcher() {
 	log.Info("remove dispatcher",
 		zap.Stringer("dispatcher", d.id),
-		zap.Bool("isRedo", IsRedoDispatcher(d)),
+		zap.Bool("consistent", IsRedoDispatcher(d)),
 		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
