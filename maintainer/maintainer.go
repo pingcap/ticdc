@@ -167,7 +167,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, dispatcher.TypeDispatcherEvent)
 	var redoDDLSpan *replica.SpanReplication
-	if redo.GetDispatcherTypeEnabled(cfg.Config.Consistent.Level) {
+	if redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
 		_, redoDDLSpan = newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, dispatcher.TypeDispatcherRedo)
 	}
 	m := &Maintainer{
