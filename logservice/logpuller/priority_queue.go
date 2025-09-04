@@ -71,7 +71,11 @@ func (pq *PriorityQueue) Pop(ctx context.Context) PriorityTask {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-pq.signal:
+		case _, ok := <-pq.signal:
+			if !ok {
+				// Signal channel is closed.
+				return nil
+			}
 			// Got signal, try to pop again
 			continue
 		}
