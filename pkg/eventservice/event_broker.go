@@ -36,6 +36,7 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -77,14 +78,15 @@ type eventBroker struct {
 	messageCh     []chan *wrapEvent
 	redoMessageCh []chan *wrapEvent
 
-	scanLimitInBytes uint64
-
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
 	cancel context.CancelFunc
 	g      *errgroup.Group
 
 	// metricsCollector handles all metrics collection and reporting
 	metricsCollector *metricsCollector
+
+	scanRateLimiter  *rate.Limiter
+	scanLimitInBytes uint64
 }
 
 func newEventBroker(
@@ -110,6 +112,8 @@ func newEventBroker(
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
 
+	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
+
 	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
@@ -128,9 +132,10 @@ func newEventBroker(
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
 
-		scanLimitInBytes: uint64(config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes),
 		cancel:           cancel,
 		g:                g,
+		scanRateLimiter:  rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
+		scanLimitInBytes: uint64(scanLimitInBytes),
 	}
 
 	// Initialize metrics collector
@@ -528,6 +533,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
+	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
+	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
+	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
+	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
+	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
+	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
+		log.Debug("scan rate limit exceeded", zap.Stringer("dispatcher", task.id), zap.Int64("lastScanBytes", task.lastScanBytes.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
+		return
+	}
+
 	item, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
 		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
@@ -544,7 +559,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	if available.Load() < c.scanLimitInBytes {
 		task.resetScanLimit()
-		return
 	}
 
 	sl := c.calculateScanLimit(task)
@@ -554,7 +568,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
-	events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed",
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
@@ -562,6 +576,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
+
+	if scannedBytes > int64(c.scanLimitInBytes) {
+		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
+		scannedBytes = int64(c.scanLimitInBytes)
+	}
+	task.lastScanBytes.Store(scannedBytes)
 
 	// Check whether the task is ready to receive data events again before sending events.
 	if !task.IsReadyRecevingData() {

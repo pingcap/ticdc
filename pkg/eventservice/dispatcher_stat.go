@@ -124,6 +124,8 @@ type dispatcherStat struct {
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
+
+	lastScanBytes atomic.Int64
 }
 
 func newDispatcherStat(
@@ -142,6 +144,10 @@ func newDispatcherStat(
 		info:               info,
 		filter:             filter,
 	}
+
+	// A small value to avoid too many scan tasks at the first place.
+	dispStat.lastScanBytes.Store(1024)
+
 	changefeedStatus.addDispatcher()
 
 	if info.SyncPointEnabled() {
@@ -209,11 +215,6 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.isTaskScanning.Store(false)
 
 	a.lastScannedCommitTs.Store(resetTs)
-	if a.lastScannedCommitTs.Load() == uint64(0) {
-		log.Panic("last scanned commit ts should not be 0",
-			zap.Any("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
-			zap.Uint64("resetTs", resetTs))
-	}
 	a.lastScannedStartTs.Store(0)
 	a.isReadyReceivingData.Store(true)
 	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
@@ -242,7 +243,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	startTs := a.lastScannedCommitTs.Load()
 	resetTs := a.resetTs.Load()
 	if startTs < resetTs {
-		log.Info("startTs less than the resetTs, set startTs to the resetTs",
+		log.Warn("startTs less than the resetTs, set startTs to the resetTs",
 			zap.Stringer("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
 			zap.Uint64("resetTs", resetTs), zap.Uint64("startTs", startTs))
 		startTs = resetTs

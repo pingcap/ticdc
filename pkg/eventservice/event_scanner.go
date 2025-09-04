@@ -107,7 +107,7 @@ func (s *eventScanner) scan(
 	dispatcherStat *dispatcherStat,
 	dataRange common.DataRange,
 	limit scanLimit,
-) ([]event.Event, bool, error) {
+) (int64, []event.Event, bool, error) {
 	// Initialize scan session
 	sess := newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
@@ -115,7 +115,7 @@ func (s *eventScanner) scan(
 	// Fetch DDL events
 	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
 	if err != nil {
-		return nil, false, err
+		return 0, nil, false, err
 	}
 
 	iter := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
@@ -123,14 +123,14 @@ func (s *eventScanner) scan(
 		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch.Load())
 		events = append(events, resolved)
 		sess.appendEvents(events)
-		return sess.events, false, nil
+		return 0, sess.events, false, nil
 	}
 	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
 	merger := newEventMerger(events)
 	interrupted, err := s.scanAndMergeEvents(sess, merger, iter)
-	return sess.events, interrupted, err
+	return sess.eventBytes, sess.events, interrupted, err
 }
 
 // fetchDDLEvents retrieves DDL events for the scan
