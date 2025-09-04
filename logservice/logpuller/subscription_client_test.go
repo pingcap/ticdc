@@ -201,3 +201,60 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		require.True(t, false, "reconnection not succeed in 5 second")
 	}
 }
+
+// TestErrCacheDispatchWithFullChannelAndCanceledContext tests that when errCh is full
+// and context is canceled, the dispatch method doesn't get stuck.
+func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
+	// Create errCache with a small errCh to easily fill it up
+	errCache := &errCache{
+		cache:  make([]regionErrorInfo, 0, 10),
+		errCh:  make(chan regionErrorInfo, 2), // Small buffer to easily fill
+		notify: make(chan struct{}, 10),
+	}
+
+	// Create a mock regionErrorInfo
+	mockErrInfo := regionErrorInfo{
+		regionInfo: regionInfo{
+			verID: tikv.NewRegionVerID(1, 1, 1),
+			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
+		},
+		err: errors.New("test error"),
+	}
+
+	// Fill up the errCh channel to make it full
+	errCache.errCh <- mockErrInfo
+	errCache.errCh <- mockErrInfo
+
+	// Add some errors to the cache
+	for i := 0; i < 5; i++ {
+		errCache.add(mockErrInfo)
+	}
+
+	// Create a context that will be canceled
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Channel to signal when dispatch returns
+	dispatchDone := make(chan error, 1)
+
+	// Start dispatch in a goroutine
+	go func() {
+		err := errCache.dispatch(ctx)
+		dispatchDone <- err
+	}()
+
+	// Give dispatch some time to start and potentially get stuck
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel the context
+	cancel()
+
+	// Wait for dispatch to return with a timeout
+	select {
+	case err := <-dispatchDone:
+		// Verify that dispatch returned with context.Canceled error
+		require.Equal(t, context.Canceled, err)
+	case <-time.After(5 * time.Second):
+		// If we timeout here, it means dispatch is stuck
+		t.Fatal("dispatch method is stuck and didn't return after context cancellation")
+	}
+}
