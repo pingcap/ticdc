@@ -396,14 +396,14 @@ func tryReadLogicalTableID(snap *pebble.Snapshot, tableID int64, version uint64)
 }
 
 func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64) *common.TableInfo {
-	readRawTableInfo := func(targetTableID int64) (int64, string, *model.TableInfo) {
+	readRawTableInfo := func(targetTableID int64) (string, *model.TableInfo) {
 		targetKey, err := tableInfoKey(version, targetTableID)
 		if err != nil {
 			log.Fatal("generate table info failed", zap.Error(err))
 		}
 		value, closer, err := snap.Get(targetKey)
 		if err == pebble.ErrNotFound {
-			return 0, "", nil
+			return "", nil
 		}
 		if err != nil {
 			log.Fatal("get table info failed", zap.Error(err))
@@ -420,14 +420,14 @@ func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64)
 		if err != nil {
 			log.Fatal("unmarshal table info failed", zap.Error(err))
 		}
-		return table_info_entry.SchemaID, table_info_entry.SchemaName, tableInfo
+		return table_info_entry.SchemaName, tableInfo
 	}
-	schemaID, schemaName, tableInfo := readRawTableInfo(tableID)
+	schemaName, tableInfo := readRawTableInfo(tableID)
 	if tableInfo == nil {
 		// check whether it a physical partition id
 		logicalTableID := tryReadLogicalTableID(snap, tableID, version)
 		if logicalTableID != 0 {
-			schemaID, schemaName, tableInfo = readRawTableInfo(logicalTableID)
+			schemaName, tableInfo = readRawTableInfo(logicalTableID)
 			if tableInfo == nil {
 				return nil
 			}
@@ -435,7 +435,7 @@ func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64)
 			return nil
 		}
 	}
-	return common.WrapTableInfo(schemaID, schemaName, tableInfo)
+	return common.WrapTableInfo(schemaName, tableInfo)
 }
 
 func unmarshalPersistedDDLEvent(value []byte) PersistedDDLEvent {
@@ -793,7 +793,7 @@ func loadAllPhysicalTablesAtTs(
 		if !ok {
 			log.Panic("table info not found", zap.Int64("tableID", tableID))
 		}
-		if tableFilter != nil && tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name, common.WrapTableInfo(tableInfo.SchemaID, schemaName, fullTableInfo)) {
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name, common.WrapTableInfo(schemaName, fullTableInfo)) {
 			log.Info("ignore table by filter", zap.String("schema", schemaName), zap.String("table", tableInfo.Name), zap.Any("tableInfo", fullTableInfo))
 			continue
 		}

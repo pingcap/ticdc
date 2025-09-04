@@ -155,7 +155,7 @@ func TestColumnIndex(t *testing.T) {
 		{ID: 102, Name: ast.NewCIStr("b"), FieldType: *newFieldTypeWithFlag(mysql.UniqueKeyFlag)},
 		{ID: 103, Name: ast.NewCIStr("c"), FieldType: *newFieldTypeWithFlag()},
 	}
-	tableInfo := WrapTableInfo(100, "test", &model.TableInfo{
+	tableInfo := WrapTableInfo("test", &model.TableInfo{
 		PKIsHandle: true,
 		Columns:    columns,
 	})
@@ -166,7 +166,7 @@ func TestColumnIndex(t *testing.T) {
 		{ID: 1, Primary: true, Columns: []*model.IndexColumn{{Offset: 0}}},
 		{ID: 2, Unique: true, Columns: []*model.IndexColumn{{Offset: 1}, {Offset: 2}}},
 	}
-	tableInfo = WrapTableInfo(100, "test", &model.TableInfo{
+	tableInfo = WrapTableInfo("test", &model.TableInfo{
 		Columns: columns,
 		Indices: indices,
 	})
@@ -175,7 +175,7 @@ func TestColumnIndex(t *testing.T) {
 }
 
 func TestIndexByName(t *testing.T) {
-	tableInfo := WrapTableInfo(100, "test", &model.TableInfo{
+	tableInfo := WrapTableInfo("test", &model.TableInfo{
 		Indices: nil,
 	})
 	names, offsets, ok := tableInfo.IndexByName("idx1")
@@ -183,7 +183,7 @@ func TestIndexByName(t *testing.T) {
 	require.Nil(t, names)
 	require.Nil(t, offsets)
 
-	tableInfo = WrapTableInfo(100, "test", &model.TableInfo{
+	tableInfo = WrapTableInfo("test", &model.TableInfo{
 		Indices: []*model.IndexInfo{
 			{
 				Name: ast.NewCIStr("idx1"),
@@ -218,7 +218,7 @@ func TestIndexByName(t *testing.T) {
 }
 
 func TestColumnsByNames(t *testing.T) {
-	tableInfo := WrapTableInfo(100, "test", &model.TableInfo{
+	tableInfo := WrapTableInfo("test", &model.TableInfo{
 		Columns: []*model.ColumnInfo{
 			{
 				Name: ast.NewCIStr("col2"),
@@ -491,7 +491,7 @@ func TestIsEligible(t *testing.T) {
 	t.Parallel()
 
 	// 1. Table with PK
-	tiWithPK := WrapTableInfo(100, "test", &model.TableInfo{
+	tiWithPK := WrapTableInfo("test", &model.TableInfo{
 		Name: ast.NewCIStr("t1"),
 		Columns: []*model.ColumnInfo{
 			newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag),
@@ -500,7 +500,7 @@ func TestIsEligible(t *testing.T) {
 	})
 
 	// 2. Table with UK on not-null column
-	tiWithUK := WrapTableInfo(100, "test", &model.TableInfo{
+	tiWithUK := WrapTableInfo("test", &model.TableInfo{
 		Name: ast.NewCIStr("t2"),
 		Columns: []*model.ColumnInfo{
 			newColumnInfo(1, "id", mysql.TypeLong, mysql.NotNullFlag),
@@ -511,7 +511,7 @@ func TestIsEligible(t *testing.T) {
 	})
 
 	// 3. Table with UK on nullable column (ineligible)
-	tiWithNullableUK := WrapTableInfo(100, "test", &model.TableInfo{
+	tiWithNullableUK := WrapTableInfo("test", &model.TableInfo{
 		Name: ast.NewCIStr("t3"),
 		Columns: []*model.ColumnInfo{
 			newColumnInfo(1, "id", mysql.TypeLong, 0),
@@ -522,7 +522,7 @@ func TestIsEligible(t *testing.T) {
 	})
 
 	// 4. Table with no PK or UK (ineligible)
-	tiNoKey := WrapTableInfo(100, "test", &model.TableInfo{
+	tiNoKey := WrapTableInfo("test", &model.TableInfo{
 		Name: ast.NewCIStr("t4"),
 		Columns: []*model.ColumnInfo{
 			newColumnInfo(1, "id", mysql.TypeLong, 0),
@@ -530,13 +530,13 @@ func TestIsEligible(t *testing.T) {
 	})
 
 	// 5. View (eligible)
-	tiView := WrapTableInfo(100, "test", &model.TableInfo{
+	tiView := WrapTableInfo("test", &model.TableInfo{
 		Name: ast.NewCIStr("v1"),
 	})
 	tiView.View = &model.ViewInfo{}
 
 	// 6. Sequence (ineligible)
-	tiSeq := WrapTableInfo(100, "test", &model.TableInfo{
+	tiSeq := WrapTableInfo("test", &model.TableInfo{
 		Name: ast.NewCIStr("s1"),
 	})
 	tiSeq.Sequence = &model.SequenceInfo{}

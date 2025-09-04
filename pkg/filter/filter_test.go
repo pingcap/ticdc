@@ -64,7 +64,7 @@ func mustNewCommonTableInfo(schema, table string, cols []*model.ColumnInfo, indi
 			break
 		}
 	}
-	return common.WrapTableInfo(100, schema, ti)
+	return common.WrapTableInfo(schema, ti)
 }
 
 // mustNewModelTableInfo is a helper to create a model.TableInfo for testing.

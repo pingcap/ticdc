@@ -67,7 +67,7 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 			if err != nil {
 				return nil, nil, nil, errors.Trace(err)
 			}
-			tableInfo := common.WrapTableInfo(dbinfo.ID, dbinfo.Name.O, tbInfo)
+			tableInfo := common.WrapTableInfo(dbinfo.Name.O, tbInfo)
 			if f.ShouldIgnoreTable(dbinfo.Name.O, tbName.Name.O, tableInfo) {
 				log.Debug("ignore table", zap.String("db", dbinfo.Name.O),
 					zap.String("table", tbName.Name.O))

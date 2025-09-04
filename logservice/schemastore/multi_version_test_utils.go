@@ -172,7 +172,7 @@ func buildExchangePartitionTableEventForTest(
 			Name:      ast.NewCIStr(partitionTableName),
 			Partition: buildPartitionDefinitionsForTest(newPartitionIDs),
 		},
-		ExtraTableInfo: common.WrapTableInfo(normalSchemaID, normalSchemaName, &model.TableInfo{
+		ExtraTableInfo: common.WrapTableInfo(normalSchemaName, &model.TableInfo{
 			ID:   normalTableID,
 			Name: ast.NewCIStr(normalTableName),
 		}),

@@ -104,7 +104,7 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 		}
 	}
 
-	info := common.WrapTableInfo(job.SchemaID, job.SchemaName, tableInfo)
+	info := common.WrapTableInfo(job.SchemaName, tableInfo)
 	info.InitPrivateFields()
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
