@@ -719,6 +719,7 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Info("subscription client handle errors exit")
 			return ctx.Err()
 		case errInfo := <-s.errCache.errCh:
 			if err := s.doHandleError(ctx, errInfo); err != nil {
@@ -1050,12 +1051,15 @@ func (e *errCache) dispatch(ctx context.Context) error {
 		e.Lock()
 		if len(e.cache) == 0 {
 			e.Unlock()
-			return
 		}
 		errInfo := e.cache[0]
 		e.cache = e.cache[1:]
 		e.Unlock()
-		e.errCh <- errInfo
+		select {
+		case <-ctx.Done():
+			log.Info("subscription client dispatch err cache done")
+		case e.errCh <- errInfo:
+		}
 	}
 	for {
 		select {
