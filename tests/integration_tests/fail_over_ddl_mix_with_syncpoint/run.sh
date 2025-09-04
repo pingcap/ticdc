@@ -128,7 +128,6 @@ main() {
 	execute_ddl &
 	DDL_PID=$!
 
-	# 启动 DML 线程
 	execute_dml 1 &
 	DML_PID_1=$!
 	execute_dml 2 &
@@ -172,7 +171,6 @@ main_with_consistent() {
 	execute_ddl &
 	DDL_PID=$!
 
-	# 启动 DML 线程
 	execute_dml 1 &
 	DML_PID_1=$!
 	execute_dml 2 &

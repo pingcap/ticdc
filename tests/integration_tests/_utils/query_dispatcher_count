@@ -10,13 +10,13 @@ ipAddr=${1}
 changefeedID=${2}
 target=${3}
 retryCount=${4}
-consistent=${5:-false}
+dispatcherType=${5:-0}
 
 echo "query dispatcher count"
 count=0
 
 while [[ $count -lt $retryCount ]]; do
-	ans=$(curl -X GET http://"${ipAddr}"/api/v2/changefeeds/"${changefeedID}"/get_dispatcher_count?consistent=$consistent)
+	ans=$(curl -X GET http://"${ipAddr}"/api/v2/changefeeds/"${changefeedID}"/get_dispatcher_count?dispatcherType=$dispatcherType)
 	echo $ans
 	value=$(echo $ans | jq -r '.count')
 
