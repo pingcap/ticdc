@@ -61,7 +61,7 @@ var (
 			Subsystem: "event_service",
 			Name:      "scan_duration",
 			Help:      "The duration of scanning a data range from eventStore",
-			Buckets:   prometheus.ExponentialBuckets(0.00128, 2.0, 14), // 1.28ms to 10s
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 19), // 40us to 10s
 		})
 	EventServiceScannedCount = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -115,6 +115,28 @@ var (
 			Name:      "skip_resolved_ts_count",
 			Help:      "The number of skipped resolved ts",
 		})
+
+	EventServiceAvailableMemoryQuotaGaugeVec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "available_memory_quota",
+	}, []string{"changefeed"})
+
+	EventServiceScannedDMLSize = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "scanned_dml_size",
+		Help:      "The size of scanned DML events from eventStore",
+		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 16), // 1KB to 64MB
+	})
+
+	EventServiceScannedTxnCount = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "scanned_txn_count",
+		Help:      "The number of transactions scanned from eventStore",
+		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
+	})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
@@ -132,4 +154,7 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServicePendingScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
 	registry.MustRegister(EventServiceSkipResolvedTsCount)
+	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
+	registry.MustRegister(EventServiceScannedDMLSize)
+	registry.MustRegister(EventServiceScannedTxnCount)
 }

@@ -57,13 +57,12 @@ var (
 			Help:      "The number of scan requests received by event store.",
 		})
 
-	EventStoreScanBytes = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "event_store",
-			Name:      "scan_bytes",
-			Help:      "The number of bytes scanned by event store.",
-		})
+	EventStoreScanBytes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "scan_bytes",
+		Help:      "The number of bytes scanned by event store.",
+	}, []string{"type"})
 
 	EventStoreDeleteRangeCount = prometheus.NewCounter(
 		prometheus.CounterOpts{

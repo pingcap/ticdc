@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
 )
 
@@ -167,6 +168,12 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 			heartbeat: heartbeat,
 		}:
 		}
+	case messaging.TypeCongestionControl:
+		if len(msg.Message) != 1 {
+			log.Panic("invalid control message", zap.Any("msg", msg))
+		}
+		m := msg.Message[0].(*event.CongestionControl)
+		s.handleCongestionControl(msg.From, m)
 	default:
 		log.Panic("unknown message type", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	}
@@ -231,6 +238,15 @@ func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatW
 		return
 	}
 	c.handleDispatcherHeartbeat(heartbeat)
+}
+
+func (s *eventService) handleCongestionControl(from node.ID, m *event.CongestionControl) {
+	clusterID := m.GetClusterID()
+	c, ok := s.brokers[clusterID]
+	if !ok {
+		return
+	}
+	c.handleCongestionControl(from, m)
 }
 
 func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {

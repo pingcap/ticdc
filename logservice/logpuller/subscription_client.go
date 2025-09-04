@@ -338,7 +338,7 @@ func (s *subscriptionClient) Subscribe(
 	defer func() {
 		log.Info("subscribes span done",
 			zap.Uint64("subscriptionID", uint64(subID)),
-			zap.String("span", span.String()))
+			zap.Uint64("startTs", startTs))
 	}()
 
 	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval)
