@@ -397,7 +397,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			})
 			d.dealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
-			if d.GetType() == TypeDispatcherRedo {
+			if IsRedoDispatcherType(d.GetType()) {
 				continue
 			}
 			if len(dispatcherEvents) != 1 {

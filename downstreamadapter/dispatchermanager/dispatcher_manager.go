@@ -576,7 +576,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			return
 		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			if tableSpanStatus.DispatcherType == dispatcher.TypeDispatcherEvent {
+			if !dispatcher.IsRedoDispatcherType(tableSpanStatus.DispatcherType) {
 				newWatermark.Seq = tableSpanStatus.Seq
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
@@ -588,7 +588,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 				select {
 				case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if tableSpanStatus.DispatcherType == dispatcher.TypeDispatcherEvent {
+					if !dispatcher.IsRedoDispatcherType(tableSpanStatus.DispatcherType) {
 						if newWatermark.Seq < tableSpanStatus.Seq {
 							newWatermark.Seq = tableSpanStatus.Seq
 						}
@@ -662,7 +662,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
 			dispatcherCount--
-			if m.dispatcherType == dispatcher.TypeDispatcherRedo {
+			if dispatcher.IsRedoDispatcherType(m.dispatcherType) {
 				e.cleanRedoDispatcher(m.id, m.schemaID)
 			} else {
 				e.cleanEventDispatcher(m.id, m.schemaID)

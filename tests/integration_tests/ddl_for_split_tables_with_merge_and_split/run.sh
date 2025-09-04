@@ -104,7 +104,7 @@ main_with_consistent() {
 
 	# move the table to node 2
 	table_id=$(get_table_id "test" "table_1")
-	move_split_table_with_retry "127.0.0.1:8301" $table_id "test" 10 true || true
+	move_split_table_with_retry "127.0.0.1:8301" $table_id "test" 10 1 || true
 
 	run_sql "ALTER TABLE test.table_1 ADD COLUMN new_col INT;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_ignore_error "INSERT INTO test.table_1 (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
@@ -112,9 +112,19 @@ main_with_consistent() {
 	sleep 10
 
 	## merge and split make the dispatcher id changed
-	merge_table_with_retry $table_id "test" 10 true || true
+	# first merge 5 times to merge all dispatchers to one
+	# then split
+	merge_table_with_retry $table_id "test" 10 1 || true
 	sleep 10
-	split_table_with_retry $table_id "test" 10 true || true
+	merge_table_with_retry $table_id "test" 10 1 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 1 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 1 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 1 || true
+	sleep 10
+	split_table_with_retry $table_id "test" 10 1 || true
 
 	sleep 10
 

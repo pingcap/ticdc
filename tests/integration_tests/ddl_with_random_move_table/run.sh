@@ -124,7 +124,7 @@ function move_table_consistent() {
 
 		# move table to a random node
 		table_id=$(get_table_id "test" "$table_name")
-		move_table_with_retry "127.0.0.1:$port" $table_id "test" 10 true || true
+		move_table_with_retry "127.0.0.1:$port" $table_id "test" 10 1 || true
 		sleep 1
 	done
 }

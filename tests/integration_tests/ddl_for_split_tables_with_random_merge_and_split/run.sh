@@ -115,9 +115,17 @@ function merge_and_split_table_consistent() {
 
 		# move table to a random node
 		table_id=$(get_table_id "test" "$table_name")
-		merge_table_with_retry $table_id "test" 10 true || true
+		merge_table_with_retry $table_id "test" 10 1 || true
 		sleep 10
-		split_table_with_retry $table_id "test" 10 true || true
+		merge_table_with_retry $table_id "test" 10 1 || true
+		sleep 10
+		merge_table_with_retry $table_id "test" 10 1 || true
+		sleep 10
+		merge_table_with_retry $table_id "test" 10 1 || true
+		sleep 10
+		merge_table_with_retry $table_id "test" 10 1 || true
+		sleep 10
+		split_table_with_retry $table_id "test" 10 1 || true
 	done
 }
 

@@ -236,7 +236,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
 		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
-		if dispatcher.IsRedoDispatcherType(dispatcherItem.GetType()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
+		if !dispatcher.IsRedoDispatcherType(dispatcherItem.GetType()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",
@@ -293,7 +293,7 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
-		if dispatcher.IsRedoDispatcherType(dispatcherItem.GetType()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
+		if !dispatcher.IsRedoDispatcherType(dispatcherItem.GetType()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",
