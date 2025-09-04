@@ -116,8 +116,8 @@ func IsValidConsistentLevel(level string) bool {
 	}
 }
 
-// GetDispatcherTypeEnabled returns whether the consistent feature is enabled.
-func GetDispatcherTypeEnabled(level string) bool {
+// IsConsistentEnabled returns whether the consistent feature is enabled.
+func IsConsistentEnabled(level string) bool {
 	return IsValidConsistentLevel(level) && ConsistentLevelType(level) != ConsistentLevelNone
 }
 

@@ -50,7 +50,7 @@ type Sink struct {
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
-	if cfg == nil || !redo.GetDispatcherTypeEnabled(cfg.Level) {
+	if cfg == nil || !redo.IsConsistentEnabled(cfg.Level) {
 		return nil
 	}
 	return nil
