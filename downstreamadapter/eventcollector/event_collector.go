@@ -551,6 +551,14 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		availables[changefeedID.(common.ChangeFeedID)] = uint64(quota.AvailableMemory())
 	}
+
+	for _, quota := range c.redoDs.GetMetrics().MemoryControl.AreaMemoryMetrics {
+		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
+		if !ok {
+			continue
+		}
+		availables[changefeedID.(common.ChangeFeedID)] = min(availables[changefeedID.(common.ChangeFeedID)], uint64(quota.AvailableMemory()))
+	}
 	if len(availables) == 0 {
 		return nil
 	}
