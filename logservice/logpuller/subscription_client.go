@@ -428,7 +428,6 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	g.Go(func() error { return s.runResolveLockChecker(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
 	g.Go(func() error { return s.logSlowRegions(ctx) })
-	g.Go(func() error { return s.logSlowSpan(ctx) })
 	g.Go(func() error { return s.errCache.dispatch(ctx) })
 
 	log.Info("subscription client starts")
@@ -950,39 +949,6 @@ func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 				log.Info("subscription client holes exist",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Any("holes", attr.UnLockedRanges))
-			}
-		}
-		s.totalSpans.RUnlock()
-	}
-}
-
-func (s *subscriptionClient) logSlowSpan(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Second)
-	const resolvedLagThresholdInSecs = 10
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-
-		pdTime := s.pdClock.CurrentTime()
-		pdPhyTs := oracle.GetPhysical(pdTime)
-		s.totalSpans.RLock()
-		for subID, rt := range s.totalSpans.spanMap {
-			if !rt.initialized.Load() {
-				continue
-			}
-			resolvedTs := rt.rangeLock.GetHeapMinTs()
-			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
-			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
-			if resolvedLag > resolvedLagThresholdInSecs {
-				log.Warn("resolved ts lag is too large for initialized span",
-					zap.Uint64("subID", uint64(subID)),
-					zap.Int64("tableID", rt.span.TableID),
-					zap.Uint64("resolvedTs", resolvedTs),
-					zap.Float64("resolvedLag(s)", resolvedLag))
 			}
 		}
 		s.totalSpans.RUnlock()

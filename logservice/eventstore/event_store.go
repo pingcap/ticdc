@@ -523,7 +523,7 @@ func (e *eventStore) RegisterDispatcher(
 				notifier(ts, subStat.maxEventCommitTs.Load())
 			}
 			CounterResolved.Inc()
-			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Milliseconds()) / 1000)
+			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
 	}
 
@@ -827,7 +827,8 @@ func (e *eventStore) updateMetricsOnce() {
 			resolvedTs := subStat.resolvedTs.Load()
 			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
 			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
-			if subStat.initialized.Load() && resolvedLag >= 10 {
+			const largeResolvedTsLagInSecs = 10
+			if subStat.initialized.Load() && resolvedLag >= largeResolvedTsLagInSecs {
 				lastReceiveDMLTimeRepr := "never"
 				if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
 					lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
