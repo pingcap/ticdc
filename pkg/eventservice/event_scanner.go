@@ -327,8 +327,9 @@ func interruptScan(
 ) {
 	// Append current batch
 	events := merger.appendDMLEvent(processor.getResolvedBatchDML())
-	// lastCommitTs may be 0, if the scanner timeout and no one row scanned.
 	if newCommitTs != merger.lastCommitTs {
+		// lastCommitTs may be 0, if the scanner timeout and no one row scanned.
+		// this usually happens when the CPU is overloaded.
 		if merger.lastCommitTs == 0 {
 			log.Warn("interrupt scan when no DML event is scanned",
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
@@ -415,8 +416,7 @@ func (s *session) appendEvents(events []event.Event) {
 }
 
 func (s *session) limitCheck(nBytes int64) bool {
-	return (s.eventBytes + nBytes) >= s.limit.maxDMLBytes
-	// || time.Since(s.startTime) > s.limit.timeout
+	return (s.eventBytes+nBytes) >= s.limit.maxDMLBytes || time.Since(s.startTime) > s.limit.timeout
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
