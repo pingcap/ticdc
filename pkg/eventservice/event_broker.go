@@ -111,12 +111,12 @@ func newEventBroker(
 
 	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
 
+	g, ctx := errgroup.WithContext(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+
 	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
-
-	g, ctx := errgroup.WithContext(ctx)
-	ctx, cancel := context.WithCancel(ctx)
 	c := &eventBroker{
 		tidbClusterID:           id,
 		eventStore:              eventStore,
