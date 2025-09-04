@@ -116,12 +116,6 @@ func (c *ColumnSelectors) VerifyTables(
 
 			retainedColumns := make(map[string]struct{})
 			for _, columnInfo := range table.GetColumns() {
-				// columnInfo, ok := table.GetColumnInfo(columnID)
-				// if !ok {
-				// 	return errors.ErrColumnSelectorFailed.GenWithStack(
-				// 		"column not found when verify the table for the column selector, table: %v, column: %s",
-				// 		table.TableName, columnInfo.Name)
-				// }
 				columnName := columnInfo.Name.O
 				if s.columnM.MatchColumn(columnName) {
 					retainedColumns[columnName] = struct{}{}
