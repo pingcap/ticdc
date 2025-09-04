@@ -69,7 +69,6 @@ func newRegionRequestWorker(
 	g *errgroup.Group,
 	store *requestedStore,
 ) *regionRequestWorker {
-
 	config := config.GetGlobalServerConfig()
 	maxPendingCount := config.Debug.Puller.PendingRegionRequestQueueSize
 
@@ -307,7 +306,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 				worker:     s,
 				resolvedTs: resolvedTsEvent.Ts,
 			})
-
 		} else {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
