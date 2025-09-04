@@ -244,7 +244,7 @@ func (l *RangeLock) UnlockRange(
 	}
 
 	l.unlockedRanges.set(startKey, endKey, newResolvedTs)
-	log.Info("unlocked range",
+	log.Debug("unlocked range",
 		zap.Uint64("lockID", l.id), zap.Uint64("regionID", entry.regionID),
 		zap.Uint64("resolvedTs", newResolvedTs),
 		zap.String("startKey", hex.EncodeToString(startKey)),
@@ -261,17 +261,15 @@ func (l *RangeLock) Len() int {
 
 // ResolvedTs calculates and returns the minimum resolvedTs
 // of all ranges in the RangeLock.
-func (l *RangeLock) ResolvedTs() (uint64, uint64) {
+func (l *RangeLock) ResolvedTs() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
 	var minTs uint64 = math.MaxUint64
-	var regionID uint64
 	l.lockedRanges.Ascend(func(item *rangeLockEntry) bool {
 		ts := item.lockedRangeState.ResolvedTs.Load()
 		if ts < minTs {
 			minTs = ts
-			regionID = item.regionID
 		}
 		return true
 	})
@@ -279,10 +277,9 @@ func (l *RangeLock) ResolvedTs() (uint64, uint64) {
 	unlockedMinTs := l.unlockedRanges.getMinTs()
 	if unlockedMinTs < minTs {
 		minTs = unlockedMinTs
-		regionID = 0
 	}
 
-	return minTs, regionID
+	return minTs
 }
 
 // RangeLockStatistics represents some statistics of a RangeLock.
@@ -472,7 +469,7 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		l.lockedRangeStateHeap.AddOrUpdate(&newEntry.lockedRangeState)
 
 		l.unlockedRanges.unset(startKey, endKey)
-		log.Info("range locked",
+		log.Debug("range locked",
 			zap.Uint64("lockID", l.id),
 			zap.Uint64("regionID", regionID),
 			zap.Uint64("version", regionVersion),

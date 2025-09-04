@@ -179,7 +179,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 	stepsToRemoved := state.markRemoved()
 	err := state.takeError()
 	if err != nil {
-		log.Info("region event handler get a region error",
+		log.Debug("region event handler get a region error",
 			zap.Uint64("workerID", worker.workerID),
 			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
 			zap.Uint64("regionID", state.region.verID.GetID()),
@@ -219,7 +219,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
-			log.Info("region is initialized",
+			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),
@@ -307,7 +307,6 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	lastAdvance := span.lastAdvanceTime.Load()
 	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
 		ts := span.rangeLock.GetHeapMinTs()
-		// ts, _ := span.rangeLock.ResolvedTs()
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
 			log.Info("subscription client is initialized",
 				zap.Uint64("subscriptionID", uint64(span.subID)),
@@ -324,7 +323,8 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
 			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
 			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
-			if decreaseLag > 10 {
+			const largeResolvedTsAdvanceStepInSecs = 30
+			if decreaseLag > largeResolvedTsAdvanceStepInSecs {
 				log.Warn("resolved ts advance step is too large",
 					zap.Uint64("subID", uint64(span.subID)),
 					zap.Int64("tableID", span.span.TableID),

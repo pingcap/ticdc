@@ -552,7 +552,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			worker := store.getRequestWorker()
 			worker.requestsCh <- region
 
-			log.Info("subscription client will request a region",
+			log.Debug("subscription client will request a region",
 				zap.Uint64("workID", worker.workerID),
 				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 				zap.Uint64("regionID", region.verID.GetID()),
@@ -569,7 +569,7 @@ func (s *subscriptionClient) attachRPCContextForRegion(ctx context.Context, regi
 		return region, true
 	}
 	if err != nil {
-		log.Info("subscription client get rpc context fail",
+		log.Debug("subscription client get rpc context fail",
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.Error(err))
@@ -616,7 +616,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			}
 			backoffBeforeLoad = false
 		}
-		log.Info("subscription client is going to load regions",
+		log.Debug("subscription client is going to load regions",
 			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
 			zap.Any("span", nextSpan))
 
@@ -734,7 +734,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 	switch eerr := err.(type) {
 	case *eventError:
 		innerErr := eerr.err
-		log.Info("cdc region error",
+		log.Debug("cdc region error",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Uint64("regionID", errInfo.verID.GetID()),
 			zap.Stringer("error", innerErr))
@@ -958,6 +958,7 @@ func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 
 func (s *subscriptionClient) logSlowSpan(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Second)
+	const resolvedLagThresholdInSecs = 10
 	defer ticker.Stop()
 	for {
 		select {
@@ -976,7 +977,7 @@ func (s *subscriptionClient) logSlowSpan(ctx context.Context) error {
 			resolvedTs := rt.rangeLock.GetHeapMinTs()
 			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
 			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
-			if resolvedLag > 10 {
+			if resolvedLag > resolvedLagThresholdInSecs {
 				log.Warn("resolved ts lag is too large for initialized span",
 					zap.Uint64("subID", uint64(subID)),
 					zap.Int64("tableID", rt.span.TableID),
@@ -1048,7 +1049,7 @@ func (s *subscriptionClient) GetResolvedTsLag() float64 {
 func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	util.MustCompareAndMonotonicIncrease(&r.staleLocksTargetTs, targetTs)
 	res := r.rangeLock.IterAll(r.tryResolveLock)
-	log.Info("subscription client finds slow locked ranges",
+	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(r.subID)),
 		zap.Any("ranges", res))
 }
