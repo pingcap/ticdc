@@ -109,15 +109,14 @@ func newEventBroker(
 	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
-	g, ctx := errgroup.WithContext(ctx)
-	ctx, cancel := context.WithCancel(ctx)
-
 	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
 
 	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
+	g, ctx := errgroup.WithContext(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 	c := &eventBroker{
 		tidbClusterID:           id,
 		eventStore:              eventStore,
@@ -131,11 +130,10 @@ func newEventBroker(
 		taskChan:                make([]chan scanTask, scanWorkerCount),
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
-
-		cancel:           cancel,
-		g:                g,
-		scanRateLimiter:  rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
-		scanLimitInBytes: uint64(scanLimitInBytes),
+		cancel:                  cancel,
+		g:                       g,
+		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
+		scanLimitInBytes:        uint64(scanLimitInBytes),
 	}
 
 	// Initialize metrics collector
