@@ -53,12 +53,18 @@ var (
 			Name:      "requested_region_count",
 			Help:      "The number of requested regions",
 		}, []string{"state"})
-
-	SubscriptionClientAddRegionRequestCost = prometheus.NewHistogram(
+	RegionRequestFinishScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
-			Name:      "add_region_request_cost",
+			Name:      "region_request_finish_scan_duration",
+			Help:      "duration (s) for region request to be finished.",
+		})
+	SubscriptionClientAddRegionRequestDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "add_region_request_duration",
 			Help:      "The cost of adding region request",
 		})
 )
@@ -68,5 +74,6 @@ func InitLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
-	registry.MustRegister(SubscriptionClientAddRegionRequestCost)
+	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
+	registry.MustRegister(RegionRequestFinishScanDuration)
 }

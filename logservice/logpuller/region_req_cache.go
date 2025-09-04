@@ -101,7 +101,7 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 			case c.pendingQueue <- req:
 				c.incPendingCount()
 				cost := time.Since(start)
-				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
+				metrics.SubscriptionClientAddRegionRequestDuration.Observe(cost.Seconds())
 				return nil
 			case <-c.spaceAvailable:
 				continue
