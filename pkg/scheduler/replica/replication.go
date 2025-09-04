@@ -117,16 +117,8 @@ type replicationDB[T ReplicationID, R Replication[T]] struct {
 	taskGroups map[GroupID]*replicationGroup[T, R]
 }
 
-func (db *replicationDB[T, R]) taskGroupsLenWithLock() int {
-	count := 0
-	db.withRLock(func() {
-		count = len(db.taskGroups)
-	})
-	return count
-}
-
 func (db *replicationDB[T, R]) GetGroups() []GroupID {
-	groups := make([]GroupID, 0, db.taskGroupsLenWithLock())
+	groups := make([]GroupID, 0, db.GetGroupSize())
 	db.withRLock(func() {
 		for id := range db.taskGroups {
 			groups = append(groups, id)
