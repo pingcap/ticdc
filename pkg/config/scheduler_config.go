@@ -42,7 +42,7 @@ type ChangefeedSchedulerConfig struct {
 }
 
 // Validate validates the config.
-func (c *ChangefeedSchedulerConfig) Validate(sinkURI *url.URL) error {
+func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	if !c.EnableTableAcrossNodes {
 		return nil
 	}

@@ -283,7 +283,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 	if c.Scheduler == nil {
 		c.FixScheduler(false)
 	} else {
-		err := c.Scheduler.Validate(sinkURI)
+		err := c.Scheduler.ValidateAndAdjust(sinkURI)
 		if err != nil {
 			return err
 		}
