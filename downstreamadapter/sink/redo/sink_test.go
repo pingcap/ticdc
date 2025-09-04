@@ -49,15 +49,15 @@ func TestConsistentConfig(t *testing.T) {
 	}
 
 	levelEnableCases := []struct {
-		level      string
-		consistent bool
+		level          string
+		dispatcherType int64
 	}{
-		{"invalid-level", false},
-		{"none", false},
-		{"eventual", true},
+		{"invalid-level", 0},
+		{"none", 0},
+		{"eventual", 1},
 	}
 	for _, lc := range levelEnableCases {
-		require.Equal(t, lc.consistent, redo.IsConsistentEnabled(lc.level))
+		require.Equal(t, lc.dispatcherType, redo.GetDispatcherTypeEnabled(lc.level))
 	}
 
 	storageCases := []struct {

@@ -73,7 +73,7 @@ type ConsistentMemoryUsage struct {
 
 // ValidateAndAdjust validates the consistency config and adjusts it if necessary.
 func (c *ConsistentConfig) ValidateAndAdjust() error {
-	if !redo.IsConsistentEnabled(c.Level) {
+	if !redo.GetDispatcherTypeEnabled(c.Level) {
 		return nil
 	}
 

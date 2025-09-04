@@ -16,6 +16,7 @@ package span
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	testutil "github.com/pingcap/ticdc/maintainer/testutil"
@@ -39,7 +40,7 @@ func TestNewController(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	controller := NewController(cfID, ddlSpan, nil, nil, false)
+	controller := NewController(cfID, ddlSpan, nil, nil, dispatcher.TypeDispatcherEvent)
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
 	require.False(t, controller.enableTableAcrossNodes)
@@ -61,7 +62,7 @@ func TestController_AddNewTable(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
-		false,
+		dispatcher.TypeDispatcherEvent,
 	)
 
 	table := commonEvent.Table{
@@ -97,7 +98,7 @@ func TestController_GetTaskByID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
-		false,
+		dispatcher.TypeDispatcherEvent,
 	)
 
 	// Add a table first
@@ -150,7 +151,7 @@ func TestController_GetTasksByTableID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
-		false,
+		dispatcher.TypeDispatcherEvent,
 	)
 
 	// Add a table
@@ -186,7 +187,7 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
-		false,
+		dispatcher.TypeDispatcherEvent,
 	)
 
 	// Add tables from the same schema
@@ -226,7 +227,7 @@ func TestController_UpdateSchemaID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
-		false,
+		dispatcher.TypeDispatcherEvent,
 	)
 
 	// Add a table
@@ -267,7 +268,7 @@ func TestController_Statistics(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
-		false,
+		dispatcher.TypeDispatcherEvent,
 	)
 
 	// Add some tables
@@ -291,7 +292,7 @@ func TestBasicFunction(t *testing.T) {
 	t.Parallel()
 
 	controller := newControllerWithCheckerForTest(t)
-	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, false)
+	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, dispatcher.TypeDispatcherEvent)
 	controller.AddAbsentReplicaSet(absent)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -419,5 +420,5 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true}, false)
+	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true}, dispatcher.TypeDispatcherEvent)
 }

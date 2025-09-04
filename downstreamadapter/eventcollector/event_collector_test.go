@@ -43,7 +43,7 @@ func (m *mockEventDispatcher) GetId() common.DispatcherID {
 	return m.id
 }
 
-func (m *mockEventDispatcher) GetType() int {
+func (m *mockEventDispatcher) GetType() int64 {
 	return dispatcher.TypeDispatcherEvent
 }
 
@@ -127,7 +127,7 @@ func TestProcessMessage(t *testing.T) {
 	did := common.NewDispatcherID()
 	ch := make(chan *messaging.TargetMessage, receiveChanSize)
 	go func() {
-		c.runDispatchMessage(ctx, ch, false)
+		c.runDispatchMessage(ctx, ch, dispatcher.TypeDispatcherEvent)
 	}()
 
 	var seq atomic.Uint64

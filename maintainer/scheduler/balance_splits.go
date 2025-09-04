@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -43,8 +44,8 @@ type balanceSplitsScheduler struct {
 	spanController     *span.Controller
 	nodeManager        *watcher.NodeManager
 
-	splitter   *split.Splitter
-	consistent bool
+	splitter       *split.Splitter
+	dispatcherType int64
 }
 
 func NewBalanceSplitsScheduler(
@@ -53,7 +54,7 @@ func NewBalanceSplitsScheduler(
 	splitter *split.Splitter,
 	oc *operator.Controller,
 	sc *span.Controller,
-	consistent bool,
+	dispatcherType int64,
 ) *balanceSplitsScheduler {
 	return &balanceSplitsScheduler{
 		changefeedID:       changefeedID,
@@ -62,12 +63,12 @@ func NewBalanceSplitsScheduler(
 		operatorController: oc,
 		spanController:     sc,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		consistent:         consistent,
+		dispatcherType:     dispatcherType,
 	}
 }
 
 func (s *balanceSplitsScheduler) Name() string {
-	if s.consistent {
+	if dispatcher.IsRedoDispatcherType(s.dispatcherType) {
 		return pkgScheduler.RedoBalanceSplitScheduler
 	}
 	return pkgScheduler.BalanceSplitScheduler

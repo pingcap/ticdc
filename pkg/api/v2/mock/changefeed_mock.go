@@ -133,45 +133,45 @@ func (mr *MockChangefeedInterfaceMockRecorder) List(ctx, namespace, state interf
 }
 
 // MergeTable mocks base method.
-func (m *MockChangefeedInterface) MergeTable(ctx context.Context, namespace, name string, tableID int64, consistent string) error {
+func (m *MockChangefeedInterface) MergeTable(ctx context.Context, namespace, name string, tableID, dispatcherType int64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MergeTable", ctx, namespace, name, tableID, consistent)
+	ret := m.ctrl.Call(m, "MergeTable", ctx, namespace, name, tableID, dispatcherType)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // MergeTable indicates an expected call of MergeTable.
-func (mr *MockChangefeedInterfaceMockRecorder) MergeTable(ctx, namespace, name, tableID, consistent interface{}) *gomock.Call {
+func (mr *MockChangefeedInterfaceMockRecorder) MergeTable(ctx, namespace, name, tableID, dispatcherType interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MergeTable), ctx, namespace, name, tableID, consistent)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MergeTable), ctx, namespace, name, tableID, dispatcherType)
 }
 
 // MoveSplitTable mocks base method.
-func (m *MockChangefeedInterface) MoveSplitTable(ctx context.Context, namespace, name string, tableID int64, targetNode, consistent string) error {
+func (m *MockChangefeedInterface) MoveSplitTable(ctx context.Context, namespace, name string, tableID int64, targetNode string, dispatcherType int64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MoveSplitTable", ctx, namespace, name, tableID, targetNode, consistent)
+	ret := m.ctrl.Call(m, "MoveSplitTable", ctx, namespace, name, tableID, targetNode, dispatcherType)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // MoveSplitTable indicates an expected call of MoveSplitTable.
-func (mr *MockChangefeedInterfaceMockRecorder) MoveSplitTable(ctx, namespace, name, tableID, targetNode, consistent interface{}) *gomock.Call {
+func (mr *MockChangefeedInterfaceMockRecorder) MoveSplitTable(ctx, namespace, name, tableID, targetNode, dispatcherType interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveSplitTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MoveSplitTable), ctx, namespace, name, tableID, targetNode, consistent)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveSplitTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MoveSplitTable), ctx, namespace, name, tableID, targetNode, dispatcherType)
 }
 
 // MoveTable mocks base method.
-func (m *MockChangefeedInterface) MoveTable(ctx context.Context, namespace, name string, tableID int64, targetNode, consistent string) error {
+func (m *MockChangefeedInterface) MoveTable(ctx context.Context, namespace, name string, tableID int64, targetNode string, dispatcherType int64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MoveTable", ctx, namespace, name, tableID, targetNode, consistent)
+	ret := m.ctrl.Call(m, "MoveTable", ctx, namespace, name, tableID, targetNode, dispatcherType)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // MoveTable indicates an expected call of MoveTable.
-func (mr *MockChangefeedInterfaceMockRecorder) MoveTable(ctx, namespace, name, tableID, targetNode, consistent interface{}) *gomock.Call {
+func (mr *MockChangefeedInterfaceMockRecorder) MoveTable(ctx, namespace, name, tableID, targetNode, dispatcherType interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MoveTable), ctx, namespace, name, tableID, targetNode, consistent)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MoveTable), ctx, namespace, name, tableID, targetNode, dispatcherType)
 }
 
 // Pause mocks base method.
@@ -203,17 +203,17 @@ func (mr *MockChangefeedInterfaceMockRecorder) Resume(ctx, cfg, namespace, name 
 }
 
 // SplitTableByRegionCount mocks base method.
-func (m *MockChangefeedInterface) SplitTableByRegionCount(ctx context.Context, namespace, name string, tableID int64, consistent string) error {
+func (m *MockChangefeedInterface) SplitTableByRegionCount(ctx context.Context, namespace, name string, tableID, dispatcherType int64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SplitTableByRegionCount", ctx, namespace, name, tableID, consistent)
+	ret := m.ctrl.Call(m, "SplitTableByRegionCount", ctx, namespace, name, tableID, dispatcherType)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SplitTableByRegionCount indicates an expected call of SplitTableByRegionCount.
-func (mr *MockChangefeedInterfaceMockRecorder) SplitTableByRegionCount(ctx, namespace, name, tableID, consistent interface{}) *gomock.Call {
+func (mr *MockChangefeedInterfaceMockRecorder) SplitTableByRegionCount(ctx, namespace, name, tableID, dispatcherType interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SplitTableByRegionCount", reflect.TypeOf((*MockChangefeedInterface)(nil).SplitTableByRegionCount), ctx, namespace, name, tableID, consistent)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SplitTableByRegionCount", reflect.TypeOf((*MockChangefeedInterface)(nil).SplitTableByRegionCount), ctx, namespace, name, tableID, dispatcherType)
 }
 
 // Update mocks base method.

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -53,7 +54,7 @@ type basicScheduler struct {
 	operatorController *operator.Controller
 	spanController     *span.Controller
 	nodeManager        *watcher.NodeManager
-	consistent         bool
+	dispatcherType     int64
 }
 
 func NewBasicScheduler(
@@ -61,7 +62,7 @@ func NewBasicScheduler(
 	oc *operator.Controller,
 	spanController *span.Controller,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
-	consistent bool,
+	dispatcherType int64,
 ) *basicScheduler {
 	scheduler := &basicScheduler{
 		changefeedID:               changefeedID,
@@ -70,7 +71,7 @@ func NewBasicScheduler(
 		spanController:             spanController,
 		nodeManager:                appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		schedulingTaskCountPerNode: 1,
-		consistent:                 consistent,
+		dispatcherType:             dispatcherType,
 	}
 
 	if schedulerCfg != nil && schedulerCfg.SchedulingTaskCountPerNode > 0 {
@@ -159,7 +160,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 }
 
 func (s *basicScheduler) Name() string {
-	if s.consistent {
+	if dispatcher.IsRedoDispatcherType(s.dispatcherType) {
 		return pkgScheduler.RedoBasicScheduler
 	}
 	return pkgScheduler.BasicScheduler

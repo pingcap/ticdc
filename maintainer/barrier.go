@@ -43,7 +43,7 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
-	consistent         bool
+	dispatcherType     int64
 }
 
 type BlockedEventMap struct {
@@ -106,14 +106,14 @@ func NewBarrier(spanController *span.Controller,
 	operatorController *operator.Controller,
 	splitTableEnabled bool,
 	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-	consistent bool,
+	dispatcherType int64,
 ) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
 		spanController:     spanController,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
-		consistent:         consistent,
+		dispatcherType:     dispatcherType,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
@@ -131,16 +131,15 @@ func (b *Barrier) ReleaseLock(mutex *sync.Mutex) {
 // HandleStatus handle the block status from dispatcher manager
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
-	consistent bool,
 ) *messaging.TargetMessage {
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
-		zap.Any("detail", request), zap.Bool("consistent", consistent))
+		zap.Any("detail", request), zap.Int64("dispatcherType", b.dispatcherType))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := []*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	for _, status := range request.BlockStatuses {
-		if consistent != status.Consistent {
+		if b.dispatcherType != status.DispatcherType {
 			continue
 		}
 		// only receive block status from the replicating dispatcher
@@ -198,7 +197,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID:       request.ChangefeedID,
 			DispatcherStatuses: dispatcherStatus,
-			Consistent:         consistent,
+			DispatcherType:     b.dispatcherType,
 		})
 }
 
@@ -206,7 +205,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
 	for _, resp := range bootstrapRespMap {
 		for _, span := range resp.Spans {
-			if b.consistent != span.Consistent {
+			if b.dispatcherType != span.DispatcherType {
 				continue
 			}
 			// we only care about the WAITING, WRITING and DONE stage
@@ -269,7 +268,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
-		msgs = append(msgs, barrierEvent.resend(b.consistent)...)
+		msgs = append(msgs, barrierEvent.resend(b.dispatcherType)...)
 
 		eventList = append(eventList, barrierEvent)
 		return true
@@ -323,7 +322,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 			ID:              status.ID,
 			CheckpointTs:    status.State.BlockTs - 1,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
-			Consistent:      status.Consistent,
+			DispatcherType:  status.DispatcherType,
 		})
 		if status.State != nil {
 			span.UpdateBlockState(*status.State)

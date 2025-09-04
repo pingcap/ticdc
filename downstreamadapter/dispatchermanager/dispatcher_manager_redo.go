@@ -44,7 +44,7 @@ func initRedoComponet(
 	startTs uint64,
 	newChangefeed bool,
 ) error {
-	if manager.config.Consistent == nil || !pkgRedo.IsConsistentEnabled(manager.config.Consistent.Level) {
+	if manager.config.Consistent == nil || !pkgRedo.GetDispatcherTypeEnabled(manager.config.Consistent.Level) {
 		return nil
 	}
 	manager.RedoEnable = true

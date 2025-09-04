@@ -63,7 +63,6 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		dispatcher.NewSchemaIDToDispatchers(),
 		false,
 		0, // currentPDTs
-		dispatcher.TypeDispatcherEvent,
 		mockSink,
 		sharedInfo,
 		false,

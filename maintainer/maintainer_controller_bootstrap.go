@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -111,7 +112,7 @@ func (c *Controller) FinishBootstrap(
 	// Step 7: Prepare response
 	initSchemaInfos := c.prepareSchemaInfoResponse(schemaInfos)
 
-	// Step 8: Mark the controllerManager as bootstrapped
+	// Step 8: Mark the controller as bootstrapped
 	c.bootstrapped = true
 
 	return &heartbeatpb.MaintainerPostBootstrapRequest{
@@ -154,12 +155,12 @@ func (c *Controller) buildWorkingTaskMap(
 	for node, resp := range allNodesResp {
 		for _, spanInfo := range resp.Spans {
 			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
-			spanController := c.getSpanController(spanInfo.Consistent)
+			spanController := c.getSpanController(spanInfo.DispatcherType)
 			if spanController.IsDDLDispatcher(dispatcherID) {
 				continue
 			}
 			spanReplication := c.createSpanReplication(spanInfo, node)
-			if spanInfo.Consistent {
+			if dispatcher.IsRedoDispatcherType(spanInfo.DispatcherType) {
 				addToWorkingTaskMap(redoWorkingTaskMap, spanInfo.Span, spanReplication)
 			} else {
 				addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
@@ -190,9 +191,9 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 
 		// Process table spans
 		if c.redoSpanController != nil {
-			c.processTableSpans(table, redoWorkingTaskMap, true)
+			c.processTableSpans(table, redoWorkingTaskMap, dispatcher.TypeDispatcherRedo)
 		}
-		c.processTableSpans(table, workingTaskMap, false)
+		c.processTableSpans(table, workingTaskMap, dispatcher.TypeDispatcherEvent)
 	}
 
 	return schemaInfos
@@ -201,10 +202,10 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 func (c *Controller) processTableSpans(
 	table commonEvent.Table,
 	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-	consistent bool,
+	dispatcherType int64,
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
-	spanController := c.getSpanController(consistent)
+	spanController := c.getSpanController(dispatcherType)
 
 	// Add new table if not working
 	if isTableWorking {
@@ -268,9 +269,9 @@ func (c *Controller) initializeComponents(
 ) {
 	// Initialize barrier
 	if c.redoSpanController != nil {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, true)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, dispatcher.TypeDispatcherRedo)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, false)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, dispatcher.TypeDispatcherEvent)
 
 	// Start scheduler
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
@@ -297,7 +298,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		ComponentStatus: spanInfo.ComponentStatus,
 		ID:              spanInfo.ID,
 		CheckpointTs:    spanInfo.CheckpointTs,
-		Consistent:      spanInfo.Consistent,
+		DispatcherType:  spanInfo.DispatcherType,
 	}
 
 	return replica.NewWorkingSpanReplication(

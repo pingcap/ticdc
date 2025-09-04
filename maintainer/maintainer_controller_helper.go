@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -36,14 +37,14 @@ import (
 // only for test
 // moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
 // moveTable only works for the complete table, not for the table splited.
-func (c *Controller) moveTable(tableId int64, targetNode node.ID, consistent bool) error {
-	if consistent && c.redoSpanController == nil {
+func (c *Controller) moveTable(tableId int64, targetNode node.ID, dispatcherType int64) error {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) && c.redoSpanController == nil {
 		return nil
 	}
-	spanController := c.getSpanController(consistent)
-	operatorController := c.getOperatorController(consistent)
+	spanController := c.getSpanController(dispatcherType)
+	operatorController := c.getOperatorController(dispatcherType)
 
-	if err := c.checkParams(tableId, targetNode, consistent); err != nil {
+	if err := c.checkParams(tableId, targetNode, dispatcherType); err != nil {
 		return err
 	}
 
@@ -82,14 +83,14 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID, consistent boo
 
 // only for test
 // moveSplitTable is used for inner api(which just for make test cases convience) to force move the dispatchers in a split table to a target node.
-func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID, consistent bool) error {
-	if consistent && c.redoSpanController == nil {
+func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID, dispatcherType int64) error {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) && c.redoSpanController == nil {
 		return nil
 	}
-	spanController := c.getSpanController(consistent)
-	operatorController := c.getOperatorController(consistent)
+	spanController := c.getSpanController(dispatcherType)
+	operatorController := c.getOperatorController(dispatcherType)
 
-	if err := c.checkParams(tableId, targetNode, consistent); err != nil {
+	if err := c.checkParams(tableId, targetNode, dispatcherType); err != nil {
 		return err
 	}
 
@@ -143,12 +144,12 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID, consisten
 // only for test
 // splitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
-func (c *Controller) splitTableByRegionCount(tableID int64, consistent bool) error {
-	if consistent && c.redoSpanController == nil {
+func (c *Controller) splitTableByRegionCount(tableID int64, dispatcherType int64) error {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) && c.redoSpanController == nil {
 		return nil
 	}
-	spanController := c.getSpanController(consistent)
-	operatorController := c.getOperatorController(consistent)
+	spanController := c.getSpanController(dispatcherType)
+	operatorController := c.getOperatorController(dispatcherType)
 
 	if !spanController.IsTableExists(tableID) {
 		// the table is not exist in this node
@@ -199,12 +200,12 @@ func (c *Controller) splitTableByRegionCount(tableID int64, consistent bool) err
 // only for test
 // mergeTable merge two nearby dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
-func (c *Controller) mergeTable(tableID int64, consistent bool) error {
-	if consistent && c.redoSpanController == nil {
+func (c *Controller) mergeTable(tableID int64, dispatcherType int64) error {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) && c.redoSpanController == nil {
 		return nil
 	}
-	spanController := c.getSpanController(consistent)
-	operatorController := c.getOperatorController(consistent)
+	spanController := c.getSpanController(dispatcherType)
+	operatorController := c.getOperatorController(dispatcherType)
 
 	if !spanController.IsTableExists(tableID) {
 		// the table is not exist in this node
@@ -291,11 +292,11 @@ func (c *Controller) mergeTable(tableID int64, consistent bool) error {
 	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
 }
 
-func (c *Controller) checkParams(tableId int64, targetNode node.ID, consistent bool) error {
-	if consistent && c.redoSpanController == nil {
+func (c *Controller) checkParams(tableId int64, targetNode node.ID, dispatcherType int64) error {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) && c.redoSpanController == nil {
 		return nil
 	}
-	spanController := c.getSpanController(consistent)
+	spanController := c.getSpanController(dispatcherType)
 
 	if !spanController.IsTableExists(tableId) {
 		// the table is not exist in this node
@@ -321,15 +322,15 @@ func (c *Controller) checkParams(tableId int64, targetNode node.ID, consistent b
 	return nil
 }
 
-func (c *Controller) getOperatorController(consistent bool) *operator.Controller {
-	if consistent {
+func (c *Controller) getOperatorController(dispatcherType int64) *operator.Controller {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) {
 		return c.redoOperatorController
 	}
 	return c.operatorController
 }
 
-func (c *Controller) getSpanController(consistent bool) *span.Controller {
-	if consistent {
+func (c *Controller) getSpanController(dispatcherType int64) *span.Controller {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) {
 		return c.redoSpanController
 	}
 	return c.spanController

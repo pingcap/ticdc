@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
@@ -164,10 +165,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
-	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, false)
+	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, dispatcher.TypeDispatcherEvent)
 	var redoDDLSpan *replica.SpanReplication
-	if redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
-		_, redoDDLSpan = newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, true)
+	if redo.GetDispatcherTypeEnabled(cfg.Config.Consistent.Level) {
+		_, redoDDLSpan = newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, dispatcher.TypeDispatcherRedo)
 	}
 	m := &Maintainer{
 		id:                cfID,
@@ -672,12 +673,12 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
 	if len(req.BlockStatuses) > 0 {
 		if m.controller.redoBarrier != nil {
-			ackMsg := m.controller.redoBarrier.HandleStatus(msg.From, req, true)
+			ackMsg := m.controller.redoBarrier.HandleStatus(msg.From, req)
 			if ackMsg != nil {
 				m.sendMessages([]*messaging.TargetMessage{ackMsg})
 			}
 		}
-		ackMsg := m.controller.barrier.HandleStatus(msg.From, req, false)
+		ackMsg := m.controller.barrier.HandleStatus(msg.From, req)
 		if ackMsg != nil {
 			m.sendMessages([]*messaging.TargetMessage{ackMsg})
 		}
@@ -741,7 +742,7 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 	return config.IsMySQLCompatibleScheme(scheme), nil
 }
 
-func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, consistent bool) (common.DispatcherID, *replica.SpanReplication) {
+func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, dispatcherType int64) (common.DispatcherID, *replica.SpanReplication) {
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
@@ -749,7 +750,7 @@ func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, c
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
-			Consistent:      consistent,
+			DispatcherType:  dispatcherType,
 		}, selfNode.ID)
 	return tableTriggerEventDispatcherID, ddlSpan
 }
@@ -758,12 +759,12 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	if cachedResp == nil {
 		return
 	}
-	isMySQLCompatible, err := isMysqlCompatible(m.config.SinkURI)
+	isMySQLSinkCompatible, err := isMysqlCompatible(m.config.SinkURI)
 	if err != nil {
 		m.handleError(err)
 		return
 	}
-	msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLCompatible)
+	msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLSinkCompatible)
 	if err != nil {
 		m.handleError(err)
 		return

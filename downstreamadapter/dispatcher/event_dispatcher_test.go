@@ -75,7 +75,6 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		NewSchemaIDToDispatchers(),
 		false,
 		common.Ts(0), // pdTs
-		TypeDispatcherEvent,
 		sink,
 		sharedInfo,
 		false,

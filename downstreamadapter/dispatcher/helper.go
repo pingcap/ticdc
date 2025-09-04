@@ -408,12 +408,12 @@ func loadBootstrapState(addr *bootstrapState) bootstrapState {
 }
 
 const (
-	TypeDispatcherEvent int = iota
+	TypeDispatcherEvent int64 = iota
 	TypeDispatcherRedo
 )
 
-func IsRedoDispatcher(d DispatcherService) bool {
-	return d.GetType() == TypeDispatcherRedo
+func IsRedoDispatcherType(dispatcherType int64) bool {
+	return dispatcherType == TypeDispatcherRedo
 }
 
 // addToDynamicStream add self to dynamic stream

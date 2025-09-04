@@ -424,7 +424,6 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			e.schemaIDToDispatchers,
 			startTsIsSyncpointList[idx],
 			currentPdTs,
-			dispatcher.TypeDispatcherEvent,
 			e.sink,
 			e.sharedInfo,
 			e.RedoEnable,
@@ -577,7 +576,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			return
 		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			if !tableSpanStatus.Consistent {
+			if tableSpanStatus.DispatcherType == dispatcher.TypeDispatcherEvent {
 				newWatermark.Seq = tableSpanStatus.Seq
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
@@ -589,7 +588,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 				select {
 				case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if !tableSpanStatus.Consistent {
+					if tableSpanStatus.DispatcherType == dispatcher.TypeDispatcherEvent {
 						if newWatermark.Seq < tableSpanStatus.Seq {
 							newWatermark.Seq = tableSpanStatus.Seq
 						}
@@ -663,7 +662,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
 			dispatcherCount--
-			if m.consistent {
+			if m.dispatcherType == dispatcher.TypeDispatcherRedo {
 				e.cleanRedoDispatcher(m.id, m.schemaID)
 			} else {
 				e.cleanEventDispatcher(m.id, m.schemaID)
@@ -702,8 +701,8 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	return &message
 }
 
-func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, consistent bool) *MergeCheckTask {
-	if consistent {
+func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, dispatcherType int64) *MergeCheckTask {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) {
 		return e.mergeRedoDispatcher(dispatcherIDs, mergedDispatcherID)
 	}
 	return e.mergeEventDispatcher(dispatcherIDs, mergedDispatcherID)
@@ -736,7 +735,6 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		e.schemaIDToDispatchers,
 		false,
 		0, // currentPDTs will be calculated later.
-		dispatcher.TypeDispatcherEvent,
 		e.sink,
 		e.sharedInfo,
 		e.RedoEnable,

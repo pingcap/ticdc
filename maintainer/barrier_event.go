@@ -379,7 +379,7 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 
 // send pass action to the related dispatchers, if find the related dispatchers are all removed, mark rangeCheck done
 // else return pass action messages
-func (be *BarrierEvent) sendPassAction(consistent bool) []*messaging.TargetMessage {
+func (be *BarrierEvent) sendPassAction(dispatcherType int64) []*messaging.TargetMessage {
 	if be.blockedDispatchers == nil {
 		return []*messaging.TargetMessage{}
 	}
@@ -399,14 +399,14 @@ func (be *BarrierEvent) sendPassAction(consistent bool) []*messaging.TargetMessa
 				}
 				_, ok := msgMap[nodeID]
 				if !ok {
-					msgMap[nodeID] = be.newPassActionMessage(nodeID, consistent)
+					msgMap[nodeID] = be.newPassActionMessage(nodeID, dispatcherType)
 				}
 			}
 		}
 	case heartbeatpb.InfluenceType_All:
 		// all type will not have drop-type ddl.
 		for _, n := range getAllNodes(be.nodeManager) {
-			msgMap[n] = be.newPassActionMessage(n, consistent)
+			msgMap[n] = be.newPassActionMessage(n, dispatcherType)
 		}
 	case heartbeatpb.InfluenceType_Normal:
 		for _, tableID := range be.blockedDispatchers.TableIDs {
@@ -422,7 +422,7 @@ func (be *BarrierEvent) sendPassAction(consistent bool) []*messaging.TargetMessa
 					}
 					msg, ok := msgMap[nodeID]
 					if !ok {
-						msg = be.newPassActionMessage(nodeID, consistent)
+						msg = be.newPassActionMessage(nodeID, dispatcherType)
 						msgMap[nodeID] = msg
 					}
 					influencedDispatchers := msg.Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].InfluencedDispatchers
@@ -489,7 +489,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 	}
 }
 
-func (be *BarrierEvent) resend(consistent bool) []*messaging.TargetMessage {
+func (be *BarrierEvent) resend(dispatcherType int64) []*messaging.TargetMessage {
 	if time.Since(be.lastResendTime) < time.Second {
 		return nil
 	}
@@ -577,15 +577,15 @@ func (be *BarrierEvent) resend(consistent bool) []*messaging.TargetMessage {
 			return nil
 		}
 
-		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), consistent)}
+		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), dispatcherType)}
 	} else {
 		// the writer dispatcher is advanced, resend pass action
-		return be.sendPassAction(consistent)
+		return be.sendPassAction(dispatcherType)
 	}
 	return msgs
 }
 
-func (be *BarrierEvent) newWriterActionMessage(capture node.ID, consistent bool) *messaging.TargetMessage {
+func (be *BarrierEvent) newWriterActionMessage(capture node.ID, dispatcherType int64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID: be.cfID.ToPB(),
@@ -600,11 +600,11 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, consistent bool)
 					},
 				},
 			},
-			Consistent: consistent,
+			DispatcherType: dispatcherType,
 		})
 }
 
-func (be *BarrierEvent) newPassActionMessage(capture node.ID, consistent bool) *messaging.TargetMessage {
+func (be *BarrierEvent) newPassActionMessage(capture node.ID, dispatcherType int64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID: be.cfID.ToPB(),
@@ -618,7 +618,7 @@ func (be *BarrierEvent) newPassActionMessage(capture node.ID, consistent bool) *
 					},
 				},
 			},
-			Consistent: consistent,
+			DispatcherType: dispatcherType,
 		})
 }
 

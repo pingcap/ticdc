@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -89,14 +90,14 @@ func NewController(changefeedID common.ChangeFeedID,
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, false)
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, dispatcher.TypeDispatcherEvent)
 
 	var (
 		redoSpanController *span.Controller
 		redoOC             *operator.Controller
 	)
 	if redoDDLSpan != nil {
-		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, true)
+		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, dispatcher.TypeDispatcherRedo)
 		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize)
 	}
 	// Create operator controller using spanController
@@ -129,8 +130,8 @@ func NewController(changefeedID common.ChangeFeedID,
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		operatorController := c.getOperatorController(status.Consistent)
-		spanController := c.getSpanController(status.Consistent)
+		operatorController := c.getOperatorController(status.DispatcherType)
+		spanController := c.getSpanController(status.DispatcherType)
 
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm := spanController.GetTaskByID(dispatcherID)
@@ -147,7 +148,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// if the span is not found, and the status is working, we need to remove it from dispatcher
-				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, status.Consistent))
+				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, status.DispatcherType))
 			}
 			continue
 		}

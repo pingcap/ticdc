@@ -46,8 +46,8 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
 				CheckpointTs:    watermark.CheckpointTs,
-				Consistent:      dispatcher.IsRedoDispatcher(dispatcherItem),
-			}, &cleanMap{dispatcherItem.GetId(), dispatcherItem.GetSchemaID(), dispatcher.IsRedoDispatcher(dispatcherItem)}, &watermark
+				DispatcherType:  dispatcherItem.GetType(),
+			}, &cleanMap{dispatcherItem.GetId(), dispatcherItem.GetSchemaID(), dispatcherItem.GetType()}, &watermark
 		}
 	}
 	if needCompleteStatus {
@@ -65,7 +65,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 			ComponentStatus:    heartBeatInfo.ComponentStatus,
 			CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 			EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
-			Consistent:         dispatcher.IsRedoDispatcher(dispatcherItem),
+			DispatcherType:     dispatcherItem.GetType(),
 		}, nil, &heartBeatInfo.Watermark
 	}
 	return nil, nil, &heartBeatInfo.Watermark
@@ -113,7 +113,7 @@ func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeF
 					ID:              mergedDispatcherID.ToPB(),
 					CheckpointTs:    dispatcherItem.GetCheckpointTs(),
 					ComponentStatus: heartbeatpb.ComponentState_Working,
-					Consistent:      dispatcher.IsRedoDispatcher(dispatcherItem),
+					DispatcherType:  dispatcherItem.GetType(),
 				},
 				Seq: dispatcherMap.GetSeq(),
 			}
@@ -146,7 +146,7 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 			log.Error("merge dispatcher failed, the dispatcher is not working",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Any("dispatcherID", id),
-				zap.Bool("consistent", dispatcher.IsRedoDispatcher(dispatcherItem)),
+				zap.Int64("dispatcherType", dispatcherItem.GetType()),
 				zap.Any("componentStatus", dispatcherItem.GetComponentStatus()))
 			return nil, 0, 0
 		}
@@ -163,7 +163,7 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 				log.Error("merge dispatcher failed, the dispatcherIDs are not consecutive",
 					zap.Stringer("changefeedID", changefeedID),
 					zap.Any("dispatcherIDs", dispatcherIDs),
-					zap.Bool("consistent", dispatcher.IsRedoDispatcher(dispatcherItem)),
+					zap.Int64("dispatcherType", dispatcherItem.GetType()),
 					zap.Any("prevTableSpan", prevTableSpan),
 					zap.Any("currentTableSpan", currentTableSpan),
 				)
@@ -214,7 +214,7 @@ func registerMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.Change
 			log.Info("merge dispatcher is ready",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", mergedDispatcher.GetId()),
-				zap.Bool("consistent", dispatcher.IsRedoDispatcher(mergedDispatcher)),
+				zap.Int64("dispatcherType", mergedDispatcher.GetType()),
 				zap.Any("tableSpan", common.FormatTableSpan(mergedDispatcher.GetTableSpan())),
 			)
 		})
@@ -236,7 +236,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
 		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
-		if !dispatcher.IsRedoDispatcher(dispatcherItem) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
+		if dispatcher.IsRedoDispatcherType(dispatcherItem.GetType()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",
@@ -258,7 +258,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 				log.Info("waiting for dispatcher to close",
 					zap.Stringer("changefeedID", changefeedID),
 					zap.Stringer("dispatcherID", dispatcherItem.GetId()),
-					zap.Bool("consistent", dispatcher.IsRedoDispatcher(dispatcherItem)),
+					zap.Int64("dispatcherType", dispatcherItem.GetType()),
 					zap.Any("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
 					zap.Int("count", count),
 				)
@@ -268,12 +268,16 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			dispatcherItem.Remove()
 		}
 	} else {
+		// If the dispatcherItem is not existed, we use sinkType to check
+		dispatcherType := dispatcher.TypeDispatcherEvent
+		if sinkType == common.RedoSinkType {
+			dispatcherType = dispatcher.TypeDispatcherRedo
+		}
 		statusesChan <- dispatcher.TableSpanStatusWithSeq{
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
-				// If the dispatcherItem is not existed, we use sinkType to check
-				Consistent: sinkType == common.RedoSinkType,
+				DispatcherType:  dispatcherType,
 			},
 			Seq: dispatcherMap.GetSeq(),
 		}
@@ -289,7 +293,7 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
-		if !dispatcher.IsRedoDispatcher(dispatcherItem) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
+		if dispatcher.IsRedoDispatcherType(dispatcherItem.GetType()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",

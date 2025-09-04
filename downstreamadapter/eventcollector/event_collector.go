@@ -151,13 +151,13 @@ func (c *EventCollector) Run(ctx context.Context) {
 
 	for _, ch := range c.receiveChannels {
 		g.Go(func() error {
-			return c.runDispatchMessage(ctx, ch, false)
+			return c.runDispatchMessage(ctx, ch, dispatcher.TypeDispatcherEvent)
 		})
 	}
 
 	for _, ch := range c.redoReceiveChannels {
 		g.Go(func() error {
-			return c.runDispatchMessage(ctx, ch, true)
+			return c.runDispatchMessage(ctx, ch, dispatcher.TypeDispatcherRedo)
 		})
 	}
 
@@ -219,7 +219,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 ) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
-		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()), zap.Int("type", target.GetType()))
+		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()), zap.Int64("type", target.GetType()))
 	}()
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
@@ -227,7 +227,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 
-	ds := c.getDynamicStream(dispatcher.IsRedoDispatcher(target))
+	ds := c.getDynamicStream(target.GetType())
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
@@ -255,7 +255,6 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
-	consistent := dispatcher.IsRedoDispatcher(target)
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
 		return
@@ -263,7 +262,7 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 	stat := value.(*dispatcherStat)
 	stat.remove()
 
-	ds := c.getDynamicStream(consistent)
+	ds := c.getDynamicStream(target.GetType())
 	err := ds.RemovePath(target.GetId())
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
@@ -478,9 +477,9 @@ func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessa
 // runDispatchMessage dispatches messages from the input channel to the dynamic stream.
 // Note: Avoid implementing any message handling logic within this function
 // as messages may be stale and need be verified before process.
-func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage, consistent bool) error {
-	ds := c.getDynamicStream(consistent)
-	metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(consistent)
+func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage, dispatcherType int64) error {
+	ds := c.getDynamicStream(dispatcherType)
+	metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(dispatcherType)
 	for {
 		select {
 		case <-ctx.Done():
@@ -545,15 +544,15 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	}
 }
 
-func (c *EventCollector) getDynamicStream(consistent bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
-	if consistent {
+func (c *EventCollector) getDynamicStream(dispatcherType int64) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) {
 		return c.redoDs
 	}
 	return c.ds
 }
 
-func (c *EventCollector) getMetric(consistent bool) (prometheus.Counter, prometheus.Counter) {
-	if consistent {
+func (c *EventCollector) getMetric(dispatcherType int64) (prometheus.Counter, prometheus.Counter) {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) {
 		return c.metricRedoDispatcherReceivedKVEventCount, c.metricRedoDispatcherReceivedResolvedTsEventCount
 	}
 	return c.metricDispatcherReceivedKVEventCount, c.metricDispatcherReceivedResolvedTsEventCount

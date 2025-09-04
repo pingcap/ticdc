@@ -49,13 +49,13 @@ type ChangefeedInterface interface {
 	// List lists all changefeeds
 	List(ctx context.Context, namespace string, state string) ([]v2.ChangefeedCommonInfo, error)
 	// Move Table to target node, it just for make test case now. **Not for public use.**
-	MoveTable(ctx context.Context, namespace string, name string, tableID int64, targetNode string, consistent string) error
+	MoveTable(ctx context.Context, namespace string, name string, tableID int64, targetNode string, dispatcherType int64) error
 	// Move dispatchers in a split Table to target node, it just for make test case now. **Not for public use.**
-	MoveSplitTable(ctx context.Context, namespace string, name string, tableID int64, targetNode string, consistent string) error
+	MoveSplitTable(ctx context.Context, namespace string, name string, tableID int64, targetNode string, dispatcherType int64) error
 	// split table based on region count, it just for make test case now. **Not for public use.**
-	SplitTableByRegionCount(ctx context.Context, namespace string, name string, tableID int64, consistent string) error
+	SplitTableByRegionCount(ctx context.Context, namespace string, name string, tableID int64, dispatcherType int64) error
 	// merge table, it just for make test case now. **Not for public use.**
-	MergeTable(ctx context.Context, namespace string, name string, tableID int64, consistent string) error
+	MergeTable(ctx context.Context, namespace string, name string, tableID int64, dispatcherType int64) error
 }
 
 // changefeeds implements ChangefeedInterface
@@ -169,54 +169,54 @@ func (c *changefeeds) List(ctx context.Context,
 
 // MoveTable to target node, it just for make test case now. **Not for public use.**
 func (c *changefeeds) MoveTable(ctx context.Context,
-	namespace string, name string, tableID int64, targetNode string, consistent string,
+	namespace string, name string, tableID int64, targetNode string, dispatcherType int64,
 ) error {
 	url := fmt.Sprintf("changefeeds/%s/move_table?namespace=%s", name, namespace)
 	err := c.client.Post().
 		WithURI(url).
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).
 		WithParam("targetNodeID", targetNode).
-		WithParam("consistent", consistent).
+		WithParam("dispatcherType", strconv.FormatInt(dispatcherType, 10)).
 		Do(ctx).Error()
 	return err
 }
 
 // move dispatchers in a split table to target node, it just for make test case now. **Not for public use.**
 func (c *changefeeds) MoveSplitTable(ctx context.Context,
-	namespace string, name string, tableID int64, targetNode string, consistent string,
+	namespace string, name string, tableID int64, targetNode string, dispatcherType int64,
 ) error {
 	url := fmt.Sprintf("changefeeds/%s/move_split_table?namespace=%s", name, namespace)
 	err := c.client.Post().
 		WithURI(url).
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).
 		WithParam("targetNodeID", targetNode).
-		WithParam("consistent", consistent).
+		WithParam("dispatcherType", strconv.FormatInt(dispatcherType, 10)).
 		Do(ctx).Error()
 	return err
 }
 
 // SplitTableByRegionCount split table based on region count, it just for make test case now. **Not for public use.**
 func (c *changefeeds) SplitTableByRegionCount(ctx context.Context,
-	namespace string, name string, tableID int64, consistent string,
+	namespace string, name string, tableID int64, dispatcherType int64,
 ) error {
 	url := fmt.Sprintf("changefeeds/%s/split_table_by_region_count?namespace=%s", name, namespace)
 	err := c.client.Post().
 		WithURI(url).
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).
-		WithParam("consistent", consistent).
+		WithParam("dispatcherType", strconv.FormatInt(dispatcherType, 10)).
 		Do(ctx).Error()
 	return err
 }
 
 // MergeTable merge table, it just for make test case now. **Not for public use.**
 func (c *changefeeds) MergeTable(ctx context.Context,
-	namespace string, name string, tableID int64, consistent string,
+	namespace string, name string, tableID int64, dispatcherType int64,
 ) error {
 	url := fmt.Sprintf("changefeeds/%s/merge_table?namespace=%s", name, namespace)
 	err := c.client.Post().
 		WithURI(url).
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).
-		WithParam("consistent", consistent).
+		WithParam("dispatcherType", strconv.FormatInt(dispatcherType, 10)).
 		Do(ctx).Error()
 	return err
 }

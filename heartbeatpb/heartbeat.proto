@@ -58,7 +58,7 @@ message DispatcherStatus {
 message HeartBeatResponse {
     ChangefeedID changefeedID = 1;
     repeated DispatcherStatus dispatcherStatuses = 2;
-    bool consistent = 3;
+    int64 dispatcherType = 3;
 }
 
 message CheckpointTsMessage {
@@ -87,7 +87,7 @@ message DispatcherConfig {
     uint64 startTs = 2;
     DispatcherID dispatcherID = 3;
     int64 schemaID = 4;
-    bool consistent = 5;
+    int64 dispatcherType = 5;
 }
 
 message ScheduleDispatcherRequest {
@@ -100,7 +100,7 @@ message MergeDispatcherRequest {
     ChangefeedID changefeedID = 1;
     repeated DispatcherID dispatcherIDs = 2; // dispatcherIDs from the dispatchers that need to be merged
     DispatcherID mergedDispatcherID = 3;  // the dispatcherID of the new dispatcher to be merged to.
-    bool consistent = 4;
+    int64 dispatcherType = 4;
 }
 
 message MaintainerHeartbeat {
@@ -199,7 +199,7 @@ message BootstrapTableSpan {
     ComponentState component_status = 4;
     uint64 checkpoint_ts = 5;
     State block_state = 6;
-    bool consistent = 7;
+    int64 dispatcherType = 7;
 }
 
 message MaintainerCloseRequest {
@@ -253,7 +253,7 @@ message State {
 message TableSpanBlockStatus {
     DispatcherID ID = 1; // for which dispatcher
     State state = 2;
-    bool consistent = 3;
+    int64 dispatcherType = 3;
 }
 
 message TableSpanStatus {
@@ -261,7 +261,7 @@ message TableSpanStatus {
     ComponentState component_status = 2;
     uint64 checkpoint_ts = 3;
     float event_size_per_second = 4;
-    bool consistent = 5;
+    int64 dispatcherType = 5;
 }
 
 message BlockStatusRequest {

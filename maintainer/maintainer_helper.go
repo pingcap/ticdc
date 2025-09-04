@@ -16,6 +16,7 @@ package maintainer
 import (
 	"sync"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -54,26 +55,26 @@ func (c *CheckpointTsCaptureMap) Delete(nodeID node.ID) {
 // ========================== Exported methods for HTTP API ==========================
 
 // GetDispatcherCount returns the number of dispatchers.
-func (m *Maintainer) GetDispatcherCount(consistent bool) int {
-	if consistent {
+func (m *Maintainer) GetDispatcherCount(dispatcherType int64) int {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) {
 		return len(m.controller.redoSpanController.GetAllTasks())
 	}
 	return len(m.controller.spanController.GetAllTasks())
 }
 
 // MoveTable moves a table to a specific node.
-func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID, consistent bool) error {
-	return m.controller.moveTable(tableId, targetNode, consistent)
+func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID, dispatcherType int64) error {
+	return m.controller.moveTable(tableId, targetNode, dispatcherType)
 }
 
 // MoveSplitTable moves all the dispatchers in a split table to a specific node.
-func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID, consistent bool) error {
-	return m.controller.moveSplitTable(tableId, targetNode, consistent)
+func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID, dispatcherType int64) error {
+	return m.controller.moveSplitTable(tableId, targetNode, dispatcherType)
 }
 
 // GetTables returns all tables.
-func (m *Maintainer) GetTables(consistent bool) []*replica.SpanReplication {
-	if consistent {
+func (m *Maintainer) GetTables(dispatcherType int64) []*replica.SpanReplication {
+	if dispatcher.IsRedoDispatcherType(dispatcherType) {
 		return m.controller.redoSpanController.GetAllTasks()
 	}
 	return m.controller.spanController.GetAllTasks()
@@ -81,12 +82,12 @@ func (m *Maintainer) GetTables(consistent bool) []*replica.SpanReplication {
 
 // SplitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
-func (m *Maintainer) SplitTableByRegionCount(tableId int64, consistent bool) error {
-	return m.controller.splitTableByRegionCount(tableId, consistent)
+func (m *Maintainer) SplitTableByRegionCount(tableId int64, dispatcherType int64) error {
+	return m.controller.splitTableByRegionCount(tableId, dispatcherType)
 }
 
 // MergeTable merge two dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
-func (m *Maintainer) MergeTable(tableId int64, consistent bool) error {
-	return m.controller.mergeTable(tableId, consistent)
+func (m *Maintainer) MergeTable(tableId int64, dispatcherType int64) error {
+	return m.controller.mergeTable(tableId, dispatcherType)
 }

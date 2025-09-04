@@ -88,7 +88,7 @@ func NewMergeDispatcherOperator(
 		toMergedReplicaSets[0].GetSchemaID(),
 		mergeTableSpan,
 		1, // use a fake checkpointTs here.
-		toMergedReplicaSets[0].IsConsistent())
+		toMergedReplicaSets[0].GetDispatcherType())
 
 	spanController.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 
@@ -165,7 +165,7 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 			ChangefeedID:       m.toMergedReplicaSets[0].ChangefeedID.ToPB(),
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
-			Consistent:         m.newReplicaSet.IsConsistent(),
+			DispatcherType:     m.newReplicaSet.GetDispatcherType(),
 		})
 }
 

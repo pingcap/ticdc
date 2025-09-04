@@ -124,7 +124,7 @@ func (t *MergeCheckTask) Execute() time.Time {
 		return time.Now().Add(time.Second * 1)
 	}
 
-	if dispatcher.IsRedoDispatcher(t.mergedDispatcher) {
+	if dispatcher.IsRedoDispatcherType(t.mergedDispatcher.GetType()) {
 		doMerge(t, t.manager.redoDispatcherMap)
 	} else {
 		doMerge(t, t.manager.dispatcherMap)
@@ -137,7 +137,7 @@ func (t *MergeCheckTask) Cancel() {
 }
 
 func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *DispatcherMap[T]) {
-	consistent := dispatcher.IsRedoDispatcher(t.mergedDispatcher)
+	consistent := dispatcher.IsRedoDispatcherType(t.mergedDispatcher.GetType())
 	log.Info("do merge",
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Bool("consistent", consistent),

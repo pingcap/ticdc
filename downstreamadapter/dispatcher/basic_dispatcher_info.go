@@ -87,7 +87,7 @@ func (d *BasicDispatcher) GetSchemaID() int64 {
 	return d.schemaID
 }
 
-func (d *BasicDispatcher) GetType() int {
+func (d *BasicDispatcher) GetType() int64 {
 	return d.dispatcherType
 }
 

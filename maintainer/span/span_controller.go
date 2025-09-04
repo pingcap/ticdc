@@ -74,7 +74,7 @@ type Controller struct {
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
 	ddlDispatcherID        common.DispatcherID
-	consistent             bool
+	dispatcherType         int64
 }
 
 // NewController creates a new span controller
@@ -83,7 +83,7 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
-	consistent bool,
+	dispatcherType int64,
 ) *Controller {
 	enableTableAcrossNodes := false
 	if schedulerCfg != nil {
@@ -97,7 +97,7 @@ func NewController(
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		ddlDispatcherID:        ddlSpan.ID,
-		consistent:             consistent,
+		dispatcherType:         dispatcherType,
 	}
 
 	c.reset(c.ddlSpan)
@@ -170,7 +170,7 @@ func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.consistent)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.dispatcherType)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -411,7 +411,7 @@ func (c *Controller) ReplaceReplicaSet(
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
 			span, checkpointTs,
-			old.IsConsistent())
+			old.GetDispatcherType())
 		news = append(news, new)
 	}
 

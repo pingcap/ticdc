@@ -61,7 +61,6 @@ func NewEventDispatcher(
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	startTsIsSyncpoint bool,
 	currentPdTs uint64,
-	dispatcherType int,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 	redoEnable bool,
@@ -75,7 +74,7 @@ func NewEventDispatcher(
 		schemaIDToDispatchers,
 		startTsIsSyncpoint,
 		currentPdTs,
-		dispatcherType,
+		TypeDispatcherEvent,
 		sink,
 		sharedInfo,
 	)

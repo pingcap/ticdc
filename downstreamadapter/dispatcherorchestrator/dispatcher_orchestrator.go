@@ -288,7 +288,7 @@ func createBootstrapResponse(
 				ComponentStatus: d.GetComponentStatus(),
 				CheckpointTs:    d.GetCheckpointTs(),
 				BlockState:      d.GetBlockEventStatus(),
-				Consistent:      true,
+				DispatcherType:  d.GetType(),
 			})
 		})
 	}
@@ -300,6 +300,7 @@ func createBootstrapResponse(
 			ComponentStatus: d.GetComponentStatus(),
 			CheckpointTs:    d.GetCheckpointTs(),
 			BlockState:      d.GetBlockEventStatus(),
+			DispatcherType:  d.GetType(),
 		})
 	})
 

@@ -33,7 +33,7 @@ import (
 // DispatcherService defines the interface for providing dispatcher information and basic event handling.
 type DispatcherService interface {
 	GetId() common.DispatcherID
-	GetType() int
+	GetType() int64
 	GetStartTs() uint64
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
@@ -152,7 +152,7 @@ type BasicDispatcher struct {
 	isRemoving atomic.Bool
 
 	seq            uint64
-	dispatcherType int
+	dispatcherType int64
 
 	BootstrapState bootstrapState
 }
@@ -165,7 +165,7 @@ func NewBasicDispatcher(
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	startTsIsSyncpoint bool,
 	currentPDTs uint64,
-	dispatcherType int,
+	dispatcherType int64,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
@@ -280,7 +280,7 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 			ID:              d.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    d.GetCheckpointTs(),
-			Consistent:      IsRedoDispatcher(d),
+			DispatcherType:  d.GetType(),
 		},
 		Seq: d.seq,
 	}
@@ -317,11 +317,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	dmlWakeOnce := &sync.Once{}
 	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	latestResolvedTs := uint64(0)
-	consistent := IsRedoDispatcher(d)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
-			zap.Stringer("dispatcher", d.id), zap.Bool("consistent", consistent),
+			zap.Stringer("dispatcher", d.id), zap.Int64("dispatcherType", d.GetType()),
 			zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
 			zap.Any("event", dispatcherEvent.Event))
 		failpoint.Inject("HandleEventsSlowly", func() {
@@ -398,7 +397,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			})
 			d.dealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
-			if consistent {
+			if d.GetType() == TypeDispatcherRedo {
 				continue
 			}
 			if len(dispatcherEvents) != 1 {
@@ -516,7 +515,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
-			Consistent: IsRedoDispatcher(d),
+			DispatcherType: d.GetType(),
 		}
 	}
 }
@@ -574,7 +573,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false, // sync point event must should block
 					Stage:             heartbeatpb.BlockStage_NONE,
 				},
-				Consistent: IsRedoDispatcher(d),
+				DispatcherType: d.GetType(),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
@@ -628,7 +627,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 						IsSyncPoint:       true,
 						Stage:             heartbeatpb.BlockStage_WAITING,
 					},
-					Consistent: IsRedoDispatcher(d),
+					DispatcherType: d.GetType(),
 				}
 				identifier := BlockEventIdentifier{
 					CommitTs:    commitTs,
@@ -650,7 +649,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false,
 					Stage:             heartbeatpb.BlockStage_WAITING,
 				},
-				Consistent: IsRedoDispatcher(d),
+				DispatcherType: d.GetType(),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
@@ -748,7 +747,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		log.Info("dispatcher component has stopped and is ready for cleanup",
 			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 			zap.Stringer("dispatcher", d.id),
-			zap.Bool("consistent", IsRedoDispatcher(d)),
+			zap.Int64("dispatcherType", d.GetType()),
 			zap.String("table", common.FormatTableSpan(d.tableSpan)),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 			zap.Uint64("resolvedTs", d.GetResolvedTs()),
@@ -757,7 +756,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	}
 	log.Info("dispatcher is not ready to close",
 		zap.Stringer("dispatcher", d.id),
-		zap.Bool("consistent", IsRedoDispatcher(d)),
+		zap.Int64("dispatcherType", d.GetType()),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
 		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
@@ -769,7 +768,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 func (d *BasicDispatcher) removeDispatcher() {
 	log.Info("remove dispatcher",
 		zap.Stringer("dispatcher", d.id),
-		zap.Bool("consistent", IsRedoDispatcher(d)),
+		zap.Int64("dispatcherType", d.GetType()),
 		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
