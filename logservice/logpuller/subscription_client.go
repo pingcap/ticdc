@@ -184,7 +184,7 @@ type subscriptionClient struct {
 	pdClock      pdutil.Clock
 	lockResolver txnutil.LockResolver
 
-	stores map[string]*requestedStore
+	stores sync.Map
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 	// the following three fields are used to manage feedback from ds and notify other goroutines
@@ -224,7 +224,7 @@ func NewSubscriptionClient(
 	subClient := &subscriptionClient{
 		config: config,
 
-		stores:       make(map[string]*requestedStore),
+		stores:       sync.Map{},
 		pd:           pd,
 		regionCache:  appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
 		pdClock:      appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
@@ -306,11 +306,15 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			}
 
 			pendingRegionReqCount := 0
-			for _, store := range s.stores {
+
+			s.stores.Range(func(key, value any) bool {
+				store := value.(*requestedStore)
 				for _, worker := range store.requestWorkers {
 					pendingRegionReqCount += worker.requestCache.getPendingCount()
 				}
-			}
+				return true
+			})
+
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
 		}
 	}
@@ -503,28 +507,30 @@ func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
 // handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
 // then send them to corresponding requestedStore.
 func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
-	stores := s.stores
 	getStore := func(storeAddr string) *requestedStore {
 		var rs *requestedStore
-		if rs = stores[storeAddr]; rs != nil {
+		if v, ok := s.stores.Load(storeAddr); ok {
+			rs = v.(*requestedStore)
 			return rs
 		}
+
 		rs = &requestedStore{storeAddr: storeAddr}
-		stores[storeAddr] = rs
+		s.stores.Store(storeAddr, rs)
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
 			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs)
 			rs.requestWorkers = append(rs.requestWorkers, requestWorker)
 		}
-
 		return rs
 	}
 
 	defer func() {
-		for _, rs := range stores {
+		s.stores.Range(func(key, value any) bool {
+			rs := value.(*requestedStore)
 			for _, w := range rs.requestWorkers {
 				w.requestCache.clear()
 			}
-		}
+			return true
+		})
 	}()
 
 	for {
@@ -542,11 +548,13 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			zap.Uint64("regionID", region.verID.GetID()))
 
 		if region.isStopped() {
-			for _, rs := range stores {
+			s.stores.Range(func(key, value any) bool {
+				rs := value.(*requestedStore)
 				for _, worker := range rs.requestWorkers {
 					worker.add(ctx, region, true)
 				}
-			}
+				return true
+			})
 			continue
 		}
 
