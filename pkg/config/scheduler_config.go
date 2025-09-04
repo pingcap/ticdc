@@ -15,6 +15,7 @@ package config
 
 import (
 	"errors"
+	"net/url"
 	"time"
 
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -33,10 +34,15 @@ type ChangefeedSchedulerConfig struct {
 	WriteKeyThreshold int `toml:"write-key-threshold" json:"write-key-threshold"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
 	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
+	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
+	// If true, only tables with primary key and no unique key can be split.
+	// If false, all tables can be split without checking.
+	// For MySQL downstream, this is always set to true for data consistency.
+	EnableSplittableCheck bool `toml:"enable-splittable-check" json:"enable-splittable-check"`
 }
 
 // Validate validates the config.
-func (c *ChangefeedSchedulerConfig) Validate() error {
+func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	if !c.EnableTableAcrossNodes {
 		return nil
 	}
@@ -51,6 +57,10 @@ func (c *ChangefeedSchedulerConfig) Validate() error {
 	}
 	if c.RegionCountPerSpan <= 0 {
 		return errors.New("region-count-per-span must be larger than 0")
+	}
+
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
+		c.EnableSplittableCheck = true
 	}
 	return nil
 }
