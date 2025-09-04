@@ -18103,12 +18103,21 @@
           "steppedLine": false,
           "targets": [
             {
+              "expr": "sum(tikv_cdc_sink_memory_capacity{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}) by (instance)",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-quota-capacity",
+              "refId": "A",
+              "step": 10
+            },
+            {
               "expr": "sum(tikv_cdc_sink_memory_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}) by (instance)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "sink-{{instance}}",
-              "refId": "D",
+              "legendFormat": "{{instance}}-quota",
+              "refId": "B",
               "step": 10
             }
           ],
