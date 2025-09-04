@@ -174,7 +174,6 @@ func TestEdgeCases(t *testing.T) {
 	currentTs := oracle.GoTimeToTS(currentTime)
 
 	t.Run("resolvedTs in the future", func(t *testing.T) {
-		// resolvedTs比currentTs晚5秒（在未来）
 		resolvedTs := oracle.GoTimeToTS(currentTime.Add(5 * time.Second))
 
 		lag := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(resolvedTs))
@@ -183,7 +182,6 @@ func TestEdgeCases(t *testing.T) {
 		priority := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs, 5)
 		t.Logf("resolvedTs in the future priority: %d", priority)
 
-		// 当resolvedTs在未来时，lag为负数，会降低优先级数值，提高实际优先级
 		require.GreaterOrEqual(t, priority, 0, "priority should not be less than 0")
 	})
 

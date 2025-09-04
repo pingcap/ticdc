@@ -106,10 +106,11 @@ type regionFeedState struct {
 	worker *regionRequestWorker
 }
 
-func newRegionFeedState(region regionInfo, requestID uint64) *regionFeedState {
+func newRegionFeedState(region regionInfo, requestID uint64, worker *regionRequestWorker) *regionFeedState {
 	return &regionFeedState{
 		region:    region,
 		requestID: requestID,
+		worker:    worker,
 	}
 }
 

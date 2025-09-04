@@ -97,13 +97,13 @@ var (
 			Help:      "total duration (s) for changeEventProcessor worker.",
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 20), // 1ms~524s
 		}, []string{"type", "id"})
-	RegionRequestFinishScanDuration = prometheus.NewHistogramVec(
+	RegionRequestFinishScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "kvclient",
 			Name:      "region_request_finish_scan_duration",
 			Help:      "duration (s) for region request to be finished.",
-		}, []string{"id"})
+		})
 )
 
 func GetGlobalGrpcMetrics() *grpc_prometheus.ClientMetrics {

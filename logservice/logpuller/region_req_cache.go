@@ -15,7 +15,6 @@ package logpuller
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -66,7 +65,6 @@ type requestCache struct {
 }
 
 func newRequestCache(maxPendingCount int) *requestCache {
-	log.Info("fizz cdc new request cache", zap.Int("maxPendingCount", maxPendingCount))
 	return &requestCache{
 		pendingQueue: make(chan regionReq, maxPendingCount), // Large buffer to reduce blocking
 		sentRequests: struct {
@@ -104,7 +102,6 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 				c.incPendingCount()
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestCost.Observe(cost.Seconds())
-				log.Info("fizz cdc add region request success", zap.Uint64("subID", uint64(region.subscribedSpan.subID)), zap.Uint64("regionID", region.verID.GetID()), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(current)), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 				return nil
 			case <-c.spaceAvailable:
 				continue
@@ -175,7 +172,6 @@ func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 
 	delete(regionReqs, regionID)
 	c.decPendingCount()
-	log.Info("fizz cdc mark stopped region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 	// Notify waiting add operations that there's space available
 	select {
 	case c.spaceAvailable <- struct{}{}:
@@ -204,8 +200,8 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 		delete(regionReqs, regionID)
 		c.decPendingCount()
 		cost := time.Since(req.createTime)
-		log.Info("fizz cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
-		metrics.RegionRequestFinishScanDuration.WithLabelValues(fmt.Sprintf("%d", regionID)).Observe(cost.Seconds())
+		log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
+		metrics.RegionRequestFinishScanDuration.Observe(cost.Seconds())
 		// Notify waiting add operations that there's space available
 		select {
 		case c.spaceAvailable <- struct{}{}:

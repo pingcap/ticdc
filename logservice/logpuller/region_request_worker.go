@@ -392,7 +392,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// the table will be handled later.
 			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
 		} else {
-			state := newRegionFeedState(region, uint64(subID))
+			state := newRegionFeedState(region, uint64(subID), s)
 			state.start()
 			s.addRegionState(subID, region.verID.GetID(), state)
 			if err := doSend(s.createRegionRequest(region)); err != nil {
@@ -430,7 +430,6 @@ func (s *regionRequestWorker) addRegionState(subscriptionID SubscriptionID, regi
 		s.requestedRegions.subscriptions[subscriptionID] = states
 	}
 
-	state.worker = s
 	states[regionID] = state
 }
 

@@ -542,11 +542,6 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		region := regionTask.GetRegionInfo()
-		log.Info("fizz cdc handle region task",
-			zap.Uint("priority", uint(regionTask.Priority())),
-			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-			zap.Uint64("regionID", region.verID.GetID()))
-
 		if region.isStopped() {
 			s.stores.Range(func(key, value any) bool {
 				rs := value.(*requestedStore)
@@ -568,14 +563,9 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		worker := store.getRequestWorker()
 		force := regionTask.Priority() <= forcedPriorityBase
 
-		if force {
-			log.Info("fizz cdc add region request force", zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)), zap.Uint64("regionID", region.verID.GetID()), zap.Int("priority", regionTask.Priority()))
-		}
-
 		err := worker.add(ctx, region, force)
 		if err != nil {
 			if errors.Cause(err) == cerrors.ErrAddRegionRequestRetryLimitExceeded {
-				log.Info("fizz cdc add region request retry limit exceeded", zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)), zap.Uint64("regionID", region.verID.GetID()), zap.Int("priority", regionTask.Priority()))
 				s.regionTaskQueue.Push(regionTask)
 				continue
 			} else {
@@ -763,7 +753,7 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 
 func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	log.Info("fizz cdc region error",
+	log.Debug("cdc region error",
 		zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 		zap.Uint64("regionID", errInfo.verID.GetID()),
 		zap.Error(err))
