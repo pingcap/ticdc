@@ -21,11 +21,12 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/pingcap/tiflow/cdc/api"
-	"github.com/pingcap/tiflow/cdc/api/middleware"
-	"github.com/pingcap/tiflow/cdc/capture"
-	"github.com/pingcap/tiflow/pkg/etcd"
-	"github.com/pingcap/tiflow/pkg/version"
+	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/server"
+	"github.com/pingcap/ticdc/pkg/version"
 )
 
 // status of cdc server
@@ -38,14 +39,14 @@ type status struct {
 }
 
 type statusAPI struct {
-	capture capture.Capture
+	server server.Server
 }
 
 // RegisterStatusAPIRoutes registers routes for status.
-func RegisterStatusAPIRoutes(router *gin.Engine, capture capture.Capture) {
-	statusAPI := statusAPI{capture: capture}
+func RegisterStatusAPIRoutes(router *gin.Engine, server server.Server) {
+	statusAPI := statusAPI{server: server}
 	router.GET("/status", gin.WrapF(statusAPI.handleStatus))
-	router.GET("/debug/info", middleware.AuthenticateMiddleware(capture), gin.WrapF(statusAPI.handleDebugInfo))
+	router.GET("/debug/info", middleware.AuthenticateMiddleware(server), gin.WrapF(statusAPI.handleDebugInfo))
 }
 
 func (h *statusAPI) writeEtcdInfo(ctx context.Context, cli etcd.CDCEtcdClient, w io.Writer) {
@@ -60,11 +61,30 @@ func (h *statusAPI) writeEtcdInfo(ctx context.Context, cli etcd.CDCEtcdClient, w
 	}
 }
 
+// TODO
 func (h *statusAPI) handleDebugInfo(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
-	h.capture.WriteDebugInfo(ctx, w)
+	co, err := h.server.GetCoordinatorInfo(ctx)
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, err)
+		return
+	}
+	fmt.Fprintf(w, "\n\n*** owner info ***:\n\n")
+	fmt.Fprint(w, co.String())
+	self, err := h.server.SelfInfo()
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, err)
+		return
+	}
+	fmt.Fprintf(w, "\n\n*** processors info ***:\n\n")
+	fmt.Fprint(w, self.String())
+	maintainers := h.server.GetMaintainerManager().ListMaintainers()
+	for _, m := range maintainers {
+		changefeedID := common.NewChangefeedIDFromPB(m.GetMaintainerStatus().ChangefeedID)
+		fmt.Fprintf(w, "changefeedID: %s\n", changefeedID)
+	}
 	fmt.Fprintf(w, "\n\n*** etcd info ***:\n\n")
-	h.writeEtcdInfo(ctx, h.capture.GetEtcdClient(), w)
+	h.writeEtcdInfo(ctx, h.server.GetEtcdClient(), w)
 }
 
 func (h *statusAPI) handleStatus(w http.ResponseWriter, req *http.Request) {
@@ -74,15 +94,14 @@ func (h *statusAPI) handleStatus(w http.ResponseWriter, req *http.Request) {
 		Pid:     os.Getpid(),
 	}
 
-	if h.capture != nil {
-		info, err := h.capture.Info()
+	if h.server != nil {
+		info, err := h.server.SelfInfo()
 		if err != nil {
 			api.WriteError(w, http.StatusInternalServerError, err)
 			return
 		}
-
-		st.ID = info.ID
-		st.IsOwner = h.capture.IsOwner()
+		st.ID = string(info.ID)
+		st.IsOwner = h.server.IsCoordinator()
 	}
 	api.WriteData(w, st)
 }

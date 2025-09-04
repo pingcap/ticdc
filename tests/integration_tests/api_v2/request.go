@@ -27,12 +27,12 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/cdc/api/middleware"
-	"github.com/pingcap/tiflow/cdc/model"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/httputil"
-	"github.com/pingcap/tiflow/pkg/retry"
-	"github.com/pingcap/tiflow/pkg/version"
+	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/pkg/api"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/httputil"
+	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
 )
 
@@ -434,7 +434,7 @@ func (r *Request) checkResponse(resp *http.Response) *Result {
 
 	contentType := resp.Header.Get("Content-Type")
 	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusPartialContent {
-		var jsonErr model.HTTPError
+		var jsonErr api.HTTPError
 		err := json.Unmarshal(body, &jsonErr)
 		if err == nil {
 			err = errors.New(jsonErr.Error)

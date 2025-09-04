@@ -23,7 +23,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/pkg/httputil"
+	"github.com/pingcap/ticdc/pkg/httputil"
 	"go.uber.org/zap"
 )
 
