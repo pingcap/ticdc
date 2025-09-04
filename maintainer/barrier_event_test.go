@@ -23,13 +23,15 @@ import (
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
 
 func TestScheduleEvent(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -39,13 +41,13 @@ func TestScheduleEvent(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "test1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked:         true,
 		BlockTs:           10,
-		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_All},
+		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_Normal, TableIDs: []int64{1}},
 		NeedAddedTables:   []*heartbeatpb.Table{{2, 1, true}, {3, 1, true}},
 	}, true)
 	event.scheduleBlockEvent()
@@ -80,7 +82,8 @@ func TestScheduleEvent(t *testing.T) {
 }
 
 func TestResendAction(t *testing.T) {
-	nodeManager := testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -91,7 +94,7 @@ func TestResendAction(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -186,7 +189,7 @@ func TestResendAction(t *testing.T) {
 }
 
 func TestUpdateSchemaID(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -196,7 +199,7 @@ func TestUpdateSchemaID(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	require.Equal(t, 1, spanController.GetAbsentSize())

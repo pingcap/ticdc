@@ -18,6 +18,7 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"go.uber.org/zap"
 )
 
@@ -50,6 +51,7 @@ func LogVersionInfo(app string) {
 		zap.String("utc-build-time", BuildTS),
 		zap.String("go-version", GoVersion),
 		zap.Bool("failpoint-build", false),
+		zap.String("kernel-type", kerneltype.Name()),
 	)
 }
 
@@ -62,5 +64,6 @@ func GetRawInfo() string {
 	info += fmt.Sprintf("UTC Build Time: %s\n", BuildTS)
 	info += fmt.Sprintf("Go Version: %s\n", GoVersion)
 	info += fmt.Sprintf("Failpoint Build: %t\n", false)
+	info += fmt.Sprintf("Kernel Type: %s\n", kerneltype.Name())
 	return info
 }

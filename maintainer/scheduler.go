@@ -44,19 +44,19 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,
 			batchSize,
+			splitter,
 			oc,
 			spanController,
 			balanceInterval,
 		),
 	}
 	if splitter != nil {
-		schedulers[pkgscheduler.SplitScheduler] = scheduler.NewSplitScheduler(
+		schedulers[pkgscheduler.BalanceSplitScheduler] = scheduler.NewBalanceSplitsScheduler(
 			changefeedID,
 			batchSize,
 			splitter,
 			oc,
 			spanController,
-			balanceInterval,
 		)
 	}
 	return pkgscheduler.NewController(schedulers)

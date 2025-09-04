@@ -36,6 +36,10 @@ type SpanReplication struct {
 	ID           common.DispatcherID
 	Span         *heartbeatpb.TableSpan
 	ChangefeedID common.ChangeFeedID
+	// whether the span is enabled to split.
+	// if the sink is mysql-sink and the table have only one primary key and no uk, the span is enabled to split.
+	// if the sink is other sink, the span is enabled to split.
+	enabledSplit bool
 
 	schemaID    int64
 	nodeIDMutex sync.Mutex // mutex for nodeID
@@ -88,7 +92,7 @@ func NewWorkingSpanReplication(
 		zap.String("componentStatus", status.ComponentStatus.String()),
 		zap.Int64("schemaID", SchemaID),
 		zap.Int64("tableID", span.TableID),
-		zap.String("groupID", replica.GetGroupName(r.groupID)),
+		zap.Int64("groupID", int64(r.groupID)),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r

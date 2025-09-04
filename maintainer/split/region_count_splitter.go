@@ -26,9 +26,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// maxSpanCount is the maximum number of spans that can be created when splitting a table
+// based on regionCountPerSpan. If splitting by regionCountPerSpan would result in more
+// than maxSpanCount spans, the splitting will be limited to maxSpanCount spans instead.
+const maxSpanCount = 1000
+
 // regionCountSplitter is a splitter that splits spans by region count.
-// It is used to split spans when add new table when initialize the maintainer and enable enableTableAcrossNodes
-// regionCountSplitter will split a table span into multiple spans, each span contains at most regionCountPerSpan regions.
+// regionCountSplitter has two modes:
+// 1. if spansNum > 0, means we split the span to spansNum spans
+// 2. if spansNum == 0, means we split the span as each span contains at most regionCountPerSpan regions.
 type regionCountSplitter struct {
 	changefeedID       common.ChangeFeedID
 	regionCache        RegionCache
@@ -37,41 +43,55 @@ type regionCountSplitter struct {
 }
 
 func newRegionCountSplitter(
-	changefeedID common.ChangeFeedID, regionThreshold int, regionCountPerSpan int,
+	changefeedID common.ChangeFeedID, regionCountPerSpan int, regionThreshold int,
 ) *regionCountSplitter {
 	regionCache := appcontext.GetService[RegionCache](appcontext.RegionCache)
 	return &regionCountSplitter{
 		changefeedID:       changefeedID,
 		regionCache:        regionCache,
-		regionThreshold:    regionThreshold,
 		regionCountPerSpan: regionCountPerSpan,
+		regionThreshold:    regionThreshold,
 	}
 }
 
+// If spansNum > 0, means we split the span to spansNum spans
+// In this split, we don't need to ensure the region count is larger than regionThreshold.
+//
+// If spansNum == 0, means we split the span to regionNum / regionCountPerSpan spans.
+// In this split, we need to ensure the region count is larger than regionThreshold.
+// Otherwise, we don't need to split the span.
 func (m *regionCountSplitter) split(
-	ctx context.Context, span *heartbeatpb.TableSpan,
+	ctx context.Context, span *heartbeatpb.TableSpan, spansNum int,
 ) []*heartbeatpb.TableSpan {
 	startTimestamp := time.Now()
-	bo := tikv.NewBackoffer(ctx, 500)
+	bo := tikv.NewBackoffer(ctx, 2000)
 	regions, err := m.regionCache.LoadRegionsInKeyRange(bo, span.StartKey, span.EndKey)
 	if err != nil {
-		log.Warn("list regions failed, skip split span",
+		log.Warn("load regions failed, skip split span",
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}
-	if len(regions) <= m.regionThreshold {
-		log.Info("skip split span by region count",
+
+	if spansNum == 0 && (m.regionThreshold == 0 || len(regions) <= m.regionThreshold) {
+		log.Info("skip split span because region count is less than region threshold or region threshold is 0",
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
 			zap.Int("regionCount", len(regions)),
-			zap.Int("regionThreshold", m.regionThreshold),
-			zap.Any("regionCountPerSpan", m.regionCountPerSpan))
+			zap.Int("regionThreshold", m.regionThreshold))
+		return []*heartbeatpb.TableSpan{span}
+	}
+	if spansNum > 0 && len(regions) < spansNum {
+		log.Info("skip split span because region count is less than target spans num",
+			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("span", span.String()),
+			zap.Int("regionCount", len(regions)),
+			zap.Int("targetSpansNum", spansNum))
 		return []*heartbeatpb.TableSpan{span}
 	}
 
-	stepper := newEvenlySplitStepper(len(regions), m.regionCountPerSpan)
+	stepper := newEvenlySplitStepper(len(regions), m.regionCountPerSpan, spansNum)
 
 	spans := make([]*heartbeatpb.TableSpan, 0, stepper.SpanCount())
 	start, end := 0, stepper.Step()
@@ -116,9 +136,8 @@ func (m *regionCountSplitter) split(
 		zap.String("span", span.String()),
 		zap.Int("spans", len(spans)),
 		zap.Int("regionCount", len(regions)),
-		zap.Int("regionThreshold", m.regionThreshold),
 		zap.Int("regionCountPerSpan", m.regionCountPerSpan),
-		zap.Int("spanRegionLimit", spanRegionLimit),
+		zap.Int("spansNum", spansNum),
 		zap.Duration("splitTime", time.Since(startTimestamp)))
 	return spans
 }
@@ -129,7 +148,27 @@ type evenlySplitStepper struct {
 	remain        int // the number of spans that have the regionPerSpan + 1 region count
 }
 
-func newEvenlySplitStepper(totalRegion int, maxRegionPerSpan int) evenlySplitStepper {
+func newEvenlySplitStepper(totalRegion int, maxRegionPerSpan int, spansNum int) evenlySplitStepper {
+	// split based on the spansNum
+	if spansNum > 0 {
+		return evenlySplitStepper{
+			regionPerSpan: totalRegion / spansNum,
+			spanCount:     spansNum,
+			remain:        totalRegion % spansNum,
+		}
+	}
+
+	// if splitted by maxRegionPerSpan would result in more than maxSpanCount spans,
+	// the splitting will be limited to maxSpanCount spans instead.
+	if totalRegion/maxRegionPerSpan > maxSpanCount {
+		return evenlySplitStepper{
+			regionPerSpan: totalRegion / maxSpanCount,
+			spanCount:     maxSpanCount,
+			remain:        totalRegion % maxSpanCount,
+		}
+	}
+
+	// split based on the maxRegionPerSpan
 	if totalRegion%maxRegionPerSpan == 0 {
 		return evenlySplitStepper{
 			regionPerSpan: maxRegionPerSpan,

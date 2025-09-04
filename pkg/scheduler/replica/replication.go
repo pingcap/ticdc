@@ -15,7 +15,6 @@ package replica
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
@@ -56,9 +55,11 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 
 	// group scheduler interface
 	GetGroups() []GroupID
+	GetGroupSize() int
 	GetAbsentByGroup(groupID GroupID, batch int) []R
 	GetSchedulingByGroup(groupID GroupID) []R
 	GetReplicatingByGroup(groupID GroupID) []R
+	GetTaskSizeByGroup(groupID GroupID) int
 	GetGroupStat() string
 
 	IsReplicating(replica R) bool
@@ -67,7 +68,6 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 	GetTaskByNodeID(id node.ID) []R
 	GetTaskSizeByNodeID(id node.ID) int
 	GetTaskSizePerNode() map[node.ID]int
-	GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (groups map[GroupID]map[node.ID]R, valid bool)
 	GetTaskSizePerNodeByGroup(groupID GroupID) map[node.ID]int
 	GetScheduleTaskSizePerNodeByGroup(groupID GroupID) map[node.ID]int
 
@@ -125,6 +125,14 @@ func (db *replicationDB[T, R]) GetGroups() []GroupID {
 		}
 	})
 	return groups
+}
+
+func (db *replicationDB[T, R]) GetGroupSize() int {
+	count := 0
+	db.withRLock(func() {
+		count = len(db.taskGroups)
+	})
+	return count
 }
 
 func (db *replicationDB[T, R]) GetGroupsWithoutLock() []GroupID {
@@ -192,6 +200,14 @@ func (db *replicationDB[T, R]) GetReplicating() (ret []R) {
 	return
 }
 
+func (db *replicationDB[T, R]) GetTaskSizeByGroup(id GroupID) (size int) {
+	db.withRLock(func() {
+		g := db.mustGetGroup(id)
+		size = g.GetSize()
+	})
+	return
+}
+
 func (db *replicationDB[T, R]) GetReplicatingWithoutLock() (ret []R) {
 	for _, g := range db.taskGroups {
 		ret = append(ret, g.GetReplicating()...)
@@ -199,13 +215,14 @@ func (db *replicationDB[T, R]) GetReplicatingWithoutLock() (ret []R) {
 	return
 }
 
-func (db *replicationDB[T, R]) GetReplicatingSize() (size int) {
+func (db *replicationDB[T, R]) GetReplicatingSize() int {
+	size := 0
 	db.withRLock(func() {
 		for _, g := range db.taskGroups {
 			size += g.GetReplicatingSize()
 		}
 	})
-	return
+	return size
 }
 
 func (db *replicationDB[T, R]) GetReplicatingByGroup(id GroupID) (ret []R) {
@@ -236,71 +253,6 @@ func (db *replicationDB[T, R]) GetSchedulingSize() int {
 		size += g.GetSchedulingSize()
 	}
 	return size
-}
-
-func (db *replicationDB[T, R]) GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (groups map[GroupID]map[node.ID]R, valid bool) {
-	groups = make(map[GroupID]map[node.ID]R, len(db.taskGroups))
-	nodesNum := len(nodes)
-	valid = true
-	db.withRLock(func() {
-		var zeroR R
-		for gid, g := range db.taskGroups {
-			if !g.IsStable() {
-				groups = nil
-				valid = false
-				return
-			}
-
-			totalSpan, nodesTasks := 0, g.GetNodeTasks()
-			for _, tasks := range nodesTasks {
-				totalSpan += len(tasks)
-			}
-			if totalSpan == 0 {
-				log.Warn("scheduler: meet empty group", zap.String("schedulerID", db.id), zap.String("group", GetGroupName(gid)))
-				db.maybeRemoveGroup(g)
-				continue
-			}
-
-			// calc imbalance state for stable group
-			upperLimitPerNode := int(math.Ceil(float64(totalSpan) / float64(nodesNum)))
-			groupMap := make(map[node.ID]R, nodesNum)
-			limitCnt := 0
-			for nodeID, tasks := range nodesTasks {
-				switch len(tasks) {
-				case upperLimitPerNode:
-					limitCnt++
-					for _, stm := range tasks {
-						groupMap[nodeID] = stm
-						break
-					}
-				case upperLimitPerNode - 1:
-					groupMap[nodeID] = zeroR
-				default:
-					// invalid state: len(tasks) > upperLimitPerNode || len(tasks) < upperLimitPerNode-1,
-					// that means some basic scheduler happens bewteen schedule group and schedule global
-					log.Warn("scheduler: invalid group state",
-						zap.String("schedulerID", db.id),
-						zap.String("group", GetGroupName(gid)), zap.Int("totalSpan", totalSpan),
-						zap.Int("nodesNum", nodesNum), zap.Int("upperLimitPerNode", upperLimitPerNode),
-						zap.String("node", nodeID.String()), zap.Int("nodeTaskSize", len(tasks)))
-
-					groups = nil
-					valid = false
-					return
-				}
-			}
-			if limitCnt < nodesNum {
-				for nodeID := range nodes {
-					if _, ok := groupMap[nodeID]; !ok {
-						groupMap[nodeID] = zeroR
-					}
-				}
-				// only record imbalance group
-				groups[gid] = groupMap
-			}
-		}
-	})
-	return
 }
 
 // GetTaskSizePerNode returns the size of the task per node
@@ -436,7 +388,7 @@ func (db *replicationDB[T, R]) maybeRemoveGroup(g *replicationGroup[T, R]) {
 	delete(db.taskGroups, g.groupID)
 	log.Info("scheduler: remove task group", zap.String("schedulerID", db.id),
 		zap.String("group", GetGroupName(g.groupID)),
-		zap.Stringer("groupType", GroupType(g.groupID)))
+		zap.Int64("groupID", int64(g.groupID)))
 }
 
 func (db *replicationDB[T, R]) mustGetGroup(groupID GroupID) *replicationGroup[T, R] {

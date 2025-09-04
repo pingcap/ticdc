@@ -22,9 +22,9 @@ import (
 const DefaultCheckInterval = time.Second * 120
 
 const (
-	BasicScheduler   = "basic-scheduler"
-	BalanceScheduler = "balance-scheduler"
-	SplitScheduler   = "split-scheduler"
+	BasicScheduler        = "basic-scheduler"
+	BalanceScheduler      = "balance-scheduler"
+	BalanceSplitScheduler = "balance-split-scheduler"
 )
 
 type Scheduler interface {

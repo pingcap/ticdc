@@ -16,13 +16,13 @@ package maintainer
 import (
 	"bytes"
 	"context"
-	"math/rand"
 	"sort"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -142,6 +142,10 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 	}
 
 	replications := c.spanController.GetTasksByTableID(tableID)
+	if len(replications) > 1 {
+		log.Info("More then one replications; There is no need to do split", zap.Any("tableID", tableID))
+		return nil
+	}
 
 	span := common.TableIDToComparableSpan(tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
@@ -149,39 +153,18 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		StartKey: span.StartKey,
 		EndKey:   span.EndKey,
 	}
-	splitTableSpans := c.spanController.GetSplitter().SplitSpansByRegion(context.Background(), wholeSpan)
+	splitTableSpans := c.spanController.GetSplitter().Split(context.Background(), wholeSpan, 0, split.SplitTypeRegionCount)
 
-	if len(splitTableSpans) == len(replications) {
-		log.Info("Split Table is finished; There is no need to do split", zap.Any("tableID", tableID))
-		return nil
-	}
-
-	randomIdx := rand.Intn(len(replications))
-	primaryID := replications[randomIdx].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(c.spanController, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
-	operators := make([]*operator.MergeSplitDispatcherOperator, 0, len(replications))
-	for _, replicaSet := range replications {
-		var op *operator.MergeSplitDispatcherOperator
-		if replicaSet.ID == primaryID {
-			op = primaryOp
-		} else {
-			op = operator.NewMergeSplitDispatcherOperator(c.spanController, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
-		}
-		ret := c.operatorController.AddOperator(op)
-		if !ret {
-			// this op is created failed, so we need to remove the previous operators. Otherwise, the previous operators will never finish.
-			for _, op := range operators {
-				op.OnTaskRemoved()
-			}
-			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge split dispatcher operator")
-		}
-		operators = append(operators, op)
+	op := operator.NewSplitDispatcherOperator(c.spanController, replications[0], splitTableSpans, []node.ID{}, nil)
+	ret := c.operatorController.AddOperator(op)
+	if !ret {
+		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create split dispatcher operator")
 	}
 
 	count := 0
 	maxTry := 30
 	for count < maxTry {
-		if primaryOp.IsFinished() {
+		if op.IsFinished() {
 			return nil
 		}
 
@@ -189,6 +172,8 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		count += 1
 		log.Info("wait for split table operator finished", zap.Int("count", count))
 	}
+
+	log.Info("successfully split table by region count", zap.Any("tableID", tableID), zap.Any("replications", replications))
 
 	return apperror.ErrTimeout.GenWithStackByArgs("split table operator is timeout")
 }
@@ -276,6 +261,8 @@ func (c *Controller) mergeTable(tableID int64) error {
 		count += 1
 		log.Info("wait for merge table table operator finished", zap.Int("count", count), zap.Any("operator", operator.String()))
 	}
+
+	log.Info("successfully merge table", zap.Any("tableID", tableID), zap.Any("restReplicationsLen", len(replications)-1))
 
 	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
 }
