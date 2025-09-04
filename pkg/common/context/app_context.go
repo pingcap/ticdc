@@ -35,8 +35,8 @@ const (
 	MaintainerManager       = "MaintainerManager"
 	DispatcherOrchestrator  = "DispatcherOrchestrator"
 	DefaultPDClock          = "PDClock-0"
-	RegionCache             = "RegionCache"
 	PDAPIClient             = "PDAPIClient"
+	RegionCache             = "RegionCache"
 )
 
 // Put all the global instances here.

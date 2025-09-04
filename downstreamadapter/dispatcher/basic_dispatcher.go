@@ -317,7 +317,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
 			zap.Stringer("dispatcher", d.id), zap.Bool("isRedo", isRedo),
-			zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
 			zap.Any("event", dispatcherEvent.Event))
 		failpoint.Inject("HandleEventsSlowly", func() {
 			lag := time.Duration(rand.Intn(5000)) * time.Millisecond

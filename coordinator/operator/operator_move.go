@@ -184,3 +184,8 @@ func (m *MoveMaintainerOperator) String() string {
 func (m *MoveMaintainerOperator) Type() string {
 	return "move"
 }
+
+func (m *MoveMaintainerOperator) BlockTsForward() bool {
+	log.Panic("unreachable code")
+	return false
+}

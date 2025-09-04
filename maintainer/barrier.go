@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"math"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -273,19 +274,16 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	return msgs
 }
 
-// ShouldBlockCheckpointTs returns ture if there is a block event need block the checkpoint ts forwarding
-// currently, when the block event is a create table event, we should block the checkpoint ts forwarding
-// because on the complete checkpointTs calculation should consider the new dispatcher.
-func (b *Barrier) ShouldBlockCheckpointTs() bool {
-	flag := false
-	b.blockedEvents.RangeWoLock(func(key eventKey, barrierEvent *BarrierEvent) bool {
-		if barrierEvent.hasNewTable {
-			flag = true
-			return false
+// GetMinBlockedCheckpointTsForNewTables returns the minimum checkpoint ts for the new tables
+func (b *Barrier) GetMinBlockedCheckpointTsForNewTables() uint64 {
+	minCheckpointTs := uint64(math.MaxUint64)
+	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
+		if barrierEvent.hasNewTable && minCheckpointTs > barrierEvent.commitTs {
+			minCheckpointTs = barrierEvent.commitTs
 		}
 		return true
 	})
-	return flag
+	return minCheckpointTs
 }
 
 func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus) {

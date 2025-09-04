@@ -107,30 +107,27 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	defer db.lock.Unlock()
 
 	cf, ok := db.changefeeds[cfID]
-	if ok {
-		// remove the changefeed
-		delete(db.changefeeds, cfID)
-		delete(db.stopped, cf.ID)
-		db.RemoveReplicaWithoutLock(cf)
-
-		if remove {
-			log.Info("remove changefeed", zap.String("changefeed", cf.ID.String()))
-		} else {
-			log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
-			// push back to stopped
-			db.changefeeds[cfID] = cf
-			db.stopped[cfID] = cf
-		}
-
-		nodeID := cf.GetNodeID()
-		if cf.GetNodeID() == "" {
-			log.Info("changefeed is not scheduled, delete directly")
-			return ""
-		}
-		cf.SetNodeID("")
-		return nodeID
+	if !ok {
+		return ""
 	}
-	return ""
+	nodeID := cf.GetNodeID()
+	if nodeID != "" {
+		cf.SetNodeID("")
+	}
+
+	// Remove from replication tracking
+	db.RemoveReplicaWithoutLock(cf)
+
+	if remove {
+		log.Info("remove changefeed", zap.String("changefeed", cf.ID.String()))
+		delete(db.changefeeds, cfID)
+		delete(db.stopped, cfID)
+	} else {
+		log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
+		db.stopped[cfID] = cf
+	}
+
+	return nodeID
 }
 
 // GetSize returns the size of the all chagnefeeds
@@ -186,8 +183,8 @@ func (db *ChangefeedDB) MarkMaintainerReplicating(task *Changefeed) {
 }
 
 // GetWaitingSchedulingChangefeeds returns the absent maintainers and the working state of each node
-func (db *ChangefeedDB) GetWaitingSchedulingChangefeeds(absent []*Changefeed, maxSize int) ([]*Changefeed, map[node.ID]int) {
-	absent = db.GetAbsent()
+func (db *ChangefeedDB) GetWaitingSchedulingChangefeeds(maxSize int) ([]*Changefeed, map[node.ID]int) {
+	absent := db.GetAbsent()
 	if len(absent) > maxSize {
 		absent = absent[:maxSize]
 	}

@@ -31,8 +31,6 @@ type ChangefeedSchedulerConfig struct {
 	RegionCountPerSpan int `toml:"region-count-per-span" json:"region-count-per-span"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write-key-threshold" json:"write-key-threshold"`
-	// SplitNumberPerNode is the number of splits per node.
-	SplitNumberPerNode int `toml:"split-number-per-node" json:"split-number-per-node"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
 	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
 }
@@ -48,10 +46,7 @@ func (c *ChangefeedSchedulerConfig) Validate() error {
 	if c.WriteKeyThreshold < 0 {
 		return errors.New("write-key-threshold must be larger than 0")
 	}
-	if c.SplitNumberPerNode <= 0 {
-		return errors.New("split-number-per-node must be larger than 0")
-	}
-	if c.SchedulingTaskCountPerNode <= 0 {
+	if c.SchedulingTaskCountPerNode < 0 {
 		return errors.New("scheduling-task-count-per-node must be larger than 0")
 	}
 	if c.RegionCountPerSpan <= 0 {

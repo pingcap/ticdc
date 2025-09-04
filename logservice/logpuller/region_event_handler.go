@@ -75,7 +75,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	if len(span.kvEventsCache) != 0 {
 		log.Panic("kvEventsCache is not empty",
 			zap.Int("kvEventsCacheLen", len(span.kvEventsCache)),
-			zap.Uint64("subID", uint64(span.subID)))
+			zap.Uint64("subscriptionID", uint64(span.subID)))
 	}
 
 	newResolvedTs := uint64(0)

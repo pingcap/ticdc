@@ -176,6 +176,13 @@ func (a *saramaAdminClient) CreateTopic(
 	return nil
 }
 
+func (a *saramaAdminClient) Heartbeat() {
+	brokers := a.client.Brokers()
+	for _, b := range brokers {
+		_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
+	}
+}
+
 func (a *saramaAdminClient) Close() {
 	if err := a.admin.Close(); err != nil {
 		log.Warn("close admin client meet error",

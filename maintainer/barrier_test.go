@@ -24,14 +24,16 @@ import (
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
 func TestOneBlockEvent(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -41,7 +43,7 @@ func TestOneBlockEvent(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	startTs := uint64(10)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
@@ -159,7 +161,7 @@ func TestOneBlockEvent(t *testing.T) {
 }
 
 func TestNormalBlock(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -169,7 +171,7 @@ func TestNormalBlock(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
@@ -327,7 +329,7 @@ func TestNormalBlock(t *testing.T) {
 }
 
 func TestNormalBlockWithTableTrigger(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -337,7 +339,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 3; id++ {
@@ -466,7 +468,8 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 }
 
 func TestSchemaBlock(t *testing.T) {
-	nm := testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
+	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nmap := nm.GetAliveNodes()
 	for key := range nmap {
 		delete(nmap, key)
@@ -482,7 +485,7 @@ func TestSchemaBlock(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
@@ -636,7 +639,8 @@ func TestSchemaBlock(t *testing.T) {
 }
 
 func TestSyncPointBlock(t *testing.T) {
-	nm := testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
+	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nmap := nm.GetAliveNodes()
 	for key := range nmap {
 		delete(nmap, key)
@@ -652,7 +656,7 @@ func TestSyncPointBlock(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -804,7 +808,7 @@ func TestSyncPointBlock(t *testing.T) {
 }
 
 func TestNonBlocked(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -814,7 +818,7 @@ func TestNonBlocked(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	barrier := NewBarrier(spanController, operatorController, false, nil)
 
@@ -857,7 +861,7 @@ func TestNonBlocked(t *testing.T) {
 }
 
 func TestUpdateCheckpointTs(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -867,7 +871,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	barrier := NewBarrier(spanController, operatorController, false, nil)
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -912,7 +916,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 
 // TODO:Add more cases here
 func TestHandleBlockBootstrapResponse(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -922,7 +926,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	var dispatcherIDs []*heartbeatpb.DispatcherID
@@ -1073,7 +1077,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 }
 
 func TestSyncPointBlockPerf(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -1083,7 +1087,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	barrier := NewBarrier(spanController, operatorController, true, nil)
 	for id := 1; id < 1000; id++ {
@@ -1152,7 +1156,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 // 3. The event selection logic works properly with the reallocated dispatchers
 // 4. The barrier maintains consistency when dispatcher IDs change but the same table spans are covered
 func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -1163,7 +1167,7 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	tableID := int64(1)
@@ -1358,7 +1362,7 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 // 2. When dispatcher A enters scheduling state and table trigger event dispatcher reports DDL, DDL should not execute
 // 3. When dispatcher A finishes scheduling and reports DDL again, DDL should execute
 func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
-	testutil.SetNodeManagerAndMessageCenter()
+	testutil.SetUpTestServices()
 
 	// Setup table trigger event dispatcher (DDL dispatcher)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1370,7 +1374,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	// Setup dispatcher A

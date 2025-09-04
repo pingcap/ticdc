@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"math"
 	"time"
 
 	"github.com/pingcap/log"
@@ -43,6 +44,8 @@ type Controller struct {
 	spanController      *span.Controller
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
+
+	splitter *split.Splitter
 
 	startCheckpointTs uint64
 
@@ -77,15 +80,15 @@ func NewController(changefeedID common.ChangeFeedID,
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	// Create span controller
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes)
-
-	// Create operator controller using spanController
-	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
-
 	var schedulerCfg *config.ChangefeedSchedulerConfig
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg)
+
+	// Create operator controller using spanController
+	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
+
 	sc := NewScheduleController(
 		changefeedID, batchSize, oc, spanController, balanceInterval, splitter, schedulerCfg,
 	)
@@ -103,6 +106,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		cfConfig:               cfConfig,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		batchSize:              batchSize,
+		splitter:               splitter,
 	}
 }
 
@@ -142,9 +146,16 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	}
 }
 
-// ScheduleFinished return false if not all task are running in working state
-func (c *Controller) ScheduleFinished() bool {
-	return c.operatorController.OperatorSizeWithLock() == 0 && c.spanController.GetAbsentSize() == 0
+func (c *Controller) GetMinCheckpointTs() uint64 {
+	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs()
+	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForAbsentSpans()
+	if minCheckpointTsForOperator == math.MaxUint64 {
+		return minCheckpointTsForSpan
+	}
+	if minCheckpointTsForSpan == math.MaxUint64 {
+		return minCheckpointTsForOperator
+	}
+	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
 
 func (c *Controller) Stop() {

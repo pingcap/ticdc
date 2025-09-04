@@ -154,10 +154,10 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 // NewTestRegionInfo creates a new RegionInfo for test purpose.
 func NewTestRegionInfo(regionID uint64, start, end []byte, writtenKeys uint64) RegionInfo {
 	return RegionInfo{
-		ID:          regionID,
-		StartKey:    hex.EncodeToString(start),
-		EndKey:      hex.EncodeToString(end),
-		WrittenKeys: writtenKeys,
+		ID:           regionID,
+		StartKey:     hex.EncodeToString(start),
+		EndKey:       hex.EncodeToString(end),
+		WrittenBytes: writtenKeys,
 	}
 }
 
@@ -165,10 +165,10 @@ func NewTestRegionInfo(regionID uint64, start, end []byte, writtenKeys uint64) R
 // NOTE: This type is a copy of github.com/tikv/pd/server/api.RegionInfo.
 // To reduce dependency tree, we do not import the api package directly.
 type RegionInfo struct {
-	ID          uint64 `json:"id"`
-	StartKey    string `json:"start_key"`
-	EndKey      string `json:"end_key"`
-	WrittenKeys uint64 `json:"written_keys"`
+	ID           uint64 `json:"id"`
+	StartKey     string `json:"start_key"`
+	EndKey       string `json:"end_key"`
+	WrittenBytes uint64 `json:"written_bytes"`
 }
 
 // RegionsInfo contains some regions with the detailed region info.
