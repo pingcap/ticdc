@@ -63,6 +63,13 @@ ifeq ("${ENABLE_FIPS}", "1")
 	GOEXPERIMENT = GOEXPERIMENT=boringcrypto
 	CGO = 1
 endif
+ifeq ("${NEXT_GEN}", "1")
+	ifeq ($(BUILD_FLAG),)
+		BUILD_FLAG := -tags nextgen
+	else
+		BUILD_FLAG := $(BUILD_FLAG),nextgen
+	endif
+endif
 
 RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)
@@ -134,7 +141,7 @@ build-cdc-with-failpoint: ## Build cdc with failpoint enabled.
 	$(FAILPOINT_ENABLE)
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go
 	$(FAILPOINT_DISABLE)
-	
+
 cdc:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
 
