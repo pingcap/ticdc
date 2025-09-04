@@ -19,7 +19,6 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
 )
 
 // RedoLogType is the type of log
@@ -240,7 +239,7 @@ func parseColumnValue(row *chunk.Row, colInfo *timodel.ColumnInfo, i int, isHand
 
 // For compatibility
 func convertFlag(colInfo *timodel.ColumnInfo, isHandleKey bool) uint64 {
-	var flag model.ColumnFlagType
+	var flag common.ColumnFlagType
 	if isHandleKey {
 		flag.SetIsHandleKey()
 	}

@@ -125,7 +125,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 			table_name_in_ddl_job varchar(1024),
 			db_name_in_ddl_job varchar(1024),
 			is_syncpoint bool,
-			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			created_at datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 			INDEX (ticdc_cluster_id, changefeed, table_id),
 			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
 		);`).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -171,7 +171,6 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
 	}
-	dmlEvent.CommitTs = 2
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").

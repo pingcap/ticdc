@@ -35,10 +35,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	tableIDAllocator  = common.NewTableIDAllocator()
-	tableInfoAccessor = common.NewTableInfoAccessor()
-)
+var tableIDAllocator = common.NewTableIDAllocator()
 
 type decoder struct {
 	keyBytes   []byte
@@ -78,7 +75,6 @@ func NewDecoder(
 	}
 
 	tableIDAllocator.Clean()
-	tableInfoAccessor.Clean()
 	return &decoder{
 		idx:          idx,
 		config:       config,
@@ -178,19 +174,12 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.FinishedTs = b.nextKey.Ts
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
+	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
 
 	// only the DDL comes from the first partition will be processed.
-	// since tableInfoAccessor is global, we need to make sure the table info
-	// is not removed by other partitions' decoder.
 	if b.idx == 0 {
-		result.BlockedTables = common.GetBlockedTables(tableInfoAccessor, result)
-		schemaName := result.SchemaName
-		tableName := result.TableName
-		if result.Type == byte(timodel.ActionRenameTable) {
-			schemaName = result.ExtraSchemaName
-			tableName = result.ExtraTableName
-		}
-		tableInfoAccessor.Remove(schemaName, tableName)
+		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
+		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	}
 
 	b.nextKey = nil
@@ -334,23 +323,14 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	tableInfo, ok := tableInfoAccessor.Get(key.Schema, key.Table)
-	if !ok {
-		tableInfo = b.newTableInfo(key, value)
-		tableInfoAccessor.Add(key.Schema, key.Table, tableInfo)
-	}
-	if key.Partition != nil {
-		tableInfo.TableName.TableID = *key.Partition
-	}
-	tableInfoAccessor.AddBlockTableID(key.Schema, key.Table, tableInfo.TableName.TableID)
+	tableInfo := b.newTableInfo(key, value)
 	return tableInfo
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	if key.Partition == nil {
-		physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
-		key.Partition = &physicalTableID
-	}
+	physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
+	tableIDAllocator.AddBlockTableID(key.Schema, key.Table, physicalTableID)
+	key.Partition = &physicalTableID
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = *key.Partition
 	tableInfo.Name = ast.NewCIStr(key.Table)

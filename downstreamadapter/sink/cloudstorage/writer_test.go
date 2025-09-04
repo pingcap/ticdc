@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	pclock "github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -37,7 +38,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	pclock "github.com/pingcap/tiflow/engine/pkg/clock"
 	"github.com/stretchr/testify/require"
 )
 

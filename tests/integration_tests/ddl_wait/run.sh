@@ -31,10 +31,14 @@ function run() {
 
 	run_sql "alter table test.t modify column col decimal(30,10);"
 	run_sql "alter table test.t add index (col);"
-	run_sql "create table test.finish_mark (a int primary key);"
-	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	# make sure all tables are equal in upstream and downstream
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 180
+	# use `truncate table` ddl as a barrier to ensure the slow `add index` operation
+	# completes before the test finishes.
+	# because `truncate table` and `create table` are processed sequentially by table trigger dispatcher.
+	run_sql "truncate table test.t;"
+	run_sql "create table test.finish_mark (a int primary key);"
+	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_logs_contains $WORK_DIR "DDL replicate success"
 	check_logs_contains $WORK_DIR "DDL is running downstream"
 	cleanup_process $CDC_BINARY

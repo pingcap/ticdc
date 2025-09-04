@@ -147,10 +147,8 @@ function failOverCaseD-2() {
 
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1'"
 
-	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
-		check_not_contains "test1" &&
-		check_contains "test2" &&
-		ret=$?
+	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test2'"
+	ret=$?
 	if [ "$ret" != 0 ]; then
 		exit 1
 	fi
@@ -206,10 +204,7 @@ function failOverCaseD-3() {
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test4'"
 
-	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
-		check_not_contains "test1" &&
-		check_contains "test2" &&
-		check_contains "test4"
+	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test2' && check_contains 'test4'"
 
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -271,9 +266,7 @@ function failOverCaseD-4() {
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains '2'"
 
-	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
-		check_contains "test1" &&
-		check_contains "test2"
+	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains 'test1' && check_contains 'test2'"
 
 	ret=$?
 	if [ "$ret" != 0 ]; then
