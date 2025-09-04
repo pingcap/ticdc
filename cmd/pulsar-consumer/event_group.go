@@ -82,6 +82,5 @@ func (g *eventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
 			zap.Int("resolved", len(result)), zap.Int("remained", len(g.events)),
 			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
 	}
-	g.highWatermark = resolve
 	return result
 }

@@ -22,12 +22,12 @@ import (
 const DefaultCheckInterval = time.Second * 120
 
 const (
-	BasicScheduler       = "basic-scheduler"
-	BalanceScheduler     = "balance-scheduler"
-	SplitScheduler       = "split-scheduler"
-	RedoBasicScheduler   = "redo-basic-scheduler"
-	RedoBalanceScheduler = "redo-balance-scheduler"
-	RedoSplitScheduler   = "redo-split-scheduler"
+	BasicScheduler            = "basic-scheduler"
+	BalanceScheduler          = "balance-scheduler"
+	BalanceSplitScheduler     = "balance-split-scheduler"
+	RedoBasicScheduler        = "redo-basic-scheduler"
+	RedoBalanceScheduler      = "redo-balance-scheduler"
+	RedoBalanceSplitScheduler = "redo-balance-split-scheduler"
 )
 
 type Scheduler interface {

@@ -69,6 +69,7 @@ func TestStopByChangefeedID(t *testing.T) {
 	require.Contains(t, db.stopped, cf.ID)
 	require.Contains(t, db.changefeeds, cf.ID)
 	require.Equal(t, node.ID("node-1"), nodeID)
+	require.Lenf(t, db.GetReplicating(), 0, "")
 
 	require.Equal(t, "", db.StopByChangefeedID(common.NewChangeFeedIDWithName("a"), false).String())
 }
@@ -96,12 +97,14 @@ func TestRemoveChangefeed(t *testing.T) {
 	db.StopByChangefeedID(cf.ID, false)
 	require.NotContains(t, db.GetAbsent(), cf)
 	require.Contains(t, db.changefeeds, cf.ID)
+	require.Contains(t, db.stopped, cf.ID)
 
 	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2")}
 	db.AddReplicatingMaintainer(cf2, "node1")
 	require.Equal(t, node.ID("node1"), db.StopByChangefeedID(cf2.ID, true))
 	require.NotContains(t, db.GetAbsent(), cf2)
 	require.NotContains(t, db.changefeeds, cf2.ID)
+	require.NotContains(t, db.stopped, cf2.ID)
 	require.Equal(t, "", cf2.nodeID.String())
 }
 
@@ -140,13 +143,13 @@ func TestGetWaitingSchedulingChangefeeds(t *testing.T) {
 	cf3.backoff = NewBackoff(cf3.ID, 0, 0)
 	db.AddAbsentChangefeed(cf3)
 
-	result, nMap := db.GetWaitingSchedulingChangefeeds(nil, 3)
+	result, nMap := db.GetWaitingSchedulingChangefeeds(3)
 	require.Equal(t, 1, nMap["node1"])
 	require.NotContains(t, result, cf1)
 	require.NotContains(t, result, cf2)
 	require.Contains(t, result, cf3)
 
-	result, nMap = db.GetWaitingSchedulingChangefeeds(nil, 1)
+	result, nMap = db.GetWaitingSchedulingChangefeeds(1)
 	require.Equal(t, 1, nMap["node1"])
 	require.Len(t, result, 1)
 }

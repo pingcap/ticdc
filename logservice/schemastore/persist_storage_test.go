@@ -2023,6 +2023,10 @@ func TestApplyDDLJobs(t *testing.T) {
 							// TableID should be unique, so it is enough
 							return expectedDDLEvent.UpdatedSchemas[i].TableID < expectedDDLEvent.UpdatedSchemas[j].TableID
 						})
+						sort.Slice(actualDDLEvent.UpdatedSchemas, func(i, j int) bool {
+							// TableID should be unique, so it is enough
+							return actualDDLEvent.UpdatedSchemas[i].TableID < actualDDLEvent.UpdatedSchemas[j].TableID
+						})
 						if !reflect.DeepEqual(expectedDDLEvent.UpdatedSchemas, actualDDLEvent.UpdatedSchemas) {
 							return false
 						}
@@ -2048,6 +2052,10 @@ func TestApplyDDLJobs(t *testing.T) {
 						sort.Slice(expectedDDLEvent.NeedAddedTables, func(i, j int) bool {
 							// TableID should be unique, so it is enough
 							return expectedDDLEvent.NeedAddedTables[i].TableID < expectedDDLEvent.NeedAddedTables[j].TableID
+						})
+						sort.Slice(actualDDLEvent.NeedAddedTables, func(i, j int) bool {
+							// TableID should be unique, so it is enough
+							return actualDDLEvent.NeedAddedTables[i].TableID < actualDDLEvent.NeedAddedTables[j].TableID
 						})
 						if !reflect.DeepEqual(expectedDDLEvent.NeedAddedTables, actualDDLEvent.NeedAddedTables) {
 							return false
@@ -2076,6 +2084,24 @@ func TestApplyDDLJobs(t *testing.T) {
 									return false
 								} else {
 									return expectedDDLEvent.TableNameChange.DropName[i].SchemaName < expectedDDLEvent.TableNameChange.DropName[j].SchemaName
+								}
+							})
+							sort.Slice(actualDDLEvent.TableNameChange.AddName, func(i, j int) bool {
+								if actualDDLEvent.TableNameChange.AddName[i].TableName < actualDDLEvent.TableNameChange.AddName[j].TableName {
+									return true
+								} else if actualDDLEvent.TableNameChange.AddName[i].TableName > actualDDLEvent.TableNameChange.AddName[j].TableName {
+									return false
+								} else {
+									return actualDDLEvent.TableNameChange.AddName[i].SchemaName < actualDDLEvent.TableNameChange.AddName[j].SchemaName
+								}
+							})
+							sort.Slice(actualDDLEvent.TableNameChange.DropName, func(i, j int) bool {
+								if actualDDLEvent.TableNameChange.DropName[i].TableName < actualDDLEvent.TableNameChange.DropName[j].TableName {
+									return true
+								} else if actualDDLEvent.TableNameChange.DropName[i].TableName > actualDDLEvent.TableNameChange.DropName[j].TableName {
+									return false
+								} else {
+									return actualDDLEvent.TableNameChange.DropName[i].SchemaName < actualDDLEvent.TableNameChange.DropName[j].SchemaName
 								}
 							})
 							if !reflect.DeepEqual(expectedDDLEvent.TableNameChange, actualDDLEvent.TableNameChange) {
