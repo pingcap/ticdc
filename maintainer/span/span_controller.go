@@ -84,18 +84,14 @@ func NewController(
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) *Controller {
-	enableTableAcrossNodes := false
-	if schedulerCfg != nil {
-		enableTableAcrossNodes = schedulerCfg.EnableTableAcrossNodes
-	}
 	c := &Controller{
 		changefeedID:           changefeedID,
 		ddlSpan:                ddlSpan,
 		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg),
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
-		enableTableAcrossNodes: enableTableAcrossNodes,
 		ddlDispatcherID:        ddlSpan.ID,
+		enableTableAcrossNodes: schedulerCfg != nil && schedulerCfg.EnableTableAcrossNodes,
 		enableSplittableCheck:  schedulerCfg != nil && schedulerCfg.EnableSplittableCheck,
 	}
 
