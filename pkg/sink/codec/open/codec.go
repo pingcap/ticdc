@@ -19,7 +19,6 @@ import (
 	"strconv"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -240,7 +239,7 @@ func writeColumnFieldValues(
 	row *chunk.Row,
 	tableInfo *commonType.TableInfo,
 	columnFlags map[string]uint64,
-	selector columnselector.Selector,
+	selector commonEvent.Selector,
 	onlyHandleKeyColumns bool,
 ) error {
 	var encoded bool
@@ -272,7 +271,7 @@ func writeUpdatedColumnFieldValues(
 	row *chunk.Row,
 	tableInfo *commonType.TableInfo,
 	columnFlags map[string]uint64,
-	selector columnselector.Selector,
+	selector commonEvent.Selector,
 	onlyHandleKeyColumns bool,
 ) {
 	// we don't need check here whether after column selector there still exists handle key column

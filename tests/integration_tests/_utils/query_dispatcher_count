@@ -3,6 +3,7 @@
 # parameter 2: changefeed id
 # parameter 3: target count, if target count is -1, means the target count is not important, just not to be null
 # parameter 4: retry count
+# parameter 5: comparison mode, if set to "le" (less than or equal), compare value <= target; otherwise compare value == target
 
 set -ex
 
@@ -10,6 +11,7 @@ ipAddr=${1}
 changefeedID=${2}
 target=${3}
 retryCount=${4}
+comparisonMode=${5}
 
 echo "query dispatcher count"
 count=0
@@ -24,8 +26,14 @@ while [[ $count -lt $retryCount ]]; do
 			exit 0
 		fi
 	else
-		if [ "$value" == "$target" ]; then
-			exit 0
+		if [ "$comparisonMode" == "le" ]; then
+			if [ "$value" -le "$target" ]; then
+				exit 0
+			fi
+		else
+			if [ "$value" == "$target" ]; then
+				exit 0
+			fi
 		fi
 	fi
 

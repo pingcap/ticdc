@@ -1,0 +1,107 @@
+// Copyright 2021 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package status
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+
+	"github.com/gin-gonic/gin"
+	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/server"
+	"github.com/pingcap/ticdc/pkg/version"
+)
+
+// status of cdc server
+type status struct {
+	Version string `json:"version"`
+	GitHash string `json:"git_hash"`
+	ID      string `json:"id"`
+	Pid     int    `json:"pid"`
+	IsOwner bool   `json:"is_owner"`
+}
+
+type statusAPI struct {
+	server server.Server
+}
+
+// RegisterStatusAPIRoutes registers routes for status.
+func RegisterStatusAPIRoutes(router *gin.Engine, server server.Server) {
+	statusAPI := statusAPI{server: server}
+	router.GET("/status", gin.WrapF(statusAPI.handleStatus))
+	router.GET("/debug/info", middleware.AuthenticateMiddleware(server), gin.WrapF(statusAPI.handleDebugInfo))
+}
+
+func (h *statusAPI) writeEtcdInfo(ctx context.Context, cli etcd.CDCEtcdClient, w io.Writer) {
+	kvs, err := cli.GetAllCDCInfo(ctx)
+	if err != nil {
+		fmt.Fprintf(w, "failed to get info: %s\n\n", err.Error())
+		return
+	}
+
+	for _, kv := range kvs {
+		fmt.Fprintf(w, "%s\n\t%s\n\n", string(kv.Key), string(kv.Value))
+	}
+}
+
+// TODO
+func (h *statusAPI) handleDebugInfo(w http.ResponseWriter, req *http.Request) {
+	ctx := req.Context()
+	co, err := h.server.GetCoordinatorInfo(ctx)
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, err)
+		return
+	}
+	fmt.Fprintf(w, "\n\n*** owner info ***:\n\n")
+	fmt.Fprint(w, co.String())
+	self, err := h.server.SelfInfo()
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, err)
+		return
+	}
+	fmt.Fprintf(w, "\n\n*** processors info ***:\n\n")
+	fmt.Fprint(w, self.String())
+	maintainers := h.server.GetMaintainerManager().ListMaintainers()
+	for _, m := range maintainers {
+		changefeedID := common.NewChangefeedIDFromPB(m.GetMaintainerStatus().ChangefeedID)
+		fmt.Fprintf(w, "changefeedID: %s\n", changefeedID)
+	}
+	fmt.Fprintf(w, "\n\n*** etcd info ***:\n\n")
+	h.writeEtcdInfo(ctx, h.server.GetEtcdClient(), w)
+}
+
+func (h *statusAPI) handleStatus(w http.ResponseWriter, req *http.Request) {
+	st := status{
+		Version: version.ReleaseVersion,
+		GitHash: version.GitHash,
+		Pid:     os.Getpid(),
+	}
+
+	if h.server != nil {
+		info, err := h.server.SelfInfo()
+		if err != nil {
+			api.WriteError(w, http.StatusInternalServerError, err)
+			return
+		}
+		st.ID = string(info.ID)
+		st.IsOwner = h.server.IsCoordinator()
+	}
+	api.WriteData(w, st)
+}

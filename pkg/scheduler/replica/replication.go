@@ -118,7 +118,7 @@ type replicationDB[T ReplicationID, R Replication[T]] struct {
 }
 
 func (db *replicationDB[T, R]) GetGroups() []GroupID {
-	groups := make([]GroupID, 0, len(db.taskGroups))
+	groups := make([]GroupID, 0, db.GetGroupSize())
 	db.withRLock(func() {
 		for id := range db.taskGroups {
 			groups = append(groups, id)
@@ -376,7 +376,7 @@ func (db *replicationDB[T, R]) getOrCreateGroup(task R) *replicationGroup[T, R] 
 		db.taskGroups[groupID] = g
 		log.Info("scheduler: add new task group", zap.String("schedulerID", db.id),
 			zap.String("group", GetGroupName(groupID)),
-			zap.Stringer("groupType", GroupType(groupID)))
+			zap.Int64("groupID", int64(groupID)))
 	}
 	return g
 }
