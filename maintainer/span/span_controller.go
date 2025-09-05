@@ -74,6 +74,7 @@ type Controller struct {
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
 	ddlDispatcherID        common.DispatcherID
+	enableSplittableCheck  bool
 }
 
 // NewController creates a new span controller
@@ -83,18 +84,15 @@ func NewController(
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) *Controller {
-	enableTableAcrossNodes := false
-	if schedulerCfg != nil {
-		enableTableAcrossNodes = schedulerCfg.EnableTableAcrossNodes
-	}
 	c := &Controller{
 		changefeedID:           changefeedID,
 		ddlSpan:                ddlSpan,
 		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg),
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
-		enableTableAcrossNodes: enableTableAcrossNodes,
 		ddlDispatcherID:        ddlSpan.ID,
+		enableTableAcrossNodes: schedulerCfg != nil && schedulerCfg.EnableTableAcrossNodes,
+		enableSplittableCheck:  schedulerCfg != nil && schedulerCfg.EnableSplittableCheck,
 	}
 
 	c.reset(c.ddlSpan)
@@ -148,7 +146,9 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		EndKey:   span.EndKey,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
-	if c.enableTableAcrossNodes && c.splitter != nil && table.Splitable {
+
+	// Determine if the table can be split based on configuration and table splittable status
+	if c.enableTableAcrossNodes && c.splitter != nil && (table.Splitable || !c.enableSplittableCheck) {
 		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
