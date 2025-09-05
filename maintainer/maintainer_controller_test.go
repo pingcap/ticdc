@@ -62,7 +62,7 @@ func TestSchedule(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, ddlSpan, nil, 9, time.Minute)
+	controller := NewController(cfID, 1, nil, nil, ddlSpan, nil, 9, time.Minute, false)
 	for i := 0; i < 10; i++ {
 		controller.spanController.AddNewTable(commonEvent.Table{
 			SchemaID: 1,
@@ -104,7 +104,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 			EnableTableAcrossNodes: true,
 			WriteKeyThreshold:      500,
 		},
-	}, ddlSpan, nil, 1000, 0)
+	}, ddlSpan, nil, 1000, 0, false)
 
 	nodeID := node.ID("node1")
 	for i := 0; i < 100; i++ {
@@ -204,7 +204,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 			EnableTableAcrossNodes: true,
 			WriteKeyThreshold:      500,
 		},
-	}, ddlSpan, nil, 1000, 0)
+	}, ddlSpan, nil, 1000, 0, false)
 
 	regionCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
 
@@ -322,7 +322,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 			EnableTableAcrossNodes: true,
 			WriteKeyThreshold:      500,
 		},
-	}, ddlSpan, nil, 1000, 0)
+	}, ddlSpan, nil, 1000, 0, false)
 
 	nodeIDList := []node.ID{"node1", "node2", "node3"}
 	for i := 0; i < 100; i++ {
@@ -419,7 +419,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			WriteKeyThreshold:      1000,
 			RegionThreshold:        20,
 		},
-	}, ddlSpan, nil, 1000, 0)
+	}, ddlSpan, nil, 1000, 0, false)
 
 	nodeIDList := []node.ID{"node1", "node2", "node3"}
 	// make a group
@@ -1004,7 +1004,7 @@ func TestBalance(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0, false)
 	for i := 0; i < 100; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -1080,7 +1080,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 			RegionThreshold:            8,
 			SchedulingTaskCountPerNode: 10,
 		},
-	}, ddlSpan, nil, 1000, 0)
+	}, ddlSpan, nil, 1000, 0, false)
 	totalSpan := common.TableIDToComparableSpan(1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	dispatcherID := common.NewDispatcherID()
@@ -1221,7 +1221,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0)
+	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0, false)
 	for i := 0; i < 2; i++ {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -1265,7 +1265,7 @@ func TestFinishBootstrap(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	s := NewController(cfID, 1, &mockThreadPool{},
-		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0)
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, false)
 	totalSpan := common.TableIDToComparableSpan(1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	schemaStore := &mockSchemaStore{
@@ -1340,7 +1340,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 		RegionThreshold:        1,
 		RegionCountPerSpan:     1,
 	}
-	s := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0)
+	s := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, false)
 	s.taskPool = &mockThreadPool{}
 	schemaStore := &mockSchemaStore{tables: []commonEvent.Table{
 		{TableID: 1, SchemaID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t"}},
@@ -1513,7 +1513,7 @@ func TestLargeTableInitialization(t *testing.T) {
 			RegionCountPerSpan:         10,
 			SchedulingTaskCountPerNode: 2,
 		},
-	}, ddlSpan, nil, 1000, 0)
+	}, ddlSpan, nil, 1000, 0, false)
 
 	// Create a large table with 10000 regions
 	totalSpan := common.TableIDToComparableSpan(int64(1))

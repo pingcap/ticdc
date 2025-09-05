@@ -64,6 +64,7 @@ type Controller struct {
 
 	enableTableAcrossNodes bool
 	batchSize              int
+	enableRedo             bool
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -72,6 +73,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	cfConfig *config.ReplicaConfig,
 	ddlSpan, redoDDLSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration,
+	enableRedo bool,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
@@ -95,7 +97,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		redoSpanController *span.Controller
 		redoOC             *operator.Controller
 	)
-	if redoDDLSpan != nil {
+	if enableRedo {
 		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, common.RedoMode)
 		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize)
 	}
@@ -122,6 +124,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		batchSize:              batchSize,
 		splitter:               splitter,
+		enableRedo:             enableRedo,
 	}
 }
 
@@ -184,7 +187,7 @@ func (c *Controller) Stop() {
 
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
-	if c.redoOperatorController != nil {
+	if c.enableRedo {
 		c.redoOperatorController.OnNodeRemoved(id)
 	}
 	c.operatorController.OnNodeRemoved(id)

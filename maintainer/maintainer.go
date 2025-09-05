@@ -93,6 +93,7 @@ type Maintainer struct {
 	// It is sent to dispatcher managers during bootstrap to initialize their
 	// checkpointTs.
 	startCheckpointTs uint64
+	enableRedo        bool
 	// redoTs is global ts to forward
 	redoTs          *heartbeatpb.RedoMessage
 	redoDDLSpan     *replica.SpanReplication
@@ -165,10 +166,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
-	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, common.DefaultMode)
+	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfID, checkpointTs, selfNode, common.DefaultMode)
 	var redoDDLSpan *replica.SpanReplication
-	if redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
-		_, redoDDLSpan = newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, common.RedoMode)
+	enableRedo := redo.IsConsistentEnabled(cfg.Config.Consistent.Level)
+	if enableRedo {
+		_, redoDDLSpan = newDDLSpan(cfID, checkpointTs, selfNode, common.RedoMode)
 	}
 	m := &Maintainer{
 		id:                cfID,
@@ -176,7 +178,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
+			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), enableRedo),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
 		nodeManager:     nodeManager,
@@ -191,6 +193,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		checkpointTsByCapture: newWatermarkCaptureMap(),
 		redoTsByCapture:       newWatermarkCaptureMap(),
 		newChangefeed:         newChangefeed,
+		enableRedo:            enableRedo,
 
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
@@ -226,7 +229,9 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	go m.runHandleEvents(ctx)
 	go m.calCheckpointTs(ctx)
-	go m.handleRedoMessage(ctx)
+	if enableRedo {
+		go m.handleRedoMessage(ctx)
+	}
 
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.String("state", string(cfg.State)),
@@ -775,7 +780,7 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 	return config.IsMySQLCompatibleScheme(scheme), nil
 }
 
-func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, mode int64) (common.DispatcherID, *replica.SpanReplication) {
+func newDDLSpan(cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, mode int64) (common.DispatcherID, *replica.SpanReplication) {
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
@@ -843,14 +848,12 @@ func (m *Maintainer) handleResendMessage() {
 	if m.postBootstrapMsg != nil {
 		m.sendPostBootstrapRequest()
 	}
-	if m.controller.redoBarrier != nil {
+	if m.enableRedo {
 		// resend redo barrier ack messages
 		m.sendMessages(m.controller.redoBarrier.Resend())
 	}
-	if m.controller.barrier != nil {
-		// resend barrier ack messages
-		m.sendMessages(m.controller.barrier.Resend())
-	}
+	// resend barrier ack messages
+	m.sendMessages(m.controller.barrier.Resend())
 }
 
 func (m *Maintainer) tryCloseChangefeed() bool {
@@ -859,7 +862,7 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 	}
 	if !m.cascadeRemoving {
 		m.controller.operatorController.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
-		if m.controller.redoOperatorController != nil {
+		if m.enableRedo {
 			m.controller.redoOperatorController.RemoveTasksByTableIDs(m.redoDDLSpan.Span.TableID)
 			return !m.ddlSpan.IsWorking() && !m.redoDDLSpan.IsWorking()
 		}
@@ -951,7 +954,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 				zap.Uint64("startTs", m.startCheckpointTs),
 			)
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
-			if m.redoDDLSpan != nil {
+			if m.enableRedo {
 				msg.RedoTableTriggerEventDispatcherId = m.redoDDLSpan.ID.ToPB()
 			}
 			msg.IsNewChangefeed = m.newChangefeed
