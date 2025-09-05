@@ -203,9 +203,11 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 	if req.regionInfo.subscribedSpan.subID == subscriptionID {
 		delete(regionReqs, regionID)
 		c.decPendingCount()
-		cost := time.Since(req.createTime)
-		log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost.Seconds()), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
-		metrics.RegionRequestFinishScanDuration.Observe(cost.Seconds())
+		cost := time.Since(req.createTime).Seconds()
+		if cost > 0 {
+			log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
+			metrics.RegionRequestFinishScanDuration.Observe(cost)
+		}
 		// Notify waiting add operations that there's space available
 		select {
 		case c.spaceAvailable <- struct{}{}:
