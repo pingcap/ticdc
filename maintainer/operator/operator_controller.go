@@ -203,8 +203,8 @@ func (oc *Controller) GetMinCheckpointTs() uint64 {
 		if op.BlockTsForward() {
 			spanReplication := oc.spanController.GetTaskByID(op.ID())
 			if spanReplication == nil {
-				// for test
-				log.Panic("span replication is nil", zap.String("operator", op.String()))
+				log.Info("span replication is nil", zap.String("operator", op.String()))
+				continue
 			}
 			if spanReplication.GetStatus().CheckpointTs < minCheckpointTs {
 				minCheckpointTs = spanReplication.GetStatus().CheckpointTs

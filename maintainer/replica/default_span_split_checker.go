@@ -128,7 +128,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 
 	// check traffic first
 	if status.GetStatus().EventSizePerSecond != 0 {
-		if status.GetStatus().EventSizePerSecond < float32(s.writeThreshold) {
+		if s.writeThreshold == 0 || status.GetStatus().EventSizePerSecond < float32(s.writeThreshold) {
 			status.trafficScore = 0
 		} else {
 			status.trafficScore++
@@ -147,7 +147,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 		status.regionCheckTime = time.Now()
 	}
 
-	log.Info("default span split checker: update status", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
+	log.Debug("default span split checker: update status", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
 
 	if status.trafficScore >= trafficScoreThreshold || (s.regionThreshold > 0 && status.regionCount >= s.regionThreshold) {
 		if _, ok := s.splitReadyTasks[status.ID]; !ok {

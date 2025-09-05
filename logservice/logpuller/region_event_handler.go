@@ -128,20 +128,21 @@ func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) 
 }
 
 func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {
-	if event.entries != nil && event.entries.Entries != nil && len(event.entries.Entries.GetEntries()) > 0 {
-		entries := event.entries.Entries.GetEntries()
-		switch entries[0].Type {
-		case cdcpb.Event_INITIALIZED:
-			return dynstream.Timestamp(event.state.region.resolvedTs())
-		case cdcpb.Event_COMMITTED,
-			cdcpb.Event_PREWRITE,
-			cdcpb.Event_COMMIT,
-			cdcpb.Event_ROLLBACK:
-			return dynstream.Timestamp(entries[0].CommitTs)
-		default:
-			log.Warn("unknown event entries", zap.Any("event", event.entries))
-			return 0
+	if event.entries != nil && event.entries.Entries != nil {
+		for _, entry := range event.entries.Entries.GetEntries() {
+			switch entry.Type {
+			case cdcpb.Event_INITIALIZED:
+				return dynstream.Timestamp(event.state.region.resolvedTs())
+			case cdcpb.Event_COMMITTED,
+				cdcpb.Event_PREWRITE,
+				cdcpb.Event_COMMIT,
+				cdcpb.Event_ROLLBACK:
+				return dynstream.Timestamp(entry.CommitTs)
+			default:
+				// ignore other event types
+			}
 		}
+		return 0
 	} else {
 		return dynstream.Timestamp(event.resolvedTs)
 	}
