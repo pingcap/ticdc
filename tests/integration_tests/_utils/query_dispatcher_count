@@ -13,7 +13,6 @@ target=${3}
 retryCount=${4}
 comparisonMode=${5}
 
-
 echo "query dispatcher count"
 count=0
 

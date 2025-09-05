@@ -1,5 +1,5 @@
 #!/bin/bash
-# This test is aimed to test the schedule process for split tables and non-split tables with dml 
+# This test is aimed to test the schedule process for split tables and non-split tables with dml
 # 1. we start three TiCDC servers, and create 5 split tables and 5 non-split tables.
 # 2. we enable the split table param, and start a changefeed.
 # 3. we execute dmls to these table.
@@ -67,24 +67,24 @@ main() {
 
 	sleep 200
 
-	kill -9 ${pids[@]} 
+	kill -9 ${pids[@]}
 
-    sleep 60
+	sleep 60
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 
-    query_dispatcher_count "127.0.0.1:8300" "test" 36 100 le # 6 * 5 + 5 + 1
+	query_dispatcher_count "127.0.0.1:8300" "test" 36 100 le # 6 * 5 + 5 + 1
 
-    cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
-    if [ -z "$cdc_pid_1" ]; then
-        echo "ERROR: cdc server 1 is not running"
-        exit 1
-    fi
-    kill_cdc_pid $cdc_pid_1
+	cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+	if [ -z "$cdc_pid_1" ]; then
+		echo "ERROR: cdc server 1 is not running"
+		exit 1
+	fi
+	kill_cdc_pid $cdc_pid_1
 
-    sleep 60    
+	sleep 60
 
-    query_dispatcher_count "127.0.0.1:8301" "test" 26 100 le  # 4 * 5 + 5 + 1
+	query_dispatcher_count "127.0.0.1:8301" "test" 26 100 le # 4 * 5 + 5 + 1
 
 	cleanup_process $CDC_BINARY
 }
