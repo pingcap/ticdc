@@ -58,7 +58,7 @@ func (m *mockDispatcher) GetStartTs() uint64 {
 }
 
 func (m *mockDispatcher) GetType() int64 {
-	return dispatcher.TypeDispatcherEvent
+	return common.DefaultMode
 }
 
 func (m *mockDispatcher) GetId() common.DispatcherID {

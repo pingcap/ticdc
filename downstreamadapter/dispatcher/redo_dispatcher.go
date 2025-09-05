@@ -54,7 +54,7 @@ func NewRedoDispatcher(
 		schemaIDToDispatchers,
 		startTsIsSyncpoint,
 		0,
-		TypeDispatcherRedo,
+		common.RedoMode,
 		sink,
 		sharedInfo,
 	)

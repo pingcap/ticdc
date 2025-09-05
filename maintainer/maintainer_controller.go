@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -90,14 +89,14 @@ func NewController(changefeedID common.ChangeFeedID,
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, dispatcher.TypeDispatcherEvent)
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, common.DefaultMode)
 
 	var (
 		redoSpanController *span.Controller
 		redoOC             *operator.Controller
 	)
 	if redoDDLSpan != nil {
-		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, dispatcher.TypeDispatcherRedo)
+		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, common.RedoMode)
 		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize)
 	}
 	// Create operator controller using spanController
@@ -130,8 +129,8 @@ func NewController(changefeedID common.ChangeFeedID,
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		operatorController := c.getOperatorController(status.DispatcherType)
-		spanController := c.getSpanController(status.DispatcherType)
+		operatorController := c.getOperatorController(status.Mode)
+		spanController := c.getSpanController(status.Mode)
 
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm := spanController.GetTaskByID(dispatcherID)
@@ -148,7 +147,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// if the span is not found, and the status is working, we need to remove it from dispatcher
-				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, status.DispatcherType))
+				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, status.Mode))
 			}
 			continue
 		}
@@ -191,10 +190,22 @@ func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
 }
 
-func (c *Controller) checkRedoAdvance() bool {
-	barrierLock := c.redoBarrier.GetLock()
-	defer func() {
-		c.redoBarrier.ReleaseLock(barrierLock)
-	}()
-	return c.redoOperatorController.BlockOperatorSize() == 0 && c.redoSpanController.GetAbsentSize() == 0 && !c.redoBarrier.ShouldBlockCheckpointTs()
+func (c *Controller) GetMinRedoCheckpointTs() uint64 {
+	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs()
+	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForAbsentSpans()
+	if minCheckpointTsForOperator == math.MaxUint64 {
+		return minCheckpointTsForSpan
+	}
+	if minCheckpointTsForSpan == math.MaxUint64 {
+		return minCheckpointTsForOperator
+	}
+	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
+
+// func (c *Controller) checkRedoAdvance() bool {
+// 	barrierLock := c.redoBarrier.GetLock()
+// 	defer func() {
+// 		c.redoBarrier.ReleaseLock(barrierLock)
+// 	}()
+// 	return c.redoOperatorController.BlockOperatorSize() == 0 && c.redoSpanController.GetAbsentSize() == 0 && !c.redoBarrier.ShouldBlockCheckpointTs()
+// }

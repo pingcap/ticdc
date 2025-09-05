@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -114,7 +113,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 		for j := 0; j < 4; j++ {
 			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
 			dispatcherID := common.NewDispatcherID()
-			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, dispatcher.TypeDispatcherEvent)
+			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 			spanReplica.SetNodeID(nodeID)
 			s.spanController.AddReplicatingSpan(spanReplica)
 
@@ -216,7 +215,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 		for j := 0; j < 2; j++ {
 			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
 			dispatcherID := common.NewDispatcherID()
-			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, dispatcher.TypeDispatcherEvent)
+			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 			spanReplica.SetNodeID(nodeIDList[j%2])
 			s.spanController.AddReplicatingSpan(spanReplica)
 
@@ -332,7 +331,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 		for j := 0; j < 6; j++ {
 			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
 			dispatcherID := common.NewDispatcherID()
-			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, dispatcher.TypeDispatcherEvent)
+			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 			spanReplica.SetNodeID(nodeIDList[j%3])
 			s.spanController.AddReplicatingSpan(spanReplica)
 
@@ -433,7 +432,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey := appendNew(totalSpan.StartKey, byte('a'))
 	endKey := appendNew(totalSpan.StartKey, byte('b'))
 	span1 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica := replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span1, 1, dispatcher.TypeDispatcherEvent)
+	spanReplica := replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span1, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[1])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span1.StartKey, span1.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -473,7 +472,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('b'))
 	endKey = appendNew(totalSpan.StartKey, byte('c'))
 	span2 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span2, 1, dispatcher.TypeDispatcherEvent)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span2, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[0])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span2.StartKey, span2.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -498,7 +497,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('c'))
 	endKey = appendNew(totalSpan.StartKey, byte('d'))
 	span3 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span3, 1, dispatcher.TypeDispatcherEvent)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span3, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[1])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span3.StartKey, span3.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -523,7 +522,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('d'))
 	endKey = appendNew(totalSpan.StartKey, byte('e'))
 	span4 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span4, 1, dispatcher.TypeDispatcherEvent)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span4, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[2])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span4.StartKey, span4.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -548,7 +547,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('e'))
 	endKey = appendNew(totalSpan.StartKey, byte('f'))
 	span5 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span5, 1, dispatcher.TypeDispatcherEvent)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span5, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[0])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span5.StartKey, span5.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -573,7 +572,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('f'))
 	endKey = totalSpan.EndKey
 	span6 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span6, 1, dispatcher.TypeDispatcherEvent)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span6, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[2])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span6.StartKey, span6.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -1010,7 +1009,7 @@ func TestBalance(t *testing.T) {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, dispatcher.TypeDispatcherEvent)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 		spanReplica.SetNodeID("node1")
 		s.spanController.AddReplicatingSpan(spanReplica)
 	}
@@ -1085,7 +1084,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 	totalSpan := common.TableIDToComparableSpan(1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	dispatcherID := common.NewDispatcherID()
-	spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, dispatcher.TypeDispatcherEvent)
+	spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 	spanReplica.SetNodeID("node1")
 	controller.spanController.AddReplicatingSpan(spanReplica)
 
@@ -1227,7 +1226,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, dispatcher.TypeDispatcherEvent)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 		spanReplica.SetNodeID("node1")
 		s.spanController.AddReplicatingSpan(spanReplica)
 	}

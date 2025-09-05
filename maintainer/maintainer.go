@@ -23,7 +23,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
@@ -48,6 +47,7 @@ import (
 
 const (
 	periodEventInterval = time.Millisecond * 100
+	periodRedoInterval  = time.Second * 1
 )
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
@@ -79,7 +79,7 @@ type Maintainer struct {
 		*heartbeatpb.Watermark
 	}
 
-	checkpointTsByCapture *CheckpointTsCaptureMap
+	checkpointTsByCapture *WatermarkCaptureMap
 
 	scheduleState atomic.Int32
 	bootstrapper  *bootstrap.Bootstrapper[heartbeatpb.MaintainerBootstrapResponse]
@@ -93,10 +93,10 @@ type Maintainer struct {
 	// It is sent to dispatcher managers during bootstrap to initialize their
 	// checkpointTs.
 	startCheckpointTs uint64
-	redoTsMap         map[node.ID]*heartbeatpb.RedoHeartbeatMessage
 	// redoTs is global ts to forward
-	redoTs      *heartbeatpb.RedoMessage
-	redoDDLSpan *replica.SpanReplication
+	redoTs          *heartbeatpb.RedoMessage
+	redoDDLSpan     *replica.SpanReplication
+	redoTsByCapture *WatermarkCaptureMap
 
 	// ddlSpan represents the table trigger event dispatcher that handles DDL events.
 	// This dispatcher is always created on the same node as the maintainer and has a
@@ -165,17 +165,16 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
-	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, dispatcher.TypeDispatcherEvent)
+	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, common.DefaultMode)
 	var redoDDLSpan *replica.SpanReplication
 	if redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
-		_, redoDDLSpan = newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, dispatcher.TypeDispatcherRedo)
+		_, redoDDLSpan = newDDLSpan(cfg.Config, cfID, checkpointTs, selfNode, common.RedoMode)
 	}
 	m := &Maintainer{
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		redoTsMap:         make(map[node.ID]*heartbeatpb.RedoHeartbeatMessage),
 		controller: NewController(cfID, checkpointTs, taskScheduler,
 			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
@@ -189,7 +188,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 		ddlSpan:               ddlSpan,
 		redoDDLSpan:           redoDDLSpan,
-		checkpointTsByCapture: newCheckpointTsCaptureMap(),
+		checkpointTsByCapture: newWatermarkCaptureMap(),
+		redoTsByCapture:       newWatermarkCaptureMap(),
 		newChangefeed:         newChangefeed,
 
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
@@ -226,6 +226,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	go m.runHandleEvents(ctx)
 	go m.calCheckpointTs(ctx)
+	go m.handleRedoMessage(ctx)
 
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.String("state", string(cfg.State)),
@@ -424,9 +425,6 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		m.onCheckpointTsPersisted(req)
-	case messaging.TypeRedoHeartbeatMessage:
-		req := msg.Message[0].(*heartbeatpb.RedoHeartbeatMessage)
-		m.onRedoTsPersisted(msg.From, req)
 	default:
 		log.Panic("unexpected message type",
 			zap.String("changefeed", m.id.Name()),
@@ -458,49 +456,6 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 	})
 }
 
-// onRedoTsPersisted forwards the redoTs message to the dispatcher manager.
-// - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
-func (m *Maintainer) onRedoTsPersisted(id node.ID, msg *heartbeatpb.RedoHeartbeatMessage) {
-	if !m.bootstrapped.Load() {
-		log.Warn("can not advance redoTs since not bootstrapped",
-			zap.String("changefeed", m.id.Name()))
-		return
-	}
-	var resolvedTs uint64 = math.MaxUint64
-	m.redoTsMap[id] = msg
-	for _, redoTs := range m.redoTsMap {
-		resolvedTs = min(resolvedTs, redoTs.ResolvedTs)
-	}
-	redoAdvance := m.controller.checkRedoAdvance()
-	needUpdate := false
-	// need to consider if all dispatcher are removed
-	// this leads resolvedTs is math.MaxUint64
-	if m.redoTs.ResolvedTs < resolvedTs && resolvedTs != math.MaxUint64 && redoAdvance {
-		m.redoTs.ResolvedTs = resolvedTs
-		needUpdate = true
-	}
-	if m.redoTs.CheckpointTs < m.getWatermark().CheckpointTs {
-		m.redoTs.CheckpointTs = m.getWatermark().CheckpointTs
-		needUpdate = true
-	}
-	log.Debug("received redo ts message", zap.Bool("redoAdvance", redoAdvance),
-		zap.Any("needUpdate", needUpdate), zap.Any("mapLength", len(m.redoTsMap)), zap.Any("nodeId", id),
-		zap.Any("message", msg), zap.Any("globalRedoTs", m.redoTs),
-		zap.Any("checkpointTs", m.getWatermark().CheckpointTs), zap.Any("resolvedTs", resolvedTs),
-	)
-	if needUpdate {
-		msgs := make([]*messaging.TargetMessage, 0, len(m.redoTsMap))
-		for id := range m.redoTsMap {
-			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
-				ChangefeedID: m.redoTs.ChangefeedID,
-				CheckpointTs: m.redoTs.CheckpointTs,
-				ResolvedTs:   m.redoTs.ResolvedTs,
-			}))
-		}
-		m.sendMessages(msgs)
-	}
-}
-
 func (m *Maintainer) onNodeChanged() {
 	currentNodes := m.bootstrapper.GetAllNodeIDs()
 
@@ -516,7 +471,7 @@ func (m *Maintainer) onNodeChanged() {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
 			m.checkpointTsByCapture.Delete(id)
-			delete(m.redoTsMap, id)
+			m.redoTsByCapture.Delete(id)
 			m.controller.RemoveNode(id)
 		}
 	}
@@ -528,6 +483,78 @@ func (m *Maintainer) onNodeChanged() {
 	if cachedResponse != nil {
 		log.Info("bootstrap done after removed some nodes", zap.String("id", m.id.String()))
 		m.onBootstrapDone(cachedResponse)
+	}
+}
+
+// handleRedoMessage forwards the redoTs message to the dispatcher manager.
+// - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
+func (m *Maintainer) handleRedoMessage(ctx context.Context) {
+	ticker := time.NewTicker(periodRedoInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !m.bootstrapped.Load() {
+				log.Warn("can not advance redoTs since not bootstrapped",
+					zap.String("changefeed", m.id.Name()))
+				break
+			}
+			needUpdate := false
+			updateCheckpointTs := true
+
+			newWatermark := heartbeatpb.NewMaxWatermark()
+			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs()
+			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables()
+			// if there is no tables, there must be a table trigger dispatcher
+			for id := range m.bootstrapper.GetAllNodeIDs() {
+				// maintainer node has the table trigger dispatcher
+				if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
+					continue
+				}
+				// node level watermark reported, ignore this round
+				watermark, ok := m.redoTsByCapture.Get(id)
+				if !ok {
+					updateCheckpointTs = false
+					log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
+						zap.String("changefeed", m.id.Name()),
+						zap.Any("node", id))
+					continue
+				}
+				newWatermark.UpdateMin(watermark)
+			}
+
+			if minRedoCheckpointTsForScheduler != uint64(math.MaxUint64) {
+				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
+			}
+			if minRedoCheckpointTsForBarrier != uint64(math.MaxUint64) {
+				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
+			}
+
+			if m.redoTs.ResolvedTs < newWatermark.CheckpointTs && updateCheckpointTs {
+				m.redoTs.ResolvedTs = newWatermark.CheckpointTs
+				needUpdate = true
+			}
+			if m.redoTs.CheckpointTs < m.getWatermark().CheckpointTs {
+				m.redoTs.CheckpointTs = m.getWatermark().CheckpointTs
+				needUpdate = true
+			}
+			log.Debug("received redo ts message", zap.Any("needUpdate", needUpdate), zap.Any("globalRedoTs", m.redoTs),
+				zap.Any("checkpointTs", m.getWatermark().CheckpointTs), zap.Any("resolvedTs", newWatermark.CheckpointTs))
+			if needUpdate {
+				msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
+				for id := range m.bootstrapper.GetAllNodeIDs() {
+					msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
+						ChangefeedID: m.redoTs.ChangefeedID,
+						CheckpointTs: m.redoTs.CheckpointTs,
+						ResolvedTs:   m.redoTs.ResolvedTs,
+					}))
+				}
+				m.sendMessages(msgs)
+			}
+		}
 	}
 }
 
@@ -645,6 +672,12 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
 		}
 	}
+	if req.RedoWatermark != nil {
+		old, ok := m.redoTsByCapture.Get(msg.From)
+		if !ok || req.RedoWatermark.Seq >= old.Seq {
+			m.redoTsByCapture.Set(msg.From, *req.Watermark)
+		}
+	}
 	if req.Err != nil {
 		log.Error("dispatcher report an error",
 			zap.Stringer("changefeed", m.id),
@@ -671,14 +704,14 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
-	if len(req.BlockStatuses) > 0 {
-		if m.controller.redoBarrier != nil {
-			ackMsg := m.controller.redoBarrier.HandleStatus(msg.From, req)
-			if ackMsg != nil {
-				m.sendMessages([]*messaging.TargetMessage{ackMsg})
-			}
-		}
+
+	if common.IsDefaultMode(req.Mode) {
 		ackMsg := m.controller.barrier.HandleStatus(msg.From, req)
+		if ackMsg != nil {
+			m.sendMessages([]*messaging.TargetMessage{ackMsg})
+		}
+	} else {
+		ackMsg := m.controller.redoBarrier.HandleStatus(msg.From, req)
 		if ackMsg != nil {
 			m.sendMessages([]*messaging.TargetMessage{ackMsg})
 		}
@@ -742,7 +775,7 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 	return config.IsMySQLCompatibleScheme(scheme), nil
 }
 
-func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, dispatcherType int64) (common.DispatcherID, *replica.SpanReplication) {
+func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, mode int64) (common.DispatcherID, *replica.SpanReplication) {
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
@@ -750,7 +783,7 @@ func newDDLSpan(replicaConfig *config.ReplicaConfig, cfID common.ChangeFeedID, c
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
-			DispatcherType:  dispatcherType,
+			Mode:            mode,
 		}, selfNode.ID)
 	return tableTriggerEventDispatcherID, ddlSpan
 }

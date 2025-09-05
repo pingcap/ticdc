@@ -74,7 +74,7 @@ func NewEventDispatcher(
 		schemaIDToDispatchers,
 		startTsIsSyncpoint,
 		currentPdTs,
-		TypeDispatcherEvent,
+		common.DefaultMode,
 		sink,
 		sharedInfo,
 	)

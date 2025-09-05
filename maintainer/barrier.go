@@ -28,6 +28,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	TypeBarrierCommon int64 = iota
+	TypeBarrierRedo
+)
+
 // Barrier manage the block events for the changefeed
 // note: the dispatcher will guarantee the order of the block event.
 // the block event processing logic:
@@ -43,7 +48,7 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
-	dispatcherType     int64
+	mode               int64
 }
 
 type BlockedEventMap struct {
@@ -106,14 +111,14 @@ func NewBarrier(spanController *span.Controller,
 	operatorController *operator.Controller,
 	splitTableEnabled bool,
 	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-	dispatcherType int64,
+	mode int64,
 ) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
 		spanController:     spanController,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
-		dispatcherType:     dispatcherType,
+		mode:               mode,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
@@ -134,14 +139,11 @@ func (b *Barrier) HandleStatus(from node.ID,
 ) *messaging.TargetMessage {
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
-		zap.Any("detail", request), zap.Int64("dispatcherType", b.dispatcherType))
+		zap.Any("detail", request), zap.Int64("mode", b.mode))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := []*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	for _, status := range request.BlockStatuses {
-		if b.dispatcherType != status.DispatcherType {
-			continue
-		}
 		// only receive block status from the replicating dispatcher
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		if dispatcherID != b.spanController.GetDDLDispatcherID() {
@@ -197,7 +199,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID:       request.ChangefeedID,
 			DispatcherStatuses: dispatcherStatus,
-			DispatcherType:     b.dispatcherType,
+			Mode:               b.mode,
 		})
 }
 
@@ -205,7 +207,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
 	for _, resp := range bootstrapRespMap {
 		for _, span := range resp.Spans {
-			if b.dispatcherType != span.DispatcherType {
+			if b.mode != span.Mode {
 				continue
 			}
 			// we only care about the WAITING, WRITING and DONE stage
@@ -268,7 +270,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
-		msgs = append(msgs, barrierEvent.resend(b.dispatcherType)...)
+		msgs = append(msgs, barrierEvent.resend(b.mode)...)
 
 		eventList = append(eventList, barrierEvent)
 		return true
@@ -322,7 +324,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 			ID:              status.ID,
 			CheckpointTs:    status.State.BlockTs - 1,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
-			DispatcherType:  status.DispatcherType,
+			Mode:            status.Mode,
 		})
 		if status.State != nil {
 			span.UpdateBlockState(*status.State)

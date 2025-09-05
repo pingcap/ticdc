@@ -530,28 +530,41 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 	delay := time.NewTimer(0)
 	defer delay.Stop()
+	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus) {
+		var message heartbeatpb.BlockStatusRequest
+		message.ChangefeedID = e.changefeedID.ToPB()
+		message.BlockStatuses = blockStatusMessage
+		e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+	}
 	for {
 		blockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
+		redoBlockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
 		select {
 		case <-ctx.Done():
 			return
 		case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
-			blockStatusMessage = append(blockStatusMessage, blockStatus)
+			if common.IsDefaultMode(blockStatus.Mode) {
+				blockStatusMessage = append(blockStatusMessage, blockStatus)
+			} else {
+				redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
+			}
 			delay.Reset(10 * time.Millisecond)
 		loop:
 			for {
 				select {
 				case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
-					blockStatusMessage = append(blockStatusMessage, blockStatus)
+					if common.IsDefaultMode(blockStatus.Mode) {
+						blockStatusMessage = append(blockStatusMessage, blockStatus)
+					} else {
+						redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
+					}
 				case <-delay.C:
 					break loop
 				}
 			}
 
-			var message heartbeatpb.BlockStatusRequest
-			message.ChangefeedID = e.changefeedID.ToPB()
-			message.BlockStatuses = blockStatusMessage
-			e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+			enqueueBlockStatus(blockStatusMessage)
+			enqueueBlockStatus(redoBlockStatusMessage)
 		}
 	}
 }
@@ -576,7 +589,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			return
 		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			if !dispatcher.IsRedoDispatcherType(tableSpanStatus.DispatcherType) {
+			if common.IsDefaultMode(tableSpanStatus.Mode) {
 				newWatermark.Seq = tableSpanStatus.Seq
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
@@ -588,7 +601,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 				select {
 				case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if !dispatcher.IsRedoDispatcherType(tableSpanStatus.DispatcherType) {
+					if common.IsDefaultMode(tableSpanStatus.Mode) {
 						if newWatermark.Seq < tableSpanStatus.Seq {
 							newWatermark.Seq = tableSpanStatus.Seq
 						}
@@ -604,6 +617,8 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
+			// FIXME: need to send redo watermark?
+			// message.RedoWatermark = newRedoWatermark
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}
@@ -625,22 +640,27 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		ChangefeedID:    e.changefeedID.ToPB(),
 		CompeleteStatus: needCompleteStatus,
 		Watermark:       heartbeatpb.NewMaxWatermark(),
+		RedoWatermark:   heartbeatpb.NewMaxWatermark(),
 	}
 
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
 
 	if e.RedoEnable {
-		e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
+		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
-			status, cleanMap, _ := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
+			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 			if status != nil {
 				message.Statuses = append(message.Statuses, status)
 			}
 			if cleanMap != nil {
 				toCleanMap = append(toCleanMap, cleanMap)
 			}
+			if watermark != nil {
+				message.RedoWatermark.UpdateMin(*watermark)
+			}
 		})
+		message.RedoWatermark.Seq = redoSeq
 	}
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
@@ -662,7 +682,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
 			dispatcherCount--
-			if dispatcher.IsRedoDispatcherType(m.dispatcherType) {
+			if common.IsRedoMode(m.mode) {
 				e.cleanRedoDispatcher(m.id, m.schemaID)
 			} else {
 				e.cleanEventDispatcher(m.id, m.schemaID)
@@ -701,8 +721,8 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	return &message
 }
 
-func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, dispatcherType int64) *MergeCheckTask {
-	if dispatcher.IsRedoDispatcherType(dispatcherType) {
+func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, mode int64) *MergeCheckTask {
+	if common.IsRedoMode(mode) {
 		return e.mergeRedoDispatcher(dispatcherIDs, mergedDispatcherID)
 	}
 	return e.mergeEventDispatcher(dispatcherIDs, mergedDispatcherID)

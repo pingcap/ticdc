@@ -16,7 +16,6 @@ package maintainer
 import (
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/scheduler"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -41,7 +40,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			oc,
 			spanController,
 			schedulerCfg,
-			dispatcher.TypeDispatcherEvent,
+			common.DefaultMode,
 		),
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,
@@ -50,7 +49,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			oc,
 			spanController,
 			balanceInterval,
-			dispatcher.TypeDispatcherEvent,
+			common.DefaultMode,
 		),
 	}
 	if splitter != nil {
@@ -60,7 +59,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			splitter,
 			oc,
 			spanController,
-			dispatcher.TypeDispatcherEvent,
+			common.DefaultMode,
 		)
 	}
 	if redoOC != nil {
@@ -70,7 +69,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			redoOC,
 			redoSpanController,
 			schedulerCfg,
-			dispatcher.TypeDispatcherRedo,
+			common.RedoMode,
 		)
 		schedulers[pkgscheduler.RedoBalanceScheduler] = scheduler.NewBalanceScheduler(
 			changefeedID,
@@ -79,7 +78,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			redoOC,
 			redoSpanController,
 			balanceInterval,
-			dispatcher.TypeDispatcherRedo,
+			common.RedoMode,
 		)
 		if splitter != nil {
 			schedulers[pkgscheduler.RedoBalanceSplitScheduler] = scheduler.NewBalanceSplitsScheduler(
@@ -88,7 +87,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 				splitter,
 				redoOC,
 				redoSpanController,
-				dispatcher.TypeDispatcherRedo,
+				common.RedoMode,
 			)
 		}
 	}

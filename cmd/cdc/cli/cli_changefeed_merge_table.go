@@ -26,10 +26,10 @@ import (
 type mergeTableChangefeedOptions struct {
 	apiClientV2 apiv2client.APIV2Interface
 
-	changefeedID   string
-	namespace      string
-	tableId        int64
-	dispatcherType int64
+	changefeedID string
+	namespace    string
+	tableId      int64
+	mode         int64
 }
 
 // newCreateChangefeedOptions creates new options for the `cli changefeed create` command.
@@ -43,7 +43,7 @@ func (o *mergeTableChangefeedOptions) addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVarP(&o.namespace, "namespace", "n", "default", "Replication task (changefeed) Namespace")
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	cmd.PersistentFlags().Int64VarP(&o.tableId, "table-id", "t", 0, "the id of table to move")
-	cmd.PersistentFlags().Int64Var(&o.dispatcherType, "dispatcherType", 0, "dispatcher type")
+	cmd.PersistentFlags().Int64Var(&o.mode, "mode", 0, "enable redo when mode is 1")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 	_ = cmd.MarkPersistentFlagRequired("table-id")
 }
@@ -63,7 +63,7 @@ func (o *mergeTableChangefeedOptions) complete(f factory.Factory) error {
 func (o *mergeTableChangefeedOptions) run(cmd *cobra.Command) error {
 	ctx := context.Background()
 
-	err := o.apiClientV2.Changefeeds().MergeTable(ctx, o.namespace, o.changefeedID, o.tableId, o.dispatcherType)
+	err := o.apiClientV2.Changefeeds().MergeTable(ctx, o.namespace, o.changefeedID, o.tableId, o.mode)
 	var errStr string
 	if err != nil {
 		errStr = err.Error()

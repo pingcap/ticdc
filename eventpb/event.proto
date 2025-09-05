@@ -99,5 +99,5 @@ message DispatcherRequest {
 	string timezone = 15;
     uint64 epoch = 16;
     bool output_raw_change_event = 17;
-    int64 dispatcherType = 18;
+    int64 mode = 18;
 }

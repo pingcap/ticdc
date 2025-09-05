@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
-	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -46,8 +45,8 @@ type balanceScheduler struct {
 
 	splitter *split.Splitter
 
-	random         *rand.Rand
-	dispatcherType int64
+	random *rand.Rand
+	mode   int64
 }
 
 func NewBalanceScheduler(
@@ -57,7 +56,7 @@ func NewBalanceScheduler(
 	oc *operator.Controller,
 	sc *span.Controller,
 	_ time.Duration,
-	dispatcherType int64,
+	mode int64,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:       changefeedID,
@@ -67,7 +66,7 @@ func NewBalanceScheduler(
 		spanController:     sc,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:           splitter,
-		dispatcherType:     dispatcherType,
+		mode:               mode,
 	}
 }
 
@@ -99,7 +98,7 @@ func (s *balanceScheduler) Execute() time.Time {
 }
 
 func (s *balanceScheduler) Name() string {
-	if dispatcher.IsRedoDispatcherType(s.dispatcherType) {
+	if common.IsRedoMode(s.mode) {
 		return pkgScheduler.RedoBalanceScheduler
 	}
 	return pkgScheduler.BalanceScheduler

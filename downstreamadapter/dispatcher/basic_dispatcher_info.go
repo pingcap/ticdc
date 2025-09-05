@@ -87,8 +87,8 @@ func (d *BasicDispatcher) GetSchemaID() int64 {
 	return d.schemaID
 }
 
-func (d *BasicDispatcher) GetType() int64 {
-	return d.dispatcherType
+func (d *BasicDispatcher) GetMode() int64 {
+	return d.mode
 }
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {

@@ -74,7 +74,7 @@ type Controller struct {
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
 	ddlDispatcherID        common.DispatcherID
-	dispatcherType         int64
+	mode                   int64
 	enableSplittableCheck  bool
 }
 
@@ -84,7 +84,7 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
-	dispatcherType int64,
+	mode int64,
 ) *Controller {
 	c := &Controller{
 		changefeedID:           changefeedID,
@@ -93,7 +93,7 @@ func NewController(
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		ddlDispatcherID:        ddlSpan.ID,
-		dispatcherType:         dispatcherType,
+		mode:                   mode,
 		enableTableAcrossNodes: schedulerCfg != nil && schedulerCfg.EnableTableAcrossNodes,
 		enableSplittableCheck:  schedulerCfg != nil && schedulerCfg.EnableSplittableCheck,
 	}
@@ -170,7 +170,7 @@ func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.dispatcherType)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -411,7 +411,7 @@ func (c *Controller) ReplaceReplicaSet(
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
 			span, checkpointTs,
-			old.GetDispatcherType())
+			old.GetMode())
 		news = append(news, new)
 	}
 

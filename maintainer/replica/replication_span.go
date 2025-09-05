@@ -54,13 +54,13 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
-	dispatcherType int64,
+	mode int64,
 ) *SpanReplication {
 	r := newSpanReplication(cfID, id, SchemaID, span)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
-		ID:             id.ToPB(),
-		CheckpointTs:   checkpointTs,
-		DispatcherType: dispatcherType,
+		ID:           id.ToPB(),
+		CheckpointTs: checkpointTs,
+		Mode:         mode,
 	})
 	log.Info("new span replication created",
 		zap.String("changefeedID", cfID.Name()),
@@ -145,8 +145,8 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 	return r.status.Load()
 }
 
-func (r *SpanReplication) GetDispatcherType() int64 {
-	return r.status.Load().DispatcherType
+func (r *SpanReplication) GetMode() int64 {
+	return r.status.Load().Mode
 }
 
 // UpdateStatus updates the replication status with the following rules:
@@ -223,28 +223,28 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: r.ChangefeedID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
-				DispatcherID:   r.ID.ToPB(),
-				SchemaID:       r.schemaID,
-				Span:           r.Span,
-				StartTs:        r.status.Load().CheckpointTs,
-				DispatcherType: r.GetDispatcherType(),
+				DispatcherID: r.ID.ToPB(),
+				SchemaID:     r.schemaID,
+				Span:         r.Span,
+				StartTs:      r.status.Load().CheckpointTs,
+				Mode:         r.GetMode(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		}), nil
 }
 
 func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.GetDispatcherType())
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.GetMode())
 }
 
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, dispatcherType int64) *messaging.TargetMessage {
+func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, mode int64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: cfID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
-				DispatcherID:   dispatcherID,
-				DispatcherType: dispatcherType,
+				DispatcherID: dispatcherID,
+				Mode:         mode,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
 		})

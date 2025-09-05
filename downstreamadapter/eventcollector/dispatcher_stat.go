@@ -231,7 +231,7 @@ func (d *dispatcherStat) resume() {
 }
 
 func (d *dispatcherStat) wake() {
-	if dispatcher.IsRedoDispatcherType(d.target.GetType()) {
+	if common.IsRedoMode(d.target.GetMode()) {
 		d.eventCollector.redoDs.Wake(d.getDispatcherID())
 	} else {
 		d.eventCollector.ds.Wake(d.getDispatcherID())
@@ -642,7 +642,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			OnlyReuse:            onlyReuse,
 			BdrMode:              d.target.GetBDRMode(),
-			DispatcherType:       d.target.GetType(),
+			Mode:                 d.target.GetMode(),
 			Timezone:             d.target.GetTimezone(),
 			Integrity:            d.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
@@ -665,7 +665,7 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64)
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
 			BdrMode:           d.target.GetBDRMode(),
-			DispatcherType:    d.target.GetType(),
+			Mode:              d.target.GetMode(),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			Epoch:             epoch,
 			// OnlyReuse:         false,
@@ -683,9 +683,9 @@ func (d *dispatcherStat) newDispatcherRemoveRequest() *messaging.DispatcherReque
 			DispatcherId: d.target.GetId().ToPB(),
 			TableSpan:    d.target.GetTableSpan(),
 			// ServerId is the id of the request sender.
-			ServerId:       d.eventCollector.getLocalServerID().String(),
-			ActionType:     eventpb.ActionType_ACTION_TYPE_REMOVE,
-			DispatcherType: d.target.GetType(),
+			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
+			Mode:       d.target.GetMode(),
 		},
 	}
 }
@@ -697,9 +697,9 @@ func (d *dispatcherStat) newDispatcherPauseRequest() *messaging.DispatcherReques
 			DispatcherId: d.target.GetId().ToPB(),
 			TableSpan:    d.target.GetTableSpan(),
 			// ServerId is the id of the request sender.
-			ServerId:       d.eventCollector.getLocalServerID().String(),
-			ActionType:     eventpb.ActionType_ACTION_TYPE_PAUSE,
-			DispatcherType: d.target.GetType(),
+			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
+			Mode:       d.target.GetMode(),
 		},
 	}
 }
@@ -711,9 +711,9 @@ func (d *dispatcherStat) newDispatcherResumeRequest() *messaging.DispatcherReque
 			DispatcherId: d.target.GetId().ToPB(),
 			TableSpan:    d.target.GetTableSpan(),
 			// ServerId is the id of the request sender.
-			ServerId:       d.eventCollector.getLocalServerID().String(),
-			ActionType:     eventpb.ActionType_ACTION_TYPE_RESUME,
-			DispatcherType: d.target.GetType(),
+			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
+			Mode:       d.target.GetMode(),
 		},
 	}
 }

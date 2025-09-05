@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -31,7 +30,7 @@ import (
 
 func createTestSpanReplication(cfID common.ChangeFeedID, tableID int64) *SpanReplication {
 	totalSpan := common.TableIDToComparableSpan(tableID)
-	return NewSpanReplication(cfID, common.NewDispatcherID(), 0, &totalSpan, 1, dispatcher.TypeDispatcherEvent)
+	return NewSpanReplication(cfID, common.NewDispatcherID(), 0, &totalSpan, 1, common.DefaultMode)
 }
 
 func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {

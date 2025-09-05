@@ -151,13 +151,13 @@ func (c *EventCollector) Run(ctx context.Context) {
 
 	for _, ch := range c.receiveChannels {
 		g.Go(func() error {
-			return c.runDispatchMessage(ctx, ch, dispatcher.TypeDispatcherEvent)
+			return c.runDispatchMessage(ctx, ch, common.DefaultMode)
 		})
 	}
 
 	for _, ch := range c.redoReceiveChannels {
 		g.Go(func() error {
-			return c.runDispatchMessage(ctx, ch, dispatcher.TypeDispatcherRedo)
+			return c.runDispatchMessage(ctx, ch, common.RedoMode)
 		})
 	}
 
@@ -225,7 +225,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	defer func() {
 		log.Info("add dispatcher done",
 			zap.Stringer("dispatcherID", target.GetId()), zap.Int64("tableID", target.GetTableSpan().GetTableID()),
-			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("type", target.GetType()))
+			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("type", target.GetMode()))
 	}()
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
@@ -233,7 +233,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 
-	ds := c.getDynamicStream(target.GetType())
+	ds := c.getDynamicStream(target.GetMode())
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
@@ -270,7 +270,7 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 	stat := value.(*dispatcherStat)
 	stat.remove()
 
-	ds := c.getDynamicStream(target.GetType())
+	ds := c.getDynamicStream(target.GetMode())
 	err := ds.RemovePath(target.GetId())
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
@@ -485,9 +485,9 @@ func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessa
 // runDispatchMessage dispatches messages from the input channel to the dynamic stream.
 // Note: Avoid implementing any message handling logic within this function
 // as messages may be stale and need be verified before process.
-func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage, dispatcherType int64) error {
-	ds := c.getDynamicStream(dispatcherType)
-	metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(dispatcherType)
+func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage, mode int64) error {
+	ds := c.getDynamicStream(mode)
+	metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(mode)
 	for {
 		select {
 		case <-ctx.Done():
@@ -644,15 +644,15 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	}
 }
 
-func (c *EventCollector) getDynamicStream(dispatcherType int64) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
-	if dispatcher.IsRedoDispatcherType(dispatcherType) {
+func (c *EventCollector) getDynamicStream(mode int64) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+	if common.IsRedoMode(mode) {
 		return c.redoDs
 	}
 	return c.ds
 }
 
-func (c *EventCollector) getMetric(dispatcherType int64) (prometheus.Counter, prometheus.Counter) {
-	if dispatcher.IsRedoDispatcherType(dispatcherType) {
+func (c *EventCollector) getMetric(mode int64) (prometheus.Counter, prometheus.Counter) {
+	if common.IsRedoMode(mode) {
 		return c.metricRedoDispatcherReceivedKVEventCount, c.metricRedoDispatcherReceivedResolvedTsEventCount
 	}
 	return c.metricDispatcherReceivedKVEventCount, c.metricDispatcherReceivedResolvedTsEventCount
