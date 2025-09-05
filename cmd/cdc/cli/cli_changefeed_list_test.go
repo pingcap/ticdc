@@ -40,7 +40,7 @@ func TestChangefeedListCli(t *testing.T) {
 	cf.EXPECT().List(gomock.Any(), gomock.Any(), gomock.Any()).Return([]v2.ChangefeedCommonInfo{
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			Keyspace:       "default",
 			ID:             "pending-1",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -48,7 +48,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			Keyspace:       "default",
 			ID:             "normal-2",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -56,7 +56,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			Keyspace:       "default",
 			ID:             "failed-3",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -64,7 +64,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			Keyspace:       "default",
 			ID:             "removed-4",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -72,7 +72,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			Keyspace:       "default",
 			ID:             "finished-5",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -80,7 +80,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			Keyspace:       "default",
 			ID:             "stopped-6",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -88,7 +88,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			Keyspace:       "default",
 			ID:             "warning-7",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -96,7 +96,7 @@ func TestChangefeedListCli(t *testing.T) {
 		},
 	}, nil).Times(2)
 	// when --all=false, should contains StateNormal, StateWarning, StateFailed, StateStopped changefeed
-	os.Args = []string{"list", "--all=false", "--namespace=default"}
+	os.Args = []string{"list", "--all=false", "--keyspace=default"}
 	require.Nil(t, cmd.Execute())
 	out, err := io.ReadAll(b)
 	require.Nil(t, err)
@@ -107,7 +107,7 @@ func TestChangefeedListCli(t *testing.T) {
 	require.Contains(t, string(out), "warning-7")
 
 	// when --all=true, should contains all changefeed
-	os.Args = []string{"list", "--all=true", "--namespace=default"}
+	os.Args = []string{"list", "--all=true", "--keyspace=default"}
 	require.Nil(t, cmd.Execute())
 	out, err = io.ReadAll(b)
 	require.Nil(t, err)

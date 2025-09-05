@@ -58,7 +58,7 @@ func New(
 		resolvedTxnCaches:            make([]txnCache, opt.Count),
 		slots:                        NewSlots(numSlots),
 		notifiedNodes:                chann.NewUnlimitedChannelDefault[func()](),
-		metricConflictDetectDuration: metrics.ConflictDetectDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+		metricConflictDetectDuration: metrics.ConflictDetectDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 
 		changefeedID: changefeedID,
 	}
@@ -72,7 +72,7 @@ func New(
 
 func (d *ConflictDetector) Run(ctx context.Context) error {
 	defer func() {
-		metrics.ConflictDetectDuration.DeleteLabelValues(d.changefeedID.Namespace(), d.changefeedID.Name())
+		metrics.ConflictDetectDuration.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.Name())
 		d.closeCache()
 	}()
 

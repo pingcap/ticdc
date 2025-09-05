@@ -88,8 +88,8 @@ const (
 	APIOpVarChangefeedID = "changefeed_id"
 	// APIOpVarCaptureID is the key of capture ID in HTTP API.
 	APIOpVarCaptureID = "capture_id"
-	// APIOpVarNamespace is the key of changefeed namespace in HTTP API.
-	APIOpVarNamespace = "namespace"
+	// APIOpVarKeyspace is the key of changefeed keyspace in HTTP API
+	APIOpVarKeyspace = "keyspace"
 	// APIOpVarTiCDCUser is the key of ticdc user in HTTP API.
 	APIOpVarTiCDCUser = "user"
 	// APIOpVarTiCDCPassword is the key of ticdc password in HTTP API.

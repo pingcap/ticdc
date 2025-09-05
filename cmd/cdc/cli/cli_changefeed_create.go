@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	putil "github.com/pingcap/ticdc/pkg/util"
@@ -102,7 +103,7 @@ type createChangefeedOptions struct {
 	apiClient               apiv2client.APIV2Interface
 
 	changefeedID            string
-	namespace               string
+	keyspace                string
 	disableGCSafePointCheck bool
 	startTs                 uint64
 	timezone                string
@@ -121,7 +122,7 @@ func newCreateChangefeedOptions(commonChangefeedOptions *changefeedCommonOptions
 // flags related to template printing to it.
 func (o *createChangefeedOptions) addFlags(cmd *cobra.Command) {
 	o.commonChangefeedOptions.addFlags(cmd)
-	cmd.PersistentFlags().StringVarP(&o.namespace, "namespace", "n", "default", "Replication task (changefeed) Namespace")
+	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", common.DefaultKeyspace, "Replication task (changefeed) Keyspace")
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	cmd.PersistentFlags().BoolVarP(&o.disableGCSafePointCheck, "disable-gc-check", "", false, "Disable GC safe point check")
 	cmd.PersistentFlags().Uint64Var(&o.startTs, "start-ts", 0, "Start ts of changefeed")
@@ -214,7 +215,7 @@ func (o *createChangefeedOptions) getChangefeedConfig() *v2.ChangefeedConfig {
 	upstreamConfig := o.getUpstreamConfig()
 	return &v2.ChangefeedConfig{
 		ID:            o.changefeedID,
-		Namespace:     o.namespace,
+		Keyspace:      o.keyspace,
 		StartTs:       o.startTs,
 		TargetTs:      o.commonChangefeedOptions.targetTs,
 		SinkURI:       o.commonChangefeedOptions.sinkURI,
@@ -279,7 +280,7 @@ func (o *createChangefeedOptions) run(ctx context.Context, cmd *cobra.Command) e
 		SinkURI:       createChangefeedCfg.SinkURI,
 	}
 
-	tables, err := o.apiClient.Changefeeds().VerifyTable(ctx, verifyTableConfig)
+	tables, err := o.apiClient.Changefeeds().VerifyTable(ctx, verifyTableConfig, o.keyspace)
 	if err != nil {
 		if strings.Contains(err.Error(), "ErrInvalidIgnoreEventType") {
 			supportedEventTypes := filter.SupportedEventTypes()
@@ -320,7 +321,7 @@ func (o *createChangefeedOptions) run(ctx context.Context, cmd *cobra.Command) e
 
 	createChangefeedCfg.ReplicaConfig.IgnoreIneligibleTable = ignoreIneligibleTables
 
-	info, err := o.apiClient.Changefeeds().Create(ctx, createChangefeedCfg)
+	info, err := o.apiClient.Changefeeds().Create(ctx, createChangefeedCfg, o.keyspace)
 	if err != nil {
 		if strings.Contains(err.Error(), "ErrInvalidIgnoreEventType") {
 			supportedEventTypes := filter.SupportedEventTypes()

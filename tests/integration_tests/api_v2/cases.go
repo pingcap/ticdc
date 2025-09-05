@@ -177,7 +177,7 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	data := `{
 		"changefeed_id": "changefeed-test-v2-black-hole-1",
 		"sink_uri": "blackhole://",
-        "namespace": "test"
+        "keyspace": "test"
 	}`
 	resp := client.Post().
 		WithBody(bytes.NewReader([]byte(data))).
@@ -189,7 +189,7 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
 	}
 	ensureChangefeed(ctx, client, changefeedInfo1.ID, "normal")
-	resp = client.Get().WithURI("/changefeeds/" + changefeedInfo1.ID + "?namespace=test").Do(ctx)
+	resp = client.Get().WithURI("/changefeeds/" + changefeedInfo1.ID + "?keyspace=test").Do(ctx)
 	assertResponseIsOK(resp)
 	cfInfo := &ChangeFeedInfo{}
 	if err := json.Unmarshal(resp.body, cfInfo); err != nil {
@@ -202,7 +202,7 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	}
 
 	// pause changefeed
-	resp = client.Post().WithURI("changefeeds/changefeed-test-v2-black-hole-1/pause?namespace=test").Do(ctx)
+	resp = client.Post().WithURI("changefeeds/changefeed-test-v2-black-hole-1/pause?keyspace=test").Do(ctx)
 	assertResponseIsOK(resp)
 	assertEmptyResponseBody(resp)
 
@@ -217,7 +217,7 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	}`
 	resp = client.Put().
 		WithBody(bytes.NewReader([]byte(data))).
-		WithURI("/changefeeds/changefeed-test-v2-black-hole-1?namespace=test").
+		WithURI("/changefeeds/changefeed-test-v2-black-hole-1?keyspace=test").
 		Do(ctx)
 	assertResponseIsOK(resp)
 	changefeedInfo1 = &ChangeFeedInfo{}
@@ -235,13 +235,13 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	}
 	resp = client.Put().
 		WithBody(bytes.NewReader(cdata)).
-		WithURI("/changefeeds/changefeed-test-v2-black-hole-1?namespace=test").
+		WithURI("/changefeeds/changefeed-test-v2-black-hole-1?keyspace=test").
 		Do(ctx)
 	assertResponseIsOK(resp)
 
 	// sleep to wait owner to tick
 	time.Sleep(2 * time.Second)
-	resp = client.Get().WithURI("changefeeds/changefeed-test-v2-black-hole-1?namespace=test").Do(ctx)
+	resp = client.Get().WithURI("changefeeds/changefeed-test-v2-black-hole-1?keyspace=test").Do(ctx)
 	assertResponseIsOK(resp)
 	cf := &ChangeFeedInfo{}
 	if err := json.Unmarshal(resp.body, cf); err != nil {
@@ -254,7 +254,7 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	}
 
 	// list changefeed
-	resp = client.Get().WithURI("changefeeds?state=stopped&namespace=test").Do(ctx)
+	resp = client.Get().WithURI("changefeeds?state=stopped&keyspace=test").Do(ctx)
 	assertResponseIsOK(resp)
 	changefeedList := &ListResponse[ChangefeedCommonInfo]{}
 	if err := json.Unmarshal(resp.body, changefeedList); err != nil {
@@ -266,7 +266,7 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 
 	resp = client.Post().WithBody(bytes.NewReader(
 		[]byte(`{"overwrite_checkpoint_ts":0}`))).
-		WithURI("changefeeds/changefeed-test-v2-black-hole-1/resume?namespace=test").Do(ctx)
+		WithURI("changefeeds/changefeed-test-v2-black-hole-1/resume?keyspace=test").Do(ctx)
 	assertResponseIsOK(resp)
 	assertEmptyResponseBody(resp)
 
@@ -274,12 +274,12 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	ensureChangefeed(ctx, client, changefeedInfo1.ID, "normal")
 
 	resp = client.Delete().
-		WithURI("changefeeds/changefeed-test-v2-black-hole-1?namespace=test").Do(ctx)
+		WithURI("changefeeds/changefeed-test-v2-black-hole-1?keyspace=test").Do(ctx)
 	assertResponseIsOK(resp)
 	assertEmptyResponseBody(resp)
 
 	resp = client.Get().
-		WithURI("changefeeds/changefeed-test-v2-black-hole-1?namespace=test").Do(ctx)
+		WithURI("changefeeds/changefeed-test-v2-black-hole-1?keyspace=test").Do(ctx)
 	if resp.statusCode == 200 {
 		log.Panic("delete changefeed failed", zap.Any("resp", resp))
 	}
@@ -291,7 +291,7 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 func testCreateChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	config := ChangefeedConfig{
 		ID:            "test-create-all",
-		Namespace:     "test",
+		Keyspace:      "test",
 		SinkURI:       "blackhole://create=test",
 		ReplicaConfig: customReplicaConfig,
 	}
@@ -301,7 +301,7 @@ func testCreateChangefeed(ctx context.Context, client *CDCRESTClient) error {
 		Do(ctx)
 	assertResponseIsOK(resp)
 	ensureChangefeed(ctx, client, config.ID, "normal")
-	resp = client.Get().WithURI("/changefeeds/" + config.ID + "?namespace=test").Do(ctx)
+	resp = client.Get().WithURI("/changefeeds/" + config.ID + "?keyspace=test").Do(ctx)
 	assertResponseIsOK(resp)
 	cfInfo := &ChangeFeedInfo{}
 	if err := json.Unmarshal(resp.body, cfInfo); err != nil {
@@ -310,7 +310,7 @@ func testCreateChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	if !reflect.DeepEqual(cfInfo.Config, config.ReplicaConfig) {
 		log.Panic("config is not equals", zap.Any("add", config.ReplicaConfig), zap.Any("get", cfInfo.Config))
 	}
-	resp = client.Delete().WithURI("/changefeeds/" + config.ID + "?namespace=test").Do(ctx)
+	resp = client.Delete().WithURI("/changefeeds/" + config.ID + "?keyspace=test").Do(ctx)
 	assertResponseIsOK(resp)
 	return nil
 }
@@ -356,7 +356,7 @@ func testCapture(ctx context.Context, client *CDCRESTClient) error {
 // 	resp = client.Get().
 // 		WithURI("processors/" + processors.Items[0].ChangeFeedID + "/" +
 // 			processors.Items[0].CaptureID +
-// 			"?namespace=" + processors.Items[0].Namespace).
+// 			"?keyspace=" + processors.Items[0].Keyspace).
 // 		Do(ctx)
 // 	assertResponseIsOK(resp)
 // 	if err := json.Unmarshal(resp.body, processorDetail); err != nil {
@@ -418,7 +418,7 @@ func ensureChangefeed(ctx context.Context, client *CDCRESTClient, id, state stri
 	var info *ChangeFeedInfo
 	for i := 0; i < 10; i++ {
 		resp := client.Get().
-			WithURI("/changefeeds/" + id + "?namespace=test").Do(ctx)
+			WithURI("/changefeeds/" + id + "?keyspace=test").Do(ctx)
 		if resp.statusCode == 200 {
 			info = &ChangeFeedInfo{}
 			if err := json.Unmarshal(resp.body, info); err != nil {

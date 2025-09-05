@@ -188,15 +188,15 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		checkpointTsByCapture: newCheckpointTsCaptureMap(),
 		newChangefeed:         newChangefeed,
 
-		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 	}
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
@@ -211,7 +211,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		m.createBootstrapMessageFactory(),
 	)
 
-	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
+	metrics.MaintainerGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 
@@ -365,15 +365,15 @@ func (m *Maintainer) initialize() error {
 }
 
 func (m *Maintainer) cleanupMetrics() {
-	metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.SpanCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.TableCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Namespace(), m.id.Name())
+	metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.SpanCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.TableCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
 }
 
 func (m *Maintainer) onInit() bool {
@@ -432,7 +432,7 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs))
 		m.removed.Store(true)
 		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
-		metrics.MaintainerGauge.WithLabelValues(m.id.Namespace(), m.id.Name()).Dec()
+		metrics.MaintainerGauge.WithLabelValues(m.id.Keyspace(), m.id.Name()).Dec()
 	}
 }
 
@@ -870,8 +870,8 @@ func (m *Maintainer) collectMetrics() {
 		m.spanCountGauge.Set(float64(totalSpanCount))
 		m.tableCountGauge.Set(float64(totalTableCount))
 		m.scheduledTaskGauge.Set(float64(scheduling))
-		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent").Set(float64(absent))
-		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working").Set(float64(working))
+		metrics.TableStateGauge.WithLabelValues(m.id.Keyspace(), m.id.Name(), "Absent").Set(float64(absent))
+		metrics.TableStateGauge.WithLabelValues(m.id.Keyspace(), m.id.Name(), "Working").Set(float64(working))
 		m.lastPrintStatusTime = time.Now()
 	}
 }

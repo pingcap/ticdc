@@ -297,7 +297,7 @@ func TestLogWriterFlushLog(t *testing.T) {
 		mockWriter.On("IsRunning").Return(tt.isRunning)
 		cfg := &writer.LogWriterConfig{
 			Dir:                dir,
-			ChangeFeedID:       common.NewChangeFeedIDWithName("test-cf"),
+			ChangeFeedID:       common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspace),
 			CaptureID:          "cp",
 			MaxLogSizeInBytes:  10,
 			UseExternalStorage: true,

@@ -557,7 +557,7 @@ func NewKafkaClientID(captureAddr string,
 		clientID = configuredClientID
 	} else {
 		clientID = fmt.Sprintf("TiCDC_producer_%s_%s_%s",
-			captureAddr, changefeedID.Namespace(), changefeedID.ID())
+			captureAddr, changefeedID.Keyspace(), changefeedID.ID())
 		clientID = commonInvalidChar.ReplaceAllString(clientID, "_")
 	}
 	if !validClientID.MatchString(clientID) {
