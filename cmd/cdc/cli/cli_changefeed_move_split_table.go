@@ -30,6 +30,7 @@ type moveSplitTableChangefeedOptions struct {
 	namespace    string
 	tableId      int64
 	targetNodeID string
+	mode         int64
 }
 
 // newCreateChangefeedOptions creates new options for the `cli changefeed create` command.
@@ -44,6 +45,7 @@ func (o *moveSplitTableChangefeedOptions) addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	cmd.PersistentFlags().Int64VarP(&o.tableId, "table-id", "t", 0, "the id of table to move")
 	cmd.PersistentFlags().StringVarP(&o.targetNodeID, "target-node-id", "d", "", "the dest for the table to move")
+	cmd.PersistentFlags().Int64Var(&o.mode, "mode", 0, "enable redo when mode is 1")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 	_ = cmd.MarkPersistentFlagRequired("table-id")
 	_ = cmd.MarkPersistentFlagRequired("target-node-id")
@@ -64,7 +66,7 @@ func (o *moveSplitTableChangefeedOptions) complete(f factory.Factory) error {
 func (o *moveSplitTableChangefeedOptions) run(cmd *cobra.Command) error {
 	ctx := context.Background()
 
-	err := o.apiClientV2.Changefeeds().MoveSplitTable(ctx, o.namespace, o.changefeedID, o.tableId, o.targetNodeID)
+	err := o.apiClientV2.Changefeeds().MoveSplitTable(ctx, o.namespace, o.changefeedID, o.tableId, o.targetNodeID, o.mode)
 	var errStr string
 	if err != nil {
 		errStr = err.Error()

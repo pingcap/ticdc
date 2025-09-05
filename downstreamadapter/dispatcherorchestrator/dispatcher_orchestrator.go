@@ -288,7 +288,7 @@ func createBootstrapResponse(
 				ComponentStatus: d.GetComponentStatus(),
 				CheckpointTs:    d.GetCheckpointTs(),
 				BlockState:      d.GetBlockEventStatus(),
-				IsRedo:          true,
+				Mode:            d.GetMode(),
 			})
 		})
 	}
@@ -300,6 +300,7 @@ func createBootstrapResponse(
 			ComponentStatus: d.GetComponentStatus(),
 			CheckpointTs:    d.GetCheckpointTs(),
 			BlockState:      d.GetBlockEventStatus(),
+			Mode:            d.GetMode(),
 		})
 	})
 

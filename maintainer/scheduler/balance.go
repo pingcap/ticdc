@@ -46,6 +46,7 @@ type balanceScheduler struct {
 	splitter *split.Splitter
 
 	random *rand.Rand
+	mode   int64
 }
 
 func NewBalanceScheduler(
@@ -55,6 +56,7 @@ func NewBalanceScheduler(
 	oc *operator.Controller,
 	sc *span.Controller,
 	_ time.Duration,
+	mode int64,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:       changefeedID,
@@ -64,6 +66,7 @@ func NewBalanceScheduler(
 		spanController:     sc,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:           splitter,
+		mode:               mode,
 	}
 }
 
@@ -95,7 +98,10 @@ func (s *balanceScheduler) Execute() time.Time {
 }
 
 func (s *balanceScheduler) Name() string {
-	return "balance-scheduler"
+	if common.IsRedoMode(s.mode) {
+		return pkgScheduler.RedoBalanceScheduler
+	}
+	return pkgScheduler.BalanceScheduler
 }
 
 func (s *balanceScheduler) schedulerDefaultGroup(maxSize int) int {

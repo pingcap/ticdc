@@ -538,9 +538,9 @@ var _ DispatcherInfo = &mockDispatcherInfo{}
 
 // mockDispatcherInfo is a mock implementation of the AcceptorInfo interface
 type mockDispatcherInfo struct {
+	changefeedID common.ChangeFeedID
 	clusterID    uint64
 	serverID     string
-	changefeedID common.ChangeFeedID
 	id           common.DispatcherID
 	topic        string
 	span         *heartbeatpb.TableSpan
@@ -550,7 +550,7 @@ type mockDispatcherInfo struct {
 	bdrMode      bool
 	integrity    *integrity.Config
 	tz           *time.Location
-	redo         bool
+	mode         int64
 }
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -647,8 +647,8 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
-func (m *mockDispatcherInfo) GetIsRedo() bool {
-	return m.redo
+func (m *mockDispatcherInfo) GetMode() int64 {
+	return m.mode
 }
 
 func (m *mockDispatcherInfo) GetEpoch() uint64 {

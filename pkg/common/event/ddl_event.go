@@ -256,7 +256,7 @@ func (e *DDLEvent) GetDDLQuery() string {
 
 func (e *DDLEvent) GetDDLSchemaName() string {
 	if e == nil {
-		return "" // 要报错的
+		return ""
 	}
 	return e.SchemaName
 }

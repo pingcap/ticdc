@@ -55,7 +55,7 @@ function run() {
 	run_sql "insert into consistent_replicate_storage_file.usertable2 select * from consistent_replicate_storage_file.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 20
+	sleep 60
 
 	storage_path="file://$WORK_DIR/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
@@ -74,7 +74,7 @@ function run() {
 
 	cdc redo apply --tmp-dir="$tmp_download_path/apply" \
 		--storage="$storage_path" \
-		--sink-uri="mysql://normal:${ENPASSWORD}@127.0.0.1:3306/"
+		--sink-uri="mysql://normal:${ENPASSWORD}@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 }
 

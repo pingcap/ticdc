@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
+	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
@@ -43,6 +44,7 @@ type balanceSplitsScheduler struct {
 	nodeManager        *watcher.NodeManager
 
 	splitter *split.Splitter
+	mode     int64
 }
 
 func NewBalanceSplitsScheduler(
@@ -51,6 +53,7 @@ func NewBalanceSplitsScheduler(
 	splitter *split.Splitter,
 	oc *operator.Controller,
 	sc *span.Controller,
+	mode int64,
 ) *balanceSplitsScheduler {
 	return &balanceSplitsScheduler{
 		changefeedID:       changefeedID,
@@ -59,11 +62,15 @@ func NewBalanceSplitsScheduler(
 		operatorController: oc,
 		spanController:     sc,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		mode:               mode,
 	}
 }
 
 func (s *balanceSplitsScheduler) Name() string {
-	return "balance_splits_scheduler"
+	if common.IsRedoMode(s.mode) {
+		return pkgScheduler.RedoBalanceSplitScheduler
+	}
+	return pkgScheduler.BalanceSplitScheduler
 }
 
 func (s *balanceSplitsScheduler) Execute() time.Time {

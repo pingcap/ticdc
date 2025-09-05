@@ -79,7 +79,7 @@ func createTestSplitSpanReplications(cfID common.ChangeFeedID, tableID int64, sp
 	spans := splitTableSpanIntoMultiple(&totalSpan, spansNum)
 	replicas := make([]*SpanReplication, 0, len(spans))
 	for _, span := range spans {
-		replica := NewSpanReplication(cfID, common.NewDispatcherID(), tableID, span, 1)
+		replica := NewSpanReplication(cfID, common.NewDispatcherID(), tableID, span, 1, common.DefaultMode)
 		replicas = append(replicas, replica)
 	}
 
@@ -169,7 +169,7 @@ func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 		TableID:  100000,
 		StartKey: []byte{1},
 		EndKey:   []byte{2},
-	}, 1)
+	}, 1, common.DefaultMode)
 	checker.RemoveReplica(nonExistingReplica)
 	require.Len(t, checker.allTasks, len(replicas)-1) // Should not change
 

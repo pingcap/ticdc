@@ -41,7 +41,7 @@ func TestScheduleEvent(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "test1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
@@ -94,7 +94,7 @@ func TestResendAction(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -115,20 +115,20 @@ func TestResendAction(t *testing.T) {
 	// time is not reached
 	event.lastResendTime = time.Now()
 	event.selected.Store(true)
-	msgs := event.resend()
+	msgs := event.resend(common.DefaultMode)
 	require.Len(t, msgs, 0)
 
 	// time is not reached
 	event.lastResendTime = time.Time{}
 	event.selected.Store(false)
-	msgs = event.resend()
+	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 0)
 
 	// resend write action
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = false
 	event.writerDispatcher = dispatcherIDs[0]
-	msgs = event.resend()
+	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 
 	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
@@ -141,7 +141,7 @@ func TestResendAction(t *testing.T) {
 	}, false)
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = true
-	msgs = event.resend()
+	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
@@ -159,7 +159,7 @@ func TestResendAction(t *testing.T) {
 	}, false)
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = true
-	msgs = event.resend()
+	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
@@ -178,7 +178,7 @@ func TestResendAction(t *testing.T) {
 	}, false)
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = true
-	msgs = event.resend()
+	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
@@ -199,7 +199,7 @@ func TestUpdateSchemaID(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	require.Equal(t, 1, spanController.GetAbsentSize())

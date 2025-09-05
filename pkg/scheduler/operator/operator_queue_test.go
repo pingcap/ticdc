@@ -103,7 +103,7 @@ func TestOperatorQueue(t *testing.T) {
 
 	// Create test operators with different execution times
 	now := time.Now()
-	op1 := NewOperatorWithTime[mockReplicationID, mockReplicationStatus](
+	op1 := NewOperatorWithTime(
 		mockOperator{
 			id:       mockReplicationID{"op1"},
 			status:   mockReplicationStatus{"status1"},

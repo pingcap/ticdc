@@ -206,7 +206,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 				StartTs:   config.StartTs,
 				SchemaID:  config.SchemaID,
 			}
-			if config.IsRedo {
+			if common.IsRedoMode(config.Mode) {
 				redoInfos[dispatcherID] = info
 			} else {
 				infos[dispatcherID] = info
@@ -215,7 +215,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 			if len(reqs) != 1 {
 				log.Error("invalid remove dispatcher request count in one batch", zap.Int("count", len(reqs)))
 			}
-			if config.IsRedo {
+			if common.IsRedoMode(config.Mode) {
 				removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.redoDispatcherMap, dispatcherManager.redoSink.SinkType())
 			} else {
 				removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.dispatcherMap, dispatcherManager.sink.SinkType())
@@ -317,7 +317,7 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 			schemaID := dispatcherStatus.InfluencedDispatchers.SchemaID
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			var dispatcherIds []common.DispatcherID
-			if heartbeatResponse.IsRedo {
+			if common.IsRedoMode(heartbeatResponse.Mode) {
 				dispatcherIds = dispatcherManager.GetAllRedoDispatchers(schemaID)
 			} else {
 				dispatcherIds = dispatcherManager.GetAllDispatchers(schemaID)
@@ -329,7 +329,7 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 			}
 		case heartbeatpb.InfluenceType_All:
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
-			if heartbeatResponse.IsRedo {
+			if common.IsRedoMode(heartbeatResponse.Mode) {
 				dispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
 					if id != excludeDispatcherID {
 						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
@@ -418,34 +418,34 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 	return nil
 }
 
-// redoTsMessageDynamicStream is responsible for push RedoTsMessage to the corresponding table trigger event dispatcher.
-func newRedoTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoTsMessage, *DispatcherManager, *RedoTsMessageHandler] {
+// redoMessageDynamicStream is responsible for push RedoMessage to the corresponding table trigger event dispatcher.
+func newRedoMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMessage, *DispatcherManager, *RedoMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
-		&RedoTsMessageHandler{})
+		&RedoMessageHandler{})
 	ds.Start()
 	return ds
 }
 
-type RedoTsMessage struct {
-	*heartbeatpb.RedoTsMessage
+type RedoMessage struct {
+	*heartbeatpb.RedoMessage
 }
 
-func NewRedoTsMessage(msg *heartbeatpb.RedoTsMessage) RedoTsMessage {
-	return RedoTsMessage{msg}
+func NewRedoMessage(msg *heartbeatpb.RedoMessage) RedoMessage {
+	return RedoMessage{msg}
 }
 
-type RedoTsMessageHandler struct{}
+type RedoMessageHandler struct{}
 
-func NewRedoTsMessageHandler() RedoTsMessageHandler {
-	return RedoTsMessageHandler{}
+func NewRedoMessageHandler() RedoMessageHandler {
+	return RedoMessageHandler{}
 }
 
-func (h *RedoTsMessageHandler) Path(redoTsMessage RedoTsMessage) common.GID {
-	return common.NewChangefeedGIDFromPB(redoTsMessage.ChangefeedID)
+func (h *RedoMessageHandler) Path(redoMessage RedoMessage) common.GID {
+	return common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID)
 }
 
-func (h *RedoTsMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoTsMessage) bool {
+func (h *RedoMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoMessage) bool {
 	if len(messages) != 1 {
 		// TODO: Support batch
 		panic("invalid message count")
@@ -460,21 +460,21 @@ func (h *RedoTsMessageHandler) Handle(dispatcherManager *DispatcherManager, mess
 	return false
 }
 
-func (h *RedoTsMessageHandler) GetSize(event RedoTsMessage) int   { return 0 }
-func (h *RedoTsMessageHandler) IsPaused(event RedoTsMessage) bool { return false }
-func (h *RedoTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *RedoMessageHandler) GetSize(event RedoMessage) int   { return 0 }
+func (h *RedoMessageHandler) IsPaused(event RedoMessage) bool { return false }
+func (h *RedoMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
-func (h *RedoTsMessageHandler) GetTimestamp(event RedoTsMessage) dynstream.Timestamp {
+func (h *RedoMessageHandler) GetTimestamp(event RedoMessage) dynstream.Timestamp {
 	return 0
 }
 
-func (h *RedoTsMessageHandler) GetType(event RedoTsMessage) dynstream.EventType {
+func (h *RedoMessageHandler) GetType(event RedoMessage) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
 
-func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) interface{} {
+func (h *RedoMessageHandler) OnDrop(event RedoMessage) interface{} {
 	return nil
 }
 
@@ -510,7 +510,7 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))
 	}
-	dispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID), mergeDispatcherRequest.IsRedo)
+	dispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID), mergeDispatcherRequest.Mode)
 	return false
 }
 

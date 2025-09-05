@@ -41,6 +41,7 @@ func NewRedoDispatcher(
 	tableSpan *heartbeatpb.TableSpan,
 	startTs uint64,
 	schemaID int64,
+	schemaIDToDispatchers *SchemaIDToDispatchers,
 	startTsIsSyncpoint bool,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
@@ -50,9 +51,10 @@ func NewRedoDispatcher(
 		tableSpan,
 		startTs,
 		schemaID,
+		schemaIDToDispatchers,
 		startTsIsSyncpoint,
 		0,
-		TypeDispatcherRedo,
+		common.RedoMode,
 		sink,
 		sharedInfo,
 	)
@@ -63,7 +65,7 @@ func NewRedoDispatcher(
 	return dispatcher
 }
 
-func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if rd.GetRemovingStatus() {
 		log.Warn("redo dispatcher has removed", zap.Any("id", rd.id))
 		return true

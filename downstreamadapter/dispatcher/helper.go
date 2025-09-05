@@ -407,15 +407,6 @@ func loadBootstrapState(addr *bootstrapState) bootstrapState {
 	return bootstrapState(atomic.LoadInt32((*int32)(addr)))
 }
 
-const (
-	TypeDispatcherEvent int = iota
-	TypeDispatcherRedo
-)
-
-func IsRedoDispatcher(d DispatcherService) bool {
-	return d.GetType() == TypeDispatcherRedo
-}
-
 // addToDynamicStream add self to dynamic stream
 func addToStatusDynamicStream(d Dispatcher) {
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()

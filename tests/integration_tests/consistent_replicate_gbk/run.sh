@@ -86,7 +86,7 @@ function run() {
 	export AWS_SECRET_ACCESS_KEY=$MINIO_SECRET_KEY
 	cdc redo apply --tmp-dir="$WORK_DIR/apply" \
 		--storage="$storage_path" \
-		--sink-uri="mysql://normal:123456@127.0.0.1:3306/"
+		--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2021 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
@@ -86,8 +86,7 @@ var (
 		}, []string{"namespace", "changefeed", "type"})
 )
 
-// InitMetrics registers all metrics in this file
-func InitMetrics(registry *prometheus.Registry) {
+func InitRedoMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RedoFsyncDurationHistogram)
 	registry.MustRegister(RedoTotalRowsCountGauge)
 	registry.MustRegister(RedoWriteBytesGauge)

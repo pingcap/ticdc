@@ -39,7 +39,7 @@ func TestNewController(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	controller := NewController(cfID, ddlSpan, nil, nil)
+	controller := NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
 	require.False(t, controller.enableTableAcrossNodes)
@@ -61,6 +61,7 @@ func TestController_AddNewTable(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultMode,
 	)
 
 	table := commonEvent.Table{
@@ -96,6 +97,7 @@ func TestController_GetTaskByID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultMode,
 	)
 
 	// Add a table first
@@ -148,6 +150,7 @@ func TestController_GetTasksByTableID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultMode,
 	)
 
 	// Add a table
@@ -183,6 +186,7 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultMode,
 	)
 
 	// Add tables from the same schema
@@ -222,6 +226,7 @@ func TestController_UpdateSchemaID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultMode,
 	)
 
 	// Add a table
@@ -262,6 +267,7 @@ func TestController_Statistics(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultMode,
 	)
 
 	// Add some tables
@@ -285,7 +291,7 @@ func TestBasicFunction(t *testing.T) {
 	t.Parallel()
 
 	controller := newControllerWithCheckerForTest(t)
-	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1)
+	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, common.DefaultMode)
 	controller.AddAbsentReplicaSet(absent)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -413,5 +419,5 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true})
+	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true}, common.DefaultMode)
 }

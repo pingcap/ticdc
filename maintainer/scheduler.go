@@ -27,19 +27,20 @@ import (
 
 func NewScheduleController(changefeedID common.ChangeFeedID,
 	batchSize int,
-	oc *operator.Controller,
-	spanController *span.Controller,
+	oc, redoOC *operator.Controller,
+	spanController, redoSpanController *span.Controller,
 	balanceInterval time.Duration,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) *pkgscheduler.Controller {
 	schedulers := map[string]pkgscheduler.Scheduler{
 		pkgscheduler.BasicScheduler: scheduler.NewBasicScheduler(
-			changefeedID.String(),
+			changefeedID,
 			batchSize,
 			oc,
 			spanController,
 			schedulerCfg,
+			common.DefaultMode,
 		),
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,
@@ -48,6 +49,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			oc,
 			spanController,
 			balanceInterval,
+			common.DefaultMode,
 		),
 	}
 	if splitter != nil {
@@ -57,7 +59,37 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			splitter,
 			oc,
 			spanController,
+			common.DefaultMode,
 		)
+	}
+	if redoOC != nil {
+		schedulers[pkgscheduler.RedoBasicScheduler] = scheduler.NewBasicScheduler(
+			changefeedID,
+			batchSize,
+			redoOC,
+			redoSpanController,
+			schedulerCfg,
+			common.RedoMode,
+		)
+		schedulers[pkgscheduler.RedoBalanceScheduler] = scheduler.NewBalanceScheduler(
+			changefeedID,
+			batchSize,
+			splitter,
+			redoOC,
+			redoSpanController,
+			balanceInterval,
+			common.RedoMode,
+		)
+		if splitter != nil {
+			schedulers[pkgscheduler.RedoBalanceSplitScheduler] = scheduler.NewBalanceSplitsScheduler(
+				changefeedID,
+				batchSize,
+				splitter,
+				redoOC,
+				redoSpanController,
+				common.RedoMode,
+			)
+		}
 	}
 	return pkgscheduler.NewController(schedulers)
 }

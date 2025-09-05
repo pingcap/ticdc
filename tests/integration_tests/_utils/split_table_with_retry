@@ -8,12 +8,13 @@ set -ex
 tableID=${1}
 changefeedID=${2}
 retryCount=${3}
+mode=${4:-0}
 
 echo "split table with retry"
 count=0
 
 while [[ $count -lt $retryCount ]]; do
-	result=$(run_cdc_cli changefeed split-table-by-region-count -c "$changefeedID" -t $tableID)
+	result=$(run_cdc_cli changefeed split-table-by-region-count -c "$changefeedID" -t $tableID --mode $mode)
 	echo $result
 	success=$(echo $result | sed 's/ PASS.*//' | sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
 
