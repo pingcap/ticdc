@@ -114,7 +114,7 @@ fi
 
 echo "[$(date)] <<<<<< START cdc server in $TEST_NAME case >>>>>>"
 cd $workdir
-pid=$(ps -C run_cdc_server -o pid= | tr -d '[:space:]')
+pid=$(psutil run_cdc_server)
 # Uncomment to turn on grpc versbose log.
 # GRPC_GO_LOG_VERBOSITY_LEVEL=99 GRPC_GO_LOG_SEVERITY_LEVEL=debug \
 
@@ -131,7 +131,7 @@ if [[ "$restart" == "true" ]]; then
 			$tls \
 			$certcn \
 			$addr \
-			$pd_addr &>>$workdir/stdout$logsuffix.log
+			$pd_addr >>$workdir/stdout$logsuffix.log 2>&1
 		if [ $? -eq 143 ]; then
 			break
 		fi
@@ -147,7 +147,7 @@ else
 		$tls \
 		$certcn \
 		$addr \
-		$pd_addr &>>$workdir/stdout$logsuffix.log &
+		$pd_addr >>$workdir/stdout$logsuffix.log 2>&1 &
 fi
 
 # Make sure cdc is ready to serve

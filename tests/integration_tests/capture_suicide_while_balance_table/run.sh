@@ -62,7 +62,7 @@ function run() {
 		target_capture=$capture2_id
 		one_table_id=$(curl -X GET "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables" | jq -r --arg cid "$capture1_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
 	fi
-	table_query=$(mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "select table_name from information_schema.tables where tidb_table_id = ${one_table_id}\G")
+	table_query=$(mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -E -e "select table_name from information_schema.tables where tidb_table_id = ${one_table_id}")
 	table_name=$(echo $table_query | tail -n 1 | awk '{print $(NF)}')
 	run_sql "insert into capture_suicide_while_balance_table.${table_name} values (),(),(),(),()"
 
