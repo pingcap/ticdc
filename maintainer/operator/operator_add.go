@@ -137,7 +137,3 @@ func (m *AddDispatcherOperator) String() string {
 func (m *AddDispatcherOperator) Type() string {
 	return "add"
 }
-
-func (m *AddDispatcherOperator) BlockTsForward() bool {
-	return true
-}

@@ -29,25 +29,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// SplitDispatcherOperator support two kinds of split operator:
-// 1. just split the span to some new spans. It does not determine in which node the new span will be stored.
-// 2. split the span to some new spans, and still store the span in the origin node.
-//
-// The first kind of split operator is used when splited span when it exceed the threshold and split table span when the changefeed created.
-// The second kind of split operator is used in the split balance scheduler, to split table for more balanced traffic.
+// SplitDispatcherOperator is an operator to remove a table span from a dispatcher
+// and then added some new spans to the replication db
 type SplitDispatcherOperator struct {
 	spanController *span.Controller
 	replicaSet     *replica.SpanReplication
 	originNode     node.ID
+	splitSpans     []*heartbeatpb.TableSpan
+	checkpointTs   uint64
+	splitSpanInfo  string
 
-	splitSpans       []*heartbeatpb.TableSpan
-	splitSpanInfo    string
-	splitTargetNodes []node.ID
-	postFinish       func(span *replica.SpanReplication, node node.ID) bool
-
-	checkpointTs uint64
-	finished     atomic.Bool
-	removed      atomic.Bool
+	finished atomic.Bool
 
 	lck sync.Mutex
 
@@ -55,12 +47,10 @@ type SplitDispatcherOperator struct {
 }
 
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator
-func NewSplitDispatcherOperator(
-	spanController *span.Controller,
+func NewSplitDispatcherOperator(spanController *span.Controller,
 	replicaSet *replica.SpanReplication,
+	originNode node.ID,
 	splitSpans []*heartbeatpb.TableSpan,
-	splitTargetNodes []node.ID,
-	postFinish func(span *replica.SpanReplication, node node.ID) bool,
 ) *SplitDispatcherOperator {
 	spansInfo := ""
 	for _, span := range splitSpans {
@@ -68,15 +58,13 @@ func NewSplitDispatcherOperator(
 			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
 	}
 	op := &SplitDispatcherOperator{
-		replicaSet:       replicaSet,
-		originNode:       replicaSet.GetNodeID(),
-		splitSpans:       splitSpans,
-		checkpointTs:     replicaSet.GetStatus().GetCheckpointTs(),
-		spanController:   spanController,
-		splitSpanInfo:    spansInfo,
-		splitTargetNodes: splitTargetNodes,
-		postFinish:       postFinish,
-		sendThrottler:    newSendThrottler(),
+		replicaSet:     replicaSet,
+		originNode:     originNode,
+		splitSpans:     splitSpans,
+		checkpointTs:   replicaSet.GetStatus().GetCheckpointTs(),
+		spanController: spanController,
+		splitSpanInfo:  spansInfo,
+		sendThrottler:  newSendThrottler(),
 	}
 	return op
 }
@@ -96,7 +84,6 @@ func (m *SplitDispatcherOperator) OnNodeRemove(n node.ID) {
 		log.Info("origin node is removed",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
 		m.finished.Store(true)
-		m.removed.Store(true)
 	}
 }
 
@@ -124,7 +111,6 @@ func (m *SplitDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableS
 		log.Info("replica set removed from origin node",
 			zap.Uint64("checkpointTs", m.checkpointTs),
 			zap.String("replicaSet", m.replicaSet.ID.String()))
-
 		m.finished.Store(true)
 	}
 }
@@ -143,36 +129,14 @@ func (m *SplitDispatcherOperator) OnTaskRemoved() {
 
 	log.Info("task removed", zap.String("replicaSet", m.replicaSet.ID.String()))
 	m.finished.Store(true)
-	m.removed.Store(true)
 }
 
 func (m *SplitDispatcherOperator) PostFinish() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	log.Info("split dispatcher operator begin post finish", zap.String("id", m.replicaSet.ID.String()))
-
-	if m.removed.Load() {
-		m.spanController.MarkSpanAbsent(m.replicaSet)
-		return
-	}
-
-	newReplicaSets := m.spanController.ReplaceReplicaSet([]*replica.SpanReplication{m.replicaSet}, m.splitSpans, m.checkpointTs, m.splitTargetNodes)
-
-	if m.postFinish != nil {
-		for idx, span := range newReplicaSets {
-			ret := m.postFinish(span, m.splitTargetNodes[idx])
-			if !ret {
-				log.Error("post finish in split dispatcher operator failed, set the span absent",
-					zap.String("id", m.replicaSet.ID.String()),
-					zap.String("span", span.ID.String()),
-					zap.String("targetNode", m.splitTargetNodes[idx].String()))
-				m.spanController.MarkSpanAbsent(span)
-			}
-		}
-	}
-
-	log.Info("split dispatcher operator post finish finished", zap.String("id", m.replicaSet.ID.String()))
+	log.Info("split dispatcher operator finished", zap.String("id", m.replicaSet.ID.String()))
+	m.spanController.ReplaceReplicaSet([]*replica.SpanReplication{m.replicaSet}, m.splitSpans, m.checkpointTs)
 }
 
 func (m *SplitDispatcherOperator) String() string {
@@ -182,14 +146,4 @@ func (m *SplitDispatcherOperator) String() string {
 
 func (m *SplitDispatcherOperator) Type() string {
 	return "split"
-}
-
-func (m *SplitDispatcherOperator) BlockTsForward() bool {
-	if m.removed.Load() {
-		return true
-	}
-	if m.finished.Load() {
-		return true
-	}
-	return false
 }

@@ -116,8 +116,3 @@ func (m *AddMaintainerOperator) String() string {
 func (m *AddMaintainerOperator) Type() string {
 	return "add"
 }
-
-func (m *AddMaintainerOperator) BlockTsForward() bool {
-	log.Panic("unreachable code")
-	return false
-}

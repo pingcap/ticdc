@@ -15,7 +15,6 @@ package span
 
 import (
 	"context"
-	"math"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -25,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -82,17 +80,16 @@ func NewController(
 	changefeedID common.ChangeFeedID,
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
-	schedulerCfg *config.ChangefeedSchedulerConfig,
+	enableTableAcrossNodes bool,
 ) *Controller {
 	c := &Controller{
 		changefeedID:           changefeedID,
 		ddlSpan:                ddlSpan,
-		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg),
+		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, enableTableAcrossNodes),
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		ddlDispatcherID:        ddlSpan.ID,
-		enableTableAcrossNodes: schedulerCfg != nil && schedulerCfg.EnableTableAcrossNodes,
-		enableSplittableCheck:  schedulerCfg != nil && schedulerCfg.EnableSplittableCheck,
+		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
 
 	c.reset(c.ddlSpan)
@@ -146,10 +143,9 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		EndKey:   span.EndKey,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
-
-	// Determine if the table can be split based on configuration and table splittable status
-	if c.enableTableAcrossNodes && c.splitter != nil && (table.Splitable || !c.enableSplittableCheck) {
-		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
+	if c.enableTableAcrossNodes && table.Splitable && c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
+		// split the whole table span base on region count if table region count is exceed the limit
+		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan)
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
 }
@@ -170,16 +166,6 @@ func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
-}
-
-func (c *Controller) GetMinCheckpointTsForAbsentSpans() uint64 {
-	minCheckpointTs := uint64(math.MaxUint64)
-	for _, span := range c.GetAbsent() {
-		if span.GetStatus().CheckpointTs < minCheckpointTs {
-			minCheckpointTs = span.GetStatus().CheckpointTs
-		}
-	}
-	return minCheckpointTs
 }
 
 // GetTaskByID returns the replica set by the id, it will search the replicating, scheduling and absent map
@@ -376,12 +362,7 @@ func (c *Controller) addSchedulingReplicaSetWithoutLock(span *replica.SpanReplic
 }
 
 // ReplaceReplicaSet replaces replica sets
-func (c *Controller) ReplaceReplicaSet(
-	oldReplications []*replica.SpanReplication,
-	newSpans []*heartbeatpb.TableSpan,
-	checkpointTs uint64,
-	splitTargetNodes []node.ID,
-) []*replica.SpanReplication {
+func (c *Controller) ReplaceReplicaSet(oldReplications []*replica.SpanReplication, newSpans []*heartbeatpb.TableSpan, checkpointTs uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -411,16 +392,8 @@ func (c *Controller) ReplaceReplicaSet(
 		news = append(news, new)
 	}
 
-	if len(splitTargetNodes) > 0 && len(splitTargetNodes) == len(news) {
-		// the spans have the target nodes
-		for idx, newSpan := range news {
-			c.addSchedulingReplicaSetWithoutLock(newSpan, splitTargetNodes[idx])
-		}
-	} else {
-		c.addAbsentReplicaSetWithoutLock(news...)
-	}
-
-	return news
+	// 3. add the new replica set to the db
+	c.addAbsentReplicaSetWithoutLock(news...)
 }
 
 // IsDDLDispatcher checks if the dispatcher is a DDL dispatcher
@@ -535,6 +508,26 @@ func (c *Controller) addToSchemaAndTableMap(span *replica.SpanReplication) {
 		c.tableTasks[tableID] = tableMap
 	}
 	tableMap[span.ID] = span
+}
+
+// ForceRemove remove the span from the db
+func (c *Controller) ForceRemove(id common.DispatcherID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	span, ok := c.allTasks[id]
+	if !ok {
+		log.Warn("span not found, ignore remove action",
+			zap.String("changefeed", c.changefeedID.Name()),
+			zap.String("span", id.String()))
+		return
+	}
+
+	log.Info("remove a span",
+		zap.String("changefeed", c.changefeedID.Name()),
+		zap.String("dispatcher", id.String()),
+		zap.String("span", common.FormatTableSpan(span.Span)))
+
+	c.removeSpanWithoutLock(span)
 }
 
 // GetAbsentForTest returns absent spans for testing

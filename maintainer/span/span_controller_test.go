@@ -22,8 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +37,7 @@ func TestNewController(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	controller := NewController(cfID, ddlSpan, nil, nil)
+	controller := NewController(cfID, ddlSpan, nil, false)
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
 	require.False(t, controller.enableTableAcrossNodes)
@@ -59,8 +57,8 @@ func TestController_AddNewTable(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil, // splitter
-		nil,
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	table := commonEvent.Table{
@@ -94,8 +92,8 @@ func TestController_GetTaskByID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil, // splitter
-		nil,
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Add a table first
@@ -146,8 +144,8 @@ func TestController_GetTasksByTableID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil, // splitter
-		nil,
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Add a table
@@ -181,8 +179,8 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil, // splitter
-		nil,
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Add tables from the same schema
@@ -220,8 +218,8 @@ func TestController_UpdateSchemaID(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil, // splitter
-		nil,
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Add a table
@@ -260,8 +258,8 @@ func TestController_Statistics(t *testing.T) {
 	controller := NewController(
 		changefeedID,
 		ddlSpan,
-		nil, // splitter
-		nil,
+		nil,   // splitter
+		false, // enableTableAcrossNodes
 	)
 
 	// Add some tables
@@ -372,11 +370,11 @@ func TestReplaceReplicaSet(t *testing.T) {
 
 	notExists := &replica.SpanReplication{ID: common.NewDispatcherID()}
 	require.PanicsWithValue(t, "old replica set not found", func() {
-		controller.ReplaceReplicaSet([]*replica.SpanReplication{notExists}, []*heartbeatpb.TableSpan{{}, {}}, 1, []node.ID{})
+		controller.ReplaceReplicaSet([]*replica.SpanReplication{notExists}, []*heartbeatpb.TableSpan{{}, {}}, 1)
 	})
 	require.Len(t, controller.GetAllTasks(), 2)
 
-	controller.ReplaceReplicaSet([]*replica.SpanReplication{replicaSpan}, []*heartbeatpb.TableSpan{testutil.GetTableSpanByID(3), testutil.GetTableSpanByID(4)}, 5, []node.ID{})
+	controller.ReplaceReplicaSet([]*replica.SpanReplication{replicaSpan}, []*heartbeatpb.TableSpan{testutil.GetTableSpanByID(3), testutil.GetTableSpanByID(4)}, 5)
 	require.Len(t, controller.GetAllTasks(), 3)
 	require.Equal(t, 2, controller.GetAbsentSize())
 	require.Equal(t, 2, controller.GetTaskSizeBySchemaID(1))
@@ -402,8 +400,65 @@ func TestMarkSpanAbsent(t *testing.T) {
 	require.Equal(t, "", replicaSpan.GetNodeID().String())
 }
 
+// TestForceRemove tests the ForceRemove functionality
+func TestForceRemove(t *testing.T) {
+	t.Parallel()
+
+	controller := newControllerWithCheckerForTest(t)
+	// replicating and scheduling will be returned
+	replicaSpanID := common.NewDispatcherID()
+	replicaSpan := replica.NewWorkingSpanReplication(controller.changefeedID, replicaSpanID,
+		1,
+		testutil.GetTableSpanByID(3), &heartbeatpb.TableSpanStatus{
+			ID:              replicaSpanID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1")
+	controller.AddReplicatingSpan(replicaSpan)
+	controller.ForceRemove(common.NewDispatcherID())
+	require.Len(t, controller.GetAllTasks(), 2)
+	controller.ForceRemove(replicaSpan.ID)
+	require.Len(t, controller.GetAllTasks(), 1)
+}
+
+// TestRemoveAllTables tests the RemoveAll functionality
+func TestRemoveAllTables(t *testing.T) {
+	t.Parallel()
+
+	controller := newControllerWithCheckerForTest(t)
+	// ddl span will not be removed
+	removed := controller.RemoveAll()
+	require.Len(t, removed, 0)
+	require.Len(t, controller.GetAllTasks(), 1)
+	// replicating and scheduling will be returned
+	replicaSpanID := common.NewDispatcherID()
+	replicaSpan := replica.NewWorkingSpanReplication(controller.changefeedID, replicaSpanID,
+		1,
+		testutil.GetTableSpanByID(3), &heartbeatpb.TableSpanStatus{
+			ID:              replicaSpanID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1")
+	controller.AddReplicatingSpan(replicaSpan)
+
+	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1)
+	controller.AddAbsentReplicaSet(absent)
+
+	scheduling := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1)
+	controller.AddAbsentReplicaSet(scheduling)
+	controller.MarkSpanScheduling(scheduling)
+
+	require.Len(t, controller.GetAllTasks(), 4)
+	require.Len(t, controller.GetReplicating(), 1)
+	require.Len(t, controller.GetAbsent(), 1)
+	require.Len(t, controller.GetScheduling(), 1)
+
+	removed = controller.RemoveAll()
+	require.Len(t, removed, 2)
+	require.Len(t, controller.GetAllTasks(), 1)
+}
+
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
-	testutil.SetUpTestServices()
 	cfID := common.NewChangeFeedIDWithName("test")
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -413,5 +468,6 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true})
+	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
+	return NewController(cfID, ddlSpan, nil, true)
 }

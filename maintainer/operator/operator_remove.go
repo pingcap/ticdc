@@ -106,7 +106,3 @@ func (m *removeDispatcherOperator) String() string {
 func (m *removeDispatcherOperator) Type() string {
 	return "remove"
 }
-
-func (m *removeDispatcherOperator) BlockTsForward() bool {
-	return false
-}

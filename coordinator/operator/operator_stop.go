@@ -126,8 +126,3 @@ func (m *StopChangefeedOperator) String() string {
 func (m *StopChangefeedOperator) Type() string {
 	return "stop"
 }
-
-func (m *StopChangefeedOperator) BlockTsForward() bool {
-	log.Panic("unreachable code")
-	return false
-}

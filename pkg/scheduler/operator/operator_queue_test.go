@@ -94,10 +94,6 @@ func (m mockOperator) String() string {
 	return m.id.String()
 }
 
-func (m mockOperator) BlockTsForward() bool {
-	return false
-}
-
 func TestOperatorQueue(t *testing.T) {
 	queue := make(OperatorQueue[mockReplicationID, mockReplicationStatus], 0)
 

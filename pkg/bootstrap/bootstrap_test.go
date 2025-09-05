@@ -144,7 +144,7 @@ func TestGetAllNodes(t *testing.T) {
 		return &messaging.TargetMessage{}
 	})
 	b.HandleNewNodes([]*node.Info{{ID: "ab"}, {ID: "cd"}})
-	nodes := b.GetAllNodeIDs()
+	nodes := b.GetAllNodes()
 	require.Equal(t, 2, len(nodes))
 	// modify nodes out of bootstrap
 	delete(nodes, "ab")

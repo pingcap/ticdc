@@ -96,7 +96,3 @@ func (m *OccupyDispatcherOperator) String() string {
 func (m *OccupyDispatcherOperator) Type() string {
 	return "occupy"
 }
-
-func (m *OccupyDispatcherOperator) BlockTsForward() bool {
-	return false
-}
