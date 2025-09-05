@@ -450,7 +450,7 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 		info.rmStorageOnlyFields()
 	}
 
-	if !sink.IsMySQLCompatibleScheme(uri.Scheme) {
+	if !IsMySQLCompatibleScheme(uri.Scheme) {
 		info.rmDBOnlyFields()
 	} else {
 		// remove fields only being used by MQ and Storage downstream
@@ -579,7 +579,7 @@ func (info *ChangeFeedInfo) fixMySQLSinkProtocol() {
 		return
 	}
 
-	if sink.IsMQScheme(uri.Scheme) {
+	if IsMQScheme(uri.Scheme) {
 		return
 	}
 
@@ -604,7 +604,7 @@ func (info *ChangeFeedInfo) fixMQSinkProtocol() {
 		return
 	}
 
-	if !sink.IsMQScheme(uri.Scheme) {
+	if !IsMQScheme(uri.Scheme) {
 		return
 	}
 

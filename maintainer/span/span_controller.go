@@ -71,6 +71,7 @@ type Controller struct {
 	nodeManager            *watcher.NodeManager
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
+	enableSplittableCheck  bool
 	ddlDispatcherID        common.DispatcherID
 }
 
@@ -80,6 +81,7 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	enableTableAcrossNodes bool,
+	enableSplittableCheck bool,
 ) *Controller {
 	c := &Controller{
 		changefeedID:           changefeedID,
@@ -88,6 +90,7 @@ func NewController(
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
+		enableSplittableCheck:  enableSplittableCheck,
 		ddlDispatcherID:        ddlSpan.ID,
 	}
 
@@ -142,7 +145,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		EndKey:   span.EndKey,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
-	if c.enableTableAcrossNodes && table.Splitable && c.splitter != nil && c.nodeManager != nil && len(c.nodeManager.GetAliveNodes()) > 1 {
+	if c.enableTableAcrossNodes && c.splitter != nil && (table.Splitable || !c.enableSplittableCheck) {
 		// split the whole table span base on region count if table region count is exceed the limit
 		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan)
 	}

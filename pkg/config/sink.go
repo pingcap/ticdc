@@ -712,7 +712,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		return err
 	}
 
-	if sink.IsMySQLCompatibleScheme(sinkURI.Scheme) {
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
 		return nil
 	}
 
@@ -857,12 +857,12 @@ func (s *SinkConfig) validateAndAdjustSinkURI(sinkURI *url.URL) error {
 		zap.String("txnAtomicity", string(util.GetOrZero(s.TxnAtomicity))))
 
 	// Check that protocol config is compatible with the scheme.
-	if sink.IsMySQLCompatibleScheme(sinkURI.Scheme) && s.Protocol != nil {
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) && s.Protocol != nil {
 		return cerror.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("protocol %s "+
 			"is incompatible with %s scheme", util.GetOrZero(s.Protocol), sinkURI.Scheme))
 	}
 	// For testing purposes, any protocol should be legal for blackhole.
-	if sink.IsMQScheme(sinkURI.Scheme) || sink.IsStorageScheme(sinkURI.Scheme) {
+	if IsMQScheme(sinkURI.Scheme) || IsStorageScheme(sinkURI.Scheme) {
 		return s.ValidateProtocol(sinkURI.Scheme)
 	}
 	return nil

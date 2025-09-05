@@ -70,16 +70,18 @@ func NewController(changefeedID common.ChangeFeedID,
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
 	enableTableAcrossNodes := false
+	enableSplittableCheck := false
 	var splitter *split.Splitter
 	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
 		enableTableAcrossNodes = true
+		enableSplittableCheck = cfConfig.Scheduler.EnableSplittableCheck
 		splitter = split.NewSplitter(changefeedID, pdAPIClient, cfConfig.Scheduler)
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	// Create span controller
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes)
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, enableTableAcrossNodes, enableSplittableCheck)
 
 	// Create operator controller using spanController
 	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
