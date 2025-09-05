@@ -198,9 +198,19 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return err
 	}
 	if exist {
+		log.Info("table schema file already exists",
+			zap.String("namespace", f.changefeedID.Namespace()),
+			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.Any("versionedTableName", table),
+			zap.String("path", tblSchemaFile))
 		f.versionMap[table] = table.TableInfoVersion
 		return nil
 	}
+	log.Info("table schema file not exists",
+		zap.String("namespace", f.changefeedID.Namespace()),
+		zap.Stringer("changefeedID", f.changefeedID.ID()),
+		zap.Any("versionedTableName", table),
+		zap.String("path", tblSchemaFile))
 
 	// walk the table meta path to find the last schema file
 	_, checksum := mustParseSchemaName(tblSchemaFile)
@@ -216,6 +226,11 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		if !strings.HasSuffix(path, checksumSuffix) {
 			return nil
 		}
+		log.Info("found schema file with the same checksum",
+			zap.String("namespace", f.changefeedID.Namespace()),
+			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.Any("versionedTableName", table),
+			zap.String("path", path))
 		version, parsedChecksum := mustParseSchemaName(path)
 		if parsedChecksum != checksum {
 			log.Error("invalid schema file name",
@@ -237,6 +252,14 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 
 	// Case 2: the table meta path is not empty.
 	if schemaFileCnt != 0 && lastVersion != 0 {
+		log.Info("table schema file with the same checksum already exists",
+			zap.String("namespace", f.changefeedID.Namespace()),
+			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.Any("versionedTableName", table),
+			zap.Uint64("tableVersion", lastVersion),
+			zap.Uint32("checksum", checksum))
+		// record the last version of the table schema file.
+		// we don't need to write schema file to external storage again.
 		f.versionMap[table] = lastVersion
 		return nil
 	}
