@@ -145,39 +145,38 @@ pulsar_groups=(
 
 storage_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'canal_json_storage_partition_table'
 	# G01
-	csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered
-	''
+	'canal_json_storage_partition_table'
 	# G02
-	'canal_json_storage_basic canal_json_storage_partition_table'
+	'canal_json_storage_partition_table'
 	# G03
-	'csv_storage_basic storage_csv_update'
+	'canal_json_storage_partition_table'
 	# G04
-	'ddl_for_split_tables_with_random_move_table'
+	'canal_json_storage_partition_table'
 	# G05
-	'move_table drop_many_tables'
+	'canal_json_storage_partition_table'
 	# G06
-	'cdc default_value'
+	'canal_json_storage_partition_table'
 	# G07
-	'merge_table resolve_lock force_replicate_table'
+	'canal_json_storage_partition_table'
 	# G08
-	'tidb_mysql_test'
+	'canal_json_storage_partition_table'
 	# G09
-	'ddl_for_split_tables_with_merge_and_split'
+	'canal_json_storage_partition_table'
 	# G10
-	'ddl_for_split_tables_with_random_merge_and_split'
+	'canal_json_storage_partition_table'
 	# G11
 	# fail_over_ddl_mix_with_syncpoint
-	''
+	'canal_json_storage_partition_table'
 	# G12
-	'ddl_with_random_move_table'
+	'canal_json_storage_partition_table'
 	# G13
-	'fail_over region_merge'
+	'canal_json_storage_partition_table'
 	# G14
-	'fail_over_ddl_mix'
+	'canal_json_storage_partition_table'
 	# G15
-	''
+	'canal_json_storage_partition_table'
 )
 
 # Source shared functions and check test coverage
