@@ -84,7 +84,7 @@ main() {
 
     sleep 60    
 
-    query_dispatcher_count "127.0.0.1:8300" "test" 26 100 le  # 4 * 5 + 5 + 1
+    query_dispatcher_count "127.0.0.1:8301" "test" 26 100 le  # 4 * 5 + 5 + 1
 
 	cleanup_process $CDC_BINARY
 }
