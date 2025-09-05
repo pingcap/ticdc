@@ -19,13 +19,13 @@ import (
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/blackhole"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/kafka"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/pulsar"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	pkgConfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 )
@@ -48,17 +48,17 @@ func New(ctx context.Context, config *config.ChangefeedConfig, changefeedID comm
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
-	scheme := helper.GetScheme(sinkURI)
+	scheme := pkgConfig.GetScheme(sinkURI)
 	switch scheme {
-	case helper.MySQLScheme, helper.MySQLSSLScheme, helper.TiDBScheme, helper.TiDBSSLScheme:
+	case pkgConfig.MySQLScheme, pkgConfig.MySQLSSLScheme, pkgConfig.TiDBScheme, pkgConfig.TiDBSSLScheme:
 		return mysql.New(ctx, changefeedID, config, sinkURI)
-	case helper.KafkaScheme, helper.KafkaSSLScheme:
+	case pkgConfig.KafkaScheme, pkgConfig.KafkaSSLScheme:
 		return kafka.New(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.PulsarScheme, helper.PulsarSSLScheme, helper.PulsarHTTPScheme, helper.PulsarHTTPSScheme:
+	case pkgConfig.PulsarScheme, pkgConfig.PulsarSSLScheme, pkgConfig.PulsarHTTPScheme, pkgConfig.PulsarHTTPSScheme:
 		return pulsar.New(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.S3Scheme, helper.FileScheme, helper.GCSScheme, helper.GSScheme, helper.AzblobScheme, helper.AzureScheme, helper.CloudStorageNoopScheme:
+	case pkgConfig.S3Scheme, pkgConfig.FileScheme, pkgConfig.GCSScheme, pkgConfig.GSScheme, pkgConfig.AzblobScheme, pkgConfig.AzureScheme, pkgConfig.CloudStorageNoopScheme:
 		return cloudstorage.New(ctx, changefeedID, sinkURI, config.SinkConfig, nil)
-	case helper.BlackHoleScheme:
+	case pkgConfig.BlackHoleScheme:
 		return blackhole.New()
 	}
 	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
@@ -69,17 +69,17 @@ func Verify(ctx context.Context, config *config.ChangefeedConfig, changefeedID c
 	if err != nil {
 		return errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
-	scheme := helper.GetScheme(sinkURI)
+	scheme := pkgConfig.GetScheme(sinkURI)
 	switch scheme {
-	case helper.MySQLScheme, helper.MySQLSSLScheme, helper.TiDBScheme, helper.TiDBSSLScheme:
+	case pkgConfig.MySQLScheme, pkgConfig.MySQLSSLScheme, pkgConfig.TiDBScheme, pkgConfig.TiDBSSLScheme:
 		return mysql.Verify(ctx, sinkURI, config)
-	case helper.KafkaScheme, helper.KafkaSSLScheme:
+	case pkgConfig.KafkaScheme, pkgConfig.KafkaSSLScheme:
 		return kafka.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.PulsarScheme, helper.PulsarSSLScheme, helper.PulsarHTTPScheme, helper.PulsarHTTPSScheme:
+	case pkgConfig.PulsarScheme, pkgConfig.PulsarSSLScheme, pkgConfig.PulsarHTTPScheme, pkgConfig.PulsarHTTPSScheme:
 		return pulsar.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.S3Scheme, helper.FileScheme, helper.GCSScheme, helper.GSScheme, helper.AzblobScheme, helper.AzureScheme, helper.CloudStorageNoopScheme:
+	case pkgConfig.S3Scheme, pkgConfig.FileScheme, pkgConfig.GCSScheme, pkgConfig.GSScheme, pkgConfig.AzblobScheme, pkgConfig.AzureScheme, pkgConfig.CloudStorageNoopScheme:
 		return cloudstorage.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
-	case helper.BlackHoleScheme:
+	case pkgConfig.BlackHoleScheme:
 		return nil
 	}
 	return errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)

@@ -27,7 +27,6 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -168,7 +167,7 @@ func (c *Config) Apply(
 	}
 	c.sinkURI = sinkURI
 	scheme := strings.ToLower(sinkURI.Scheme)
-	if !helper.IsMySQLCompatibleScheme(scheme) {
+	if !config.IsMySQLCompatibleScheme(scheme) {
 		return cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 	query := sinkURI.Query()
@@ -322,7 +321,7 @@ func IsSinkSafeMode(sinkURI *url.URL, replicaConfig *config.ReplicaConfig) (bool
 	}
 
 	scheme := strings.ToLower(sinkURI.Scheme)
-	if !helper.IsMySQLCompatibleScheme(scheme) {
+	if !config.IsMySQLCompatibleScheme(scheme) {
 		return false, cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 	query := sinkURI.Query()
