@@ -198,19 +198,9 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return err
 	}
 	if exist {
-		log.Info("table schema file already exists",
-			zap.String("namespace", f.changefeedID.Namespace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
-			zap.Any("versionedTableName", table),
-			zap.String("path", tblSchemaFile))
 		f.versionMap[table] = table.TableInfoVersion
 		return nil
 	}
-	log.Info("table schema file not exists",
-		zap.String("namespace", f.changefeedID.Namespace()),
-		zap.Stringer("changefeedID", f.changefeedID.ID()),
-		zap.Any("versionedTableName", table),
-		zap.String("path", tblSchemaFile))
 
 	// walk the table meta path to find the last schema file
 	_, checksum := mustParseSchemaName(tblSchemaFile)
@@ -241,7 +231,9 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 				"expected checksum: %d, actual checksum: %d", checksum, parsedChecksum)
 			return errors.ErrInternalCheckFailed.GenWithStackByArgs(errMsg)
 		}
-		if version > lastVersion {
+		// it is possible that a dml event send after a ddl event during dispatcher scheduling,,
+		// so we use the largest version <= table.TableInfoVersion
+		if version <= table.TableInfoVersion && version > lastVersion {
 			lastVersion = version
 		}
 		return nil
@@ -252,7 +244,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 
 	// Case 2: the table meta path is not empty.
 	if schemaFileCnt != 0 && lastVersion != 0 {
-		log.Info("table schema file with the same checksum already exists",
+		log.Info("table schema file with exact version not found, using latest available",
 			zap.String("namespace", f.changefeedID.Namespace()),
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
