@@ -848,12 +848,14 @@ func (m *Maintainer) handleResendMessage() {
 	if m.postBootstrapMsg != nil {
 		m.sendPostBootstrapRequest()
 	}
-	if m.enableRedo {
+	if m.controller.redoBarrier != nil {
 		// resend redo barrier ack messages
 		m.sendMessages(m.controller.redoBarrier.Resend())
 	}
-	// resend barrier ack messages
-	m.sendMessages(m.controller.barrier.Resend())
+	if m.controller.barrier != nil {
+		// resend barrier ack messages
+		m.sendMessages(m.controller.barrier.Resend())
+	}
 }
 
 func (m *Maintainer) tryCloseChangefeed() bool {

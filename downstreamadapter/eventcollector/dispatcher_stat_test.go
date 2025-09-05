@@ -57,7 +57,7 @@ func (m *mockDispatcher) GetStartTs() uint64 {
 	return m.startTs
 }
 
-func (m *mockDispatcher) GetType() int64 {
+func (m *mockDispatcher) GetMode() int64 {
 	return common.DefaultMode
 }
 
