@@ -376,7 +376,7 @@ func (db *replicationDB[T, R]) getOrCreateGroup(task R) *replicationGroup[T, R] 
 		db.taskGroups[groupID] = g
 		log.Info("scheduler: add new task group", zap.String("schedulerID", db.id),
 			zap.String("group", GetGroupName(groupID)),
-			zap.Stringer("groupType", GroupType(groupID)))
+			zap.Int64("groupID", int64(groupID)))
 	}
 	return g
 }
