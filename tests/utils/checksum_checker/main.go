@@ -23,7 +23,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -189,7 +189,7 @@ func doChecksum(tx *sql.Tx, schema, table string, columns []string) (uint32, err
 	return checkSum, nil
 }
 
-func getColumns(tx *sql.Tx, schema, table string, selector columnselector.Selector) (result []string, err error) {
+func getColumns(tx *sql.Tx, schema, table string, selector *columnselector.ColumnSelector) (result []string, err error) {
 	rows, err := tx.Query(fmt.Sprintf("SHOW COLUMNS FROM %s", schema+"."+table))
 	if err != nil {
 		return nil, errors.Trace(err)

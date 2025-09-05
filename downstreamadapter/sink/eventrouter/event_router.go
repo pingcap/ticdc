@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -149,5 +150,36 @@ func (s *EventRouter) matchTopicGenerator(schema, table string) topic.Generator 
 		}
 	}
 	log.Panic("the dispatch rule must cover all tables")
+	return nil
+}
+
+// VerifyTables return error if any one table route rule is invalid.
+func (s *EventRouter) VerifyTables(infos []*common.TableInfo) error {
+	for _, table := range infos {
+		partitionDispatcher := s.GetPartitionGenerator(table.TableName.Schema, table.TableName.Table)
+		switch v := partitionDispatcher.(type) {
+		case *partition.IndexValuePartitionGenerator:
+			if v.IndexName != "" {
+				index := table.GetIndex(v.IndexName)
+				if index == nil {
+					return cerror.ErrDispatcherFailed.GenWithStack(
+						"index not found when verify the table, table: %v, index: %s", table.TableName, v.IndexName)
+				}
+				// only allow the unique index to be set.
+				// For the non-unique index, if any column belongs to the index is updated,
+				// the event is not split, it may cause incorrect data consumption.
+				if !index.Unique {
+					return cerror.ErrDispatcherFailed.GenWithStack(
+						"index is not unique when verify the table, table: %v, index: %s", table.TableName, v.IndexName)
+				}
+			}
+		case *partition.ColumnsPartitionGenerator:
+			_, err := table.OffsetsByNames(v.Columns)
+			if err != nil {
+				return err
+			}
+		default:
+		}
+	}
 	return nil
 }

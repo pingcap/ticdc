@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/tidb/pkg/meta/model"
 )
 
 type Event interface {
@@ -221,4 +222,8 @@ func (s EventSenderState) GetSize() int {
 
 func (s EventSenderState) IsPaused() bool {
 	return s == EventSenderStatePaused
+}
+
+type Selector interface {
+	Select(colInfo *model.ColumnInfo) bool
 }
