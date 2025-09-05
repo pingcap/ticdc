@@ -6292,7 +6292,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of KV client dispatched event per second",
           "fieldConfig": {
             "defaults": {
@@ -6403,7 +6403,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "To prevent excessive accumulation of region request tasks on the TiKV side, CDC will implement rate limiting on the number of requests it initiates.",
           "fieldConfig": {
             "defaults": {},
@@ -6493,7 +6493,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -6602,7 +6602,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "To prevent excessive accumulation of region request tasks on the TiKV side, CDC will implement rate limiting on the number of requests it initiates.",
           "fieldConfig": {
             "defaults": {},
@@ -6692,7 +6692,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Log puller memory quota",
           "fieldConfig": {
             "defaults": {},
@@ -6791,7 +6791,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The size of batch resolved regions count",
           "fieldConfig": {
             "defaults": {},
