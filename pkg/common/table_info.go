@@ -416,6 +416,22 @@ func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	return false
 }
 
+// IsEligible returns whether the table is a eligible table
+func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
+	// Sequence is not supported yet, TiCDC needs to filter all sequence tables.
+	// See https://github.com/pingcap/tiflow/issues/4559
+	if ti.IsSequence() {
+		return false
+	}
+	if forceReplicate {
+		return true
+	}
+	if ti.IsView() {
+		return true
+	}
+	return len(ti.columnSchema.HandleKeyIDs) != 0
+}
+
 // GetIndex return the corresponding index by the given name.
 func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 	for _, index := range ti.columnSchema.Indices {

@@ -98,7 +98,11 @@ def create_changefeed(sink_uri):
     assert resp.status_code == rq.codes.bad_request
 
     # create changefeed fail because dispatcher is invalid
+<<<<<<< HEAD
     url = BASE_URL1 + "/changefeeds?keyspace=keyspace1"
+=======
+    url = BASE_URL1+"/changefeeds"
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
     data = json.dumps({
         "changefeed_id": "changefeed-test-v2",
         "sink_uri": "kafka://127.0.0.1:9092/http_api_tls?protocol=simple",
@@ -232,7 +236,11 @@ def update_changefeed():
     assert resp.status_code == rq.codes.bad_request
 
     # can't update dispatchers
+<<<<<<< HEAD
     url = BASE_URL0 + "/changefeeds/changefeed-test2?keyspace=keyspace1"
+=======
+    url = BASE_URL0+"/changefeeds/changefeed-test2"
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
     data = json.dumps({
         "sink_uri": "kafka://127.0.0.1:9092/http_api_tls?protocol=simple",
         "replica_config": {
@@ -355,7 +363,14 @@ def set_log_level():
 
 
 def verify_table():
+<<<<<<< HEAD
     url = BASE_URL0 + "/tso"
+=======
+    # FIXME: Enable this test case after we fully support verify table API
+    print("pass test: verify table")
+    return
+    url = BASE_URL0+"/tso"
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
     # we need to retry since owner resign before this func call
     i = 0
     while i < 10:
@@ -421,7 +436,11 @@ def unsafe_apis():
     # FIXME: Enable this test case after we fully support unsafe APIs
     print("pass test: unsafe apis")
     return
+<<<<<<< HEAD
     url = BASE_URL1 + "/unsafe/metadata"
+=======
+    url = BASE_URL1+"/unsafe/metadata"
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
     resp = rq.get(url, cert=CERT, verify=VERIFY)
     assert resp.status_code == rq.codes.ok
     print("status code", resp.status_code)

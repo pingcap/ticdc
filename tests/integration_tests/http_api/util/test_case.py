@@ -116,7 +116,11 @@ def create_changefeed(sink_uri):
     assert_status_code(resp, rq.codes.bad_request, url)
 
     # create changefeed fail because dispatcher is invalid
+<<<<<<< HEAD
     url = BASE_URL1_V2+"/changefeeds?keyspace=keyspace1"
+=======
+    url = BASE_URL1_V2+"/changefeeds"
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
     data = json.dumps({
         "changefeed_id": "changefeed-test-v2",
         "sink_uri": "kafka://127.0.0.1:9092/http_api?protocol=simple",
@@ -136,6 +140,7 @@ def create_changefeed(sink_uri):
     resp = rq.post(url, data=data, headers=headers)
     assert "ErrDispatcherFailed" in resp.text, f"{resp.text}"
 
+<<<<<<< HEAD
     # create changefeed fail because glue schema config is invalid
     url = BASE_URL1_V2+"/changefeeds?keyspace=keyspace1"
     data = json.dumps({
@@ -157,12 +162,18 @@ def create_changefeed(sink_uri):
     assert "CDC:ErrKafkaNewProducer" in resp.text, f"{resp.text}"
     assert "not found, ResolveEndpointV2" not in resp.text, f"{resp.text}"
 
+=======
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
     print("pass test: create changefeed")
 
 
 def list_changefeed():
     # test state: all
+<<<<<<< HEAD
     url = BASE_URL0_V2+"/changefeeds?state=all&keyspace=keyspace1"
+=======
+    url = BASE_URL0_V2+"/changefeeds?state=all"
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 
     # Add retry logic to wait for changefeeds
     # We need to retry because the coordinator need some time to sync the changefeed infos from etcd
@@ -266,7 +277,11 @@ def update_changefeed():
     assert_status_code(resp, rq.codes.bad_request, url)
 
     # can't update dispatchers
+<<<<<<< HEAD
     url = BASE_URL0_V2+"/changefeeds/changefeed-test2?keyspace=keyspace1"
+=======
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
     data = json.dumps({
         "sink_uri": "kafka://127.0.0.1:9092/http_api?protocol=simple",
         "replica_config": {
@@ -353,16 +368,24 @@ def move_table(cfID="changefeed-test1"):
 
     # move table
     url = BASE_URL0_V2 + "/changefeeds/" + cfID + \
+<<<<<<< HEAD
         "/move_table?targetNodeID=" + capture_id + \
         "&tableID=" + str(table_id) + "&keyspace=keyspace1"
+=======
+        "/move_table?targetNodeID=" + capture_id + "&tableID=" + str(table_id)
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.ok, url)
     logging.info(f"Move table success")
     # move table fail
     # The target node is not found
     url = BASE_URL0_V2 + "/changefeeds/" + cfID + \
+<<<<<<< HEAD
         "/move_table?targetNodeID=&tableID=" + \
         str(table_id) + "&keyspace=keyspace1"
+=======
+        "/move_table?targetNodeID=&tableID=" + str(table_id)
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.internal_server_error, url)
 

@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -30,7 +31,10 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+<<<<<<< HEAD
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+=======
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -135,6 +139,22 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	co, err := h.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	_, status, err := co.GetChangefeed(ctx, common.NewChangeFeedDisplayName(cfg.ID, cfg.Namespace))
+	if err != nil && errors.ErrChangeFeedNotExists.NotEqual(err) {
+		_ = c.Error(err)
+		return
+	}
+	if status != nil {
+		err = errors.ErrChangeFeedAlreadyExists.GenWithStackByArgs(cfg.ID)
+		_ = c.Error(err)
+		return
+	}
+
 	ts, logical, err := h.server.GetPdClient().GetTS(ctx)
 	if err != nil {
 		_ = c.Error(errors.ErrPDEtcdAPIError.GenWithStackByArgs("fail to get ts from pd client"))
@@ -190,6 +210,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	scheme := sinkURIParsed.Scheme
+<<<<<<< HEAD
 	topic := ""
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
@@ -222,6 +243,14 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	ineligibleTables, _, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+=======
+	topic := strings.TrimFunc(sinkURIParsed.Path, func(r rune) bool {
+		return r == '/'
+	})
+	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
+
+	ineligibleTables, _, err := getVerifiedTables(ctx, replicaCfg, h.server.GetKVStorage(), cfg.StartTs, scheme, topic, protocol)
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -812,6 +841,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
+<<<<<<< HEAD
 	if configUpdated || sinkURIUpdated {
 		// verify replicaConfig
 		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
@@ -855,6 +885,25 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 				_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
 				return
 			}
+		}
+=======
+	scheme := sinkURIParsed.Scheme
+	topic := strings.TrimFunc(sinkURIParsed.Path, func(r rune) bool {
+		return r == '/'
+	})
+	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(oldCfInfo.Config.Sink.Protocol))
+
+	// use checkpointTs get snapshot from kv storage
+	ineligibleTables, _, err := getVerifiedTables(ctx, oldCfInfo.Config, h.server.GetKVStorage(), status.CheckpointTs, scheme, topic, protocol)
+	if err != nil {
+		_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
+		return
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
+	}
+	if !oldCfInfo.Config.ForceReplicate && !oldCfInfo.Config.IgnoreIneligibleTable {
+		if len(ineligibleTables) != 0 {
+			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+			return
 		}
 	}
 
@@ -1494,6 +1543,55 @@ func getVerifiedTables(
 	f, err := filter.NewFilter(replicaConfig.Filter, "", replicaConfig.CaseSensitive, replicaConfig.ForceReplicate)
 	if err != nil {
 		return nil, nil, err
+<<<<<<< HEAD
+=======
+	}
+	tableInfos, ineligibleTables, eligibleTables, err := schemastore.
+		VerifyTables(f, storage, startTs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	err = f.Verify(tableInfos)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !config.IsMQScheme(scheme) {
+		return ineligibleTables, eligibleTables, nil
+	}
+
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(protocol.String()), protocol == config.ProtocolAvro)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = eventRouter.VerifyTables(tableInfos)
+	log.Error("NewEventRouter", zap.Error(err), zap.Any("tableInfos", tableInfos), zap.Any("startTs", startTs))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	log.Error("columnselector.New")
+	selectors, err := columnselector.New(replicaConfig.Sink)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = selectors.VerifyTables(tableInfos, eventRouter)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if ctx.Err() != nil {
+		return nil, nil, errors.Trace(ctx.Err())
+	}
+
+	return ineligibleTables, eligibleTables, nil
+}
+
+func GetNamespaceValueWithDefault(c *gin.Context) string {
+	namespace := c.Query(api.APIOpVarNamespace)
+	if namespace == "" {
+		namespace = common.DefaultNamespace
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	}
 	tableInfos, ineligibleTables, eligibleTables, err := schemastore.
 		VerifyTables(f, storage, startTs)
