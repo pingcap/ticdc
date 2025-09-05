@@ -325,6 +325,14 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	require.False(t, hasNewerSchemaVersion)
 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
 
+	// test old dml file can be ignored
+	table.TableInfoVersion = 99
+	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.True(t, hasNewerSchemaVersion)
+	fmt.Println(f.versionMap, table)
+	require.Equal(t, 1, len(f.versionMap))
+
 	// test only table version changed, schema file should be reused
 	table.TableInfoVersion = 101
 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
