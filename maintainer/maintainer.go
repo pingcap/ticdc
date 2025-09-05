@@ -722,7 +722,7 @@ func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeat
 
 func (m *Maintainer) handleResendMessage() {
 	// resend closing message
-	if m.removing.Load() && !m.cascadeRemoving {
+	if m.removing.Load() && m.cascadeRemoving {
 		m.trySendMaintainerCloseRequestToAllNode()
 		return
 	}
