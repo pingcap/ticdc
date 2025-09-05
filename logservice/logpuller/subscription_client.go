@@ -306,7 +306,6 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			}
 
 			pendingRegionReqCount := 0
-
 			s.stores.Range(func(key, value any) bool {
 				store := value.(*requestedStore)
 				for _, worker := range store.requestWorkers {
@@ -316,6 +315,14 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			})
 
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
+
+			count := 0
+			s.totalSpans.RLock()
+			for _, rt := range s.totalSpans.spanMap {
+				count += rt.rangeLock.Len()
+			}
+			s.totalSpans.RUnlock()
+			metrics.SubscriptionClientSubscribedRegionCount.Set(float64(count))
 		}
 	}
 }

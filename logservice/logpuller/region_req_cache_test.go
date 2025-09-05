@@ -141,7 +141,7 @@ func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
 	require.Equal(t, 2, cache.getPendingCount()) // pop doesn't change pendingCount
 
 	// Mark as sent
-	cache.markSent(*req)
+	cache.markSent(req)
 	require.Equal(t, 2, cache.getPendingCount())
 
 	// Resolve the request to free up space
@@ -198,7 +198,7 @@ func TestRequestCacheAdd_StaleRequestCleanup(t *testing.T) {
 	require.NotNil(t, req)
 
 	// Mark as sent
-	cache.markSent(*req)
+	cache.markSent(req)
 	require.Equal(t, 1, cache.getPendingCount())
 
 	// Manually set the request as stale by modifying createTime
@@ -237,7 +237,7 @@ func TestRequestCacheAdd_WithStoppedRegion(t *testing.T) {
 	require.NotNil(t, req)
 
 	// Mark as sent
-	cache.markSent(*req)
+	cache.markSent(req)
 	require.Equal(t, 1, cache.getPendingCount())
 
 	// Manually set lastCheckStaleRequestTime to bypass the time interval check

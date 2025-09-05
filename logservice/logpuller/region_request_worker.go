@@ -335,11 +335,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 		return nil
 	}
 
-	fetchMoreReq := func() (*regionReq, error) {
+	fetchMoreReq := func() (regionReq, error) {
 		for {
 			// Try to get from cache
 			if req, err := s.requestCache.pop(ctx); err != nil {
-				return nil, err
+				return regionReq{}, err
 			} else {
 				return req, nil
 			}
@@ -349,11 +349,8 @@ func (s *regionRequestWorker) processRegionSendTask(
 	// Handle pre-fetched region first
 	region := *s.preFetchForConnecting
 	s.preFetchForConnecting = nil
-	regionReq := &regionReq{
-		regionInfo: region,
-	}
+	regionReq := newRegionReq(region)
 	var err error
-
 	for {
 		region := regionReq.regionInfo
 		subID := region.subscribedSpan.subID
@@ -398,7 +395,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			if err := doSend(s.createRegionRequest(region)); err != nil {
 				return err
 			}
-			s.requestCache.markSent(*regionReq)
+			s.requestCache.markSent(regionReq)
 		}
 		regionReq, err = fetchMoreReq()
 		if err != nil {

@@ -38,6 +38,13 @@ type regionReq struct {
 	createTime time.Time
 }
 
+func newRegionReq(region regionInfo) regionReq {
+	return regionReq{
+		regionInfo: region,
+		createTime: time.Now(),
+	}
+}
+
 func (r *regionReq) isStale() bool {
 	return time.Since(r.createTime) > requestGCLifeTime
 }
@@ -91,10 +98,7 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 		current := c.pendingCount.Load()
 		if current < c.maxPendingCount || force {
 			// Try to add the request
-			req := regionReq{
-				regionInfo: region,
-				createTime: time.Now(),
-			}
+			req := newRegionReq(region)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -131,12 +135,12 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 }
 
 // pop gets the next pending request, returns nil if queue is empty
-func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
+func (c *requestCache) pop(ctx context.Context) (regionReq, error) {
 	select {
 	case req := <-c.pendingQueue:
-		return &req, nil
+		return req, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return regionReq{}, ctx.Err()
 	}
 }
 

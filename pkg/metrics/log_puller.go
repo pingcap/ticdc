@@ -69,6 +69,13 @@ var (
 			Help:      "The cost of adding region request",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
+	SubscriptionClientSubscribedRegionCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "subscribed_region_count",
+			Help:      "The number of locked ranges",
+		})
 )
 
 func InitLogPullerMetrics(registry *prometheus.Registry) {
@@ -78,4 +85,5 @@ func InitLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
 	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)
+	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
 }
