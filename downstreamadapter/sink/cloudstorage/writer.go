@@ -134,7 +134,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				}
 
 				// generate scheme.json file before generating the first data file if necessary
-				err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, task.tableInfo)
+				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, task.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.Int("workerID", d.id),
@@ -142,6 +142,11 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.Error(err))
 					return errors.Trace(err)
+				}
+				// it is possible that a dml event send after a ddl event during dispatcher scheduling
+				// we need ignore such kinds of dml events.
+				if hasNewerSchemaVersion {
+					continue
 				}
 
 				// make sure that `generateDateStr()` is invoked ONLY once before
