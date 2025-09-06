@@ -27,18 +27,19 @@ import (
 func TestNewDispatcherStat(t *testing.T) {
 	t.Parallel()
 
+	startTs := uint64(50)
 	// Mock dispatcher info
 	info := newMockDispatcherInfo(
 		t,
+		startTs,
 		common.NewDispatcherID(),
 		1,
 		eventpb.ActionType_ACTION_TYPE_REGISTER,
 	)
 
-	startTs := uint64(50)
 	workerIndex := 1
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(startTs, info, info.filter, workerIndex, workerIndex, status)
+	stat := newDispatcherStat(info, info.filter, workerIndex, workerIndex, status)
 
 	require.Equal(t, info.GetID(), stat.id)
 	require.Equal(t, workerIndex, stat.messageWorkerIndex)
@@ -62,13 +63,12 @@ func TestResetSyncpoint(t *testing.T) {
 	thridSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(2 * syncPointInterval))
 	startTs := oracle.GoTimeToTS(now.Add(-2 * time.Second))
 
-	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	info.startTs = startTs
+	info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	info.enableSyncPoint = true
 	info.nextSyncPoint = firstSyncPoint
 	info.syncPointInterval = syncPointInterval
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(startTs, info, info.filter, 1, 1, status)
+	stat := newDispatcherStat(info, info.filter, 1, 1, status)
 
 	stat.nextSyncPoint = thridSyncPoint
 	stat.resetState(secondSyncPoint)
@@ -82,9 +82,9 @@ func TestResetSyncpoint(t *testing.T) {
 func TestDispatcherStatResolvedTs(t *testing.T) {
 	t.Parallel()
 
-	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(100, info, info.filter, 1, 1, status)
+	stat := newDispatcherStat(info, info.filter, 1, 1, status)
 
 	// Test normal update
 	updated := stat.onResolvedTs(150)
@@ -99,9 +99,9 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 func TestDispatcherStatGetDataRange(t *testing.T) {
 	t.Parallel()
 
-	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(100, info, info.filter, 1, 1, status)
+	stat := newDispatcherStat(info, info.filter, 1, 1, status)
 	stat.eventStoreResolvedTs.Store(200)
 
 	// Normal case
@@ -126,9 +126,9 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 
 func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	startTs := uint64(100)
-	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(startTs, info, info.filter, 1, 1, status)
+	stat := newDispatcherStat(info, info.filter, 1, 1, status)
 
 	// Case 1: no new events, only watermark change
 	stat.onResolvedTs(200)

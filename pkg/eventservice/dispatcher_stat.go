@@ -130,7 +130,6 @@ type dispatcherStat struct {
 }
 
 func newDispatcherStat(
-	startTs uint64,
 	info DispatcherInfo,
 	filter filter.Filter,
 	scanWorkerIndex int,
@@ -156,6 +155,7 @@ func newDispatcherStat(
 		dispStat.nextSyncPoint = info.GetSyncPointTs()
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
 	}
+	startTs := info.GetStartTs()
 	dispStat.eventStoreResolvedTs.Store(startTs)
 	dispStat.checkpointTs.Store(startTs)
 

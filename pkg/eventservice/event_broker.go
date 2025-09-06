@@ -839,13 +839,12 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	id := info.GetID()
 	span := info.GetTableSpan()
-	startTs := info.GetStartTs()
 	changefeedID := info.GetChangefeedID()
 	workerIndex := (common.GID)(id).Hash(uint64(len(c.messageCh)))
 	scanWorkerIndex := (common.GID)(id).Hash(uint64(len(c.taskChan)))
 
 	status := c.getOrSetChangefeedStatus(changefeedID)
-	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, status)
+	dispatcher := newDispatcherStat(info, filter, scanWorkerIndex, workerIndex, status)
 	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
@@ -853,7 +852,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", startTs))
+			zap.Uint64("startTs", info.GetStartTs()))
 		return nil
 	}
 
@@ -901,7 +900,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
 		zap.String("span", common.FormatTableSpan(span)),
-		zap.Uint64("startTs", startTs), zap.Bool("isRedo", info.GetIsRedo()),
+		zap.Uint64("startTs", info.GetStartTs()),
+		zap.Bool("isRedo", info.GetIsRedo()),
 		zap.Duration("duration", time.Since(start)))
 	return nil
 }
