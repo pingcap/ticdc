@@ -225,16 +225,10 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 	dispatcherMap *DispatcherMap[T],
 	sinkType common.SinkType,
 ) {
-
 	changefeedID := e.changefeedID
 	statusesChan := e.sharedInfo.GetStatusesChan()
 
 	dispatcherItem, ok := dispatcherMap.Get(id)
-	log.Info("remove dispatcher",
-		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", id),
-		zap.Any("ok", ok),
-	)
 	if ok {
 		if dispatcherItem.GetRemovingStatus() {
 			return
