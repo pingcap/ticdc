@@ -61,14 +61,14 @@ func TestEventScanner(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = uint64(100)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
 	ctx := context.Background()
 
-	startTs := uint64(100)
-	disp := newDispatcherStat(startTs, disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -380,12 +380,12 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
 
 	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = uint64(100)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	startTs := uint64(100)
-	disp := newDispatcherStat(startTs, disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -459,12 +459,12 @@ func TestEventScannerWithDDL(t *testing.T) {
 	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
 
 	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = uint64(100)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	startTs := uint64(100)
-	disp := newDispatcherStat(startTs, disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
 	makeDispatcherReady(disp)
 
 	err := broker.addDispatcher(disp.info)
@@ -1558,10 +1558,11 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = uint64(100)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 
-	disp := newDispatcherStat(100, disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
 
 	// Prepare a table info for success case
 	helper := event.NewEventTestHelper(t)
