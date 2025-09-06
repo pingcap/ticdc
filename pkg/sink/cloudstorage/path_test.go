@@ -320,14 +320,16 @@ func TestCheckOrWriteSchema(t *testing.T) {
 		TableInfoVersion:           100,
 	}
 
-	err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
 
 	// test only table version changed, schema file should be reused
 	table.TableInfoVersion = 101
-	err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
 	fmt.Println(f.versionMap, table)
 	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
 
@@ -344,8 +346,9 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	err = os.Remove(filepath.Join(dir, files[0].Name()))
 	require.NoError(t, err)
 	delete(f.versionMap, table)
-	err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
 
 	files, err = os.ReadDir(dir)
