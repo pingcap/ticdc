@@ -223,12 +223,7 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	if a.enableSyncPoint {
 		for {
 			prevSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(a.nextSyncPoint).Add(-a.syncPointInterval))
-			log.Info("resetting syncpoint for dispatcher",
-				zap.Uint64("nextSyncPoint", a.nextSyncPoint),
-				zap.Uint64("prevSyncPoint", prevSyncPoint),
-				zap.Duration("syncPointInterval", a.syncPointInterval),
-				zap.Uint64("resetTs", resetTs))
-			if prevSyncPoint < resetTs {
+			if prevSyncPoint <= resetTs {
 				break
 			}
 			a.nextSyncPoint = prevSyncPoint

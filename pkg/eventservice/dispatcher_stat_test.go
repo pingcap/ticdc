@@ -58,6 +58,8 @@ func TestResetSyncpoint(t *testing.T) {
 	now := time.Now()
 	firstSyncPoint := oracle.GoTimeToTS(now)
 	syncPointInterval := time.Second * 10
+	secondSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(syncPointInterval))
+	thridSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(2 * syncPointInterval))
 	startTs := oracle.GoTimeToTS(now.Add(-2 * time.Second))
 
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
@@ -68,8 +70,11 @@ func TestResetSyncpoint(t *testing.T) {
 	status := newChangefeedStatus(info.GetChangefeedID())
 	stat := newDispatcherStat(startTs, info, info.filter, 1, 1, status)
 
-	stat.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(stat.nextSyncPoint).Add(stat.syncPointInterval))
-	require.Less(t, firstSyncPoint, stat.nextSyncPoint)
+	stat.nextSyncPoint = thridSyncPoint
+	stat.resetState(secondSyncPoint)
+	require.Equal(t, thridSyncPoint, stat.nextSyncPoint)
+	stat.resetState(secondSyncPoint - 1)
+	require.Equal(t, secondSyncPoint, stat.nextSyncPoint)
 	stat.resetState(startTs)
 	require.Equal(t, firstSyncPoint, stat.nextSyncPoint)
 }

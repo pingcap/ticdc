@@ -1022,6 +1022,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("originSeq", originSeq),
 		zap.Uint64("newSeq", stat.seq.Load()),
 		zap.Uint64("newEpoch", newEpoch),
+		zap.Bool("syncPointEnabled", stat.enableSyncPoint),
+		zap.Uint64("nextSyncPoint", stat.nextSyncPoint),
 		zap.Uint64("lastScannedCommitTs", stat.lastScannedCommitTs.Load()),
 		zap.Uint64("lastScannedStartTs", stat.lastScannedStartTs.Load()),
 		zap.Duration("resetTime", time.Since(start)))
