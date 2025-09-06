@@ -710,4 +710,10 @@ var (
 	ErrTCPServerClosed = errors.Normalize("The TCP server has been closed",
 		errors.RFCCodeText("CDC:ErrTCPServerClosed"),
 	)
+
+	// puller related errors
+	ErrAddRegionRequestRetryLimitExceeded = errors.Normalize(
+		"add region request retry limit exceeded",
+		errors.RFCCodeText("CDC:ErrAddRegionRequestRetryLimitExceeded"),
+	)
 )

@@ -59,6 +59,8 @@ type PullerConfig struct {
 	ResolvedTsStuckInterval TomlDuration `toml:"resolved-ts-stuck-interval" json:"resolved-ts-stuck-interval"`
 	// LogRegionDetails determines whether logs Region details or not in puller and kv-client.
 	LogRegionDetails bool `toml:"log-region-details" json:"log-region-details"`
+
+	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending-region-request-queue-size"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
@@ -67,6 +69,7 @@ func NewDefaultPullerConfig() *PullerConfig {
 		EnableResolvedTsStuckDetection: false,
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,
+		PendingRegionRequestQueueSize:  64, // Base on test result
 	}
 }
 
