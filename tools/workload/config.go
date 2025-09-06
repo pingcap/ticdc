@@ -36,6 +36,7 @@ type WorkloadConfig struct {
 	TableStartIndex     int
 	Thread              int
 	BatchSize           int
+	CrossTable          bool
 	TotalRowCount       uint64
 	PercentageForUpdate float64
 
@@ -95,6 +96,9 @@ func NewWorkloadConfig() *WorkloadConfig {
 		// For sysbench workload
 		RangeNum: 5,
 
+		// For txn workload
+		CrossTable: false,
+
 		// Log related
 		LogFile:  "workload.log",
 		LogLevel: "info",
@@ -109,11 +113,12 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.TableStartIndex, "table-start-index", c.TableStartIndex, "table start index, sbtest<index>")
 	flag.IntVar(&c.Thread, "thread", c.Thread, "total thread of the workload")
 	flag.IntVar(&c.BatchSize, "batch-size", c.BatchSize, "batch size of each insert/update/delete")
+	flag.BoolVar(&c.CrossTable, "cross-table", c.CrossTable, "cross table of each txn")
 	flag.Uint64Var(&c.TotalRowCount, "total-row-count", c.TotalRowCount, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
 	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, cleanup]")
-	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler]")
+	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler, txn]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
