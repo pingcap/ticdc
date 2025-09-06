@@ -62,7 +62,9 @@ func TestCheckNeedScan(t *testing.T) {
 	disInfo := newMockDispatcherInfoForTest(t)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 
-	disp := newDispatcherStat(newMockDispatcherInfoForTest(t), nil, 0, 0, changefeedStatus)
+	info := newMockDispatcherInfoForTest(t)
+	info.startTs = 100
+	disp := newDispatcherStat(info, nil, 0, 0, changefeedStatus)
 	// Set the eventStoreResolvedTs and eventStoreCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
 	disp.eventStoreResolvedTs.Store(102)
