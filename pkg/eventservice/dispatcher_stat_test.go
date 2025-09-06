@@ -49,7 +49,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
 	require.True(t, stat.isReadyReceivingData.Load())
 	require.False(t, stat.enableSyncPoint)
-	require.Equal(t, info.GetSyncPointTs(), stat.nextSyncPoint)
+	require.Equal(t, info.GetSyncPointTs(), stat.nextSyncPoint.Load())
 	require.Equal(t, info.GetSyncPointInterval(), stat.syncPointInterval)
 }
 
@@ -70,13 +70,13 @@ func TestResetSyncpoint(t *testing.T) {
 	status := newChangefeedStatus(info.GetChangefeedID())
 	stat := newDispatcherStat(info, info.filter, 1, 1, status)
 
-	stat.nextSyncPoint = thridSyncPoint
+	stat.nextSyncPoint.Store(thridSyncPoint)
 	stat.resetState(secondSyncPoint)
-	require.Equal(t, thridSyncPoint, stat.nextSyncPoint)
+	require.Equal(t, thridSyncPoint, stat.nextSyncPoint.Load())
 	stat.resetState(secondSyncPoint - 1)
-	require.Equal(t, secondSyncPoint, stat.nextSyncPoint)
+	require.Equal(t, secondSyncPoint, stat.nextSyncPoint.Load())
 	stat.resetState(startTs)
-	require.Equal(t, firstSyncPoint, stat.nextSyncPoint)
+	require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
 }
 
 func TestDispatcherStatResolvedTs(t *testing.T) {

@@ -102,7 +102,7 @@ type dispatcherStat struct {
 
 	// syncpoint related
 	enableSyncPoint   bool
-	nextSyncPoint     uint64
+	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
 
 	// Scan task related
@@ -152,7 +152,7 @@ func newDispatcherStat(
 
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
-		dispStat.nextSyncPoint = info.GetSyncPointTs()
+		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
 	}
 	startTs := info.GetStartTs()
@@ -222,11 +222,17 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 
 	if a.enableSyncPoint {
 		for {
-			prevSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(a.nextSyncPoint).Add(-a.syncPointInterval))
+			prevSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(a.nextSyncPoint.Load()).Add(-a.syncPointInterval))
 			if prevSyncPoint <= resetTs {
 				break
 			}
-			a.nextSyncPoint = prevSyncPoint
+			log.Info("reset sync point",
+				zap.Stringer("dispatcherID", a.id),
+				zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
+				zap.Uint64("nextSyncPoint", a.nextSyncPoint.Load()),
+				zap.Uint64("prevSyncPoint", prevSyncPoint),
+				zap.Uint64("resetTs", resetTs))
+			a.nextSyncPoint.Store(prevSyncPoint)
 		}
 	}
 }
