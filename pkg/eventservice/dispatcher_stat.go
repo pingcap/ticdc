@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -218,6 +219,21 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.lastScannedStartTs.Store(0)
 	a.isReadyReceivingData.Store(true)
 	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
+
+	if a.enableSyncPoint {
+		for {
+			prevSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(a.nextSyncPoint).Add(-a.syncPointInterval))
+			log.Info("resetting syncpoint for dispatcher",
+				zap.Uint64("nextSyncPoint", a.nextSyncPoint),
+				zap.Uint64("prevSyncPoint", prevSyncPoint),
+				zap.Duration("syncPointInterval", a.syncPointInterval),
+				zap.Uint64("resetTs", resetTs))
+			if prevSyncPoint < resetTs {
+				break
+			}
+			a.nextSyncPoint = prevSyncPoint
+		}
+	}
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.

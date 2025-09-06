@@ -538,19 +538,22 @@ var _ DispatcherInfo = &mockDispatcherInfo{}
 
 // mockDispatcherInfo is a mock implementation of the AcceptorInfo interface
 type mockDispatcherInfo struct {
-	clusterID    uint64
-	serverID     string
-	changefeedID common.ChangeFeedID
-	id           common.DispatcherID
-	topic        string
-	span         *heartbeatpb.TableSpan
-	startTs      uint64
-	actionType   eventpb.ActionType
-	filter       filter.Filter
-	bdrMode      bool
-	integrity    *integrity.Config
-	tz           *time.Location
-	redo         bool
+	clusterID         uint64
+	serverID          string
+	changefeedID      common.ChangeFeedID
+	id                common.DispatcherID
+	topic             string
+	span              *heartbeatpb.TableSpan
+	startTs           uint64
+	actionType        eventpb.ActionType
+	filter            filter.Filter
+	bdrMode           bool
+	integrity         *integrity.Config
+	tz                *time.Location
+	redo              bool
+	enableSyncPoint   bool
+	nextSyncPoint     uint64
+	syncPointInterval time.Duration
 }
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -616,15 +619,15 @@ func (m *mockDispatcherInfo) GetFilterConfig() *config.FilterConfig {
 }
 
 func (m *mockDispatcherInfo) SyncPointEnabled() bool {
-	return false
+	return m.enableSyncPoint
 }
 
 func (m *mockDispatcherInfo) GetSyncPointTs() uint64 {
-	return 0
+	return m.nextSyncPoint
 }
 
 func (m *mockDispatcherInfo) GetSyncPointInterval() time.Duration {
-	return 0
+	return m.syncPointInterval
 }
 
 func (m *mockDispatcherInfo) GetFilter() filter.Filter {

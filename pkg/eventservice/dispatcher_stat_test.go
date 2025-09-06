@@ -15,11 +15,13 @@ package eventservice
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 func TestNewDispatcherStat(t *testing.T) {
@@ -48,6 +50,28 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.False(t, stat.enableSyncPoint)
 	require.Equal(t, info.GetSyncPointTs(), stat.nextSyncPoint)
 	require.Equal(t, info.GetSyncPointInterval(), stat.syncPointInterval)
+}
+
+func TestResetSyncpoint(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	firstSyncPoint := oracle.GoTimeToTS(now)
+	syncPointInterval := time.Second * 10
+	startTs := oracle.GoTimeToTS(now.Add(-2 * time.Second))
+
+	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info.startTs = startTs
+	info.enableSyncPoint = true
+	info.nextSyncPoint = firstSyncPoint
+	info.syncPointInterval = syncPointInterval
+	status := newChangefeedStatus(info.GetChangefeedID())
+	stat := newDispatcherStat(startTs, info, info.filter, 1, 1, status)
+
+	stat.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(stat.nextSyncPoint).Add(stat.syncPointInterval))
+	require.Less(t, firstSyncPoint, stat.nextSyncPoint)
+	stat.resetState(startTs)
+	require.Equal(t, firstSyncPoint, stat.nextSyncPoint)
 }
 
 func TestDispatcherStatResolvedTs(t *testing.T) {
