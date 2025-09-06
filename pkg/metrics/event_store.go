@@ -41,6 +41,7 @@ var (
 		Name:      "output_event_count",
 		Help:      "The number of events output by the sorter",
 	}, []string{"type"}) // types : kv, resolved.
+
 	EventStoreWriteDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
@@ -161,6 +162,15 @@ var (
 		Help:      "Bucketed histogram of event store sorter iterator read duration",
 		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 	}, []string{"type"})
+
+	EventStoreNotifyDispatcherDurationHist = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "notify_dispatcher_duration",
+			Help:      "The duration of notifying dispatchers with resolved ts.",
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2, 20), // 10us ~ 5.2s,
+		})
 )
 
 func InitEventStoreMetrics(registry *prometheus.Registry) {
@@ -182,4 +192,5 @@ func InitEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreWriteBatchSizeHist)
 	registry.MustRegister(EventStoreWriteRequestsCount)
 	registry.MustRegister(EventStoreReadDurationHistogram)
+	registry.MustRegister(EventStoreNotifyDispatcherDurationHist)
 }

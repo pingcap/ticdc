@@ -736,6 +736,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		innerErr := eerr.err
 		log.Debug("cdc region error",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
+			zap.Uint64("regionID", errInfo.verID.GetID()),
 			zap.Stringer("error", innerErr))
 
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
@@ -931,7 +932,7 @@ func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
 			if attr.SlowestRegion.Initialized {
 				if currTime.Sub(ckptTime) > 2*resolveLockMinInterval {
-					log.Debug("subscription client finds a initialized slow region",
+					log.Info("subscription client finds a initialized slow region",
 						zap.Uint64("subscriptionID", uint64(subscriptionID)),
 						zap.Any("slowRegion", attr.SlowestRegion))
 				}
