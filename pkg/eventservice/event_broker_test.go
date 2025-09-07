@@ -46,7 +46,7 @@ func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore) {
 
 func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	did := common.NewDispatcherID()
-	return newMockDispatcherInfo(t, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	return newMockDispatcherInfo(t, 300, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
 }
 
 type notifyMsg struct {
@@ -62,7 +62,9 @@ func TestCheckNeedScan(t *testing.T) {
 	disInfo := newMockDispatcherInfoForTest(t)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 
-	disp := newDispatcherStat(100, newMockDispatcherInfoForTest(t), nil, 0, 0, changefeedStatus)
+	info := newMockDispatcherInfoForTest(t)
+	info.startTs = 100
+	disp := newDispatcherStat(info, nil, 0, 0, changefeedStatus)
 	// Set the eventStoreResolvedTs and eventStoreCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
 	disp.eventStoreResolvedTs.Store(102)

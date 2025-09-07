@@ -145,7 +145,7 @@ function checkDiff() {
 
 function run() {
 	if [ "$SINK_TYPE" != "mysql" ]; then
-		echo "kafka downstream isn't support syncpoint record"
+		echo "kafka downstream doesn't support syncpoint record"
 		return
 	fi
 
