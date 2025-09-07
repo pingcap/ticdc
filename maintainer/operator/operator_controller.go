@@ -55,11 +55,9 @@ type Controller struct {
 	nodeManager    *watcher.NodeManager
 	splitter       *split.Splitter
 
-	mu        sync.RWMutex // protect the following fields
-	operators map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
-	// for redo
-	blockOperators map[common.DispatcherID]struct{}
-	runningQueue   operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+	mu           sync.RWMutex // protect the following fields
+	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 }
 
 // NewOperatorController creates a new operator controller
@@ -72,7 +70,6 @@ func NewOperatorController(
 		changefeedID:   changefeedID,
 		batchSize:      batchSize,
 		operators:      make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
-		blockOperators: make(map[common.DispatcherID]struct{}),
 		runningQueue:   make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
 		role:           "maintainer",
 		spanController: spanController,
@@ -243,7 +240,6 @@ func (oc *Controller) pollQueueingOperator() (
 
 		oc.mu.Lock()
 		delete(oc.operators, opID)
-		oc.removeBlockOperators(op)
 		oc.mu.Unlock()
 
 		metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Dec()
@@ -291,7 +287,6 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 
 		oc.mu.Lock()
 		delete(oc.operators, op.ID())
-		oc.removeBlockOperators(op)
 		oc.mu.Unlock()
 	}
 	oc.mu.Unlock()
@@ -309,7 +304,6 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 
 	oc.mu.Lock()
 	oc.operators[op.ID()] = withTime
-	oc.addBlockOperators(op)
 	oc.mu.Unlock()
 
 	op.Start()
@@ -437,29 +431,4 @@ func (oc *Controller) RemoveOp(id common.DispatcherID) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 	delete(oc.operators, id)
-}
-
-// BlockOperatorSize return the blockOperators of controller.
-// There may be incorrect redoTs when scheduling
-// these operators are not impact the redoTs: "occupy", "merge", "split", "remove"
-func (oc *Controller) BlockOperatorSize() int {
-	oc.mu.RLock()
-	defer oc.mu.RUnlock()
-	return len(oc.blockOperators)
-}
-
-func (oc *Controller) addBlockOperators(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
-	switch op.Type() {
-	case "occupy", "merge", "split", "remove":
-	default:
-		oc.blockOperators[op.ID()] = struct{}{}
-	}
-}
-
-func (oc *Controller) removeBlockOperators(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
-	switch op.Type() {
-	case "occupy", "merge", "split", "remove":
-	default:
-		delete(oc.blockOperators, op.ID())
-	}
 }

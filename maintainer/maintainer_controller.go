@@ -204,11 +204,3 @@ func (c *Controller) GetMinRedoCheckpointTs() uint64 {
 	}
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
-
-// func (c *Controller) checkRedoAdvance() bool {
-// 	barrierLock := c.redoBarrier.GetLock()
-// 	defer func() {
-// 		c.redoBarrier.ReleaseLock(barrierLock)
-// 	}()
-// 	return c.redoOperatorController.BlockOperatorSize() == 0 && c.redoSpanController.GetAbsentSize() == 0 && !c.redoBarrier.ShouldBlockCheckpointTs()
-// }

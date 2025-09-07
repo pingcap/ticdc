@@ -516,7 +516,7 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 			// if there is no tables, there must be a table trigger dispatcher
 			for id := range m.bootstrapper.GetAllNodeIDs() {
 				// maintainer node has the table trigger dispatcher
-				if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
+				if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
 					continue
 				}
 				// node level watermark reported, ignore this round
@@ -546,8 +546,13 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 				m.redoTs.CheckpointTs = m.getWatermark().CheckpointTs
 				needUpdate = true
 			}
-			log.Debug("received redo ts message", zap.Any("needUpdate", needUpdate), zap.Any("globalRedoTs", m.redoTs),
-				zap.Any("checkpointTs", m.getWatermark().CheckpointTs), zap.Any("resolvedTs", newWatermark.CheckpointTs))
+			log.Debug("received redo ts message",
+				zap.Any("needUpdate", needUpdate),
+				zap.Any("updateCheckpointTs", updateCheckpointTs),
+				zap.Any("globalRedoTs", m.redoTs),
+				zap.Any("checkpointTs", m.getWatermark().CheckpointTs),
+				zap.Any("resolvedTs", newWatermark.CheckpointTs),
+			)
 			if needUpdate {
 				msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
 				for id := range m.bootstrapper.GetAllNodeIDs() {
