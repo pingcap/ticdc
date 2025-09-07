@@ -37,7 +37,7 @@ import (
 // moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
 // moveTable only works for the complete table, not for the table splited.
 func (c *Controller) moveTable(tableId int64, targetNode node.ID, mode int64) error {
-	if common.IsRedoMode(mode) && c.redoSpanController == nil {
+	if common.IsRedoMode(mode) && !c.enableRedo {
 		return nil
 	}
 	spanController := c.getSpanController(mode)
@@ -83,7 +83,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID, mode int64) er
 // only for test
 // moveSplitTable is used for inner api(which just for make test cases convience) to force move the dispatchers in a split table to a target node.
 func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID, mode int64) error {
-	if common.IsRedoMode(mode) && c.redoSpanController == nil {
+	if common.IsRedoMode(mode) && !c.enableRedo {
 		return nil
 	}
 	spanController := c.getSpanController(mode)
@@ -144,7 +144,7 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID, mode int6
 // splitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
 func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
-	if common.IsRedoMode(mode) && c.redoSpanController == nil {
+	if common.IsRedoMode(mode) && !c.enableRedo {
 		return nil
 	}
 	spanController := c.getSpanController(mode)
@@ -200,7 +200,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 // mergeTable merge two nearby dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
 func (c *Controller) mergeTable(tableID int64, mode int64) error {
-	if common.IsRedoMode(mode) && c.redoSpanController == nil {
+	if common.IsRedoMode(mode) && !c.enableRedo {
 		return nil
 	}
 	spanController := c.getSpanController(mode)
@@ -292,7 +292,7 @@ func (c *Controller) mergeTable(tableID int64, mode int64) error {
 }
 
 func (c *Controller) checkParams(tableId int64, targetNode node.ID, mode int64) error {
-	if common.IsRedoMode(mode) && c.redoSpanController == nil {
+	if common.IsRedoMode(mode) && !c.enableRedo {
 		return nil
 	}
 	spanController := c.getSpanController(mode)

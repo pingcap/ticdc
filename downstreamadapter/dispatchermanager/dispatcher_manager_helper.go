@@ -268,16 +268,12 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			dispatcherItem.Remove()
 		}
 	} else {
-		// If the dispatcherItem is not existed, we use sinkType to check
-		mode := common.DefaultMode
-		if sinkType == common.RedoSinkType {
-			mode = common.RedoMode
-		}
 		statusesChan <- dispatcher.TableSpanStatusWithSeq{
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
-				Mode:            mode,
+				// If the dispatcherItem is not existed, we use sinkType to check
+				Mode: common.GetModeBySinkType(sinkType),
 			},
 			Seq: dispatcherMap.GetSeq(),
 		}

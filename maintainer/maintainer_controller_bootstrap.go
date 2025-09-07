@@ -189,7 +189,7 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
 		// Process table spans
-		if c.redoSpanController != nil {
+		if c.enableRedo {
 			c.processTableSpans(table, redoWorkingTaskMap, common.RedoMode)
 		}
 		c.processTableSpans(table, workingTaskMap, common.DefaultMode)
@@ -201,10 +201,10 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 func (c *Controller) processTableSpans(
 	table commonEvent.Table,
 	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-	Mode int64,
+	mode int64,
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
-	spanController := c.getSpanController(Mode)
+	spanController := c.getSpanController(mode)
 
 	// Add new table if not working
 	if isTableWorking {
@@ -267,15 +267,15 @@ func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 ) {
 	// Initialize barrier
-	if c.redoSpanController != nil {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, TypeBarrierRedo)
+	if c.enableRedo {
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, common.RedoMode)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, TypeBarrierCommon)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, common.DefaultMode)
 
 	// Start scheduler
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
 
-	if c.redoOperatorController != nil {
+	if c.enableRedo {
 		c.taskHandles = append(c.taskHandles, c.taskPool.Submit(c.redoOperatorController, time.Now()))
 	}
 	// Start operator controller

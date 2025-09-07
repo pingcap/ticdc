@@ -346,3 +346,10 @@ func IsDefaultMode(mode int64) bool {
 func IsRedoMode(mode int64) bool {
 	return mode == RedoMode
 }
+
+func GetModeBySinkType(sinkType SinkType) int64 {
+	if sinkType == RedoSinkType {
+		return RedoMode
+	}
+	return DefaultMode
+}

@@ -28,11 +28,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	TypeBarrierCommon int64 = iota
-	TypeBarrierRedo
-)
-
 // Barrier manage the block events for the changefeed
 // note: the dispatcher will guarantee the order of the block event.
 // the block event processing logic:

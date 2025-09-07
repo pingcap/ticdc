@@ -530,10 +530,11 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 	delay := time.NewTimer(0)
 	defer delay.Stop()
-	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus) {
+	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
 		var message heartbeatpb.BlockStatusRequest
 		message.ChangefeedID = e.changefeedID.ToPB()
 		message.BlockStatuses = blockStatusMessage
+		message.Mode = mode
 		e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 	}
 	for {
@@ -563,8 +564,8 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 				}
 			}
 
-			enqueueBlockStatus(blockStatusMessage)
-			enqueueBlockStatus(redoBlockStatusMessage)
+			enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
+			enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode)
 		}
 	}
 }
