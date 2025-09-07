@@ -683,7 +683,7 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	if req.RedoWatermark != nil {
 		old, ok := m.redoTsByCapture.Get(msg.From)
 		if !ok || req.RedoWatermark.Seq >= old.Seq {
-			m.redoTsByCapture.Set(msg.From, *req.Watermark)
+			m.redoTsByCapture.Set(msg.From, *req.RedoWatermark)
 		}
 	}
 	if req.Err != nil {
