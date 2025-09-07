@@ -564,8 +564,12 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 				}
 			}
 
-			enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
-			enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode)
+			if len(blockStatusMessage) != 0 {
+				enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
+			}
+			if len(redoBlockStatusMessage) != 0 {
+				enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode)
+			}
 		}
 	}
 }
