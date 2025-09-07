@@ -827,7 +827,7 @@ func (e *eventStore) updateMetricsOnce() {
 			resolvedTs := subStat.resolvedTs.Load()
 			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
 			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
-			const largeResolvedTsLagInSecs = 10
+			const largeResolvedTsLagInSecs = 30
 			if subStat.initialized.Load() && resolvedLag >= largeResolvedTsLagInSecs {
 				lastReceiveDMLTimeRepr := "never"
 				if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
