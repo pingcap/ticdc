@@ -24,7 +24,7 @@ import (
 func TestFormatBlockStatusRequest(t *testing.T) {
 	t.Parallel()
 
-	cfID := NewChangefeedID4Test("test-namespace", "test-changefeed")
+	cfID := NewChangefeedID4Test("test-keyspace", "test-changefeed")
 	dispatcherID := NewDispatcherID()
 
 	testCases := []struct {
@@ -202,7 +202,7 @@ func TestFormatTableSpan(t *testing.T) {
 func TestFormatMaintainerStatus(t *testing.T) {
 	t.Parallel()
 
-	cfID := NewChangefeedID4Test("test-namespace", "test-changefeed")
+	cfID := NewChangefeedID4Test("test-keyspace", "test-changefeed")
 	testCases := []struct {
 		name          string
 		input         *heartbeatpb.MaintainerStatus

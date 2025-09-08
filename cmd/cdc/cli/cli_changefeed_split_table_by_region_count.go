@@ -27,7 +27,7 @@ type splitTableByRegionCountChangefeedOptions struct {
 	apiClientV2 apiv2client.APIV2Interface
 
 	changefeedID string
-	namespace    string
+	keyspace     string
 	tableId      int64
 }
 
@@ -39,7 +39,7 @@ func newSplitTableByRegionCountChangefeedOptions() *splitTableByRegionCountChang
 // addFlags receives a *cobra.Command reference and binds
 // flags related to template printing to it.
 func (o *splitTableByRegionCountChangefeedOptions) addFlags(cmd *cobra.Command) {
-	cmd.PersistentFlags().StringVarP(&o.namespace, "namespace", "n", "default", "Replication task (changefeed) Namespace")
+	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", "default", "Replication task (changefeed) Keyspace")
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	cmd.PersistentFlags().Int64VarP(&o.tableId, "table-id", "t", 0, "the id of table to move")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
@@ -61,7 +61,7 @@ func (o *splitTableByRegionCountChangefeedOptions) complete(f factory.Factory) e
 func (o *splitTableByRegionCountChangefeedOptions) run(cmd *cobra.Command) error {
 	ctx := context.Background()
 
-	err := o.apiClientV2.Changefeeds().SplitTableByRegionCount(ctx, o.namespace, o.changefeedID, o.tableId)
+	err := o.apiClientV2.Changefeeds().SplitTableByRegionCount(ctx, o.keyspace, o.changefeedID, o.tableId)
 	var errStr string
 	if err != nil {
 		errStr = err.Error()

@@ -456,7 +456,7 @@ func getSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) 
 		return errors.Trace(err)
 	}
 
-	name := fmt.Sprintf("cdc_mysql_tls%s_%s", changefeedID.Namespace(), changefeedID.ID())
+	name := fmt.Sprintf("cdc_mysql_tls%s_%s", changefeedID.Keyspace(), changefeedID.ID())
 	err = dmysql.RegisterTLSConfig(name, tlsCfg)
 	if err != nil {
 		return cerror.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")

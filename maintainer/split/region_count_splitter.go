@@ -101,7 +101,7 @@ func (m *regionCountSplitter) split(
 		if len(spans) > 0 &&
 			bytes.Compare(spans[len(spans)-1].EndKey, startKey) > 0 {
 			log.Warn("schedulerv3: list region out of order detected",
-				zap.String("namespace", m.changefeedID.Namespace()),
+				zap.String("keyspace", m.changefeedID.Keyspace()),
 				zap.String("changefeed", m.changefeedID.Name()),
 				zap.String("span", span.String()),
 				zap.Stringer("lastSpan", spans[len(spans)-1]),

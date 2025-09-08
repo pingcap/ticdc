@@ -41,7 +41,7 @@ func TestChangefeedQueryCli(t *testing.T) {
 	cfV2.EXPECT().List(gomock.Any(), gomock.Any(), "all").Return([]v2.ChangefeedCommonInfo{
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			Keyspace:       "default",
 			ID:             "abc",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
@@ -54,7 +54,7 @@ func TestChangefeedQueryCli(t *testing.T) {
 	cfV2.EXPECT().List(gomock.Any(), gomock.Any(), "all").Return([]v2.ChangefeedCommonInfo{
 		{
 			UpstreamID:     1,
-			Namespace:      "default",
+			Keyspace:       "default",
 			ID:             "abc",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,

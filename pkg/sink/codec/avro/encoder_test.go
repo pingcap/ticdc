@@ -25,12 +25,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newAvroEncoderForTest(namespace string, schemaM SchemaManager, config *common.Config) common.EventEncoder {
+func newAvroEncoderForTest(keyspace string, schemaM SchemaManager, config *common.Config) common.EventEncoder {
 	return &BatchEncoder{
-		namespace: namespace,
-		schemaM:   schemaM,
-		result:    make([]*common.Message, 0, 1),
-		config:    config,
+		keyspace: keyspace,
+		schemaM:  schemaM,
+		result:   make([]*common.Message, 0, 1),
+		config:   config,
 	}
 }
 
@@ -82,7 +82,7 @@ func TestDDLEventE2E(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.AvroEnableWatermark = true
-	encoder := newAvroEncoderForTest(codecConfig.ChangefeedID.Namespace(), nil, codecConfig)
+	encoder := newAvroEncoderForTest(codecConfig.ChangefeedID.Keyspace(), nil, codecConfig)
 
 	ddl, _, _, _ := common.NewLargeEvent4Test(t)
 	message, err := encoder.EncodeDDLEvent(ddl)
@@ -111,7 +111,7 @@ func TestResolvedE2E(t *testing.T) {
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.AvroEnableWatermark = true
 
-	encoder := newAvroEncoderForTest(codecConfig.ChangefeedID.Namespace(), nil, codecConfig)
+	encoder := newAvroEncoderForTest(codecConfig.ChangefeedID.Keyspace(), nil, codecConfig)
 
 	resolvedTs := uint64(1591943372224)
 	message, err := encoder.EncodeCheckpointEvent(resolvedTs)

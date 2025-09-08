@@ -27,7 +27,7 @@ import (
 
 func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -46,7 +46,7 @@ func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 
 func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -61,7 +61,7 @@ func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 
 func TestStopChangefeedOperator_PostFinish(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),

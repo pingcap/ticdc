@@ -39,18 +39,18 @@ func TestWriterWrite(t *testing.T) {
 
 	dir := t.TempDir()
 	cfs := []common.ChangeFeedID{
-		common.NewChangeFeedIDWithName("test-cf"),
+		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspace),
 		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-			Namespace: "abcd",
-			Name:      "test-cf",
+			Keyspace: "abcd",
+			Name:     "test-cf",
 		}),
 	}
 
 	cf11s := []common.ChangeFeedID{
-		common.NewChangeFeedIDWithName("test-cf11"),
+		common.NewChangeFeedIDWithName("test-cf11", common.DefaultKeyspace),
 		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-			Namespace: "abcd",
-			Name:      "test-cf11",
+			Keyspace: "abcd",
+			Name:     "test-cf11",
 		}),
 	}
 
@@ -80,13 +80,13 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		var fileName string
 		// create a .tmp file
-		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
+				w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		}
 		path := filepath.Join(w.cfg.Dir, fileName)
@@ -102,13 +102,13 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 
 		// after rotate, rename to .log
-		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT)
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
+				w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT)
 		}
 		path = filepath.Join(w.cfg.Dir, fileName)
@@ -116,13 +116,13 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
 		// create a .tmp file with first eventCommitTS as name
-		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 12, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
+				w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
 				w.logType, 12, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		}
 		path = filepath.Join(w.cfg.Dir, fileName)
@@ -133,13 +133,13 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.False(t, w.IsRunning())
 		// safe close, rename to .log with max eventCommitTS as name
-		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 22, uuidGen.NewString(), redo.LogEXT)
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
+				w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
 				w.logType, 22, uuidGen.NewString(), redo.LogEXT)
 		}
 		path = filepath.Join(w.cfg.Dir, fileName)
@@ -170,13 +170,13 @@ func TestWriterWrite(t *testing.T) {
 		_, err = w1.Write([]byte("tes1t11111"))
 		require.Nil(t, err)
 		// create a .tmp file
-		if w1.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
+		if w1.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w1.cfg.CaptureID,
 				w1.cfg.ChangeFeedID.Name(),
 				w1.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w1.cfg.CaptureID,
-				w1.cfg.ChangeFeedID.Namespace(), w1.cfg.ChangeFeedID.Name(),
+				w1.cfg.ChangeFeedID.Keyspace(), w1.cfg.ChangeFeedID.Name(),
 				w1.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		}
 		path = filepath.Join(w1.cfg.Dir, fileName)
@@ -238,8 +238,8 @@ func TestNewWriter(t *testing.T) {
 		gomock.Any()).Return(nil).Times(1)
 
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-		Namespace: "abcd",
-		Name:      "test",
+		Keyspace: "abcd",
+		Name:     "test",
 	})
 	w = &Writer{
 		logType: redo.RedoDDLLogFileType,
@@ -296,8 +296,8 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 	uuidGen.Push("uuid-4")
 	uuidGen.Push("uuid-5")
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-		Namespace: "abcd",
-		Name:      "test",
+		Keyspace: "abcd",
+		Name:     "test",
 	})
 	w := &Writer{
 		logType: redo.RedoRowLogFileType,
@@ -363,8 +363,8 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	uuidGen.Push("uuid-5")
 	uuidGen.Push("uuid-6")
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-		Namespace: "abcd",
-		Name:      "test",
+		Keyspace: "abcd",
+		Name:     "test",
 	})
 	w := &Writer{
 		logType: redo.RedoDDLLogFileType,

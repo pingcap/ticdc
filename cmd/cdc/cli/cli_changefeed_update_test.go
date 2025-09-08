@@ -135,7 +135,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 		"--schema-registry=a",
 		"--sort-engine=memory",
 		"--changefeed-id=abc",
-		"--namespace=ns",
+		"--keyspace=ks",
 		"--sort-dir=a",
 		"--upstream-pd=pd",
 		"--upstream-ca=ca",
@@ -168,6 +168,6 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	o.commonChangefeedOptions.noConfirm = true
 	o.commonChangefeedOptions.sortEngine = "unified"
 	o.changefeedID = "abcd"
-	o.namespace = "ns"
+	o.keyspace = "ns"
 	require.NotNil(t, o.run(cmd))
 }

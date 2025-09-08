@@ -44,8 +44,8 @@ const (
 	// DeletionCounterKey is the key path for the counter of deleted keys
 	DeletionCounterKey = metaPrefix + "/meta/ticdc-delete-etcd-key-count"
 
-	// DefaultClusterAndNamespacePrefix is the default prefix of changefeed data
-	DefaultClusterAndNamespacePrefix = "/tidb/cdc/default/default"
+	// DefaultClusterAndKeyspacePrefix is the default prefix of changefeed data
+	DefaultClusterAndKeyspacePrefix = "/tidb/cdc/default/default"
 	// DefaultClusterAndMetaPrefix is the default prefix of cluster meta
 	DefaultClusterAndMetaPrefix = "/tidb/cdc/default" + metaPrefix
 
@@ -99,7 +99,7 @@ type CDCKey struct {
 	OwnerLeaseID string
 	ClusterID    string
 	UpstreamID   config.UpstreamID
-	Namespace    string
+	Keyspace     string
 }
 
 // BaseKey is the common prefix of the keys with cluster id in CDC
@@ -110,9 +110,9 @@ func BaseKey(clusterID string) string {
 	return fmt.Sprintf("/tidb/cdc/%s", clusterID)
 }
 
-// NamespacedPrefix returns the etcd prefix of changefeed data
-func NamespacedPrefix(clusterID, namespace string) string {
-	return BaseKey(clusterID) + "/" + namespace
+// KeyspacePrefix returns the etcd prefix of changefeed data
+func KeyspacePrefix(clusterID, keyspace string) string {
+	return BaseKey(clusterID) + "/" + keyspace
 }
 
 // Parse parses the given etcd key
@@ -145,15 +145,15 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 			return errors.ErrInvalidEtcdKey.GenWithStackByArgs(key)
 		}
 	} else {
-		namespace := parts[2]
-		key = key[len(namespace)+1:]
-		k.Namespace = namespace
+		keyspace := parts[2]
+		key = key[len(keyspace)+1:]
+		k.Keyspace = keyspace
 		switch {
 		case strings.HasPrefix(key, ChangefeedInfoKey):
 			k.Tp = CDCKeyTypeChangefeedInfo
 			k.CaptureID = ""
 			k.ChangefeedID = common.ChangeFeedID{
-				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedInfoKey)+1:], namespace),
+				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedInfoKey)+1:], keyspace),
 			}
 			k.OwnerLeaseID = ""
 		case strings.HasPrefix(key, upstreamKey):
@@ -168,7 +168,7 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 			k.Tp = CDCKeyTypeChangeFeedStatus
 			k.CaptureID = ""
 			k.ChangefeedID = common.ChangeFeedID{
-				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedStatusKey)+1:], namespace),
+				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedStatusKey)+1:], keyspace),
 			}
 			k.OwnerLeaseID = ""
 		case strings.HasPrefix(key, taskPositionKey):
@@ -179,7 +179,7 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 			k.Tp = CDCKeyTypeTaskPosition
 			k.CaptureID = splitKey[0]
 			k.ChangefeedID = common.ChangeFeedID{
-				DisplayName: common.NewChangeFeedDisplayName(splitKey[1], namespace),
+				DisplayName: common.NewChangeFeedDisplayName(splitKey[1], keyspace),
 			}
 			k.OwnerLeaseID = ""
 		default:
@@ -199,19 +199,19 @@ func (k *CDCKey) String() string {
 	case CDCKeyTypeCapture:
 		return BaseKey(k.ClusterID) + metaPrefix + captureKey + "/" + k.CaptureID
 	case CDCKeyTypeChangefeedInfo:
-		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedInfoKey +
+		return KeyspacePrefix(k.ClusterID, k.ChangefeedID.DisplayName.Keyspace) + ChangefeedInfoKey +
 			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeChangeFeedStatus:
-		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedStatusKey +
+		return KeyspacePrefix(k.ClusterID, k.ChangefeedID.DisplayName.Keyspace) + ChangefeedStatusKey +
 			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeTaskPosition:
-		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + taskPositionKey +
+		return KeyspacePrefix(k.ClusterID, k.ChangefeedID.DisplayName.Keyspace) + taskPositionKey +
 			"/" + k.CaptureID + "/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeMetaVersion:
 		return BaseKey(k.ClusterID) + metaPrefix + metaVersionKey
 	case CDCKeyTypeUpStream:
 		return fmt.Sprintf("%s%s/%d",
-			NamespacedPrefix(k.ClusterID, k.Namespace),
+			KeyspacePrefix(k.ClusterID, k.Keyspace),
 			upstreamKey, k.UpstreamID)
 	}
 	log.Panic("unreachable")

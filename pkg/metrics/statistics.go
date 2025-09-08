@@ -30,13 +30,13 @@ func NewStatistics(
 		changefeedID: changefeed,
 	}
 
-	namespace := changefeed.Namespace()
+	keyspace := changefeed.Keyspace()
 	changefeedID := changefeed.Name()
-	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(namespace, changefeedID, sinkType)
-	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(namespace, changefeedID, sinkType)
-	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(namespace, changefeedID, sinkType)
-	statistics.metricExecErrCnt = ExecutionErrorCounter.WithLabelValues(namespace, changefeedID, sinkType)
-	statistics.metricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(namespace, changefeedID)
+	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecErrCnt = ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(keyspace, changefeedID)
 	return statistics
 }
 
@@ -86,12 +86,12 @@ func (b *Statistics) RecordDDLExecution(executor func() error) error {
 
 // Close release some internal resources.
 func (b *Statistics) Close() {
-	namespace := b.changefeedID.Namespace()
+	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
-	ExecDDLHistogram.DeleteLabelValues(namespace, changefeedID)
-	ExecBatchHistogram.DeleteLabelValues(namespace, changefeedID)
-	EventSizeHistogram.DeleteLabelValues(namespace, changefeedID)
-	ExecutionErrorCounter.DeleteLabelValues(namespace, changefeedID)
-	TotalWriteBytesCounter.DeleteLabelValues(namespace, changefeedID)
-	ExecDMLEventCounter.DeleteLabelValues(namespace, changefeedID)
+	ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
+	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID)
+	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
+	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID)
+	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
+	ExecDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
 }

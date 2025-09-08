@@ -30,8 +30,8 @@ type Coordinator interface {
 	Stop()
 	// Run handles messages
 	Run(ctx context.Context) error
-	// ListChangefeeds returns all changefeeds
-	ListChangefeeds(ctx context.Context) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error)
+	// ListChangefeeds returns all changefeeds of keyspace
+	ListChangefeeds(ctx context.Context, keyspace string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error)
 	// GetChangefeed returns a changefeed
 	GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error)
 	// CreateChangefeed creates a new changefeed

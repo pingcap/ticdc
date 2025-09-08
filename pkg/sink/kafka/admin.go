@@ -71,7 +71,7 @@ func (a *saramaAdminClient) GetBrokerConfig(
 	}
 
 	log.Warn("Kafka config item not found",
-		zap.String("namespace", a.changefeed.Namespace()),
+		zap.String("keyspace", a.changefeed.Keyspace()),
 		zap.String("changefeed", a.changefeed.Name()),
 		zap.String("configName", configName))
 	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
@@ -96,7 +96,7 @@ func (a *saramaAdminClient) GetTopicConfig(
 	for _, entry := range configEntries {
 		if entry.Name == configName {
 			log.Info("Kafka config item found",
-				zap.String("namespace", a.changefeed.Namespace()),
+				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.String("configName", configName),
 				zap.String("configValue", entry.Value))
@@ -105,7 +105,7 @@ func (a *saramaAdminClient) GetTopicConfig(
 	}
 
 	log.Warn("Kafka config item not found",
-		zap.String("namespace", a.changefeed.Namespace()),
+		zap.String("keyspace", a.changefeed.Keyspace()),
 		zap.String("changefeed", a.changefeed.Name()),
 		zap.String("configName", configName))
 	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
@@ -131,7 +131,7 @@ func (a *saramaAdminClient) GetTopicsMeta(
 				return nil, meta.Err
 			}
 			log.Warn("fetch topic meta failed",
-				zap.String("namespace", a.changefeed.Namespace()),
+				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.String("topic", meta.Name),
 				zap.Error(meta.Err))
@@ -186,7 +186,7 @@ func (a *saramaAdminClient) Heartbeat() {
 func (a *saramaAdminClient) Close() {
 	if err := a.admin.Close(); err != nil {
 		log.Warn("close admin client meet error",
-			zap.String("namespace", a.changefeed.Namespace()),
+			zap.String("keyspace", a.changefeed.Keyspace()),
 			zap.String("changefeed", a.changefeed.Name()),
 			zap.Error(err))
 	}

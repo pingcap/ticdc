@@ -463,7 +463,7 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 
 func (info *ChangeFeedInfo) rmMQOnlyFields() {
 	log.Info("since the downstream is not a MQ, remove MQ only fields",
-		zap.String("namespace", info.ChangefeedID.Namespace()),
+		zap.String("keyspace", info.ChangefeedID.Keyspace()),
 		zap.String("changefeed", info.ChangefeedID.Name()))
 	info.Config.Sink.DispatchRules = nil
 	info.Config.Sink.SchemaRegistry = nil

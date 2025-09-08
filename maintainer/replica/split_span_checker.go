@@ -182,7 +182,7 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 		regionCache:            regionCache,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), replica.GetGroupName(groupID)),
+		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
 	}
 }
 

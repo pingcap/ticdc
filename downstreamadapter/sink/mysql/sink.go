@@ -137,17 +137,17 @@ func (s *Sink) Run(ctx context.Context) error {
 }
 
 func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
-	namespace := s.changefeedID.Namespace()
+	keyspace := s.changefeedID.Keyspace()
 	changefeed := s.changefeedID.Name()
 
-	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
-	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
-	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
+	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
-		metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerTotalDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerHandledRows.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -239,7 +239,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		err = s.ddlWriter.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
 	default:
 		log.Panic("mysql sink meet unknown event type",
-			zap.String("namespace", s.changefeedID.Namespace()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("event", event))
 	}
