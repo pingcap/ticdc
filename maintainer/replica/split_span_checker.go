@@ -346,10 +346,17 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		if status.GetStatus().CheckpointTs < minCheckpointTs {
 			minCheckpointTs = status.GetStatus().CheckpointTs
 		}
+		log.Info("min checkpoint ts",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Int64("groupID", s.groupID),
+			zap.Uint64("minCheckpointTs", minCheckpointTs),
+		)
 	}
 
 	pdTime := s.pdClock.CurrentTime()
 	phyCkpTs := oracle.ExtractPhysical(minCheckpointTs)
+
+	log.Info("pdTime", zap.Any("pdTime", pdTime), zap.Any("phyCkpTs", phyCkpTs), zap.Any("minCheckpointTs", minCheckpointTs))
 	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
 
 	// only when the lag is less than 30s, we can consider to merge spans.
