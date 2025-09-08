@@ -415,6 +415,12 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 				be.markTableDone(tableID)
 			} else {
 				for _, stm := range spans {
+					log.Info("send pass action to dispatcher",
+						zap.String("changefeed", be.cfID.Name()),
+						zap.Uint64("commitTs", be.commitTs),
+						zap.String("dispatcher", stm.ID.String()),
+						zap.Any("tableID", tableID),
+					)
 					nodeID := stm.GetNodeID()
 					dispatcherID := stm.ID
 					if dispatcherID == be.writerDispatcher {
