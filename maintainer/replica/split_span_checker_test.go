@@ -1044,7 +1044,6 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 
 	// Set low lag scenario
 	currentTime := time.Now()
-	log.Info("currentTime", zap.Any("currentTime", currentTime))
 	for _, replica := range replicas {
 		status := &heartbeatpb.TableSpanStatus{
 			ID:                 replica.ID.ToPB(),
