@@ -455,6 +455,9 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
+	// send a resolved ts event immediately to notify dispatcher for quick initialization
+	resolvedTs := task.resetTs.Load()
+	c.sendResolvedTs(task, resolvedTs)
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
@@ -562,6 +565,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
+		log.Debug("not enough memory quota, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available.Load()),
+			zap.Uint64("required", uint64(sl.maxDMLBytes)))
 		return
 	}
 
