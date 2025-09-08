@@ -146,6 +146,14 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				// it is possible that a dml event send after a ddl event during dispatcher scheduling
 				// we need ignore such kinds of dml events.
 				if hasNewerSchemaVersion {
+					d.ignoreTableTask(task)
+					log.Warn("ignore messages belonging to an old schema version",
+						zap.Int("workerID", d.id),
+						zap.String("namespace", d.changeFeedID.Namespace()),
+						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("schema", table.TableNameWithPhysicTableID.Schema),
+						zap.String("table", table.TableNameWithPhysicTableID.Table),
+						zap.Uint64("version", table.TableInfoVersion))
 					continue
 				}
 
@@ -207,6 +215,14 @@ func (d *writer) writeIndexFile(ctx context.Context, path, content string) error
 	err := d.storage.WriteFile(ctx, path, []byte(content))
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	return err
+}
+
+func (d *writer) ignoreTableTask(task *singleTableTask) {
+	for _, msg := range task.msgs {
+		if msg.Callback != nil {
+			msg.Callback()
+		}
+	}
 }
 
 func (d *writer) writeDataFile(ctx context.Context, path string, task *singleTableTask) error {
