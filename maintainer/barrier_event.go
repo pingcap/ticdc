@@ -461,6 +461,12 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					be.selected.Store(true)
 					be.writerDispatcherAdvanced = true
+					log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
+						zap.String("changefeed", be.cfID.Name()),
+						zap.Uint64("commitTs", be.commitTs),
+						zap.Int64("tableId", tableId),
+						zap.String("dispatcher", replication.ID.String()),
+					)
 					return
 				}
 			}
@@ -473,6 +479,12 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
+				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Int64("schemaID", schemaID),
+					zap.String("dispatcher", replication.ID.String()),
+				)
 				return
 			}
 		}
@@ -483,6 +495,11 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
+				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.String("dispatcher", replication.ID.String()),
+				)
 				return
 			}
 		}
