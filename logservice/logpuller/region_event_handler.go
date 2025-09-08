@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -314,12 +315,25 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 				zap.Uint64("resolvedTs", ts))
 		}
 		lastResolvedTs := span.resolvedTs.Load()
+		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
 		// Generally, we don't want to send duplicate resolved ts,
 		// so we check whether `ts` is larger than `lastResolvedTs` before send it.
 		// but when `ts` == `lastResolvedTs` == `span.startTs`,
 		// the span may just be initialized and have not receive any resolved ts before,
 		// so we also send ts in this case for quick notification to downstream.
 		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
+			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
+			const largeResolvedTsAdvanceStepInSecs = 30
+			if decreaseLag > largeResolvedTsAdvanceStepInSecs {
+				log.Warn("resolved ts advance step is too large",
+					zap.Uint64("subID", uint64(span.subID)),
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("resolvedTs", ts),
+					zap.Uint64("lastResolvedTs", lastResolvedTs),
+					zap.Float64("decreaseLag(s)", decreaseLag))
+			}
 			span.resolvedTs.Store(ts)
 			span.resolvedTsUpdated.Store(time.Now().Unix())
 			return ts

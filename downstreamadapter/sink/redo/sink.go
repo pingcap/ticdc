@@ -128,10 +128,10 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-		event.Rewind()
 		for {
 			row, ok := event.GetNextRow()
-			if !ok || s.isClosed.Load() {
+			if !ok {
+				event.Rewind()
 				break
 			}
 			s.logBuffer.Push(&commonEvent.RedoRowEvent{
