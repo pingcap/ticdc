@@ -62,7 +62,7 @@ const (
 // all threads are read/write information from/to the ReplicationDB
 type Maintainer struct {
 	id         common.ChangeFeedID
-	config     *config.ChangeFeedInfo
+	info       *config.ChangeFeedInfo
 	selfNode   *node.Info
 	controller *Controller
 	barrier    *Barrier
@@ -151,7 +151,7 @@ type Maintainer struct {
 // NewMaintainer create the maintainer for the changefeed
 func NewMaintainer(cfID common.ChangeFeedID,
 	conf *config.SchedulerConfig,
-	cfg *config.ChangeFeedInfo,
+	info *config.ChangeFeedInfo,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	checkpointTs uint64,
@@ -174,14 +174,14 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
+			info.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
 		nodeManager:     nodeManager,
 		closedNodes:     make(map[node.ID]struct{}),
 		statusChanged:   atomic.NewBool(true),
 		cascadeRemoving: false,
-		config:          cfg,
+		info:            info,
 		pdClock:         appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 
 		ddlSpan:               ddlSpan,
@@ -219,7 +219,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	go m.calCheckpointTs(ctx)
 
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
-		zap.String("state", string(cfg.State)),
+		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
 		zap.Bool("newChangefeed", newChangefeed),
@@ -356,7 +356,7 @@ func (m *Maintainer) initialize() error {
 	m.sendMessages(m.bootstrapper.HandleNewNodes(newNodes))
 
 	log.Info("changefeed maintainer initialized",
-		zap.String("info", m.config.String()),
+		zap.String("info", m.info.String()),
 		zap.String("id", m.id.String()),
 		zap.String("status", common.FormatMaintainerStatus(m.GetMaintainerStatus())),
 		zap.Duration("duration", time.Since(start)))
@@ -558,7 +558,7 @@ func (m *Maintainer) updateMetrics() {
 	lag = float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 	m.changefeedResolvedTsLagGauge.Set(lag)
 
-	m.changefeedStatusGauge.Set(float64(m.scheduleState.Load()))
+	m.changefeedStatusGauge.Set(float64(m.info.State.ToInt()))
 }
 
 // send message to other components
@@ -679,7 +679,7 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	if cachedResp == nil {
 		return
 	}
-	isMySQLSinkCompatible, err := isMysqlCompatible(m.config.SinkURI)
+	isMySQLSinkCompatible, err := isMysqlCompatible(m.info.SinkURI)
 	if err != nil {
 		m.handleError(err)
 		return
@@ -806,9 +806,9 @@ func (m *Maintainer) handleError(err error) {
 // - Flag indicating if this is a new changefeed
 func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessageFn {
 	// cfgBytes only holds necessary fields to initialize a changefeed dispatcher manager.
-	cfgBytes, err := json.Marshal(m.config.ToChangefeedConfig())
+	cfgBytes, err := json.Marshal(m.info.ToChangefeedConfig())
 	if err != nil {
-		log.Panic("marshal changefeed config failed",
+		log.Panic("marshal changefeed info failed",
 			zap.String("changefeed", m.id.Name()),
 			zap.Error(err))
 	}

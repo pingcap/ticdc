@@ -212,8 +212,8 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 		return nil
 	}
 
-	cfConfig := &config.ChangeFeedInfo{}
-	err := json.Unmarshal(req.Config, cfConfig)
+	info := &config.ChangeFeedInfo{}
+	err := json.Unmarshal(req.Config, info)
 	if err != nil {
 		log.Panic("decode changefeed fail", zap.Error(err))
 	}
@@ -221,9 +221,9 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 		log.Panic("add maintainer with invalid checkpointTs",
 			zap.Stringer("changefeed", cfID),
 			zap.Uint64("checkpointTs", req.CheckpointTs),
-			zap.Any("config", cfConfig))
+			zap.Any("info", info))
 	}
-	maintainer := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed)
+	maintainer := NewMaintainer(cfID, m.conf, info, m.selfNode, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed)
 	m.maintainers.Store(cfID, maintainer)
 	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	return nil
