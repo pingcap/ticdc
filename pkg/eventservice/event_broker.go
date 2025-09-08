@@ -459,7 +459,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
 func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) bool {
-	return d.enableSyncPoint && ts > d.nextSyncPoint
+	return d.enableSyncPoint && ts > d.nextSyncPoint.Load()
 }
 
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
@@ -468,9 +468,9 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 // When a period of time, there is no other dml and ddls, we will batch multiple sync point commit ts in one sync point event to enhance the speed.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
 	commitTsList := make([]uint64, 0)
-	for d.enableSyncPoint && ts > d.nextSyncPoint {
-		commitTsList = append(commitTsList, d.nextSyncPoint)
-		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
+	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
+		commitTsList = append(commitTsList, d.nextSyncPoint.Load())
+		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint.Load()).Add(d.syncPointInterval)))
 	}
 	for len(commitTsList) > 0 {
 		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
@@ -839,13 +839,12 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	id := info.GetID()
 	span := info.GetTableSpan()
-	startTs := info.GetStartTs()
 	changefeedID := info.GetChangefeedID()
 	workerIndex := (common.GID)(id).Hash(uint64(len(c.messageCh)))
 	scanWorkerIndex := (common.GID)(id).Hash(uint64(len(c.taskChan)))
 
 	status := c.getOrSetChangefeedStatus(changefeedID)
-	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, status)
+	dispatcher := newDispatcherStat(info, filter, scanWorkerIndex, workerIndex, status)
 	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
@@ -853,7 +852,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", startTs))
+			zap.Uint64("startTs", info.GetStartTs()))
 		return nil
 	}
 
@@ -901,7 +900,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
 		zap.String("span", common.FormatTableSpan(span)),
-		zap.Uint64("startTs", startTs), zap.Bool("isRedo", info.GetIsRedo()),
+		zap.Uint64("startTs", info.GetStartTs()),
+		zap.Bool("isRedo", info.GetIsRedo()),
 		zap.Duration("duration", time.Since(start)))
 	return nil
 }
@@ -1022,6 +1022,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("originSeq", originSeq),
 		zap.Uint64("newSeq", stat.seq.Load()),
 		zap.Uint64("newEpoch", newEpoch),
+		zap.Bool("syncPointEnabled", stat.enableSyncPoint),
+		zap.Uint64("nextSyncPoint", stat.nextSyncPoint.Load()),
 		zap.Uint64("lastScannedCommitTs", stat.lastScannedCommitTs.Load()),
 		zap.Uint64("lastScannedStartTs", stat.lastScannedStartTs.Load()),
 		zap.Duration("resetTime", time.Since(start)))

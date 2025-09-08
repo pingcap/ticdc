@@ -123,6 +123,14 @@ type subscriptionStat struct {
 	eventCh *chann.UnlimitedChannel[eventWithCallback, uint64]
 	// data <= checkpointTs can be deleted
 	checkpointTs atomic.Uint64
+	// whether the subStat has received any resolved ts
+	initialized atomic.Bool
+	// the time when the subscription receives latest resolved ts
+	lastAdvanceTime atomic.Int64
+	// the time when the subscription receives latest dml event
+	// it is used to calculate the idle time of the subscription
+	// 0 means the subscription has not received any dml event
+	lastReceiveDMLTime atomic.Int64
 	// the resolveTs persisted in the store
 	resolvedTs atomic.Uint64
 	// the max commit ts of dml event in the store
@@ -486,6 +494,7 @@ func (e *eventStore) RegisterDispatcher(
 				maxCommitTs = kv.CRTs
 			}
 		}
+		subStat.lastReceiveDMLTime.Store(time.Now().UnixMilli())
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
 			subID:             subStat.subID,
@@ -502,6 +511,9 @@ func (e *eventStore) RegisterDispatcher(
 		if ts <= currentResolvedTs {
 			return
 		}
+		now := time.Now().UnixMilli()
+		subStat.lastAdvanceTime.Store(now)
+		subStat.initialized.Store(true)
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
 			subStat.dispatchers.Lock()
@@ -510,6 +522,7 @@ func (e *eventStore) RegisterDispatcher(
 				notifier(ts, subStat.maxEventCommitTs.Load())
 			}
 			CounterResolved.Inc()
+			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
 	}
 
@@ -817,6 +830,23 @@ func (e *eventStore) updateMetricsOnce() {
 			resolvedTs := subStat.resolvedTs.Load()
 			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
 			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
+			const largeResolvedTsLagInSecs = 30
+			if subStat.initialized.Load() && resolvedLag >= largeResolvedTsLagInSecs {
+				lastReceiveDMLTimeRepr := "never"
+				if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
+					lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+				}
+				log.Warn("resolved ts lag is too large for initialized subscription",
+					zap.Uint64("subID", uint64(subStat.subID)),
+					zap.Int64("tableID", subStat.tableSpan.TableID),
+					zap.Uint64("resolvedTs", resolvedTs),
+					zap.Float64("resolvedLag(s)", resolvedLag),
+					zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
+					zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
+					zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
+					zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
+					zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
+			}
 			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
 			if minResolvedTs == 0 || resolvedTs < minResolvedTs {
 				minResolvedTs = resolvedTs

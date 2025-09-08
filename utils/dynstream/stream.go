@@ -114,7 +114,7 @@ func (s *stream[A, P, T, D, H]) start() {
 
 // Close the stream and wait for all goroutines to exit.
 // wait is by default true, which means to wait for the goroutines to exit.
-func (s *stream[A, P, T, D, H]) close(wait ...bool) {
+func (s *stream[A, P, T, D, H]) close() {
 	if s.isClosed.CompareAndSwap(false, true) {
 		if s.option.UseBuffer {
 			close(s.inChan)
@@ -122,9 +122,7 @@ func (s *stream[A, P, T, D, H]) close(wait ...bool) {
 			close(s.eventChan)
 		}
 	}
-	if len(wait) == 0 || wait[0] {
-		s.wg.Wait()
-	}
+	s.wg.Wait()
 }
 
 func (s *stream[A, P, T, D, H]) receiver() {

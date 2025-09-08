@@ -24,6 +24,10 @@ var (
 		"changefeed not exists, %s",
 		errors.RFCCodeText("CDC:ErrChangeFeedNotExists"),
 	)
+	ErrChangeFeedAlreadyExists = errors.Normalize(
+		"changefeed already exists, %s",
+		errors.RFCCodeText("CDC:ErrChangeFeedAlreadyExists"),
+	)
 	ErrEtcdAPIError = errors.Normalize(
 		"etcd api returns error",
 		errors.RFCCodeText("CDC:ErrEtcdAPIError"),
@@ -363,6 +367,35 @@ var (
 		"can not found schema snapshot, ts: %d",
 		errors.RFCCodeText("CDC:ErrSchemaSnapshotNotFound"),
 	)
+	ErrSchemaStorageTableMiss = errors.Normalize(
+		"table %d not found",
+		errors.RFCCodeText("CDC:ErrSchemaStorageTableMiss"),
+	)
+	ErrSnapshotSchemaNotFound = errors.Normalize(
+		"schema %d not found in schema snapshot",
+		errors.RFCCodeText("CDC:ErrSnapshotSchemaNotFound"),
+	)
+	ErrSnapshotTableNotFound = errors.Normalize(
+		"table %d not found in schema snapshot",
+		errors.RFCCodeText("CDC:ErrSnapshotTableNotFound"),
+	)
+	ErrSnapshotSchemaExists = errors.Normalize(
+		"schema %s(%d) already exists",
+		errors.RFCCodeText("CDC:ErrSnapshotSchemaExists"),
+	)
+	ErrSnapshotTableExists = errors.Normalize(
+		"table %s.%s already exists",
+		errors.RFCCodeText("CDC:ErrSnapshotTableExists"),
+	)
+	ErrInvalidDDLJob = errors.Normalize(
+		"invalid ddl job(%d)",
+		errors.RFCCodeText("CDC:ErrInvalidDDLJob"),
+	)
+	ErrExchangePartition = errors.Normalize(
+		"exchange partition failed, %s",
+		errors.RFCCodeText("CDC:ErrExchangePartition"),
+	)
+
 	ErrCorruptedDataMutation = errors.Normalize(
 		"Changefeed %s.%s stopped due to corrupted data mutation received",
 		errors.RFCCodeText("CDC:ErrCorruptedDataMutation"))
@@ -403,6 +436,10 @@ var (
 	ErrAPIInvalidParam = errors.Normalize(
 		"invalid api parameter",
 		errors.RFCCodeText("CDC:ErrAPIInvalidParam"),
+	)
+	ErrAPIGetPDClientFailed = errors.Normalize(
+		"failed to get PDClient to connect PD, please recheck",
+		errors.RFCCodeText("CDC:ErrAPIGetPDClientFailed"),
 	)
 	ErrInternalServerError = errors.Normalize(
 		"internal server error",

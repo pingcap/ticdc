@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"

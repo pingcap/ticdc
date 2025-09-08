@@ -56,7 +56,14 @@ var customReplicaConfig = &ReplicaConfig{
 		WorkerNum: 17,
 	},
 	Sink: &SinkConfig{
-		Protocol: "arvo",
+		Protocol: "simple",
+		DispatchRules: []*DispatchRule{
+			{
+				Matcher:       []string{"*.*"},
+				PartitionRule: "columns",
+				Columns:       []string{"id"},
+			},
+		},
 		ColumnSelectors: []*ColumnSelector{
 			{
 				[]string{"a.b"},
@@ -188,6 +195,7 @@ func testChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	if err := json.Unmarshal(resp.body, changefeedInfo1); err != nil {
 		log.Panic("unmarshal failed", zap.String("body", string(resp.body)), zap.Error(err))
 	}
+
 	ensureChangefeed(ctx, client, changefeedInfo1.ID, "normal")
 	resp = client.Get().WithURI("/changefeeds/" + changefeedInfo1.ID + "?namespace=test").Do(ctx)
 	assertResponseIsOK(resp)
@@ -341,6 +349,7 @@ func testCapture(ctx context.Context, client *CDCRESTClient) error {
 	return nil
 }
 
+// TODO
 // func testProcessor(ctx context.Context, client *CDCRESTClient) error {
 // 	resp := client.Get().WithURI("processors").Do(ctx)
 // 	assertResponseIsOK(resp)
@@ -428,7 +437,7 @@ func ensureChangefeed(ctx context.Context, client *CDCRESTClient, id, state stri
 				return
 			}
 		}
-		log.Info("check changefeed failed", zap.Int("time", i), zap.ByteString("body", resp.body))
+		log.Info("check changefeed failed", zap.Int("time", i), zap.Any("info", info))
 		time.Sleep(2 * time.Second)
 	}
 	log.Panic("ensure changefeed failed")

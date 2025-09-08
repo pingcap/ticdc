@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -101,7 +102,7 @@ type dispatcherStat struct {
 
 	// syncpoint related
 	enableSyncPoint   bool
-	nextSyncPoint     uint64
+	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
 
 	// Scan task related
@@ -129,7 +130,6 @@ type dispatcherStat struct {
 }
 
 func newDispatcherStat(
-	startTs uint64,
 	info DispatcherInfo,
 	filter filter.Filter,
 	scanWorkerIndex int,
@@ -152,9 +152,10 @@ func newDispatcherStat(
 
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
-		dispStat.nextSyncPoint = info.GetSyncPointTs()
+		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
 	}
+	startTs := info.GetStartTs()
 	dispStat.eventStoreResolvedTs.Store(startTs)
 	dispStat.checkpointTs.Store(startTs)
 
@@ -218,6 +219,22 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.lastScannedStartTs.Store(0)
 	a.isReadyReceivingData.Store(true)
 	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
+
+	if a.enableSyncPoint {
+		for {
+			prevSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(a.nextSyncPoint.Load()).Add(-a.syncPointInterval))
+			if prevSyncPoint <= resetTs {
+				break
+			}
+			log.Info("reset sync point",
+				zap.Stringer("dispatcherID", a.id),
+				zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
+				zap.Uint64("nextSyncPoint", a.nextSyncPoint.Load()),
+				zap.Uint64("prevSyncPoint", prevSyncPoint),
+				zap.Uint64("resetTs", resetTs))
+			a.nextSyncPoint.Store(prevSyncPoint)
+		}
+	}
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
