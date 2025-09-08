@@ -218,11 +218,6 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		if !strings.HasSuffix(path, checksumSuffix) {
 			return nil
 		}
-		log.Info("found schema file with the same checksum",
-			zap.String("namespace", f.changefeedID.Namespace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
-			zap.Any("versionedTableName", table),
-			zap.String("path", path))
 		version, parsedChecksum := mustParseSchemaName(path)
 		if parsedChecksum != checksum {
 			log.Error("invalid schema file name",
