@@ -45,6 +45,8 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
+
+	defaultReportDispatcherStatToStoreInterval = time.Second * 10
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -167,7 +169,7 @@ func newEventBroker(
 	})
 
 	g.Go(func() error {
-		return c.reportDispatcherStatToStore(ctx)
+		return c.reportDispatcherStatToStore(ctx, defaultFlushResolvedTsInterval)
 	})
 
 	g.Go(func() error {
@@ -753,8 +755,8 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	}
 }
 
-func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second * 10)
+func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInterval time.Duration) error {
+	ticker := time.NewTicker(tickInterval)
 	log.Info("update dispatcher send ts goroutine is started")
 	for {
 		select {
@@ -1058,7 +1060,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 			dispatcher.checkpointTs.Store(dp.CheckpointTs)
 		}
 		// Update the last received heartbeat time to the current time.
-		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
+		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().Unix())
 	}
 	c.sendDispatcherResponse(responseMap)
 }
