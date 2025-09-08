@@ -411,7 +411,9 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
+		log.Error("fetchTableDDLEvents readPersistedDDLEvent", zap.Any("ddl", rawEvent.Query))
 		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+		log.Error("fetchTableDDLEvents readPersistedDDLEvent", zap.Any("ddl", ddlEvent.Query))
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -481,7 +483,9 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
+			log.Error("fetchTableTriggerDDLEvents readPersistedDDLEvent", zap.Any("ddl", rawEvent.Query))
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+			log.Error("fetchTableTriggerDDLEvents buildDDLEvent", zap.Any("ddl", ddlEvent.Query))
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -829,5 +833,6 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (comm
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))
 	}
+	// here!
 	return handler.buildDDLEventFunc(rawEvent, tableFilter)
 }

@@ -483,7 +483,10 @@ func readPersistedDDLEvent(snap *pebble.Snapshot, version uint64) PersistedDDLEv
 			zap.Error(err))
 	}
 	defer closer.Close()
-	return unmarshalPersistedDDLEvent(ddlValue)
+
+	ddl := unmarshalPersistedDDLEvent(ddlValue)
+	log.Error("writePersistedDDLEvent", zap.Any("ddl", ddl.Query))
+	return ddl
 }
 
 func writePersistedDDLEvent(db *pebble.DB, ddlEvent *PersistedDDLEvent) error {
@@ -516,6 +519,7 @@ func writePersistedDDLEvent(db *pebble.DB, ddlEvent *PersistedDDLEvent) error {
 		return err
 	}
 	batch.Set(ddlKey, ddlValue, pebble.NoSync)
+	log.Error("writePersistedDDLEvent", zap.Any("ddl", ddlEvent.Query))
 	return batch.Commit(pebble.NoSync)
 }
 
