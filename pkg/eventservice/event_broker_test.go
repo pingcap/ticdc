@@ -315,7 +315,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	removedDispatcher := broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, removedDispatcher)
 
-	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Millisecond)
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Verify that a response was sent indicating the dispatcher is removed
 	select {

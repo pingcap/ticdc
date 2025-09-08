@@ -169,7 +169,7 @@ func newEventBroker(
 	})
 
 	g.Go(func() error {
-		return c.reportDispatcherStatToStore(ctx, defaultFlushResolvedTsInterval)
+		return c.reportDispatcherStatToStore(ctx, defaultReportDispatcherStatToStoreInterval)
 	})
 
 	g.Go(func() error {
