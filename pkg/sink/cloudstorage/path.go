@@ -186,17 +186,17 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
 			zap.Any("tableInfo", tableInfo))
-		return true, errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table schema in FilePathGenerator")
+		return false, errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table schema in FilePathGenerator")
 	}
 
 	// Case 1: point check if the schema file exists.
 	tblSchemaFile, err := def.GenerateSchemaFilePath()
 	if err != nil {
-		return true, err
+		return false, err
 	}
 	exist, err := f.storage.FileExists(ctx, tblSchemaFile)
 	if err != nil {
-		return true, err
+		return false, err
 	}
 	if exist {
 		f.versionMap[table] = table.TableInfoVersion
@@ -237,7 +237,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return nil
 	})
 	if err != nil {
-		return true, err
+		return false, err
 	}
 	if hasNewerSchemaVersion {
 		return true, nil
