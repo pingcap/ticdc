@@ -36,21 +36,21 @@ mysql_groups=(
 	# G02
 	'availability ddl_for_split_tables_with_failover'
 	# G03
-	''
+	'cdc move_table'
 	# G04
-	'syncpoint syncpoint_check_ts'
+	'syncpoint syncpoint_check_ts '
 	# G05
-	'move_table ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_merge_and_split'
 	# G06
-	'cdc ddl_for_split_tables_with_random_merge_and_split'
+	'ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'resolve_lock merge_table'
+	'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
 	# G08
-	'bank ddl_for_split_tables_random_schedule'
+	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
 	# G09
-	'drop_many_tables'
+	'resolve_lock merge_table drop_many_tables bank'
 	# G10
-	'default_value http_proxies'
+	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
 	# G11
 	'ddl_reentrant force_replicate_table'
 	# G12

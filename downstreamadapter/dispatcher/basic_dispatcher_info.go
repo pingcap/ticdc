@@ -47,11 +47,6 @@ type SharedInfo struct {
 	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
 	// shared by the event dispatcher manager
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
-	// schemaIDToDispatchers is shared in the DispatcherManager,
-	// it store all the infos about schemaID->Dispatchers
-	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
-	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
-	schemaIDToDispatchers *SchemaIDToDispatchers
 	// errCh is used to collect the errors that need to report to maintainer
 	// such as error of flush ddl events
 	errCh chan error
@@ -68,21 +63,19 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
-	schemaIDToDispatchers *SchemaIDToDispatchers,
 	errCh chan error,
 ) *SharedInfo {
 	return &SharedInfo{
-		changefeedID:          changefeedID,
-		timezone:              timezone,
-		bdrMode:               bdrMode,
-		outputRawChangeEvent:  outputRawChangeEvent,
-		integrityConfig:       integrityConfig,
-		filterConfig:          filterConfig,
-		syncPointConfig:       syncPointConfig,
-		statusesChan:          statusesChan,
-		blockStatusesChan:     blockStatusesChan,
-		schemaIDToDispatchers: schemaIDToDispatchers,
-		errCh:                 errCh,
+		changefeedID:         changefeedID,
+		timezone:             timezone,
+		bdrMode:              bdrMode,
+		outputRawChangeEvent: outputRawChangeEvent,
+		integrityConfig:      integrityConfig,
+		filterConfig:         filterConfig,
+		syncPointConfig:      syncPointConfig,
+		statusesChan:         statusesChan,
+		blockStatusesChan:    blockStatusesChan,
+		errCh:                errCh,
 	}
 }
 
@@ -94,8 +87,8 @@ func (d *BasicDispatcher) GetSchemaID() int64 {
 	return d.schemaID
 }
 
-func (d *BasicDispatcher) GetType() int {
-	return d.dispatcherType
+func (d *BasicDispatcher) GetMode() int64 {
+	return d.mode
 }
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
@@ -190,10 +183,6 @@ func (d *BasicDispatcher) SetCurrentPDTs(currentPDTs uint64) {
 // SharedInfo methods
 func (s *SharedInfo) IsOutputRawChangeEvent() bool {
 	return s.outputRawChangeEvent
-}
-
-func (s *SharedInfo) GetSchemaIDToDispatchers() *SchemaIDToDispatchers {
-	return s.schemaIDToDispatchers
 }
 
 func (s *SharedInfo) GetStatusesChan() chan TableSpanStatusWithSeq {

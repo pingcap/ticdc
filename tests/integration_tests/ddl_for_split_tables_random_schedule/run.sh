@@ -42,7 +42,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -56,7 +56,7 @@ function execute_dml() {
 }
 
 main() {
-	prepare
+	prepare changefeed
 
 	declare -a pids=()
 
@@ -89,7 +89,48 @@ main() {
 	cleanup_process $CDC_BINARY
 }
 
+main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
+	prepare consistent_changefeed
+
+	declare -a pids=()
+
+	for i in {1..10}; do
+		execute_dml $i &
+		pids+=("$!")
+	done
+
+	sleep 200
+
+	kill -9 ${pids[@]}
+
+	sleep 60
+
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 36 100 le 1 # 6 * 5 + 5 + 1
+
+	cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+	if [ -z "$cdc_pid_1" ]; then
+		echo "ERROR: cdc server 1 is not running"
+		exit 1
+	fi
+	kill_cdc_pid $cdc_pid_1
+
+	sleep 60
+
+	query_dispatcher_count "127.0.0.1:8301" "test" 26 100 le 1 # 4 * 5 + 5 + 1
+
+	cleanup_process $CDC_BINARY
+}
+
 trap stop_tidb_cluster EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+stop_tidb_cluster
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

@@ -28,9 +28,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
-	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -137,9 +137,9 @@ func newFileWorkerGroup(
 			},
 		},
 		flushCh: make(chan *fileCache, 32),
-		metricWriteBytes: misc.RedoWriteBytesGauge.
+		metricWriteBytes: metrics.RedoWriteBytesGauge.
 			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
-		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 	}
 }
@@ -172,9 +172,9 @@ func (f *fileWorkerGroup) Run(
 }
 
 func (f *fileWorkerGroup) close() {
-	misc.RedoFlushAllDurationHistogram.
+	metrics.RedoFlushAllDurationHistogram.
 		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
-	misc.RedoWriteBytesGauge.
+	metrics.RedoWriteBytesGauge.
 		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
 }
 

@@ -379,7 +379,7 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 
 // send pass action to the related dispatchers, if find the related dispatchers are all removed, mark rangeCheck done
 // else return pass action messages
-func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
+func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 	if be.blockedDispatchers == nil {
 		return []*messaging.TargetMessage{}
 	}
@@ -399,14 +399,14 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 				}
 				_, ok := msgMap[nodeID]
 				if !ok {
-					msgMap[nodeID] = be.newPassActionMessage(nodeID)
+					msgMap[nodeID] = be.newPassActionMessage(nodeID, mode)
 				}
 			}
 		}
 	case heartbeatpb.InfluenceType_All:
 		// all type will not have drop-type ddl.
 		for _, n := range getAllNodes(be.nodeManager) {
-			msgMap[n] = be.newPassActionMessage(n)
+			msgMap[n] = be.newPassActionMessage(n, mode)
 		}
 	case heartbeatpb.InfluenceType_Normal:
 		for _, tableID := range be.blockedDispatchers.TableIDs {
@@ -422,7 +422,7 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 					}
 					msg, ok := msgMap[nodeID]
 					if !ok {
-						msg = be.newPassActionMessage(nodeID)
+						msg = be.newPassActionMessage(nodeID, mode)
 						msgMap[nodeID] = msg
 					}
 					influencedDispatchers := msg.Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].InfluencedDispatchers
@@ -489,7 +489,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 	}
 }
 
-func (be *BarrierEvent) resend() []*messaging.TargetMessage {
+func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 	if time.Since(be.lastResendTime) < time.Second {
 		return nil
 	}
@@ -577,15 +577,15 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 			return nil
 		}
 
-		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID())}
+		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
 	} else {
 		// the writer dispatcher is advanced, resend pass action
-		return be.sendPassAction()
+		return be.sendPassAction(mode)
 	}
 	return msgs
 }
 
-func (be *BarrierEvent) newWriterActionMessage(capture node.ID) *messaging.TargetMessage {
+func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID: be.cfID.ToPB(),
@@ -600,10 +600,11 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID) *messaging.Targe
 					},
 				},
 			},
+			Mode: mode,
 		})
 }
 
-func (be *BarrierEvent) newPassActionMessage(capture node.ID) *messaging.TargetMessage {
+func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID: be.cfID.ToPB(),
@@ -617,6 +618,7 @@ func (be *BarrierEvent) newPassActionMessage(capture node.ID) *messaging.TargetM
 					},
 				},
 			},
+			Mode: mode,
 		})
 }
 

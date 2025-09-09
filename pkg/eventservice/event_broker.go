@@ -184,7 +184,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 	doSendDML := func(e *event.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
-			c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+			c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
 			metricEventServiceSendKvCount.Add(float64(e.Len()))
 		}
 	}
@@ -235,13 +235,13 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	case <-ctx.Done():
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
 		return
-	case c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- ddlEvent:
+	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
 		metricEventServiceSendDDLCount.Inc()
 	}
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", e.TableID),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
-		zap.Uint64("seq", e.Seq), zap.Bool("isRedo", d.info.GetIsRedo()))
+		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
 
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
@@ -249,7 +249,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
 	re := event.NewResolvedEvent(watermark, d.id, d.epoch.Load())
 	resolvedEvent := newWrapResolvedEvent(remoteID, re, d.getEventSenderState())
-	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- resolvedEvent
+	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	metricEventServiceSendResolvedTsCount.Inc()
 }
@@ -262,7 +262,7 @@ func (c *eventBroker) sendNotReusableEvent(
 	wrapEvent := newWrapNotReusableEvent(server, event)
 
 	// must success unless we can do retry later
-	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- wrapEvent
+	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
 }
 
@@ -427,7 +427,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		remoteID := node.ID(task.info.GetServerID())
 		event := event.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
-		c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
+		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 		metricEventServiceSendCommandCount.Inc()
 		return false
 	}
@@ -455,7 +455,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		zap.Any("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 		zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
-	c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
+	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
 }
 
@@ -486,7 +486,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
-		c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- syncPointEvent
+		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
 			commitTsList = commitTsList[16:]
@@ -900,10 +900,11 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
-		zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
+		zap.Stringer("dispatcherID", id),
+		zap.Int64("mode", info.GetMode()),
+		zap.Int64("tableID", span.GetTableID()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", info.GetStartTs()),
-		zap.Bool("isRedo", info.GetIsRedo()),
 		zap.Duration("duration", time.Since(start)))
 	return nil
 }

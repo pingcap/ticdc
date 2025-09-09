@@ -64,6 +64,16 @@ func (r *ResendTaskMap) Len() int {
 	return len(r.m)
 }
 
+func (r *ResendTaskMap) Keys() []BlockEventIdentifier {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	keys := make([]BlockEventIdentifier, 0, len(r.m))
+	for key := range r.m {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 // Considering the sync point event and ddl event may have the same commitTs,
 // we need to distinguish them.
 type BlockEventIdentifier struct {
@@ -405,15 +415,6 @@ func storeBootstrapState(addr *bootstrapState, state bootstrapState) {
 
 func loadBootstrapState(addr *bootstrapState) bootstrapState {
 	return bootstrapState(atomic.LoadInt32((*int32)(addr)))
-}
-
-const (
-	TypeDispatcherEvent int = iota
-	TypeDispatcherRedo
-)
-
-func IsRedoDispatcher(d DispatcherService) bool {
-	return d.GetType() == TypeDispatcherRedo
 }
 
 // addToDynamicStream add self to dynamic stream
