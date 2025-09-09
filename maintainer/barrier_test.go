@@ -156,7 +156,8 @@ func TestOneBlockEvent(t *testing.T) {
 	})
 	require.Len(t, barrier.blockedEvents.m, 0)
 	// no event if found, no message will be sent
-	require.Nil(t, msg)
+	require.NotNil(t, msg)
+	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 }
 
 func TestNormalBlock(t *testing.T) {
@@ -1496,22 +1497,19 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 // different dispatchers receive syncpoint events with different commitTs batches.
 // The test scenario:
 // 1. There are 3 related dispatchers (1 table trigger + 2 normal dispatchers)
-// 2. There are 4 syncpoint events with different commitTs (A=10, B=11, C=12, D=13)
+// 2. There are 4 syncpoint events with different commitTs (A=10, B=11, C=12)
 // 3. Different receiving patterns:
-//   - Table trigger receives syncpoint event with commitTsList [A, B], reports B (max commitTs)
-//   - Dispatcher1 receives syncpoint event with commitTsList [A], reports A
-//   - Dispatcher2 receives syncpoint event with commitTsList [A, B, C], reports C (max commitTs)
+//   - Table trigger first receives syncpoint event with commitTsList [A, B], reports B (max commitTs)
+//   - Dispatcher1 first receives syncpoint event with commitTsList [A], reports A
+//   - Dispatcher2 first receives syncpoint event with commitTsList [A, B, C], reports C (max commitTs)
 //
 // 4. Expected behavior:
-//   - Barrier notifies dispatcher1 and table trigger to pass their events
-//   - Table trigger receives syncpoint event with commitTsList [C], reports C
-//   - Dispatcher1 receives syncpoint event with commitTsList [B], reports B
-//   - After reporting again, barrier notifies dispatcher1 to pass
-//   - Dispatcher1 receives syncpoint event with commitTsList [C], reports C
-//   - After reporting again, barrier notifies table trigger to write, after table trigger returns, notify others to pass
+//   - Barrier notifies dispatcher1 and table trigger to pass A and B
+//   - After table trigger and dispatcher receive C and report C, barrier notifies table trigger to write C
 func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	testutil.SetUpTestServices()
-
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
 	// Setup table trigger event dispatcher (DDL dispatcher)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
@@ -1563,7 +1561,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	eventB := uint64(11)
 	eventC := uint64(12)
 
-	// Phase 1: Table trigger receives syncpoint event with commitTsList [A, B], reports B (max commitTs)
+	// Table trigger receives syncpoint event with commitTsList [A, B], reports B (max commitTs)
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -1583,7 +1581,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	})
 	require.NotNil(t, msg)
 
-	// Phase 2: Dispatcher1 receives syncpoint event with commitTsList [A], reports A
+	// Dispatcher1 receives syncpoint event with commitTsList [A], reports A
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -1603,7 +1601,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	})
 	require.NotNil(t, msg)
 
-	// Phase 3.1: Dispatcher2 also reports event C
+	//  Dispatcher2 also reports event C
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -1631,7 +1629,6 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	eventB_obj, ok := barrier.blockedEvents.Get(eventBKey)
 	eventB_obj.setLastResendTime(time.Now().Add(-60 * time.Second))
 
-	// Check that event C is not yet selected (only dispatcher2 reported)
 	eventCKey := eventKey{blockTs: eventC, isSyncPoint: true}
 	eventC_obj, ok := barrier.blockedEvents.Get(eventCKey)
 	eventC_obj.setLastResendTime(time.Now().Add(-60 * time.Second))
@@ -1659,10 +1656,8 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	require.False(t, eventC_obj.selected.Load())
 
 	msgs = barrier.Resend()
-	require.Len(t, msgs, 3) // Should send pass actions to dispatcher1 and dispatcher2
+	require.Len(t, msgs, 2)
 	require.Equal(t, msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.Action, heartbeatpb.Action_Pass)
-	require.Equal(t, msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[1].Action.Action, heartbeatpb.Action_Pass)
-	require.Equal(t, msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[2].Action.Action, heartbeatpb.Action_Pass)
 
 	//dispatcher2 and table trigger reports write done for event B
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -1726,7 +1721,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	eventA_obj, ok = barrier.blockedEvents.Get(eventAKey)
 	require.False(t, ok)
 
-	// Phase 4: Table trigger receives syncpoint event with commitTsList [C], reports C
+	// Table trigger receives syncpoint event with commitTsList [C], reports C
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -1746,7 +1741,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	})
 	require.NotNil(t, msg)
 
-	// Phase 5: Dispatcher1 receives syncpoint event with commitTsList [B], reports B
+	// Dispatcher1 receives syncpoint event with commitTsList [B], reports B
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -1766,14 +1761,15 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	})
 	require.NotNil(t, msg)
 
-	msgs = barrier.Resend()
-	require.Len(t, msgs, 0)
+	eventB_obj, ok = barrier.blockedEvents.Get(eventBKey)
+	eventB_obj.setLastResendTime(time.Now().Add(-60 * time.Second))
+
+	eventC_obj, ok = barrier.blockedEvents.Get(eventCKey)
+	eventC_obj.setLastResendTime(time.Now().Add(-60 * time.Second))
 
 	msgs = barrier.Resend()
-	require.Len(t, msgs, 3)
+	require.Len(t, msgs, 1)
 	require.Equal(t, msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.Action, heartbeatpb.Action_Pass)
-	require.Equal(t, msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[1].Action.Action, heartbeatpb.Action_Pass)
-	require.Equal(t, msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[2].Action.Action, heartbeatpb.Action_Pass)
 
 	// all dispatchers reports write done for event B
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -1812,7 +1808,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	eventB_obj, ok = barrier.blockedEvents.Get(eventBKey)
 	require.False(t, ok)
 
-	// Phase 6: Dispatcher1 receives syncpoint event with commitTsList [C], reports C
+	// Dispatcher1 receives syncpoint event with commitTsList [C], reports C
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -1858,7 +1854,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 
 	// Check that pass actions are sent for event C
 	msgs = barrier.Resend()
-	require.Len(t, msgs, 2) // Should send pass actions to dispatcher1 and dispatcher2
+	require.Len(t, msgs, 1)
 
 	// Phase 12: All dispatchers report done for event C
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
