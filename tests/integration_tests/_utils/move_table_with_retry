@@ -10,6 +10,7 @@ ipAddr=${1}
 tableID=${2}
 changefeedID=${3}
 retryCount=${4}
+mode=${5:-0}
 
 echo "move table with retry"
 count=0
@@ -23,7 +24,7 @@ while [[ $count -lt $retryCount ]]; do
 	fi
 
 	# move table 1 to node2
-	result=$(run_cdc_cli changefeed move-table -c "$changefeedID" -t $tableID -d "$node2ID")
+	result=$(run_cdc_cli changefeed move-table -c "$changefeedID" -t $tableID -d "$node2ID" --mode $mode)
 	echo $result
 	success=$(echo $result | sed 's/ PASS.*//' | sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
 

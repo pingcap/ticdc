@@ -169,7 +169,7 @@ func newDispatcherStat(
 	now := time.Now()
 	dispStat.lastReceivedResolvedTsTime.Store(now)
 	dispStat.lastSentResolvedTsTime.Store(now)
-	dispStat.lastReceivedHeartbeatTime.Store(now.UnixNano())
+	dispStat.lastReceivedHeartbeatTime.Store(now.Unix())
 	return dispStat
 }
 
@@ -218,7 +218,7 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.lastScannedCommitTs.Store(resetTs)
 	a.lastScannedStartTs.Store(0)
 	a.isReadyReceivingData.Store(true)
-	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
+	a.lastReceivedHeartbeatTime.Store(time.Now().Unix())
 
 	if a.enableSyncPoint {
 		for {

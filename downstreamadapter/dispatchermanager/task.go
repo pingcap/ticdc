@@ -124,7 +124,7 @@ func (t *MergeCheckTask) Execute() time.Time {
 		return time.Now().Add(time.Second * 1)
 	}
 
-	if dispatcher.IsRedoDispatcher(t.mergedDispatcher) {
+	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
 		doMerge(t, t.manager.redoDispatcherMap)
 	} else {
 		doMerge(t, t.manager.dispatcherMap)
@@ -137,10 +137,9 @@ func (t *MergeCheckTask) Cancel() {
 }
 
 func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *DispatcherMap[T]) {
-	isRedo := dispatcher.IsRedoDispatcher(t.mergedDispatcher)
 	log.Info("do merge",
 		zap.Stringer("changefeedID", t.manager.changefeedID),
-		zap.Bool("isRedo", isRedo),
+		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
 		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
 	)
@@ -179,7 +178,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 			zap.Int("closedCount", closedCount),
 			zap.Int("total", len(t.dispatcherIDs)),
 			zap.Int("count", count),
-			zap.Bool("isRedo", isRedo),
+			zap.Int64("mode", t.mergedDispatcher.GetMode()),
 			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
 		)
 	}
@@ -203,7 +202,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	// We don't need to calculate the true start timestamp (start-ts) because the redo metadata records the minimum checkpoint timestamp and resolved timestamp.
 	// The merger dispatcher operates by first creating a dispatcher and then removing it.
 	// Even if the redo dispatcher’s start-ts is less than that of the common dispatcher, we still record the correct redo metadata log.
-	if !isRedo && t.manager.sink.SinkType() == common.MysqlSinkType {
+	if common.IsDefaultMode(t.mergedDispatcher.GetMode()) && t.manager.sink.SinkType() == common.MysqlSinkType {
 		newStartTsList, startTsIsSyncpointList, err := t.manager.sink.(*mysql.Sink).GetStartTsList([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
 		if err != nil {
 			log.Error("calculate real startTs for merge dispatcher failed",
@@ -229,10 +228,10 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	t.mergedDispatcher.SetCurrentPDTs(t.manager.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, minCheckpointTs)
-	log.Info("merge redo dispatcher commit add dispatcher",
+	log.Info("merge dispatcher commit",
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
-		zap.Bool("isRedo", isRedo),
+		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
 		zap.Uint64("startTs", minCheckpointTs),
 	)

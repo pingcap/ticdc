@@ -39,11 +39,16 @@ import (
 type Controller struct {
 	bootstrapped bool
 
-	schedulerController *pkgscheduler.Controller
-	operatorController  *operator.Controller
-	spanController      *span.Controller
-	messageCenter       messaging.MessageCenter
-	nodeManager         *watcher.NodeManager
+	schedulerController    *pkgscheduler.Controller
+	operatorController     *operator.Controller
+	redoOperatorController *operator.Controller
+	spanController         *span.Controller
+	redoSpanController     *span.Controller
+	barrier                *Barrier
+	redoBarrier            *Barrier
+
+	messageCenter messaging.MessageCenter
+	nodeManager   *watcher.NodeManager
 
 	splitter *split.Splitter
 
@@ -59,14 +64,16 @@ type Controller struct {
 
 	enableTableAcrossNodes bool
 	batchSize              int
+	enableRedo             bool
 }
 
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
 	taskPool threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
-	ddlSpan *replica.SpanReplication,
+	ddlSpan, redoDDLSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration,
+	enableRedo bool,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
@@ -84,13 +91,21 @@ func NewController(changefeedID common.ChangeFeedID,
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg)
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, common.DefaultMode)
 
+	var (
+		redoSpanController *span.Controller
+		redoOC             *operator.Controller
+	)
+	if enableRedo {
+		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, common.RedoMode)
+		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize)
+	}
 	// Create operator controller using spanController
 	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
 
 	sc := NewScheduleController(
-		changefeedID, batchSize, oc, spanController, balanceInterval, splitter, schedulerCfg,
+		changefeedID, batchSize, oc, redoOC, spanController, redoSpanController, balanceInterval, splitter, schedulerCfg,
 	)
 
 	return &Controller{
@@ -99,7 +114,9 @@ func NewController(changefeedID common.ChangeFeedID,
 		bootstrapped:           false,
 		schedulerController:    sc,
 		operatorController:     oc,
+		redoOperatorController: redoOC,
 		spanController:         spanController,
+		redoSpanController:     redoSpanController,
 		messageCenter:          mc,
 		nodeManager:            nodeManager,
 		taskPool:               taskPool,
@@ -107,6 +124,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		batchSize:              batchSize,
 		splitter:               splitter,
+		enableRedo:             enableRedo,
 	}
 }
 
@@ -114,13 +132,16 @@ func NewController(changefeedID common.ChangeFeedID,
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		c.operatorController.UpdateOperatorStatus(dispatcherID, from, status)
-		stm := c.spanController.GetTaskByID(dispatcherID)
+		operatorController := c.getOperatorController(status.Mode)
+		spanController := c.getSpanController(status.Mode)
+
+		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
+		stm := spanController.GetTaskByID(dispatcherID)
 		if stm == nil {
 			if status.ComponentStatus != heartbeatpb.ComponentState_Working {
 				continue
 			}
-			if op := c.operatorController.GetOperator(dispatcherID); op == nil {
+			if op := operatorController.GetOperator(dispatcherID); op == nil {
 				// it's normal case when the span is not found in replication db
 				// the span is removed from replication db first, so here we only check if the span status is working or not
 				log.Warn("no span found, remove it",
@@ -129,7 +150,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// if the span is not found, and the status is working, we need to remove it from dispatcher
-				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID))
+				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, status.Mode))
 			}
 			continue
 		}
@@ -142,7 +163,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				zap.Stringer("node", nodeID))
 			continue
 		}
-		c.spanController.UpdateStatus(stm, status)
+		spanController.UpdateStatus(stm, status)
 	}
 }
 
@@ -162,4 +183,24 @@ func (c *Controller) Stop() {
 	for _, handler := range c.taskHandles {
 		handler.Cancel()
 	}
+}
+
+// RemoveNode is called when a node is removed
+func (c *Controller) RemoveNode(id node.ID) {
+	if c.enableRedo {
+		c.redoOperatorController.OnNodeRemoved(id)
+	}
+	c.operatorController.OnNodeRemoved(id)
+}
+
+func (c *Controller) GetMinRedoCheckpointTs() uint64 {
+	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs()
+	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForAbsentSpans()
+	if minCheckpointTsForOperator == math.MaxUint64 {
+		return minCheckpointTsForSpan
+	}
+	if minCheckpointTsForSpan == math.MaxUint64 {
+		return minCheckpointTsForOperator
+	}
+	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }

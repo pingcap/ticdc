@@ -27,9 +27,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/fsutil"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
-	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -109,11 +109,11 @@ func NewFileWriter(
 		uint64buf: make([]byte, 8),
 		storage:   extStorage,
 
-		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
+		metricFsyncDuration: metrics.RedoFsyncDurationHistogram.
 			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
-		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
-		metricWriteBytes: misc.RedoWriteBytesGauge.
+		metricWriteBytes: metrics.RedoWriteBytesGauge.
 			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 	}
 	if w.op.GetUUIDGenerator != nil {
@@ -226,11 +226,11 @@ func (w *Writer) Close() error {
 		return nil
 	}
 
-	misc.RedoFlushAllDurationHistogram.
+	metrics.RedoFlushAllDurationHistogram.
 		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
-	misc.RedoFsyncDurationHistogram.
+	metrics.RedoFsyncDurationHistogram.
 		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
-	misc.RedoWriteBytesGauge.
+	metrics.RedoWriteBytesGauge.
 		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
 
 	ctx, cancel := context.WithTimeout(context.Background(), redo.CloseTimeout)

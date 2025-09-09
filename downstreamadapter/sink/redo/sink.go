@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -40,7 +41,7 @@ type Sink struct {
 	ddlWriter writer.RedoLogWriter
 	dmlWriter writer.RedoLogWriter
 
-	logBuffer chan writer.RedoEvent
+	logBuffer *chann.UnlimitedChannel[writer.RedoEvent, any]
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal   *atomic.Bool
@@ -68,7 +69,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: cfg.MaxLogSize * redo.Megabyte,
 		},
-		logBuffer:  make(chan writer.RedoEvent, 32),
+		logBuffer:  chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
 		isNormal:   atomic.NewBool(true),
 		isClosed:   atomic.NewBool(false),
 		statistics: metrics.NewStatistics(changefeedID, "redo"),
@@ -100,6 +101,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 func (s *Sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
+		defer s.logBuffer.Close()
 		return s.dmlWriter.Run(ctx)
 	})
 	g.Go(func() error {
@@ -132,14 +134,13 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				event.Rewind()
 				break
 			}
-
-			s.logBuffer <- &commonEvent.RedoRowEvent{
+			s.logBuffer.Push(&commonEvent.RedoRowEvent{
 				StartTs:   event.StartTs,
 				CommitTs:  event.CommitTs,
 				Event:     row,
 				TableInfo: event.TableInfo,
 				Callback:  event.PostFlush,
-			}
+			})
 		}
 		// batchSize, batchWriteBytes, err
 		return int(event.Len()), event.GetSize(), nil
@@ -158,11 +159,10 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
 func (s *Sink) Close(_ bool) {
-	if s.isClosed.Load() {
+	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}
-	defer s.isClosed.Store(true)
-	close(s.logBuffer)
+	s.logBuffer.Close()
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close ddl writer",
@@ -192,10 +192,12 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case e := <-s.logBuffer:
-			err := s.dmlWriter.WriteEvents(ctx, e)
-			if err != nil {
-				return err
+		default:
+			if e, ok := s.logBuffer.Get(); ok {
+				err := s.dmlWriter.WriteEvents(ctx, e)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
