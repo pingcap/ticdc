@@ -143,8 +143,8 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Error(err))
 					return errors.Trace(err)
 				}
-// It is possible that a DML event is sent after a DDL event during dispatcher scheduling.
-// We need to ignore such DML events, as they belong to a stale schema version.
+				// It is possible that a DML event is sent after a DDL event during dispatcher scheduling.
+				// We need to ignore such DML events, as they belong to a stale schema version.
 				if hasNewerSchemaVersion {
 					d.ignoreTableTask(task)
 					log.Warn("ignore messages belonging to an old schema version",
