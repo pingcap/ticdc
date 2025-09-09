@@ -465,6 +465,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 						zap.String("changefeed", be.cfID.Name()),
 						zap.Uint64("commitTs", be.commitTs),
 						zap.Int64("tableId", tableId),
+						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
 						zap.String("dispatcher", replication.ID.String()),
 					)
 					return
@@ -483,6 +484,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Int64("schemaID", schemaID),
+					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
 					zap.String("dispatcher", replication.ID.String()),
 				)
 				return
@@ -498,6 +500,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Uint64("commitTs", be.commitTs),
+					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
 					zap.String("dispatcher", replication.ID.String()),
 				)
 				return

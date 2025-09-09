@@ -603,34 +603,42 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 
 		if event.GetType() == commonEvent.TypeSyncPointEvent {
 			// deal with multi sync point commit ts in one Sync Point Event
-			// make each commitTs as a single message for maintainer
-			// Because the batch commitTs in different dispatchers can be different.
+			// we only report the latest commitTs as the blockTs.
+			// If A receive [syncpont1, syncpoint2, syncpoint3]
+			// B receive [syncpoint1]
+			// C receive [syncpoint1, syncpoint2]
+			// then A report syncpoint3, B report syncpoint1, C report syncpoint2
+			// and barrier find A checkpointTs is exceed syncpoint1 and syncpoint2,
+			// so will just make B and C pass these syncpoint, to receive the latest syncpoint3
+			// then make syncpoint3 Write successfully.
+
+			// TODO(hyy): we could consider to just use the latest commitTs to represent this batch sync point event,
+			// instead of obtain a commitTsList in the sync point event.
 			commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
 			blockTables := event.GetBlockedTables().ToPB()
 			needDroppedTables := event.GetNeedDroppedTables().ToPB()
 			needAddedTables := commonEvent.ToTablesPB(event.GetNeedAddedTables())
-			for _, commitTs := range commitTsList {
-				message := &heartbeatpb.TableSpanBlockStatus{
-					ID: d.id.ToPB(),
-					State: &heartbeatpb.State{
-						IsBlocked:         true,
-						BlockTs:           commitTs,
-						BlockTables:       blockTables,
-						NeedDroppedTables: needDroppedTables,
-						NeedAddedTables:   needAddedTables,
-						UpdatedSchemas:    nil,
-						IsSyncPoint:       true,
-						Stage:             heartbeatpb.BlockStage_WAITING,
-					},
-					IsRedo: IsRedoDispatcher(d),
-				}
-				identifier := BlockEventIdentifier{
-					CommitTs:    commitTs,
-					IsSyncPoint: true,
-				}
-				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-				d.sharedInfo.blockStatusesChan <- message
+			commitTs := commitTsList[len(commitTsList)-1]
+			message := &heartbeatpb.TableSpanBlockStatus{
+				ID: d.id.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked:         true,
+					BlockTs:           commitTs,
+					BlockTables:       blockTables,
+					NeedDroppedTables: needDroppedTables,
+					NeedAddedTables:   needAddedTables,
+					UpdatedSchemas:    nil,
+					IsSyncPoint:       true,
+					Stage:             heartbeatpb.BlockStage_WAITING,
+				},
+				IsRedo: IsRedoDispatcher(d),
 			}
+			identifier := BlockEventIdentifier{
+				CommitTs:    commitTs,
+				IsSyncPoint: true,
+			}
+			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+			d.sharedInfo.blockStatusesChan <- message
 		} else {
 			message := &heartbeatpb.TableSpanBlockStatus{
 				ID: d.id.ToPB(),

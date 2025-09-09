@@ -75,9 +75,7 @@ type BlockEventStatus struct {
 	mutex             sync.Mutex
 	blockPendingEvent commonEvent.BlockEvent
 	blockStage        heartbeatpb.BlockStage
-	// record all the commitTs of this pending event
-	// mainly for the batch sync point event
-	blockCommitTsMap map[uint64]struct{}
+	blockCommitTs     uint64
 }
 
 func (b *BlockEventStatus) clear() {
@@ -86,7 +84,7 @@ func (b *BlockEventStatus) clear() {
 
 	b.blockPendingEvent = nil
 	b.blockStage = heartbeatpb.BlockStage_NONE
-	b.blockCommitTsMap = make(map[uint64]struct{})
+	b.blockCommitTs = 0
 }
 
 func (b *BlockEventStatus) setBlockEvent(event commonEvent.BlockEvent, blockStage heartbeatpb.BlockStage) {
@@ -95,14 +93,11 @@ func (b *BlockEventStatus) setBlockEvent(event commonEvent.BlockEvent, blockStag
 
 	b.blockPendingEvent = event
 	b.blockStage = blockStage
-	b.blockCommitTsMap = make(map[uint64]struct{})
+	b.blockCommitTs = event.GetCommitTs()
 
 	if event.GetType() == commonEvent.TypeSyncPointEvent {
-		for _, ts := range event.(*commonEvent.SyncPointEvent).GetCommitTsList() {
-			b.blockCommitTsMap[ts] = struct{}{}
-		}
-	} else {
-		b.blockCommitTsMap[event.GetCommitTs()] = struct{}{}
+		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
+		b.blockCommitTs = commitTsList[len(commitTsList)-1]
 	}
 }
 
@@ -142,15 +137,7 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 		return false
 	}
 
-	_, ok := b.blockCommitTsMap[action.CommitTs]
-	if ok {
-		delete(b.blockCommitTsMap, action.CommitTs)
-	}
-
-	if len(b.blockCommitTsMap) == 0 {
-		return true
-	}
-	return false
+	return b.blockCommitTs == action.CommitTs
 }
 
 type SchemaIDToDispatchers struct {
