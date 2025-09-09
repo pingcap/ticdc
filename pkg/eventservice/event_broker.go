@@ -583,6 +583,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
+	if scannedBytes < 0 {
+		releaseQuota(available, uint64(sl.maxDMLBytes))
+	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
+		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	}
+
 	if scannedBytes > int64(c.scanLimitInBytes) {
 		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
 		scannedBytes = int64(c.scanLimitInBytes)
@@ -634,11 +640,19 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 }
 
 func allocQuota(quota *atomic.Uint64, nBytes uint64) bool {
-	available := quota.Load()
-	if available < nBytes {
-		return false
+	for {
+		available := quota.Load()
+		if available < nBytes {
+			return false
+		}
+		if quota.CompareAndSwap(available, available-nBytes) {
+			return true
+		}
 	}
-	return quota.CompareAndSwap(available, available-nBytes)
+}
+
+func releaseQuota(quota *atomic.Uint64, nBytes uint64) {
+	quota.Add(nBytes)
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int, topic string) error {
