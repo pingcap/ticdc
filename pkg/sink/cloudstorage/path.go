@@ -167,7 +167,7 @@ func NewFilePathGenerator(
 
 // CheckOrWriteSchema checks whether the schema file exists in the storage and
 // write scheme.json if necessary.
-// It returns true if there is newer schema version in the storage than the pased table version.
+// It returns true if there is a newer schema version in storage than the passed table version.
 func (f *FilePathGenerator) CheckOrWriteSchema(
 	ctx context.Context,
 	table VersionedTableName,
