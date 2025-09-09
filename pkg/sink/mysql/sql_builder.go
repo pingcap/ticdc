@@ -22,6 +22,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type preparedDMLs struct {
@@ -30,6 +32,48 @@ type preparedDMLs struct {
 	rowCount        int
 	approximateSize int64
 	startTs         []uint64
+}
+
+func (d *preparedDMLs) LogDebug() {
+	if log.GetLevel() != zapcore.DebugLevel {
+		return
+	}
+	// Calculate total count
+	totalCount := len(d.sqls)
+	log.Debug("Start to log a preparedDMLs", zap.Int("totalSQLCount", totalCount), zap.Any("startTs", d.startTs), zap.Int("rowCount", d.rowCount))
+
+	if len(d.sqls) == 0 {
+		log.Debug("No SQL statements to log")
+		return
+	}
+
+	// Log each SQL statement with its arguments
+	for i, sql := range d.sqls {
+		var args []interface{}
+		if i < len(d.values) {
+			args = d.values[i]
+		}
+
+		// Format the arguments as a string
+		argsStr := "("
+		for j, arg := range args {
+			if j > 0 {
+				argsStr += ", "
+			}
+			if arg == nil {
+				argsStr += "NULL"
+			} else if str, ok := arg.(string); ok {
+				argsStr += fmt.Sprintf(`"%s"`, str)
+			} else {
+				argsStr += fmt.Sprintf("%v", arg)
+			}
+		}
+		argsStr += ")"
+		// Log in the requested format
+		log.Debug(fmt.Sprintf("[%03d] Query: %s", i+1, sql))
+		log.Debug(fmt.Sprintf("      Args: %s", argsStr))
+	}
+	log.Debug("End to log a preparedDMLs")
 }
 
 func (d *preparedDMLs) String() string {
