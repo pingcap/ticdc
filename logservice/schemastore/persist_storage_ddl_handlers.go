@@ -798,7 +798,17 @@ func updateDDLHistoryForTableTriggerOnlyDDL(args updateDDLHistoryFuncArgs) []uin
 
 func updateDDLHistoryForSchemaDDL(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
-	for tableID := range args.databaseMap[args.ddlEvent.SchemaID].Tables {
+	if args.ddlEvent == nil {
+		log.Error("ddl event is nil")
+	}
+	if args.ddlEvent.SchemaID == 0 {
+		log.Error("schema id is 0 in schema ddl", zap.Any("ddlEvent", args.ddlEvent))
+	}
+	databaseInfo := args.databaseMap[args.ddlEvent.SchemaID]
+	if databaseInfo == nil {
+		log.Panic("database info is nil in schema ddl", zap.Int64("schemaID", args.ddlEvent.SchemaID))
+	}
+	for tableID := range databaseInfo.Tables {
 		if partitionInfo, ok := args.partitionMap[tableID]; ok {
 			for id := range partitionInfo {
 				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, id)
