@@ -140,6 +140,16 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 	return b.blockCommitTs == action.CommitTs
 }
 
+func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.blockPendingEvent == nil {
+		return 0, false
+	}
+	return b.blockCommitTs, true
+}
+
 type SchemaIDToDispatchers struct {
 	mutex sync.RWMutex
 	m     map[int64]map[common.DispatcherID]interface{}
