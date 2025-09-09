@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -62,13 +63,12 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Of
 			zap.Uint64("watermark", newWatermark))
 		return
 	}
+	readOldOffset := true
 	if offset > p.watermarkOffset {
-		log.Panic("partition resolved ts fallback",
-			zap.Int32("partition", p.partition),
-			zap.Uint64("newWatermark", newWatermark), zap.Any("offset", offset),
-			zap.Uint64("watermark", p.watermark), zap.Any("watermarkOffset", p.watermarkOffset))
+		readOldOffset = false
 	}
-	log.Warn("partition resolved ts fall back, ignore it, since consumer read old offset message",
+	log.Warn("partition resolved ts fall back, ignore it",
+		zap.Bool("readOldOffset", readOldOffset),
 		zap.Int32("partition", p.partition),
 		zap.Uint64("newWatermark", newWatermark), zap.Any("offset", offset),
 		zap.Uint64("watermark", p.watermark), zap.Any("watermarkOffset", p.watermarkOffset))
@@ -82,11 +82,12 @@ type writer struct {
 	// this should only be used by the canal-json protocol
 	partitionTableAccessor *partitionTableAccessor
 
-	eventRouter     *eventrouter.EventRouter
-	protocol        config.Protocol
-	maxMessageBytes int
-	maxBatchSize    int
-	mysqlSink       sink.Sink
+	eventRouter      *eventrouter.EventRouter
+	protocol         config.Protocol
+	maxMessageBytes  int
+	maxBatchSize     int
+	mysqlSink        sink.Sink
+	tableSchemaStore *util.TableSchemaStore
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -138,6 +139,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
+	w.tableSchemaStore = util.NewTableSchemaStore(nil, commonType.MysqlSinkType)
+	w.mysqlSink.SetTableSchemaStore(w.tableSchemaStore)
 	return w
 }
 
@@ -485,6 +488,12 @@ func (m *partitionTableAccessor) isPartitionTable(schema, table string) bool {
 }
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
+	ddl.AddPostFlushFunc(func() {
+		if w.tableSchemaStore != nil {
+			w.tableSchemaStore.AddEvent(ddl)
+		}
+	})
+
 	switch w.protocol {
 	case config.ProtocolCanalJSON, config.ProtocolOpen:
 	default:

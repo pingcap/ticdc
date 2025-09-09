@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
@@ -58,7 +59,7 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64) {
 			zap.Uint64("watermark", newWatermark))
 		return
 	}
-	log.Warn("partition resolved ts fall back, ignore it, since consumer read old  message",
+	log.Warn("partition resolved ts fall back, ignore it, since consumer read old message",
 		zap.Uint64("newWatermark", newWatermark),
 		zap.Uint64("watermark", p.watermark), zap.Any("watermark", p.watermark))
 }
@@ -71,9 +72,10 @@ type writer struct {
 	// this should only be used by the canal-json protocol
 	partitionTableAccessor *partitionTableAccessor
 
-	eventRouter *eventrouter.EventRouter
-	protocol    config.Protocol
-	mysqlSink   sink.Sink
+	eventRouter      *eventrouter.EventRouter
+	protocol         config.Protocol
+	mysqlSink        sink.Sink
+	tableSchemaStore *util.TableSchemaStore
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -128,6 +130,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
+	w.tableSchemaStore = util.NewTableSchemaStore(nil, commonType.MysqlSinkType)
+	w.mysqlSink.SetTableSchemaStore(w.tableSchemaStore)
 	return w
 }
 
