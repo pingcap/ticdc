@@ -296,6 +296,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	ticdcClusterID := config.GetGlobalServerConfig().ClusterID
 
 	query := selectDDLTsQuery(tableIDs, ticdcClusterID, changefeedID)
+	log.Info("query ddl ts table", zap.String("query", query))
 	rows, err := w.db.Query(query)
 	if err != nil {
 		if apperror.IsTableNotExistsErr(err) {
@@ -351,14 +352,30 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 						retStartTsList[idx] = ddlTs
 						isSyncpoints[idx] = isSyncpoint
 					}
-					log.Debug("createdTime is larger than createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs))
+					log.Debug("createdTime is larger than createdAt",
+						zap.Int64("tableId", tableId),
+						zap.Any("tableNameInDDLJob", tableNameInDDLJob),
+						zap.Any("dbNameInDDLJob", dbNameInDDLJob),
+						zap.Int64("ddlTs", ddlTs),
+						zap.Int64("startTs", ddlTs),
+						zap.Any("ddlJobCreatedTime", createdTime),
+						zap.Any("createdAt", createdAt),
+					)
 					continue
 				} else {
 					// show the ddl is not executed
 					for _, idx := range tableIdIdxMap[tableId] {
 						retStartTsList[idx] = ddlTs - 1
 					}
-					log.Debug("createdTime is less than  createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs-1))
+					log.Debug("createdTime is less than  createdAt",
+						zap.Int64("tableId", tableId),
+						zap.Any("tableNameInDDLJob", tableNameInDDLJob),
+						zap.Any("dbNameInDDLJob", dbNameInDDLJob),
+						zap.Int64("ddlTs", ddlTs),
+						zap.Int64("startTs", ddlTs-1),
+						zap.Any("ddlJobCreatedTime", createdTime),
+						zap.Any("createdAt", createdAt),
+					)
 					continue
 				}
 			}
