@@ -505,13 +505,14 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				failpoint.Inject("BlockAfterPass", nil)
 			}
 		} else {
-			ts, ok := d.blockEventStatusgetEventCommitTs() 
+			ts, ok := d.blockEventStatus.getEventCommitTs()
 			if ok && action.CommitTs > ts {
-			log.Info("pending event's commitTs is smaller than the action's commitTs, just ignore it",
-				zap.Uint64("pendingEventCommitTs", ts),
-				zap.Uint64("actionCommitTs", action.CommitTs),
-				zap.Stringer("dispatcher", d.id))
-			return
+				log.Info("pending event's commitTs is smaller than the action's commitTs, just ignore it",
+					zap.Uint64("pendingEventCommitTs", ts),
+					zap.Uint64("actionCommitTs", action.CommitTs),
+					zap.Stringer("dispatcher", d.id))
+				return
+			}
 		}
 
 		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
