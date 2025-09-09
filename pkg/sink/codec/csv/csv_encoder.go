@@ -46,6 +46,7 @@ func (b *batchEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
+			event.Rewind()
 			break
 		}
 		msg, err := rowChangedEvent2CSVMsg(b.config, &commonEvent.RowEvent{

@@ -8,6 +8,7 @@ tools/workload/bin
 .idea
 *.log
 .DS_Store
+.test
 
 # Unit test reports
 cdc-junit-report.xml

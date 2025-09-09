@@ -119,7 +119,7 @@ type Maintainer struct {
 	lastReportTime time.Time
 
 	removing        atomic.Bool
-	cascadeRemoving bool
+	cascadeRemoving atomic.Bool
 	// the changefeed is removed, notify the dispatcher manager to clear ddl_ts table
 	changefeedRemoved atomic.Bool
 
@@ -175,14 +175,13 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
-		mc:              mc,
-		removed:         atomic.NewBool(false),
-		nodeManager:     nodeManager,
-		closedNodes:     make(map[node.ID]struct{}),
-		statusChanged:   atomic.NewBool(true),
-		cascadeRemoving: false,
-		config:          cfg,
-		pdClock:         appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		mc:            mc,
+		removed:       atomic.NewBool(false),
+		nodeManager:   nodeManager,
+		closedNodes:   make(map[node.ID]struct{}),
+		statusChanged: atomic.NewBool(true),
+		config:        cfg,
+		pdClock:       appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 
 		ddlSpan:               ddlSpan,
 		checkpointTsByCapture: newCheckpointTsCaptureMap(),
@@ -239,7 +238,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		Config:       config.GetDefaultReplicaConfig(),
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false)
-	m.cascadeRemoving = true
+	m.cascadeRemoving.Store(true)
 	return m
 }
 
@@ -423,7 +422,7 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	m.removing.Store(true)
-	m.cascadeRemoving = cascade
+	m.cascadeRemoving.Store(cascade)
 	m.changefeedRemoved.Store(changefeedRemoved)
 	closed := m.tryCloseChangefeed()
 	if closed {
@@ -716,13 +715,13 @@ func (m *Maintainer) sendPostBootstrapRequest() {
 func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeatpb.MaintainerCloseResponse) {
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
-		m.onRemoveMaintainer(m.cascadeRemoving, m.changefeedRemoved.Load())
+		m.onRemoveMaintainer(m.cascadeRemoving.Load(), m.changefeedRemoved.Load())
 	}
 }
 
 func (m *Maintainer) handleResendMessage() {
 	// resend closing message
-	if m.removing.Load() {
+	if m.removing.Load() && m.cascadeRemoving.Load() {
 		m.trySendMaintainerCloseRequestToAllNode()
 		return
 	}
@@ -741,7 +740,7 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 	if m.scheduleState.Load() != int32(heartbeatpb.ComponentState_Stopped) {
 		m.statusChanged.Store(true)
 	}
-	if !m.cascadeRemoving {
+	if !m.cascadeRemoving.Load() {
 		m.controller.operatorController.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
 		return !m.ddlSpan.IsWorking()
 	}

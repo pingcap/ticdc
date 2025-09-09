@@ -510,6 +510,7 @@ func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offs
 	for {
 		change, ok := row.GetNextRow()
 		if !ok {
+			row.Rewind()
 			break
 		}
 
@@ -526,7 +527,6 @@ func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offs
 			)
 		}
 	}
-	row.Rewind()
 }
 
 func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionProgress, offset kafka.Offset) {
