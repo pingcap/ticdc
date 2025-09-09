@@ -320,14 +320,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		offset    = message.TopicPartition.Offset
 	)
 
-	// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
-	if len(message.Key)+len(message.Value) > w.maxMessageBytes {
-		log.Panic("kafka max-messages-bytes exceeded",
-			zap.Int32("partition", partition), zap.Any("offset", offset),
-			zap.Int("max-message-bytes", w.maxMessageBytes),
-			zap.Int("receivedBytes", len(message.Key)+len(message.Value)))
-	}
-
 	progress := w.progresses[partition]
 	progress.decoder.AddKeyValue(message.Key, message.Value)
 
@@ -402,6 +394,13 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			row = progress.decoder.NextDMLEvent()
 			w.appendRow2Group(row, progress, offset)
 			counter++
+		}
+		// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
+		if len(message.Key)+len(message.Value) > w.maxMessageBytes && counter > 1 {
+			log.Panic("kafka max-messages-bytes exceeded",
+				zap.Int32("partition", partition), zap.Any("offset", offset),
+				zap.Int("max-message-bytes", w.maxMessageBytes),
+				zap.Int("receivedBytes", len(message.Key)+len(message.Value)))
 		}
 		if counter > w.maxBatchSize {
 			log.Panic("Open Protocol max-batch-size exceeded",
