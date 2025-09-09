@@ -145,39 +145,53 @@ pulsar_groups=(
 
 storage_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G01
-	csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered
-	''
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G02
-	'canal_json_storage_basic canal_json_storage_partition_table'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G03
-	'csv_storage_basic storage_csv_update'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G04
-	'ddl_for_split_tables_with_random_move_table'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G05
-	'move_table drop_many_tables'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G06
-	'cdc default_value'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G07
-	'merge_table resolve_lock force_replicate_table'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G08
-	'tidb_mysql_test'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G09
-	'ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G10
-	'ddl_for_split_tables_with_random_merge_and_split'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G11
 	# fail_over_ddl_mix_with_syncpoint
-	'ddl_for_split_tables_random_schedule'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G12
-	'ddl_with_random_move_table'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G13
-	'fail_over region_merge'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 	# G14
-	'fail_over_ddl_mix'
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
 	# G15
-	''
+	'ddl_for_split_tables_with_random_move_table ddl_for_split_tables_with_random_move_table'
+
 )
 
 # Source shared functions and check test coverage
