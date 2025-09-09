@@ -336,7 +336,6 @@ func (c *consumer) emitDMLEvents(
 
 		if tp == model.MessageTypeRow {
 			row, err := decoder.NextRowChangedEvent()
-
 			if err != nil {
 				log.Error("failed to get next row changed event", zap.Error(err))
 				return errors.Trace(err)
