@@ -26,12 +26,17 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+type tsPair struct {
+	startTs  uint64
+	commitTs uint64
+}
+
 type preparedDMLs struct {
 	sqls            []string
 	values          [][]interface{}
 	rowCount        int
 	approximateSize int64
-	startTs         []uint64
+	tsPairs         []tsPair
 }
 
 func (d *preparedDMLs) LogDebug() {
@@ -40,7 +45,7 @@ func (d *preparedDMLs) LogDebug() {
 	}
 	// Calculate total count
 	totalCount := len(d.sqls)
-	log.Debug("Start to log a preparedDMLs", zap.Int("totalSQLCount", totalCount), zap.Any("startTs", d.startTs), zap.Int("rowCount", d.rowCount))
+	log.Debug("Start to log a preparedDMLs", zap.Int("totalSQLCount", totalCount), zap.Int("rowCount", d.rowCount))
 
 	if len(d.sqls) == 0 {
 		log.Debug("No SQL statements to log")
@@ -76,8 +81,47 @@ func (d *preparedDMLs) LogDebug() {
 	log.Debug("End to log a preparedDMLs")
 }
 
+func (d *preparedDMLs) LogInfo() {
+	// Calculate total count
+	totalCount := len(d.sqls)
+	log.Info("Start to log a preparedDMLs", zap.Int("totalSQLCount", totalCount), zap.Int("rowCount", d.rowCount))
+
+	if len(d.sqls) == 0 {
+		log.Info("No SQL statements to log")
+		return
+	}
+
+	// Log each SQL statement with its arguments
+	for i, sql := range d.sqls {
+		var args []interface{}
+		if i < len(d.values) {
+			args = d.values[i]
+		}
+
+		// Format the arguments as a string
+		argsStr := "("
+		for j, arg := range args {
+			if j > 0 {
+				argsStr += ", "
+			}
+			if arg == nil {
+				argsStr += "NULL"
+			} else if str, ok := arg.(string); ok {
+				argsStr += fmt.Sprintf(`"%s"`, str)
+			} else {
+				argsStr += fmt.Sprintf("%v", arg)
+			}
+		}
+		argsStr += ")"
+		// Log in the requested format
+		log.Info(fmt.Sprintf("[%03d] Query: %s", i+1, sql))
+		log.Info(fmt.Sprintf("      Args: %s", argsStr))
+	}
+	log.Info("End to log a preparedDMLs")
+}
+
 func (d *preparedDMLs) String() string {
-	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.fmtSqls(), d.values, d.rowCount, d.approximateSize, d.startTs)
+	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.fmtSqls(), d.values, d.rowCount, d.approximateSize, d.tsPairs)
 }
 
 func (d *preparedDMLs) fmtSqls() string {
@@ -94,7 +138,7 @@ var dmlsPool = sync.Pool{
 		return &preparedDMLs{
 			sqls:    make([]string, 0, 128),
 			values:  make([][]interface{}, 0, 128),
-			startTs: make([]uint64, 0, 128),
+			tsPairs: make([]tsPair, 0, 128),
 		}
 	},
 }
@@ -102,7 +146,7 @@ var dmlsPool = sync.Pool{
 func (d *preparedDMLs) reset() {
 	d.sqls = d.sqls[:0]
 	d.values = d.values[:0]
-	d.startTs = d.startTs[:0]
+	d.tsPairs = d.tsPairs[:0]
 	d.rowCount = 0
 	d.approximateSize = 0
 }
