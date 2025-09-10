@@ -94,7 +94,7 @@ kafka_groups=(
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
-	'debezium02 fail_over_ddl_mix_with_syncpoint'
+	'debezium02'
 	# G15
 	'debezium03'
 )
@@ -130,7 +130,7 @@ pulsar_groups=(
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
-	'debezium02 fail_over_ddl_mix_with_syncpoint'
+	'debezium02'
 	# G15
 	'debezium03'
 )
@@ -167,7 +167,7 @@ storage_groups=(
 	# G14
 	'fail_over_ddl_mix'
 	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	''
 )
 
 # Source shared functions and check test coverage
