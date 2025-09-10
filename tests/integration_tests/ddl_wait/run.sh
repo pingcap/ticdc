@@ -12,7 +12,7 @@ SINK_TYPE=$1
 # TiCDC blocks DDL operations until its state is not running, except for adding indexes.
 # TiCDC also checks add index ddl state before execute a new DDL.
 function run() {
-		# No need to test kafka and storage sink.
+	# No need to test kafka and storage sink.
 	if [ "$SINK_TYPE" != "mysql" ]; then
 		return
 	fi
