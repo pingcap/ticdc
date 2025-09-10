@@ -45,7 +45,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+	do_retry 5 3 run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -54,7 +54,7 @@ function prepare() {
 }
 
 main() {
-	prepare
+	prepare changefeed
 
 	# move the table to node 2
 	table_id=$(get_table_id "test" "table_1")
@@ -96,7 +96,63 @@ main() {
 	cleanup_process $CDC_BINARY
 }
 
+main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
+	prepare consistent_changefeed
+
+	# move the table to node 2
+	table_id=$(get_table_id "test" "table_1")
+	move_split_table_with_retry "127.0.0.1:8301" $table_id "test" 10 1 || true
+
+	run_sql "ALTER TABLE test.table_1 ADD COLUMN new_col INT;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql_ignore_error "INSERT INTO test.table_1 (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+
+	sleep 10
+
+	## merge and split make the dispatcher id changed
+	# first merge 5 times to merge all dispatchers to one
+	# then split
+	merge_table_with_retry $table_id "test" 10 1 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 1 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 1 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 1 || true
+	sleep 10
+	merge_table_with_retry $table_id "test" 10 1 || true
+	sleep 10
+	split_table_with_retry $table_id "test" 10 1 || true
+
+	sleep 10
+
+	# restart node2 to disable failpoint
+	cdc_pid_1=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	kill_cdc_pid $cdc_pid_1
+	sleep 5
+	export GO_FAILPOINTS=''
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
+
+	# to ensure row changed events have been replicated to TiCDC
+	sleep 10
+	changefeed_id="test"
+	storage_path="file://$WORK_DIR/redo"
+	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+	cleanup_process $CDC_BINARY
+
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+}
+
 trap stop_tidb_cluster EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+stop_tidb_cluster
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

@@ -134,7 +134,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				}
 
 				// generate scheme.json file before generating the first data file if necessary
-				err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, task.tableInfo)
+				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, task.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.Int("workerID", d.id),
@@ -142,6 +142,19 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.Error(err))
 					return errors.Trace(err)
+				}
+				// It is possible that a DML event is sent after a DDL event during dispatcher scheduling.
+				// We need to ignore such DML events, as they belong to a stale schema version.
+				if hasNewerSchemaVersion {
+					d.ignoreTableTask(task)
+					log.Warn("ignore messages belonging to an old schema version",
+						zap.Int("workerID", d.id),
+						zap.String("namespace", d.changeFeedID.Namespace()),
+						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("schema", table.TableNameWithPhysicTableID.Schema),
+						zap.String("table", table.TableNameWithPhysicTableID.Table),
+						zap.Uint64("version", table.TableInfoVersion))
+					continue
 				}
 
 				// make sure that `generateDateStr()` is invoked ONLY once before
@@ -202,6 +215,14 @@ func (d *writer) writeIndexFile(ctx context.Context, path, content string) error
 	err := d.storage.WriteFile(ctx, path, []byte(content))
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	return err
+}
+
+func (d *writer) ignoreTableTask(task *singleTableTask) {
+	for _, msg := range task.msgs {
+		if msg.Callback != nil {
+			msg.Callback()
+		}
+	}
 }
 
 func (d *writer) writeDataFile(ctx context.Context, path string, task *singleTableTask) error {

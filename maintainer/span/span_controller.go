@@ -74,6 +74,7 @@ type Controller struct {
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
 	ddlDispatcherID        common.DispatcherID
+	mode                   int64
 	enableSplittableCheck  bool
 }
 
@@ -83,6 +84,7 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	mode int64,
 ) *Controller {
 	c := &Controller{
 		changefeedID:           changefeedID,
@@ -91,6 +93,7 @@ func NewController(
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		ddlDispatcherID:        ddlSpan.ID,
+		mode:                   mode,
 		enableTableAcrossNodes: schedulerCfg != nil && schedulerCfg.EnableTableAcrossNodes,
 		enableSplittableCheck:  schedulerCfg != nil && schedulerCfg.EnableSplittableCheck,
 	}
@@ -167,7 +170,7 @@ func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -293,6 +296,11 @@ func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
 // UpdateStatus updates the status of a span
 func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbeatpb.TableSpanStatus) {
 	span.UpdateStatus(status)
+
+	if span == c.ddlSpan {
+		// ddl span don't need check by checker
+		return
+	}
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
 
@@ -407,7 +415,8 @@ func (c *Controller) ReplaceReplicaSet(
 			old.ChangefeedID,
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
-			span, checkpointTs)
+			span, checkpointTs,
+			old.GetMode())
 		news = append(news, new)
 	}
 

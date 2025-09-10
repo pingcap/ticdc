@@ -314,6 +314,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			for {
 				row, ok := event.GetNextRow()
 				if !ok {
+					event.Rewind()
 					break
 				}
 

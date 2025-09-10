@@ -83,6 +83,11 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including redo table trigger event dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
+	// schemaIDToDispatchers is shared in the DispatcherManager,
+	// it store all the infos about schemaID->Dispatchers
+	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
+	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
+	schemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
 	// redoSchemaIDToDispatchers is store the schemaID info for all redo dispatchers.
 	redoSchemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
 	// heartbeatRequestQueue is used to store the heartbeat request from all the dispatchers.
@@ -162,12 +167,15 @@ func NewDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	manager := &DispatcherManager{
-		dispatcherMap:                          newDispatcherMap[*dispatcher.EventDispatcher](),
-		changefeedID:                           changefeedID,
-		pdClock:                                pdClock,
-		cancel:                                 cancel,
-		config:                                 cfConfig,
-		latestWatermark:                        NewWatermark(0),
+		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
+		changefeedID:          changefeedID,
+		pdClock:               pdClock,
+		cancel:                cancel,
+		config:                cfConfig,
+		latestWatermark:       NewWatermark(0),
+		schemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
+		sinkQuota:             cfConfig.MemoryQuota,
+
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "eventDispatcher"),
 		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "eventDispatcher"),
 		metricCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "eventDispatcher"),
@@ -175,6 +183,10 @@ func NewDispatcherManager(
 		metricCheckpointTsLag:                  metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTs:                       metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricResolvedTsLag:                    metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+
+		metricRedoTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redoDispatcher"),
+		metricRedoEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redoDispatcher"),
+		metricRedoCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
 	// Set the epoch and maintainerID of the event dispatcher manager
@@ -189,20 +201,6 @@ func NewDispatcherManager(
 			SyncPointInterval:  cfConfig.SyncPointInterval,
 			SyncPointRetention: cfConfig.SyncPointRetention,
 		}
-	}
-
-	totalQuota := manager.config.MemoryQuota
-	if manager.RedoEnable {
-		consistentMemoryUsage := manager.config.Consistent.MemoryUsage
-		if consistentMemoryUsage == nil {
-			consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
-		}
-
-		manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
-		manager.sinkQuota = totalQuota - manager.redoQuota
-	} else {
-		manager.sinkQuota = totalQuota
-		manager.redoQuota = 0
 	}
 
 	var err error
@@ -231,7 +229,6 @@ func NewDispatcherManager(
 		syncPointConfig,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
-		dispatcher.NewSchemaIDToDispatchers(),
 		make(chan error, 1),
 	)
 
@@ -424,9 +421,9 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			tableSpans[idx],
 			uint64(newStartTsList[idx]),
 			schemaIds[idx],
+			e.schemaIDToDispatchers,
 			startTsIsSyncpointList[idx],
 			currentPdTs,
-			dispatcher.TypeDispatcherEvent,
 			e.sink,
 			e.sharedInfo,
 			e.RedoEnable,
@@ -442,7 +439,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			}
 			e.tableTriggerEventDispatcher = d
 		} else {
-			e.sharedInfo.GetSchemaIDToDispatchers().Set(schemaIds[idx], id)
+			e.schemaIDToDispatchers.Set(schemaIds[idx], id)
 			// we don't register table trigger event dispatcher in event collector, when created.
 			// Table trigger event dispatcher is a special dispatcher,
 			// it need to wait get the initial table schema store from the maintainer, then will register to event collector to receive events.
@@ -533,28 +530,46 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 	delay := time.NewTimer(0)
 	defer delay.Stop()
+	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
+		var message heartbeatpb.BlockStatusRequest
+		message.ChangefeedID = e.changefeedID.ToPB()
+		message.BlockStatuses = blockStatusMessage
+		message.Mode = mode
+		e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+	}
 	for {
 		blockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
+		redoBlockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
 		select {
 		case <-ctx.Done():
 			return
 		case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
-			blockStatusMessage = append(blockStatusMessage, blockStatus)
+			if common.IsDefaultMode(blockStatus.Mode) {
+				blockStatusMessage = append(blockStatusMessage, blockStatus)
+			} else {
+				redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
+			}
 			delay.Reset(10 * time.Millisecond)
 		loop:
 			for {
 				select {
 				case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
-					blockStatusMessage = append(blockStatusMessage, blockStatus)
+					if common.IsDefaultMode(blockStatus.Mode) {
+						blockStatusMessage = append(blockStatusMessage, blockStatus)
+					} else {
+						redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
+					}
 				case <-delay.C:
 					break loop
 				}
 			}
 
-			var message heartbeatpb.BlockStatusRequest
-			message.ChangefeedID = e.changefeedID.ToPB()
-			message.BlockStatuses = blockStatusMessage
-			e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+			if len(blockStatusMessage) != 0 {
+				enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
+			}
+			if len(redoBlockStatusMessage) != 0 {
+				enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode)
+			}
 		}
 	}
 }
@@ -579,7 +594,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			return
 		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			if !tableSpanStatus.IsRedo {
+			if common.IsDefaultMode(tableSpanStatus.Mode) {
 				newWatermark.Seq = tableSpanStatus.Seq
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
@@ -591,7 +606,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 				select {
 				case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if !tableSpanStatus.IsRedo {
+					if common.IsDefaultMode(tableSpanStatus.Mode) {
 						if newWatermark.Seq < tableSpanStatus.Seq {
 							newWatermark.Seq = tableSpanStatus.Seq
 						}
@@ -607,6 +622,8 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
+			// FIXME: need to send redo watermark?
+			// message.RedoWatermark = newRedoWatermark
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}
@@ -628,22 +645,27 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		ChangefeedID:    e.changefeedID.ToPB(),
 		CompeleteStatus: needCompleteStatus,
 		Watermark:       heartbeatpb.NewMaxWatermark(),
+		RedoWatermark:   heartbeatpb.NewMaxWatermark(),
 	}
 
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
 
 	if e.RedoEnable {
-		e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
+		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
-			status, cleanMap, _ := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
+			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 			if status != nil {
 				message.Statuses = append(message.Statuses, status)
 			}
 			if cleanMap != nil {
 				toCleanMap = append(toCleanMap, cleanMap)
 			}
+			if watermark != nil {
+				message.RedoWatermark.UpdateMin(*watermark)
+			}
 		})
+		message.RedoWatermark.Seq = redoSeq
 	}
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
@@ -665,7 +687,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
 			dispatcherCount--
-			if m.redo {
+			if common.IsRedoMode(m.mode) {
 				e.cleanRedoDispatcher(m.id, m.schemaID)
 			} else {
 				e.cleanEventDispatcher(m.id, m.schemaID)
@@ -704,8 +726,8 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	return &message
 }
 
-func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, isRedo bool) *MergeCheckTask {
-	if isRedo {
+func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, mode int64) *MergeCheckTask {
+	if common.IsRedoMode(mode) {
 		return e.mergeRedoDispatcher(dispatcherIDs, mergedDispatcherID)
 	}
 	return e.mergeEventDispatcher(dispatcherIDs, mergedDispatcherID)
@@ -735,9 +757,9 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		mergedSpan,
 		fakeStartTs, // real startTs will be calculated later.
 		schemaID,
+		e.schemaIDToDispatchers,
 		false,
 		0, // currentPDTs will be calculated later.
-		dispatcher.TypeDispatcherEvent,
 		e.sink,
 		e.sharedInfo,
 		e.RedoEnable,
@@ -749,7 +771,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		zap.Stringer("dispatcherID", mergedDispatcherID),
 		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
 
-	registerMergeDispatcher(e.changefeedID, dispatcherIDs, e.dispatcherMap, mergedDispatcherID, mergedDispatcher, e.sharedInfo.GetSchemaIDToDispatchers(), e.metricEventDispatcherCount, e.sinkQuota)
+	registerMergeDispatcher(e.changefeedID, dispatcherIDs, e.dispatcherMap, mergedDispatcherID, mergedDispatcher, e.schemaIDToDispatchers, e.metricEventDispatcherCount, e.sinkQuota)
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 
@@ -822,7 +844,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
 	e.dispatcherMap.Delete(id)
-	e.sharedInfo.GetSchemaIDToDispatchers().Delete(schemaID, id)
+	e.schemaIDToDispatchers.Delete(schemaID, id)
 	if e.tableTriggerEventDispatcher != nil && e.tableTriggerEventDispatcher.GetId() == id {
 		e.tableTriggerEventDispatcher = nil
 		e.metricTableTriggerEventDispatcherCount.Dec()

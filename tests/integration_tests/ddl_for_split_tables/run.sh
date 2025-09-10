@@ -25,7 +25,7 @@ function prepare() {
 	run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_file $CUR/data/pre.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500_
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
 	TOPIC_NAME="ticdc-ddl-split-table-$RANDOM"
 	case $SINK_TYPE in
@@ -38,7 +38,7 @@ function prepare() {
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
 	sleep 10
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -46,16 +46,47 @@ function prepare() {
 	esac
 }
 
+main() {
+	prepare changefeed
+	## execute ddls
+	run_sql_file $CUR/data/ddls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	# ## insert some datas
+	run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
+	cleanup_process $CDC_BINARY
+}
+
+main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
+	prepare consistent_changefeed
+
+	## execute ddls
+	run_sql_file $CUR/data/ddls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	# ## insert some datas
+	run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+
+	# to ensure row changed events have been replicated to TiCDC
+	sleep 10
+	changefeed_id="test"
+	storage_path="file://$WORK_DIR/redo"
+	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+	cleanup_process $CDC_BINARY
+
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+}
+
 trap stop_tidb_cluster EXIT
-
-prepare $*
-## execute ddls
-run_sql_file $CUR/data/ddls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-# ## insert some datas
-run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-
-check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
-cleanup_process $CDC_BINARY
-
+main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+stop_tidb_cluster
+# FIXME: refactor redo apply
+# main_with_consistent
+# check_logs $WORK_DIR
+# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
