@@ -1659,7 +1659,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	require.Len(t, msgs, 2)
 	require.Equal(t, msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.Action, heartbeatpb.Action_Pass)
 
-	//dispatcher2 and table trigger reports write done for event B
+	// dispatcher2 and table trigger reports write done for event B
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
