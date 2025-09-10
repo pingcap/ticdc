@@ -88,8 +88,10 @@ func TestRequestCacheAdd_ForceFlag(t *testing.T) {
 	req, err := cache.pop(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, req)
-	require.Equal(t, region3.verID.GetID(), req.regionInfo.verID.GetID())
-	require.Equal(t, region3.subscribedSpan.subID, req.regionInfo.subscribedSpan.subID)
+	require.Equal(t, region1.verID.GetID(), req.regionInfo.verID.GetID())
+	require.Equal(t, region1.subscribedSpan.subID, req.regionInfo.subscribedSpan.subID)
+	cache.markSent(req)
+	require.Equal(t, 1, cache.getPendingCount())
 
 	ok, err = cache.add(ctx, region3, true)
 	require.True(t, ok)
