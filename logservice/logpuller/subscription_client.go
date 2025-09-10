@@ -303,10 +303,12 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 					"log-puller",
 					"max",
 					"default",
+					"default",
 				).Set(float64(areaMetric.MaxMemory()))
 				metrics.DynamicStreamMemoryUsage.WithLabelValues(
 					"log-puller",
 					"used",
+					"default",
 					"default",
 				).Set(float64(areaMetric.MemoryUsage()))
 			}

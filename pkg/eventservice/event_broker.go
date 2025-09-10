@@ -251,7 +251,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	resolvedEvent := newWrapResolvedEvent(remoteID, re, d.getEventSenderState())
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
-	updateMetricRedoEventServiceSendResolvedTsCount(d.info.GetMode())
+	updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
 }
 
 func (c *eventBroker) sendNotReusableEvent(

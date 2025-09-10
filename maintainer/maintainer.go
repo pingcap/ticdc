@@ -1028,8 +1028,8 @@ func (m *Maintainer) collectMetrics() {
 			m.redoSpanCountGauge.Set(float64(totalSpanCount))
 			m.redoTableCountGauge.Set(float64(totalTableCount))
 			m.redoScheduledTaskGauge.Set(float64(scheduling))
-			metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent", "mode").Set(float64(absent))
-			metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working", "mode").Set(float64(working))
+			metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent", "redo").Set(float64(absent))
+			metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working", "redo").Set(float64(working))
 		}
 	}
 }

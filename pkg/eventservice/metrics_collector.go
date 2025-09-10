@@ -48,60 +48,48 @@ var (
 	metricRedoEventServiceSkipResolvedTsCount = metrics.EventServiceSkipResolvedTsCount.WithLabelValues("redo")
 )
 
-func updateMetricEventStoreOutputKv(mode int64, val float64) {
+func updateCounter(mode int64, defaultCounter, redoCounter prometheus.Counter) {
 	if common.IsDefaultMode(mode) {
-		metricEventStoreOutputKv.Add(val)
+		defaultCounter.Inc()
 	} else {
-		metricRedoEventStoreOutputKv.Add(val)
+		redoCounter.Inc()
 	}
+}
+
+func updateCounterWithValue(mode int64, defaultCounter, redoCounter prometheus.Counter, val float64) {
+	if common.IsDefaultMode(mode) {
+		defaultCounter.Add(val)
+	} else {
+		redoCounter.Add(val)
+	}
+}
+
+func updateMetricEventStoreOutputKv(mode int64, val float64) {
+	updateCounterWithValue(mode, metricEventStoreOutputKv, metricRedoEventStoreOutputKv, val)
 }
 
 func updateMetricEventStoreOutputResolved(mode int64) {
-	if common.IsDefaultMode(mode) {
-		metricEventStoreOutputResolved.Inc()
-	} else {
-		metricRedoEventStoreOutputResolved.Inc()
-	}
+	updateCounter(mode, metricEventStoreOutputResolved, metricRedoEventStoreOutputResolved)
 }
 
 func updateMetricEventServiceSendKvCount(mode int64, val float64) {
-	if common.IsDefaultMode(mode) {
-		metricEventServiceSendKvCount.Add(val)
-	} else {
-		metricRedoEventServiceSendKvCount.Add(val)
-	}
+	updateCounterWithValue(mode, metricEventServiceSendKvCount, metricRedoEventServiceSendKvCount, val)
 }
 
-func updateMetricRedoEventServiceSendResolvedTsCount(mode int64) {
-	if common.IsDefaultMode(mode) {
-		metricEventServiceSendResolvedTsCount.Inc()
-	} else {
-		metricRedoEventServiceSendResolvedTsCount.Inc()
-	}
+func updateMetricEventServiceSendResolvedTsCount(mode int64) {
+	updateCounter(mode, metricEventServiceSendResolvedTsCount, metricRedoEventServiceSendResolvedTsCount)
 }
 
 func updateMetricEventServiceSendDDLCount(mode int64) {
-	if common.IsDefaultMode(mode) {
-		metricEventServiceSendDDLCount.Inc()
-	} else {
-		metricRedoEventServiceSendDDLCount.Inc()
-	}
+	updateCounter(mode, metricEventServiceSendDDLCount, metricRedoEventServiceSendDDLCount)
 }
 
 func updateMetricEventServiceSendCommandCount(mode int64) {
-	if common.IsDefaultMode(mode) {
-		metricEventServiceSendCommandCount.Inc()
-	} else {
-		metricRedoEventServiceSendCommandCount.Inc()
-	}
+	updateCounter(mode, metricEventServiceSendCommandCount, metricRedoEventServiceSendCommandCount)
 }
 
 func updateMetricEventServiceSkipResolvedTsCount(mode int64) {
-	if common.IsDefaultMode(mode) {
-		metricEventServiceSkipResolvedTsCount.Inc()
-	} else {
-		metricRedoEventServiceSkipResolvedTsCount.Inc()
-	}
+	updateCounter(mode, metricEventServiceSkipResolvedTsCount, metricRedoEventServiceSkipResolvedTsCount)
 }
 
 // metricsSnapshot holds all metrics data collected at a point in time
