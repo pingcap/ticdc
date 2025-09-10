@@ -16,6 +16,7 @@ package event
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -325,12 +326,36 @@ func NewDMLEvent(
 }
 
 func (t *DMLEvent) String() string {
-	rowsString := ""
-	if t.Rows != nil {
-		rowsString = t.Rows.ToString(t.TableInfo.GetFieldSlice())
+	rowsStringBuilder := strings.Builder{}
+	if t.Rows == nil {
+		return ""
 	}
+
+	rows := make([]RowChange, 0)
+	for row, ok := t.GetNextRow(); ok; {
+		rows = append(rows, row)
+	}
+
+	t.Rewind()
+
+	for _, row := range rows {
+		switch row.RowType {
+		case common.RowTypeUpdate:
+			rowsStringBuilder.WriteString("Update: ")
+			rowsStringBuilder.WriteString("PreRow: " + row.PreRow.ToString(t.TableInfo.GetFieldSlice()) + "\n")
+			rowsStringBuilder.WriteString("Row: " + row.Row.ToString(t.TableInfo.GetFieldSlice()) + "\n")
+		case common.RowTypeDelete:
+			rowsStringBuilder.WriteString("Delete: ")
+			rowsStringBuilder.WriteString("PreRow: " + row.PreRow.ToString(t.TableInfo.GetFieldSlice()) + "\n")
+		case common.RowTypeInsert:
+			rowsStringBuilder.WriteString("Insert: ")
+			rowsStringBuilder.WriteString("Row: " + row.Row.ToString(t.TableInfo.GetFieldSlice()) + "\n")
+		default:
+		}
+	}
+
 	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, Size: %d, Rows: %s}",
-		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName.String(), t.Checksum, t.Length, t.GetSize(), rowsString)
+		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName.String(), t.Checksum, t.Length, t.GetSize(), rowsStringBuilder.String())
 }
 
 // SetRows sets the Rows chunk for this DMLEvent
