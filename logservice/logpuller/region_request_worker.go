@@ -86,17 +86,19 @@ func newRegionRequestWorker(
 				zap.Uint64("workerID", worker.workerID),
 				zap.String("addr", store.storeAddr))
 		}
-
-		region, err := worker.requestCache.pop(ctx)
-		if err != nil {
-			return err
+		for {
+			region, err := worker.requestCache.pop(ctx)
+			if err != nil {
+				return err
+			}
+			if !region.regionInfo.isStopped() {
+				worker.preFetchForConnecting = new(regionInfo)
+				*worker.preFetchForConnecting = region.regionInfo
+				return nil
+			} else {
+				continue
+			}
 		}
-		if !region.regionInfo.isStopped() {
-			worker.preFetchForConnecting = new(regionInfo)
-			*worker.preFetchForConnecting = region.regionInfo
-			return nil
-		}
-		return nil
 	}
 
 	g.Go(func() error {
