@@ -326,6 +326,8 @@ func NewDMLEvent(
 }
 
 func (t *DMLEvent) String() string {
+	// hack it, restore after testing
+	return ""
 	rowsStringBuilder := strings.Builder{}
 	if t.Rows == nil {
 		return ""
