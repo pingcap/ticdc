@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -101,6 +102,7 @@ type PDAPIClient interface {
 	CollectMemberEndpoints(ctx context.Context) ([]string, error)
 	Healthy(ctx context.Context, endpoint string) error
 	ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]RegionInfo, error)
+	GetCodec(ctx context.Context, keyspace string) (tikv.Codec, error)
 	Close()
 }
 
@@ -120,6 +122,19 @@ func NewPDAPIClient(pdClient pd.Client, conf *security.Credential) (PDAPIClient,
 		grpcClient: pdClient,
 		httpClient: dialClient,
 	}, nil
+}
+
+func (pc *pdAPIClient) GetCodec(ctx context.Context, keyspace string) (tikv.Codec, error) {
+	meta, err := pc.grpcClient.LoadKeyspace(ctx, keyspace)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	codec, err := tikv.NewCodecV2(tikv.ModeTxn, meta)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return codec, nil
 }
 
 // Close the pd api client, at the moment only close idle http connections if there is any.

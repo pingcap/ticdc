@@ -126,11 +126,7 @@ func (c *server) prepare(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	pdClient, err := tikv.NewCodecPDClientWithKeyspace(tikv.ModeTxn, c.pdClient, "SYSTEM")
-	if err != nil {
-		return errors.Trace(err)
-	}
-	appctx.SetService(appctx.RegionCache, tikv.NewRegionCache(pdClient))
+	appctx.SetService(appctx.RegionCache, tikv.NewRegionCache(c.pdClient))
 
 	if err = c.initDir(); err != nil {
 		return errors.Trace(err)

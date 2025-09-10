@@ -23,8 +23,10 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
+	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
@@ -258,14 +260,23 @@ const (
 )
 
 func getAllDDLSpan() []heartbeatpb.TableSpan {
+	pdClient := appctx.GetService[pdutil.PDAPIClient](appctx.PDAPIClient)
+	codecV2, err := pdClient.GetCodec(context.Background(), "SYSTEM")
+	if err != nil {
+		log.Panic("get codec from pd client failed", zap.Error(err))
+	}
+
 	spans := make([]heartbeatpb.TableSpan, 0, 2)
 	start, end := common.GetTableRange(JobTableID)
+	start, end = codecV2.EncodeRange(start, end)
 	spans = append(spans, heartbeatpb.TableSpan{
 		TableID:  JobTableID,
 		StartKey: common.ToComparableKey(start),
 		EndKey:   common.ToComparableKey(end),
 	})
+
 	start, end = common.GetTableRange(JobHistoryID)
+	start, end = codecV2.EncodeRange(start, end)
 	spans = append(spans, heartbeatpb.TableSpan{
 		TableID:  JobHistoryID,
 		StartKey: common.ToComparableKey(start),
