@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
@@ -399,6 +400,10 @@ func (s *regionRequestWorker) processRegionSendTask(
 }
 
 func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.ChangeDataRequest {
+	log.Info("region worker start to send request to store",
+		zap.Uint64("regionID", region.verID.GetID()),
+		zap.String("startKey", spanz.HexKey(region.span.StartKey)),
+		zap.String("endKey", spanz.HexKey(region.span.EndKey)))
 	return &cdcpb.ChangeDataRequest{
 		Header:       &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
 		RegionId:     region.verID.GetID(),
