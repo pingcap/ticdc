@@ -662,8 +662,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 					zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)))
 			}
 
-			intersectSpan.StartKey = s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(intersectSpan.StartKey)
-			intersectSpan.EndKey = s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(intersectSpan.EndKey)
+			//intersectSpan.StartKey = s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(intersectSpan.StartKey)
+			//intersectSpan.EndKey = s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(intersectSpan.EndKey)
 
 			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
 			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, filterLoop)
