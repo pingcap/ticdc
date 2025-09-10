@@ -646,11 +646,9 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 
 		for _, regionMeta := range regionMetas {
-			startKey := s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(regionMeta.StartKey)
-			endKey := s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(regionMeta.EndKey)
 			regionSpan := heartbeatpb.TableSpan{
-				StartKey: startKey,
-				EndKey:   endKey,
+				StartKey: regionMeta.StartKey,
+				EndKey:   regionMeta.EndKey,
 			}
 			// NOTE: the End key return by the PD API will be nil to represent the biggest key.
 			// So we need to fix it by calling spanz.HackSpan.
@@ -663,6 +661,9 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 				log.Panic("subscription client check spans intersect shouldn't fail",
 					zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)))
 			}
+
+			intersectSpan.StartKey = s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(intersectSpan.StartKey)
+			intersectSpan.EndKey = s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(intersectSpan.EndKey)
 
 			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
 			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, filterLoop)
