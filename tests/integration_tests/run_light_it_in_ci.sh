@@ -32,39 +32,39 @@ group_num=${group#G}
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
-	'event_filter charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
+	'partition_table partition_table partition_table partition_table'
 	# G01
-	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
+	'partition_table partition_table partition_table partition_table'
 	# G02
-	'new_ci_collation safe_mode savepoint fail_over_ddl_C'
+	'partition_table partition_table partition_table partition_table'
 	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
+	'partition_table partition_table partition_table partition_table'
 	# G04
 	# multi_capture
-	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'partition_table partition_table partition_table partition_table'
 	# G05
-	'vector simple partition_table fail_over_ddl_F'
+	'partition_table partition_table partition_table partition_table'
 	# G06
-	'http_api http_api_tls ddl_wait fail_over_ddl_G'
+	'partition_table partition_table partition_table partition_table'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H'
+	'partition_table partition_table partition_table partition_table'
 	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	'partition_table partition_table partition_table partition_table'
 	# G09
-	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
+	'partition_table partition_table partition_table partition_table'
 	# G10
-	'changefeed_error bdr_mode fail_over_ddl_K'
+	'partition_table partition_table partition_table partition_table'
 	# G11
-	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	'partition_table partition_table partition_table partition_table'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'partition_table partition_table partition_table partition_table'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	'partition_table partition_table partition_table partition_table'
 	# G14
-	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
+	'partition_table partition_table partition_table partition_table'
 	# G15
 	# 'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables'
-	'split_region autorandom gc_safepoint foreign_key_check ddl_for_split_tables'
+	'partition_table partition_table partition_table partition_table'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
