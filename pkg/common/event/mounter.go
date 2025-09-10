@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
@@ -171,6 +172,15 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		}
 		return job, err
 	}
+
+	log.Info("before remove keyspace prefix",
+		zap.String("key", spanz.HexKey(rawKV.Key)),
+		zap.Any("rawKey", rawKV.Key), zap.Int("lenKey", len(rawKV.Key)))
+	rawKV.Key = rowcodec.RemoveKeyspacePrefix(rawKV.Key)
+
+	log.Info("after remove keyspace prefix",
+		zap.String("key", spanz.HexKey(rawKV.Key)),
+		zap.Any("rawKey", rawKV.Key), zap.Int("lenKey", len(rawKV.Key)))
 
 	recordID, err := tablecodec.DecodeRowKey(rawKV.Key)
 	if err != nil {

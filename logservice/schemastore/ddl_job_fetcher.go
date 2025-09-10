@@ -155,8 +155,6 @@ func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, erro
 				log.Fatal("init ddl table info failed", zap.Error(err))
 			}
 		})
-	} else {
-		log.Error("meet legacy format ddl job", zap.String("key", spanz.HexKey(rawKV.Key)))
 	}
 
 	return event.ParseDDLJob(rawKV, ddlTableInfo)
