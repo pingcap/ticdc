@@ -37,5 +37,5 @@ mkdir -p "$(dirname "$log_file")"
 
 echo "[$(date)] Executing SQL: ${sql}"
 
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" >> "$log_file"
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" >> "$log_file"
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" >>"$log_file"
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" >>"$log_file"
