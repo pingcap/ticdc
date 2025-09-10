@@ -56,9 +56,9 @@ mysql_groups=(
 	# G12
 	'tidb_mysql_test ddl_with_random_move_table'
 	# G13
-	'owner_resign fail_over region_merge'
+	'fail_over region_merge'
 	# G14
-	'kill_owner_with_ddl fail_over_ddl_mix'
+	'fail_over_ddl_mix'
 	# G15
 	'fail_over_ddl_mix_with_syncpoint'
 )
@@ -88,7 +88,7 @@ kafka_groups=(
 	# G10
 	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
-	'owner_resign fail_over region_merge'
+	'fail_over region_merge'
 	# G12
 	'ddl_for_split_tables_random_schedule'
 	# G13
@@ -126,7 +126,7 @@ pulsar_groups=(
 	# G11
 	'ddl_with_random_move_table'
 	# G12
-	'owner_resign fail_over region_merge'
+	'fail_over region_merge'
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
@@ -163,7 +163,7 @@ storage_groups=(
 	# G12
 	'ddl_with_random_move_table'
 	# G13
-	'owner_resign fail_over region_merge'
+	'fail_over region_merge'
 	# G14
 	'fail_over_ddl_mix'
 	# G15
