@@ -990,47 +990,39 @@ func (m *Maintainer) collectMetrics() {
 	if !m.bootstrapped.Load() {
 		return
 	}
-	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
+	updateMetric := func(mode int64) {
 		// exclude the table trigger
-		totalSpanCount := m.controller.spanController.TaskSize() - 1
+		spanController := m.controller.getSpanController(mode)
+		totalSpanCount := spanController.TaskSize() - 1
 		totalTableCount := 0
-		groupSize := m.controller.spanController.GetGroupSize()
+		groupSize := spanController.GetGroupSize()
 		if groupSize == 1 {
-			totalTableCount = m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
+			totalTableCount = spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
 		} else {
-			totalTableCount = groupSize - 1 + m.controller.spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
+			totalTableCount = groupSize - 1 + spanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
 		}
-		scheduling := m.controller.spanController.GetSchedulingSize()
-		working := m.controller.spanController.GetReplicatingSize()
-		absent := m.controller.spanController.GetAbsentSize()
+		scheduling := spanController.GetSchedulingSize()
+		working := spanController.GetReplicatingSize()
+		absent := spanController.GetAbsentSize()
 
-		m.spanCountGauge.Set(float64(totalSpanCount))
-		m.tableCountGauge.Set(float64(totalTableCount))
-		m.scheduledTaskGauge.Set(float64(scheduling))
-		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent", "default").Set(float64(absent))
-		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working", "default").Set(float64(working))
-		m.lastPrintStatusTime = time.Now()
-
-		if m.enableRedo {
-			// exclude the table trigger
-			totalSpanCount := m.controller.redoSpanController.TaskSize() - 1
-			totalTableCount := 0
-			groupSize := m.controller.redoSpanController.GetGroupSize()
-			if groupSize == 1 {
-				totalTableCount = m.controller.redoSpanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
-			} else {
-				totalTableCount = groupSize - 1 + m.controller.redoSpanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
-			}
-			scheduling := m.controller.redoSpanController.GetSchedulingSize()
-			working := m.controller.redoSpanController.GetReplicatingSize()
-			absent := m.controller.redoSpanController.GetAbsentSize()
-
+		if common.IsDefaultMode(mode) {
+			m.spanCountGauge.Set(float64(totalSpanCount))
+			m.tableCountGauge.Set(float64(totalTableCount))
+			m.scheduledTaskGauge.Set(float64(scheduling))
+		} else {
 			m.redoSpanCountGauge.Set(float64(totalSpanCount))
 			m.redoTableCountGauge.Set(float64(totalTableCount))
 			m.redoScheduledTaskGauge.Set(float64(scheduling))
-			metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent", "redo").Set(float64(absent))
-			metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working", "redo").Set(float64(working))
 		}
+		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
+		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working", common.StringMode(mode)).Set(float64(working))
+	}
+	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
+		updateMetric(common.DefaultMode)
+		if m.enableRedo {
+			updateMetric(common.RedoMode)
+		}
+		m.lastPrintStatusTime = time.Now()
 	}
 }
 
