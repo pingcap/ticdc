@@ -543,7 +543,6 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		// Use blocking Pop to wait for tasks
 		regionTask, err := s.regionTaskQueue.Pop(ctx)
 		if err != nil {
-			// Means Context cancelled
 			return err
 		}
 
