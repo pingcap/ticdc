@@ -35,7 +35,7 @@ type dmlWriters struct {
 	// msgCh is a channel to hold eventFragment.
 	// The caller of WriteEvents will write eventFragment to msgCh and
 	// the encodingWorkers will read eventFragment from msgCh to encode events.
-	msgCh       *chann.DrainableChann[eventFragment]
+	msgCh       *chann.UnlimitedChannel[eventFragment, any]
 	encodeGroup *encodingGroup
 
 	// defragmenter is used to defragment the out-of-order encoded messages and
@@ -56,9 +56,9 @@ func newDMLWriters(
 	extension string,
 	statistics *metrics.Statistics,
 ) *dmlWriters {
-	messageCh := chann.NewAutoDrainChann[eventFragment]()
+	messageCh := chann.NewUnlimitedChannelDefault[eventFragment]()
 	encodedOutCh := make(chan eventFragment, defaultChannelSize)
-	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh.Out(), encodedOutCh)
+	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh, encodedOutCh)
 
 	writers := make([]*writer, config.WorkerCount)
 	writerInputChs := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
@@ -92,6 +92,9 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 
 	for i := 0; i < len(d.writers); i++ {
 		eg.Go(func() error {
+			// UnlimitedChannel will block when there is no event, they cannot dirrectly find ctx.Done()
+			// Thus, we need to close the channel when the context is done
+			defer d.encodeGroup.inputCh.Close()
 			return d.writers[i].Run(ctx)
 		})
 	}
@@ -118,13 +121,13 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 	seq := atomic.AddUint64(&d.lastSeqNum, 1)
 	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		d.msgCh.In() <- newEventFragment(seq, tbl, event)
+		d.msgCh.Push(newEventFragment(seq, tbl, event))
 		return int(event.Len()), event.GetSize(), nil
 	})
 }
 
 func (d *dmlWriters) close() {
-	d.msgCh.CloseAndDrain()
+	d.msgCh.Close()
 	d.encodeGroup.close()
 	for _, w := range d.writers {
 		w.close()
