@@ -158,6 +158,24 @@ func IsLegacyFormatJob(rawKV *common.RawKVEntry) bool {
 	return bytes.HasPrefix(rawKV.Key, metaPrefix)
 }
 
+const (
+	keyspacePrefixLen       = 4
+	apiV2TxnModePrefix byte = 'x'
+)
+
+// RemoveKeyspacePrefix is used to remove keyspace prefix from the key.
+func RemoveKeyspacePrefix(key []byte) []byte {
+	if len(key) <= keyspacePrefixLen {
+		return key
+	}
+
+	if key[0] != apiV2TxnModePrefix {
+		log.Warn("the first byte of key is not 'x', it may not be in api v2 txn mode", zap.Any("byte", key[0]))
+		return key
+	}
+	return key[keyspacePrefixLen:]
+}
+
 // ParseDDLJob parses the job from the raw KV entry.
 func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.Job, error) {
 	var v []byte
@@ -176,7 +194,8 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 	log.Info("before remove keyspace prefix",
 		zap.String("key", spanz.HexKey(rawKV.Key)),
 		zap.Any("rawKey", rawKV.Key), zap.Int("lenKey", len(rawKV.Key)))
-	rawKV.Key = rowcodec.RemoveKeyspacePrefix(rawKV.Key)
+
+	rawKV.Key = RemoveKeyspacePrefix(rawKV.Key)
 
 	log.Info("after remove keyspace prefix",
 		zap.String("key", spanz.HexKey(rawKV.Key)),
