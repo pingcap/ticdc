@@ -332,11 +332,18 @@ func (t *DMLEvent) String() string {
 	}
 
 	rows := make([]RowChange, 0)
-	for row, ok := t.GetNextRow(); ok; {
+	for {
+		row, ok := t.GetNextRow()
+		if !ok {
+			t.Rewind()
+			break
+		}
 		rows = append(rows, row)
 	}
 
-	t.Rewind()
+	if len(rows) == 0 {
+		return ""
+	}
 
 	for _, row := range rows {
 		switch row.RowType {
