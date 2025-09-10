@@ -342,14 +342,14 @@ func (t *DMLEvent) String() string {
 		switch row.RowType {
 		case common.RowTypeUpdate:
 			rowsStringBuilder.WriteString("Update: ")
-			rowsStringBuilder.WriteString("PreRow: " + row.PreRow.ToString(t.TableInfo.GetFieldSlice()) + "\n")
-			rowsStringBuilder.WriteString("Row: " + row.Row.ToString(t.TableInfo.GetFieldSlice()) + "\n")
+			rowsStringBuilder.WriteString("PreRow: " + row.PreRow.ToString(t.TableInfo.GetFieldSlice()) + ",")
+			rowsStringBuilder.WriteString("Row: " + row.Row.ToString(t.TableInfo.GetFieldSlice()) + ";")
 		case common.RowTypeDelete:
 			rowsStringBuilder.WriteString("Delete: ")
-			rowsStringBuilder.WriteString("PreRow: " + row.PreRow.ToString(t.TableInfo.GetFieldSlice()) + "\n")
+			rowsStringBuilder.WriteString("PreRow: " + row.PreRow.ToString(t.TableInfo.GetFieldSlice()) + ";")
 		case common.RowTypeInsert:
 			rowsStringBuilder.WriteString("Insert: ")
-			rowsStringBuilder.WriteString("Row: " + row.Row.ToString(t.TableInfo.GetFieldSlice()) + "\n")
+			rowsStringBuilder.WriteString("Row: " + row.Row.ToString(t.TableInfo.GetFieldSlice()) + ";")
 		default:
 		}
 	}
