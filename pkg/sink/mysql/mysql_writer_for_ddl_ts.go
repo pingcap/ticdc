@@ -28,6 +28,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const timeFormat = "2006-01-02 15:04:05.000000"
+
 // FlushDDLTsPre is used to flush ddl ts before the ddl event is sent to downstream.
 // It only be called when downstream is tidb.
 // It's used to fix the potential data loss problem leading by the ddl ts event and ddl event can't be atomicly send to downstream.
@@ -329,7 +331,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 				log.Panic("ddl ts table is not finished, but downstream is not tidb, FIX IT")
 			}
 
-			createdAt, err := time.Parse(time.StampMicro, string(createdAtBytes))
+			createdAt, err := time.Parse(timeFormat, string(createdAtBytes))
 			if err != nil {
 				log.Error("Failed to parse created_at", zap.Any("createdAtBytes", createdAtBytes), zap.Any("error", err))
 				for _, idx := range tableIdIdxMap[tableId] {
@@ -420,7 +422,7 @@ func (w *Writer) queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob string) (time.Ti
 			log.Error("failed to query ddl jobs", zap.Error(err))
 			return time.Time{}, false
 		}
-		createdTime, err = time.Parse(time.StampMicro, string(createdTimeBytes))
+		createdTime, err = time.Parse(timeFormat, string(createdTimeBytes))
 		if err != nil {
 			log.Error("Failed to parse createdTimeBytes", zap.Any("createdTimeBytes", createdTimeBytes), zap.Any("error", err))
 			return time.Time{}, false

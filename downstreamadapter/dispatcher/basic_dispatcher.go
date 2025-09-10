@@ -792,4 +792,13 @@ func (d *BasicDispatcher) removeDispatcher() {
 			zap.Uint64("resolvedTs", d.GetResolvedTs()),
 			zap.Error(err))
 	}
+
+	// remove unfinished resend task
+	identifiers := d.resendTaskMap.Keys()
+	for _, identifier := range identifiers {
+		d.cancelResendTask(identifier)
+		log.Info("cancel resend task before remove dispatcher",
+			zap.Any("identifier", identifier),
+			zap.Stringer("dispatcherID", d.id))
+	}
 }

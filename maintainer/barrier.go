@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
-	"github.com/pingcap/ticdc/maintainer/range_checker"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -335,11 +334,15 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	key := getEventKey(status.State.BlockTs, status.State.IsSyncPoint)
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-		// no block event found
-		be := NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, status.State, b.splitTableEnabled)
-		// the event is a fake event, the dispatcher will not send the block event
-		be.rangeChecker = range_checker.NewBoolRangeChecker(false)
-		return be
+		log.Info("No block event found, ignore the event done message",
+			zap.String("changefeed", changefeedID.Name()),
+			zap.String("dispatcher", dispatcherID.String()),
+			zap.Uint64("commitTs", status.State.BlockTs),
+			zap.Any("state", status.State),
+			zap.Bool("isSyncPoint", status.State.IsSyncPoint),
+			zap.Int64("mode", b.mode),
+		)
+		return nil
 	}
 
 	// there is a block event and the dispatcher write or pass action already
@@ -420,7 +423,7 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 		return
 	}
 	if be.selected.Load() {
-		log.Info("the all dispatchers reported event done, remove event",
+		log.Info("all dispatchers reported event done, remove event",
 			zap.String("changefeed", be.cfID.Name()),
 			zap.Uint64("committs", be.commitTs))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
