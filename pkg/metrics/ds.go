@@ -21,19 +21,19 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "memory_usage",
-		}, []string{"component", "type", "area"})
+		}, []string{"component", "type", "area", "mode"})
 	DynamicStreamEventChanSize = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "event_chan_size",
-		}, []string{"component"})
+		}, []string{"component", "mode"})
 	DynamicStreamPendingQueueLen = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "pending_queue_len",
-		}, []string{"component"})
+		}, []string{"component", "mode"})
 	DynamicStreamAddPathNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",

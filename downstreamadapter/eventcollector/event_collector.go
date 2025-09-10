@@ -614,32 +614,39 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	updateMetric := func(mode int64) {
+		ds := c.getDynamicStream(mode)
+		dsMetrics := ds.GetMetrics()
+		label := common.StringMode(mode)
+		metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector", label).Set(float64(dsMetrics.EventChanSize))
+		metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector", label).Set(float64(dsMetrics.PendingQueueLen))
+		for _, areaMetric := range dsMetrics.MemoryControl.AreaMemoryMetrics {
+			cfID, ok := c.changefeedIDMap.Load(areaMetric.Area())
+			if !ok {
+				continue
+			}
+			changefeedID := cfID.(common.ChangeFeedID)
+			metrics.DynamicStreamMemoryUsage.WithLabelValues(
+				"event-collector",
+				"max",
+				changefeedID.String(),
+				label,
+			).Set(float64(areaMetric.MaxMemory()))
+			metrics.DynamicStreamMemoryUsage.WithLabelValues(
+				"event-collector",
+				"used",
+				changefeedID.String(),
+				label,
+			).Set(float64(areaMetric.MemoryUsage()))
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
-			// FIXME: record ds?
-			dsMetrics := c.ds.GetMetrics()
-			metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector").Set(float64(dsMetrics.EventChanSize))
-			metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector").Set(float64(dsMetrics.PendingQueueLen))
-			for _, areaMetric := range dsMetrics.MemoryControl.AreaMemoryMetrics {
-				cfID, ok := c.changefeedIDMap.Load(areaMetric.Area())
-				if !ok {
-					continue
-				}
-				changefeedID := cfID.(common.ChangeFeedID)
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"event-collector",
-					"max",
-					changefeedID.String(),
-				).Set(float64(areaMetric.MaxMemory()))
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"event-collector",
-					"used",
-					changefeedID.String(),
-				).Set(float64(areaMetric.MemoryUsage()))
-			}
+			updateMetric(common.DefaultMode)
+			updateMetric(common.RedoMode)
 		}
 	}
 }

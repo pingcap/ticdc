@@ -152,6 +152,10 @@ type Maintainer struct {
 	spanCountGauge                 prometheus.Gauge
 	tableCountGauge                prometheus.Gauge
 	handleEventDuration            prometheus.Observer
+
+	redoScheduledTaskGauge prometheus.Gauge
+	redoSpanCountGauge     prometheus.Gauge
+	redoTableCountGauge    prometheus.Gauge
 }
 
 // NewMaintainer create the maintainer for the changefeed
@@ -198,10 +202,14 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
+		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
+		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
 		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
+
+		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "redo"),
+		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "redo"),
+		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "redo"),
 	}
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
@@ -999,9 +1007,30 @@ func (m *Maintainer) collectMetrics() {
 		m.spanCountGauge.Set(float64(totalSpanCount))
 		m.tableCountGauge.Set(float64(totalTableCount))
 		m.scheduledTaskGauge.Set(float64(scheduling))
-		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent").Set(float64(absent))
-		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working").Set(float64(working))
+		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent", "default").Set(float64(absent))
+		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working", "default").Set(float64(working))
 		m.lastPrintStatusTime = time.Now()
+
+		if m.enableRedo {
+			// exclude the table trigger
+			totalSpanCount := m.controller.redoSpanController.TaskSize() - 1
+			totalTableCount := 0
+			groupSize := m.controller.redoSpanController.GetGroupSize()
+			if groupSize == 1 {
+				totalTableCount = m.controller.redoSpanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
+			} else {
+				totalTableCount = groupSize - 1 + m.controller.redoSpanController.GetTaskSizeByGroup(pkgReplica.DefaultGroupID)
+			}
+			scheduling := m.controller.redoSpanController.GetSchedulingSize()
+			working := m.controller.redoSpanController.GetReplicatingSize()
+			absent := m.controller.redoSpanController.GetAbsentSize()
+
+			m.redoSpanCountGauge.Set(float64(totalSpanCount))
+			m.redoTableCountGauge.Set(float64(totalTableCount))
+			m.redoScheduledTaskGauge.Set(float64(scheduling))
+			metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent", "mode").Set(float64(absent))
+			metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working", "mode").Set(float64(working))
+		}
 	}
 }
 

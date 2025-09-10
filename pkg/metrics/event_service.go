@@ -31,7 +31,7 @@ var (
 		Subsystem: "event_service",
 		Name:      "send_event_count",
 		Help:      "The number of events sent by the event service",
-	}, []string{"type"})
+	}, []string{"type", "mode"})
 
 	// EventServiceSendEventDuration is the metric that records the duration of sending events by the event service.
 	EventServiceSendEventDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -108,13 +108,13 @@ var (
 			Help:      "The lag difference between received and sent resolved ts of dispatchers",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
-	EventServiceSkipResolvedTsCount = prometheus.NewCounter(
+	EventServiceSkipResolvedTsCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_service",
 			Name:      "skip_resolved_ts_count",
 			Help:      "The number of skipped resolved ts",
-		})
+		}, []string{"mode"})
 
 	EventServiceAvailableMemoryQuotaGaugeVec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",

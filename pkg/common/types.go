@@ -353,3 +353,10 @@ func GetModeBySinkType(sinkType SinkType) int64 {
 	}
 	return DefaultMode
 }
+
+func StringMode(mode int64) string {
+	if mode == RedoMode {
+		return "redo"
+	}
+	return "default"
+}
