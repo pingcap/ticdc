@@ -30,22 +30,22 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
-	'ddl_for_split_tables_with_failover'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
+	'ddl_with_random_move_table'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
@@ -96,7 +96,7 @@ pulsar_groups=(
 	# G01
 	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
 	# G02
-	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
+	'canal_json_handle_key_only ddl_with_random_move_table'
 	# G03
 	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
