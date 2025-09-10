@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
@@ -126,10 +127,11 @@ func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
 	for _, kv := range kvs {
 		job, err := p.unmarshalDDL(&kv)
 		if err != nil {
-			log.Fatal("unmarshal ddl failed", zap.Any("kv", kv), zap.Error(err))
+			log.Error("unmarshal ddl failed", zap.String("key", spanz.HexKey(kv.Key)), zap.Error(err))
 		}
 
 		if job == nil {
+			log.Error("job is nil, skip it", zap.String("key", spanz.HexKey(kv.Key)))
 			continue
 		}
 
@@ -153,6 +155,8 @@ func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, erro
 				log.Fatal("init ddl table info failed", zap.Error(err))
 			}
 		})
+	} else {
+		log.Error("meet legacy format ddl job", zap.String("key", spanz.HexKey(rawKV.Key)))
 	}
 
 	return event.ParseDDLJob(rawKV, ddlTableInfo)
