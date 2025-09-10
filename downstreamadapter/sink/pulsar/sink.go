@@ -134,11 +134,11 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	case *commonEvent.DDLEvent:
 		err = s.sendDDLEvent(v)
 	default:
-		log.Error("pulsar sink doesn't support this type of block event",
-			zap.String("namespace", s.changefeedID.Namespace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Any("eventType", event.GetType()))
-		return errors.ErrInvalidEventType.GenWithStackByArgs(event.GetType())
+log.Error("pulsar sink doesn't support this type of block event",
+	zap.String("namespace", s.changefeedID.Namespace()),
+	zap.String("changefeed", s.changefeedID.Name()),
+	zap.String("eventType", commonEvent.TypeToString(event.GetType())))
+return errors.ErrInvalidEventType.GenWithStackByArgs(commonEvent.TypeToString(event.GetType()))
 	}
 	if err != nil {
 		s.isNormal.Store(false)
