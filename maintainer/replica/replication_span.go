@@ -163,8 +163,10 @@ func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
 		}
 		oldStatus := r.status.Load()
 		if newStatus.CheckpointTs >= oldStatus.CheckpointTs {
+			log.Debug("hyy UpdateStatus", zap.Any("newStatusCheckpointTs", newStatus.CheckpointTs), zap.Any("oldStatusCheckpointTs", oldStatus.CheckpointTs))
 			r.status.Store(newStatus)
 		}
+
 	}
 }
 
@@ -218,6 +220,7 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 }
 
 func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.TargetMessage, error) {
+	log.Debug("hyy NewAddDispatcherMessage", zap.Any("dispatcherID", r.ID), zap.Any("startTs", r.status.Load().CheckpointTs))
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{

@@ -314,6 +314,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 	// so here we forward the span's checkpoint ts to status.State.BlockTs - 1
 	span := b.spanController.GetTaskByID(dispatcherID)
 	if span != nil {
+		log.Debug("hyy span update status", zap.Any("dispatcherID", status.ID), zap.Any("checkpointTs", status.State.BlockTs-1))
 		span.UpdateStatus(&heartbeatpb.TableSpanStatus{
 			ID:              status.ID,
 			CheckpointTs:    status.State.BlockTs - 1,

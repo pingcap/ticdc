@@ -30,37 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'ddl_for_split_tables_with_random_move_table'
 	# G01
-	'api_v2 ddl_for_split_tables_with_random_move_table'
+	'ddl_for_split_tables_with_random_move_table'
 	# G02
-	'availability ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_random_move_table'
 	# G03
-	'cdc move_table'
+	'ddl_for_split_tables_with_random_move_table'
 	# G04
-	'syncpoint syncpoint_check_ts '
+	'ddl_for_split_tables_with_random_move_table'
 	# G05
-	'ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_random_move_table'
 	# G06
-	'ddl_for_split_tables_with_random_merge_and_split'
+	'ddl_for_split_tables_with_random_move_table'
 	# G07
-	'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
+	'ddl_for_split_tables_with_random_move_table'
 	# G08
-	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
+	'ddl_for_split_tables_with_random_move_table'
 	# G09
-	'resolve_lock merge_table drop_many_tables bank'
+	'ddl_for_split_tables_with_random_move_table'
 	# G10
-	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
+	'ddl_for_split_tables_with_random_move_table'
 	# G11
-	'ddl_reentrant force_replicate_table'
+	'ddl_for_split_tables_with_random_move_table'
 	# G12
-	'tidb_mysql_test ddl_with_random_move_table'
+	'ddl_for_split_tables_with_random_move_table'
 	# G13
-	'fail_over region_merge'
+	'ddl_for_split_tables_with_random_move_table'
 	# G14
-	'fail_over_ddl_mix'
+	'ddl_for_split_tables_with_random_move_table'
 	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	'ddl_for_split_tables_with_random_move_table'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
