@@ -218,7 +218,6 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 	case messaging.TypeHeartBeatResponse:
 		// TODO: Change a more appropriate name for HeartBeatResponse. It should be BlockStatusResponse or something else.
 		heartbeatResponse := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-		log.Info("hyy recv heartbeat response", zap.Any("heartbeatResponse", heartbeatResponse))
 		c.heartBeatResponseDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(heartbeatResponse.ChangefeedID),
 			NewHeartBeatResponse(heartbeatResponse))

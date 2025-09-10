@@ -598,7 +598,6 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		}
 
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
-		log.Info("hyy resend msgs", zap.Any("msgs", msgs))
 	} else {
 		// the writer dispatcher is advanced, resend pass action
 		return be.sendPassAction(mode)
