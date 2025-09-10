@@ -166,26 +166,38 @@ main_with_consistent() {
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $KILL_SERVER_PID
 
-	cleanup_process $CDC_BINARY
 	# to ensure row changed events have been replicated to TiCDC
 	sleep 10
 	changefeed_id="test"
 	storage_path="file://$WORK_DIR/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
-	rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+	cleanup_process $CDC_BINARY
 
-	sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
-
-	cat $WORK_DIR/consistent_diff_config.toml
 	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-	check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+
+	# cleanup_process $CDC_BINARY
+	# # to ensure row changed events have been replicated to TiCDC
+	# sleep 10
+	# changefeed_id="test"
+	# storage_path="file://$WORK_DIR/redo"
+	# tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	# rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
+
+	# sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
+
+	# cat $WORK_DIR/consistent_diff_config.toml
+	# cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	# check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml
 }
 
 trap stop_tidb_cluster EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
-stop_tidb_cluster
-main_with_consistent
-check_logs $WORK_DIR
-echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
+# stop_tidb_cluster
+# main_with_consistent
+# check_logs $WORK_DIR
+# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

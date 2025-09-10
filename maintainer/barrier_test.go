@@ -155,9 +155,7 @@ func TestOneBlockEvent(t *testing.T) {
 		},
 	})
 	require.Len(t, barrier.blockedEvents.m, 0)
-	// no event if found, no message will be sent
-	require.NotNil(t, msg)
-	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
+	require.Nil(t, msg)
 }
 
 func TestNormalBlock(t *testing.T) {

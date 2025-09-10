@@ -296,6 +296,11 @@ func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
 // UpdateStatus updates the status of a span
 func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbeatpb.TableSpanStatus) {
 	span.UpdateStatus(status)
+
+	if span == c.ddlSpan {
+		// ddl span don't need check by checker
+		return
+	}
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
 
