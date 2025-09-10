@@ -17,6 +17,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/utils/heap"
 )
 
@@ -56,7 +57,7 @@ func (pq *PriorityQueue) Push(task PriorityTask) {
 // Pop removes and returns the highest priority task
 // This is a blocking operation that waits for a signal
 // Returns nil if the context is cancelled
-func (pq *PriorityQueue) Pop(ctx context.Context) PriorityTask {
+func (pq *PriorityQueue) Pop(ctx context.Context) (PriorityTask, error) {
 	for {
 		// First try to pop without waiting
 		pq.mu.Lock()
@@ -64,17 +65,17 @@ func (pq *PriorityQueue) Pop(ctx context.Context) PriorityTask {
 		pq.mu.Unlock()
 
 		if ok {
-			return task
+			return task, nil
 		}
 
 		// Queue is empty, wait for signal
 		select {
 		case <-ctx.Done():
-			return nil
+			return nil, ctx.Err()
 		case _, ok := <-pq.signal:
 			if !ok {
 				// Signal channel is closed.
-				return nil
+				return nil, errors.New("signal channel is closed")
 			}
 			// Got signal, try to pop again
 			continue

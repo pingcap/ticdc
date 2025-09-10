@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -542,10 +541,10 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 	for {
 		// Use blocking Pop to wait for tasks
-		regionTask := s.regionTaskQueue.Pop(ctx)
-		if regionTask == nil {
+		regionTask, err := s.regionTaskQueue.Pop(ctx)
+		if err != nil {
 			// Means Context cancelled
-			return errors.Trace(ctx.Err())
+			return err
 		}
 
 		region := regionTask.GetRegionInfo()
@@ -570,18 +569,18 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		worker := store.getRequestWorker()
 		force := regionTask.Priority() <= forcedPriorityBase
 
-		err := worker.add(ctx, region, force)
+		ok, err = worker.add(ctx, region, force)
 		if err != nil {
-			if errors.Cause(err) == cerrors.ErrAddRegionRequestRetryLimitExceeded {
-				s.regionTaskQueue.Push(regionTask)
-				continue
-			} else {
-				log.Warn("subscription client add region request failed",
-					zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-					zap.Uint64("regionID", region.verID.GetID()),
-					zap.Error(err))
-				return err
-			}
+			log.Warn("subscription client add region request failed",
+				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+				zap.Uint64("regionID", region.verID.GetID()),
+				zap.Error(err))
+			return err
+		}
+
+		if !ok {
+			s.regionTaskQueue.Push(regionTask)
+			continue
 		}
 
 		log.Debug("subscription client will request a region",
@@ -772,17 +771,17 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
 			s.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskRegionError)
+			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskRegionError)
+			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskRegionError)
+			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {

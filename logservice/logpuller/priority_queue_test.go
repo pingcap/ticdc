@@ -149,7 +149,8 @@ func TestPriorityQueue_PopBlocking(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		task := pq.Pop(ctx)
+		task, err := pq.Pop(ctx)
+		require.Error(t, err)
 		elapsed := time.Since(start)
 
 		require.Nil(t, task)
@@ -168,7 +169,8 @@ func TestPriorityQueue_PopBlocking(t *testing.T) {
 		}()
 
 		start := time.Now()
-		task := pq.Pop(ctx)
+		task, err := pq.Pop(ctx)
+		require.NoError(t, err)
 		elapsed := time.Since(start)
 
 		require.NotNil(t, task)
@@ -200,7 +202,8 @@ func TestPriorityQueue_PopOrder(t *testing.T) {
 	expectedPriorities := []int{5, 7, 10, 12, 15}
 
 	for i, expectedDesc := range expectedOrder {
-		task := pq.Pop(ctx)
+		task, err := pq.Pop(ctx)
+		require.NoError(t, err)
 		require.NotNil(t, task)
 		require.Equal(t, expectedPriorities[i], task.Priority())
 		require.Equal(t, expectedDesc, task.(*mockPriorityTask).description)
@@ -251,8 +254,8 @@ func TestPriorityQueue_ConcurrentOperations(t *testing.T) {
 		go func(consumerID int) {
 			defer wg.Done()
 			for {
-				task := pq.Pop(ctx)
-				if task == nil {
+				task, err := pq.Pop(ctx)
+				if err != nil {
 					return
 				}
 
@@ -349,7 +352,8 @@ func TestPriorityQueue_UpdateExistingTask(t *testing.T) {
 
 	// Verify the task has the updated priority
 	ctx := context.Background()
-	poppedTask := pq.Pop(ctx)
+	poppedTask, err := pq.Pop(ctx)
+	require.NoError(t, err)
 	require.NotNil(t, poppedTask)
 	require.Equal(t, 5, poppedTask.Priority())
 }
@@ -391,8 +395,9 @@ func TestPriorityQueue_EmptyQueueOperations(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	task = pq.Pop(ctx)
-	require.Nil(t, task)
+	task2, err := pq.Pop(ctx)
+	require.Nil(t, task2)
+	require.Error(t, err)
 }
 
 func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
@@ -416,7 +421,7 @@ func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
 	}
 
 	// Create tasks with different priorities
-	errorTask := NewRegionPriorityTask(TaskRegionError, regionInfo, currentTs)
+	errorTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs+1)
 	highTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs)
 	lowTask := NewRegionPriorityTask(TaskLowPrior, regionInfo, currentTs)
 
@@ -429,17 +434,25 @@ func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
 
 	// Pop tasks and verify they come out in priority order
 	// TaskRegionError should have highest priority (lowest value)
-	first := pq.Pop(ctx)
+	first, err := pq.Pop(ctx)
+	require.NoError(t, err)
 	require.NotNil(t, first)
-	require.Equal(t, TaskRegionError, first.(*regionPriorityTask).taskType)
+	require.Equal(t, TaskHighPrior, first.(*regionPriorityTask).taskType)
 
-	second := pq.Pop(ctx)
+	second, err := pq.Pop(ctx)
+	require.NoError(t, err)
 	require.NotNil(t, second)
 	require.Equal(t, TaskHighPrior, second.(*regionPriorityTask).taskType)
 
-	third := pq.Pop(ctx)
+	third, err := pq.Pop(ctx)
+	require.NoError(t, err)
 	require.NotNil(t, third)
 	require.Equal(t, TaskLowPrior, third.(*regionPriorityTask).taskType)
 
 	require.Equal(t, 0, pq.Len())
+
+	pq.Close()
+	task, err := pq.Pop(ctx)
+	require.Nil(t, task)
+	require.Error(t, err)
 }

@@ -86,18 +86,17 @@ func newRegionRequestWorker(
 				zap.Uint64("workerID", worker.workerID),
 				zap.String("addr", store.storeAddr))
 		}
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case region := <-worker.requestCache.pendingQueue:
-				if !region.regionInfo.isStopped() {
-					worker.preFetchForConnecting = new(regionInfo)
-					*worker.preFetchForConnecting = region.regionInfo
-					return nil
-				}
-			}
+
+		region, err := worker.requestCache.pop(ctx)
+		if err != nil {
+			return err
 		}
+		if !region.regionInfo.isStopped() {
+			worker.preFetchForConnecting = new(regionInfo)
+			*worker.preFetchForConnecting = region.regionInfo
+			return nil
+		}
+		return nil
 	}
 
 	g.Go(func() error {
@@ -471,7 +470,7 @@ func (s *regionRequestWorker) clearRegionStates() map[SubscriptionID]regionFeedS
 
 // add adds a region request to the worker's cache
 // It blocks if the cache is full until there's space or ctx is cancelled
-func (s *regionRequestWorker) add(ctx context.Context, region regionInfo, force bool) error {
+func (s *regionRequestWorker) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
 	return s.requestCache.add(ctx, region, force)
 }
 

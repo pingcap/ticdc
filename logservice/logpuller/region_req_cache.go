@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -87,7 +86,7 @@ func newRequestCache(maxPendingCount int) *requestCache {
 
 // add adds a new region request to the cache
 // It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
-func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) error {
+func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
 	start := time.Now()
 	ticker := time.NewTicker(addReqRetryInterval)
 	defer ticker.Stop()
@@ -101,18 +100,18 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 			req := newRegionReq(region)
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return false, ctx.Err()
 			case c.pendingQueue <- req:
 				c.incPendingCount()
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestDuration.Observe(cost.Seconds())
-				return nil
+				return true, nil
 			case <-c.spaceAvailable:
 				continue
 			case <-ticker.C:
 				addReqRetryLimit--
 				if addReqRetryLimit <= 0 {
-					return cerrors.ErrAddRegionRequestRetryLimitExceeded
+					return false, nil
 				}
 				continue
 			}
@@ -123,13 +122,13 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) e
 		case <-ticker.C:
 			addReqRetryLimit--
 			if addReqRetryLimit <= 0 {
-				return cerrors.ErrAddRegionRequestRetryLimitExceeded
+				return false, nil
 			}
 			continue
 		case <-c.spaceAvailable:
 			continue
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		}
 	}
 }

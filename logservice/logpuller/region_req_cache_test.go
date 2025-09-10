@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -48,8 +47,9 @@ func TestRequestCacheAdd_NormalCase(t *testing.T) {
 
 	region := createTestRegionInfo(1, 1)
 
-	err := cache.add(ctx, region, false)
+	ok, err := cache.add(ctx, region, false)
 	require.NoError(t, err)
+	require.True(t, ok)
 	require.Equal(t, 1, cache.getPendingCount())
 
 	// Verify the request was added to the queue
@@ -66,22 +66,40 @@ func TestRequestCacheAdd_ForceFlag(t *testing.T) {
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
-	err := cache.add(ctx, region1, false)
+	ok, err := cache.add(ctx, region1, false)
+	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 1, cache.getPendingCount())
 
 	// Try to add another request without force - should fail due to retry limit
 	region2 := createTestRegionInfo(1, 2)
-	err = cache.add(ctx, region2, false)
-	require.Error(t, err)
-	require.Equal(t, errors.ErrAddRegionRequestRetryLimitExceeded, err)
+	ok, err = cache.add(ctx, region2, false)
+	require.False(t, ok)
+	require.NoError(t, err)
 
 	// With force=true, it should still fail because the channel is full
 	// The force flag only bypasses the pendingCount check, not the channel capacity
 	region3 := createTestRegionInfo(1, 3)
-	err = cache.add(ctx, region3, true)
-	require.Error(t, err)
-	require.Equal(t, errors.ErrAddRegionRequestRetryLimitExceeded, err)
+	ok, err = cache.add(ctx, region3, true)
+	require.False(t, ok)
+	require.NoError(t, err)
+
+	// consume the pending queue ann add with force
+	req, err := cache.pop(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, req)
+	require.Equal(t, region3.verID.GetID(), req.regionInfo.verID.GetID())
+	require.Equal(t, region3.subscribedSpan.subID, req.regionInfo.subscribedSpan.subID)
+
+	ok, err = cache.add(ctx, region3, true)
+	require.True(t, ok)
+	require.NoError(t, err)
+	// It is 2 since region1 is unresolved
+	require.Equal(t, 2, cache.getPendingCount())
+
+	// resolve region1
+	cache.resolve(region1.subscribedSpan.subID, region1.verID.GetID())
+	require.Equal(t, 1, cache.getPendingCount())
 }
 
 func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
@@ -90,7 +108,8 @@ func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
 	ctx1 := context.Background()
-	err := cache.add(ctx1, region1, false)
+	ok, err := cache.add(ctx1, region1, false)
+	require.True(t, ok)
 	require.NoError(t, err)
 
 	// Try to add another request with a cancelled context
@@ -98,7 +117,8 @@ func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately
 
 	region2 := createTestRegionInfo(1, 2)
-	err = cache.add(ctx2, region2, false)
+	ok, err = cache.add(ctx2, region2, false)
+	require.False(t, ok)
 	require.Error(t, err)
 	require.Equal(t, context.Canceled, err)
 }
@@ -109,14 +129,15 @@ func TestRequestCacheAdd_RetryLimitExceeded(t *testing.T) {
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
-	err := cache.add(ctx, region1, false)
+	ok, err := cache.add(ctx, region1, false)
+	require.True(t, ok)
 	require.NoError(t, err)
 
 	// Try to add another request - should eventually hit retry limit
 	region2 := createTestRegionInfo(1, 2)
-	err = cache.add(ctx, region2, false)
-	require.Error(t, err)
-	require.Equal(t, errors.ErrAddRegionRequestRetryLimitExceeded, err)
+	ok, err = cache.add(ctx, region2, false)
+	require.False(t, ok)
+	require.NoError(t, err)
 }
 
 func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
@@ -125,12 +146,14 @@ func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
-	err := cache.add(ctx, region1, false)
+	ok, err := cache.add(ctx, region1, false)
+	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 1, cache.getPendingCount())
 
 	region2 := createTestRegionInfo(1, 2)
-	err = cache.add(ctx, region2, false)
+	ok, err = cache.add(ctx, region2, false)
+	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 2, cache.getPendingCount())
 
@@ -139,7 +162,6 @@ func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, req)
 	require.Equal(t, 2, cache.getPendingCount()) // pop doesn't change pendingCount
-
 	// Mark as sent
 	cache.markSent(req)
 	require.Equal(t, 2, cache.getPendingCount())
@@ -151,7 +173,8 @@ func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
 
 	// Now we should be able to add another request
 	region3 := createTestRegionInfo(1, 3)
-	err = cache.add(ctx, region3, false)
+	ok, err = cache.add(ctx, region3, false)
+	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 2, cache.getPendingCount())
 }
@@ -167,7 +190,10 @@ func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(id int) {
 			region := createTestRegionInfo(SubscriptionID(id%3), uint64(id))
-			done <- cache.add(ctx, region, false)
+			ok, err := cache.add(ctx, region, false)
+			require.True(t, ok)
+			require.NoError(t, err)
+			done <- err
 		}(i)
 	}
 
@@ -190,7 +216,8 @@ func TestRequestCacheAdd_StaleRequestCleanup(t *testing.T) {
 
 	// Add a request and mark it as sent
 	region := createTestRegionInfo(1, 1)
-	err := cache.add(ctx, region, false)
+	ok, err := cache.add(ctx, region, false)
+	require.True(t, ok)
 	require.NoError(t, err)
 
 	req, err := cache.pop(ctx)
@@ -228,7 +255,8 @@ func TestRequestCacheAdd_WithStoppedRegion(t *testing.T) {
 	region := createTestRegionInfo(1, 1)
 	region.lockedRangeState = nil // This makes it stopped
 
-	err := cache.add(ctx, region, false)
+	ok, err := cache.add(ctx, region, false)
+	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 1, cache.getPendingCount())
 
@@ -248,42 +276,4 @@ func TestRequestCacheAdd_WithStoppedRegion(t *testing.T) {
 
 	// The stopped region should be cleaned up
 	require.Equal(t, 0, cache.getPendingCount())
-}
-
-func TestRequestCacheAdd_EmptyCache(t *testing.T) {
-	cache := newRequestCache(1)
-	ctx := context.Background()
-
-	region := createTestRegionInfo(1, 1)
-
-	// Fill up the cache
-	err := cache.add(ctx, region, false)
-	require.NoError(t, err)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	// Without force, it should fail due to retry limit
-	err = cache.add(ctx, region, false)
-	require.Error(t, err)
-	require.Equal(t, errors.ErrAddRegionRequestRetryLimitExceeded, err)
-
-	// With force, it should still fail because the channel is full
-	// The force flag only bypasses the pendingCount check, not the channel capacity
-	err = cache.add(ctx, region, true)
-	require.Error(t, err)
-	require.Equal(t, errors.ErrAddRegionRequestRetryLimitExceeded, err)
-}
-
-func TestRequestCacheAdd_MetricsAndTiming(t *testing.T) {
-	cache := newRequestCache(10)
-	ctx := context.Background()
-
-	region := createTestRegionInfo(1, 1)
-
-	start := time.Now()
-	err := cache.add(ctx, region, false)
-	duration := time.Since(start)
-
-	require.NoError(t, err)
-	require.True(t, duration < 10*time.Millisecond, "Add should be fast for normal case")
-	require.Equal(t, 1, cache.getPendingCount())
 }
