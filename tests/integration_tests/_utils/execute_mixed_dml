@@ -39,7 +39,7 @@ function execute_mixed_dml() {
 	echo "DML: Executing mixed operations on $table_name..."
 
 	# Ensure table has some initial data for UPDATE and DELETE operations
-	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('initial_data_1_${dml_counter}'), ('initial_data_2_$((dml_counter+1))'), ('initial_data_3_$((dml_counter+2)));" $host $port || true
+	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('initial_data_1_${dml_counter}'), ('initial_data_2_$((dml_counter + 1))'), ('initial_data_3_$((dml_counter + 2)));" $host $port || true
 	dml_counter=$((dml_counter + 3))
 
 	while true; do
@@ -55,19 +55,19 @@ function execute_mixed_dml() {
 				dml_counter=$((dml_counter + 1))
 				;;
 			2)
-				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+1))');" $host $port || true
+				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 1))');" $host $port || true
 				dml_counter=$((dml_counter + 2))
 				;;
 			3)
-				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+1))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+2))');" $host $port || true
+				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 1))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 2))');" $host $port || true
 				dml_counter=$((dml_counter + 3))
 				;;
 			4)
-				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+1))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+2))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+3))');" $host $port || true
+				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 1))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 2))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 3))');" $host $port || true
 				dml_counter=$((dml_counter + 4))
 				;;
 			5)
-				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+1))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+2))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+3))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter+4))');" $host $port || true
+				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 1))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 2))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 3))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 4))');" $host $port || true
 				dml_counter=$((dml_counter + 5))
 				;;
 			esac
@@ -131,7 +131,7 @@ function execute_mixed_dml() {
 # 	local sql="$1"
 # 	local host="${2:-127.0.0.1}"
 # 	local port="${3:-4000}"
-	
+
 # 	echo "[$(date)] Executing SQL: ${sql}"
 # 	mysql -uroot -h${host} -P${port} --default-character-set utf8mb4 -E -e "set global tidb_enable_clustered_index = 'int_only';" 2>/dev/null || true
 # 	mysql -uroot -h${host} -P${port} --default-character-set utf8mb4 -E -e "${sql}" 2>/dev/null || true
