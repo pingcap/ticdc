@@ -260,7 +260,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 
 	// check sync point config
 	if util.GetOrZero(c.EnableSyncPoint) {
-		if !IsMySQLCompatibleScheme(util.GetOrZero(c.Sink.Protocol)) {
+		if !IsMySQLCompatibleScheme(GetScheme(sinkURI)) {
 			return cerror.ErrInvalidReplicaConfig.
 				FastGenByArgs("The SyncPoint must be disabled when the downstream is not tidb or mysql")
 		}
