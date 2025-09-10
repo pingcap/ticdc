@@ -646,9 +646,11 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 
 		for _, regionMeta := range regionMetas {
+			startKey := s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(regionMeta.StartKey)
+			endKey := s.regionCache.PDClient().(*tikv.CodecPDClient).GetCodec().EncodeKey(regionMeta.EndKey)
 			regionSpan := heartbeatpb.TableSpan{
-				StartKey: regionMeta.StartKey,
-				EndKey:   regionMeta.EndKey,
+				StartKey: startKey,
+				EndKey:   endKey,
 			}
 			// NOTE: the End key return by the PD API will be nil to represent the biggest key.
 			// So we need to fix it by calling spanz.HackSpan.
