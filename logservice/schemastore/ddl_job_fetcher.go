@@ -127,11 +127,10 @@ func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
 	for _, kv := range kvs {
 		job, err := p.unmarshalDDL(&kv)
 		if err != nil {
-			log.Fatal("unmarshal ddl failed", zap.String("key", spanz.HexKey(kv.Key)), zap.Error(err))
+			log.Fatal("unmarshal ddl failed", zap.String("key", spanz.HexKey(kv.Key)), zap.Any("kv", kv), zap.Error(err))
 		}
 
 		if job == nil {
-			log.Error("job is nil, skip it", zap.String("key", spanz.HexKey(kv.Key)))
 			continue
 		}
 
