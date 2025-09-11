@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
@@ -72,16 +71,7 @@ func NewMounter(tz *time.Location, integrity *integrity.Config) Mounter {
 
 // DecodeToChunk decodes the raw KV entry to a chunk, it returns the number of rows decoded.
 func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
-	log.Info("before remove keyspace prefix",
-		zap.String("key", spanz.HexKey(raw.Key)),
-		zap.Any("kv", raw), zap.Int("lenKey", len(raw.Key)))
-
 	raw.Key = RemoveKeyspacePrefix(raw.Key)
-
-	log.Info("after remove keyspace prefix",
-		zap.String("key", spanz.HexKey(raw.Key)),
-		zap.Any("kv", raw), zap.Int("lenKey", len(raw.Key)))
-
 	recordID, err := tablecodec.DecodeRowKey(raw.Key)
 	if err != nil {
 		return 0, nil, errors.Trace(err)
