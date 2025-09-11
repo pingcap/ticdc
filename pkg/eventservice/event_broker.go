@@ -455,9 +455,6 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
-	// send a resolved ts event immediately to notify dispatcher for quick initialization
-	// resolvedTs := task.resetTs.Load()
-	// c.sendResolvedTs(task, resolvedTs)
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
