@@ -72,6 +72,7 @@ func NewMounter(tz *time.Location, integrity *integrity.Config) Mounter {
 
 // DecodeToChunk decodes the raw KV entry to a chunk, it returns the number of rows decoded.
 func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
+	raw.Key = RemoveKeyspacePrefix(raw.Key)
 	recordID, err := tablecodec.DecodeRowKey(raw.Key)
 	if err != nil {
 		return 0, nil, errors.Trace(err)
