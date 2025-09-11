@@ -36,6 +36,11 @@ import (
 	"go.uber.org/zap"
 )
 
+type eventGroupKey struct {
+	tableID      int64
+	tableVersion uint64
+}
+
 // for multiple events, we try to batch the events of the same table into limited update / insert / delete query,
 // to enhance the performance of the sink.
 // While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
@@ -50,7 +55,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 	// Step 1: group the events by table ID
-	eventsGroup := make(map[int64][]*commonEvent.DMLEvent) // tableID --> events
+	eventsGroup := make(map[eventGroupKey][]*commonEvent.DMLEvent) // tableID --> events
 	for _, event := range events {
 		// calculate for metrics
 		dmls.rowCount += int(event.Len())
@@ -58,11 +63,15 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 			dmls.tsPairs = append(dmls.tsPairs, tsPair{startTs: event.StartTs, commitTs: event.CommitTs})
 		}
 		dmls.approximateSize += event.GetSize()
-		tableID := event.GetTableID()
-		if _, ok := eventsGroup[tableID]; !ok {
-			eventsGroup[tableID] = make([]*commonEvent.DMLEvent, 0)
+
+		// We use TableInfoVersion instead of tableInfo.GetUpdateTS() to group the events since we also need to consider the case when the table is renamed.
+		key := eventGroupKey{
+			tableID:      event.GetTableID(),
+			tableVersion: event.TableInfoVersion}
+		if _, ok := eventsGroup[key]; !ok {
+			eventsGroup[key] = make([]*commonEvent.DMLEvent, 0)
 		}
-		eventsGroup[tableID] = append(eventsGroup[tableID], event)
+		eventsGroup[key] = append(eventsGroup[key], event)
 	}
 
 	// Step 2: prepare the dmls for each group

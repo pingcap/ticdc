@@ -648,3 +648,57 @@ func newDMLEvent(_ *testing.T, commitTs, replicatingTs, rowCount uint64) *common
 		Length:        int32(rowCount),
 	}
 }
+
+func TestGenerateBatchSQLWithDifferentTableVersion(t *testing.T) {
+	writer, _, _ := newTestMysqlWriter(t)
+	defer writer.db.Close()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	// Step 1: Create table with 2 columns
+	createTableSQL := "create table t (id int primary key, name varchar(32), age int);"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	writer.cfg.MaxTxnRow = 10
+	writer.cfg.SafeMode = false
+
+	// Step 2: Create 2 insert events with 3 columns
+	dmlInsertEvent1 := helper.DML2Event("test", "t", "insert into t values (1, 'test1', 20)")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 1")
+	dmlInsertEvent2 := helper.DML2Event("test", "t", "insert into t values (2, 'test2', 25)")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 2")
+	// set table info version
+	dmlInsertEvent1.TableInfoVersion = job.BinlogInfo.FinishedTS
+	dmlInsertEvent2.TableInfoVersion = job.BinlogInfo.FinishedTS
+
+	// Step 3: Drop the age column
+	dropColumnSQL := "alter table t drop column age;"
+	dropJob := helper.DDL2Job(dropColumnSQL)
+	require.NotNil(t, dropJob)
+
+	// Step 4: Create 2 more insert events with 2 columns (after drop)
+	dmlInsertEvent3 := helper.DML2Event("test", "t", "insert into t values (3, 'test3')")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 3")
+	dmlInsertEvent4 := helper.DML2Event("test", "t", "insert into t values (4, 'test4')")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 4")
+	// set table info version
+	dmlInsertEvent3.TableInfoVersion = dropJob.BinlogInfo.FinishedTS
+	dmlInsertEvent4.TableInfoVersion = dropJob.BinlogInfo.FinishedTS
+
+	// Step 5: Try to put all 4 events in one group and call generateBatchSQL
+	// This should potentially cause a panic due to different table versions
+	events := []*commonEvent.DMLEvent{dmlInsertEvent1, dmlInsertEvent2, dmlInsertEvent3, dmlInsertEvent4}
+
+	// This should panic due to event with different table versions in the same batch
+	// In the previous implementation, events with different table versions
+	// are not properly handled when generating batch SQL
+	require.Panics(t, func() { writer.generateBatchSQL(events) })
+
+	// This call is ok since we have grouped the events by table version
+	dmls := writer.prepareDMLs(events)
+	require.NotNil(t, dmls)
+	require.Greater(t, len(dmls.sqls), 0, "Should generate at least one SQL statement")
+}
