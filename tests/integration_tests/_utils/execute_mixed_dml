@@ -33,10 +33,14 @@ function execute_mixed_dml() {
 	local host="$2"
 	local port="$3"
 
+	# Initialize DML operation counter
+	local dml_counter=0
+
 	echo "DML: Executing mixed operations on $table_name..."
 
 	# Ensure table has some initial data for UPDATE and DELETE operations
-	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('initial_data_1'), ('initial_data_2'), ('initial_data_3');" $host $port || true
+	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('initial_data_1_${dml_counter}'), ('initial_data_2_$((dml_counter + 1))'), ('initial_data_3_$((dml_counter + 2)));" $host $port || true
+	dml_counter=$((dml_counter + 3))
 
 	while true; do
 		# Randomly choose between INSERT, UPDATE, and DELETE operations
@@ -47,19 +51,24 @@ function execute_mixed_dml() {
 			echo "DML: Inserting $insert_count record(s) into $table_name..."
 			case $insert_count in
 			1)
-				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_$RANDOM');" $host $port || true
+				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}');" $host $port || true
+				dml_counter=$((dml_counter + 1))
 				;;
 			2)
-				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM');" $host $port || true
+				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 1))');" $host $port || true
+				dml_counter=$((dml_counter + 2))
 				;;
 			3)
-				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM');" $host $port || true
+				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 1))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 2))');" $host $port || true
+				dml_counter=$((dml_counter + 3))
 				;;
 			4)
-				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM');" $host $port || true
+				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 1))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 2))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 3))');" $host $port || true
+				dml_counter=$((dml_counter + 4))
 				;;
 			5)
-				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM'), ('insert_$(date +%s)_$RANDOM');" $host $port || true
+				run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 1))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 2))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 3))'), ('insert_$(date +%s)_${RANDOM}_$((dml_counter + 4))');" $host $port || true
+				dml_counter=$((dml_counter + 5))
 				;;
 			esac
 			;;
@@ -69,32 +78,38 @@ function execute_mixed_dml() {
 			0)
 				# Update data field based on random id
 				echo "DML: Updating data field in $table_name..."
-				run_sql_ignore_error "UPDATE test.$table_name SET data = 'updated_data_$(date +%s)_$RANDOM' WHERE id = (SELECT id FROM test.$table_name ORDER BY RAND() LIMIT 1);" $host $port || true
+				run_sql_ignore_error "UPDATE test.$table_name SET data = 'updated_data_$(date +%s)_${RANDOM}_${dml_counter}' WHERE id = (SELECT id FROM test.$table_name ORDER BY RAND() LIMIT 1);" $host $port || true
+				dml_counter=$((dml_counter + 1))
 				;;
 			1)
 				# Update id field based on data pattern (this will fail due to auto_increment, but good for testing)
 				echo "DML: Attempting to update id field in $table_name..."
 				run_sql_ignore_error "UPDATE test.$table_name SET id = id + 1000 WHERE data LIKE '%initial_data%';" $host $port || true
+				dml_counter=$((dml_counter + 1))
 				;;
 			2)
 				# Update multiple records based on data pattern
 				echo "DML: Updating multiple records in $table_name..."
-				run_sql_ignore_error "UPDATE test.$table_name SET data = 'batch_updated_$(date +%s)_$RANDOM' WHERE data LIKE '%insert_%';" $host $port || true
+				run_sql_ignore_error "UPDATE test.$table_name SET data = 'batch_updated_$(date +%s)_${RANDOM}_${dml_counter}' WHERE data LIKE '%insert_%';" $host $port || true
+				dml_counter=$((dml_counter + 1))
 				;;
 			3)
 				# Update with complex condition
 				echo "DML: Complex update in $table_name..."
-				run_sql_ignore_error "UPDATE test.$table_name SET data = 'complex_$(date +%s)_$RANDOM' WHERE id > (SELECT MIN(id) FROM test.$table_name) AND data NOT LIKE '%complex_%';" $host $port || true
+				run_sql_ignore_error "UPDATE test.$table_name SET data = 'complex_$(date +%s)_${RANDOM}_${dml_counter}' WHERE id > (SELECT MIN(id) FROM test.$table_name) AND data NOT LIKE '%complex_%';" $host $port || true
+				dml_counter=$((dml_counter + 1))
 				;;
 			4)
 				# Update based on data field containing specific pattern
 				echo "DML: Update based on data pattern in $table_name..."
-				run_sql_ignore_error "UPDATE test.$table_name SET data = 'data_based_update_$(date +%s)_$RANDOM' WHERE data LIKE '%updated_%' OR data LIKE '%batch_%';" $host $port || true
+				run_sql_ignore_error "UPDATE test.$table_name SET data = 'data_based_update_$(date +%s)_${RANDOM}_${dml_counter}' WHERE data LIKE '%updated_%' OR data LIKE '%batch_%';" $host $port || true
+				dml_counter=$((dml_counter + 1))
 				;;
 			5)
 				# Update with arithmetic operation on id
 				echo "DML: Update with arithmetic operation in $table_name..."
-				run_sql_ignore_error "UPDATE test.$table_name SET data = CONCAT('arithmetic_', id, '_', '$(date +%s)') WHERE id % 2 = 0;" $host $port || true
+				run_sql_ignore_error "UPDATE test.$table_name SET data = CONCAT('arithmetic_', id, '_', '$(date +%s)', '_${dml_counter}') WHERE id % 2 = 0;" $host $port || true
+				dml_counter=$((dml_counter + 1))
 				;;
 			esac
 			;;
@@ -102,6 +117,7 @@ function execute_mixed_dml() {
 			# DELETE operation - delete a random existing record (but keep at least one record)
 			echo "DML: Deleting data from $table_name..."
 			run_sql_ignore_error "DELETE FROM test.$table_name WHERE id = (SELECT id FROM test.$table_name ORDER BY RAND() LIMIT 1) AND (SELECT COUNT(*) FROM test.$table_name) > 1;" $host $port || true
+			dml_counter=$((dml_counter + 1))
 			;;
 		esac
 
@@ -109,3 +125,19 @@ function execute_mixed_dml() {
 		sleep 0.1
 	done
 }
+
+# Simple run_sql_ignore_error function for standalone execution
+# function run_sql_ignore_error() {
+# 	local sql="$1"
+# 	local host="${2:-127.0.0.1}"
+# 	local port="${3:-4000}"
+
+# 	echo "[$(date)] Executing SQL: ${sql}"
+# 	mysql -uroot -h${host} -P${port} --default-character-set utf8mb4 -E -e "set global tidb_enable_clustered_index = 'int_only';" 2>/dev/null || true
+# 	mysql -uroot -h${host} -P${port} --default-character-set utf8mb4 -E -e "${sql}" 2>/dev/null || true
+# }
+
+# # If script is executed directly (not sourced), call the function with provided arguments
+# if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# 	execute_mixed_dml "$@"
+# fi
