@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -220,7 +221,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
-			log.Debug("region is initialized",
+			log.Info("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),
@@ -231,12 +232,18 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			state.matcher.matchCachedRollbackRow(true)
 		case cdcpb.Event_COMMITTED:
 			resolvedTs := state.getLastResolvedTs()
+			log.Info("handle committed entry",
+				zap.Uint64("regionID", regionID),
+				zap.Any("entry.Key", spanz.HexKey(entry.Key)),
+				zap.Uint64("entry.StartTs", entry.StartTs),
+				zap.Uint64("entry.CommitTs", entry.CommitTs),
+				zap.Uint64("resolvedTs", resolvedTs),
+				zap.Any("entry", entry))
 			if entry.CommitTs <= resolvedTs {
 				log.Fatal("The CommitTs must be greater than the resolvedTs",
 					zap.String("EventType", "COMMITTED"),
 					zap.Uint64("CommitTs", entry.CommitTs),
-					zap.Uint64("resolvedTs", resolvedTs),
-					zap.Uint64("regionID", regionID))
+					zap.Uint64("resolvedTs", resolvedTs))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_PREWRITE:
