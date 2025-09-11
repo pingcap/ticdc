@@ -110,7 +110,6 @@ func (m *MockSaramaSyncProducer) Close() {
 }
 
 func (m *MockSaramaSyncProducer) Heartbeat() {
-	return
 }
 
 // MockSaramaAsyncProducer is a mock implementation of AsyncProducer interface.
@@ -170,7 +169,6 @@ func (p *MockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, p
 }
 
 func (p *MockSaramaAsyncProducer) Heartbeat() {
-	return
 }
 
 // Close implement the AsyncProducer interface.

@@ -134,10 +134,12 @@ func (p *saramaSyncProducer) Heartbeat() {
 	if p.closed.Load() {
 		return
 	}
-	brokers := p.client.Brokers()
-	for _, b := range brokers {
-		_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
-	}
+	go func() {
+		brokers := p.client.Brokers()
+		for _, b := range brokers {
+			_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
+		}
+	}()
 }
 
 func (p *saramaSyncProducer) Close() {
@@ -265,10 +267,12 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) Heartbeat() {
-	brokers := p.client.Brokers()
-	for _, b := range brokers {
-		_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
-	}
+	go func() {
+		brokers := p.client.Brokers()
+		for _, b := range brokers {
+			_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
+		}
+	}()
 }
 
 // AsyncSend is the input channel for the user to write messages to that they

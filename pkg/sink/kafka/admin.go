@@ -177,10 +177,12 @@ func (a *saramaAdminClient) CreateTopic(
 }
 
 func (a *saramaAdminClient) Heartbeat() {
-	brokers := a.client.Brokers()
-	for _, b := range brokers {
-		_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
-	}
+	go func() {
+		brokers := a.client.Brokers()
+		for _, b := range brokers {
+			_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
+		}
+	}()
 }
 
 func (a *saramaAdminClient) Close() {
