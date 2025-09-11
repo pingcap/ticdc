@@ -453,8 +453,20 @@ func SplitQueries(queries string) ([]string, error) {
 	var res []string
 	for _, stmt := range stmts {
 		var sb strings.Builder
+		// translate TiDB feature to special comment
+		restoreFlags := format.RestoreTiDBSpecialComment
+		// escape the keyword
+		restoreFlags |= format.RestoreNameBackQuotes
+		// upper case keyword
+		restoreFlags |= format.RestoreKeyWordUppercase
+		// wrap string with single quote
+		restoreFlags |= format.RestoreStringSingleQuotes
+		// remove placement rule
+		restoreFlags |= format.SkipPlacementRuleForRestore
+		// force disable ttl
+		restoreFlags |= format.RestoreWithTTLEnableOff
 		err := stmt.Restore(&format.RestoreCtx{
-			Flags: format.DefaultRestoreFlags,
+			Flags: restoreFlags,
 			In:    &sb,
 		})
 		if err != nil {

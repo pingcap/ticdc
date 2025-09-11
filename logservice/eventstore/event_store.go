@@ -421,7 +421,7 @@ func (e *eventStore) RegisterDispatcher(
 				// Track the smallest containing span that meets ts requirements
 				// Note: this is still not bestMatch
 				// for example, if we have a dispatcher with span [b, c),
-				// it is hard to determin whether [a, d) or [b, h) is beshMatch without some statistics.
+				// it is hard to determine whether [a, d) or [b, h) is bestMatch without some statistics.
 				if bestMatch == nil ||
 					(bytes.Compare(subStat.tableSpan.StartKey, bestMatch.tableSpan.StartKey) >= 0 &&
 						bytes.Compare(subStat.tableSpan.EndKey, bestMatch.tableSpan.EndKey) <= 0) {

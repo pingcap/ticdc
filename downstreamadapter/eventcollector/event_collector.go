@@ -151,13 +151,13 @@ func (c *EventCollector) Run(ctx context.Context) {
 
 	for _, ch := range c.receiveChannels {
 		g.Go(func() error {
-			return c.runDispatchMessage(ctx, ch, false)
+			return c.runDispatchMessage(ctx, ch, common.DefaultMode)
 		})
 	}
 
 	for _, ch := range c.redoReceiveChannels {
 		g.Go(func() error {
-			return c.runDispatchMessage(ctx, ch, true)
+			return c.runDispatchMessage(ctx, ch, common.RedoMode)
 		})
 	}
 
@@ -225,15 +225,15 @@ func (c *EventCollector) PrepareAddDispatcher(
 	defer func() {
 		log.Info("add dispatcher done",
 			zap.Stringer("dispatcherID", target.GetId()), zap.Int64("tableID", target.GetTableSpan().GetTableID()),
-			zap.Uint64("startTs", target.GetStartTs()), zap.Int("type", target.GetType()))
+			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("type", target.GetMode()))
 	}()
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
-	stat := newDispatcherStat(target, c, readyCallback, memoryQuota)
+	stat := newDispatcherStat(target, c, readyCallback)
 	c.dispatcherMap.Store(target.GetId(), stat)
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 
-	ds := c.getDynamicStream(dispatcher.IsRedoDispatcher(target))
+	ds := c.getDynamicStream(target.GetMode())
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
@@ -263,7 +263,6 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcherID", target.GetId()),
 			zap.Int64("tableID", target.GetTableSpan().GetTableID()))
 	}()
-	isRedo := dispatcher.IsRedoDispatcher(target)
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
 		return
@@ -271,7 +270,7 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 	stat := value.(*dispatcherStat)
 	stat.remove()
 
-	ds := c.getDynamicStream(isRedo)
+	ds := c.getDynamicStream(target.GetMode())
 	err := ds.RemovePath(target.GetId())
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
@@ -486,9 +485,9 @@ func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessa
 // runDispatchMessage dispatches messages from the input channel to the dynamic stream.
 // Note: Avoid implementing any message handling logic within this function
 // as messages may be stale and need be verified before process.
-func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage, isRedo bool) error {
-	ds := c.getDynamicStream(isRedo)
-	metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(isRedo)
+func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage, mode int64) error {
+	ds := c.getDynamicStream(mode)
+	metricDispatcherReceivedKVEventCount, metricDispatcherReceivedResolvedTsEventCount := c.getMetric(mode)
 	for {
 		select {
 		case <-ctx.Done():
@@ -552,6 +551,14 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		availables[changefeedID.(common.ChangeFeedID)] = uint64(quota.AvailableMemory())
 	}
+
+	for _, quota := range c.redoDs.GetMetrics().MemoryControl.AreaMemoryMetrics {
+		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
+		if !ok {
+			continue
+		}
+		availables[changefeedID.(common.ChangeFeedID)] = min(availables[changefeedID.(common.ChangeFeedID)], uint64(quota.AvailableMemory()))
+	}
 	if len(availables) == 0 {
 		return nil
 	}
@@ -607,45 +614,52 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	updateMetric := func(mode int64) {
+		ds := c.getDynamicStream(mode)
+		dsMetrics := ds.GetMetrics()
+		label := common.StringMode(mode)
+		metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector", label).Set(float64(dsMetrics.EventChanSize))
+		metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector", label).Set(float64(dsMetrics.PendingQueueLen))
+		for _, areaMetric := range dsMetrics.MemoryControl.AreaMemoryMetrics {
+			cfID, ok := c.changefeedIDMap.Load(areaMetric.Area())
+			if !ok {
+				continue
+			}
+			changefeedID := cfID.(common.ChangeFeedID)
+			metrics.DynamicStreamMemoryUsage.WithLabelValues(
+				"event-collector",
+				"max",
+				changefeedID.String(),
+				label,
+			).Set(float64(areaMetric.MaxMemory()))
+			metrics.DynamicStreamMemoryUsage.WithLabelValues(
+				"event-collector",
+				"used",
+				changefeedID.String(),
+				label,
+			).Set(float64(areaMetric.MemoryUsage()))
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
-			// FIXME: record ds?
-			dsMetrics := c.ds.GetMetrics()
-			metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector").Set(float64(dsMetrics.EventChanSize))
-			metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector").Set(float64(dsMetrics.PendingQueueLen))
-			for _, areaMetric := range dsMetrics.MemoryControl.AreaMemoryMetrics {
-				cfID, ok := c.changefeedIDMap.Load(areaMetric.Area())
-				if !ok {
-					continue
-				}
-				changefeedID := cfID.(common.ChangeFeedID)
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"event-collector",
-					"max",
-					changefeedID.String(),
-				).Set(float64(areaMetric.MaxMemory()))
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"event-collector",
-					"used",
-					changefeedID.String(),
-				).Set(float64(areaMetric.MemoryUsage()))
-			}
+			updateMetric(common.DefaultMode)
+			updateMetric(common.RedoMode)
 		}
 	}
 }
 
-func (c *EventCollector) getDynamicStream(isRedo bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
-	if isRedo {
+func (c *EventCollector) getDynamicStream(mode int64) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+	if common.IsRedoMode(mode) {
 		return c.redoDs
 	}
 	return c.ds
 }
 
-func (c *EventCollector) getMetric(isRedo bool) (prometheus.Counter, prometheus.Counter) {
-	if isRedo {
+func (c *EventCollector) getMetric(mode int64) (prometheus.Counter, prometheus.Counter) {
+	if common.IsRedoMode(mode) {
 		return c.metricRedoDispatcherReceivedKVEventCount, c.metricRedoDispatcherReceivedResolvedTsEventCount
 	}
 	return c.metricDispatcherReceivedKVEventCount, c.metricDispatcherReceivedResolvedTsEventCount

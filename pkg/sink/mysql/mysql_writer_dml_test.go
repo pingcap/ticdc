@@ -203,7 +203,6 @@ func TestAllRowInSameSafeMode(t *testing.T) {
 	}
 }
 
-// 这个主要测有没有正常分段，以及unsafe 和 safe 下生成的结果符合预期
 func TestGenerateBatchSQL(t *testing.T) {
 	writer, _, _ := newTestMysqlWriter(t)
 	defer writer.db.Close()

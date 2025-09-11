@@ -240,91 +240,96 @@ func TestHandleResolvedTs(t *testing.T) {
 	require.Equal(t, msg.Type, messaging.TypeBatchResolvedTs)
 }
 
-// func TestRateLimiter(t *testing.T) {
-// 	broker, _, _ := newEventBrokerForTest()
-// 	defer broker.close()
+func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
+	broker, _, _ := newEventBrokerForTest()
+	defer broker.close()
 
-// 	dispInfo := newMockDispatcherInfoForTest(t)
-// 	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo.GetChangefeedID())
+	// Create a dispatcher and add it to the broker
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
 
-// 	// Create a dispatcher with known scan limit
-// 	disp := newDispatcherStat(100, dispInfo, nil, 0, 0, changefeedStatus)
-// 	disp.resetState(100)
-// 	disp.isHandshaked.Store(true)
-// 	disp.isReadyReceivingData.Store(true)
-// 	disp.eventStoreResolvedTs.Store(200)
-// 	disp.eventStoreCommitTs.Store(200)
+	// Verify dispatcher exists
+	dispatcher := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispatcher)
+	require.Equal(t, dispatcher.id, dispInfo.GetID())
 
-// 	// Test Case 1: Normal operation - should allow within burst capacity
-// 	// Reset the scan limit to minimum value (1MB)
-// 	disp.resetScanLimit()
-// 	scanLimit := disp.getCurrentScanLimitInBytes()
-// 	require.Equal(t, int64(minScanLimitInBytes), scanLimit)
+	// Create a heartbeat with progress for the existing dispatcher
+	heartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{
+				{
+					Version:      event.DispatcherHeartbeatVersion,
+					DispatcherID: dispInfo.GetID(),
+					CheckpointTs: 100,
+				},
+			},
+		},
+	}
 
-// 	// This should succeed - within burst capacity
-// 	allowed := broker.scanRateLimiter.AllowN(time.Now(), int(scanLimit))
-// 	require.True(t, allowed, "Rate limiter should allow request within burst capacity")
+	// Handle heartbeat - should update the dispatcher's heartbeat time and checkpoint
+	broker.handleDispatcherHeartbeat(heartbeat)
 
-// 	// Test Case 2: Burst capacity limit - should reject request larger than burst
-// 	// Try to consume more than the burst capacity (maxScanLimitInBytes)
-// 	oversizedRequest := int(maxScanLimitInBytes + 1)
-// 	allowed = broker.scanRateLimiter.AllowN(time.Now(), oversizedRequest)
-// 	require.False(t, allowed, "Rate limiter should reject request larger than burst capacity")
+	// Verify the dispatcher's checkpoint and heartbeat time were updated
+	// The checkpoint should be updated to the higher value (from heartbeat)
+	require.GreaterOrEqual(t, dispatcher.checkpointTs.Load(), uint64(100))
+	require.Greater(t, dispatcher.lastReceivedHeartbeatTime.Load(), int64(0))
 
-// 	// Test Case 3: Multiple requests within burst capacity
-// 	// After some time, we should be able to make another request
-// 	time.Sleep(100 * time.Millisecond) // Allow some tokens to be replenished
-// 	allowed = broker.scanRateLimiter.AllowN(time.Now(), int(scanLimit))
-// 	require.True(t, allowed, "Rate limiter should allow another request after token replenishment")
+	// Now Set this dispatcher lastReceivedHeartbeatTime to a time in the past
+	// it should be considered as inactive and removed
+	dispatcher.lastReceivedHeartbeatTime.Store(time.Now().Add(-heartbeatTimeout * 2).Unix())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go broker.reportDispatcherStatToStore(ctx, time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
-// 	// Test Case 4: Test doScan with rate limiter integration
-// 	// Mock the getScanTaskDataRange to return our test data range
-// 	disp.sentResolvedTs.Store(99) // Set to less than eventStoreResolvedTs to trigger scan
+	// Create a heartbeat for the now-removed (inactive) dispatcher
+	heartbeatForInactiveDispatcher := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{
+				{
+					Version:      event.DispatcherHeartbeatVersion,
+					DispatcherID: dispInfo.GetID(), // Same dispatcher ID but it's removed
+					CheckpointTs: 200,
+				},
+			},
+		},
+	}
 
-// 	// Test that doScan respects rate limiter
-// 	// First, exhaust the rate limiter
-// 	broker.scanRateLimiter.AllowN(time.Now(), int(maxScanLimitInBytes))
+	// Mock the message center to capture the response
+	mc := broker.msgSender.(*mockMessageCenter)
 
-// 	// Now doScan should return early due to rate limiter
-// 	ctx := context.Background()
-// 	// This should return quickly without doing actual scan due to rate limiter
-// 	broker.doScan(ctx, disp)
-// 	// Since we can't directly check internal state, we verify the scan wasn't blocked
-// 	require.False(t, disp.isTaskScanning.Load(), "Task should not be scanning due to rate limiter")
+	// Handle heartbeat for the removed dispatcher
+	// This should generate a response indicating the dispatcher should be removed
+	broker.handleDispatcherHeartbeat(heartbeatForInactiveDispatcher)
 
-// 	// Test Case 5: Test rate limiter configuration
-// 	// Verify that the rate limiter is configured correctly
-// 	require.NotNil(t, broker.scanRateLimiter, "Rate limiter should be initialized")
+	// Verify dispatcher is removed
+	removedDispatcher := broker.getDispatcher(dispInfo.GetID())
+	require.Nil(t, removedDispatcher)
 
-// 	// Test rate limiter limits
-// 	rateLimiter := broker.scanRateLimiter
-// 	require.Equal(t, float64(maxScanLimitInBytesPerSecond), float64(rateLimiter.Limit()), "Rate limiter should have correct rate limit")
-
-// 	// Test burst capacity by trying to consume exactly the burst amount
-// 	// Wait for tokens to be replenished
-// 	time.Sleep(200 * time.Millisecond)
-// 	burstAmount := int(maxScanLimitInBytes)
-// 	allowed = rateLimiter.AllowN(time.Now(), burstAmount)
-// 	require.True(t, allowed, "Rate limiter should allow request exactly equal to burst capacity")
-
-// 	// Test Case 6: Test with dispatcher's getCurrentScanLimitInBytes
-// 	// Reset scan limit and test integration
-// 	disp.resetScanLimit()
-// 	currentLimit := disp.getCurrentScanLimitInBytes()
-// 	require.Equal(t, int64(minScanLimitInBytes), currentLimit)
-
-// 	// This should work with rate limiter
-// 	time.Sleep(100 * time.Millisecond) // Allow token replenishment
-// 	allowed = broker.scanRateLimiter.AllowN(time.Now(), int(currentLimit))
-// 	require.True(t, allowed, "Rate limiter should work with dispatcher's current scan limit")
-
-// 	// Test Case 7: Test scan limit growth over time
-// 	// Wait for scan limit to potentially grow
-// 	time.Sleep(updateScanLimitInterval + 100*time.Millisecond)
-// 	newLimit := disp.getCurrentScanLimitInBytes()
-// 	// Should either stay the same or grow (depending on timing)
-// 	require.True(t, newLimit >= currentLimit, "Scan limit should not decrease")
-// 	require.True(t, newLimit <= maxScanLimitInBytes, "Scan limit should not exceed maximum")
-
-// 	log.Info("All rate limiter tests passed")
-// }
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Verify that a response was sent indicating the dispatcher is removed
+	select {
+	case msg := <-mc.messageCh:
+		require.Equal(t, messaging.TypeDispatcherHeartbeatResponse, msg.Type)
+		// The response should contain a dispatcher state indicating removal
+		require.Len(t, msg.Message, 1)
+		response := msg.Message[0].(*event.DispatcherHeartbeatResponse)
+		require.NotNil(t, response)
+		states := response.DispatcherStates
+		require.Len(t, states, 1)
+		require.Equal(t, dispInfo.GetID(), states[0].DispatcherID)
+		require.Equal(t, event.DSStateRemoved, states[0].State)
+	case <-ctx.Done():
+		require.Fail(t, "Expected to receive a dispatcher heartbeat response")
+	}
+}

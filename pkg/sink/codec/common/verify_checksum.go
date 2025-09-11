@@ -35,11 +35,11 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
 	// if expected is 0, it means the checksum is not enabled, so we don't need to verify it.
 	// the data maybe restored by br, and the checksum is not enabled, so no expected here.
 	columns := event.TableInfo.GetColumns()
-	event.Rewind()
 
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
+			event.Rewind()
 			break
 		}
 		if row.Checksum.Current != 0 {

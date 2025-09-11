@@ -65,7 +65,7 @@ func (c *UUUWorkload) BuildInsertSql(tableN int, batchSize int) string {
 // BuildInsertSql returns two insert statements for Data and index_Data tables
 func (c *UUUWorkload) BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{}) {
 	var sql string
-	values := make([]interface{}, 0, batchSize*4) // 预分配空间：每行4个值
+	values := make([]interface{}, 0, batchSize*4)
 
 	if tableN%2 == 0 {
 		// Data table insert

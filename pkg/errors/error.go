@@ -592,6 +592,10 @@ var (
 		"invalid ignore event type: '%s'",
 		errors.RFCCodeText("CDC:ErrInvalidIgnoreEventType"),
 	)
+	ErrInvalidEventType = errors.Normalize(
+		"sink doesn't support this type of block event: '%s'",
+		errors.RFCCodeText("CDC:ErrInvalidEventType"),
+	)
 	ErrSyncRenameTableFailed = errors.Normalize(
 		"table's old name is not in filter rule, and its new name in filter rule "+
 			"table id '%d', ddl query: [%s], it's an unexpected behavior, "+
@@ -709,5 +713,11 @@ var (
 	// tcp server error
 	ErrTCPServerClosed = errors.Normalize("The TCP server has been closed",
 		errors.RFCCodeText("CDC:ErrTCPServerClosed"),
+	)
+
+	// puller related errors
+	ErrAddRegionRequestRetryLimitExceeded = errors.Normalize(
+		"add region request retry limit exceeded",
+		errors.RFCCodeText("CDC:ErrAddRegionRequestRetryLimitExceeded"),
 	)
 )

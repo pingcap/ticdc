@@ -40,7 +40,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -116,8 +116,21 @@ function move_table() {
 	done
 }
 
+function move_table_consistent() {
+	while true; do
+		table_num=$((RANDOM % 10 + 1))
+		table_name="table_$table_num"
+		port=$((RANDOM % 3 + 8300))
+
+		# move table to a random node
+		table_id=$(get_table_id "test" "$table_name")
+		move_table_with_retry "127.0.0.1:$port" $table_id "test" 10 1 || true
+		sleep 1
+	done
+}
+
 main() {
-	prepare
+	prepare changefeed
 
 	create_tables
 	execute_ddls &
@@ -146,7 +159,50 @@ main() {
 	cleanup_process $CDC_BINARY
 }
 
+main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
+	prepare consistent_changefeed
+
+	create_tables
+	execute_ddls &
+	NORMAL_TABLE_DDL_PID=$!
+
+	# do execute dml for 100 tables, and store the pid for each thread
+	declare -a pids=()
+
+	for i in {1..10}; do
+		execute_dml $i &
+		pids+=("$!")
+	done
+
+	move_table_consistent &
+	MOVE_TABLE_PID=$!
+
+	sleep 500
+
+	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
+
+	# to ensure row changed events have been replicated to TiCDC
+	sleep 10
+	changefeed_id="test"
+	storage_path="file://$WORK_DIR/redo"
+	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	ensure 20 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+	cleanup_process $CDC_BINARY
+
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+}
+
 trap stop_tidb_cluster EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+# FIXME: refactor redo apply
+# stop_tidb_cluster
+# main_with_consistent
+# check_logs $WORK_DIR
+# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
