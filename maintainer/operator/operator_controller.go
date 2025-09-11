@@ -331,6 +331,7 @@ func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origi
 		origin:         origin,
 		dest:           dest,
 		spanController: oc.spanController,
+		sendThrottler:  newSendThrottler(),
 	}
 }
 

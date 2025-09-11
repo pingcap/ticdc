@@ -369,3 +369,5 @@ require (
 replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 
 replace github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20250416
+
+replace github.com/pingcap/tiflow v0.0.0-20250707050724-ac2fcf466cf3 => github.com/wk989898/tiflow v0.0.0-20250910030004-dca4ecfba7a0
