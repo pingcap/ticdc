@@ -30,41 +30,34 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
+	'multi_source multi_source'
 	# G02
-	'multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
-	'multi_source'
+	'multi_source multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
+	'multi_source multi_source'
 	# G02
-	'multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
-	'multi_source'
+	'multi_source multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
+	'multi_source multi_source'
 	# G02
-	'multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
-	'multi_source'
+	'multi_source multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
+	'multi_source multi_source'
 	# G02
-	'multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
-	'multi_source'
-	# G01
-	'multi_source'
-	# G02
-	'multi_source'
-	# G01
-	'multi_source'
+	'multi_source multi_source'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.

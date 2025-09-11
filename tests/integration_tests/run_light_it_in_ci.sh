@@ -31,48 +31,35 @@ group_num=${group#G}
 # https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_mysql_integration_light.yaml
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
-	'multi_source'
+	# G00
+	'multi_source multi_source'
 	# G01
-	'multi_source'
+	'multi_source multi_source'
 	# G02
-	'multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
-	'multi_source'
+	'multi_source multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
+	'multi_source multi_source'
 	# G02
-	'multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
-	'multi_source'
+	'multi_source multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
+	'multi_source multi_source'
 	# G02
-	'multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
-	'multi_source'
+	'multi_source multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
+	'multi_source multi_source'
 	# G02
-	'multi_source'
+	'multi_source multi_source'
 	# G01
-	'multi_source'
-		'multi_source'
-	# G01
-	'multi_source'
-	# G02
-	'multi_source'
-	# G01
-	'multi_source'
-		'multi_source'
-	# G01
-	'multi_source'
-	# G02
-	'multi_source'
-	# G01
-	'multi_source'
+	'multi_source multi_source'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
