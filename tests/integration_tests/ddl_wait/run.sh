@@ -41,8 +41,13 @@ function run() {
 	# completes before the test finishes.
 	# because `truncate table` and `create table` are processed sequentially by table trigger dispatcher.
 	run_sql "truncate table test.t;"
+	run_sql "insert into test.t values (1, 1);"
 	run_sql "create table test.finish_mark (a int primary key);"
 	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+
+	# ensure all dml / ddl related to test.t finish
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+
 	check_logs_contains $WORK_DIR "DDL replicate success"
 	check_logs_contains $WORK_DIR "DDL is running downstream"
 	cleanup_process $CDC_BINARY
