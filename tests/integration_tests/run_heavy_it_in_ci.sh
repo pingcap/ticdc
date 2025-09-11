@@ -54,7 +54,6 @@ mysql_groups=(
 	'multi_source multi_source'
 	# G01
 	'multi_source multi_source'
-	# G02
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
@@ -62,10 +61,9 @@ kafka_groups=(
 	# G00
 	'generate_column many_pk_or_uk multi_source'
 	# G01
-	# ddl_for_split_tables_with_random_move_table
-	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
+	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
 	# G02
-	'canal_json_handle_key_only'
+	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
 	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
@@ -73,25 +71,21 @@ kafka_groups=(
 	# G05
 	'move_table drop_many_tables'
 	# G06
-	'cdc default_value'
+	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	# merge_table
-	'resolve_lock force_replicate_table'
+	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'tidb_mysql_test'
+	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
 	# G09
-	'mq_sink_error_resume'
+	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume'
 	# G10
-	'kafka_column_selector kafka_column_selector_avro'
-	# fail_over_ddl_mix_with_syncpoint
-	# ddl_with_random_move_table
-	# fail_over_ddl_mix
+	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
 	'fail_over region_merge'
 	# G12
 	'ddl_for_split_tables_random_schedule'
 	# G13
-	'debezium01'
+	'debezium01 fail_over_ddl_mix'
 	# G14
 	'debezium02'
 	# G15
@@ -113,24 +107,21 @@ pulsar_groups=(
 	# G05
 	'move_table drop_many_tables'
 	# G06
-	'cdc default_value'
+	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	# merge_table
-	'resolve_lock force_replicate_table'
+	'merge_table resolve_lock force_replicate_table'
 	# G08
 	'tidb_mysql_test'
 	# G09
 	'mq_sink_error_resume'
 	# G10
-	# fail_over_ddl_mix_with_syncpoint
 	'ddl_for_split_tables_random_schedule'
 	# G11
 	'ddl_with_random_move_table'
 	# G12
 	'fail_over region_merge'
 	# G13
-	# fail_over_ddl_mix
-	'debezium01'
+	'debezium01 fail_over_ddl_mix'
 	# G14
 	'debezium02'
 	# G15
@@ -142,11 +133,10 @@ storage_groups=(
 	'generate_column many_pk_or_uk multi_source'
 	# G01
 	csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered
-	''
 	# G02
 	'canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
-	'csv_storage_basic storage_csv_update'
+	'csv_storage_basic storage_csv_update ddl_for_split_tables_with_failover'
 	# G04
 	'ddl_for_split_tables_with_random_move_table'
 	# G05
@@ -162,7 +152,6 @@ storage_groups=(
 	# G10
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G11
-	# fail_over_ddl_mix_with_syncpoint
 	'ddl_for_split_tables_random_schedule'
 	# G12
 	'ddl_with_random_move_table'
