@@ -15,12 +15,17 @@ package range_checker
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"sync/atomic"
 
 	"github.com/google/btree"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"go.uber.org/zap"
 )
 
 // TableSpanRangeChecker is used to check if all ranges cover the start and end byte slices.
@@ -35,8 +40,14 @@ func NewTableSpanRangeChecker(tables []int64) *TableSpanRangeChecker {
 		tableSpans: make(map[int64]*SpanCoverageChecker),
 		covered:    atomic.Bool{},
 	}
+	pdClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
+	codecV2, err := pdClient.GetCodec(context.Background(), "SYSTEM")
+	if err != nil {
+		log.Panic("get codec from pd client failed", zap.Error(err))
+	}
 	for _, table := range tables {
 		span := common.TableIDToComparableSpan(table)
+		span.StartKey, span.EndKey = codecV2.EncodeRange(span.StartKey, span.EndKey)
 		sc.tableSpans[table] = NewTableSpanCoverageChecker(span.StartKey, span.EndKey)
 	}
 	return sc

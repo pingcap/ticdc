@@ -27,6 +27,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
@@ -140,6 +141,12 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		return
 	}
 	span := common.TableIDToComparableSpan(table.TableID)
+	pdClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
+	codecV2, err := pdClient.GetCodec(context.Background(), "SYSTEM")
+	if err != nil {
+		log.Panic("get codec from pd client failed", zap.Error(err))
+	}
+	span.StartKey, span.EndKey = codecV2.EncodeRange(span.StartKey, span.EndKey)
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  table.TableID,
 		StartKey: span.StartKey,

@@ -15,14 +15,17 @@ package replica
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -127,6 +130,13 @@ func (r *SpanReplication) initGroupID() {
 	span := heartbeatpb.TableSpan{TableID: r.Span.TableID, StartKey: r.Span.StartKey, EndKey: r.Span.EndKey}
 	// check if the table is split
 	totalSpan := common.TableIDToComparableSpan(span.TableID)
+	pdClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
+	codecV2, err := pdClient.GetCodec(context.Background(), "SYSTEM")
+	if err != nil {
+		log.Panic("get codec from pd client failed", zap.Error(err))
+	}
+	totalSpan.StartKey, totalSpan.EndKey = codecV2.EncodeRange(totalSpan.StartKey, totalSpan.EndKey)
+
 	if !common.IsSubSpan(span, totalSpan) {
 		log.Warn("invalid span range", zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("id", r.ID.String()), zap.Int64("tableID", span.TableID),
