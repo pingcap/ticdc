@@ -72,7 +72,7 @@ func main() {
 
 // for every DDL, run the DDL continuously, and one goroutine for one TiDB instance to do some DML op
 func runDDLTest(srcs []*sql.DB) {
-	runTime := time.Second * 30
+	runTime := time.Second * 120
 	start := time.Now()
 	defer func() {
 		log.S().Infof("runDDLTest take %v", time.Since(start))
