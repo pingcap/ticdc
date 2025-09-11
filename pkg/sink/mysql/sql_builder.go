@@ -40,6 +40,8 @@ type preparedDMLs struct {
 }
 
 func (d *preparedDMLs) LogDebug() {
+	// for test
+	return
 	if log.GetLevel() != zapcore.DebugLevel {
 		return
 	}
@@ -248,7 +250,12 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
-	for i, col := range tableInfo.GetColumns() {
+
+	if row.Len() != len(tableInfo.GetColumns()) {
+		log.Panic("row length mismatch", zap.Any("rowLen", row.Len()), zap.Any("tableInfoLen", len(tableInfo.GetColumns())), zap.Any("tableInfo", tableInfo))
+	}
+
+	for i, col := range tableInfo.GetColumns() { // 3
 		if col == nil || col.IsGenerated() {
 			continue
 		}
