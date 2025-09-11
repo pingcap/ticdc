@@ -54,8 +54,8 @@ else
 fi
 
 log_with_timestamp() {
+	# Clear the log file at the start of each command
 	while IFS= read -r line; do
-		echo "$line" >"$log_file"
 		echo "[$(date)] $line" >>"$remainLogFile"
 	done
 }
@@ -63,6 +63,6 @@ log_with_timestamp() {
 echo "[$(date)] Executing SQL: $1" >"$log_file"
 echo "[$(date)] Executing SQL: $1" >>"$remainLogFile"
 
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" 2>&1 | log_with_timestamp
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" 2>&1 | tee "$log_file" | log_with_timestamp
 
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" 2>&1 | log_with_timestamp
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" 2>&1 | tee "$log_file" | log_with_timestamp

@@ -37,8 +37,8 @@ log_file="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
 remainLogFile="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.remain.log"
 
 log_with_timestamp() {
+	# Clear the log file at the start of each command
 	while IFS= read -r line; do
-		echo "$line" >"$log_file"
 		echo "[$(date)] $line" >>"$remainLogFile"
 	done
 }
@@ -46,6 +46,6 @@ log_with_timestamp() {
 echo "[$(date)] Executing SQL: ${sql}" >"$log_file"
 echo "[$(date)] Executing SQL: ${sql}" >>"$remainLogFile"
 
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" 2>&1 | log_with_timestamp
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" 2>&1 | tee "$log_file" | log_with_timestamp
 
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" 2>&1 | log_with_timestamp
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" 2>&1 | tee "$log_file" | log_with_timestamp

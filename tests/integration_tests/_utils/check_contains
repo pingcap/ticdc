@@ -2,7 +2,7 @@
 
 set -eu
 OUT_DIR=/tmp/tidb_cdc_test
-LOG_FILE="$OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.remain.log"
+LOG_FILE="$OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
 
 if ! grep -Fq "$1" "$LOG_FILE"; then
 	echo "TEST FAILED: OUTPUT DOES NOT CONTAIN '$1'"

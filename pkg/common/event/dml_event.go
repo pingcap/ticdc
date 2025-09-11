@@ -327,7 +327,7 @@ func NewDMLEvent(
 
 func (t *DMLEvent) String() string {
 	rowsStringBuilder := strings.Builder{}
-	if t.Rows == nil {
+	if t.Rows == nil || t.TableInfo == nil {
 		return ""
 	}
 
