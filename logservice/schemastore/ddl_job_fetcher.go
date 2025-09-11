@@ -262,22 +262,28 @@ const (
 
 func getAllDDLSpan() []heartbeatpb.TableSpan {
 	pdClient := appctx.GetService[pdutil.PDAPIClient](appctx.PDAPIClient)
-	codecV2, err := pdClient.GetCodec(context.Background(), "SYSTEM")
+	keyspaceID, err := pdClient.GetKeyspaceID(context.Background(), "SYSTEM")
 	if err != nil {
-		log.Panic("get codec from pd client failed", zap.Error(err))
+		log.Panic("get keyspace id from pd client failed", zap.Error(err))
 	}
 
 	spans := make([]heartbeatpb.TableSpan, 0, 2)
-	start, end := common.GetTableRange(JobTableID)
-	start, end = codecV2.EncodeRange(start, end)
+	start, end, err := common.GetKeyspaceTableRange(keyspaceID, JobTableID)
+	if err != nil {
+		log.Panic("get keyspace table range failed",
+			zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+	}
 	spans = append(spans, heartbeatpb.TableSpan{
 		TableID:  JobTableID,
 		StartKey: common.ToComparableKey(start),
 		EndKey:   common.ToComparableKey(end),
 	})
 
-	start, end = common.GetTableRange(JobHistoryID)
-	start, end = codecV2.EncodeRange(start, end)
+	start, end, err = common.GetKeyspaceTableRange(keyspaceID, JobHistoryID)
+	if err != nil {
+		log.Panic("get keyspace table range failed",
+			zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+	}
 	spans = append(spans, heartbeatpb.TableSpan{
 		TableID:  JobHistoryID,
 		StartKey: common.ToComparableKey(start),

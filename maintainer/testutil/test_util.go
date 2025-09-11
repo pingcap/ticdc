@@ -133,8 +133,8 @@ func (m *MockPDAPIClient) ScanRegions(ctx context.Context, span heartbeatpb.Tabl
 	return m.scnaRegionsResult[fmt.Sprintf("%s-%s", span.StartKey, span.EndKey)], nil
 }
 
-func (m *MockPDAPIClient) GetCodec(ctx context.Context, keyspace string) (tikv.Codec, error) {
-	return nil, nil
+func (m *MockPDAPIClient) GetKeyspaceID(ctx context.Context, keyspace string) (uint32, error) {
+	return 0, nil
 }
 
 func (m *MockPDAPIClient) Close() {

@@ -41,13 +41,16 @@ func NewTableSpanRangeChecker(tables []int64) *TableSpanRangeChecker {
 		covered:    atomic.Bool{},
 	}
 	pdClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
-	codecV2, err := pdClient.GetCodec(context.Background(), "SYSTEM")
+	keyspaceID, err := pdClient.GetKeyspaceID(context.Background(), "SYSTEM")
 	if err != nil {
 		log.Panic("get codec from pd client failed", zap.Error(err))
 	}
 	for _, table := range tables {
-		span := common.TableIDToComparableSpan(table)
-		span.StartKey, span.EndKey = codecV2.EncodeRange(span.StartKey, span.EndKey)
+		span, err := common.TableIDToComparableSpanWithKeyspace(keyspaceID, table)
+		if err != nil {
+			log.Panic("tableIDToComparableSpanWithKeyspace failed",
+				zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+		}
 		sc.tableSpans[table] = NewTableSpanCoverageChecker(span.StartKey, span.EndKey)
 	}
 	return sc

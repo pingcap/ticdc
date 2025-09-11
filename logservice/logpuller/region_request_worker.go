@@ -407,8 +407,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 }
 
 func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.ChangeDataRequest {
+	resolvedTs := region.resolvedTs()
 	log.Info("region worker start to send request to store",
 		zap.Uint64("regionID", region.verID.GetID()),
+		zap.Uint64("startTs", resolvedTs),
+		zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 		zap.String("startKey", spanz.HexKey(region.span.StartKey)),
 		zap.String("endKey", spanz.HexKey(region.span.EndKey)))
 	return &cdcpb.ChangeDataRequest{
@@ -416,7 +419,7 @@ func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.Chan
 		RegionId:     region.verID.GetID(),
 		RequestId:    uint64(region.subscribedSpan.subID),
 		RegionEpoch:  region.rpcCtx.Meta.RegionEpoch,
-		CheckpointTs: region.resolvedTs(),
+		CheckpointTs: resolvedTs,
 		StartKey:     region.span.StartKey,
 		EndKey:       region.span.EndKey,
 		ExtraOp:      kvrpcpb.ExtraOp_ReadOldValue,

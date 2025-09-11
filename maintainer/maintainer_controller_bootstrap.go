@@ -210,13 +210,16 @@ func (c *Controller) processTableSpans(
 	// Add new table if not working
 	if isTableWorking {
 		// Handle existing table spans
-		span := common.TableIDToComparableSpan(table.TableID)
 		pdClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
-		codecV2, err := pdClient.GetCodec(context.Background(), "SYSTEM")
+		keyspaceID, err := pdClient.GetKeyspaceID(context.Background(), "SYSTEM")
 		if err != nil {
 			log.Panic("get codec from pd client failed", zap.Error(err))
 		}
-		span.StartKey, span.EndKey = codecV2.EncodeRange(span.StartKey, span.EndKey)
+		span, err := common.TableIDToComparableSpanWithKeyspace(keyspaceID, table.TableID)
+		if err != nil {
+			log.Panic("tableIDToComparableSpanWithKeyspace failed",
+				zap.Uint32("keyspaceID", keyspaceID), zap.Int64("tableID", table.TableID), zap.Error(err))
+		}
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  table.TableID,
 			StartKey: span.StartKey,

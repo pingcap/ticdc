@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -131,14 +130,17 @@ func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
 func (r *SpanReplication) initGroupID() {
 	r.groupID = replica.DefaultGroupID
 	span := heartbeatpb.TableSpan{TableID: r.Span.TableID, StartKey: r.Span.StartKey, EndKey: r.Span.EndKey}
-	// check if the table is split
-	totalSpan := common.TableIDToComparableSpan(span.TableID)
 	pdClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
-	codecV2, err := pdClient.GetCodec(context.Background(), "SYSTEM")
+	keyspaceID, err := pdClient.GetKeyspaceID(context.Background(), "SYSTEM")
 	if err != nil {
 		log.Panic("get codec from pd client failed", zap.Error(err))
 	}
-	totalSpan.StartKey, totalSpan.EndKey = codecV2.EncodeRange(totalSpan.StartKey, totalSpan.EndKey)
+	// check if the table is split
+	totalSpan, err := common.TableIDToComparableSpanWithKeyspace(keyspaceID, span.TableID)
+	if err != nil {
+		log.Panic("tableIDToComparableSpanWithKeyspace failed",
+			zap.Uint32("keyspaceID", keyspaceID), zap.Int64("tableID", span.TableID), zap.Error(err))
+	}
 
 	if !common.IsSubSpan(span, totalSpan) {
 		log.Warn("invalid span range", zap.String("changefeedID", r.ChangefeedID.Name()),
@@ -149,12 +151,6 @@ func (r *SpanReplication) initGroupID() {
 	}
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)
-	} else {
-		log.Warn("the groupID is not set",
-			zap.Any("span.StartKey", spanz.HexKey(span.StartKey)),
-			zap.Any("total.StartKey", spanz.HexKey(totalSpan.StartKey)),
-			zap.Any("span.EndKey", spanz.HexKey(span.EndKey)),
-			zap.Any("total.EndKey", spanz.HexKey(totalSpan.EndKey)))
 	}
 }
 
