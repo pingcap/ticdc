@@ -201,6 +201,13 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 	argsList := make([][]interface{}, 0)
 
 	batchSQL := func(events []*commonEvent.DMLEvent) {
+
+		defer func() {
+			if r := recover(); r != nil {
+				log.Fatal("panic in batchSQL", zap.Any("events", events), zap.Any("firstTableInfo", events[0].TableInfo), zap.Any("error", r))
+			}
+		}()
+
 		// Only when SafeMode == false and commitTs is larger than replicatingTs,
 		// we think the data status is safe, we can use insert instead of replica sql to avoid the conflict.
 		inDataSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
@@ -765,6 +772,8 @@ func (w *Writer) batchSingleTxnDmls(
 	tableInfo *common.TableInfo,
 	translateToInsert bool,
 ) (sqls []string, values [][]interface{}) {
+	log.Debug("batchSingleTxnDmls", zap.Any("rows", rows), zap.Any("tableInfoUpdateTs", tableInfo.UpdateTS), zap.Any("translateToInsert", translateToInsert))
+
 	insertRows, updateRows, deleteRows := w.groupRowsByType(rows, tableInfo)
 
 	// handle delete

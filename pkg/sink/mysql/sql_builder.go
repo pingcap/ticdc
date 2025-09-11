@@ -267,6 +267,11 @@ func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
 
 func getArgsWithGeneratedColumn(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
+
+	if row.Len() != len(tableInfo.GetColumns()) {
+		log.Panic("row length mismatch", zap.Any("rowLen", row.Len()), zap.Any("row", row), zap.Any("tableInfoLen", len(tableInfo.GetColumns())), zap.Any("tableInfo", tableInfo))
+	}
+
 	for i, col := range tableInfo.GetColumns() {
 		if col == nil {
 			continue
