@@ -32,8 +32,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const redoHeartBeatInterval = time.Second * 1
-
 func initRedoComponet(
 	ctx context.Context,
 	manager *DispatcherManager,
@@ -78,11 +76,6 @@ func initRedoComponet(
 		err := manager.redoSink.Run(ctx)
 		manager.handleError(ctx, err)
 	}()
-	// go func() {
-	// 	defer manager.wg.Done()
-	// 	err := manager.collectRedoTs(ctx)
-	// 	manager.handleError(ctx, err)
-	// }()
 	return nil
 }
 
@@ -179,36 +172,6 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	)
 	return nil
 }
-
-// func (e *DispatcherManager) collectRedoTs(ctx context.Context) error {
-// 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-// 	ticker := time.NewTicker(redoHeartBeatInterval)
-// 	defer ticker.Stop()
-// 	for {
-// 		select {
-// 		case <-ctx.Done():
-// 			return ctx.Err()
-// 		case <-ticker.C:
-// 			var resolvedTs uint64 = math.MaxUint64
-// 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-// 				resolvedTs = min(resolvedTs, dispatcher.GetCheckpointTs())
-// 			})
-// 			message := &heartbeatpb.RedoHeartbeatMessage{
-// 				ChangefeedID: e.changefeedID.ToPB(),
-// 				ResolvedTs:   resolvedTs,
-// 			}
-// 			err := mc.SendCommand(
-// 				messaging.NewSingleTargetMessage(
-// 					e.GetMaintainerID(),
-// 					messaging.MaintainerManagerTopic,
-// 					message,
-// 				))
-// 			if err != nil {
-// 				log.Error("failed to send redoTs request message", zap.Error(err))
-// 			}
-// 		}
-// 	}
-// }
 
 func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
 	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:

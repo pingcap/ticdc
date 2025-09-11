@@ -69,8 +69,8 @@ var (
 	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
 
-	metricsubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
-	metricsubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
+	metricsubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store", "default")
+	metricsubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store", "default")
 	metricEventStoreDSAddPathNum              = metrics.DynamicStreamAddPathNum.WithLabelValues("event-store")
 	metricEventStoreDSRemovePathNum           = metrics.DynamicStreamRemovePathNum.WithLabelValues("event-store")
 	// metricEventStoreDSArrageStreamNum         = metrics.DynamicStreamArrangeStreamNum.WithLabelValues("event-store")
@@ -303,10 +303,12 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 					"log-puller",
 					"max",
 					"default",
+					"default",
 				).Set(float64(areaMetric.MaxMemory()))
 				metrics.DynamicStreamMemoryUsage.WithLabelValues(
 					"log-puller",
 					"used",
+					"default",
 					"default",
 				).Set(float64(areaMetric.MemoryUsage()))
 			}

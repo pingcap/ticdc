@@ -185,7 +185,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
 			c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
-			metricEventServiceSendKvCount.Add(float64(e.Len()))
+			updateMetricEventServiceSendKvCount(d.info.GetMode(), float64(e.Len()))
 		}
 	}
 
@@ -236,7 +236,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
 		return
 	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
-		metricEventServiceSendDDLCount.Inc()
+		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", e.TableID),
@@ -251,7 +251,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	resolvedEvent := newWrapResolvedEvent(remoteID, re, d.getEventSenderState())
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
-	metricEventServiceSendResolvedTsCount.Inc()
+	updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
 }
 
 func (c *eventBroker) sendNotReusableEvent(
@@ -263,7 +263,7 @@ func (c *eventBroker) sendNotReusableEvent(
 
 	// must success unless we can do retry later
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- wrapEvent
-	metricEventServiceSendCommandCount.Inc()
+	updateMetricEventServiceSendCommandCount(d.info.GetMode())
 }
 
 func (c *eventBroker) getMessageCh(workerIndex int, isRedo bool) chan *wrapEvent {
@@ -361,7 +361,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
-		metricEventServiceSkipResolvedTsCount.Inc()
+		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
 
@@ -370,7 +370,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
-		metricEventServiceSkipResolvedTsCount.Inc()
+		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
 
@@ -428,7 +428,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		event := event.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
-		metricEventServiceSendCommandCount.Inc()
+		updateMetricEventServiceSendCommandCount(task.info.GetMode())
 		return false
 	}
 	return true
@@ -456,7 +456,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
-	metricEventServiceSendCommandCount.Inc()
+	updateMetricEventServiceSendCommandCount(task.info.GetMode())
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
@@ -567,7 +567,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
+	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Error("scan events failed",
@@ -623,6 +623,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
 	}
+	task.info.GetMode()
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
 }
@@ -800,7 +801,7 @@ func (c *eventBroker) close() {
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs uint64) {
 	if d.onResolvedTs(resolvedTs) {
 		d.lastReceivedResolvedTsTime.Store(time.Now())
-		metricEventStoreOutputResolved.Inc()
+		updateMetricEventStoreOutputResolved(d.info.GetMode())
 		d.onLatestCommitTs(commitTs)
 		if c.scanReady(d) {
 			c.pushTask(d, true)

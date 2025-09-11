@@ -154,10 +154,11 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	case *commonEvent.DDLEvent:
 		err = s.sendDDLEvent(v)
 	default:
-		log.Panic("kafka sink doesn't support this type of block event",
+		log.Error("kafka sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Any("eventType", event.GetType()))
+			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
+		return errors.ErrInvalidEventType.GenWithStackByArgs(commonEvent.TypeToString(event.GetType()))
 	}
 	if err != nil {
 		s.isNormal.Store(false)
