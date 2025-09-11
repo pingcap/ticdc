@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -148,6 +149,12 @@ func (r *SpanReplication) initGroupID() {
 	}
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)
+	} else {
+		log.Warn("the groupID is not set",
+			zap.Any("span.StartKey", spanz.HexKey(span.StartKey)),
+			zap.Any("total.StartKey", spanz.HexKey(totalSpan.StartKey)),
+			zap.Any("span.EndKey", spanz.HexKey(span.EndKey)),
+			zap.Any("total.EndKey", spanz.HexKey(totalSpan.EndKey)))
 	}
 }
 
