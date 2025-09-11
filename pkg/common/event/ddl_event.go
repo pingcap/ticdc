@@ -107,6 +107,8 @@ type DDLEvent struct {
 	// So we should send the `TRUNCATE TABLE` DDL event to table trigger,
 	// to ensure the new truncated table can be handled correctly.
 	NotSync bool `msg:"not_sync"`
+	// MultipleNotSync is used to indicate whether multiple table DDLs should be synced to downstream.
+	MultipleNotSync []bool `msg:"multiple_not_sync"`
 }
 
 func (d *DDLEvent) String() string {

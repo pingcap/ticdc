@@ -472,7 +472,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 
 	if filter != nil {
-		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo)
+		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs)
 		if err != nil {
 			return errors.Trace(err)
 		}
