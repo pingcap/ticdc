@@ -273,6 +273,13 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 
 			// NOTE: state.getLastResolvedTs() will never less than startTs.
 			resolvedTs := state.getLastResolvedTs()
+			log.Info("handle commit entry",
+				zap.Uint64("regionID", regionID),
+				zap.Any("entry.Key", spanz.HexKey(entry.Key)),
+				zap.Uint64("entry.StartTs", entry.StartTs),
+				zap.Uint64("entry.CommitTs", entry.CommitTs),
+				zap.Uint64("resolvedTs", resolvedTs),
+				zap.Any("entry", entry))
 			if entry.CommitTs <= resolvedTs {
 				log.Fatal("The CommitTs must be greater than the resolvedTs",
 					zap.String("EventType", "COMMIT"),
