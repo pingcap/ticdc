@@ -197,6 +197,7 @@ trap stop_tidb_cluster EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+# FIXME: refactor redo apply
 # stop_tidb_cluster
 # main_with_consistent
 # check_logs $WORK_DIR
