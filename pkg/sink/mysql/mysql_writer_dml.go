@@ -67,7 +67,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 		// We use TableInfoVersion instead of tableInfo.GetUpdateTS() to group the events since we also need to consider the case when the table is renamed.
 		key := eventGroupKey{
 			tableID:      event.GetTableID(),
-			tableVersion: event.TableInfoVersion}
+			tableVersion: event.TableInfoVersion,
+		}
 		if _, ok := eventsGroup[key]; !ok {
 			eventsGroup[key] = make([]*commonEvent.DMLEvent, 0)
 		}
