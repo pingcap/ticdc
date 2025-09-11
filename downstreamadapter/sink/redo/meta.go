@@ -435,12 +435,6 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 func (m *RedoMeta) cleanup(logType string) {
 	metrics.RedoFlushLogDurationHistogram.
 		DeleteLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), logType)
-	metrics.RedoWriteLogDurationHistogram.
-		DeleteLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), logType)
-	metrics.RedoTotalRowsCountGauge.
-		DeleteLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), logType)
-	metrics.RedoWorkerBusyRatio.
-		DeleteLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), logType)
 }
 
 // Cleanup removes all redo logs of this manager, it is called when changefeed is removed

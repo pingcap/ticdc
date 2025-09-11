@@ -461,6 +461,13 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					be.selected.Store(true)
 					be.writerDispatcherAdvanced = true
+					log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
+						zap.String("changefeed", be.cfID.Name()),
+						zap.Uint64("commitTs", be.commitTs),
+						zap.Int64("tableId", tableId),
+						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+						zap.String("dispatcher", replication.ID.String()),
+					)
 					return
 				}
 			}
@@ -473,6 +480,13 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
+				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Int64("schemaID", schemaID),
+					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+					zap.String("dispatcher", replication.ID.String()),
+				)
 				return
 			}
 		}
@@ -483,6 +497,12 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
+				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+					zap.String("dispatcher", replication.ID.String()),
+				)
 				return
 			}
 		}
@@ -638,4 +658,9 @@ func getAllNodes(nodeManager *watcher.NodeManager) []node.ID {
 		nodes = append(nodes, id)
 	}
 	return nodes
+}
+
+// for test
+func (be *BarrierEvent) setLastResendTime(time time.Time) {
+	be.lastResendTime = time
 }

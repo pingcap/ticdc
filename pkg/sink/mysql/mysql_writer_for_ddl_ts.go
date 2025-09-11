@@ -212,11 +212,13 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 
 func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint, tableNameInDDLJob, dbNameInDDlJob string) string {
 	var builder strings.Builder
+	builder.WriteString("SET @current_ts = NOW();")
+
 	builder.WriteString("INSERT INTO ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
-	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ")
+	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint, created_at) VALUES ")
 
 	for idx, tableId := range tableIds {
 		builder.WriteString("('")
@@ -235,12 +237,13 @@ func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, fini
 		builder.WriteString(finished)
 		builder.WriteString(", ")
 		builder.WriteString(isSyncpoint)
+		builder.WriteString(", @current_ts")
 		builder.WriteString(")")
 		if idx < len(tableIds)-1 {
 			builder.WriteString(", ")
 		}
 	}
-	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);")
+	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=VALUES(created_at), is_syncpoint=VALUES(is_syncpoint);")
 
 	return builder.String()
 }
@@ -298,6 +301,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	ticdcClusterID := config.GetGlobalServerConfig().ClusterID
 
 	query := selectDDLTsQuery(tableIDs, ticdcClusterID, changefeedID)
+	log.Info("query ddl ts table", zap.String("query", query))
 	rows, err := w.db.Query(query)
 	if err != nil {
 		if apperror.IsTableNotExistsErr(err) {
@@ -353,14 +357,30 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 						retStartTsList[idx] = ddlTs
 						isSyncpoints[idx] = isSyncpoint
 					}
-					log.Debug("createdTime is larger than createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs))
+					log.Debug("createdTime is larger than createdAt",
+						zap.Int64("tableId", tableId),
+						zap.Any("tableNameInDDLJob", tableNameInDDLJob),
+						zap.Any("dbNameInDDLJob", dbNameInDDLJob),
+						zap.Int64("ddlTs", ddlTs),
+						zap.Int64("startTs", ddlTs),
+						zap.Any("ddlJobCreatedTime", createdTime),
+						zap.Any("createdAt", createdAt),
+					)
 					continue
 				} else {
 					// show the ddl is not executed
 					for _, idx := range tableIdIdxMap[tableId] {
 						retStartTsList[idx] = ddlTs - 1
 					}
-					log.Debug("createdTime is less than  createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs-1))
+					log.Debug("createdTime is less than createdAt",
+						zap.Int64("tableId", tableId),
+						zap.Any("tableNameInDDLJob", tableNameInDDLJob),
+						zap.Any("dbNameInDDLJob", dbNameInDDLJob),
+						zap.Int64("ddlTs", ddlTs),
+						zap.Int64("startTs", ddlTs-1),
+						zap.Any("ddlJobCreatedTime", createdTime),
+						zap.Any("createdAt", createdAt),
+					)
 					continue
 				}
 			}

@@ -142,7 +142,6 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				Callback:  event.PostFlush,
 			})
 		}
-		// batchSize, batchWriteBytes, err
 		return int(event.Len()), event.GetSize(), nil
 	})
 }

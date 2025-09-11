@@ -54,6 +54,7 @@ type eventScanner struct {
 	eventGetter  eventGetter
 	schemaGetter schemaGetter
 	mounter      event.Mounter
+	mode         int64
 }
 
 // newEventScanner creates a new EventScanner
@@ -61,11 +62,13 @@ func newEventScanner(
 	eventStore eventstore.EventStore,
 	schemaStore schemastore.SchemaStore,
 	mounter event.Mounter,
+	mode int64,
 ) *eventScanner {
 	return &eventScanner{
 		eventGetter:  eventStore,
 		schemaGetter: schemaStore,
 		mounter:      mounter,
+		mode:         mode,
 	}
 }
 
@@ -156,7 +159,7 @@ func (s *eventScanner) closeIterator(iter eventstore.EventIterator) {
 	if iter != nil {
 		eventCount, _ := iter.Close()
 		if eventCount != 0 {
-			metricEventStoreOutputKv.Add(float64(eventCount))
+			updateMetricEventStoreOutputKv(s.mode, float64(eventCount))
 		}
 	}
 }

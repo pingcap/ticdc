@@ -69,8 +69,8 @@ var (
 	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
 
-	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
-	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
+	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store", "default")
+	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store", "default")
 )
 
 // To generate an ID for a new subscription.
@@ -296,10 +296,12 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 					"log-puller",
 					"max",
 					"default",
+					"default",
 				).Set(float64(areaMetric.MaxMemory()))
 				metrics.DynamicStreamMemoryUsage.WithLabelValues(
 					"log-puller",
 					"used",
+					"default",
 					"default",
 				).Set(float64(areaMetric.MemoryUsage()))
 			}

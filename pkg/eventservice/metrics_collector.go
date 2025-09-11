@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
@@ -30,15 +31,66 @@ var (
 	metricEventServiceSendEventDuration   = metrics.EventServiceSendEventDuration.WithLabelValues("txn")
 	metricEventBrokerScanTaskCount        = metrics.EventServiceScanTaskCount
 	metricEventBrokerPendingScanTaskCount = metrics.EventServicePendingScanTaskCount
-	metricEventStoreOutputKv              = metrics.EventStoreOutputEventCount.WithLabelValues("kv")
-	metricEventStoreOutputResolved        = metrics.EventStoreOutputEventCount.WithLabelValues("resolved")
+	metricEventStoreOutputKv              = metrics.EventStoreOutputEventCount.WithLabelValues("kv", "default")
+	metricEventStoreOutputResolved        = metrics.EventStoreOutputEventCount.WithLabelValues("resolved", "default")
+	metricEventServiceSendKvCount         = metrics.EventServiceSendEventCount.WithLabelValues("kv", "default")
+	metricEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts", "default")
+	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl", "default")
+	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command", "default")
+	metricEventServiceSkipResolvedTsCount = metrics.EventServiceSkipResolvedTsCount.WithLabelValues("default")
 
-	metricEventServiceSendKvCount         = metrics.EventServiceSendEventCount.WithLabelValues("kv")
-	metricEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts")
-	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl")
-	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command")
-	metricEventServiceSkipResolvedTsCount = metrics.EventServiceSkipResolvedTsCount
+	metricRedoEventStoreOutputKv              = metrics.EventStoreOutputEventCount.WithLabelValues("kv", "redo")
+	metricRedoEventStoreOutputResolved        = metrics.EventStoreOutputEventCount.WithLabelValues("resolved", "redo")
+	metricRedoEventServiceSendKvCount         = metrics.EventServiceSendEventCount.WithLabelValues("kv", "redo")
+	metricRedoEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts", "redo")
+	metricRedoEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl", "redo")
+	metricRedoEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command", "redo")
+	metricRedoEventServiceSkipResolvedTsCount = metrics.EventServiceSkipResolvedTsCount.WithLabelValues("redo")
 )
+
+func updateCounter(mode int64, defaultCounter, redoCounter prometheus.Counter) {
+	if common.IsDefaultMode(mode) {
+		defaultCounter.Inc()
+	} else {
+		redoCounter.Inc()
+	}
+}
+
+func updateCounterWithValue(mode int64, defaultCounter, redoCounter prometheus.Counter, val float64) {
+	if common.IsDefaultMode(mode) {
+		defaultCounter.Add(val)
+	} else {
+		redoCounter.Add(val)
+	}
+}
+
+func updateMetricEventStoreOutputKv(mode int64, val float64) {
+	updateCounterWithValue(mode, metricEventStoreOutputKv, metricRedoEventStoreOutputKv, val)
+}
+
+func updateMetricEventStoreOutputResolved(mode int64) {
+	updateCounter(mode, metricEventStoreOutputResolved, metricRedoEventStoreOutputResolved)
+}
+
+func updateMetricEventServiceSendKvCount(mode int64, val float64) {
+	updateCounterWithValue(mode, metricEventServiceSendKvCount, metricRedoEventServiceSendKvCount, val)
+}
+
+func updateMetricEventServiceSendResolvedTsCount(mode int64) {
+	updateCounter(mode, metricEventServiceSendResolvedTsCount, metricRedoEventServiceSendResolvedTsCount)
+}
+
+func updateMetricEventServiceSendDDLCount(mode int64) {
+	updateCounter(mode, metricEventServiceSendDDLCount, metricRedoEventServiceSendDDLCount)
+}
+
+func updateMetricEventServiceSendCommandCount(mode int64) {
+	updateCounter(mode, metricEventServiceSendCommandCount, metricRedoEventServiceSendCommandCount)
+}
+
+func updateMetricEventServiceSkipResolvedTsCount(mode int64) {
+	updateCounter(mode, metricEventServiceSkipResolvedTsCount, metricRedoEventServiceSkipResolvedTsCount)
+}
 
 // metricsSnapshot holds all metrics data collected at a point in time
 type metricsSnapshot struct {

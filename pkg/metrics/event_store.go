@@ -40,7 +40,7 @@ var (
 		Subsystem: "event_store",
 		Name:      "output_event_count",
 		Help:      "The number of events output by the sorter",
-	}, []string{"type"}) // types : kv, resolved.
+	}, []string{"type", "mode"}) // types : kv, resolved.
 
 	EventStoreWriteDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
