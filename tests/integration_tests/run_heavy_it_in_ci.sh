@@ -30,37 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'fail_over fail_over fail_over'
-	# G13
-	'fail_over fail_over fail_over'
-	# G14
-	'fail_over fail_over fail_over'
-	# G15
-	'fail_over fail_over fail_over'
+	'generate_column many_pk_or_uk multi_source'
+	# G01
+	'api_v2 ddl_for_split_tables_with_random_move_table'
+	# G02
+	'availability ddl_for_split_tables_with_failover'
+	# G03
+	'cdc move_table'
 	# G04
-	'fail_over fail_over fail_over'
-	# G13
-	'fail_over fail_over fail_over'
-	# G14
-	'fail_over fail_over fail_over'
-	# G15
-	'fail_over fail_over fail_over'
+	'syncpoint syncpoint_check_ts '
+	# G05
+	'ddl_for_split_tables_with_merge_and_split'
+	# G06
+	'ddl_for_split_tables_with_random_merge_and_split'
+	# G07
+	'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
 	# G08
-	'fail_over fail_over fail_over'
-	# G13
-	'fail_over fail_over fail_over'
-	# G14
-	'fail_over fail_over fail_over'
-	# G15
-	'fail_over fail_over fail_over'
+	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
+	# G09
+	'resolve_lock merge_table drop_many_tables bank'
+	# G10
+	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
+	# G11
+	'ddl_reentrant force_replicate_table'
 	# G12
-	'fail_over fail_over fail_over'
+	'tidb_mysql_test ddl_with_random_move_table'
 	# G13
-	'fail_over fail_over fail_over'
+	'fail_over region_merge'
 	# G14
-	'fail_over fail_over fail_over'
+	'fail_over_ddl_mix'
 	# G15
-	'fail_over fail_over fail_over'
+	'fail_over_ddl_mix_with_syncpoint'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
@@ -68,9 +68,10 @@ kafka_groups=(
 	# G00
 	'generate_column many_pk_or_uk multi_source'
 	# G01
-	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
+	# ddl_for_split_tables_with_random_move_table
+	'canal_json_basic canal_json_claim_check canal_json_content_compatible'
 	# G02
-	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
+	'canal_json_handle_key_only'
 	# G03
 	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
@@ -78,21 +79,25 @@ kafka_groups=(
 	# G05
 	'move_table drop_many_tables'
 	# G06
-	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
+	'cdc default_value'
 	# G07
-	'merge_table resolve_lock force_replicate_table'
+	# merge_table
+	'resolve_lock force_replicate_table'
 	# G08
-	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
+	'tidb_mysql_test'
 	# G09
-	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume'
+	'mq_sink_error_resume'
 	# G10
-	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
+	'kafka_column_selector kafka_column_selector_avro'
+	# fail_over_ddl_mix_with_syncpoint
+	# ddl_with_random_move_table
+	# fail_over_ddl_mix
 	# G11
 	'fail_over region_merge'
 	# G12
 	'ddl_for_split_tables_random_schedule'
 	# G13
-	'debezium01 fail_over_ddl_mix'
+	'debezium01'
 	# G14
 	'debezium02'
 	# G15
@@ -114,21 +119,24 @@ pulsar_groups=(
 	# G05
 	'move_table drop_many_tables'
 	# G06
-	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
+	'cdc default_value'
 	# G07
-	'merge_table resolve_lock force_replicate_table'
+	# merge_table
+	'resolve_lock force_replicate_table'
 	# G08
 	'tidb_mysql_test'
 	# G09
 	'mq_sink_error_resume'
 	# G10
+	# fail_over_ddl_mix_with_syncpoint
 	'ddl_for_split_tables_random_schedule'
 	# G11
 	'ddl_with_random_move_table'
 	# G12
 	'fail_over region_merge'
 	# G13
-	'debezium01 fail_over_ddl_mix'
+	# fail_over_ddl_mix
+	'debezium01'
 	# G14
 	'debezium02'
 	# G15
@@ -140,6 +148,7 @@ storage_groups=(
 	'generate_column many_pk_or_uk multi_source'
 	# G01
 	csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered
+	''
 	# G02
 	'canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
@@ -159,6 +168,7 @@ storage_groups=(
 	# G10
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G11
+	# fail_over_ddl_mix_with_syncpoint
 	'ddl_for_split_tables_random_schedule'
 	# G12
 	'ddl_with_random_move_table'
