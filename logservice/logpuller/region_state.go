@@ -16,11 +16,9 @@ package logpuller
 import (
 	"sync"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/tikv/client-go/v2/tikv"
-	"go.uber.org/zap"
 )
 
 const (
@@ -184,10 +182,6 @@ func (s *regionFeedState) updateResolvedTs(resolvedTs uint64) {
 			return
 		}
 		if state.ResolvedTs.CompareAndSwap(last, resolvedTs) {
-			log.Info("region feed update resolved ts",
-				zap.Uint64("regionID", s.region.verID.GetID()),
-				zap.Uint64("last", last),
-				zap.Uint64("new", resolvedTs))
 			break
 		}
 	}

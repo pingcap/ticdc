@@ -72,7 +72,16 @@ func NewMounter(tz *time.Location, integrity *integrity.Config) Mounter {
 
 // DecodeToChunk decodes the raw KV entry to a chunk, it returns the number of rows decoded.
 func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
+	log.Info("before remove keyspace prefix",
+		zap.String("key", spanz.HexKey(raw.Key)),
+		zap.Any("kv", raw), zap.Int("lenKey", len(raw.Key)))
+
 	raw.Key = RemoveKeyspacePrefix(raw.Key)
+
+	log.Info("after remove keyspace prefix",
+		zap.String("key", spanz.HexKey(raw.Key)),
+		zap.Any("kv", raw), zap.Int("lenKey", len(raw.Key)))
+
 	recordID, err := tablecodec.DecodeRowKey(raw.Key)
 	if err != nil {
 		return 0, nil, errors.Trace(err)
@@ -192,16 +201,7 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		return job, err
 	}
 
-	log.Info("before remove keyspace prefix",
-		zap.String("key", spanz.HexKey(rawKV.Key)),
-		zap.Any("rawKey", rawKV.Key), zap.Int("lenKey", len(rawKV.Key)))
-
 	rawKV.Key = RemoveKeyspacePrefix(rawKV.Key)
-
-	log.Info("after remove keyspace prefix",
-		zap.String("key", spanz.HexKey(rawKV.Key)),
-		zap.Any("rawKey", rawKV.Key), zap.Int("lenKey", len(rawKV.Key)))
-
 	recordID, err := tablecodec.DecodeRowKey(rawKV.Key)
 	if err != nil {
 		return nil, errors.Trace(err)
