@@ -66,7 +66,7 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 // Invariant: at any times, we can receive events from at most two event service, and one of them must be local event service.
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
 	// add this log for debug some strange bug.
-	log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()), zap.Any("events", events), zap.Any("eventLen", len(events)))
+	log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()), zap.Any("eventLen", len(events)))
 	if len(events) == 0 {
 		return false
 	}
