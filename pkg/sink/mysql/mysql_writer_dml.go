@@ -67,8 +67,9 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 		// We use TableInfoVersion instead of tableInfo.GetUpdateTS() to group the events since we also need to consider the case when the table is renamed.
 		key := eventGroupKey{
 			tableID:      event.GetTableID(),
-			tableVersion: event.TableInfoVersion,
+			tableVersion: 0,
 		}
+
 		if _, ok := eventsGroup[key]; !ok {
 			eventsGroup[key] = make([]*commonEvent.DMLEvent, 0)
 		}
@@ -82,6 +83,20 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
+
+		firstTableVersion := eventsInGroup[0].TableInfoVersion
+		firstTableInfo := tableInfo
+		for _, event := range eventsInGroup {
+			if event.TableInfoVersion != firstTableVersion {
+				log.Panic("events in the same group have different table versions",
+					zap.Any("firstTableInfo", firstTableInfo),
+					zap.Any("firstTableVersion", firstTableVersion),
+					zap.Any("currentEventTableVersion", event.TableInfoVersion),
+					zap.Any("currentEventTableInfo", event.TableInfo),
+					zap.Any("events", eventsInGroup))
+			}
+		}
+
 		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg) {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else {

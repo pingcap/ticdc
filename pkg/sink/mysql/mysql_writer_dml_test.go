@@ -674,6 +674,10 @@ func TestGenerateBatchSQLWithDifferentTableVersion(t *testing.T) {
 	dmlInsertEvent1.TableInfoVersion = job.BinlogInfo.FinishedTS
 	dmlInsertEvent2.TableInfoVersion = job.BinlogInfo.FinishedTS
 
+	// tableInfo1 := dmlInsertEvent1.TableInfo
+
+	// rawKvs := helper.DML2RawKv(job.BinlogInfo.TableInfo.ID, job.BinlogInfo.FinishedTS, "test", "t", "insert into t values (20, 'testRawKV', 20)", "insert into t values (21, 'testRawKV2', 21)")
+
 	// Step 3: Drop the age column
 	dropColumnSQL := "alter table t drop column age;"
 	dropJob := helper.DDL2Job(dropColumnSQL)
@@ -687,6 +691,8 @@ func TestGenerateBatchSQLWithDifferentTableVersion(t *testing.T) {
 	// set table info version
 	dmlInsertEvent3.TableInfoVersion = dropJob.BinlogInfo.FinishedTS
 	dmlInsertEvent4.TableInfoVersion = dropJob.BinlogInfo.FinishedTS
+
+	//chink1 := chunk.NewChunkWithCapacity(tableInfo1.GetFieldSlice(), 1)
 
 	// Step 5: Try to put all 4 events in one group and call generateBatchSQL
 	// This should potentially cause a panic due to different table versions
