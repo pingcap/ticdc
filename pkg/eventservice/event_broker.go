@@ -565,7 +565,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
-		log.Debug("not enough memory quota, skip scan",
+		log.Info("not enough memory quota, skip scan",
 			zap.String("changefeed", changefeedID.String()),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available.Load()),
