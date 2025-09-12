@@ -567,6 +567,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		log.Panic("no current DML event to append to")
 	}
 
+	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
 	if !rawEvent.IsUpdate() {
 		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
