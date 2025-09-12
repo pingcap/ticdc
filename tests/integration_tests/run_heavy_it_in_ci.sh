@@ -104,37 +104,37 @@ kafka_groups=(
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
 pulsar_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'cdc cdc cdc'
 	# G01
-	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
+	'cdc cdc cdc'
 	# G02
-	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
+	'cdc cdc cdc'
 	# G03
-	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	'cdc cdc cdc'
 	# G04
-	'open_protocol_claim_check open_protocol_handle_key_only'
+	'cdc cdc cdc'
 	# G05
-	'move_table drop_many_tables'
+	'cdc cdc cdc'
 	# G06
-	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
+	'cdc cdc cdc'
 	# G07
-	'merge_table resolve_lock force_replicate_table'
+	'cdc cdc cdc'
 	# G08
-	'tidb_mysql_test'
+	'cdc cdc cdc'
 	# G09
-	'mq_sink_error_resume'
+	'cdc cdc cdc'
 	# G10
-	'ddl_for_split_tables_random_schedule'
+	'cdc cdc cdc'
 	# G11
-	'ddl_with_random_move_table'
+	'cdc cdc cdc'
 	# G12
-	'fail_over region_merge'
+	'cdc cdc cdc'
 	# G13
-	'debezium01 fail_over_ddl_mix'
+	'cdc cdc cdc'
 	# G14
-	'debezium02'
+	'cdc cdc cdc'
 	# G15
-	'debezium03'
+	'cdc cdc cdc'
 )
 
 storage_groups=(
