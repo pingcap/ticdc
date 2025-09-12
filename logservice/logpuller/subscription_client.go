@@ -309,9 +309,11 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			pendingRegionReqCount := 0
 			s.stores.Range(func(key, value any) bool {
 				store := value.(*requestedStore)
-				for _, worker := range store.requestWorkers {
+				store.requestWorkers.RLock()
+				for _, worker := range store.requestWorkers.s {
 					pendingRegionReqCount += worker.requestCache.getPendingCount()
 				}
+				store.requestWorkers.RUnlock()
 				return true
 			})
 
@@ -503,13 +505,20 @@ func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
 type requestedStore struct {
 	storeAddr string
 	// Use to select a worker to send request.
-	nextWorker     atomic.Uint32
-	requestWorkers []*regionRequestWorker
+	nextWorker atomic.Uint32
+
+	requestWorkers struct {
+		sync.RWMutex
+		s []*regionRequestWorker
+	}
 }
 
 func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
-	index := rs.nextWorker.Add(1) % uint32(len(rs.requestWorkers))
-	return rs.requestWorkers[index]
+	rs.requestWorkers.RLock()
+	defer rs.requestWorkers.RUnlock()
+
+	index := rs.nextWorker.Add(1) % uint32(len(rs.requestWorkers.s))
+	return rs.requestWorkers.s[index]
 }
 
 // handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
@@ -526,7 +535,9 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		s.stores.Store(storeAddr, rs)
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
 			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs)
-			rs.requestWorkers = append(rs.requestWorkers, requestWorker)
+			rs.requestWorkers.Lock()
+			rs.requestWorkers.s = append(rs.requestWorkers.s, requestWorker)
+			rs.requestWorkers.Unlock()
 		}
 		return rs
 	}
@@ -534,9 +545,13 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 	defer func() {
 		s.stores.Range(func(key, value any) bool {
 			rs := value.(*requestedStore)
-			for _, w := range rs.requestWorkers {
+
+			rs.requestWorkers.RLock()
+			for _, w := range rs.requestWorkers.s {
 				w.requestCache.clear()
 			}
+			rs.requestWorkers.RUnlock()
+
 			return true
 		})
 	}()
@@ -552,9 +567,11 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		if region.isStopped() {
 			s.stores.Range(func(key, value any) bool {
 				rs := value.(*requestedStore)
-				for _, worker := range rs.requestWorkers {
+				rs.requestWorkers.RLock()
+				for _, worker := range rs.requestWorkers.s {
 					worker.add(ctx, region, true)
 				}
+				rs.requestWorkers.RUnlock()
 				return true
 			})
 			continue
