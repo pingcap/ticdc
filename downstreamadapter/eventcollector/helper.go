@@ -24,7 +24,7 @@ import (
 
 func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
 	option := dynstream.NewOption()
-	option.BatchCount = 67136
+	option.BatchCount = 4096
 	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
 	option.EnableMemoryControl = true
@@ -65,7 +65,8 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 
 // Invariant: at any times, we can receive events from at most two event service, and one of them must be local event service.
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
-	log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()))
+	// add this log for debug some strange bug.
+	log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()), zap.Any("eventLen", len(events)))
 	if len(events) == 0 {
 		return false
 	}

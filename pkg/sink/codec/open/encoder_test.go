@@ -18,8 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -1060,9 +1059,9 @@ func TestE2EPartitionTable(t *testing.T) {
 
 		decodedEvent := dec.NextDMLEvent()
 		// table id should be set to the partition table id, the PhysicalTableID
-		require.Equal(t, decodedEvent.GetTableID(), e.GetTableID())
+		require.Equal(t, decodedEvent.GetTableID(), tableIDAllocator.Allocate(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
 
-		require.Contains(t, tableInfoAccessor.GetBlockedTables("test", "t"), e.GetTableID())
+		require.Contains(t, tableIDAllocator.GetBlockedTables("test", "t"), tableIDAllocator.Allocate(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
 	}
 
 	createTable2DDL := helper.DDL2Event(`create table t2 (a int primary key, b int)`)
@@ -1093,7 +1092,7 @@ func TestE2EPartitionTable(t *testing.T) {
 	decodedDDL = dec.NextDDLEvent()
 	require.NotEmpty(t, decodedDDL.GetBlockedTables().TableIDs)
 
-	expected := tableInfoAccessor.GetBlockedTables("test", "t")
+	expected := tableIDAllocator.GetBlockedTables("test", "t")
 	actual := decodedDDL.GetBlockedTables().TableIDs
 	for _, id := range expected {
 		require.Contains(t, actual, id)
@@ -1126,7 +1125,7 @@ func TestE2EPartitionTable(t *testing.T) {
 	require.Equal(t, common.MessageTypeDDL, tp)
 
 	decodedDDL = dec.NextDDLEvent()
-	expected = tableInfoAccessor.GetBlockedTables("test", "t")
+	expected = tableIDAllocator.GetBlockedTables("test", "t")
 	actual = decodedDDL.GetBlockedTables().TableIDs
 	for _, id := range expected {
 		require.Contains(t, actual, id)
@@ -1233,9 +1232,6 @@ func TestGenerateColumn(t *testing.T) {
 	require.Equal(t, messageType, common.MessageTypeRow)
 
 	decoded = dec.NextDMLEvent()
-
-	hashKey := causality.ConflictKeys(decoded)
-	require.NotNil(t, hashKey)
 }
 
 // Including insert / update / delete
@@ -1577,7 +1573,7 @@ func TestRenameTable(t *testing.T) {
 
 	decodedInsert := decoder1.NextDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
-	require.Contains(t, tableInfoAccessor.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
+	require.Contains(t, tableIDAllocator.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
 
 	m, err = encoder.EncodeDDLEvent(renameTableDDL)
 	require.NoError(t, err)
@@ -1683,7 +1679,7 @@ func TestDDLSequence(t *testing.T) {
 
 	decodedInsert := decoder.NextDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
-	require.Contains(t, tableInfoAccessor.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
+	require.Contains(t, tableIDAllocator.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
 
 	addColumn := helper.DDL2Event(`alter table t add column c int`)
 

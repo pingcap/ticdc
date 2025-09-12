@@ -73,7 +73,9 @@ const (
 	TypeBlockStatusRequest
 	TypeDispatcherHeartbeat
 	TypeDispatcherHeartbeatResponse
+	TypeRedoMessage
 	TypeMergeDispatcherRequest
+	TypeCongestionControl
 
 	// Coordinator related
 	TypeCoordinatorBootstrapRequest
@@ -153,8 +155,13 @@ func (t IOType) String() string {
 		return "CheckpointTsMessage"
 	case TypeDispatcherHeartbeat:
 		return "DispatcherHeartbeat"
+	case TypeRedoMessage:
+		return "RedoMessage"
+		return "RedoHeartbeatMessage"
 	case TypeDispatcherHeartbeatResponse:
 		return "DispatcherHeartbeatResponse"
+	case TypeCongestionControl:
+		return "CongestionControl"
 	case TypeMergeDispatcherRequest:
 		return "MergeDispatcherRequest"
 	default:
@@ -206,7 +213,7 @@ func (r DispatcherRequest) GetFilter() filter.Filter {
 	changefeedID := r.GetChangefeedID()
 	filter, err := filter.
 		GetSharedFilterStorage().
-		GetOrSetFilter(changefeedID, r.DispatcherRequest.FilterConfig, "", false)
+		GetOrSetFilter(changefeedID, r.DispatcherRequest.FilterConfig, r.GetTimezone().String())
 	if err != nil {
 		log.Panic("create filter failed", zap.Error(err), zap.Any("filterConfig", r.DispatcherRequest.FilterConfig))
 	}
@@ -254,6 +261,10 @@ func (r DispatcherRequest) GetTimezone() *time.Location {
 
 func (r DispatcherRequest) GetEpoch() uint64 {
 	return r.Epoch
+}
+
+func (r DispatcherRequest) IsOutputRawChangeEvent() bool {
+	return r.OutputRawChangeEvent
 }
 
 type IOTypeT interface {
@@ -326,6 +337,10 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &commonEvent.DispatcherHeartbeat{}
 	case TypeDispatcherHeartbeatResponse:
 		m = &commonEvent.DispatcherHeartbeatResponse{}
+	case TypeRedoMessage:
+		m = &heartbeatpb.RedoMessage{}
+	case TypeCongestionControl:
+		m = &commonEvent.CongestionControl{}
 	case TypeMergeDispatcherRequest:
 		m = &heartbeatpb.MergeDispatcherRequest{}
 	default:
@@ -419,6 +434,10 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeDispatcherHeartbeat
 	case *commonEvent.DispatcherHeartbeatResponse:
 		ioType = TypeDispatcherHeartbeatResponse
+	case *heartbeatpb.RedoMessage:
+		ioType = TypeRedoMessage
+	case *commonEvent.CongestionControl:
+		ioType = TypeCongestionControl
 	case *heartbeatpb.MergeDispatcherRequest:
 		ioType = TypeMergeDispatcherRequest
 	default:

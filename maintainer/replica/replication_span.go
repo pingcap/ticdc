@@ -36,6 +36,10 @@ type SpanReplication struct {
 	ID           common.DispatcherID
 	Span         *heartbeatpb.TableSpan
 	ChangefeedID common.ChangeFeedID
+	// whether the span is enabled to split.
+	// if the sink is mysql-sink and the table have only one primary key and no uk, the span is enabled to split.
+	// if the sink is other sink, the span is enabled to split.
+	enabledSplit bool
 
 	schemaID    int64
 	nodeIDMutex sync.Mutex // mutex for nodeID
@@ -50,11 +54,13 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
+	mode int64,
 ) *SpanReplication {
 	r := newSpanReplication(cfID, id, SchemaID, span)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
 		ID:           id.ToPB(),
 		CheckpointTs: checkpointTs,
+		Mode:         mode,
 	})
 	log.Info("new span replication created",
 		zap.String("changefeedID", cfID.Name()),
@@ -88,7 +94,7 @@ func NewWorkingSpanReplication(
 		zap.String("componentStatus", status.ComponentStatus.String()),
 		zap.Int64("schemaID", SchemaID),
 		zap.Int64("tableID", span.TableID),
-		zap.String("groupID", replica.GetGroupName(r.groupID)),
+		zap.Int64("groupID", int64(r.groupID)),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r
@@ -137,6 +143,10 @@ func (r *SpanReplication) initGroupID() {
 
 func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 	return r.status.Load()
+}
+
+func (r *SpanReplication) GetMode() int64 {
+	return r.status.Load().Mode
 }
 
 // UpdateStatus updates the replication status with the following rules:
@@ -217,22 +227,24 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 				SchemaID:     r.schemaID,
 				Span:         r.Span,
 				StartTs:      r.status.Load().CheckpointTs,
+				Mode:         r.GetMode(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		}), nil
 }
 
 func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB())
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.GetMode())
 }
 
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID) *messaging.TargetMessage {
+func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, mode int64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: cfID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
 				DispatcherID: dispatcherID,
+				Mode:         mode,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
 		})

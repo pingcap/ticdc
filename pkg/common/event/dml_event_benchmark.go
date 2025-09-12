@@ -106,7 +106,7 @@ func createBatchDMLEvent(b *testing.B, dmlNum, rowNum int) {
 	batchDMLEvent := new(BatchDMLEvent)
 	tableInfo := helper.GetTableInfo(ddlJob)
 	did := common.NewDispatcherID()
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	rawKvs := helper.DML2RawKv(tableInfo.TableName.TableID, ts, dml)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -116,7 +116,7 @@ func createBatchDMLEvent(b *testing.B, dmlNum, rowNum int) {
 			batchDMLEvent.AppendDMLEvent(dmlEvent)
 			for j := 0; j < rowNum; j++ {
 				for _, rawKV := range rawKvs {
-					err := dmlEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk)
+					err := dmlEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk, nil)
 					require.NoError(b, err)
 				}
 			}
@@ -133,7 +133,7 @@ func createDMLEvents(b *testing.B, dmlNum, rowNum int) {
 	require.NotNil(b, ddlJob)
 	tableInfo := helper.GetTableInfo(ddlJob)
 	did := common.NewDispatcherID()
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	rawKvs := helper.DML2RawKv(tableInfo.TableName.TableID, ts, dml)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -143,7 +143,7 @@ func createDMLEvents(b *testing.B, dmlNum, rowNum int) {
 			event.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount))
 			for j := 0; j < rowNum; j++ {
 				for _, rawKV := range rawKvs {
-					err := event.AppendRow(rawKV, helper.mounter.DecodeToChunk)
+					err := event.AppendRow(rawKV, helper.mounter.DecodeToChunk, nil)
 					require.NoError(b, err)
 				}
 			}

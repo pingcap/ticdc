@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -34,11 +35,14 @@ type MoveDispatcherOperator struct {
 	origin         node.ID
 	dest           node.ID
 
-	originNodeStopped bool
+	originNodeStopped atomic.Bool
 	finished          bool
 	bind              bool
+	removed           atomic.Bool
 
 	noPostFinishNeed bool
+
+	sendThrottler sendThrottler
 
 	lck sync.Mutex
 }
@@ -49,6 +53,7 @@ func NewMoveDispatcherOperator(spanController *span.Controller, replicaSet *repl
 		origin:         origin,
 		dest:           dest,
 		spanController: spanController,
+		sendThrottler:  newSendThrottler(),
 	}
 }
 
@@ -59,9 +64,12 @@ func (m *MoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSp
 	if from == m.origin && status.ComponentStatus != heartbeatpb.ComponentState_Working {
 		log.Info("replica set removed from origin node",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
-		m.originNodeStopped = true
+
+		// reset last send message time
+		m.sendThrottler.reset()
+		m.originNodeStopped.Store(true)
 	}
-	if m.originNodeStopped && from == m.dest && status.ComponentStatus == heartbeatpb.ComponentState_Working {
+	if m.originNodeStopped.Load() && from == m.dest && status.ComponentStatus == heartbeatpb.ComponentState_Working {
 		log.Info("replica set added to dest node",
 			zap.String("dest", m.dest.String()),
 			zap.String("replicaSet", m.replicaSet.ID.String()))
@@ -73,21 +81,17 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	if m.dest == m.origin && !m.originNodeStopped {
-		log.Info("origin and dest are the same, no need to move",
-			zap.String("origin", m.origin.String()),
-			zap.String("dest", m.dest.String()),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
-		m.finished = true
-		return nil
-	}
-
-	if m.originNodeStopped {
+	if m.originNodeStopped.Load() {
 		if !m.bind {
 			// only bind the span to the dest node after the origin node is stopped.
 			m.spanController.BindSpanToNode(m.origin, m.dest, m.replicaSet)
 			m.bind = true
 		}
+
+		if !m.sendThrottler.shouldSend() {
+			return nil
+		}
+
 		msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
 		if err != nil {
 			log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))
@@ -95,12 +99,18 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 		}
 		return msg
 	}
+
+	if !m.sendThrottler.shouldSend() {
+		return nil
+	}
 	return m.replicaSet.NewRemoveDispatcherMessage(m.origin)
 }
 
 func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 	m.lck.Lock()
 	defer m.lck.Unlock()
+
+	m.removed.Store(true)
 
 	if m.finished {
 		log.Info("move dispatcher operator is finished, no need to handle node remove",
@@ -112,7 +122,7 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 
 	if n == m.dest {
 		// the origin node is finished, we must mark the span as absent to reschedule it again
-		if m.originNodeStopped {
+		if m.originNodeStopped.Load() {
 			log.Info("dest node is stopped, mark span absent",
 				zap.String("replicaSet", m.replicaSet.ID.String()),
 				zap.String("dest", m.dest.String()))
@@ -130,13 +140,13 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 		m.dest = m.origin
 		m.spanController.BindSpanToNode(m.dest, m.origin, m.replicaSet)
 		m.bind = true
-		m.originNodeStopped = true
+		m.originNodeStopped.Store(true)
 	}
 	if n == m.origin {
 		log.Info("origin node is stopped",
 			zap.String("origin", m.origin.String()),
 			zap.String("replicaSet", m.replicaSet.ID.String()))
-		m.originNodeStopped = true
+		m.originNodeStopped.Store(true)
 	}
 }
 
@@ -166,12 +176,22 @@ func (m *MoveDispatcherOperator) OnTaskRemoved() {
 	log.Info("replicaset is removed, mark move dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
+	m.spanController.MarkSpanReplicating(m.replicaSet)
 	m.noPostFinishNeed = true
 }
 
 func (m *MoveDispatcherOperator) Start() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
+
+	if m.dest == m.origin && !m.originNodeStopped.Load() {
+		log.Info("origin and dest are the same, no need to move",
+			zap.String("origin", m.origin.String()),
+			zap.String("dest", m.dest.String()),
+			zap.String("replicaSet", m.replicaSet.ID.String()))
+		m.finished = true
+		return
+	}
 
 	m.spanController.MarkSpanScheduling(m.replicaSet)
 }
@@ -200,4 +220,23 @@ func (m *MoveDispatcherOperator) String() string {
 
 func (m *MoveDispatcherOperator) Type() string {
 	return "move"
+}
+
+func (m *MoveDispatcherOperator) BlockTsForward() bool {
+	if m.removed.Load() {
+		return true
+	}
+	if m.originNodeStopped.Load() {
+		return true
+	}
+	return false
+}
+
+// just for test.
+// TODO:find a more proper way to do this
+func (m *MoveDispatcherOperator) SetOriginNodeStopped() {
+	m.lck.Lock()
+	defer m.lck.Unlock()
+
+	m.originNodeStopped.Store(true)
 }

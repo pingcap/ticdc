@@ -46,6 +46,8 @@ type MergeDispatcherOperator struct {
 	checkpointTs        uint64
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+
+	sendThrottler sendThrottler
 }
 
 func NewMergeDispatcherOperator(
@@ -53,37 +55,13 @@ func NewMergeDispatcherOperator(
 	toMergedReplicaSets []*replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
 ) *MergeDispatcherOperator {
-	// Step1: ensure toMergedSpans and affectedReplicaSets belong to the same table with consecutive ranges in a same node
-	if len(toMergedReplicaSets) < 2 {
-		log.Info("toMergedReplicaSets is less than 2, skip merge",
-			zap.Any("toMergedReplicaSets", toMergedReplicaSets))
-		setOccupyOperatorsFinished(occupyOperators)
-		return nil
-	}
-
 	toMergedSpans := make([]*heartbeatpb.TableSpan, 0, len(toMergedReplicaSets))
 	for _, replicaSet := range toMergedReplicaSets {
 		toMergedSpans = append(toMergedSpans, replicaSet.Span)
 	}
 
-	prevTableSpan := toMergedSpans[0]
 	nodeID := toMergedReplicaSets[0].GetNodeID()
-	for idx := 1; idx < len(toMergedSpans); idx++ {
-		currentTableSpan := toMergedSpans[idx]
-		if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
-			log.Info("toMergedSpans is not consecutive, skip merge", zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)), zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)))
-			setOccupyOperatorsFinished(occupyOperators)
-			return nil
-		}
-		prevTableSpan = currentTableSpan
-		if toMergedReplicaSets[idx].GetNodeID() != nodeID {
-			log.Info("toMergedSpans is not in the same node, skip merge", zap.Any("toMergedReplicaSets", toMergedReplicaSets))
-			setOccupyOperatorsFinished(occupyOperators)
-			return nil
-		}
-	}
 
-	// Step2: generate a new dispatcherID as the merged span's dispatcherID
 	newDispatcherID := common.NewDispatcherID()
 
 	dispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(toMergedReplicaSets))
@@ -109,7 +87,8 @@ func NewMergeDispatcherOperator(
 		newDispatcherID,
 		toMergedReplicaSets[0].GetSchemaID(),
 		mergeTableSpan,
-		1) // use a fake checkpointTs here.
+		1, // use a fake checkpointTs here.
+		toMergedReplicaSets[0].GetMode())
 
 	spanController.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 
@@ -123,6 +102,7 @@ func NewMergeDispatcherOperator(
 		mergedSpanInfo:      spansInfo,
 		occupyOperators:     occupyOperators,
 		newReplicaSet:       newReplicaSet,
+		sendThrottler:       newSendThrottler(),
 	}
 	return op
 }
@@ -174,12 +154,18 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.removed.Load() {
 		return nil
 	}
+
+	if !m.sendThrottler.shouldSend() {
+		return nil
+	}
+
 	return messaging.NewSingleTargetMessage(m.node,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.MergeDispatcherRequest{
 			ChangefeedID:       m.toMergedReplicaSets[0].ChangefeedID.ToPB(),
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
+			Mode:               m.newReplicaSet.GetMode(),
 		})
 }
 
@@ -216,4 +202,9 @@ func (m *MergeDispatcherOperator) String() string {
 
 func (m *MergeDispatcherOperator) Type() string {
 	return "merge"
+}
+
+// dispatcher manager ensure the checkpointTs calculation correctly during the merge operation
+func (m *MergeDispatcherOperator) BlockTsForward() bool {
+	return false
 }

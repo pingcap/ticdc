@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -74,8 +73,8 @@ type EventStore interface {
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
-	// GetIterator return an iterator which scan the data in ts range (dataRange.StartTs, dataRange.EndTs]
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error)
+	// GetIterator return an iterator which scan the data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd]
+	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
 }
 
 type DMLEventState struct {
@@ -124,6 +123,14 @@ type subscriptionStat struct {
 	eventCh *chann.UnlimitedChannel[eventWithCallback, uint64]
 	// data <= checkpointTs can be deleted
 	checkpointTs atomic.Uint64
+	// whether the subStat has received any resolved ts
+	initialized atomic.Bool
+	// the time when the subscription receives latest resolved ts
+	lastAdvanceTime atomic.Int64
+	// the time when the subscription receives latest dml event
+	// it is used to calculate the idle time of the subscription
+	// 0 means the subscription has not received any dml event
+	lastReceiveDMLTime atomic.Int64
 	// the resolveTs persisted in the store
 	resolvedTs atomic.Uint64
 	// the max commit ts of dml event in the store
@@ -350,16 +357,13 @@ func (e *eventStore) RegisterDispatcher(
 	onlyReuse bool,
 	bdrMode bool,
 ) bool {
-	pdTime := e.pdClock.CurrentTime()
-	pdPhyTs := oracle.GetPhysical(pdTime)
-	startPhyTs := oracle.ExtractPhysical(startTs)
-	startPhyLag := float64(pdPhyTs-startPhyTs) / 1e3
-	if startPhyLag > 10 {
+	lag := time.Since(oracle.GetTimeFromTS(startTs))
+	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs),
-			zap.Float64("startPhyLag", startPhyLag))
+			zap.Duration("lag", lag))
 	} else {
 		log.Info("register dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
@@ -408,7 +412,7 @@ func (e *eventStore) RegisterDispatcher(
 						zap.Stringer("dispatcherID", dispatcherID),
 						zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
 						zap.Uint64("startTs", startTs),
-						zap.Uint64("subID", uint64(subStat.subID)),
+						zap.Uint64("subscriptionID", uint64(subStat.subID)),
 						zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
 					return true
@@ -417,7 +421,7 @@ func (e *eventStore) RegisterDispatcher(
 				// Track the smallest containing span that meets ts requirements
 				// Note: this is still not bestMatch
 				// for example, if we have a dispatcher with span [b, c),
-				// it is hard to determin whether [a, d) or [b, h) is beshMatch without some statistics.
+				// it is hard to determine whether [a, d) or [b, h) is bestMatch without some statistics.
 				if bestMatch == nil ||
 					(bytes.Compare(subStat.tableSpan.StartKey, bestMatch.tableSpan.StartKey) >= 0 &&
 						bytes.Compare(subStat.tableSpan.EndKey, bestMatch.tableSpan.EndKey) <= 0) {
@@ -438,7 +442,7 @@ func (e *eventStore) RegisterDispatcher(
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs),
-			zap.Uint64("subID", uint64(bestMatch.subID)),
+			zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
 			zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
 			zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
 			zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
@@ -490,6 +494,7 @@ func (e *eventStore) RegisterDispatcher(
 				maxCommitTs = kv.CRTs
 			}
 		}
+		subStat.lastReceiveDMLTime.Store(time.Now().UnixMilli())
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
 			subID:             subStat.subID,
@@ -506,6 +511,9 @@ func (e *eventStore) RegisterDispatcher(
 		if ts <= currentResolvedTs {
 			return
 		}
+		now := time.Now().UnixMilli()
+		subStat.lastAdvanceTime.Store(now)
+		subStat.initialized.Store(true)
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
 			subStat.dispatchers.Lock()
@@ -514,6 +522,7 @@ func (e *eventStore) RegisterDispatcher(
 				notifier(ts, subStat.maxEventCommitTs.Load())
 			}
 			CounterResolved.Inc()
+			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
 	}
 
@@ -522,7 +531,7 @@ func (e *eventStore) RegisterDispatcher(
 	// Note: don't hold any lock when call Subscribe
 	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	log.Info("new subscription created",
-		zap.Uint64("subID", uint64(subStat.subID)),
+		zap.Uint64("subscriptionID", uint64(subStat.subID)),
 		zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
@@ -613,7 +622,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		if log.GetLevel() <= zap.DebugLevel {
 			log.Debug("update checkpoint ts",
 				zap.Any("dispatcherID", dispatcherID),
-				zap.Uint64("subID", uint64(subStat.subID)),
+				zap.Uint64("subscriptionID", uint64(subStat.subID)),
 				zap.Uint64("newCheckpointTs", newCheckpointTs),
 				zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
 		}
@@ -622,13 +631,13 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	updateSubStatCheckpoint(dispatcherStat.pendingSubStat)
 }
 
-func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error) {
+func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
 	e.dispatcherMeta.RLock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
 		log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 		e.dispatcherMeta.RUnlock()
-		return nil, nil
+		return nil
 	}
 
 	tryGetDB := func(subStat *subscriptionStat) *pebble.DB {
@@ -636,20 +645,21 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 			return nil
 		}
 		checkpointTs := subStat.checkpointTs.Load()
-		if dataRange.StartTs < checkpointTs {
+		if dataRange.CommitTsStart < checkpointTs {
 			log.Panic("dataRange startTs is smaller than subscriptionStat checkpointTs, it should not happen",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Uint64("startTs", dataRange.StartTs),
+				zap.Int64("tableID", dataRange.Span.GetTableID()),
+				zap.Uint64("startTs", dataRange.CommitTsStart),
 				zap.Uint64("checkpointTs", checkpointTs))
 		}
-		if dataRange.EndTs > subStat.resolvedTs.Load() {
+		if dataRange.CommitTsEnd > subStat.resolvedTs.Load() {
 			return nil
 		}
 		return e.dbs[subStat.dbIndex]
 	}
 
 	// get from pendingSubStat first,
-	// because its span is more close to dispatcher span if it it not nil
+	// because its span is more close to dispatcher span if it's not nil
 	var needUpgradeLock bool
 	db := tryGetDB(stat.pendingSubStat)
 	subStat := stat.pendingSubStat
@@ -664,8 +674,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		log.Panic("fail to find db for dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.String("span", common.FormatTableSpan(stat.tableSpan)),
-			zap.Uint64("startTs", dataRange.StartTs),
-			zap.Uint64("endTs", dataRange.EndTs))
+			zap.Uint64("startTs", dataRange.CommitTsStart),
+			zap.Uint64("endTs", dataRange.CommitTsEnd))
 	}
 	if needUpgradeLock {
 		e.dispatcherMeta.RUnlock()
@@ -675,7 +685,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		if stat == nil {
 			e.dispatcherMeta.Unlock()
 			log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
-			return nil, nil
+			return nil
 		}
 		// GetIterator for the same dispatcher won't be called concurrently.
 		// So if the dispatcher is not unregistered during the unlock period,
@@ -690,16 +700,19 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 
 	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
-	start := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.StartTs+1)
-	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.EndTs+1)
+	var start []byte
+	if dataRange.LastScannedTxnStartTs != 0 {
+		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart, dataRange.LastScannedTxnStartTs+1)
+	} else {
+		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
+	}
+	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
 	// TODO: optimize read performance
-	iter, err := db.NewIter(&pebble.IterOptions{
+	// it's impossible return error here
+	iter, _ := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,
 		UpperBound: end,
 	})
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
 	startTime := time.Now()
 	// todo: what happens if iter.First() returns false?
 	_ = iter.First()
@@ -717,10 +730,10 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		innerIter:     iter,
 		prevStartTs:   0,
 		prevCommitTs:  0,
-		startTs:       dataRange.StartTs,
-		endTs:         dataRange.EndTs,
+		startTs:       dataRange.CommitTsStart,
+		endTs:         dataRange.CommitTsEnd,
 		rowCount:      0,
-	}, nil
+	}
 }
 
 func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {
@@ -733,7 +746,7 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	if len(subStat.dispatchers.notifiers) == 0 {
 		subStat.idleTime.Store(time.Now().UnixMilli())
 		log.Info("subscription is idle, set idle time",
-			zap.Uint64("subID", uint64(subStat.subID)),
+			zap.Uint64("subscriptionID", uint64(subStat.subID)),
 			zap.Int("dbIndex", subStat.dbIndex),
 			zap.Int64("tableID", subStat.tableSpan.TableID))
 	}
@@ -757,7 +770,7 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 					}
 					if now-idleTime > ttlInMs {
 						log.Info("clean obsolete subscription",
-							zap.Uint64("subID", uint64(subID)),
+							zap.Uint64("subscriptionID", uint64(subID)),
 							zap.Int("dbIndex", subStat.dbIndex),
 							zap.Int64("tableID", subStat.tableSpan.TableID))
 						e.subClient.Unsubscribe(subID)
@@ -817,6 +830,23 @@ func (e *eventStore) updateMetricsOnce() {
 			resolvedTs := subStat.resolvedTs.Load()
 			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
 			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
+			const largeResolvedTsLagInSecs = 30
+			if subStat.initialized.Load() && resolvedLag >= largeResolvedTsLagInSecs {
+				lastReceiveDMLTimeRepr := "never"
+				if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
+					lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+				}
+				log.Warn("resolved ts lag is too large for initialized subscription",
+					zap.Uint64("subID", uint64(subStat.subID)),
+					zap.Int64("tableID", subStat.tableSpan.TableID),
+					zap.Uint64("resolvedTs", resolvedTs),
+					zap.Float64("resolvedLag(s)", resolvedLag),
+					zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
+					zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
+					zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
+					zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
+					zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
+			}
 			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
 			if minResolvedTs == 0 || resolvedTs < minResolvedTs {
 				minResolvedTs = resolvedTs
@@ -849,7 +879,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 				log.Warn("event store received kv with commitTs less than resolvedTs",
 					zap.Uint64("commitTs", kv.CRTs),
 					zap.Uint64("resolvedTs", event.currentResolvedTs),
-					zap.Uint64("subID", uint64(event.subID)),
+					zap.Uint64("subscriptionID", uint64(event.subID)),
 					zap.Int64("tableID", event.tableID))
 				continue
 			}
@@ -904,7 +934,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
-		metrics.EventStoreScanBytes.Add(float64(len(value)))
+		metrics.EventStoreScanBytes.WithLabelValues("scanned").Add(float64(len(value)))
 		if !iter.needCheckSpan {
 			break
 		}
@@ -918,9 +948,14 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			zap.String("key", hex.EncodeToString(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs))
+		metrics.EventStoreScanBytes.WithLabelValues("skipped").Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
 	isNewTxn := false
+	// 2 PC transactions have different startTs and commitTs.
+	// async-commit transactions have different startTs and may have the same commitTs.
+	// at the moment, use commit-ts determine whether it is a new transaction, even though multiple
+	// different transactions may be grouped together, to satisfy the resolved-ts semantics.
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
 	}
@@ -989,7 +1024,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 		case change := <-e.subscriptionChangeCh.Out():
 			switch change.ChangeType {
 			case SubscriptionChangeTypeAdd:
-				log.Info("add subscription for upload state", zap.Uint64("subID", change.SubID))
+				log.Info("add subscription for upload state", zap.Uint64("subscriptionID", change.SubID))
 				if tableState, ok := state.TableStates[change.Span.TableID]; ok {
 					tableState.Subscriptions = append(tableState.Subscriptions, &logservicepb.SubscriptionState{
 						SubID:        change.SubID,
@@ -1010,7 +1045,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 			case SubscriptionChangeTypeRemove:
-				log.Info("remove subscription from upload state", zap.Uint64("subID", change.SubID))
+				log.Info("remove subscription from upload state", zap.Uint64("subscriptionID", change.SubID))
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {
 					log.Panic("cannot find table state", zap.Int64("tableID", change.Span.TableID))
@@ -1023,7 +1058,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 				if targetIndex == -1 {
-					log.Panic("cannot find subscription state", zap.Uint64("subID", change.SubID))
+					log.Panic("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 				}
 				tableState.Subscriptions = append(tableState.Subscriptions[:targetIndex], tableState.Subscriptions[targetIndex+1:]...)
 			case SubscriptionChangeTypeUpdate:
@@ -1040,13 +1075,13 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 				if targetIndex == -1 {
-					log.Warn("cannot find subscription state", zap.Uint64("subID", change.SubID))
+					log.Warn("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 					continue
 				}
 				if change.CheckpointTs < tableState.Subscriptions[targetIndex].CheckpointTs ||
 					change.ResolvedTs < tableState.Subscriptions[targetIndex].ResolvedTs {
 					log.Panic("should not happen",
-						zap.Uint64("subID", change.SubID),
+						zap.Uint64("subscriptionID", change.SubID),
 						zap.Uint64("oldCheckpointTs", tableState.Subscriptions[targetIndex].CheckpointTs),
 						zap.Uint64("oldResolvedTs", tableState.Subscriptions[targetIndex].ResolvedTs),
 						zap.Uint64("newCheckpointTs", change.CheckpointTs),

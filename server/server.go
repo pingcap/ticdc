@@ -173,14 +173,13 @@ func (c *server) initialize(ctx context.Context) error {
 	c.subCommonModules = []common.SubModule{
 		nodeManager,
 		NewElector(c),
-		NewHttpServer(c, c.tcpServer.HTTP1Listener()),
 		NewGrpcServer(c.tcpServer.GrpcListener()),
 	}
 
 	c.subModules = []common.SubModule{
 		subscriptionClient,
 		schemaStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, c.pdAPIClient),
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler),
 		eventStore,
 		eventService,
 	}
@@ -231,6 +230,10 @@ func (c *server) setPreServices(ctx context.Context) error {
 	dispatcherOrchestrator := dispatcherorchestrator.New()
 	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
 	c.preServices = append(c.preServices, dispatcherOrchestrator)
+
+	httpServer := NewHttpServer(c, c.tcpServer.HTTP1Listener())
+	httpServer.Run(ctx)
+	c.preServices = append(c.preServices, httpServer)
 
 	log.Info("pre services all set", zap.Any("preServicesNum", len(c.preServices)))
 	return nil

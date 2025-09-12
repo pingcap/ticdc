@@ -37,10 +37,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	tableIDAllocator  = common.NewTableIDAllocator()
-	tableInfoAccessor = common.NewTableInfoAccessor()
-)
+var tableIDAllocator = common.NewTableIDAllocator()
 
 // decoder implement the Decoder interface
 type decoder struct {
@@ -62,7 +59,6 @@ func NewDecoder(
 	db *sql.DB,
 ) common.Decoder {
 	tableIDAllocator.Clean()
-	tableInfoAccessor.Clean()
 	return &decoder{
 		idx:          idx,
 		config:       config,
@@ -140,14 +136,15 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	event.Query = d.valuePayload["ddl"].(string)
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
+	event.TableID = tableIDAllocator.Allocate(event.SchemaName, event.TableName)
 
 	if d.idx == 0 {
-		event.BlockedTables = common.GetBlockedTables(tableInfoAccessor, event)
+		tableIDAllocator.AddBlockTableID(event.SchemaName, event.TableName, event.TableID)
+		event.BlockedTables = common.GetBlockedTables(tableIDAllocator, event)
 		if event.Type == byte(timodel.ActionRenameTable) {
 			schemaName = event.ExtraSchemaName
 			tableName = event.ExtraTableName
 		}
-		tableInfoAccessor.Remove(schemaName, tableName)
 	}
 	return event
 }
@@ -186,12 +183,12 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	if ok1 && ok2 {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeUpdate)
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeUpdate)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate)
 	} else if ok1 {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeDelete)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeDelete)
 	} else if ok2 {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeInsert)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
 	} else {
 		log.Panic("unknown event type for the DML event")
 	}
@@ -230,13 +227,9 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 	schemaName := d.getSchemaName()
 	tableName := d.getTableName()
 
-	tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
-	if ok {
-		return tableInfo
-	}
-
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 	fields := d.valueSchema["fields"].([]interface{})
@@ -260,7 +253,7 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 				fieldType.SetDecimal(6)
 			}
 		}
-		if _, ok = d.keyPayload[colName]; ok {
+		if _, ok := d.keyPayload[colName]; ok {
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
 				Name:   ast.NewCIStr(colName),
 				Offset: idx,
@@ -282,7 +275,6 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 		Primary: true,
 	})
 	result := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
-	tableInfoAccessor.Add(schemaName, tableName, result)
 	return result
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -33,11 +34,9 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 180
 
-	minScanLimitInBytes     = 1024 * 128      // 128KB
-	maxScanLimitInBytes     = 1024 * 1024 * 4 // 4MB
+	minScanLimitInBytes     = 1024 * 128  // 128KB
+	maxScanLimitInBytes     = 1024 * 1024 // 1MB
 	updateScanLimitInterval = time.Second * 10
-
-	maxScanLimitInBytesPerSecond = 1024 * 1024 * 256 // 256MB/s
 )
 
 // Store the progress of the dispatcher, and the incremental events stats.
@@ -57,21 +56,31 @@ type dispatcherStat struct {
 	// The reset ts send by the dispatcher.
 	// It is also the start ts of the dispatcher.
 	resetTs atomic.Uint64
+
 	// The max resolved ts received from event store.
+	// it's updated after the event store receive resolved-ts event.
 	eventStoreResolvedTs atomic.Uint64
+
 	// The max latest commit ts received from event store.
-	latestCommitTs atomic.Uint64
+	// it's updated after the event store receive DML events.
+	eventStoreCommitTs atomic.Uint64
+
 	// The sentResolvedTs of the events that have been sent to the dispatcher.
-	// We use this value to generate data range for the next scan task.
 	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
 	sentResolvedTs atomic.Uint64
+
+	// The last scanned DML event start-ts.
+	// These two values are used to construct the scan range for the next scan task.
+	lastScannedCommitTs atomic.Uint64
+	lastScannedStartTs  atomic.Uint64
+
 	// checkpointTs is the ts that reported by the downstream dispatcher.
 	// events <= checkpointTs will not needed anymore, so we can inform eventStore to GC them.
 	// TODO: maintain it
 	checkpointTs atomic.Uint64
 
 	// The seq of the events that have been sent to the downstream dispatcher.
-	// It start from 1, and increase by 1 for each event.
+	// It starts from 1, and increase by 1 for each event.
 	// If the dispatcher is reset, the seq should be set to 1.
 	seq atomic.Uint64
 
@@ -82,7 +91,8 @@ type dispatcherStat struct {
 	// isReadyRecevingData is used to indicate whether the dispatcher is ready to receive data events.
 	// It will be set to false, after it receives the pause event from the dispatcher.
 	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
-	isReadyRecevingData atomic.Bool
+	isReadyReceivingData atomic.Bool
+
 	// isHandshaked is used to indicate whether the dispatcher is ready to send data.
 	// It will be set to true, after it sends the handshake event to the dispatcher.
 	// It will be set to false, after it receives the reset event from the dispatcher.
@@ -93,7 +103,7 @@ type dispatcherStat struct {
 
 	// syncpoint related
 	enableSyncPoint   bool
-	nextSyncPoint     uint64
+	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
 
 	// Scan task related
@@ -121,7 +131,6 @@ type dispatcherStat struct {
 }
 
 func newDispatcherStat(
-	startTs uint64,
 	info DispatcherInfo,
 	filter filter.Filter,
 	scanWorkerIndex int,
@@ -144,19 +153,24 @@ func newDispatcherStat(
 
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
-		dispStat.nextSyncPoint = info.GetSyncPointTs()
+		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
 	}
+	startTs := info.GetStartTs()
 	dispStat.eventStoreResolvedTs.Store(startTs)
 	dispStat.checkpointTs.Store(startTs)
+
 	dispStat.sentResolvedTs.Store(startTs)
-	dispStat.isReadyRecevingData.Store(true)
+
+	dispStat.lastScannedCommitTs.Store(startTs)
+	dispStat.lastScannedStartTs.Store(0)
+	dispStat.isReadyReceivingData.Store(true)
 	dispStat.resetScanLimit()
 
 	now := time.Now()
 	dispStat.lastReceivedResolvedTsTime.Store(now)
 	dispStat.lastSentResolvedTsTime.Store(now)
-	dispStat.lastReceivedHeartbeatTime.Store(now.UnixNano())
+	dispStat.lastReceivedHeartbeatTime.Store(now.Unix())
 	return dispStat
 }
 
@@ -177,22 +191,51 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 		a.sentResolvedTs.Store(resolvedTs)
 		a.lastSentResolvedTsTime.Store(time.Now())
 	}
+
+	a.updateScanRange(resolvedTs, 0)
+}
+
+func (a *dispatcherStat) updateScanRange(txnCommitTs, txnStartTs uint64) {
+	if a.IsReadyRecevingData() {
+		a.lastScannedCommitTs.Store(txnCommitTs)
+		a.lastScannedStartTs.Store(txnStartTs)
+	}
 }
 
 // resetState is used to reset the state of the dispatcher.
 func (a *dispatcherStat) resetState(resetTs uint64) {
 	// Do this first to prevent the dispatcher's sentResolvedTs being updated by other goroutines.
 	a.isHandshaked.Store(false)
+
 	// Reset the sentResolvedTs to the resetTs.
 	// Because when the dispatcher is reset, the downstream want to resend the events from the resetTs.
 	a.sentResolvedTs.Store(resetTs)
+
 	a.resetTs.Store(resetTs)
 	a.seq.Store(0)
 
 	a.isTaskScanning.Store(false)
 
-	a.isReadyRecevingData.Store(true)
-	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
+	a.lastScannedCommitTs.Store(resetTs)
+	a.lastScannedStartTs.Store(0)
+	a.isReadyReceivingData.Store(true)
+	a.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+
+	if a.enableSyncPoint {
+		for {
+			prevSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(a.nextSyncPoint.Load()).Add(-a.syncPointInterval))
+			if prevSyncPoint <= resetTs {
+				break
+			}
+			log.Info("reset sync point",
+				zap.Stringer("dispatcherID", a.id),
+				zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
+				zap.Uint64("nextSyncPoint", a.nextSyncPoint.Load()),
+				zap.Uint64("prevSyncPoint", prevSyncPoint),
+				zap.Uint64("resetTs", resetTs))
+			a.nextSyncPoint.Store(prevSyncPoint)
+		}
+	}
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
@@ -201,7 +244,8 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 		return false
 	}
 	if !a.isReceivedFirstResolvedTs.Load() {
-		log.Info("received first resolved ts from event store", zap.Uint64("resolvedTs", resolvedTs), zap.Stringer("dispatcherID", a.id))
+		log.Info("received first resolved ts from event store",
+			zap.Stringer("dispatcherID", a.id), zap.Uint64("resolvedTs", resolvedTs))
 		a.lastUpdateScanLimitTime.Store(time.Now())
 		a.isReceivedFirstResolvedTs.Store(true)
 	}
@@ -209,38 +253,41 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 }
 
 func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
-	return util.CompareAndMonotonicIncrease(&a.latestCommitTs, latestCommitTs)
+	return util.CompareAndMonotonicIncrease(&a.eventStoreCommitTs, latestCommitTs)
 }
 
 // getDataRange returns the data range that the dispatcher needs to scan.
 func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
-	startTs := a.sentResolvedTs.Load()
+	lastTxnCommitTs := a.lastScannedCommitTs.Load()
+	lastTxnStartTs := a.lastScannedStartTs.Load()
 	resetTs := a.resetTs.Load()
-	if startTs < resetTs {
-		log.Warn("resetTs is greater than startTs, set startTs as the resetTs",
-			zap.Uint64("resetTs", resetTs),
-			zap.Uint64("startTs", startTs),
-			zap.Stringer("dispatcherID", a.id))
-		startTs = resetTs
+	if lastTxnCommitTs < resetTs {
+		log.Warn("startTs less than the resetTs, set startTs to the resetTs",
+			zap.Stringer("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
+			zap.Uint64("resetTs", resetTs), zap.Uint64("startTs", lastTxnStartTs))
+		a.updateScanRange(resetTs, 0)
+		lastTxnCommitTs = a.lastScannedCommitTs.Load()
+		lastTxnStartTs = a.lastScannedStartTs.Load()
 	}
 
 	// the data not received by the event store yet, so just skip it.
 	resolvedTs := a.eventStoreResolvedTs.Load()
-	if startTs >= resolvedTs {
+	if lastTxnCommitTs >= resolvedTs {
 		return common.DataRange{}, false
 	}
-	// Range: (startTs, EndTs],
-	// since the startTs(and the data before startTs) is already sent to the dispatcher.
+	// Range: (CommitTsStart-lastScannedStartTs, CommitTsEnd],
+	// since the CommitTsStart(and the data before startTs) is already sent to the dispatcher.
 	r := common.DataRange{
-		Span:    a.info.GetTableSpan(),
-		StartTs: startTs,
-		EndTs:   resolvedTs,
+		Span:                  a.info.GetTableSpan(),
+		CommitTsStart:         lastTxnCommitTs,
+		CommitTsEnd:           resolvedTs,
+		LastScannedTxnStartTs: lastTxnStartTs,
 	}
 	return r, true
 }
 
 func (a *dispatcherStat) IsReadyRecevingData() bool {
-	return a.isReadyRecevingData.Load() && a.changefeedStat.isReadyRecevingData.Load()
+	return a.isReadyReceivingData.Load()
 }
 
 // getCurrentScanLimitInBytes returns the current scan limit in bytes.
@@ -415,22 +462,18 @@ func (c *resolvedTsCache) reset() {
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
-	// isReadyRecevingData is used to indicate whether the changefeed is running.
-	// It will be set to false, after it receives the pause event from the dispatcher.
-	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
-	isReadyRecevingData atomic.Bool
+
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
 	dispatcherCount atomic.Uint64
 
-	dispatcherStatMap sync.Map // nodeID -> dispatcherID -> dispatcherStat
+	dispatcherStatMap    sync.Map // nodeID -> dispatcherID -> dispatcherStat
+	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 	stat := &changefeedStatus{
-		changefeedID:        changefeedID,
-		isReadyRecevingData: atomic.Bool{},
+		changefeedID: changefeedID,
 	}
-	stat.isReadyRecevingData.Store(true)
 	return stat
 }
 

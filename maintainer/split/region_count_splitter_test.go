@@ -43,6 +43,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 	cases := []struct {
 		span        *heartbeatpb.TableSpan
 		cfg         *config.ChangefeedSchedulerConfig
+		spansNum    int
 		expectSpans []*heartbeatpb.TableSpan
 	}{
 		{
@@ -51,6 +52,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 1,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_1")},   // 1 region
 				{TableID: 1, StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, // 1 region
@@ -65,6 +67,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 2,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_2")},   // 2 region
 				{TableID: 1, StartKey: []byte("t1_2"), EndKey: []byte("t1_4")}, // 2 region
@@ -77,6 +80,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 3,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, // 3 region
 				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, // 2 region
@@ -88,6 +92,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 4,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, // 3 region
 				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, // 2 region
@@ -99,16 +104,29 @@ func TestRegionCountSplitSpan(t *testing.T) {
 				RegionThreshold:    10,
 				RegionCountPerSpan: 2,
 			},
+			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}, // no split
+			},
+		},
+		{
+			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 1,
+			},
+			spansNum: 2,
+			expectSpans: []*heartbeatpb.TableSpan{
+				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, // 3 region
+				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, // 2 region
 			},
 		},
 	}
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	for i, cs := range cases {
-		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
-		spans := splitter.split(context.Background(), cs.span)
+		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionCountPerSpan, cs.cfg.RegionThreshold)
+		spans := splitter.split(context.Background(), cs.span, cs.spansNum)
 		require.Equalf(t, cs.expectSpans, spans, "%d %s", i, cs.span.String())
 	}
 }
@@ -127,6 +145,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 	cases := []struct {
 		expectedSpans int
 		cfg           *config.ChangefeedSchedulerConfig
+		spansNum      int
 	}{
 		{
 			expectedSpans: 1000,
@@ -134,6 +153,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 1,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 500,
@@ -141,6 +161,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 2,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 334,
@@ -148,6 +169,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 3,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 250,
@@ -155,6 +177,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 4,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 200,
@@ -162,6 +185,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 5,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 167,
@@ -169,6 +193,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 6,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 143,
@@ -176,6 +201,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 7,
 			},
+			spansNum: 0,
 		},
 		{
 			expectedSpans: 125,
@@ -183,14 +209,15 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 				RegionThreshold:    1,
 				RegionCountPerSpan: 8,
 			},
+			spansNum: 0,
 		},
 	}
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	spans := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	for i, cs := range cases {
-		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
-		spans := splitter.split(context.Background(), spans)
+		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionCountPerSpan, cs.cfg.RegionThreshold)
+		spans := splitter.split(context.Background(), spans, cs.spansNum)
 		require.Equalf(t, cs.expectedSpans, len(spans), "%d %v", i, cs)
 	}
 }
@@ -207,9 +234,9 @@ func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 		RegionCountPerSpan: 1,
 	}
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newRegionCountSplitter(cfID, cfg.RegionThreshold, cfg.RegionCountPerSpan)
+	splitter := newRegionCountSplitter(cfID, cfg.RegionCountPerSpan, cfg.RegionCountPerSpan)
 	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
-	spans := splitter.split(context.Background(), span)
+	spans := splitter.split(context.Background(), span, 0)
 	require.Equal(
 		t, []*heartbeatpb.TableSpan{{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}}, spans)
 }

@@ -24,7 +24,6 @@ import (
 	"github.com/gin-gonic/gin/binding"
 	"github.com/imdario/mergo"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -105,7 +104,7 @@ func (c *Config) Apply(
 	}
 
 	scheme := strings.ToLower(sinkURI.Scheme)
-	if !helper.IsStorageScheme(scheme) {
+	if !config.IsStorageScheme(scheme) {
 		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
 			"can't create cloud storage sink with unsupported scheme: %s", scheme)
 	}

@@ -73,7 +73,7 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 		UpdateTS: 100,
 	})
 	var def TableDefinition
-	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, tableInfo.UpdateTS(), false)
+	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, tableInfo.GetUpdateTS(), false)
 	return def, tableInfo
 }
 
@@ -422,7 +422,7 @@ func TestTableDefinition(t *testing.T) {
 
 	def = TableDefinition{}
 	event := &commonEvent.DDLEvent{
-		FinishedTs: tableInfo.UpdateTS(),
+		FinishedTs: tableInfo.GetUpdateTS(),
 		Type:       byte(timodel.ActionAddColumn),
 		Query:      "alter table schema1.table1 add Birthday date",
 		TableInfo:  tableInfo,

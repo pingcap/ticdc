@@ -15,11 +15,15 @@ package causality
 
 import (
 	"context"
+	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -40,17 +44,23 @@ type ConflictDetector struct {
 	// nextCacheID is used to dispatch transactions round-robin.
 	nextCacheID atomic.Int64
 
-	notifiedNodes *chann.DrainableChann[func()]
+	notifiedNodes *chann.UnlimitedChannel[func(), any]
+
+	changefeedID                 common.ChangeFeedID
+	metricConflictDetectDuration prometheus.Observer
 }
 
 // New creates a new ConflictDetector.
 func New(
-	numSlots uint64, opt TxnCacheOption,
+	numSlots uint64, opt TxnCacheOption, changefeedID common.ChangeFeedID,
 ) *ConflictDetector {
 	ret := &ConflictDetector{
-		resolvedTxnCaches: make([]txnCache, opt.Count),
-		slots:             NewSlots(numSlots),
-		notifiedNodes:     chann.NewAutoDrainChann[func()](),
+		resolvedTxnCaches:            make([]txnCache, opt.Count),
+		slots:                        NewSlots(numSlots),
+		notifiedNodes:                chann.NewUnlimitedChannelDefault[func()](),
+		metricConflictDetectDuration: metrics.ConflictDetectDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
+
+		changefeedID: changefeedID,
 	}
 	for i := 0; i < opt.Count; i++ {
 		ret.resolvedTxnCaches[i] = newTxnCache(opt)
@@ -61,14 +71,21 @@ func New(
 }
 
 func (d *ConflictDetector) Run(ctx context.Context) error {
-	defer d.closeCache()
+	defer func() {
+		metrics.ConflictDetectDuration.DeleteLabelValues(d.changefeedID.Namespace(), d.changefeedID.Name())
+		d.closeCache()
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case notifyCallback := <-d.notifiedNodes.Out():
-			if notifyCallback != nil {
+		default:
+			if notifyCallback, ok := d.notifiedNodes.Get(); ok {
 				notifyCallback()
+			} else {
+				log.Info("notifiedNodes is closed, return")
+				return nil
 			}
 		}
 	}
@@ -79,6 +96,7 @@ func (d *ConflictDetector) Run(ctx context.Context) error {
 // NOTE: if multiple threads access this concurrently,
 // ConflictKeys must be sorted by the slot index.
 func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
+	start := time.Now()
 	hashes := ConflictKeys(event)
 	node := d.slots.AllocNode(hashes)
 
@@ -88,7 +106,11 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 
 	node.TrySendToTxnCache = func(cacheID int64) bool {
 		// Try sending this txn to related cache as soon as all dependencies are resolved.
-		return d.sendToCache(event, cacheID)
+		ok := d.sendToCache(event, cacheID)
+		if ok {
+			d.metricConflictDetectDuration.Observe(time.Since(start).Seconds())
+		}
+		return ok
 	}
 	node.RandCacheID = func() int64 {
 		return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches))
@@ -100,7 +122,7 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 				log.Warn("failed to send notification, channel might be closed", zap.Any("error", r))
 			}
 		}()
-		d.notifiedNodes.In() <- callback
+		d.notifiedNodes.Push(callback)
 	}
 	d.slots.Add(node)
 }
@@ -125,6 +147,10 @@ func (d *ConflictDetector) closeCache() {
 	}
 }
 
+func (d *ConflictDetector) CloseNotifiedNodes() {
+	d.notifiedNodes.Close()
+}
+
 func (d *ConflictDetector) Close() {
-	d.notifiedNodes.CloseAndDrain()
+	d.CloseNotifiedNodes()
 }

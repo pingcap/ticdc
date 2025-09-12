@@ -164,15 +164,13 @@ func (c *logCoordinator) updateEventStoreState(nodeID node.ID, newState *logserv
 // getCandidateNode return all nodes(exclude the request node) which may contain data for `span` from `startTs`,
 // and the return slice should be sorted by resolvedTs(largest first).
 func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbeatpb.TableSpan, startTs uint64) []string {
-	c.eventStoreStates.Lock()
-	defer c.eventStoreStates.Unlock()
-
 	type candidateSubscription struct {
 		nodeID         node.ID
 		subscriptionID uint64
 		resolvedTs     uint64
 	}
 	var candidateSubs []candidateSubscription
+	c.eventStoreStates.Lock()
 	for nodeID, eventStoreState := range c.eventStoreStates.m {
 		if nodeID == requestNodeID {
 			continue
@@ -212,6 +210,7 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 			})
 		}
 	}
+	c.eventStoreStates.Unlock()
 
 	// return candidate nodes sorted by resolvedTs in descending order
 	sort.Slice(candidateSubs, func(i, j int) bool {
@@ -219,16 +218,22 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	})
 	var subIDs []uint64
 	var candidateNodes []string
-	for _, candidate := range candidateSubs {
-		subIDs = append(subIDs, candidate.subscriptionID)
-		candidateNodes = append(candidateNodes, string(candidate.nodeID))
+	if len(candidateSubs) > 0 {
+		c.nodes.Lock()
+		for _, candidate := range candidateSubs {
+			if c.nodes.m[candidate.nodeID] != nil {
+				subIDs = append(subIDs, candidate.subscriptionID)
+				candidateNodes = append(candidateNodes, string(candidate.nodeID))
+			}
+		}
+		c.nodes.Unlock()
 	}
 	log.Info("log coordinator get candidate nodes",
 		zap.String("requestNodeID", requestNodeID.String()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", startTs),
 		zap.Strings("candidateNodes", candidateNodes),
-		zap.Any("subscriptionIDs", subIDs))
+		zap.Uint64s("subscriptionIDs", subIDs))
 
 	return candidateNodes
 }

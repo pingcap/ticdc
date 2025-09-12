@@ -154,10 +154,11 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	case *commonEvent.DDLEvent:
 		err = s.sendDDLEvent(v)
 	default:
-		log.Panic("kafka sink doesn't support this type of block event",
+		log.Error("kafka sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Any("eventType", event.GetType()))
+			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
+		return errors.ErrInvalidEventType.GenWithStackByArgs(commonEvent.TypeToString(event.GetType()))
 	}
 	if err != nil {
 		s.isNormal.Store(false)
@@ -240,6 +241,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			for {
 				row, ok := event.GetNextRow()
 				if !ok {
+					event.Rewind()
 					break
 				}
 
@@ -362,12 +364,17 @@ func (s *sink) sendMessages(ctx context.Context) error {
 	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	var err error
 	outCh := s.comp.encoderGroup.Output()
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			s.dmlProducer.Heartbeat()
 		case future, ok := <-outCh:
 			if !ok {
 				log.Info("kafka sink encoder's output channel closed",
@@ -388,6 +395,10 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						future.Key.Topic,
 						future.Key.Partition,
 						message); err != nil {
+						log.Error("kafka sink send message failed",
+							zap.String("namespace", s.changefeedID.Namespace()),
+							zap.String("changefeed", s.changefeedID.Name()),
+							zap.Error(err))
 						return 0, 0, err
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil
@@ -453,6 +464,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	}()
 
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	var (
 		msg          *common.Message
 		partitionNum int32
@@ -462,6 +476,8 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			s.ddlProducer.Heartbeat()
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
 				log.Warn("kafka sink checkpoint channel closed",

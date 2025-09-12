@@ -341,6 +341,8 @@ func (c *consumer) emitDMLEvents(
 				return errors.Trace(err)
 			}
 
+			log.Debug("next row changed event", zap.Any("rowCommitTs", row.CommitTs), zap.Any("rowStartTs", row.StartTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("rowTableID", tableID), zap.Any("column", row.Columns), zap.Any("preColumn", row.PreColumns))
+
 			if _, ok := c.tableSinkMap[tableID]; !ok {
 				c.tableSinkMap[tableID] = c.sinkFactory.CreateTableSinkForConsumer(
 					model.DefaultChangeFeedID(defaultChangefeedName),

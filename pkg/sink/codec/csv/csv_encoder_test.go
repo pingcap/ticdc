@@ -111,7 +111,6 @@ func TestCSVBatchCodecWithHeader(t *testing.T) {
 	require.Equal(t, "ticdc-meta$operation,ticdc-meta$table,ticdc-meta$schema,ticdc-meta$commit-ts,col1", header)
 	require.Equal(t, int(event.Length), messages[0].GetRowsCount())
 
-	event.Rewind()
 	cfg.CSVOutputFieldHeader = false
 	encoder = NewTxnEventEncoder(cfg)
 	err = encoder.AppendTxnEvent(event)
@@ -122,6 +121,7 @@ func TestCSVBatchCodecWithHeader(t *testing.T) {
 	require.Equal(t, int(event.Length), messages1[0].GetRowsCount())
 
 	cfg.CSVOutputFieldHeader = true
+	event.RowTypes = nil
 	encoder = NewTxnEventEncoder(cfg)
 	err = encoder.AppendTxnEvent(event)
 	require.Nil(t, err)

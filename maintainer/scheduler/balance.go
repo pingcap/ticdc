@@ -14,24 +14,27 @@
 package scheduler
 
 import (
-	"math"
+	"context"
 	"math/rand"
 	"time"
 
 	"github.com/pingcap/failpoint"
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
+	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
-	"go.uber.org/zap"
 )
 
-// balanceScheduler is used to check the balance status of all spans among all nodes
+// balanceScheduler mainly focus on two types of operations:
+// 1. Split operations: splits the one large span for the whole table into smaller ones.
+// 2. Move operations: distributes spans across nodes for balance the span count in each node.
 type balanceScheduler struct {
 	changefeedID common.ChangeFeedID
 	batchSize    int
@@ -40,149 +43,98 @@ type balanceScheduler struct {
 	spanController     *span.Controller
 	nodeManager        *watcher.NodeManager
 
-	random               *rand.Rand
-	lastRebalanceTime    time.Time
-	checkBalanceInterval time.Duration
-	// forceBalance forces the scheduler to produce schedule tasks regardless of
-	// `checkBalanceInterval`.
-	// It is set to true when the last time `Schedule` produces some tasks,
-	// and it is likely there are more tasks will be produced in the next
-	// `Schedule`.
-	// It speeds up rebalance.
-	forceBalance bool
+	splitter *split.Splitter
+
+	random *rand.Rand
+	mode   int64
 }
 
 func NewBalanceScheduler(
-	changefeedID common.ChangeFeedID, batchSize int,
-	oc *operator.Controller, sc *span.Controller,
-	balanceInterval time.Duration,
+	changefeedID common.ChangeFeedID,
+	batchSize int,
+	splitter *split.Splitter,
+	oc *operator.Controller,
+	sc *span.Controller,
+	_ time.Duration,
+	mode int64,
 ) *balanceScheduler {
 	return &balanceScheduler{
-		changefeedID:         changefeedID,
-		batchSize:            batchSize,
-		random:               rand.New(rand.NewSource(time.Now().UnixNano())),
-		operatorController:   oc,
-		spanController:       sc,
-		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		checkBalanceInterval: balanceInterval,
-		lastRebalanceTime:    time.Now(),
+		changefeedID:       changefeedID,
+		batchSize:          batchSize,
+		random:             rand.New(rand.NewSource(time.Now().UnixNano())),
+		operatorController: oc,
+		spanController:     sc,
+		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		splitter:           splitter,
+		mode:               mode,
 	}
 }
 
 func (s *balanceScheduler) Execute() time.Time {
-	if !s.forceBalance && time.Since(s.lastRebalanceTime) < s.checkBalanceInterval {
-		return s.lastRebalanceTime.Add(s.checkBalanceInterval)
-	}
-	now := time.Now()
-
 	failpoint.Inject("StopBalanceScheduler", func() {
-		failpoint.Return(now.Add(s.checkBalanceInterval))
+		failpoint.Return(time.Now().Add(time.Second * 5))
 	})
 
 	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule
 	if s.operatorController.OperatorSize() > 0 || s.spanController.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
-		return now.Add(s.checkBalanceInterval)
+		return time.Now().Add(time.Second * 5)
 	}
 
-	nodes := s.nodeManager.GetAliveNodes()
-	moved := s.schedulerGroup(nodes)
-	if moved == 0 {
-		// all groups are balanced, safe to do the global balance
-		moved = s.schedulerGlobal(nodes)
+	// 1. check whether we have spans in defaultGroupID need to be splitted.
+	//    we only consider the not splitted span here.
+	checkResults := s.spanController.CheckByGroup(pkgReplica.DefaultGroupID, s.batchSize)
+	count := s.doSplit(checkResults)
+
+	// to many split operators, do move operator later
+	if count >= s.batchSize {
+		return time.Now().Add(time.Second * 5)
 	}
 
-	s.forceBalance = moved >= s.batchSize
-	s.lastRebalanceTime = time.Now()
+	// 2. do balance for the spans in defaultGroupID
+	s.schedulerDefaultGroup(s.batchSize - count)
 
-	return now.Add(s.checkBalanceInterval)
+	return time.Now().Add(time.Second * 5)
 }
 
 func (s *balanceScheduler) Name() string {
-	return "balance-scheduler"
-}
-
-func (s *balanceScheduler) schedulerGroup(nodes map[node.ID]*node.Info) int {
-	batch, moved := s.batchSize, 0
-	for _, group := range s.spanController.GetGroups() {
-		// fast path, check the balance status
-		moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNodeByGroup(group), nodes)
-		if moveSize <= 0 {
-			// no need to do the balance, skip
-			continue
-		}
-		replicas := s.spanController.GetReplicatingByGroup(group)
-		moved += pkgScheduler.Balance(batch, s.random, nodes, replicas, s.doMove)
-		if moved >= batch {
-			break
-		}
+	if common.IsRedoMode(s.mode) {
+		return pkgScheduler.RedoBalanceScheduler
 	}
-	return moved
+	return pkgScheduler.BalanceScheduler
 }
 
-// TODO: refactor and simplify the implementation and limit max group size
-func (s *balanceScheduler) schedulerGlobal(nodes map[node.ID]*node.Info) int {
+func (s *balanceScheduler) schedulerDefaultGroup(maxSize int) int {
+	nodes := s.nodeManager.GetAliveNodes()
+	group := pkgreplica.DefaultGroupID
 	// fast path, check the balance status
-	moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNode(), nodes)
+	moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNodeByGroup(group), nodes)
 	if moveSize <= 0 {
-		// no need to do the balance, skip
 		return 0
 	}
-	groupNodetasks, valid := s.spanController.GetImbalanceGroupNodeTask(nodes)
-	if !valid {
-		// no need to do the balance, skip
+	replicas := s.spanController.GetReplicatingByGroup(group)
+	return pkgScheduler.Balance(maxSize, s.random, nodes, replicas, s.doMove)
+}
+
+func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
+	if results == nil {
 		return 0
 	}
-
-	// complexity note: len(nodes) * len(groups)
-	totalTasks := 0
-	sizePerNode := make(map[node.ID]int, len(nodes))
-	for _, nodeTasks := range groupNodetasks {
-		for id, task := range nodeTasks {
-			if task != nil {
-				totalTasks++
-				sizePerNode[id]++
+	checkResults := results.([]replica.DefaultSpanSplitCheckResult)
+	splitCount := 0
+	for _, result := range checkResults {
+		spansNum := max(result.SpanNum, len(s.nodeManager.GetAliveNodes())*2)
+		splitSpans := s.splitter.Split(context.Background(), result.Span.Span, spansNum, result.SpanType)
+		if len(splitSpans) > 1 {
+			op := operator.NewSplitDispatcherOperator(s.spanController, result.Span, splitSpans, []node.ID{}, nil)
+			ret := s.operatorController.AddOperator(op)
+			if ret {
+				splitCount++
 			}
 		}
-	}
-	lowerLimitPerNode := int(math.Floor(float64(totalTasks) / float64(len(nodes))))
-	limitCnt := 0
-	for _, size := range sizePerNode {
-		if size == lowerLimitPerNode {
-			limitCnt++
-		}
-	}
-	if limitCnt == len(nodes) {
-		// all nodes are global balanced
-		return 0
 	}
 
-	moved := 0
-	for _, nodeTasks := range groupNodetasks {
-		availableNodes, victims, next := []node.ID{}, []node.ID{}, 0
-		for id, task := range nodeTasks {
-			if task != nil && sizePerNode[id] > lowerLimitPerNode {
-				victims = append(victims, id)
-			} else if task == nil && sizePerNode[id] < lowerLimitPerNode {
-				availableNodes = append(availableNodes, id)
-			}
-		}
-
-		for _, new := range availableNodes {
-			if next >= len(victims) {
-				break
-			}
-			old := victims[next]
-			if s.doMove(nodeTasks[old], new) {
-				sizePerNode[old]--
-				sizePerNode[new]++
-				next++
-				moved++
-			}
-		}
-	}
-	log.Info("finish global balance", zap.Stringer("changefeed", s.changefeedID), zap.Int("moved", moved))
-	return moved
+	return splitCount
 }
 
 func (s *balanceScheduler) doMove(replication *replica.SpanReplication, id node.ID) bool {

@@ -102,20 +102,19 @@ func (d *dispatcherConnState) clearRemoteCandidates() {
 
 // dispatcherStat is a helper struct to manage the state of a dispatcher.
 type dispatcherStat struct {
-	target         dispatcher.EventDispatcher
+	target         dispatcher.DispatcherService
 	eventCollector *EventCollector
 	readyCallback  func()
 
 	connState dispatcherConnState
 
-	memoryQuota uint64
 	// epoch is used to filter invalid events.
 	// It is incremented when the dispatcher is reset.
 	epoch atomic.Uint64
 	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
-	// lastEventCommitTs is the commitTs of the last received DDL/DML events.
+	// lastEventCommitTs is the commitTs of the last received DDL/DML/SyncPoint events.
 	lastEventCommitTs atomic.Uint64
 	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
 	gotDDLOnTs atomic.Bool
@@ -129,16 +128,14 @@ type dispatcherStat struct {
 }
 
 func newDispatcherStat(
-	target dispatcher.EventDispatcher,
+	target dispatcher.DispatcherService,
 	eventCollector *EventCollector,
 	readyCallback func(),
-	memoryQuota uint64,
 ) *dispatcherStat {
 	stat := &dispatcherStat{
 		target:         target,
 		eventCollector: eventCollector,
 		readyCallback:  readyCallback,
-		memoryQuota:    memoryQuota,
 	}
 	stat.lastEventSeq.Store(0)
 	stat.lastEventCommitTs.Store(target.GetStartTs())
@@ -234,7 +231,11 @@ func (d *dispatcherStat) resume() {
 }
 
 func (d *dispatcherStat) wake() {
-	d.eventCollector.ds.Wake(d.getDispatcherID())
+	if common.IsRedoMode(d.target.GetMode()) {
+		d.eventCollector.redoDs.Wake(d.getDispatcherID())
+	} else {
+		d.eventCollector.ds.Wake(d.getDispatcherID())
+	}
 }
 
 func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
@@ -332,6 +333,7 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 		d.gotDDLOnTs.Store(false)
 		d.gotSyncpointOnTS.Store(false)
 	}
+
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		d.gotDDLOnTs.Store(true)
@@ -342,7 +344,8 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeDMLEvent,
-		commonEvent.TypeBatchDMLEvent:
+		commonEvent.TypeBatchDMLEvent,
+		commonEvent.TypeSyncPointEvent:
 		d.lastEventCommitTs.Store(event.GetCommitTs())
 	}
 
@@ -350,6 +353,14 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 }
 
 func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
+	if event.GetType() == commonEvent.TypeBatchDMLEvent {
+		batchDML := event.Event.(*commonEvent.BatchDMLEvent)
+		for _, dml := range batchDML.DMLEvents {
+			if dml.GetEpoch() != d.epoch.Load() {
+				return false
+			}
+		}
+	}
 	return event.GetEpoch() == d.epoch.Load()
 }
 
@@ -367,6 +378,10 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	var validEvents []dispatcher.DispatcherEvent
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event) {
+			log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Any("event", event.Event))
 			continue
 		}
 		if !d.verifyEventSequence(event) {
@@ -394,6 +409,10 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
+				// DMLs in the same batch share the same updateTs in their table info,
+				// but they may reference different table info objects,
+				// so each needs to be initialized separately.
+				dml.TableInfo.InitPrivateFields()
 				dml.TableInfoVersion = tableInfoVersion
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.filterAndUpdateEventByCommitTs(dmlEvent) {
@@ -594,13 +613,12 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 }
 
 func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
-	log.Info("set remote candidates",
-		zap.Strings("nodes", nodes),
-		zap.Stringer("dispatcherID", d.getDispatcherID()))
 	if len(nodes) == 0 {
 		return
 	}
 	if d.connState.trySetRemoteCandidates(nodes) {
+		log.Info("set remote candidates", zap.Stringer("dispatcherID", d.getDispatcherID()),
+			zap.Int64("tableID", d.target.GetTableSpan().TableID), zap.Strings("nodes", nodes))
 		candidate := d.connState.getNextRemoteCandidate()
 		d.registerTo(candidate)
 	}
@@ -616,16 +634,18 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 			TableSpan:    d.target.GetTableSpan(),
 			StartTs:      startTs,
 			// ServerId is the id of the request sender.
-			ServerId:          d.eventCollector.getLocalServerID().String(),
-			ActionType:        eventpb.ActionType_ACTION_TYPE_REGISTER,
-			FilterConfig:      d.target.GetFilterConfig(),
-			EnableSyncPoint:   d.target.EnableSyncPoint(),
-			SyncPointInterval: uint64(syncPointInterval.Seconds()),
-			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
-			OnlyReuse:         onlyReuse,
-			BdrMode:           d.target.GetBDRMode(),
-			Timezone:          d.target.GetTimezone(),
-			Integrity:         d.target.GetIntegrityConfig(),
+			ServerId:             d.eventCollector.getLocalServerID().String(),
+			ActionType:           eventpb.ActionType_ACTION_TYPE_REGISTER,
+			FilterConfig:         d.target.GetFilterConfig(),
+			EnableSyncPoint:      d.target.EnableSyncPoint(),
+			SyncPointInterval:    uint64(syncPointInterval.Seconds()),
+			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
+			OnlyReuse:            onlyReuse,
+			BdrMode:              d.target.GetBDRMode(),
+			Mode:                 d.target.GetMode(),
+			Timezone:             d.target.GetTimezone(),
+			Integrity:            d.target.GetIntegrityConfig(),
+			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
 		},
 	}
 }
@@ -644,8 +664,14 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64)
 			FilterConfig:      d.target.GetFilterConfig(),
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
+			BdrMode:           d.target.GetBDRMode(),
+			Mode:              d.target.GetMode(),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
 			Epoch:             epoch,
+			// OnlyReuse:         false,
+			Timezone:             d.target.GetTimezone(),
+			Integrity:            d.target.GetIntegrityConfig(),
+			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
 		},
 	}
 }
@@ -659,6 +685,7 @@ func (d *dispatcherStat) newDispatcherRemoveRequest() *messaging.DispatcherReque
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
+			Mode:       d.target.GetMode(),
 		},
 	}
 }
@@ -672,6 +699,7 @@ func (d *dispatcherStat) newDispatcherPauseRequest() *messaging.DispatcherReques
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
+			Mode:       d.target.GetMode(),
 		},
 	}
 }
@@ -685,6 +713,7 @@ func (d *dispatcherStat) newDispatcherResumeRequest() *messaging.DispatcherReque
 			// ServerId is the id of the request sender.
 			ServerId:   d.eventCollector.getLocalServerID().String(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
+			Mode:       d.target.GetMode(),
 		},
 	}
 }

@@ -15,7 +15,6 @@ package common
 
 import (
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"go.uber.org/zap"
 )
 
@@ -28,27 +27,37 @@ type accessKey struct {
 	table  string
 }
 
-// tableInfoAccessor provide table information, to helper
-// the decoder set table info to the event
-type tableInfoAccessor struct {
-	memo            map[accessKey]*commonType.TableInfo
+// tableIDAllocator is a fake table id allocator
+type tableIDAllocator struct {
+	tableIDs        map[accessKey]int64
+	currentTableID  int64
 	blockedTableIDs map[accessKey]map[int64]struct{}
 }
 
-func NewTableInfoAccessor() *tableInfoAccessor {
-	return &tableInfoAccessor{
-		memo:            make(map[accessKey]*commonType.TableInfo),
+// NewTableIDAllocator creates a new tableIDAllocator
+func NewTableIDAllocator() *tableIDAllocator {
+	return &tableIDAllocator{
+		tableIDs:        make(map[accessKey]int64),
 		blockedTableIDs: make(map[accessKey]map[int64]struct{}),
 	}
 }
 
-func (a *tableInfoAccessor) Get(schema, table string) (*commonType.TableInfo, bool) {
-	key := accessKey{schema, table}
-	tableInfo, ok := a.memo[key]
-	return tableInfo, ok
+func (a *tableIDAllocator) allocateByKey(key accessKey) int64 {
+	if tableID, ok := a.tableIDs[key]; ok {
+		return tableID
+	}
+	a.currentTableID++
+	a.tableIDs[key] = a.currentTableID
+	return a.currentTableID
 }
 
-func (a *tableInfoAccessor) GetBlockedTables(schema, table string) []int64 {
+// Allocate allocates a table id
+func (a *tableIDAllocator) Allocate(schema, table string) int64 {
+	key := accessKey{schema, table}
+	return a.allocateByKey(key)
+}
+
+func (a *tableIDAllocator) GetBlockedTables(schema, table string) []int64 {
 	key := accessKey{schema, table}
 	blocked := a.blockedTableIDs[key]
 	result := make([]int64, 0, len(blocked))
@@ -58,7 +67,7 @@ func (a *tableInfoAccessor) GetBlockedTables(schema, table string) []int64 {
 	return result
 }
 
-func (a *tableInfoAccessor) AddBlockTableID(schema string, table string, physicalTableID int64) {
+func (a *tableIDAllocator) AddBlockTableID(schema string, table string, physicalTableID int64) {
 	key := accessKey{schema, table}
 	if _, ok := a.blockedTableIDs[key]; !ok {
 		a.blockedTableIDs[key] = make(map[int64]struct{})
@@ -71,53 +80,8 @@ func (a *tableInfoAccessor) AddBlockTableID(schema string, table string, physica
 	}
 }
 
-func (a *tableInfoAccessor) Add(schema, table string, tableInfo *commonType.TableInfo) {
-	key := accessKey{schema, table}
-	if _, ok := a.memo[key]; !ok {
-		a.memo[key] = tableInfo
-		log.Info("add table info to cache", zap.String("schema", schema), zap.String("table", table))
-	}
-}
-
-func (a *tableInfoAccessor) Remove(schema, table string) {
-	key := accessKey{schema, table}
-	delete(a.memo, key)
-}
-
-func (a *tableInfoAccessor) Clean() {
-	clear(a.memo)
+func (a *tableIDAllocator) Clean() {
+	a.currentTableID = 0
+	clear(a.tableIDs)
 	clear(a.blockedTableIDs)
-}
-
-// tableIDAllocator is a fake table id allocator
-type tableIDAllocator struct {
-	tableIDs       map[accessKey]int64
-	currentTableID int64
-}
-
-// NewTableIDAllocator creates a new tableIDAllocator
-func NewTableIDAllocator() *tableIDAllocator {
-	return &tableIDAllocator{
-		tableIDs: make(map[accessKey]int64),
-	}
-}
-
-func (g *tableIDAllocator) allocateByKey(key accessKey) int64 {
-	if tableID, ok := g.tableIDs[key]; ok {
-		return tableID
-	}
-	g.currentTableID++
-	g.tableIDs[key] = g.currentTableID
-	return g.currentTableID
-}
-
-// Allocate allocates a table id
-func (g *tableIDAllocator) Allocate(schema, table string) int64 {
-	key := accessKey{schema, table}
-	return g.allocateByKey(key)
-}
-
-func (g *tableIDAllocator) Clean() {
-	g.currentTableID = 0
-	clear(g.tableIDs)
 }

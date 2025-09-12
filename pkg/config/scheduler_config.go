@@ -15,6 +15,7 @@ package config
 
 import (
 	"errors"
+	"net/url"
 	"time"
 
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -31,14 +32,17 @@ type ChangefeedSchedulerConfig struct {
 	RegionCountPerSpan int `toml:"region-count-per-span" json:"region-count-per-span"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write-key-threshold" json:"write-key-threshold"`
-	// SplitNumberPerNode is the number of splits per node.
-	SplitNumberPerNode int `toml:"split-number-per-node" json:"split-number-per-node"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
 	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
+	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
+	// If true, only tables with primary key and no unique key can be split.
+	// If false, all tables can be split without checking.
+	// For MySQL downstream, this is always set to true for data consistency.
+	EnableSplittableCheck bool `toml:"enable-splittable-check" json:"enable-splittable-check"`
 }
 
 // Validate validates the config.
-func (c *ChangefeedSchedulerConfig) Validate() error {
+func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	if !c.EnableTableAcrossNodes {
 		return nil
 	}
@@ -48,14 +52,15 @@ func (c *ChangefeedSchedulerConfig) Validate() error {
 	if c.WriteKeyThreshold < 0 {
 		return errors.New("write-key-threshold must be larger than 0")
 	}
-	if c.SplitNumberPerNode <= 0 {
-		return errors.New("split-number-per-node must be larger than 0")
-	}
-	if c.SchedulingTaskCountPerNode <= 0 {
+	if c.SchedulingTaskCountPerNode < 0 {
 		return errors.New("scheduling-task-count-per-node must be larger than 0")
 	}
 	if c.RegionCountPerSpan <= 0 {
 		return errors.New("region-count-per-span must be larger than 0")
+	}
+
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
+		c.EnableSplittableCheck = true
 	}
 	return nil
 }
@@ -92,7 +97,7 @@ func NewDefaultSchedulerConfig() *SchedulerConfig {
 		CollectStatsTick:     200, // 200 * 50ms = 10s.
 		MaxTaskConcurrency:   10,
 		CheckBalanceInterval: TomlDuration(15 * time.Second),
-		AddTableBatchSize:    1000,
+		AddTableBatchSize:    10000,
 	}
 }
 

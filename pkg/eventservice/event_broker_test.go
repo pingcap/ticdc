@@ -20,7 +20,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -29,16 +28,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
-
-func newTableSpan(tableID int64, start, end string) *heartbeatpb.TableSpan {
-	return &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: []byte(start),
-		EndKey:   []byte(end),
-	}
-}
 
 func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore) {
 	mockPDClock := pdutil.NewClock4Test()
@@ -54,7 +46,7 @@ func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore) {
 
 func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	did := common.NewDispatcherID()
-	return newMockDispatcherInfo(t, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	return newMockDispatcherInfo(t, 300, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
 }
 
 type notifyMsg struct {
@@ -70,11 +62,13 @@ func TestCheckNeedScan(t *testing.T) {
 	disInfo := newMockDispatcherInfoForTest(t)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 
-	disp := newDispatcherStat(100, newMockDispatcherInfoForTest(t), nil, 0, 0, changefeedStatus)
-	// Set the eventStoreResolvedTs and latestCommitTs to 102 and 101.
+	info := newMockDispatcherInfoForTest(t)
+	info.startTs = 100
+	disp := newDispatcherStat(info, nil, 0, 0, changefeedStatus)
+	// Set the eventStoreResolvedTs and eventStoreCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
 	disp.eventStoreResolvedTs.Store(102)
-	disp.latestCommitTs.Store(101)
+	disp.eventStoreCommitTs.Store(101)
 
 	// Case 1: Is scanning, and mustCheck is false, it should return false.
 	disp.isTaskScanning.Store(true)
@@ -103,7 +97,7 @@ func TestCheckNeedScan(t *testing.T) {
 	log.Info("Pass case 3")
 
 	// Case 4: The task.isRunning is false, it should return false.
-	disp.isReadyRecevingData.Store(false)
+	disp.isReadyReceivingData.Store(false)
 	needScan = broker.scanReady(disp)
 	require.False(t, needScan)
 	log.Info("Pass case 4")
@@ -115,50 +109,62 @@ func TestOnNotify(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
-	startTs := uint64(100)
-	workerIndex := 0
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	disInfo.startTs = 100
 
-	disp := newDispatcherStat(startTs, disInfo, nil, workerIndex, workerIndex, changefeedStatus)
-	broker.addDispatcher(disInfo)
-	// Make the dispatcher is reset.
+	err := broker.addDispatcher(disInfo)
+	require.NoError(t, err)
+
+	disp := broker.getDispatcher(disInfo.GetID())
+	require.NotNil(t, disp)
+	require.Equal(t, disp.id, disInfo.GetID())
+
+	broker.resetDispatcher(disInfo)
+
 	disp.resetState(100)
+	require.Equal(t, disp.isHandshaked.Load(), false)
+	require.Equal(t, disp.isReadyReceivingData.Load(), true)
+	require.Equal(t, disp.lastScannedCommitTs.Load(), uint64(100))
+	require.Equal(t, disp.lastScannedStartTs.Load(), uint64(0))
+
 	disp.isHandshaked.Store(true)
 
 	// Case 1: The resolvedTs is greater than the startTs, it should be updated.
-	notifyMsgs2 := notifyMsg{101, 1}
-	broker.onNotify(disp, notifyMsgs2.resolvedTs, notifyMsgs2.latestCommitTs)
+	notifyMsgs := notifyMsg{101, 1}
+	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
 	require.Equal(t, uint64(101), disp.eventStoreResolvedTs.Load())
-	log.Info("Pass case 2")
+	log.Info("Pass case 1")
 
-	// Case 2: The latestCommitTs is greater than the startTs, it triggers a scan task.
-	notifyMsgs3 := notifyMsg{102, 101}
-	broker.onNotify(disp, notifyMsgs3.resolvedTs, notifyMsgs3.latestCommitTs)
+	// Case 2: The eventStoreCommitTs is greater than the startTs, it triggers a scan task.
+	notifyMsgs = notifyMsg{102, 101}
+	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
 	require.Equal(t, uint64(102), disp.eventStoreResolvedTs.Load())
 	require.True(t, disp.isTaskScanning.Load())
 	task := <-broker.taskChan[disp.scanWorkerIndex]
 	require.Equal(t, task.id, disp.id)
-	log.Info("Pass case 3")
+	log.Info("Pass case 2")
 
 	// Case 3: When the scan task is running, even there is a larger resolvedTs,
 	// should not trigger a new scan task.
-	notifyMsgs4 := notifyMsg{103, 101}
-	broker.onNotify(disp, notifyMsgs4.resolvedTs, notifyMsgs4.latestCommitTs)
+	notifyMsgs = notifyMsg{103, 101}
+	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
 	require.Equal(t, uint64(103), disp.eventStoreResolvedTs.Load())
 	after := time.After(50 * time.Millisecond)
 	select {
 	case <-after:
-		log.Info("Pass case 4")
+		log.Info("Pass case 3")
 	case task := <-broker.taskChan[disp.scanWorkerIndex]:
-		log.Info("trigger a new scan task", zap.Any("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("latestCommitTs", task.latestCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
+		log.Info("trigger a new scan task", zap.Any("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("eventStoreCommitTs", task.eventStoreCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
 		require.Fail(t, "should not trigger a new scan task")
 	}
 
 	// Case 4: Do scan, it will update the sentResolvedTs.
+	status := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	status.availableMemoryQuota.Store(node.ID(task.info.GetServerID()), atomic.NewUint64(broker.scanLimitInBytes))
+
 	broker.doScan(context.TODO(), task)
 	require.False(t, disp.isTaskScanning.Load())
-	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())
-	log.Info("pass case 5")
+	require.Equal(t, notifyMsgs.resolvedTs, disp.sentResolvedTs.Load())
+	log.Info("pass case 4")
 
 	notifyMsgs5 := notifyMsg{104, 101}
 	// Set the schemaStore's maxDDLCommitTs to the sentResolvedTs, so the broker will not scan the schemaStore.
@@ -176,35 +182,34 @@ func TestCURDDispatcher(t *testing.T) {
 	dispInfo := newMockDispatcherInfoForTest(t)
 	// Case 1: Add and get a dispatcher.
 	broker.addDispatcher(dispInfo)
-	disp, ok := broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
+	disp := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 
 	// Case 2: Reset a dispatcher.
 	dispInfo.startTs = 1002
 	broker.resetDispatcher(dispInfo)
-	disp, ok = broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
+	disp = broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 	// Check the resetTs is updated.
 	require.Equal(t, disp.resetTs.Load(), dispInfo.GetStartTs())
 
 	// Case 3: Pause a dispatcher.
 	broker.pauseDispatcher(dispInfo)
-	disp, ok = broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
-	require.False(t, disp.isReadyRecevingData.Load())
+	disp = broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
+	require.False(t, disp.isReadyReceivingData.Load())
 
 	// Case 4: Resume a dispatcher.
 	broker.resumeDispatcher(dispInfo)
-	disp, ok = broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
-	require.True(t, disp.isReadyRecevingData.Load())
+	disp = broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
+	require.True(t, disp.isReadyReceivingData.Load())
 
 	// Case 5: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
-	disp, ok = broker.getDispatcher(dispInfo.GetID())
-	require.False(t, ok)
+	disp = broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, disp)
 }
 
@@ -214,8 +219,8 @@ func TestHandleResolvedTs(t *testing.T) {
 
 	dispInfo := newMockDispatcherInfoForTest(t)
 	broker.addDispatcher(dispInfo)
-	disp, ok := broker.getDispatcher(dispInfo.GetID())
-	require.True(t, ok)
+	disp := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 
 	mc := broker.msgSender.(*mockMessageCenter)
@@ -228,98 +233,103 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 	// handle resolvedTsCacheSize resolvedTs events, so the cache is full.
 	for i := 0; i < resolvedTsCacheSize+1; i++ {
-		broker.handleResolvedTs(ctx, cacheMap, wrapEvent, disp.messageWorkerIndex)
+		broker.handleResolvedTs(ctx, cacheMap, wrapEvent, disp.messageWorkerIndex, messaging.EventCollectorTopic)
 	}
 
 	msg := <-mc.messageCh
 	require.Equal(t, msg.Type, messaging.TypeBatchResolvedTs)
 }
 
-// func TestRateLimiter(t *testing.T) {
-// 	broker, _, _ := newEventBrokerForTest()
-// 	defer broker.close()
+func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
+	broker, _, _ := newEventBrokerForTest()
+	defer broker.close()
 
-// 	dispInfo := newMockDispatcherInfoForTest(t)
-// 	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo.GetChangefeedID())
+	// Create a dispatcher and add it to the broker
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
 
-// 	// Create a dispatcher with known scan limit
-// 	disp := newDispatcherStat(100, dispInfo, nil, 0, 0, changefeedStatus)
-// 	disp.resetState(100)
-// 	disp.isHandshaked.Store(true)
-// 	disp.isReadyRecevingData.Store(true)
-// 	disp.eventStoreResolvedTs.Store(200)
-// 	disp.latestCommitTs.Store(200)
+	// Verify dispatcher exists
+	dispatcher := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispatcher)
+	require.Equal(t, dispatcher.id, dispInfo.GetID())
 
-// 	// Test Case 1: Normal operation - should allow within burst capacity
-// 	// Reset the scan limit to minimum value (1MB)
-// 	disp.resetScanLimit()
-// 	scanLimit := disp.getCurrentScanLimitInBytes()
-// 	require.Equal(t, int64(minScanLimitInBytes), scanLimit)
+	// Create a heartbeat with progress for the existing dispatcher
+	heartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{
+				{
+					Version:      event.DispatcherHeartbeatVersion,
+					DispatcherID: dispInfo.GetID(),
+					CheckpointTs: 100,
+				},
+			},
+		},
+	}
 
-// 	// This should succeed - within burst capacity
-// 	allowed := broker.scanRateLimiter.AllowN(time.Now(), int(scanLimit))
-// 	require.True(t, allowed, "Rate limiter should allow request within burst capacity")
+	// Handle heartbeat - should update the dispatcher's heartbeat time and checkpoint
+	broker.handleDispatcherHeartbeat(heartbeat)
 
-// 	// Test Case 2: Burst capacity limit - should reject request larger than burst
-// 	// Try to consume more than the burst capacity (maxScanLimitInBytes)
-// 	oversizedRequest := int(maxScanLimitInBytes + 1)
-// 	allowed = broker.scanRateLimiter.AllowN(time.Now(), oversizedRequest)
-// 	require.False(t, allowed, "Rate limiter should reject request larger than burst capacity")
+	// Verify the dispatcher's checkpoint and heartbeat time were updated
+	// The checkpoint should be updated to the higher value (from heartbeat)
+	require.GreaterOrEqual(t, dispatcher.checkpointTs.Load(), uint64(100))
+	require.Greater(t, dispatcher.lastReceivedHeartbeatTime.Load(), int64(0))
 
-// 	// Test Case 3: Multiple requests within burst capacity
-// 	// After some time, we should be able to make another request
-// 	time.Sleep(100 * time.Millisecond) // Allow some tokens to be replenished
-// 	allowed = broker.scanRateLimiter.AllowN(time.Now(), int(scanLimit))
-// 	require.True(t, allowed, "Rate limiter should allow another request after token replenishment")
+	// Now Set this dispatcher lastReceivedHeartbeatTime to a time in the past
+	// it should be considered as inactive and removed
+	dispatcher.lastReceivedHeartbeatTime.Store(time.Now().Add(-heartbeatTimeout * 2).Unix())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go broker.reportDispatcherStatToStore(ctx, time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
-// 	// Test Case 4: Test doScan with rate limiter integration
-// 	// Mock the getScanTaskDataRange to return our test data range
-// 	disp.sentResolvedTs.Store(99) // Set to less than eventStoreResolvedTs to trigger scan
+	// Create a heartbeat for the now-removed (inactive) dispatcher
+	heartbeatForInactiveDispatcher := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{
+				{
+					Version:      event.DispatcherHeartbeatVersion,
+					DispatcherID: dispInfo.GetID(), // Same dispatcher ID but it's removed
+					CheckpointTs: 200,
+				},
+			},
+		},
+	}
 
-// 	// Test that doScan respects rate limiter
-// 	// First, exhaust the rate limiter
-// 	broker.scanRateLimiter.AllowN(time.Now(), int(maxScanLimitInBytes))
+	// Mock the message center to capture the response
+	mc := broker.msgSender.(*mockMessageCenter)
 
-// 	// Now doScan should return early due to rate limiter
-// 	ctx := context.Background()
-// 	// This should return quickly without doing actual scan due to rate limiter
-// 	broker.doScan(ctx, disp)
-// 	// Since we can't directly check internal state, we verify the scan wasn't blocked
-// 	require.False(t, disp.isTaskScanning.Load(), "Task should not be scanning due to rate limiter")
+	// Handle heartbeat for the removed dispatcher
+	// This should generate a response indicating the dispatcher should be removed
+	broker.handleDispatcherHeartbeat(heartbeatForInactiveDispatcher)
 
-// 	// Test Case 5: Test rate limiter configuration
-// 	// Verify that the rate limiter is configured correctly
-// 	require.NotNil(t, broker.scanRateLimiter, "Rate limiter should be initialized")
+	// Verify dispatcher is removed
+	removedDispatcher := broker.getDispatcher(dispInfo.GetID())
+	require.Nil(t, removedDispatcher)
 
-// 	// Test rate limiter limits
-// 	rateLimiter := broker.scanRateLimiter
-// 	require.Equal(t, float64(maxScanLimitInBytesPerSecond), float64(rateLimiter.Limit()), "Rate limiter should have correct rate limit")
-
-// 	// Test burst capacity by trying to consume exactly the burst amount
-// 	// Wait for tokens to be replenished
-// 	time.Sleep(200 * time.Millisecond)
-// 	burstAmount := int(maxScanLimitInBytes)
-// 	allowed = rateLimiter.AllowN(time.Now(), burstAmount)
-// 	require.True(t, allowed, "Rate limiter should allow request exactly equal to burst capacity")
-
-// 	// Test Case 6: Test with dispatcher's getCurrentScanLimitInBytes
-// 	// Reset scan limit and test integration
-// 	disp.resetScanLimit()
-// 	currentLimit := disp.getCurrentScanLimitInBytes()
-// 	require.Equal(t, int64(minScanLimitInBytes), currentLimit)
-
-// 	// This should work with rate limiter
-// 	time.Sleep(100 * time.Millisecond) // Allow token replenishment
-// 	allowed = broker.scanRateLimiter.AllowN(time.Now(), int(currentLimit))
-// 	require.True(t, allowed, "Rate limiter should work with dispatcher's current scan limit")
-
-// 	// Test Case 7: Test scan limit growth over time
-// 	// Wait for scan limit to potentially grow
-// 	time.Sleep(updateScanLimitInterval + 100*time.Millisecond)
-// 	newLimit := disp.getCurrentScanLimitInBytes()
-// 	// Should either stay the same or grow (depending on timing)
-// 	require.True(t, newLimit >= currentLimit, "Scan limit should not decrease")
-// 	require.True(t, newLimit <= maxScanLimitInBytes, "Scan limit should not exceed maximum")
-
-// 	log.Info("All rate limiter tests passed")
-// }
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Verify that a response was sent indicating the dispatcher is removed
+	select {
+	case msg := <-mc.messageCh:
+		require.Equal(t, messaging.TypeDispatcherHeartbeatResponse, msg.Type)
+		// The response should contain a dispatcher state indicating removal
+		require.Len(t, msg.Message, 1)
+		response := msg.Message[0].(*event.DispatcherHeartbeatResponse)
+		require.NotNil(t, response)
+		states := response.DispatcherStates
+		require.Len(t, states, 1)
+		require.Equal(t, dispInfo.GetID(), states[0].DispatcherID)
+		require.Equal(t, event.DSStateRemoved, states[0].State)
+	case <-ctx.Done():
+		require.Fail(t, "Expected to receive a dispatcher heartbeat response")
+	}
+}

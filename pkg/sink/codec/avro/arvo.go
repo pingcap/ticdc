@@ -91,7 +91,7 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEve
 		colInfos:       colInfos,
 		columnselector: e.ColumnSelector,
 	}
-	avroCodec, header, err := a.getKeySchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.UpdateTS(), keyColumns)
+	avroCodec, header, err := a.getKeySchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.GetUpdateTS(), keyColumns)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -137,7 +137,7 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonE
 		index:          index,
 		columnselector: e.ColumnSelector,
 	}
-	avroCodec, header, err := a.getValueSchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.UpdateTS(), input)
+	avroCodec, header, err := a.getValueSchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.GetUpdateTS(), input)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -718,4 +718,11 @@ func SetupEncoderAndSchemaRegistry4Testing(
 // TeardownEncoderAndSchemaRegistry4Testing stop the local schema registry for testing.
 func TeardownEncoderAndSchemaRegistry4Testing() {
 	stopHTTPInterceptForTestingRegistry()
+}
+
+// GenCodec generate avro codec.
+// Don't treat string literal "null" as null, because we can distinguish them.
+// See https://github.com/pingcap/tiflow/issues/11994
+func GenCodec(schema string) (*goavro.Codec, error) {
+	return goavro.NewCodecWithOptions(schema, &goavro.CodecOption{EnableStringNull: false})
 }

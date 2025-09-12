@@ -563,6 +563,18 @@ func buildDropViewJobForTest(schemaID int64, finishedTs uint64) *model.Job {
 	}
 }
 
+func buildAddForeignKeyJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAddForeignKey,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo:  newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID)),
+		},
+	}
+}
+
 // old table can be a normal table or a partition table
 // `tableName` args is just to pass some safety check for the ddl handler
 func buildAlterTablePartitioningJobForTest(

@@ -14,7 +14,6 @@
 package event
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
@@ -567,7 +566,7 @@ func TestTimezoneDefaultValue(t *testing.T) {
 	require.NotNil(t, dmlEvent)
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
-	require.Equal(t, RowTypeInsert, row.RowType)
+	require.Equal(t, common.RowTypeInsert, row.RowType)
 	require.Equal(t, int64(1), row.Row.GetInt64(0))
 	require.Equal(t, "2023-02-09 13:00:00", row.Row.GetTime(1).String())
 }
@@ -584,7 +583,7 @@ func TestAllTypes(t *testing.T) {
 
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
-	require.Equal(t, RowTypeInsert, row.RowType)
+	require.Equal(t, common.RowTypeInsert, row.RowType)
 	require.Equal(t, int64(2), row.Row.GetInt64(0))
 	require.Equal(t, int64(1), row.Row.GetInt64(1))
 
@@ -678,7 +677,7 @@ func TestNullColumn(t *testing.T) {
 
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
-	require.Equal(t, RowTypeInsert, row.RowType)
+	require.Equal(t, common.RowTypeInsert, row.RowType)
 
 	tableInfo := helper.GetTableInfo(job)
 	require.NotNil(t, tableInfo)
@@ -718,19 +717,11 @@ func TestBinary(t *testing.T) {
 
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
-	require.Equal(t, RowTypeInsert, row.RowType)
+	require.Equal(t, common.RowTypeInsert, row.RowType)
 	tableInfo := helper.GetTableInfo(job)
 	v := common.ExtractColVal(&row.Row, tableInfo.GetColumns()[0], 0)
 	binaryFormat := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A}
 	require.Equal(t, binaryFormat, v)
-}
-
-func TestTablePrefix(t *testing.T) {
-	key := []byte{'t', 1}
-	require.True(t, bytes.HasPrefix(key, tablePrefix))
-
-	key2 := []byte{'b', 1}
-	require.False(t, bytes.HasPrefix(key2, tablePrefix))
 }
 
 func TestDecodeToChunk(t *testing.T) {
@@ -744,7 +735,7 @@ func TestDecodeToChunk(t *testing.T) {
 	ddlJob := helper.DDL2Job("create table t(id int primary key)")
 	require.NotNil(t, ddlJob)
 	tableInfo := helper.GetTableInfo(ddlJob)
-	ts := tableInfo.UpdateTS()
+	ts := tableInfo.GetUpdateTS()
 	dmls := []string{
 		"insert into t values(1)",
 		"insert into t values(2)",

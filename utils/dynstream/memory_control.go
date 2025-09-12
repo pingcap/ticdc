@@ -246,7 +246,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
 	as.totalPendingSize.Add(int64(-size))
 	if as.totalPendingSize.Load() < 0 {
-		log.Warn("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
+		log.Debug("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
 		as.totalPendingSize.Store(0)
 	}
 	as.updatePathPauseState(path)
@@ -344,6 +344,13 @@ func (a *AreaMemoryMetric[A]) MemoryUsage() int64 {
 
 func (a *AreaMemoryMetric[A]) MaxMemory() int64 {
 	return a.maxMemory
+}
+
+func (a *AreaMemoryMetric[A]) AvailableMemory() int64 {
+	if a.usedMemory > a.maxMemory {
+		return 0
+	}
+	return a.maxMemory - a.usedMemory
 }
 
 func (a *AreaMemoryMetric[A]) Area() A {

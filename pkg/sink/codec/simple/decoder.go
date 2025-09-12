@@ -336,7 +336,7 @@ func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
 	key := tableSchemaKey{
 		schema:  info.TableName.Schema,
 		table:   info.TableName.Table,
-		version: info.UpdateTS(),
+		version: info.GetUpdateTS(),
 	}
 
 	_, ok := m.memo[key]
@@ -344,7 +344,7 @@ func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
 		log.Debug("table info not stored, since it already exists",
 			zap.String("schema", info.TableName.Schema),
 			zap.String("table", info.TableName.Table),
-			zap.Uint64("version", info.UpdateTS()))
+			zap.Uint64("version", info.GetUpdateTS()))
 		return
 	}
 
@@ -352,7 +352,7 @@ func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
 	log.Info("table info stored",
 		zap.String("schema", info.TableName.Schema),
 		zap.String("table", info.TableName.Table),
-		zap.Uint64("version", info.UpdateTS()))
+		zap.Uint64("version", info.GetUpdateTS()))
 }
 
 // Read returns the table info with the exact (schema, table, version)
@@ -546,6 +546,8 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
 	result.TableID = tableInfo.TableName.TableID
+	d.blockedTablesMemo.add(result.SchemaName, result.TableName, result.TableID)
+
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
 		result.ExtraTableName = preTableInfo.GetTableName()
@@ -654,11 +656,11 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 	case DMLTypeDelete:
 		data := formatAllColumnsValue(msg.Old, columns)
 		common.AppendRow2Chunk(data, columns, chk)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeDelete)
 	case DMLTypeInsert:
 		data := formatAllColumnsValue(msg.Data, columns)
 		common.AppendRow2Chunk(data, columns, chk)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeInsert)
 	case DMLTypeUpdate:
 		previous := formatAllColumnsValue(msg.Old, columns)
 		data := formatAllColumnsValue(msg.Data, columns)
@@ -669,8 +671,8 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		}
 		common.AppendRow2Chunk(previous, columns, chk)
 		common.AppendRow2Chunk(data, columns, chk)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
-		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.Type))
 	}

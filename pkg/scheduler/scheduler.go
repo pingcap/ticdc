@@ -22,9 +22,12 @@ import (
 const DefaultCheckInterval = time.Second * 120
 
 const (
-	BasicScheduler   = "basic-scheduler"
-	BalanceScheduler = "balance-scheduler"
-	SplitScheduler   = "split-scheduler"
+	BasicScheduler            = "basic-scheduler"
+	BalanceScheduler          = "balance-scheduler"
+	BalanceSplitScheduler     = "balance-split-scheduler"
+	RedoBasicScheduler        = "redo-basic-scheduler"
+	RedoBalanceScheduler      = "redo-balance-scheduler"
+	RedoBalanceSplitScheduler = "redo-balance-split-scheduler"
 )
 
 type Scheduler interface {
@@ -51,12 +54,15 @@ func NewController(schedulers map[string]Scheduler) *Controller {
 }
 
 func (sm *Controller) Start(taskPool threadpool.ThreadPool) (handles []*threadpool.TaskHandle) {
+	redoBasicScheduler, ok := sm.schedulers[RedoBasicScheduler]
+	if ok {
+		handles = append(handles, taskPool.Submit(redoBasicScheduler, time.Now()))
+	}
 	basicScheduler := sm.schedulers[BasicScheduler]
 	handles = append(handles, taskPool.Submit(basicScheduler, time.Now()))
-
 	checkerSchedulers := []Scheduler{}
 	for _, scheduler := range sm.schedulers {
-		if scheduler.Name() != BasicScheduler {
+		if scheduler.Name() != BasicScheduler && scheduler.Name() != RedoBasicScheduler {
 			checkerSchedulers = append(checkerSchedulers, scheduler)
 		}
 	}

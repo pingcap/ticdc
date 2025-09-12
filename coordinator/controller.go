@@ -233,7 +233,7 @@ func (c *Controller) onMessage(msg *messaging.TargetMessage) {
 }
 
 func (c *Controller) onNodeChanged() {
-	currentNodes := c.bootstrapper.GetAllNodes()
+	currentNodes := c.bootstrapper.GetAllNodeIDs()
 
 	activeNodes := c.nodeManager.GetAliveNodes()
 	newNodes := make([]*node.Info, 0, len(activeNodes))

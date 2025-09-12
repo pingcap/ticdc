@@ -57,6 +57,10 @@ func (m *mockDispatcher) GetStartTs() uint64 {
 	return m.startTs
 }
 
+func (m *mockDispatcher) GetMode() int64 {
+	return common.DefaultMode
+}
+
 func (m *mockDispatcher) GetId() common.DispatcherID {
 	return m.id
 }
@@ -114,6 +118,10 @@ func (m *mockDispatcher) GetTimezone() string {
 
 func (m *mockDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 	return &eventpb.IntegrityConfig{}
+}
+
+func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
+	return false
 }
 
 // mockEvent implements the Event interface for testing
@@ -337,13 +345,13 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 			event: dispatcher.DispatcherEvent{
 				Event: &mockEvent{
 					eventType: commonEvent.TypeSyncPointEvent,
-					commitTs:  100,
+					commitTs:  101,
 				},
 			},
-			expectedResult:   false,
+			expectedResult:   true,
 			expectedDDLOnTs:  false,
 			expectedSyncOnTs: true,
-			expectedCommitTs: 100,
+			expectedCommitTs: 101,
 		},
 		{
 			name:              "SyncPoint event with same commit ts and not got SyncPoint",
@@ -352,14 +360,30 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 			event: dispatcher.DispatcherEvent{
 				Event: &mockEvent{
 					eventType: commonEvent.TypeSyncPointEvent,
-					commitTs:  100,
+					commitTs:  101,
 				},
 			},
 			expectedResult:   true,
 			expectedDDLOnTs:  false,
 			expectedSyncOnTs: true,
-			expectedCommitTs: 100,
+			expectedCommitTs: 101,
 		},
+		{
+			name:              "SyncPoint event with same commit ts should be ignored",
+			lastEventCommitTs: 101,
+			gotSyncpointOnTS:  true,
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeSyncPointEvent,
+					commitTs:  101,
+				},
+			},
+			expectedResult:   false,
+			expectedDDLOnTs:  false,
+			expectedSyncOnTs: true,
+			expectedCommitTs: 101,
+		},
+
 		{
 			name:              "DML event with larger commit ts",
 			lastEventCommitTs: 100,
@@ -873,7 +897,7 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
-			stat := newDispatcherStat(mockDisp, mockEventCollector, nil, 0)
+			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 			stat.lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			stat.epoch.Store(tt.epoch)
@@ -959,7 +983,7 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
-			stat := newDispatcherStat(mockDisp, mockEventCollector, nil, 0)
+			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 			stat.lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			stat.epoch.Store(tt.epoch)
@@ -1068,7 +1092,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
-			stat := newDispatcherStat(mockDisp, nil, nil, 0)
+			stat := newDispatcherStat(mockDisp, nil, nil)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			stat.epoch.Store(tt.epoch)
 			if tt.tableInfo != nil {

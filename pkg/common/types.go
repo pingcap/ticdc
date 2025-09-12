@@ -20,8 +20,10 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
 )
 
 const (
@@ -147,6 +149,10 @@ func (g GID) String() string {
 	return buf.String()
 }
 
+func (g GID) GetSize() int {
+	return 16
+}
+
 func NewGIDWithValue(Low uint64, High uint64) GID {
 	return GID{
 		Low:  Low,
@@ -172,7 +178,7 @@ func (r ChangeFeedDisplayName) String() string {
 	return r.Namespace + "/" + r.Name
 }
 
-// ChangefeedID is the unique identifier of a changefeed.
+// ChangeFeedID is the unique identifier of a changefeed.
 // GID is the inner unique identifier of a changefeed.
 // we can use Id to represent the changefeedID in performance-critical scenarios.
 // DisplayName is the user-friendly expression of a changefeed.
@@ -302,3 +308,55 @@ const (
 	BlackHoleSinkType
 	RedoSinkType
 )
+
+type RowType byte
+
+const (
+	// RowTypeDelete represents a delete row.
+	RowTypeDelete RowType = iota
+	// RowTypeInsert represents a insert row.
+	RowTypeInsert
+	// RowTypeUpdate represents a update row.
+	RowTypeUpdate
+)
+
+func (r RowType) String() string {
+	switch r {
+	case RowTypeDelete:
+		return "delete"
+	case RowTypeInsert:
+		return "insert"
+	case RowTypeUpdate:
+		return "update"
+	default:
+	}
+	log.Panic("RowType: invalid row type", zap.Uint8("rowType", uint8(r)))
+	return ""
+}
+
+const (
+	DefaultMode int64 = iota
+	RedoMode
+)
+
+func IsDefaultMode(mode int64) bool {
+	return mode == DefaultMode
+}
+
+func IsRedoMode(mode int64) bool {
+	return mode == RedoMode
+}
+
+func GetModeBySinkType(sinkType SinkType) int64 {
+	if sinkType == RedoSinkType {
+		return RedoMode
+	}
+	return DefaultMode
+}
+
+func StringMode(mode int64) string {
+	if mode == RedoMode {
+		return "redo"
+	}
+	return "default"
+}

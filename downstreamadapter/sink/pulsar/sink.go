@@ -134,10 +134,11 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	case *commonEvent.DDLEvent:
 		err = s.sendDDLEvent(v)
 	default:
-		log.Panic("pulsar sink doesn't support this type of block event",
+		log.Error("pulsar sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Any("eventType", event.GetType()))
+			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
+		return errors.ErrInvalidEventType.GenWithStackByArgs(commonEvent.TypeToString(event.GetType()))
 	}
 	if err != nil {
 		s.isNormal.Store(false)
@@ -314,6 +315,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			for {
 				row, ok := event.GetNextRow()
 				if !ok {
+					event.Rewind()
 					break
 				}
 

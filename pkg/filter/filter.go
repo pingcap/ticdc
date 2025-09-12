@@ -16,15 +16,15 @@ package filter
 import (
 	"sync"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -43,23 +43,31 @@ const (
 )
 
 // Filter are safe for concurrent use.
-// TODO: find a better way to abstract this interface.
 type Filter interface {
-	// ShouldIgnoreDMLEvent returns true if the DML event should not be sent to downstream.
-	ShouldIgnoreDMLEvent(dml *model.RowChangedEvent, rawRow model.RowChangedDatums, tableInfo *model.TableInfo) (bool, error)
-	// ShouldIgnoreDDLEvent returns true if the DDL event should not be sent to downstream.
-	ShouldIgnoreDDLEvent(ddl *model.DDLEvent) (bool, error)
-	// ShouldDiscardDDL returns true if this DDL should be discarded.
-	// If a ddl is discarded, it will neither be applied to cdc's schema storage
-	// nor sent to downstream.
-	ShouldDiscardDDL(ddlType timodel.ActionType, schema, table string, tableInfo *timodel.TableInfo) bool
+	// ShouldIgnoreDML returns true if the DML event should not be handled.
+	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64) (bool, error)
+	// ShouldDiscardDDL returns true if the DDL event should not be handled.
+	ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo, startTs uint64) bool
+	// ShouldIgnoreDDL returns true if the DDL event should not be sent to downstream.
+	//
+	// If a ddl is ignored, it will be sent to table trigger dispatcher to update the schema or table info,
+	// but will not be sent to downstream.
+	// Note that a ignored ddl is different from a discarded ddl. For example, suppose
+	// we have a changefeed-test with the following config:
+	//   - table filter: rules = ['test.*']
+	//   - event-filters: matcher = ["test.worker"] ignore-event = ["create table"]
+	//
+	// Then, for the following DDLs:
+	//  1. `CREATE TABLE test.worker` will be ignored, but the table will be replicated by changefeed-test.
+	//  2. `CREATE TABLE other.worker` will be discarded, and the table will not be replicated by changefeed-test.
+	ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType) (bool, error)
 	// ShouldIgnoreTable returns true if the table should be ignored.
-	ShouldIgnoreTable(schema, table string, tableInfo *timodel.TableInfo) bool
+	ShouldIgnoreTable(schema, table string, tableInfo *common.TableInfo) bool
 	// ShouldIgnoreSchema returns true if the schema should be ignored.
 	ShouldIgnoreSchema(schema string) bool
 	// Verify should only be called by create changefeed OpenAPI.
 	// Its purpose is to verify the expression filter config.
-	Verify(tableInfos []*model.TableInfo) error
+	Verify(tableInfos []*common.TableInfo) error
 }
 
 // filter implements Filter.
@@ -90,7 +98,7 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 	if err != nil {
 		return nil, err
 	}
-	sqlEventFilter, err := newSQLEventFilter(cfg)
+	sqlEventFilter, err := newSQLEventFilter(cfg, caseSensitive)
 	if err != nil {
 		return nil, err
 	}
@@ -103,141 +111,66 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 	}, nil
 }
 
-// IsEligible returns whether the table is a eligible table.
-// A table is eligible if it has a primary key or unique key on not null columns.
-// Or when enable forReplicate or the table is a view.
-// TODO: Add some tests for this function.
-func (f *filter) IsEligible(tableInfo *timodel.TableInfo) bool {
-	// Sequence is not supported yet, TiCDC needs to filter all sequence tables.
-	// See https://github.com/pingcap/tiflow/issues/4559
-	if tableInfo.IsSequence() {
-		return false
-	}
-	if f.forceReplicate {
-		return true
-	}
-	if tableInfo.IsView() {
-		return true
-	}
-
-	// If the table has primary key, it is eligible.
-	for _, col := range tableInfo.Columns {
-		if !(col.IsGenerated() && !col.GeneratedStored) { // visible and not stored generated column
-			if (tableInfo.PKIsHandle && mysql.HasPriKeyFlag(col.GetFlag())) || col.ID == timodel.ExtraHandleID {
-				return true
-			}
-		}
-	}
-
-	// If the table has unique key on not null columns, it is eligible.
-	for _, idx := range tableInfo.Indices {
-		if idx.Primary {
-			return true
-		}
-		if len(idx.Columns) == 0 {
-			continue
-		}
-		if idx.Unique {
-			// ensure all columns in unique key have NOT NULL flag
-			allColNotNull := true
-			skip := false
-			for _, idxCol := range idx.Columns {
-				col := timodel.FindColumnInfo(tableInfo.Cols(), idxCol.Name.L)
-				// This index has a column in DeleteOnly state,
-				// or it is expression index (it defined on a hidden column),
-				// it can not be implicit PK, go to next index iterator
-				if col == nil || col.Hidden {
-					skip = true
-					break
-				}
-				if !mysql.HasNotNullFlag(col.GetFlag()) {
-					allColNotNull = false
-					break
-				}
-			}
-			if skip {
-				continue
-			}
-			if allColNotNull {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// ShouldIgnoreDMLEvent checks if a DML event should be ignore by conditions below:
+// ShouldIgnoreDML checks if a DML event should be ignore by conditions below:
 // 0. By startTs.
 // 1. By table name.
 // 2. By type.
-// 3. By columns value.
-func (f *filter) ShouldIgnoreDMLEvent(
-	dml *model.RowChangedEvent,
-	rawRow model.RowChangedDatums,
-	ti *model.TableInfo,
-) (bool, error) {
-	if f.shouldIgnoreStartTs(dml.StartTs) {
+func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64) (bool, error) {
+	if f.shouldIgnoreStartTs(startTs) {
 		return true, nil
 	}
 
-	if f.ShouldIgnoreTable(dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName(), nil) {
+	if f.ShouldIgnoreTable(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo) {
 		return true, nil
 	}
 
-	ignoreByEventType, err := f.sqlEventFilter.shouldSkipDML(dml)
+	ignoreByEventType, err := f.sqlEventFilter.shouldSkipDML(tableInfo.GetSchemaName(), tableInfo.GetTableName(), dmlType)
 	if err != nil {
 		return false, err
 	}
 	if ignoreByEventType {
 		return true, nil
 	}
-	return f.dmlExprFilter.shouldSkipDML(dml, rawRow, ti)
+	return f.dmlExprFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
 }
 
-// ShouldDiscardDDL checks if a DDL should be discarded by conditions below:
+// ShouldDiscardDDL checks if a DDL event should be discarded by conditions below:
 // 0. By allow list.
-// 1. By schema name.
-// 2. By table name.
-func (f *filter) ShouldDiscardDDL(ddlType timodel.ActionType, schema, table string, tableInfo *timodel.TableInfo) bool {
+// 1. By startTs.
+// 2. By schema name.
+// 3. By table name.
+func (f *filter) ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo, startTs uint64) bool {
 	if !isAllowedDDL(ddlType) {
 		return true
 	}
 
-	if IsSchemaDDL(ddlType) {
-		return f.ShouldIgnoreSchema(schema)
+	if f.shouldIgnoreStartTs(startTs) {
+		return true
 	}
+
+	// If the DDL is a schema DDL, we should ignore it if the schema is not allowed.
+	if IsSchemaDDL(ddlType) && f.ShouldIgnoreSchema(schema) {
+		return true
+	}
+
 	return f.ShouldIgnoreTable(schema, table, tableInfo)
 }
 
-// ShouldIgnoreDDLEvent checks if a DDL event should be ignore by conditions below:
+// ShouldIgnoreDDL checks if a DDL event should be ignore by conditions below:
 // 1. By ddl type.
 // 2. By ddl query.
-//
-// If a ddl is ignored, it will be applied to cdc's schema storage,
-// but will not be sent to downstream.
-// Note that a ignored ddl is different from a discarded ddl. For example, suppose
-// we have a changefeed-test with the following config:
-//   - table filter: rules = ['test.*']
-//   - event-filters: matcher = ["test.worker"] ignore-event = ["create table"]
-//
-// Then, for the following DDLs:
-//  1. `CREATE TABLE test.worker` will be ignored, but the table will be replicated by changefeed-test.
-//  2. `CREATE TABLE other.worker` will be discarded, and the table will not be replicated by changefeed-test.
-func (f *filter) ShouldIgnoreDDLEvent(ddl *model.DDLEvent) (bool, error) {
-	if f.shouldIgnoreStartTs(ddl.StartTs) {
-		return true, nil
-	}
-	return f.sqlEventFilter.shouldSkipDDL(ddl)
+func (f *filter) ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType) (bool, error) {
+	return f.sqlEventFilter.shouldSkipDDL(schema, table, query, ddlType)
 }
 
 // ShouldIgnoreTable returns true if the specified table should be ignored by this changefeed.
 // NOTICE: Set `tbl` to an empty string to test against the whole database.
-func (f *filter) ShouldIgnoreTable(db, tbl string, tableInfo *timodel.TableInfo) bool {
+func (f *filter) ShouldIgnoreTable(db, tbl string, tableInfo *common.TableInfo) bool {
 	if IsSysSchema(db) {
 		return true
 	}
 
-	if tableInfo != nil && !f.IsEligible(tableInfo) {
+	if tableInfo != nil && !tableInfo.IsEligible(f.forceReplicate) {
 		log.Info("table is not eligible, should ignore this table", zap.String("db", db), zap.String("table", tbl))
 		return true
 	}
@@ -250,8 +183,10 @@ func (f *filter) ShouldIgnoreSchema(schema string) bool {
 	return IsSysSchema(schema) || !f.tableFilter.MatchSchema(schema)
 }
 
-func (f *filter) Verify(tableInfos []*model.TableInfo) error {
-	return f.dmlExprFilter.verify(tableInfos)
+// TODO
+func (f *filter) Verify(tableInfos []*common.TableInfo) error {
+	return nil
+	// return f.dmlExprFilter.verify(tableInfos)
 }
 
 func (f *filter) shouldIgnoreStartTs(ts uint64) bool {
@@ -284,16 +219,22 @@ var (
 	storage *SharedFilterStorage
 )
 
+type FilterWithConfig struct {
+	Filter
+	config   *eventpb.FilterConfig
+	timeZone string
+}
+
 type SharedFilterStorage struct {
 	// Each dispatcher in the same changefeed will share the same filter storage.
-	m     map[common.ChangeFeedID]Filter
+	m     map[common.ChangeFeedID]FilterWithConfig
 	mutex sync.Mutex
 }
 
 func GetSharedFilterStorage() *SharedFilterStorage {
 	once.Do(func() {
 		storage = &SharedFilterStorage{
-			m: make(map[common.ChangeFeedID]Filter),
+			m: make(map[common.ChangeFeedID]FilterWithConfig),
 		}
 	})
 	return storage
@@ -302,13 +243,16 @@ func GetSharedFilterStorage() *SharedFilterStorage {
 func (s *SharedFilterStorage) GetOrSetFilter(
 	changeFeedID common.ChangeFeedID,
 	cfg *eventpb.FilterConfig,
-	tz string,
-	caseSensitive bool,
+	timeZone string,
 ) (Filter, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if f, ok := s.m[changeFeedID]; ok {
-		return f, nil
+		if !isFilterConfigEqual(f.config, cfg) || f.timeZone != timeZone {
+			log.Info("filter config changed, need to rebuild filter", zap.Any("preConfig", f.config), zap.Any("newConfig", cfg), zap.String("preTimeZone", f.timeZone), zap.String("newTimeZone", timeZone))
+		} else {
+			return f.Filter, nil
+		}
 	}
 	// convert eventpb.FilterConfig to config.FilterConfig
 	filterCfg := &config.FilterConfig{
@@ -331,10 +275,30 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 		filterCfg.EventFilters = append(filterCfg.EventFilters, f)
 	}
 	// generate table filter
-	f, err := NewFilter(filterCfg, tz, cfg.CaseSensitive, cfg.ForceReplicate)
+	f, err := NewFilter(filterCfg, timeZone, cfg.CaseSensitive, cfg.ForceReplicate)
 	if err != nil {
 		return nil, err
 	}
-	s.m[changeFeedID] = f
+	s.m[changeFeedID] = FilterWithConfig{
+		Filter:   f,
+		config:   cfg,
+		timeZone: timeZone,
+	}
 	return f, nil
+}
+
+// isFilterConfigEqual compares two FilterConfig for equality by content
+func isFilterConfigEqual(cfg1, cfg2 *eventpb.FilterConfig) bool {
+	// Fast path: if pointers are equal, configs are definitely equal
+	if cfg1 == cfg2 {
+		return true
+	}
+
+	// Handle nil cases
+	if cfg1 == nil || cfg2 == nil {
+		return false
+	}
+
+	// Use protobuf's built-in Equal method for content comparison
+	return proto.Equal(cfg1, cfg2)
 }

@@ -17,7 +17,7 @@ import (
 	"bytes"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -39,7 +39,7 @@ type JSONTxnEventEncoder struct {
 	txnSchema   *string
 	txnTable    *string
 
-	columnSelector columnselector.Selector
+	columnSelector commonEvent.Selector
 }
 
 // NewJSONTxnEventEncoder creates a new JSONTxnEventEncoder
@@ -57,6 +57,7 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
+			event.Rewind()
 			break
 		}
 		value, err := newJSONMessageForDML(&commonEvent.RowEvent{

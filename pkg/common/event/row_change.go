@@ -15,7 +15,6 @@ package event
 
 import (
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -98,7 +97,7 @@ type RowEvent struct {
 	TableInfo       *common.TableInfo
 	CommitTs        uint64
 	Event           RowChange
-	ColumnSelector  columnselector.Selector
+	ColumnSelector  Selector
 	Callback        func()
 
 	Checksum *integrity.Checksum

@@ -12,6 +12,10 @@ SINK_TYPE=$1
 # TiCDC blocks DDL operations until its state is not running, except for adding indexes.
 # TiCDC also checks add index ddl state before execute a new DDL.
 function run() {
+	# No need to test kafka and storage sink.
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
@@ -31,10 +35,19 @@ function run() {
 
 	run_sql "alter table test.t modify column col decimal(30,10);"
 	run_sql "alter table test.t add index (col);"
-	run_sql "create table test.finish_mark (a int primary key);"
-	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	# make sure all tables are equal in upstream and downstream
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 180
+	# use `truncate table` ddl as a barrier to ensure the slow `add index` operation
+	# completes before the test finishes.
+	# because `truncate table` and `create table` are processed sequentially by table trigger dispatcher.
+	run_sql "truncate table test.t;"
+	run_sql "insert into test.t values (1, 1);"
+	run_sql "create table test.finish_mark (a int primary key);"
+	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+
+	# ensure all dml / ddl related to test.t finish
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+
 	check_logs_contains $WORK_DIR "DDL replicate success"
 	check_logs_contains $WORK_DIR "DDL is running downstream"
 	cleanup_process $CDC_BINARY

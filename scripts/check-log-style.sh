@@ -12,10 +12,10 @@
 # limitations under the License.
 
 # zap field name should be camelCase, excepts for idioms and special terms.
-grep -RnE "zap.[A-Z][a-zA-Z0-9]+\(\"[0-9A-Za-z]*[-_ ][^\"]*\"(,|\))" api cmd downstreamadapter coordinator eventpb heartbeatpb logservice maintainer pkg server tools utils version tests |
+grep -RnE "zap.[A-Z][a-zA-Z0-9]+\(\"[0-9A-Za-z]*[-_ ][^\"]*\"(,|\))" api cmd downstreamadapter coordinator eventpb heartbeatpb logservice maintainer pkg server tools utils tests |
 	grep -vE "user-agent" |
 	grep -vE "https_proxy|http_proxy|no_proxy" |
 	grep -vE "max-message-bytes|max-message-size|replication-factor" |
 	grep -vE "release-version|git-hash|git-branch|go-version" |
-	grep -vE "failpoint-build|utc-build-time" |
+	grep -vE "failpoint-build|utc-build-time|kernel-type" |
 	awk '{ print  } END { if (NR > 0) { exit 1  }  }'

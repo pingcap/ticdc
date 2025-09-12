@@ -23,7 +23,9 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -87,6 +89,11 @@ type TableInfo struct {
 
 	Sequence *model.SequenceInfo `json:"sequence"`
 
+	// UpdateTS is used to record the timestamp of updating the table's schema information.
+	// These changing schema operations don't include 'truncate table', 'rename table',
+	// 'truncate partition' and 'exchange partition'.
+	UpdateTS uint64 `json:"update_timestamp"`
+
 	preSQLs struct {
 		isInitialized atomic.Bool
 		mutex         sync.Mutex
@@ -111,7 +118,6 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
-	ti.TableName.quotedName = QuoteSchema(ti.TableName.Schema, ti.TableName.Table)
 	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteString())
@@ -195,11 +201,11 @@ func (ti *TableInfo) GetPKIndex() []int64 {
 	return ti.columnSchema.PKIndex
 }
 
-// UpdateTS returns the UpdateTS of columnSchema
+// GetUpdateTS() returns the GetUpdateTS() of columnSchema
 // These changing schema operations don't include 'truncate table', 'rename table',
 // 'rename tables', 'truncate partition' and 'exchange partition'.
-func (ti *TableInfo) UpdateTS() uint64 {
-	return ti.columnSchema.UpdateTS
+func (ti *TableInfo) GetUpdateTS() uint64 {
+	return ti.UpdateTS
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
@@ -337,6 +343,22 @@ func (ti *TableInfo) HasVirtualColumns() bool {
 	return ti.columnSchema.VirtualColumnCount > 0
 }
 
+// IsEligible returns whether the table is a eligible table
+func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
+	// Sequence is not supported yet, TiCDC needs to filter all sequence tables.
+	// See https://github.com/pingcap/tiflow/issues/4559
+	if ti.IsSequence() {
+		return false
+	}
+	if forceReplicate {
+		return true
+	}
+	if ti.IsView() {
+		return true
+	}
+	return len(ti.columnSchema.HandleKeyIDs) != 0
+}
+
 // GetIndex return the corresponding index by the given name.
 func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 	for _, index := range ti.columnSchema.Indices {
@@ -370,25 +392,36 @@ func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 // Column is not case-sensitive on any platform, nor are column aliases.
 // So we always match in lowercase.
 // See also: https://dev.mysql.com/doc/refman/5.7/en/identifier-case-sensitivity.html
-func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
+func (ti *TableInfo) OffsetsByNames(names []string) ([]int, error) {
 	// todo: optimize it
-	columnOffsets := make(map[string]int, len(ti.columnSchema.Columns))
+	columnOffsets := make(map[string]int)
+	virtualGeneratedColumn := make(map[string]struct{})
 	for idx, col := range ti.columnSchema.Columns {
 		if col != nil {
-			columnOffsets[col.Name.L] = idx
+			if IsColCDCVisible(col) {
+				columnOffsets[col.Name.L] = idx
+			} else {
+				virtualGeneratedColumn[col.Name.L] = struct{}{}
+			}
 		}
 	}
 
 	result := make([]int, 0, len(names))
 	for _, col := range names {
-		offset, ok := columnOffsets[strings.ToLower(col)]
+		name := strings.ToLower(col)
+		if _, ok := virtualGeneratedColumn[name]; ok {
+			return nil, errors.ErrDispatcherFailed.GenWithStack(
+				"found virtual generated columns when dispatch event, table: %v, columns: %v column: %v", ti.GetTableName(), names, name)
+		}
+		offset, ok := columnOffsets[name]
 		if !ok {
-			return nil, false
+			return nil, errors.ErrDispatcherFailed.GenWithStack(
+				"columns not found when dispatch event, table: %v, columns: %v, column: %v", ti.GetTableName(), names, name)
 		}
 		result = append(result, offset)
 	}
 
-	return result, true
+	return result, nil
 }
 
 func (ti *TableInfo) HasPrimaryKey() bool {
@@ -422,6 +455,19 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	return ok
 }
 
+func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
+	return &model.TableInfo{
+		ID:       ti.TableName.TableID,
+		Name:     ast.NewCIStr(ti.TableName.Table),
+		Charset:  ti.Charset,
+		Collate:  ti.Collate,
+		Comment:  ti.Comment,
+		View:     ti.View,
+		Sequence: ti.Sequence,
+		Columns:  ti.columnSchema.Cols(), // Get public state columns, that's enough.
+	}
+}
+
 func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	return &TableInfo{
 		TableName: TableName{
@@ -429,7 +475,6 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 			Table:       table,
 			TableID:     tableID,
 			IsPartition: isPartition,
-			quotedName:  QuoteSchema(schema, table),
 		},
 		columnSchema: columnSchema,
 		View:         tableInfo.View,
@@ -437,6 +482,7 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 		Charset:      tableInfo.Charset,
 		Collate:      tableInfo.Collate,
 		Comment:      tableInfo.Comment,
+		UpdateTS:     tableInfo.UpdateTS,
 	}
 }
 

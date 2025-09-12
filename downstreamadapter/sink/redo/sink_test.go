@@ -124,6 +124,8 @@ func TestRedoSinkInProcessor(t *testing.T) {
 		}
 		startTs := uint64(100)
 		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test"), startTs, cfg)
+		defer dmlMgr.Close(false)
+
 		var eg errgroup.Group
 		eg.Go(func() error {
 			return dmlMgr.Run(ctx)
@@ -212,6 +214,8 @@ func TestRedoSinkError(t *testing.T) {
 		FlushWorkerNum:        workerNumberForTest,
 	}
 	logMgr := New(ctx, common.NewChangeFeedIDWithName("test"), 0, cfg)
+	defer logMgr.Close(false)
+
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return logMgr.Run(ctx)
@@ -269,6 +273,8 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		UseFileBackend:        useFileBackend,
 	}
 	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test"), 0, cfg)
+	defer dmlMgr.Close(false)
+
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return dmlMgr.Run(ctx)

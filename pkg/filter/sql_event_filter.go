@@ -14,13 +14,16 @@
 package filter
 
 import (
+	"fmt"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -35,8 +38,6 @@ const (
 	binlogFilterTablePlaceholder = "binlogFilterTable"
 	// dmlQuery is a place holder to call binlog filter to filter dml event.
 	dmlQuery = ""
-	// caseSensitive is use to create bf.BinlogEvent.
-	caseSensitive = false
 )
 
 // sqlEventRule only be used by sqlEventFilter.
@@ -48,12 +49,15 @@ type sqlEventRule struct {
 	bf *bf.BinlogEvent
 }
 
-func newSQLEventFilterRule(cfg *config.EventFilterRule) (*sqlEventRule, error) {
+func newSQLEventFilterRule(cfg *config.EventFilterRule, caseSensitive bool) (*sqlEventRule, error) {
 	tf, err := tfilter.Parse(cfg.Matcher)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, cfg.Matcher)
 	}
 
+	if !caseSensitive {
+		tf = tfilter.CaseInsensitive(tf)
+	}
 	res := &sqlEventRule{
 		tf: tf,
 	}
@@ -96,18 +100,18 @@ type sqlEventFilter struct {
 	rules []*sqlEventRule
 }
 
-func newSQLEventFilter(cfg *config.FilterConfig) (*sqlEventFilter, error) {
+func newSQLEventFilter(cfg *config.FilterConfig, caseSensitive bool) (*sqlEventFilter, error) {
 	res := &sqlEventFilter{}
 	for _, rule := range cfg.EventFilters {
-		if err := res.addRule(rule); err != nil {
+		if err := res.addRule(rule, caseSensitive); err != nil {
 			return nil, errors.Trace(err)
 		}
 	}
 	return res, nil
 }
 
-func (f *sqlEventFilter) addRule(cfg *config.EventFilterRule) error {
-	rule, err := newSQLEventFilterRule(cfg)
+func (f *sqlEventFilter) addRule(cfg *config.EventFilterRule, caseSensitive bool) error {
+	rule, err := newSQLEventFilterRule(cfg, caseSensitive)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -132,17 +136,15 @@ func (f *sqlEventFilter) getRules(schema, table string) []*sqlEventRule {
 }
 
 // skipDDLEvent skips ddl event by its type and query.
-func (f *sqlEventFilter) shouldSkipDDL(ddl *model.DDLEvent) (skip bool, err error) {
+func (f *sqlEventFilter) shouldSkipDDL(schema, table, query string, ddlType model.ActionType) (skip bool, err error) {
 	if len(f.rules) == 0 {
 		return false, nil
 	}
-	schema := ddl.TableInfo.TableName.Schema
-	table := ddl.TableInfo.TableName.Table
-	evenType := ddlToEventType(ddl.Type)
+	evenType := ddlToEventType(ddlType)
 	if evenType == bf.NullEvent {
 		log.Warn("sql event filter unsupported ddl type, do nothing",
-			zap.String("type", ddl.Type.String()),
-			zap.String("query", ddl.Query))
+			zap.String("type", ddlType.String()),
+			zap.String("query", query))
 		return false, nil
 	}
 
@@ -151,7 +153,7 @@ func (f *sqlEventFilter) shouldSkipDDL(ddl *model.DDLEvent) (skip bool, err erro
 		action, err := rule.bf.Filter(
 			binlogFilterSchemaPlaceholder,
 			binlogFilterTablePlaceholder,
-			evenType, ddl.Query)
+			evenType, query)
 		if err != nil {
 			return false, errors.Trace(err)
 		}
@@ -161,11 +163,11 @@ func (f *sqlEventFilter) shouldSkipDDL(ddl *model.DDLEvent) (skip bool, err erro
 
 		// If the ddl is alter table's subtype,
 		// we need try to filter it by bf.AlterTable.
-		if isAlterTable(ddl.Type) {
+		if isAlterTable(ddlType) {
 			action, err = rule.bf.Filter(
 				binlogFilterSchemaPlaceholder,
 				binlogFilterTablePlaceholder,
-				bf.AlterTable, ddl.Query)
+				bf.AlterTable, query)
 			if err != nil {
 				return false, errors.Trace(err)
 			}
@@ -178,29 +180,29 @@ func (f *sqlEventFilter) shouldSkipDDL(ddl *model.DDLEvent) (skip bool, err erro
 }
 
 // shouldSkipDML skips dml event by its type.
-func (f *sqlEventFilter) shouldSkipDML(event *model.RowChangedEvent) (bool, error) {
+func (f *sqlEventFilter) shouldSkipDML(schema, table string, dmlType common.RowType) (bool, error) {
 	if len(f.rules) == 0 {
 		return false, nil
 	}
 
 	var et bf.EventType
-	switch {
-	case event.IsInsert():
+	switch dmlType {
+	case common.RowTypeInsert:
 		et = bf.InsertEvent
-	case event.IsUpdate():
+	case common.RowTypeUpdate:
 		et = bf.UpdateEvent
-	case event.IsDelete():
+	case common.RowTypeDelete:
 		et = bf.DeleteEvent
 	default:
 		// It should never happen.
 		log.Warn("unknown row changed event type")
 		return false, nil
 	}
-	rules := f.getRules(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName())
+	rules := f.getRules(schema, table)
 	for _, rule := range rules {
 		action, err := rule.bf.Filter(binlogFilterSchemaPlaceholder, binlogFilterTablePlaceholder, et, dmlQuery)
 		if err != nil {
-			return false, cerror.WrapError(cerror.ErrFailedToFilterDML, err, event)
+			return false, cerror.WrapError(cerror.ErrFailedToFilterDML, err, fmt.Sprintf("%s.%s, %d", schema, table, dmlType))
 		}
 		if action == bf.Ignore {
 			return true, nil

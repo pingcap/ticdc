@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -227,7 +226,7 @@ func newTableSchema(tableInfo *commonType.TableInfo) *TableSchema {
 		Schema:  tableInfo.TableName.Schema,
 		Table:   tableInfo.TableName.Table,
 		TableID: tableInfo.TableName.TableID,
-		Version: tableInfo.UpdateTS(),
+		Version: tableInfo.GetUpdateTS(),
 		Columns: columns,
 		Indexes: indexes,
 	}
@@ -328,7 +327,7 @@ func (a *jsonMarshaller) newDMLMessage(
 		TableID:            event.GetTableID(),
 		CommitTs:           event.CommitTs,
 		BuildTs:            time.Now().UnixMilli(),
-		SchemaVersion:      event.TableInfo.UpdateTS(),
+		SchemaVersion:      event.TableInfo.GetUpdateTS(),
 		HandleKeyOnly:      onlyHandleKey,
 		ClaimCheckLocation: claimCheckFileName,
 	}
@@ -355,7 +354,7 @@ func (a *jsonMarshaller) newDMLMessage(
 }
 
 func (a *jsonMarshaller) formatColumns(
-	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool, columnSelector columnselector.Selector,
+	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool, columnSelector commonEvent.Selector,
 ) map[string]interface{} {
 	colInfos := tableInfo.GetColumns()
 	result := make(map[string]interface{}, len(colInfos))

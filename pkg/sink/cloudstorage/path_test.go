@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -32,7 +33,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
-	"github.com/pingcap/tiflow/engine/pkg/clock"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -320,15 +320,23 @@ func TestCheckOrWriteSchema(t *testing.T) {
 		TableInfoVersion:           100,
 	}
 
-	err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
+
+	// test old dml file can be ignored
+	table.TableInfoVersion = 99
+	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.True(t, hasNewerSchemaVersion)
+	require.Equal(t, 1, len(f.versionMap))
 
 	// test only table version changed, schema file should be reused
 	table.TableInfoVersion = 101
-	err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
-	fmt.Println(f.versionMap, table)
+	require.False(t, hasNewerSchemaVersion)
 	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
 
 	dir = filepath.Join(dir, "test/table1/meta")
@@ -344,8 +352,9 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	err = os.Remove(filepath.Join(dir, files[0].Name()))
 	require.NoError(t, err)
 	delete(f.versionMap, table)
-	err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
 
 	files, err = os.ReadDir(dir)

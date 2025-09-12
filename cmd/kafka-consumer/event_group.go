@@ -51,16 +51,8 @@ func (g *eventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		lastDMLEvent = g.events[len(g.events)-1]
 	}
 
-	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
+	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() <= row.GetCommitTs() {
 		g.events = append(g.events, row)
-		return
-	}
-
-	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
-		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
-		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
-		lastDMLEvent.Length += row.Length
-		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
 		return
 	}
 
@@ -90,6 +82,5 @@ func (g *eventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
 			zap.Int("resolved", len(result)), zap.Int("remained", len(g.events)),
 			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
 	}
-
 	return result
 }

@@ -25,8 +25,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink"
-	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -118,7 +117,7 @@ func (l AtomicityLevel) validate(scheme string) error {
 		// Do nothing here to avoid modifying the persistence parameters.
 	case tableTxnAtomicity:
 		// MqSink only support `noneTxnAtomicity`.
-		if sink.IsMQScheme(scheme) {
+		if IsMQScheme(scheme) {
 			errMsg := fmt.Sprintf("%s level atomicity is not supported by %s scheme", l, scheme)
 			return cerror.ErrSinkURIInvalid.GenWithStackByArgs(errMsg)
 		}
@@ -713,7 +712,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		return err
 	}
 
-	if sink.IsMySQLCompatibleScheme(sinkURI.Scheme) {
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
 		return nil
 	}
 
@@ -756,7 +755,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		}
 	}
 
-	if sink.IsPulsarScheme(sinkURI.Scheme) && s.PulsarConfig == nil {
+	if IsPulsarScheme(sinkURI.Scheme) && s.PulsarConfig == nil {
 		s.PulsarConfig = &PulsarConfig{
 			SinkURI: sinkURI,
 		}
@@ -800,7 +799,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	}
 
 	// validate storage sink related config
-	if sinkURI != nil && sink.IsStorageScheme(sinkURI.Scheme) {
+	if sinkURI != nil && IsStorageScheme(sinkURI.Scheme) {
 		// validate date separator
 		if len(util.GetOrZero(s.DateSeparator)) > 0 {
 			var separator DateSeparator
@@ -858,12 +857,12 @@ func (s *SinkConfig) validateAndAdjustSinkURI(sinkURI *url.URL) error {
 		zap.String("txnAtomicity", string(util.GetOrZero(s.TxnAtomicity))))
 
 	// Check that protocol config is compatible with the scheme.
-	if sink.IsMySQLCompatibleScheme(sinkURI.Scheme) && s.Protocol != nil {
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) && s.Protocol != nil {
 		return cerror.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("protocol %s "+
 			"is incompatible with %s scheme", util.GetOrZero(s.Protocol), sinkURI.Scheme))
 	}
 	// For testing purposes, any protocol should be legal for blackhole.
-	if sink.IsMQScheme(sinkURI.Scheme) || sink.IsStorageScheme(sinkURI.Scheme) {
+	if IsMQScheme(sinkURI.Scheme) || IsStorageScheme(sinkURI.Scheme) {
 		return s.ValidateProtocol(sinkURI.Scheme)
 	}
 	return nil
@@ -897,9 +896,9 @@ func (s *SinkConfig) ValidateProtocol(scheme string) error {
 
 	outputRawChangeEvent := false
 	switch scheme {
-	case sink.KafkaScheme, sink.KafkaSSLScheme:
+	case KafkaScheme, KafkaSSLScheme:
 		outputRawChangeEvent = s.KafkaConfig.GetOutputRawChangeEvent()
-	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
+	case PulsarScheme, PulsarSSLScheme, PulsarHTTPScheme, PulsarHTTPSScheme:
 		outputRawChangeEvent = s.PulsarConfig.GetOutputRawChangeEvent()
 	default:
 		outputRawChangeEvent = s.CloudStorageConfig.GetOutputRawChangeEvent()

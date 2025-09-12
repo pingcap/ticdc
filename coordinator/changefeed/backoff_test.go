@@ -78,6 +78,7 @@ func TestRetry(t *testing.T) {
 	})
 	require.False(t, changefeed)
 	require.Equal(t, config.StateFailed, state)
+	require.Nil(t, err)
 	require.Equal(t, uint64(2), backoff.checkpointTs)
 
 	backoff.resetErrRetry()

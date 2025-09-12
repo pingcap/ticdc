@@ -214,10 +214,10 @@ func queryRowChecksum(
 	}
 	defer conn.Close()
 
-	event.Rewind()
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
+			event.Rewind()
 			break
 		}
 		columns := event.TableInfo.GetColumns()

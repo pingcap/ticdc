@@ -16,13 +16,14 @@ package maintainer
 import (
 	"bytes"
 	"context"
-	"math/rand"
 	"sort"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/span"
+	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -35,20 +36,30 @@ import (
 // only for test
 // moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
 // moveTable only works for the complete table, not for the table splited.
-func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
-	if err := c.checkParams(tableId, targetNode); err != nil {
+func (c *Controller) moveTable(tableId int64, targetNode node.ID, mode int64) error {
+	if common.IsRedoMode(mode) && !c.enableRedo {
+		return nil
+	}
+	spanController := c.getSpanController(mode)
+	operatorController := c.getOperatorController(mode)
+
+	if err := c.checkParams(tableId, targetNode, mode); err != nil {
 		return err
 	}
 
-	replications := c.spanController.GetTasksByTableID(tableId)
+	replications := spanController.GetTasksByTableID(tableId)
 	if len(replications) != 1 {
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
 	}
 
 	replication := replications[0]
 
-	op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-	ret := c.operatorController.AddOperator(op)
+	if replication.GetNodeID() == targetNode {
+		log.Info("table is already on the target node", zap.Int64("tableID", tableId), zap.String("targetNode", targetNode.String()))
+		return nil
+	}
+	op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
+	ret := operatorController.AddOperator(op)
 	if !ret {
 		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
 	}
@@ -71,20 +82,26 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 
 // only for test
 // moveSplitTable is used for inner api(which just for make test cases convience) to force move the dispatchers in a split table to a target node.
-func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
-	if err := c.checkParams(tableId, targetNode); err != nil {
+func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID, mode int64) error {
+	if common.IsRedoMode(mode) && !c.enableRedo {
+		return nil
+	}
+	spanController := c.getSpanController(mode)
+	operatorController := c.getOperatorController(mode)
+
+	if err := c.checkParams(tableId, targetNode, mode); err != nil {
 		return err
 	}
 
-	replications := c.spanController.GetTasksByTableID(tableId)
+	replications := spanController.GetTasksByTableID(tableId)
 	opList := make([]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(replications))
 	finishList := make([]bool, len(replications))
 	for _, replication := range replications {
 		if replication.GetNodeID() == targetNode {
 			continue
 		}
-		op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-		ret := c.operatorController.AddOperator(op)
+		op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
+		ret := operatorController.AddOperator(op)
 		if !ret {
 			for _, op := range opList {
 				op.OnTaskRemoved()
@@ -126,8 +143,14 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 // only for test
 // splitTableByRegionCount split table based on region count
 // it can split the table whether the table have one dispatcher or multiple dispatchers
-func (c *Controller) splitTableByRegionCount(tableID int64) error {
-	if !c.spanController.IsTableExists(tableID) {
+func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
+	if common.IsRedoMode(mode) && !c.enableRedo {
+		return nil
+	}
+	spanController := c.getSpanController(mode)
+	operatorController := c.getOperatorController(mode)
+
+	if !spanController.IsTableExists(tableID) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
 	}
@@ -136,7 +159,11 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
 	}
 
-	replications := c.spanController.GetTasksByTableID(tableID)
+	replications := spanController.GetTasksByTableID(tableID)
+	if len(replications) > 1 {
+		log.Info("More then one replications; There is no need to do split", zap.Any("tableID", tableID))
+		return nil
+	}
 
 	span := common.TableIDToComparableSpan(tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
@@ -144,39 +171,18 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		StartKey: span.StartKey,
 		EndKey:   span.EndKey,
 	}
-	splitTableSpans := c.spanController.GetSplitter().SplitSpansByRegion(context.Background(), wholeSpan)
+	splitTableSpans := spanController.GetSplitter().Split(context.Background(), wholeSpan, 0, split.SplitTypeRegionCount)
 
-	if len(splitTableSpans) == len(replications) {
-		log.Info("Split Table is finished; There is no need to do split", zap.Any("tableID", tableID))
-		return nil
-	}
-
-	randomIdx := rand.Intn(len(replications))
-	primaryID := replications[randomIdx].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(c.spanController, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
-	operators := make([]*operator.MergeSplitDispatcherOperator, 0, len(replications))
-	for _, replicaSet := range replications {
-		var op *operator.MergeSplitDispatcherOperator
-		if replicaSet.ID == primaryID {
-			op = primaryOp
-		} else {
-			op = operator.NewMergeSplitDispatcherOperator(c.spanController, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
-		}
-		ret := c.operatorController.AddOperator(op)
-		if !ret {
-			// this op is created failed, so we need to remove the previous operators. Otherwise, the previous operators will never finish.
-			for _, op := range operators {
-				op.OnTaskRemoved()
-			}
-			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge split dispatcher operator")
-		}
-		operators = append(operators, op)
+	op := operator.NewSplitDispatcherOperator(spanController, replications[0], splitTableSpans, []node.ID{}, nil)
+	ret := operatorController.AddOperator(op)
+	if !ret {
+		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create split dispatcher operator")
 	}
 
 	count := 0
 	maxTry := 30
 	for count < maxTry {
-		if primaryOp.IsFinished() {
+		if op.IsFinished() {
 			return nil
 		}
 
@@ -185,14 +191,22 @@ func (c *Controller) splitTableByRegionCount(tableID int64) error {
 		log.Info("wait for split table operator finished", zap.Int("count", count))
 	}
 
+	log.Info("successfully split table by region count", zap.Any("tableID", tableID), zap.Any("replications", replications))
+
 	return apperror.ErrTimeout.GenWithStackByArgs("split table operator is timeout")
 }
 
 // only for test
 // mergeTable merge two nearby dispatchers in this table into one dispatcher,
 // so after merge table, the table may also have multiple dispatchers
-func (c *Controller) mergeTable(tableID int64) error {
-	if !c.spanController.IsTableExists(tableID) {
+func (c *Controller) mergeTable(tableID int64, mode int64) error {
+	if common.IsRedoMode(mode) && !c.enableRedo {
+		return nil
+	}
+	spanController := c.getSpanController(mode)
+	operatorController := c.getOperatorController(mode)
+
+	if !spanController.IsTableExists(tableID) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
 	}
@@ -201,7 +215,7 @@ func (c *Controller) mergeTable(tableID int64) error {
 		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
 	}
 
-	replications := c.spanController.GetTasksByTableID(tableID)
+	replications := spanController.GetTasksByTableID(tableID)
 
 	if len(replications) == 1 {
 		log.Info("Merge Table is finished; There is only one replication for this table, so no need to do merge", zap.Any("tableID", tableID))
@@ -231,8 +245,8 @@ func (c *Controller) mergeTable(tableID int64) error {
 	if !mergeSpanFound {
 		idx = 0
 		// try to move the second span to the first span's node
-		moveOp := c.operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
-		ret := c.operatorController.AddOperator(moveOp)
+		moveOp := operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
+		ret := operatorController.AddOperator(moveOp)
 		if !ret {
 			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
 		}
@@ -255,7 +269,7 @@ func (c *Controller) mergeTable(tableID int64) error {
 		}
 	}
 
-	operator := c.operatorController.AddMergeOperator(replications[idx : idx+2])
+	operator := operatorController.AddMergeOperator(replications[idx : idx+2])
 	if operator == nil {
 		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge operator")
 	}
@@ -272,11 +286,18 @@ func (c *Controller) mergeTable(tableID int64) error {
 		log.Info("wait for merge table table operator finished", zap.Int("count", count), zap.Any("operator", operator.String()))
 	}
 
+	log.Info("successfully merge table", zap.Any("tableID", tableID), zap.Any("restReplicationsLen", len(replications)-1))
+
 	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
 }
 
-func (c *Controller) checkParams(tableId int64, targetNode node.ID) error {
-	if !c.spanController.IsTableExists(tableId) {
+func (c *Controller) checkParams(tableId int64, targetNode node.ID, mode int64) error {
+	if common.IsRedoMode(mode) && !c.enableRedo {
+		return nil
+	}
+	spanController := c.getSpanController(mode)
+
+	if !spanController.IsTableExists(tableId) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
 	}
@@ -298,4 +319,18 @@ func (c *Controller) checkParams(tableId int64, targetNode node.ID) error {
 	}
 
 	return nil
+}
+
+func (c *Controller) getOperatorController(mode int64) *operator.Controller {
+	if common.IsRedoMode(mode) {
+		return c.redoOperatorController
+	}
+	return c.operatorController
+}
+
+func (c *Controller) getSpanController(mode int64) *span.Controller {
+	if common.IsRedoMode(mode) {
+		return c.redoSpanController
+	}
+	return c.spanController
 }

@@ -68,37 +68,47 @@ func TestEventServiceBasic(t *testing.T) {
 	log.Info("start event service basic test")
 
 	mockStore := newMockEventStore(100)
-	mockStore.Run(ctx)
+	_ = mockStore.Run(ctx)
 
 	mc := &mockMessageCenter{
 		messageCh: make(chan *messaging.TargetMessage, 100),
 	}
 	esImpl := startEventService(ctx, t, mc, mockStore)
-	esImpl.Close(ctx)
+	_ = esImpl.Close(ctx)
 
-	dispatcherInfo := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	dispatcherInfo := newMockDispatcherInfo(t, 200, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	// register acceptor
 	esImpl.registerDispatcher(ctx, dispatcherInfo)
 	require.Equal(t, 1, len(esImpl.brokers))
-	require.NotNil(t, esImpl.brokers[dispatcherInfo.GetClusterID()])
 
-	// add events to eventStore
+	broker := esImpl.brokers[dispatcherInfo.GetClusterID()]
+	require.NotNil(t, broker)
+
+	controlM := commonEvent.NewCongestionControl()
+	controlM.AddAvailableMemory(dispatcherInfo.GetChangefeedID().Id, broker.scanLimitInBytes+1024*1024)
+	broker.handleCongestionControl(node.ID(dispatcherInfo.serverID), controlM)
+
+	// add events to eventStore`
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
-		`insert into test.t(id,c) values (0, "c0")`,
-		`insert into test.t(id,c) values (1, "c1")`,
-		`insert into test.t(id,c) values (2, "c2")`,
-	}...)
+	ddlEvent, kvEvents := genEvents(helper,
+		`create table test.t(id int primary key, c char(50))`,
+		[]string{
+			`insert into test.t(id,c) values (0, "c0")`,
+			`insert into test.t(id,c) values (1, "c1")`,
+			`insert into test.t(id,c) values (2, "c2")`,
+		}...)
 	require.NotNil(t, kvEvents)
-	schemastore := esImpl.schemaStore.(*mockSchemaStore)
-	schemastore.AppendDDLEvent(dispatcherInfo.span.TableID, ddlEvent)
+
+	esImpl.schemaStore.(*mockSchemaStore).AppendDDLEvent(dispatcherInfo.span.TableID, ddlEvent)
 
 	resolvedTs := kvEvents[0].CRTs + 1
-	mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents[0])
+	_ = mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents[0])
 	// receive events from msg center
-	msgCnt := 0
-	dmlCount := 0
+	var (
+		msgCnt   int
+		dmlCount int
+	)
 	for {
 		msg := <-mc.messageCh
 		log.Info("receive message", zap.Any("message", msg))
@@ -106,29 +116,28 @@ func TestEventServiceBasic(t *testing.T) {
 			msgCnt++
 			switch e := m.(type) {
 			case *commonEvent.ReadyEvent:
-				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, dispatcherInfo.id, e.DispatcherID)
 				require.Equal(t, uint64(0), e.GetSeq())
 				log.Info("receive ready event", zap.Any("event", e))
+
 				// 1. When a Dispatcher is register, it will send a ReadyEvent to the eventCollector.
 				// 2. The eventCollector will send a reset request to the eventService.
 				// 3. We are here to simulate the reset request.
 				esImpl.resetDispatcher(dispatcherInfo)
-				mockStore.AppendEvents(dispatcherInfo.id, resolvedTs+1)
+				_ = mockStore.AppendEvents(dispatcherInfo.id, resolvedTs+1)
 			case *commonEvent.HandshakeEvent:
-				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, dispatcherInfo.id, e.DispatcherID)
 				require.Equal(t, dispatcherInfo.startTs, e.GetStartTs())
 				require.Equal(t, uint64(1), e.Seq)
 				log.Info("receive handshake event", zap.Any("event", e))
-				mockStore.AppendEvents(dispatcherInfo.id, kvEvents[1].CRTs+1, kvEvents[1])
-				mockStore.AppendEvents(dispatcherInfo.id, kvEvents[2].CRTs+1, kvEvents[2])
+
+				_ = mockStore.AppendEvents(dispatcherInfo.id, kvEvents[1].CRTs+1, kvEvents[1])
+				_ = mockStore.AppendEvents(dispatcherInfo.id, kvEvents[2].CRTs+1, kvEvents[2])
 			case *commonEvent.BatchDMLEvent:
-				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
-				// first dml has one event, sencond dml has two events
+				// first dml has one event, second dml has two events
 				if dmlCount == 0 {
 					require.Equal(t, int32(1), e.Len())
 				} else if dmlCount == 1 {
@@ -138,12 +147,10 @@ func TestEventServiceBasic(t *testing.T) {
 				require.Equal(t, kvEvents[dmlCount-1].CRTs, e.GetCommitTs())
 				require.Equal(t, uint64(dmlCount+2), e.GetSeq())
 			case *commonEvent.DDLEvent:
-				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, ddlEvent.FinishedTs, e.FinishedTs)
 				require.Equal(t, uint64(2), e.Seq)
 			case *commonEvent.BatchResolvedEvent:
-				require.NotNil(t, msg)
 				log.Info("receive watermark", zap.Uint64("ts", e.Events[0].ResolvedTs))
 			}
 		}
@@ -290,28 +297,32 @@ func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) 
 	}
 }
 
-func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (eventstore.EventIterator, error) {
-	iter := &mockEventIterator{
-		events: make([]*common.RawKVEntry, 0),
-	}
+func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) eventstore.EventIterator {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
-		return nil, fmt.Errorf("dispatcher not found: %v", dispatcherID)
+		log.Panic("dispatcher not found", zap.Stringer("dispatcherID", dispatcherID))
 	}
 
 	v, ok := m.spansMap.Load(span)
 	if !ok {
-		return nil, fmt.Errorf("span not found: %v, dispatcherID: %v", span, dispatcherID)
+		log.Panic("span not found", zap.Any("span", span), zap.Stringer("dispatcherID", dispatcherID))
 	}
 
 	spanStats := v.(*mockSpanStats)
 	events := spanStats.getAllEvents()
+
+	entries := make([]*common.RawKVEntry, 0)
 	for _, e := range events {
-		if e.CRTs > dataRange.StartTs && e.CRTs <= dataRange.EndTs {
-			iter.events = append(iter.events, e)
+		if e.CRTs > dataRange.CommitTsStart && e.CRTs <= dataRange.CommitTsEnd {
+			entries = append(entries, e)
 		}
 	}
-	return iter, nil
+
+	var iter eventstore.EventIterator
+	if len(entries) != 0 {
+		iter = &mockEventIterator{events: entries}
+	}
+	return iter
 }
 
 func (m *mockEventStore) RegisterDispatcher(
@@ -366,16 +377,21 @@ var _ schemastore.SchemaStore = &mockSchemaStore{}
 
 type mockSchemaStore struct {
 	DDLEvents map[common.TableID][]commonEvent.DDLEvent
-	TableInfo map[common.TableID][]*common.TableInfo
+	TableInfo map[common.TableID]*mockVersionTableInfo
 
 	resolvedTs     uint64
 	maxDDLCommitTs uint64
 }
 
+type mockVersionTableInfo struct {
+	tableInfos    []*common.TableInfo
+	deleteVersion uint64
+}
+
 func newMockSchemaStore() *mockSchemaStore {
 	return &mockSchemaStore{
 		DDLEvents:      make(map[common.TableID][]commonEvent.DDLEvent),
-		TableInfo:      make(map[common.TableID][]*common.TableInfo),
+		TableInfo:      make(map[common.TableID]*mockVersionTableInfo),
 		resolvedTs:     math.MaxUint64,
 		maxDDLCommitTs: math.MaxUint64,
 	}
@@ -393,22 +409,45 @@ func (m *mockSchemaStore) Close(ctx context.Context) error {
 	return nil
 }
 
+func (m *mockSchemaStore) DeleteTable(id common.TableID, ts common.Ts) {
+	if info, ok := m.TableInfo[id]; ok {
+		info.deleteVersion = uint64(ts)
+	} else {
+		m.TableInfo[id] = &mockVersionTableInfo{
+			tableInfos:    make([]*common.TableInfo, 0),
+			deleteVersion: uint64(ts),
+		}
+	}
+}
+
 func (m *mockSchemaStore) AppendDDLEvent(id common.TableID, ddls ...commonEvent.DDLEvent) {
 	for _, ddl := range ddls {
 		m.DDLEvents[id] = append(m.DDLEvents[id], ddl)
-		m.TableInfo[id] = append(m.TableInfo[id], ddl.TableInfo)
+		if _, ok := m.TableInfo[id]; !ok {
+			m.TableInfo[id] = &mockVersionTableInfo{
+				tableInfos:    make([]*common.TableInfo, 0),
+				deleteVersion: math.MaxUint64,
+			}
+		}
+		m.TableInfo[id].tableInfos = append(m.TableInfo[id].tableInfos, ddl.TableInfo)
 	}
 }
 
 func (m *mockSchemaStore) GetTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
-	infos := m.TableInfo[tableID]
-	idx := sort.Search(len(infos), func(i int) bool {
-		return infos[i].UpdateTS() > uint64(ts)
-	})
-	if idx == 0 {
-		return nil, nil
+	if info, ok := m.TableInfo[tableID]; ok {
+		if info.deleteVersion <= uint64(ts) {
+			return nil, &schemastore.TableDeletedError{}
+		}
+		infos := m.TableInfo[tableID].tableInfos
+		idx := sort.Search(len(infos), func(i int) bool {
+			return infos[i].GetUpdateTS() > uint64(ts)
+		})
+		if idx == 0 {
+			return nil, nil
+		}
+		return infos[idx-1], nil
 	}
-	return infos[idx-1], nil
+	return nil, nil
 }
 
 func (m *mockSchemaStore) GetAllPhysicalTables(snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
@@ -429,7 +468,7 @@ func (m *mockSchemaStore) RegisterTable(
 	return nil
 }
 
-func (m *mockSchemaStore) UnregisterTable(tableID int64) error {
+func (m *mockSchemaStore) UnregisterTable(_ int64) error {
 	return nil
 }
 
@@ -499,34 +538,40 @@ var _ DispatcherInfo = &mockDispatcherInfo{}
 
 // mockDispatcherInfo is a mock implementation of the AcceptorInfo interface
 type mockDispatcherInfo struct {
-	clusterID  uint64
-	serverID   string
-	id         common.DispatcherID
-	topic      string
-	span       *heartbeatpb.TableSpan
-	startTs    uint64
-	actionType eventpb.ActionType
-	filter     filter.Filter
-	bdrMode    bool
-	integrity  *integrity.Config
-	tz         *time.Location
+	changefeedID      common.ChangeFeedID
+	clusterID         uint64
+	serverID          string
+	id                common.DispatcherID
+	topic             string
+	span              *heartbeatpb.TableSpan
+	startTs           uint64
+	actionType        eventpb.ActionType
+	filter            filter.Filter
+	bdrMode           bool
+	integrity         *integrity.Config
+	tz                *time.Location
+	mode              int64
+	enableSyncPoint   bool
+	nextSyncPoint     uint64
+	syncPointInterval time.Duration
 }
 
-func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
+func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
 	cfg := config.NewDefaultFilterConfig()
 	filter, err := filter.NewFilter(cfg, "", false, false)
 	require.NoError(t, err)
 	return &mockDispatcherInfo{
-		clusterID: 1,
-		serverID:  "server1",
-		id:        dispatcherID,
-		topic:     "topic1",
+		clusterID:    1,
+		serverID:     "server1",
+		id:           dispatcherID,
+		changefeedID: common.NewChangefeedID4Test("default", "test"),
+		topic:        "topic1",
 		span: &heartbeatpb.TableSpan{
 			TableID:  tableID,
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
 		},
-		startTs:    1,
+		startTs:    startTs,
 		actionType: actionType,
 		filter:     filter,
 		bdrMode:    false,
@@ -564,7 +609,7 @@ func (m *mockDispatcherInfo) GetActionType() eventpb.ActionType {
 }
 
 func (m *mockDispatcherInfo) GetChangefeedID() common.ChangeFeedID {
-	return common.NewChangefeedID4Test("default", "test")
+	return m.changefeedID
 }
 
 func (m *mockDispatcherInfo) GetFilterConfig() *config.FilterConfig {
@@ -574,15 +619,15 @@ func (m *mockDispatcherInfo) GetFilterConfig() *config.FilterConfig {
 }
 
 func (m *mockDispatcherInfo) SyncPointEnabled() bool {
-	return false
+	return m.enableSyncPoint
 }
 
 func (m *mockDispatcherInfo) GetSyncPointTs() uint64 {
-	return 0
+	return m.nextSyncPoint
 }
 
 func (m *mockDispatcherInfo) GetSyncPointInterval() time.Duration {
-	return 0
+	return m.syncPointInterval
 }
 
 func (m *mockDispatcherInfo) GetFilter() filter.Filter {
@@ -605,8 +650,16 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
+func (m *mockDispatcherInfo) GetMode() int64 {
+	return m.mode
+}
+
 func (m *mockDispatcherInfo) GetEpoch() uint64 {
 	return 0
+}
+
+func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {
+	return false
 }
 
 func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {

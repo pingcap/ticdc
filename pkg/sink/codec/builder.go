@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -27,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/debezium"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 

@@ -14,12 +14,15 @@
 package maintainer
 
 import (
+	"bytes"
+	"context"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -65,13 +68,12 @@ import (
 //   - isMysqlCompatible: Flag indicating if using MySQL-compatible backend
 //
 // Returns:
-//   - *Barrier: Initialized barrier for consistency tracking
 //   - *MaintainerPostBootstrapRequest: Configuration for post-bootstrap setup
 //   - error: Any error encountered during the bootstrap process
 func (c *Controller) FinishBootstrap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	isMysqlCompatibleBackend bool,
-) (*Barrier, *heartbeatpb.MaintainerPostBootstrapRequest, error) {
+) (*heartbeatpb.MaintainerPostBootstrapRequest, error) {
 	if c.bootstrapped {
 		log.Panic("already bootstrapped",
 			zap.Stringer("changefeed", c.changefeedID),
@@ -91,20 +93,20 @@ func (c *Controller) FinishBootstrap(
 		log.Error("load table from scheme store failed",
 			zap.String("changefeed", c.changefeedID.Name()),
 			zap.Error(err))
-		return nil, nil, errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 
 	// Step 3: Build working task map from bootstrap responses
-	workingTaskMap := c.buildWorkingTaskMap(allNodesResp)
+	workingTaskMap, redoWorkingTaskMap := c.buildWorkingTaskMap(allNodesResp)
 
 	// Step 4: Process tables and build schema info
-	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, isMysqlCompatibleBackend)
+	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, redoWorkingTaskMap, isMysqlCompatibleBackend)
 
 	// Step 5: Handle any remaining working tasks (likely dropped tables)
-	c.handleRemainingWorkingTasks(workingTaskMap)
+	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
 	// Step 6: Initialize and start sub components
-	barrier := c.initializeComponents(allNodesResp)
+	c.initializeComponents(allNodesResp)
 
 	// Step 7: Prepare response
 	initSchemaInfos := c.prepareSchemaInfoResponse(schemaInfos)
@@ -112,7 +114,7 @@ func (c *Controller) FinishBootstrap(
 	// Step 8: Mark the controller as bootstrapped
 	c.bootstrapped = true
 
-	return barrier, &heartbeatpb.MaintainerPostBootstrapRequest{
+	return &heartbeatpb.MaintainerPostBootstrapRequest{
 		ChangefeedID:                  c.changefeedID.ToPB(),
 		TableTriggerEventDispatcherId: c.spanController.GetDDLDispatcherID().ToPB(),
 		Schemas:                       initSchemaInfos,
@@ -143,37 +145,33 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 
 func (c *Controller) buildWorkingTaskMap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-) map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication] {
+) (
+	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+) {
 	workingTaskMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
+	redoWorkingTaskMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
 	for node, resp := range allNodesResp {
 		for _, spanInfo := range resp.Spans {
 			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
-			if c.spanController.IsDDLDispatcher(dispatcherID) {
+			spanController := c.getSpanController(spanInfo.Mode)
+			if spanController.IsDDLDispatcher(dispatcherID) {
 				continue
 			}
 			spanReplication := c.createSpanReplication(spanInfo, node)
-			c.addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
+			if common.IsRedoMode(spanInfo.Mode) {
+				addToWorkingTaskMap(redoWorkingTaskMap, spanInfo.Span, spanReplication)
+			} else {
+				addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
+			}
 		}
 	}
-	return workingTaskMap
-}
-
-func (c *Controller) addToWorkingTaskMap(
-	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-	span *heartbeatpb.TableSpan,
-	spanReplication *replica.SpanReplication,
-) {
-	tableSpans, ok := workingTaskMap[span.TableID]
-	if !ok {
-		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
-		workingTaskMap[span.TableID] = tableSpans
-	}
-	tableSpans.ReplaceOrInsert(span, spanReplication)
+	return workingTaskMap, redoWorkingTaskMap
 }
 
 func (c *Controller) processTablesAndBuildSchemaInfo(
 	tables []commonEvent.Table,
-	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	isMysqlCompatibleBackend bool,
 ) map[int64]*heartbeatpb.SchemaInfo {
 	schemaInfos := make(map[int64]*heartbeatpb.SchemaInfo)
@@ -191,7 +189,10 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
 		// Process table spans
-		c.processTableSpans(table, workingTaskMap)
+		if c.enableRedo {
+			c.processTableSpans(table, redoWorkingTaskMap, common.RedoMode)
+		}
+		c.processTableSpans(table, workingTaskMap, common.DefaultMode)
 	}
 
 	return schemaInfos
@@ -200,8 +201,10 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 func (c *Controller) processTableSpans(
 	table commonEvent.Table,
 	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	mode int64,
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
+	spanController := c.getSpanController(mode)
 
 	// Add new table if not working
 	if isTableWorking {
@@ -216,32 +219,43 @@ func (c *Controller) processTableSpans(
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
-		c.spanController.AddWorkingSpans(tableSpans)
+		spanController.AddWorkingSpans(tableSpans)
 
 		if c.enableTableAcrossNodes {
-			c.handleTableHoles(table, tableSpans, tableSpan)
+			c.handleTableHoles(spanController, table, tableSpans, tableSpan)
 		}
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
-		c.spanController.AddNewTable(table, c.startCheckpointTs)
+		spanController.AddNewTable(table, c.startCheckpointTs)
 	}
 }
 
 func (c *Controller) handleTableHoles(
+	spanController *span.Controller,
 	table commonEvent.Table,
 	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	tableSpan *heartbeatpb.TableSpan,
 ) {
-	holes := split.FindHoles(tableSpans, tableSpan)
-	// TODO: split the hole
-	// Add holes to the replicationDB
-	c.spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+	holes := findHoles(tableSpans, tableSpan)
+	if c.splitter != nil {
+		for _, hole := range holes {
+			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
+			spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
+		}
+	} else {
+		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+	}
 }
 
 func (c *Controller) handleRemainingWorkingTasks(
-	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 ) {
+	for tableID := range redoWorkingTaskMap {
+		log.Warn("found a redo working table that is not in initial table map, just ignore it",
+			zap.Stringer("changefeed", c.changefeedID),
+			zap.Int64("id", tableID))
+	}
 	for tableID := range workingTaskMap {
 		log.Warn("found a working table that is not in initial table map, just ignore it",
 			zap.Stringer("changefeed", c.changefeedID),
@@ -251,17 +265,21 @@ func (c *Controller) handleRemainingWorkingTasks(
 
 func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-) *Barrier {
+) {
 	// Initialize barrier
-	barrier := NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp)
+	if c.enableRedo {
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, common.RedoMode)
+	}
+	c.barrier = NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, common.DefaultMode)
 
 	// Start scheduler
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
 
+	if c.enableRedo {
+		c.taskHandles = append(c.taskHandles, c.taskPool.Submit(c.redoOperatorController, time.Now()))
+	}
 	// Start operator controller
 	c.taskHandles = append(c.taskHandles, c.taskPool.Submit(c.operatorController, time.Now()))
-
-	return barrier
 }
 
 func (c *Controller) prepareSchemaInfoResponse(
@@ -279,6 +297,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		ComponentStatus: spanInfo.ComponentStatus,
 		ID:              spanInfo.ID,
 		CheckpointTs:    spanInfo.CheckpointTs,
+		Mode:            spanInfo.Mode,
 	}
 
 	return replica.NewWorkingSpanReplication(
@@ -319,4 +338,55 @@ func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heart
 		tableInfo.TableName = table.TableName
 	}
 	return tableInfo
+}
+
+func addToWorkingTaskMap(
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	span *heartbeatpb.TableSpan,
+	spanReplication *replica.SpanReplication,
+) {
+	tableSpans, ok := workingTaskMap[span.TableID]
+	if !ok {
+		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
+		workingTaskMap[span.TableID] = tableSpans
+	}
+	tableSpans.ReplaceOrInsert(span, spanReplication)
+}
+
+// findHoles returns an array of Span that are not covered in the range
+func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication], totalSpan *heartbeatpb.TableSpan) []*heartbeatpb.TableSpan {
+	lastSpan := &heartbeatpb.TableSpan{
+		TableID:  totalSpan.TableID,
+		StartKey: totalSpan.StartKey,
+		EndKey:   totalSpan.StartKey,
+	}
+	var holes []*heartbeatpb.TableSpan
+	// table span is sorted
+	currentSpan.Ascend(func(current *heartbeatpb.TableSpan, _ *replica.SpanReplication) bool {
+		ord := bytes.Compare(lastSpan.EndKey, current.StartKey)
+		if ord < 0 {
+			// Find a hole.
+			holes = append(holes, &heartbeatpb.TableSpan{
+				TableID:  totalSpan.TableID,
+				StartKey: lastSpan.EndKey,
+				EndKey:   current.StartKey,
+			})
+		} else if ord > 0 {
+			log.Panic("map is out of order",
+				zap.String("lastSpan", lastSpan.String()),
+				zap.String("current", current.String()))
+		}
+		lastSpan = current
+		return true
+	})
+	// Check if there is a hole in the end.
+	// the lastSpan not reach the totalSpan end
+	if !bytes.Equal(lastSpan.EndKey, totalSpan.EndKey) {
+		holes = append(holes, &heartbeatpb.TableSpan{
+			TableID:  totalSpan.TableID,
+			StartKey: lastSpan.EndKey,
+			EndKey:   totalSpan.EndKey,
+		})
+	}
+	return holes
 }

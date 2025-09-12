@@ -117,6 +117,18 @@ func (p *TableProgress) Pass(event commonEvent.FlushableEvent) {
 	p.maxCommitTs = getFinalCommitTs(event)
 }
 
+func (p *TableProgress) Len() int {
+	p.rwMutex.RLock()
+	defer p.rwMutex.RUnlock()
+	return p.list.Len()
+}
+
+func (p *TableProgress) MaxCommitTs() uint64 {
+	p.rwMutex.RLock()
+	defer p.rwMutex.RUnlock()
+	return p.maxCommitTs
+}
+
 // GetCheckpointTs returns the current checkpoint timestamp for the table span.
 // It returns:
 // 1. The commitTs of the earliest unflushed event minus 1, if there are unflushed events.
@@ -151,7 +163,7 @@ func (p *TableProgress) GetEventSizePerSecond() float32 {
 	if eventSizePerSecond == 0 {
 		// The event size will only send to maintainer once per second.
 		// So if no data is write, we use a tiny value instead of 0 to distinguish it from the status without eventSize
-		return 0.1
+		return 1
 	}
 
 	return eventSizePerSecond

@@ -17,7 +17,7 @@ import (
 	"database/sql/driver"
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )

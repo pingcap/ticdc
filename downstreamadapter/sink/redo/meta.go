@@ -23,12 +23,13 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/redo"
-	"github.com/pingcap/tiflow/pkg/util"
-	"github.com/pingcap/tiflow/pkg/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -38,7 +39,6 @@ import (
 type RedoMeta struct {
 	captureID    config.CaptureID
 	changeFeedID common.ChangeFeedID
-	enabled      bool
 
 	// running means the meta manager now running normally.
 	running atomic.Bool
@@ -68,16 +68,10 @@ type RedoMeta struct {
 func NewRedoMeta(
 	changefeedID common.ChangeFeedID, checkpoint common.Ts, cfg *config.ConsistentConfig,
 ) *RedoMeta {
-	// return a disabled Manager if no consistent config or normal consistent level
-	if cfg == nil || !redo.IsConsistentEnabled(cfg.Level) {
-		return &RedoMeta{enabled: false}
-	}
-
 	m := &RedoMeta{
 		captureID:         config.GetGlobalServerConfig().AdvertiseAddr,
 		changeFeedID:      changefeedID,
 		uuidGenerator:     uuid.NewGenerator(),
-		enabled:           true,
 		cfg:               cfg,
 		startTs:           checkpoint,
 		flushIntervalInMs: cfg.MetaFlushIntervalInMs,
@@ -91,11 +85,6 @@ func NewRedoMeta(
 		m.flushIntervalInMs = redo.DefaultMetaFlushIntervalInMs
 	}
 	return m
-}
-
-// Enabled returns whether this meta is enabled
-func (m *RedoMeta) Enabled() bool {
-	return m.enabled
 }
 
 // Running return whether the meta is initialized,
@@ -122,7 +111,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) error {
 	}
 	m.extStorage = extStorage
 
-	m.metricFlushLogDuration = misc.RedoFlushLogDurationHistogram.
+	m.metricFlushLogDuration = metrics.RedoFlushLogDurationHistogram.
 		WithLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 
 	err = m.preCleanupExtStorage(ctx)
@@ -444,13 +433,7 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 }
 
 func (m *RedoMeta) cleanup(logType string) {
-	misc.RedoFlushLogDurationHistogram.
-		DeleteLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), logType)
-	misc.RedoWriteLogDurationHistogram.
-		DeleteLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), logType)
-	misc.RedoTotalRowsCountGauge.
-		DeleteLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), logType)
-	misc.RedoWorkerBusyRatio.
+	metrics.RedoFlushLogDurationHistogram.
 		DeleteLabelValues(m.changeFeedID.Namespace(), m.changeFeedID.Name(), logType)
 }
 

@@ -4,7 +4,7 @@
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
-	unit_test_in_verify_ci integration_test_build integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
+	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
 
 
 FAIL_ON_STDOUT := awk '{ print } END { if (NR > 0) { exit 1  }  }'
@@ -63,6 +63,13 @@ ifeq ("${ENABLE_FIPS}", "1")
 	GOEXPERIMENT = GOEXPERIMENT=boringcrypto
 	CGO = 1
 endif
+ifeq ("${NEXT_GEN}", "1")
+	ifeq ($(BUILD_FLAG),)
+		BUILD_FLAG := -tags nextgen
+	else
+		BUILD_FLAG := $(BUILD_FLAG),nextgen
+	endif
+endif
 
 RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)
@@ -113,11 +120,11 @@ P=3
 
 # The following packages are used in unit tests.
 # Add new packages here if you want to include them in unit tests.
-UT_PACKAGES_DISPATCHER := ./pkg/sink/cloudstorage/... ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreamadapter/sink/... ./downstreamadapter/dispatcher/... ./downstreamadapter/eventcollector/... ./pkg/sink/codec/avro/... ./pkg/sink/codec/open/... ./pkg/sink/codec/csv/... ./pkg/sink/codec/canal/... ./pkg/sink/codec/debezium/... ./pkg/sink/codec/simple/...
-UT_PACKAGES_MAINTAINER := ./maintainer/...
-UT_PACKAGES_COORDINATOR := ./coordinator/...
+UT_PACKAGES_DISPATCHER := ./pkg/sink/cloudstorage/... ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreamadapter/sink/... ./downstreamadapter/dispatcher/... ./downstreamadapter/dispatchermanager/... ./downstreamadapter/eventcollector/... ./pkg/sink/...
+UT_PACKAGES_MAINTAINER := ./maintainer/... ./pkg/scheduler/...
+UT_PACKAGES_COORDINATOR := ./coordinator/... 
 UT_PACKAGES_LOGSERVICE := ./logservice/...
-UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/...
+UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/... ./pkg/common/...
 
 include tools/Makefile
 
@@ -128,6 +135,12 @@ generate-protobuf:
 generate_mock: ## Generate mock code.
 generate_mock: tools/bin/mockgen
 	scripts/generate-mock.sh
+
+build-cdc-with-failpoint: check_failpoint_ctl
+build-cdc-with-failpoint: ## Build cdc with failpoint enabled.
+	$(FAILPOINT_ENABLE)
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go
+	$(FAILPOINT_DISABLE)
 
 cdc:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
@@ -178,6 +191,16 @@ check_third_party_binary:
 	@which bin/bin/schema-registry-start
 
 integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer pulsar_consumer oauth2_server
+	$(FAILPOINT_ENABLE)
+	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
+		-coverpkg=github.com/pingcap/ticdc/... \
+		-o bin/cdc.test github.com/pingcap/ticdc/cmd/cdc \
+	|| { $(FAILPOINT_DISABLE); echo "Failed to build cdc.test"; exit 1; }
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go \
+	|| { $(FAILPOINT_DISABLE); exit 1; }
+	$(FAILPOINT_DISABLE)
+
+integration_test_build_fast:
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \

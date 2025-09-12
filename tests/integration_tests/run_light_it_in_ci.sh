@@ -32,7 +32,7 @@ group_num=${group#G}
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
-	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
+	'event_filter charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
 	# G01
 	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
 	# G02
@@ -40,8 +40,7 @@ mysql_groups=(
 	# G03
 	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	# multi_capture
-	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
@@ -63,8 +62,7 @@ mysql_groups=(
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
 	# G15
-	# 'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables'
-	'split_region autorandom gc_safepoint foreign_key_check ddl_for_split_tables'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
@@ -72,17 +70,15 @@ mysql_groups=(
 # 6 CPU, 16 Gi memory.
 kafka_groups=(
 	# G00
-	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	# foreign_key
-	'common_1 changefeed_pause_resume fail_over_ddl_B'
+	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
 	# G02
 	'new_ci_collation savepoint fail_over_ddl_C'
 	# G03
 	'kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	# multi_capture
-	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
@@ -104,7 +100,7 @@ kafka_groups=(
 	# G14
 	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O'
 	# G15
-	'kafka_simple_basic_avro split_region autorandom gc_safepoint'
+	'kafka_simple_basic_avro split_region autorandom gc_safepoint ddl_for_split_tables'
 )
 
 # Resource allocation for pulsar light integration tests in CI pipelines:
@@ -112,17 +108,15 @@ kafka_groups=(
 # 6 CPU, 32 Gi memory.
 pulsar_groups=(
 	# G00
-	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	# foreign_key
-	'common_1 changefeed_pause_resume fail_over_ddl_B'
+	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
 	# G02
 	'new_ci_collation savepoint fail_over_ddl_C'
 	# G03
 	'kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	# multi_capture
-	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
@@ -144,7 +138,7 @@ pulsar_groups=(
 	# G14
 	'avro_basic debezium_basic fail_over_ddl_O'
 	# G15
-	'split_region autorandom gc_safepoint'
+	'split_region autorandom gc_safepoint ddl_for_split_tables'
 )
 
 # Resource allocation for storage light integration tests in CI pipelines:
@@ -152,7 +146,7 @@ pulsar_groups=(
 # 6 CPU, 16 Gi memory.
 storage_groups=(
 	# G00
-	'charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
 	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
 	# G02
@@ -160,8 +154,7 @@ storage_groups=(
 	# G03
 	'kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	# multi_capture
-	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
@@ -183,7 +176,7 @@ storage_groups=(
 	# G14
 	'csv_storage_multi_tables_ddl fail_over_ddl_O'
 	# G15
-	'split_region autorandom gc_safepoint'
+	'split_region autorandom gc_safepoint ddl_for_split_tables'
 )
 
 # Source shared functions and check test coverage
