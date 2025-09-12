@@ -13888,20 +13888,12 @@
           },
           "yaxes": [
             {
-              "format": "s",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
               "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": false
+              "show": true
             }
           ],
           "yaxis": {
