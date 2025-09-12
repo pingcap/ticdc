@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
@@ -77,6 +78,9 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		return 0, nil, errors.Trace(err)
 	}
 	if !bytes.HasPrefix(raw.Key, tablePrefix) {
+		log.Warn("the key is not a table row key, skip it",
+			zap.String("schema", tableInfo.TableName.Schema), zap.String("table", tableInfo.TableName.Table),
+			zap.Int64("tableID", tableInfo.TableName.TableID), zap.Any("key", spanz.HexKey(raw.Key)))
 		return 0, nil, nil
 	}
 
@@ -170,7 +174,6 @@ func RemoveKeyspacePrefix(key []byte) []byte {
 	}
 
 	if key[0] != apiV2TxnModePrefix {
-		log.Warn("the first byte of key is not 'x', it may not be in api v2 txn mode", zap.Any("byte", key[0]))
 		return key
 	}
 	return key[keyspacePrefixLen:]

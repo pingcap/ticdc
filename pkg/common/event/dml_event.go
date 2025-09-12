@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
@@ -414,10 +415,10 @@ func (t *DMLEvent) SetRows(rows *chunk.Chunk) {
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	decode func(
-		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo,
-		chk *chunk.Chunk,
-	) (int, *integrity.Checksum, error),
+	rawKv *common.RawKVEntry,
+	tableInfo *common.TableInfo,
+	chk *chunk.Chunk,
+) (int, *integrity.Checksum, error),
 	filter filter.Filter,
 ) error {
 	// Some transactions could generate empty row change event, such as
@@ -425,7 +426,9 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	// Just ignore these row changed events
 	// See https://github.com/pingcap/tiflow/issues/2612 for more details.
 	if len(raw.Value) == 0 && len(raw.OldValue) == 0 {
-		log.Debug("the value and old_value of the raw kv entry are both nil, skip it", zap.String("raw", raw.String()))
+		log.Info("the value and old_value of the raw kv entry are both nil, skip it",
+			zap.String("schema", t.TableInfo.TableName.Schema), zap.String("table", t.TableInfo.TableName.Table),
+			zap.String("key", spanz.HexKey(raw.Key)), zap.String("raw", raw.String()))
 		return nil
 	}
 

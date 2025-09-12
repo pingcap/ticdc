@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -220,16 +221,24 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
-			log.Debug("region is initialized",
-				zap.Int64("tableID", span.span.TableID),
+			log.Info("entry receive initialized",
 				zap.Uint64("regionID", regionID),
-				zap.Uint64("requestID", state.requestID),
-				zap.Stringer("span", &state.region.span))
+				zap.Int64("tableID", span.span.TableID),
+				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
+				zap.String("endKey", spanz.HexKey(span.span.EndKey)),
+				zap.Uint64("requestID", state.requestID))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}
 			state.matcher.matchCachedRollbackRow(true)
 		case cdcpb.Event_COMMITTED:
+			log.Info("entry receive committed",
+				zap.Uint64("regionID", regionID),
+				zap.Int64("tableID", span.span.TableID),
+				zap.String("key", spanz.HexKey(entry.GetKey())),
+				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
+				zap.String("endKey", spanz.HexKey(span.span.EndKey)),
+				zap.Uint64("requestID", state.requestID))
 			resolvedTs := state.getLastResolvedTs()
 			if entry.CommitTs <= resolvedTs {
 				log.Fatal("The CommitTs must be greater than the resolvedTs",
@@ -239,12 +248,30 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_PREWRITE:
+			log.Info("entry receive prewrite",
+				zap.Uint64("regionID", regionID),
+				zap.Int64("tableID", span.span.TableID),
+				zap.String("key", spanz.HexKey(entry.GetKey())),
+				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
+				zap.String("endKey", spanz.HexKey(span.span.EndKey)),
+				zap.Uint64("requestID", state.requestID))
 			state.matcher.putPrewriteRow(entry)
 		case cdcpb.Event_COMMIT:
+			log.Info("entry receive commit",
+				zap.Uint64("regionID", regionID),
+				zap.Int64("tableID", span.span.TableID),
+				zap.String("key", spanz.HexKey(entry.GetKey())),
+				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
+				zap.String("endKey", spanz.HexKey(span.span.EndKey)),
+				zap.Uint64("requestID", state.requestID))
 			// NOTE: matchRow should always be called even if the event is stale.
 			if !state.matcher.matchRow(entry, state.isInitialized()) {
 				if !state.isInitialized() {
 					state.matcher.cacheCommitRow(entry)
+					log.Info("commit entry cached since not initialized",
+						zap.Uint64("regionID", regionID),
+						zap.Int64("tableID", span.span.TableID),
+						zap.String("key", hex.EncodeToString(entry.GetKey())))
 					continue
 				}
 				log.Fatal("prewrite not match",
@@ -260,6 +287,12 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			// TiKV can send events with StartTs/CommitTs less than startTs.
 			isStaleEvent := entry.CommitTs <= span.startTs
 			if isStaleEvent {
+				log.Info("commit entry is staled",
+					zap.Uint64("regionID", regionID),
+					zap.Int64("tableID", span.span.TableID),
+					zap.String("key", hex.EncodeToString(entry.GetKey())),
+					zap.Uint64("commitTs", entry.GetCommitTs()),
+					zap.Uint64("span.StartTs", span.startTs))
 				continue
 			}
 
@@ -275,6 +308,13 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:
+			log.Info("entry receive rollback",
+				zap.Uint64("regionID", regionID),
+				zap.Int64("tableID", span.span.TableID),
+				zap.String("key", spanz.HexKey(entry.GetKey())),
+				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
+				zap.String("endKey", spanz.HexKey(span.span.EndKey)),
+				zap.Uint64("requestID", state.requestID))
 			if !state.isInitialized() {
 				state.matcher.cacheRollbackRow(entry)
 				continue
