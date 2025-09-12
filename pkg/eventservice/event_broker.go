@@ -378,7 +378,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// Note: target range is (dataRange.CommitTsStart-dataRange.LastScannedTxnStartTs, dataRange.CommitTsEnd]
 	// when `dataRange.CommitTsStart` equals `task.eventStoreCommitTs.Load()`,
 	// it is difficult to determine whether any txn events with a commitTs of `dataRange.CommitTsStart` remain unscanned.
-	// because multiple txns may have the same commit ts.
+	// because multiple transactions may have the same commit ts.
 	// so we take the risk to do a useless scan.
 	noDMLEvent := dataRange.CommitTsStart > task.eventStoreCommitTs.Load()
 	noDDLEvent := dataRange.CommitTsStart >= ddlState.MaxEventCommitTs
