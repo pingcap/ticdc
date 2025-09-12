@@ -288,7 +288,10 @@ func (s *eventScanner) commitTxn(
 	}
 
 	currentBatchDML := processor.getCurrentBatchDML()
-	if currentBatchDML == nil || currentBatchDML.Len() == 0 {
+
+	// Use DMLCount() instead of Len() to check if the batchDML is empty
+	// because the batchDML may have some skipped rows, so the Len() can be 0 even if the batchDML is not empty
+	if currentBatchDML == nil || currentBatchDML.DMLCount() == 0 {
 		return nil
 	}
 
@@ -473,7 +476,7 @@ func newEventMerger(
 
 // mergeWithPrecedingDDLs returns the DML event along with all preceding DDL events in timestamp order.
 func (m *eventMerger) mergeWithPrecedingDDLs(batchDML *event.BatchDMLEvent) []event.Event {
-	if batchDML == nil || batchDML.Len() == 0 {
+	if batchDML == nil || batchDML.DMLCount() == 0 {
 		return nil
 	}
 

@@ -250,6 +250,11 @@ func (b *BatchDMLEvent) Len() int32 {
 	return length
 }
 
+// DMLCount returns the number of DML events in the batch.
+func (b *BatchDMLEvent) DMLCount() int {
+	return len(b.DMLEvents)
+}
+
 // DMLEvent represent a batch of DMLs of a whole or partial of a transaction.
 type DMLEvent struct {
 	// Version is the version of the DMLEvent struct.
