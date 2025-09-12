@@ -704,7 +704,8 @@ func TestGenerateBatchSQLWithDifferentTableVersion(t *testing.T) {
 	require.Panics(t, func() { writer.generateBatchSQL(events) })
 
 	// This call is ok since we have grouped the events by table version
-	dmls := writer.prepareDMLs(events)
+	dmls, err := writer.prepareDMLs(events)
+	require.NoError(t, err)
 	require.NotNil(t, dmls)
 	require.Greater(t, len(dmls.sqls), 0, "Should generate at least one SQL statement")
 }

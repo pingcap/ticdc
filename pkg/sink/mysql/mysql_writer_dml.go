@@ -46,7 +46,7 @@ import (
 //     Otherwise,
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
-func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
+func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 	// Step 1: group the events by table ID
@@ -100,7 +100,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 
 	dmls.LogDebug()
 
-	return dmls
+	return dmls, nil
 }
 
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
