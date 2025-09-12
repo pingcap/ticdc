@@ -15,14 +15,17 @@ package replica
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -127,8 +130,18 @@ func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
 func (r *SpanReplication) initGroupID() {
 	r.groupID = replica.DefaultGroupID
 	span := heartbeatpb.TableSpan{TableID: r.Span.TableID, StartKey: r.Span.StartKey, EndKey: r.Span.EndKey}
+	pdClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
+	keyspaceID, err := pdClient.GetKeyspaceID(context.Background(), "SYSTEM")
+	if err != nil {
+		log.Panic("get codec from pd client failed", zap.Error(err))
+	}
 	// check if the table is split
-	totalSpan := common.TableIDToComparableSpan(span.TableID)
+	totalSpan, err := common.TableIDToComparableSpanWithKeyspace(keyspaceID, span.TableID)
+	if err != nil {
+		log.Panic("tableIDToComparableSpanWithKeyspace failed",
+			zap.Uint32("keyspaceID", keyspaceID), zap.Int64("tableID", span.TableID), zap.Error(err))
+	}
+
 	if !common.IsSubSpan(span, totalSpan) {
 		log.Warn("invalid span range", zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("id", r.ID.String()), zap.Int64("tableID", span.TableID),

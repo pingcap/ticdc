@@ -23,8 +23,11 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
+	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
@@ -124,7 +127,7 @@ func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
 	for _, kv := range kvs {
 		job, err := p.unmarshalDDL(&kv)
 		if err != nil {
-			log.Fatal("unmarshal ddl failed", zap.Any("kv", kv), zap.Error(err))
+			log.Fatal("unmarshal ddl failed", zap.String("key", spanz.HexKey(kv.Key)), zap.Any("kv", kv), zap.Error(err))
 		}
 
 		if job == nil {
@@ -258,14 +261,29 @@ const (
 )
 
 func getAllDDLSpan() []heartbeatpb.TableSpan {
+	pdClient := appctx.GetService[pdutil.PDAPIClient](appctx.PDAPIClient)
+	keyspaceID, err := pdClient.GetKeyspaceID(context.Background(), "SYSTEM")
+	if err != nil {
+		log.Panic("get keyspace id from pd client failed", zap.Error(err))
+	}
+
 	spans := make([]heartbeatpb.TableSpan, 0, 2)
-	start, end := common.GetTableRange(JobTableID)
+	start, end, err := common.GetKeyspaceTableRange(keyspaceID, JobTableID)
+	if err != nil {
+		log.Panic("get keyspace table range failed",
+			zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+	}
 	spans = append(spans, heartbeatpb.TableSpan{
 		TableID:  JobTableID,
 		StartKey: common.ToComparableKey(start),
 		EndKey:   common.ToComparableKey(end),
 	})
-	start, end = common.GetTableRange(JobHistoryID)
+
+	start, end, err = common.GetKeyspaceTableRange(keyspaceID, JobHistoryID)
+	if err != nil {
+		log.Panic("get keyspace table range failed",
+			zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+	}
 	spans = append(spans, heartbeatpb.TableSpan{
 		TableID:  JobHistoryID,
 		StartKey: common.ToComparableKey(start),
