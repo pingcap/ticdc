@@ -343,7 +343,7 @@ func interruptScan(
 		// lastCommitTs may be 0, if the scanner timeout and no one row scanned.
 		// this usually happens when the CPU is overloaded.
 		if merger.lastBatchDMLCommitTs == 0 {
-			log.Warn("interrupt scan when no DML event is scanned",
+			log.Info("interrupt scan when no DML event is scanned",
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", session.dataRange.Span.TableID),
 				zap.Uint64("newCommitTs", newCommitTs),
