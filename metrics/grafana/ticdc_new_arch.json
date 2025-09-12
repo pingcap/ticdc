@@ -13892,8 +13892,16 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
             }
           ],
           "yaxis": {
@@ -22795,5 +22803,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aac",
-  "version": 8
+  "version": 9
 }
