@@ -333,3 +333,30 @@ func (r RowType) String() string {
 	log.Panic("RowType: invalid row type", zap.Uint8("rowType", uint8(r)))
 	return ""
 }
+
+const (
+	DefaultMode int64 = iota
+	RedoMode
+)
+
+func IsDefaultMode(mode int64) bool {
+	return mode == DefaultMode
+}
+
+func IsRedoMode(mode int64) bool {
+	return mode == RedoMode
+}
+
+func GetModeBySinkType(sinkType SinkType) int64 {
+	if sinkType == RedoSinkType {
+		return RedoMode
+	}
+	return DefaultMode
+}
+
+func StringMode(mode int64) string {
+	if mode == RedoMode {
+		return "redo"
+	}
+	return "default"
+}

@@ -43,7 +43,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -108,8 +108,29 @@ function merge_and_split_table() {
 	done
 }
 
+function merge_and_split_table_consistent() {
+	while true; do
+		table_num=$((RANDOM % 5 + 1))
+		table_name="table_$table_num"
+
+		# move table to a random node
+		table_id=$(get_table_id "test" "$table_name")
+		merge_table_with_retry $table_id "test" 10 1 || true
+		sleep 10
+		merge_table_with_retry $table_id "test" 10 1 || true
+		sleep 10
+		merge_table_with_retry $table_id "test" 10 1 || true
+		sleep 10
+		merge_table_with_retry $table_id "test" 10 1 || true
+		sleep 10
+		merge_table_with_retry $table_id "test" 10 1 || true
+		sleep 10
+		split_table_with_retry $table_id "test" 10 1 || true
+	done
+}
+
 main() {
-	prepare
+	prepare changefeed
 
 	execute_ddls &
 	NORMAL_TABLE_DDL_PID=$!
@@ -135,7 +156,62 @@ main() {
 	cleanup_process $CDC_BINARY
 }
 
+main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
+	prepare consistent_changefeed
+
+	execute_ddls &
+	NORMAL_TABLE_DDL_PID=$!
+
+	declare -a pids=()
+
+	for i in {1..5}; do
+		execute_dml $i &
+		pids+=("$!")
+	done
+
+	merge_and_split_table_consistent &
+	MERGE_AND_SPLIT_TABLE_PID=$!
+
+	sleep 500
+
+	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MERGE_AND_SPLIT_TABLE_PID
+
+	# to ensure row changed events have been replicated to TiCDC
+	sleep 10
+	changefeed_id="test"
+	storage_path="file://$WORK_DIR/redo"
+	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	ensure 20 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+	cleanup_process $CDC_BINARY
+
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+
+	# cleanup_process $CDC_BINARY
+	# # to ensure row changed events have been replicated to TiCDC
+	# sleep 10
+	# changefeed_id="test"
+	# storage_path="file://$WORK_DIR/redo"
+	# tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	# rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
+
+	# sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
+
+	# cat $WORK_DIR/consistent_diff_config.toml
+	# cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	# check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml
+}
+
 trap stop_tidb_cluster EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+# FIXME: refactor redo apply
+# stop_tidb_cluster
+# main_with_consistent
+# check_logs $WORK_DIR
+# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

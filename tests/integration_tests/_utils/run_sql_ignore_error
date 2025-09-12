@@ -32,8 +32,37 @@ if [ -n "$TEST_NAME" ] && [[ "$OUT_DIR" == *"/$TEST_NAME"* ]]; then
 fi
 
 log_file="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
+remainLogFile="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.remain.log"
 
-echo "[$(date)] Executing SQL: ${sql}" >"$log_file"
+# echo "ADJUSTED_OUT_DIR: $ADJUSTED_OUT_DIR"
+# echo "TEST_NAME: $TEST_NAME"
+# echo "OUT_DIR: $OUT_DIR"
+# echo "log_file: $log_file"
 
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" >"$log_file"
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" >"$log_file"
+# Check if log file exists, if not, print its absolute path and create the directory
+if [ ! -f "$log_file" ]; then
+	echo "Log file does not exist. Creating: $log_file"
+
+	echo "ADJUSTED_OUT_DIR: $ADJUSTED_OUT_DIR"
+	echo "TEST_NAME: $TEST_NAME"
+	echo "OUT_DIR: $OUT_DIR"
+	echo "log_file: $log_file"
+
+	mkdir -p "$(dirname "$log_file")"
+else
+	mkdir -p "$(dirname "$log_file")"
+fi
+
+log_with_timestamp() {
+	# Clear the log file at the start of each command
+	while IFS= read -r line; do
+		echo "[$(date)] $line" >>"$remainLogFile"
+	done
+}
+
+echo "[$(date)] Executing SQL: $1" >"$log_file"
+echo "[$(date)] Executing SQL: $1" >>"$remainLogFile"
+
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" 2>&1 | tee "$log_file" | log_with_timestamp
+
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" 2>&1 | tee "$log_file" | log_with_timestamp

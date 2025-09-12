@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 )
@@ -35,7 +36,7 @@ type encodingGroup struct {
 
 	concurrency int
 
-	inputCh  <-chan eventFragment
+	inputCh  *chann.UnlimitedChannel[eventFragment, any]
 	outputCh chan<- eventFragment
 
 	closed *atomic.Bool
@@ -45,7 +46,7 @@ func newEncodingGroup(
 	changefeedID commonType.ChangeFeedID,
 	codecConfig *common.Config,
 	concurrency int,
-	inputCh <-chan eventFragment,
+	inputCh *chann.UnlimitedChannel[eventFragment, any],
 	outputCh chan<- eventFragment,
 ) *encodingGroup {
 	return &encodingGroup{
@@ -79,7 +80,8 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case frag, ok := <-eg.inputCh:
+		default:
+			frag, ok := eg.inputCh.Get()
 			if !ok || eg.closed.Load() {
 				return nil
 			}

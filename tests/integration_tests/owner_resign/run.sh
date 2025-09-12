@@ -42,6 +42,7 @@ function run() {
 	run_sql "CREATE database owner_resign;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE table owner_resign.t1(id int not null primary key, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	# wait table t1 is processed by cdc server
+	cdc cli processor list --server http://127.0.0.1:8301
 	ensure 10 "cdc cli processor list --server http://127.0.0.1:8301 |jq '.|length'|grep -E '^1$'"
 	# check the t1 is replicated to downstream to make sure the t1 is dispatched to cdc1
 	check_table_exists "owner_resign.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}

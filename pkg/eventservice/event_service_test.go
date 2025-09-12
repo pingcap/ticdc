@@ -76,7 +76,7 @@ func TestEventServiceBasic(t *testing.T) {
 	esImpl := startEventService(ctx, t, mc, mockStore)
 	_ = esImpl.Close(ctx)
 
-	dispatcherInfo := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	dispatcherInfo := newMockDispatcherInfo(t, 200, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	// register acceptor
 	esImpl.registerDispatcher(ctx, dispatcherInfo)
 	require.Equal(t, 1, len(esImpl.brokers))
@@ -538,22 +538,25 @@ var _ DispatcherInfo = &mockDispatcherInfo{}
 
 // mockDispatcherInfo is a mock implementation of the AcceptorInfo interface
 type mockDispatcherInfo struct {
-	clusterID    uint64
-	serverID     string
-	changefeedID common.ChangeFeedID
-	id           common.DispatcherID
-	topic        string
-	span         *heartbeatpb.TableSpan
-	startTs      uint64
-	actionType   eventpb.ActionType
-	filter       filter.Filter
-	bdrMode      bool
-	integrity    *integrity.Config
-	tz           *time.Location
-	redo         bool
+	changefeedID      common.ChangeFeedID
+	clusterID         uint64
+	serverID          string
+	id                common.DispatcherID
+	topic             string
+	span              *heartbeatpb.TableSpan
+	startTs           uint64
+	actionType        eventpb.ActionType
+	filter            filter.Filter
+	bdrMode           bool
+	integrity         *integrity.Config
+	tz                *time.Location
+	mode              int64
+	enableSyncPoint   bool
+	nextSyncPoint     uint64
+	syncPointInterval time.Duration
 }
 
-func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
+func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
 	cfg := config.NewDefaultFilterConfig()
 	filter, err := filter.NewFilter(cfg, "", false, false)
 	require.NoError(t, err)
@@ -568,7 +571,7 @@ func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, table
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
 		},
-		startTs:    1,
+		startTs:    startTs,
 		actionType: actionType,
 		filter:     filter,
 		bdrMode:    false,
@@ -616,15 +619,15 @@ func (m *mockDispatcherInfo) GetFilterConfig() *config.FilterConfig {
 }
 
 func (m *mockDispatcherInfo) SyncPointEnabled() bool {
-	return false
+	return m.enableSyncPoint
 }
 
 func (m *mockDispatcherInfo) GetSyncPointTs() uint64 {
-	return 0
+	return m.nextSyncPoint
 }
 
 func (m *mockDispatcherInfo) GetSyncPointInterval() time.Duration {
-	return 0
+	return m.syncPointInterval
 }
 
 func (m *mockDispatcherInfo) GetFilter() filter.Filter {
@@ -647,8 +650,8 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
-func (m *mockDispatcherInfo) GetIsRedo() bool {
-	return m.redo
+func (m *mockDispatcherInfo) GetMode() int64 {
+	return m.mode
 }
 
 func (m *mockDispatcherInfo) GetEpoch() uint64 {

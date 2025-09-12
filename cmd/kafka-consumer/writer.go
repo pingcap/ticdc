@@ -62,13 +62,12 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Of
 			zap.Uint64("watermark", newWatermark))
 		return
 	}
+	readOldOffset := true
 	if offset > p.watermarkOffset {
-		log.Panic("partition resolved ts fallback",
-			zap.Int32("partition", p.partition),
-			zap.Uint64("newWatermark", newWatermark), zap.Any("offset", offset),
-			zap.Uint64("watermark", p.watermark), zap.Any("watermarkOffset", p.watermarkOffset))
+		readOldOffset = false
 	}
-	log.Warn("partition resolved ts fall back, ignore it, since consumer read old offset message",
+	log.Warn("partition resolved ts fall back, ignore it",
+		zap.Bool("readOldOffset", readOldOffset),
 		zap.Int32("partition", p.partition),
 		zap.Uint64("newWatermark", newWatermark), zap.Any("offset", offset),
 		zap.Uint64("watermark", p.watermark), zap.Any("watermarkOffset", p.watermarkOffset))
@@ -317,14 +316,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		offset    = message.TopicPartition.Offset
 	)
 
-	// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
-	if len(message.Key)+len(message.Value) > w.maxMessageBytes {
-		log.Panic("kafka max-messages-bytes exceeded",
-			zap.Int32("partition", partition), zap.Any("offset", offset),
-			zap.Int("max-message-bytes", w.maxMessageBytes),
-			zap.Int("receivedBytes", len(message.Key)+len(message.Value)))
-	}
-
 	progress := w.progresses[partition]
 	progress.decoder.AddKeyValue(message.Key, message.Value)
 
@@ -399,6 +390,13 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			row = progress.decoder.NextDMLEvent()
 			w.appendRow2Group(row, progress, offset)
 			counter++
+		}
+		// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
+		if len(message.Key)+len(message.Value) > w.maxMessageBytes && counter > 1 {
+			log.Panic("kafka max-messages-bytes exceeded",
+				zap.Int32("partition", partition), zap.Any("offset", offset),
+				zap.Int("max-message-bytes", w.maxMessageBytes),
+				zap.Int("receivedBytes", len(message.Key)+len(message.Value)))
 		}
 		if counter > w.maxBatchSize {
 			log.Panic("Open Protocol max-batch-size exceeded",
@@ -510,6 +508,7 @@ func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offs
 	for {
 		change, ok := row.GetNextRow()
 		if !ok {
+			row.Rewind()
 			break
 		}
 
@@ -526,7 +525,6 @@ func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offs
 			)
 		}
 	}
-	row.Rewind()
 }
 
 func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionProgress, offset kafka.Offset) {

@@ -61,14 +61,14 @@ func TestEventScanner(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = uint64(100)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
 	ctx := context.Background()
 
-	startTs := uint64(100)
-	disp := newDispatcherStat(startTs, disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestEventScanner(t *testing.T) {
 	// case 1: No DDL and DML events, should emit resolved-ts event
 	// Expected result:
 	// [Resolved(ts=102)]
-	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 
 	disp.eventStoreResolvedTs.Store(102)
 	sl := scanLimit{
@@ -107,7 +107,7 @@ func TestEventScanner(t *testing.T) {
 		timeout:     10 * time.Second,
 	}
 
-	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
@@ -138,7 +138,7 @@ func TestEventScanner(t *testing.T) {
 		timeout:     10 * time.Second,
 	}
 
-	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
@@ -178,7 +178,7 @@ func TestEventScanner(t *testing.T) {
 		maxDMLBytes: 1000,
 		timeout:     10 * time.Second,
 	}
-	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
@@ -209,7 +209,7 @@ func TestEventScanner(t *testing.T) {
 		timeout:     1000 * time.Second,
 	}
 
-	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
@@ -254,7 +254,7 @@ func TestEventScanner(t *testing.T) {
 	}
 
 	require.True(t, ok)
-	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
@@ -294,7 +294,7 @@ func TestEventScanner(t *testing.T) {
 		timeout:     1000 * time.Second,
 	}
 
-	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
@@ -335,7 +335,7 @@ func TestEventScanner(t *testing.T) {
 		maxDMLBytes: 1000,
 		timeout:     10 * time.Second,
 	}
-	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
@@ -380,17 +380,17 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
 
 	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = uint64(100)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	startTs := uint64(100)
-	disp := newDispatcherStat(startTs, disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
 
-	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 
 	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
 	helper := event.NewEventTestHelper(t)
@@ -459,18 +459,18 @@ func TestEventScannerWithDDL(t *testing.T) {
 	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
 
 	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = uint64(100)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	startTs := uint64(100)
-	disp := newDispatcherStat(startTs, disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
 	makeDispatcherReady(disp)
 
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
 
-	scanner := newEventScanner(broker.eventStore, broker.schemaStore, event.NewMounter(time.UTC, &integrity.Config{}))
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, event.NewMounter(time.UTC, &integrity.Config{}), 0)
 
 	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
 	helper := event.NewEventTestHelper(t)
@@ -1558,10 +1558,11 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = uint64(100)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 
-	disp := newDispatcherStat(100, disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
 
 	// Prepare a table info for success case
 	helper := event.NewEventTestHelper(t)
@@ -1571,7 +1572,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	ts := ddlEvent.TableInfo.GetUpdateTS()
 
 	schemaStore := &schemaStoreWithErr{mockSchemaStore: mockSS}
-	scanner := newEventScanner(broker.eventStore, schemaStore, &mockMounter{})
+	scanner := newEventScanner(broker.eventStore, schemaStore, &mockMounter{}, 0)
 
 	// Case 1: Success
 	t.Run("Success", func(t *testing.T) {

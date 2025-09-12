@@ -38,6 +38,7 @@ func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
+			event.Rewind()
 			break
 		}
 		keys := genRowKeys(row, event.TableInfo, event.DispatcherID)
@@ -49,8 +50,6 @@ func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
 			hasher.Reset()
 		}
 	}
-
-	event.Rewind()
 
 	keys := make([]uint64, 0, len(hashRes))
 	for key := range hashRes {

@@ -530,6 +530,7 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 		DBInfo:            job.BinlogInfo.DBInfo,
 		TableInfo:         job.BinlogInfo.TableInfo,
 		FinishedTs:        job.BinlogInfo.FinishedTS,
+		StartTs:           job.StartTS,
 		BDRRole:           job.BDRRole,
 		CDCWriteSource:    job.CDCWriteSource,
 	}
@@ -1508,49 +1509,62 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	var wrapTableInfo *common.TableInfo
 	// Note: not all ddl types will respect the `filtered` result: create tables, rename tables, rename table, exchange table partition.
 	filtered, notSync := false, false
+	var err error
 	if tableFilter != nil && rawEvent.SchemaName != "" && rawEvent.TableName != "" {
-		filtered = tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, rawEvent.TableName, common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo))
-		// if the ddl involve another table name, only set filtered to true when all of them should be filtered
-		if rawEvent.ExtraSchemaName != "" && rawEvent.ExtraTableName != "" {
-			filtered = filtered && tableFilter.ShouldIgnoreTable(rawEvent.ExtraSchemaName, rawEvent.ExtraTableName, common.WrapTableInfo(rawEvent.ExtraSchemaName, rawEvent.TableInfo))
+		filtered, notSync, err = filterDDL(
+			tableFilter,
+			rawEvent.SchemaName,
+			rawEvent.TableName,
+			rawEvent.Query,
+			model.ActionType(rawEvent.Type),
+			rawEvent.TableInfo,
+			rawEvent.StartTs,
+		)
+		if err != nil {
+			return commonEvent.DDLEvent{}, false, err
 		}
-	}
-	if filtered {
-		log.Info("ignore DDL by filter(ShouldIgnoreTable)", zap.String("query", rawEvent.Query), zap.Any("rawEvent", rawEvent))
-	} else {
-		// If the table is not filtered, we need to check whether the DDL should be synced to downstream.
-		// For example, if a `TRUNCATE TABLE` DDL is filtered by event filter,
-		// we don't need to sync it to downstream, but the DML events of the new truncated table
-		// should be sent to downstream.
-		// So we should send the `TRUNCATE TABLE` DDL event to table trigger,
-		// to ensure the new truncated table can be handled correctly.
-		if tableFilter != nil && rawEvent.SchemaName != "" && rawEvent.TableName != "" {
-			var err error
-			notSync, err = tableFilter.ShouldIgnoreDDL(
-				rawEvent.SchemaName, rawEvent.TableName, rawEvent.Query, model.ActionType(rawEvent.Type), common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo))
+		if rawEvent.ExtraSchemaName != "" && rawEvent.ExtraTableName != "" {
+			filteredByExtraTable, notSyncByExtraTable := false, false
+			filteredByExtraTable, notSyncByExtraTable, err = filterDDL(
+				tableFilter,
+				rawEvent.ExtraSchemaName,
+				rawEvent.ExtraTableName,
+				rawEvent.Query,
+				model.ActionType(rawEvent.Type),
+				rawEvent.TableInfo,
+				rawEvent.StartTs,
+			)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}
-			// if the ddl involve another table name, only set filtered to true when all of them should be filtered
-			if rawEvent.ExtraSchemaName != "" && rawEvent.ExtraTableName != "" {
-				notSyncByExtraTable, err := tableFilter.ShouldIgnoreDDL(rawEvent.ExtraSchemaName, rawEvent.ExtraTableName, rawEvent.Query, model.ActionType(rawEvent.Type), common.WrapTableInfo(rawEvent.ExtraSchemaName, rawEvent.TableInfo))
-				if err != nil {
-					return commonEvent.DDLEvent{}, false, err
-				}
-				// The core of whether `NotSync` is set to true is whether the DML events should be sent to downstream.
-				// If the table is filtered, we don't need to send the DML events to downstream.
-				// So we can just ignore the `TRUNCATE TABLE` DDL in here.
-				// Thus, we set `NotSync` to true.
-				// If the table is not filtered, we should send the DML events to downstream.
-				// So we set `NotSync` to false, and this corresponding DDL can be applied to log service.
-				notSync = notSync && notSyncByExtraTable
-			}
+			filtered = filtered && filteredByExtraTable
+			notSync = notSync || notSyncByExtraTable
 		}
-		if notSync {
-			log.Info("ignore DDL by event filter(ShouldIgnoreDDL), it will be skipped in dispatcher",
-				zap.String("query", rawEvent.Query),
-				zap.Any("rawEvent", rawEvent))
-		}
+	}
+
+	if filtered {
+		log.Info("discard DDL by filter(ShouldDiscardDDL)",
+			zap.String("schema", rawEvent.SchemaName),
+			zap.String("extraSchema", rawEvent.ExtraSchemaName),
+			zap.String("table", rawEvent.TableName),
+			zap.String("extraTable", rawEvent.ExtraTableName),
+			zap.String("query", rawEvent.Query),
+			zap.Any("tableInfo", rawEvent.TableInfo),
+			zap.Any("ddlType", model.ActionType(rawEvent.Type)),
+			zap.Uint64("startTs", rawEvent.StartTs),
+		)
+	}
+	if notSync {
+		log.Info("ignore DDL by event filter(ShouldIgnoreDDL), it will be skipped in dispatcher",
+			zap.String("schema", rawEvent.SchemaName),
+			zap.String("extraSchema", rawEvent.ExtraSchemaName),
+			zap.String("table", rawEvent.TableName),
+			zap.String("extraTable", rawEvent.ExtraTableName),
+			zap.String("query", rawEvent.Query),
+			zap.Any("tableInfo", rawEvent.TableInfo),
+			zap.Any("ddlType", model.ActionType(rawEvent.Type)),
+			zap.Uint64("startTs", rawEvent.StartTs),
+		)
 	}
 
 	if rawEvent.TableInfo != nil {
@@ -1575,6 +1589,35 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		DBNameInDDLJob:    rawEvent.DBNameInDDLJob,
 		NotSync:           notSync,
 	}, !filtered, nil
+}
+
+func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType model.ActionType, tableInfo *model.TableInfo, startTs uint64) (bool, bool, error) {
+	filtered, notSync := false, false
+	if tableFilter != nil && schema != "" && table != "" {
+		filtered = tableFilter.ShouldDiscardDDL(schema, table, ddlType, common.WrapTableInfo(schema, tableInfo), startTs)
+	}
+	if !filtered {
+		// If the DDL is not filtered, we need to check whether the DDL should be synced to downstream.
+		// For example, if a `TRUNCATE TABLE` DDL is filtered by event filter,
+		// and we don't need to sync it to downstream, but the DML events of the new truncated table
+		// should be sent to downstream.
+		// So we should send the `TRUNCATE TABLE` DDL event to table trigger,
+		// to ensure the new truncated table can be handled correctly.
+		if tableFilter != nil && schema != "" && table != "" {
+			var err error
+			// The core of whether `NotSync` is set to true is whether the DML events should be sent to downstream.
+			// If the table is filtered, we don't need to send the DML events to downstream.
+			// So we can just ignore the `TRUNCATE TABLE` DDL in here.
+			// Thus, we set `NotSync` to true.
+			// If the table is not filtered, we should send the DML events to downstream.
+			// So we set `NotSync` to false, and this corresponding DDL can be applied to log service.
+			notSync, err = tableFilter.ShouldIgnoreDDL(schema, table, query, ddlType)
+			if err != nil {
+				return false, false, err
+			}
+		}
+	}
+	return filtered, notSync, nil
 }
 
 func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
@@ -1834,8 +1877,34 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 	}
 	ddlEvent.ExtraSchemaName = rawEvent.ExtraSchemaName
 	ddlEvent.ExtraTableName = rawEvent.ExtraTableName
-	ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.ExtraSchemaName, rawEvent.ExtraTableName, common.WrapTableInfo(rawEvent.ExtraSchemaName, rawEvent.TableInfo))
-	ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, rawEvent.TableName, common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo))
+	ignorePrevTable, ignoreCurrentTable := false, false
+	notSyncPrevTable := false
+	if tableFilter != nil {
+		ignorePrevTable, notSyncPrevTable, err = filterDDL(
+			tableFilter,
+			rawEvent.ExtraSchemaName,
+			rawEvent.ExtraTableName,
+			rawEvent.Query,
+			model.ActionRenameTable,
+			rawEvent.TableInfo,
+			rawEvent.StartTs,
+		)
+		if err != nil {
+			return commonEvent.DDLEvent{}, false, err
+		}
+		ignoreCurrentTable, _, err = filterDDL(
+			tableFilter,
+			rawEvent.SchemaName,
+			rawEvent.TableName,
+			rawEvent.Query,
+			model.ActionRenameTable,
+			rawEvent.TableInfo,
+			rawEvent.StartTs,
+		)
+		if err != nil {
+			return commonEvent.DDLEvent{}, false, err
+		}
+	}
 	if isPartitionTable(rawEvent.TableInfo) {
 		allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 		if !ignorePrevTable {
@@ -1955,6 +2024,8 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 				zap.Int64("tableID", rawEvent.TableID))
 		}
 	}
+	// For rename table, we only set NotSync to true when the previous table is filtered.
+	ddlEvent.NotSync = notSyncPrevTable
 	return ddlEvent, true, err
 }
 
@@ -2084,8 +2155,34 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	ddlEvent.ExtraSchemaName = rawEvent.ExtraSchemaName
 	ddlEvent.ExtraTableName = rawEvent.ExtraTableName
 	// TODO: rawEvent.TableInfo is not correct for ignoreNormalTable
-	ignoreNormalTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, rawEvent.TableName, common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo))
-	ignorePartitionTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.ExtraSchemaName, rawEvent.ExtraTableName, common.WrapTableInfo(rawEvent.ExtraSchemaName, rawEvent.TableInfo))
+	ignoreNormalTable, ignorePartitionTable := false, false
+	notSyncPartitionTable := false
+	if tableFilter != nil {
+		ignoreNormalTable, _, err = filterDDL(
+			tableFilter,
+			rawEvent.SchemaName,
+			rawEvent.TableName,
+			rawEvent.Query,
+			model.ActionExchangeTablePartition,
+			rawEvent.TableInfo,
+			rawEvent.StartTs,
+		)
+		if err != nil {
+			return commonEvent.DDLEvent{}, false, err
+		}
+		ignorePartitionTable, notSyncPartitionTable, err = filterDDL(
+			tableFilter,
+			rawEvent.ExtraSchemaName,
+			rawEvent.ExtraTableName,
+			rawEvent.Query,
+			model.ActionExchangeTablePartition,
+			rawEvent.TableInfo,
+			rawEvent.StartTs,
+		)
+		if err != nil {
+			return commonEvent.DDLEvent{}, false, err
+		}
+	}
 	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 	droppedIDs := getDroppedIDs(rawEvent.PrevPartitions, physicalIDs)
 	if len(droppedIDs) != 1 {
@@ -2147,6 +2244,8 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	} else {
 		log.Fatal("should not happen")
 	}
+	// For exchange table partition, we only set NotSync to true when the partition table is filtered.
+	ddlEvent.NotSync = notSyncPartitionTable
 	ddlEvent.MultipleTableInfos = []*common.TableInfo{
 		common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo),
 		rawEvent.ExtraTableInfo,
@@ -2171,12 +2270,25 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	allFiltered := true
 	resultQuerys := make([]string, 0)
 	tableInfos := make([]*common.TableInfo, 0)
+	multipleNotSync := make([]bool, 0)
 	if len(querys) != len(rawEvent.MultipleTableInfos) {
 		log.Panic("rename tables length is not equal table infos", zap.Any("querys", querys), zap.Any("tableInfos", rawEvent.MultipleTableInfos))
 	}
 	for i, tableInfo := range rawEvent.MultipleTableInfos {
-		ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], common.WrapTableInfo(rawEvent.ExtraSchemaNames[i], tableInfo))
-		ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaNames[i], tableInfo.Name.O, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
+		ignorePrevTable, ignoreCurrentTable := false, false
+		notSyncPrevTable := false
+		if tableInfo != nil {
+			ignorePrevTable, notSyncPrevTable, err = filterDDL(
+				tableFilter, rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], rawEvent.Query, model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
+			if err != nil {
+				return commonEvent.DDLEvent{}, false, err
+			}
+			ignoreCurrentTable, _, err = filterDDL(
+				tableFilter, rawEvent.SchemaNames[i], tableInfo.Name.O, rawEvent.Query, model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
+			if err != nil {
+				return commonEvent.DDLEvent{}, false, err
+			}
+		}
 		if ignorePrevTable && ignoreCurrentTable {
 			continue
 		}
@@ -2187,6 +2299,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 				resultQuerys = append(resultQuerys, querys[i])
 				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
+				multipleNotSync = append(multipleNotSync, notSyncPrevTable)
 				if !ignoreCurrentTable {
 					// check whether schema change
 					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
@@ -2230,6 +2343,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 				resultQuerys = append(resultQuerys, querys[i])
 				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
+				multipleNotSync = append(multipleNotSync, notSyncPrevTable)
 				if !ignoreCurrentTable {
 					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
 						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
@@ -2278,6 +2392,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	}
 	ddlEvent.Query = strings.Join(resultQuerys, "")
 	ddlEvent.MultipleTableInfos = tableInfos
+	ddlEvent.MultipleNotSync = multipleNotSync
 	return ddlEvent, true, err
 }
 
@@ -2294,7 +2409,8 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	logicalTableCount := 0
 	allFiltered := true
 	for _, info := range rawEvent.MultipleTableInfos {
-		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, info.Name.O, common.WrapTableInfo(rawEvent.SchemaName, info)) {
+		if tableFilter != nil && tableFilter.ShouldDiscardDDL(
+			rawEvent.SchemaName, info.Name.O, model.ActionType(rawEvent.Type), common.WrapTableInfo(rawEvent.SchemaName, info), rawEvent.StartTs) {
 			continue
 		}
 		allFiltered = false
@@ -2322,12 +2438,21 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
 	tableInfos := make([]*common.TableInfo, 0, logicalTableCount)
+	multipleNotSync := make([]bool, 0, logicalTableCount)
 	for i, info := range rawEvent.MultipleTableInfos {
-		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, info.Name.O, common.WrapTableInfo(rawEvent.SchemaName, info)) {
-			log.Info("build ddl event for create tables filter table",
-				zap.String("schemaName", rawEvent.SchemaName),
-				zap.String("tableName", info.Name.O))
-			continue
+		filtered, notSync := false, false
+		if tableFilter != nil {
+			filtered, notSync, err = filterDDL(
+				tableFilter, rawEvent.SchemaName, info.Name.O, rawEvent.Query, model.ActionType(rawEvent.Type), info, rawEvent.StartTs)
+			if err != nil {
+				return commonEvent.DDLEvent{}, false, err
+			}
+			if filtered {
+				log.Info("build ddl event for create tables filter table",
+					zap.String("schemaName", rawEvent.SchemaName),
+					zap.String("tableName", info.Name.O))
+				continue
+			}
 		}
 		if isPartitionTable(info) {
 			splitable := isSplitable(info)
@@ -2351,12 +2476,14 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		})
 		resultQuerys = append(resultQuerys, querys[i])
 		tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaName, info))
+		multipleNotSync = append(multipleNotSync, notSync)
 	}
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
 		AddName: addName,
 	}
 	ddlEvent.Query = strings.Join(resultQuerys, "")
 	ddlEvent.MultipleTableInfos = tableInfos
+	ddlEvent.MultipleNotSync = multipleNotSync
 	if len(ddlEvent.NeedAddedTables) == 0 {
 		log.Fatal("should not happen")
 	}

@@ -15,28 +15,31 @@ package eventservice
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 func TestNewDispatcherStat(t *testing.T) {
 	t.Parallel()
 
+	startTs := uint64(50)
 	// Mock dispatcher info
 	info := newMockDispatcherInfo(
 		t,
+		startTs,
 		common.NewDispatcherID(),
 		1,
 		eventpb.ActionType_ACTION_TYPE_REGISTER,
 	)
 
-	startTs := uint64(50)
 	workerIndex := 1
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(startTs, info, info.filter, workerIndex, workerIndex, status)
+	stat := newDispatcherStat(info, info.filter, workerIndex, workerIndex, status)
 
 	require.Equal(t, info.GetID(), stat.id)
 	require.Equal(t, workerIndex, stat.messageWorkerIndex)
@@ -46,16 +49,42 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
 	require.True(t, stat.isReadyReceivingData.Load())
 	require.False(t, stat.enableSyncPoint)
-	require.Equal(t, info.GetSyncPointTs(), stat.nextSyncPoint)
+	require.Equal(t, info.GetSyncPointTs(), stat.nextSyncPoint.Load())
 	require.Equal(t, info.GetSyncPointInterval(), stat.syncPointInterval)
+}
+
+func TestResetSyncpoint(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	firstSyncPoint := oracle.GoTimeToTS(now)
+	syncPointInterval := time.Second * 10
+	secondSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(syncPointInterval))
+	thirdSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(2 * syncPointInterval))
+	startTs := oracle.GoTimeToTS(now.Add(-2 * time.Second))
+
+	info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info.enableSyncPoint = true
+	info.nextSyncPoint = firstSyncPoint
+	info.syncPointInterval = syncPointInterval
+	status := newChangefeedStatus(info.GetChangefeedID())
+	stat := newDispatcherStat(info, info.filter, 1, 1, status)
+
+	stat.nextSyncPoint.Store(thirdSyncPoint)
+	stat.resetState(secondSyncPoint)
+	require.Equal(t, thirdSyncPoint, stat.nextSyncPoint.Load())
+	stat.resetState(secondSyncPoint - 1)
+	require.Equal(t, secondSyncPoint, stat.nextSyncPoint.Load())
+	stat.resetState(startTs)
+	require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
 }
 
 func TestDispatcherStatResolvedTs(t *testing.T) {
 	t.Parallel()
 
-	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(100, info, info.filter, 1, 1, status)
+	stat := newDispatcherStat(info, info.filter, 1, 1, status)
 
 	// Test normal update
 	updated := stat.onResolvedTs(150)
@@ -70,9 +99,9 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 func TestDispatcherStatGetDataRange(t *testing.T) {
 	t.Parallel()
 
-	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(100, info, info.filter, 1, 1, status)
+	stat := newDispatcherStat(info, info.filter, 1, 1, status)
 	stat.eventStoreResolvedTs.Store(200)
 
 	// Normal case
@@ -97,9 +126,9 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 
 func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	startTs := uint64(100)
-	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(startTs, info, info.filter, 1, 1, status)
+	stat := newDispatcherStat(info, info.filter, 1, 1, status)
 
 	// Case 1: no new events, only watermark change
 	stat.onResolvedTs(200)

@@ -68,6 +68,7 @@ type PersistedDDLEvent struct {
 	Query         string `msg:"query"`
 	SchemaVersion int64  `msg:"schema_version"`
 	FinishedTs    uint64 `msg:"finished_ts"`
+	StartTs       uint64 `msg:"start_ts"`
 
 	DBInfo *model.DBInfo `msg:"-"`
 	// it is from upstream job.TableInfo

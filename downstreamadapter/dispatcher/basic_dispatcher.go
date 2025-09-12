@@ -15,6 +15,7 @@ package dispatcher
 
 import (
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,14 +27,16 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // DispatcherService defines the interface for providing dispatcher information and basic event handling.
 type DispatcherService interface {
 	GetId() common.DispatcherID
-	GetType() int
+	GetMode() int64
 	GetStartTs() uint64
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
@@ -121,6 +124,9 @@ type BasicDispatcher struct {
 	// componentStatus is the status of the dispatcher, such as working, removing, stopped.
 	componentStatus *ComponentStateWithMutex
 
+	// schemaIDToDispatchers is shared in the DispatcherManager
+	schemaIDToDispatchers *SchemaIDToDispatchers
+
 	// Shared info containing all common configuration and resources
 	sharedInfo *SharedInfo
 
@@ -148,8 +154,8 @@ type BasicDispatcher struct {
 
 	isRemoving atomic.Bool
 
-	seq            uint64
-	dispatcherType int
+	seq  uint64
+	mode int64
 
 	BootstrapState bootstrapState
 }
@@ -159,29 +165,31 @@ func NewBasicDispatcher(
 	tableSpan *heartbeatpb.TableSpan,
 	startTs uint64,
 	schemaID int64,
+	schemaIDToDispatchers *SchemaIDToDispatchers,
 	startTsIsSyncpoint bool,
 	currentPDTs uint64,
-	dispatcherType int,
+	mode int64,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                 id,
-		tableSpan:          tableSpan,
-		startTs:            startTs,
-		startTsIsSyncpoint: startTsIsSyncpoint,
-		sharedInfo:         sharedInfo,
-		sink:               sink,
-		componentStatus:    newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		resolvedTs:         startTs,
-		isRemoving:         atomic.Bool{},
-		blockEventStatus:   BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:      NewTableProgress(),
-		schemaID:           schemaID,
-		resendTaskMap:      newResendTaskMap(),
-		creationPDTs:       currentPDTs,
-		dispatcherType:     dispatcherType,
-		BootstrapState:     BootstrapFinished,
+		id:                    id,
+		tableSpan:             tableSpan,
+		startTs:               startTs,
+		startTsIsSyncpoint:    startTsIsSyncpoint,
+		sharedInfo:            sharedInfo,
+		sink:                  sink,
+		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		resolvedTs:            startTs,
+		isRemoving:            atomic.Bool{},
+		blockEventStatus:      BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:         NewTableProgress(),
+		schemaID:              schemaID,
+		schemaIDToDispatchers: schemaIDToDispatchers,
+		resendTaskMap:         newResendTaskMap(),
+		creationPDTs:          currentPDTs,
+		mode:                  mode,
+		BootstrapState:        BootstrapFinished,
 	}
 
 	return dispatcher
@@ -203,7 +211,35 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 	if event.GetType() == commonEvent.TypeDDLEvent {
 		ddl := event.(*commonEvent.DDLEvent)
-		if ddl.NotSync {
+		if ddl.MultipleNotSync != nil {
+			resultQuerys := make([]string, 0)
+			tableInfos := make([]*common.TableInfo, 0)
+			querys, err := commonEvent.SplitQueries(ddl.Query)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			if len(querys) != len(ddl.MultipleTableInfos) {
+				log.Error("the querys is not equal table infos after re-split", zap.Any("querys", querys), zap.Any("tableInfos", ddl.MultipleTableInfos))
+				return errors.ErrUnexpected.GenWithStack("the querys is not equal table infos after re-split")
+			}
+			for i, notSync := range ddl.MultipleNotSync {
+				if notSync {
+					log.Info("ignore a DDL by MultipleNotSync",
+						zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl), zap.String("query", querys[i]), zap.Any("tableInfo", ddl.MultipleTableInfos[i]))
+					continue
+				} else {
+					tableInfos = append(tableInfos, ddl.MultipleTableInfos[i])
+					resultQuerys = append(resultQuerys, querys[i])
+				}
+			}
+			if len(resultQuerys) == 0 {
+				d.PassBlockEventToSink(event)
+				return nil
+			}
+			ddl.Query = strings.Join(resultQuerys, "")
+			ddl.MultipleTableInfos = tableInfos
+			ddl.MultipleNotSync = nil
+		} else if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
 			d.PassBlockEventToSink(event)
 			return nil
@@ -275,7 +311,7 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 			ID:              d.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    d.GetCheckpointTs(),
-			IsRedo:          IsRedoDispatcher(d),
+			Mode:            d.GetMode(),
 		},
 		Seq: d.seq,
 	}
@@ -306,18 +342,27 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 //
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
 // It will be called when all the events are flushed to downstream successfully.
-func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	// Only return false when all events are resolvedTs Event.
-	block = false
+	block := false
 	dmlWakeOnce := &sync.Once{}
 	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	latestResolvedTs := uint64(0)
-	isRedo := IsRedoDispatcher(d)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
-		log.Debug("dispatcher receive all event",
-			zap.Stringer("dispatcher", d.id), zap.Bool("isRedo", isRedo),
-			zap.Any("event", dispatcherEvent.Event))
+		if log.GetLevel() == zapcore.DebugLevel {
+			eventString := ""
+			if dispatcherEvent.Event.GetType() == commonEvent.TypeDMLEvent {
+				eventString = dispatcherEvent.Event.(*commonEvent.DMLEvent).String()
+			}
+			log.Debug("dispatcher receive all event",
+				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
+				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
+				zap.Any("event", dispatcherEvent.Event),
+				zap.String("eventString", eventString),
+			)
+		}
+
 		failpoint.Inject("HandleEventsSlowly", func() {
 			lag := time.Duration(rand.Intn(5000)) * time.Millisecond
 			log.Warn("handle events slowly", zap.Duration("lag", lag))
@@ -376,7 +421,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			err := ddl.GetError()
 			if err != nil {
 				d.HandleError(err)
-				return
+				return block
 			}
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
@@ -392,7 +437,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			})
 			d.dealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
-			if isRedo {
+			if common.IsRedoMode(d.GetMode()) {
 				continue
 			}
 			if len(dispatcherEvents) != 1 {
@@ -499,6 +544,15 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				d.PassBlockEventToSink(pendingEvent)
 				failpoint.Inject("BlockAfterPass", nil)
 			}
+		} else {
+			ts, ok := d.blockEventStatus.getEventCommitTs()
+			if ok && action.CommitTs > ts {
+				log.Info("pending event's commitTs is smaller than the action's commitTs, just ignore it",
+					zap.Uint64("pendingEventCommitTs", ts),
+					zap.Uint64("actionCommitTs", action.CommitTs),
+					zap.Stringer("dispatcher", d.id))
+				return
+			}
 		}
 
 		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
@@ -510,7 +564,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
-			IsRedo: IsRedoDispatcher(d),
+			Mode: d.GetMode(),
 		}
 	}
 }
@@ -568,7 +622,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false, // sync point event must should block
 					Stage:             heartbeatpb.BlockStage_NONE,
 				},
-				IsRedo: IsRedoDispatcher(d),
+				Mode: d.GetMode(),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
@@ -603,34 +657,42 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 
 		if event.GetType() == commonEvent.TypeSyncPointEvent {
 			// deal with multi sync point commit ts in one Sync Point Event
-			// make each commitTs as a single message for maintainer
-			// Because the batch commitTs in different dispatchers can be different.
+			// we only report the latest commitTs as the blockTs.
+			// If A receive [syncpont1, syncpoint2, syncpoint3]
+			// B receive [syncpoint1]
+			// C receive [syncpoint1, syncpoint2]
+			// then A report syncpoint3, B report syncpoint1, C report syncpoint2
+			// and barrier find A checkpointTs is exceed syncpoint1 and syncpoint2,
+			// so will just make B and C pass these syncpoint, to receive the latest syncpoint3
+			// then make syncpoint3 Write successfully.
+
+			// TODO(hyy): we could consider to just use the latest commitTs to represent this batch sync point event,
+			// instead of obtain a commitTsList in the sync point event.
 			commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
 			blockTables := event.GetBlockedTables().ToPB()
 			needDroppedTables := event.GetNeedDroppedTables().ToPB()
 			needAddedTables := commonEvent.ToTablesPB(event.GetNeedAddedTables())
-			for _, commitTs := range commitTsList {
-				message := &heartbeatpb.TableSpanBlockStatus{
-					ID: d.id.ToPB(),
-					State: &heartbeatpb.State{
-						IsBlocked:         true,
-						BlockTs:           commitTs,
-						BlockTables:       blockTables,
-						NeedDroppedTables: needDroppedTables,
-						NeedAddedTables:   needAddedTables,
-						UpdatedSchemas:    nil,
-						IsSyncPoint:       true,
-						Stage:             heartbeatpb.BlockStage_WAITING,
-					},
-					IsRedo: IsRedoDispatcher(d),
-				}
-				identifier := BlockEventIdentifier{
-					CommitTs:    commitTs,
-					IsSyncPoint: true,
-				}
-				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-				d.sharedInfo.blockStatusesChan <- message
+			commitTs := commitTsList[len(commitTsList)-1]
+			message := &heartbeatpb.TableSpanBlockStatus{
+				ID: d.id.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked:         true,
+					BlockTs:           commitTs,
+					BlockTables:       blockTables,
+					NeedDroppedTables: needDroppedTables,
+					NeedAddedTables:   needAddedTables,
+					UpdatedSchemas:    nil,
+					IsSyncPoint:       true,
+					Stage:             heartbeatpb.BlockStage_WAITING,
+				},
+				Mode: d.GetMode(),
 			}
+			identifier := BlockEventIdentifier{
+				CommitTs:    commitTs,
+				IsSyncPoint: true,
+			}
+			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+			d.sharedInfo.blockStatusesChan <- message
 		} else {
 			message := &heartbeatpb.TableSpanBlockStatus{
 				ID: d.id.ToPB(),
@@ -644,7 +706,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false,
 					Stage:             heartbeatpb.BlockStage_WAITING,
 				},
-				IsRedo: IsRedoDispatcher(d),
+				Mode: d.GetMode(),
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
@@ -676,7 +738,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					return
 				} else {
 					d.schemaID = schemaIDChange.NewSchemaID
-					d.sharedInfo.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
+					d.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
 					return
 				}
 			}
@@ -742,7 +804,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		log.Info("dispatcher component has stopped and is ready for cleanup",
 			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 			zap.Stringer("dispatcher", d.id),
-			zap.Bool("isRedo", IsRedoDispatcher(d)),
+			zap.Int64("mode", d.mode),
 			zap.String("table", common.FormatTableSpan(d.tableSpan)),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 			zap.Uint64("resolvedTs", d.GetResolvedTs()),
@@ -751,7 +813,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	}
 	log.Info("dispatcher is not ready to close",
 		zap.Stringer("dispatcher", d.id),
-		zap.Bool("isRedo", IsRedoDispatcher(d)),
+		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
 		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
@@ -763,7 +825,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 func (d *BasicDispatcher) removeDispatcher() {
 	log.Info("remove dispatcher",
 		zap.Stringer("dispatcher", d.id),
-		zap.Bool("isRedo", IsRedoDispatcher(d)),
+		zap.Int64("mode", d.mode),
 		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
@@ -776,5 +838,14 @@ func (d *BasicDispatcher) removeDispatcher() {
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 			zap.Uint64("resolvedTs", d.GetResolvedTs()),
 			zap.Error(err))
+	}
+
+	// remove unfinished resend task
+	identifiers := d.resendTaskMap.Keys()
+	for _, identifier := range identifiers {
+		d.cancelResendTask(identifier)
+		log.Info("cancel resend task before remove dispatcher",
+			zap.Any("identifier", identifier),
+			zap.Stringer("dispatcherID", d.id))
 	}
 }

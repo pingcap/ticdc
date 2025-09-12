@@ -16,12 +16,14 @@ package event
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -324,9 +326,85 @@ func NewDMLEvent(
 	}
 }
 
+// Notes: This function has a performance issue, because it will decode the rows one by one.
+// Please only use it for debugging purposes.
 func (t *DMLEvent) String() string {
-	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, Size: %d}",
-		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName.String(), t.Checksum, t.Length, t.GetSize())
+	rowsStringBuilder := strings.Builder{}
+	if t.Rows == nil || t.TableInfo == nil {
+		return ""
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			// Log the panic for debugging purposes if needed
+			// You can add logging here if required
+		}
+	}()
+
+	rows := make([]RowChange, 0)
+	for {
+		row, ok := t.GetNextRow()
+		if !ok {
+			t.Rewind()
+			break
+		}
+		rows = append(rows, row)
+	}
+
+	if len(rows) == 0 {
+		return ""
+	}
+
+	for _, row := range rows {
+		switch row.RowType {
+		case common.RowTypeUpdate:
+			rowsStringBuilder.WriteString("Update: ")
+			if preRowStr := safeRowToString(row.PreRow, t.TableInfo.GetFieldSlice()); preRowStr != "" {
+				rowsStringBuilder.WriteString("PreRow: " + preRowStr + ",")
+			} else {
+				rowsStringBuilder.WriteString("PreRow: <error>,")
+			}
+			if rowStr := safeRowToString(row.Row, t.TableInfo.GetFieldSlice()); rowStr != "" {
+				rowsStringBuilder.WriteString("Row: " + rowStr + ";")
+			} else {
+				rowsStringBuilder.WriteString("Row: <error>;")
+			}
+		case common.RowTypeDelete:
+			rowsStringBuilder.WriteString("Delete: ")
+			if preRowStr := safeRowToString(row.PreRow, t.TableInfo.GetFieldSlice()); preRowStr != "" {
+				rowsStringBuilder.WriteString("PreRow: " + preRowStr + ";")
+			} else {
+				rowsStringBuilder.WriteString("PreRow: <error>;")
+			}
+		case common.RowTypeInsert:
+			rowsStringBuilder.WriteString("Insert: ")
+			if rowStr := safeRowToString(row.Row, t.TableInfo.GetFieldSlice()); rowStr != "" {
+				rowsStringBuilder.WriteString("Row: " + rowStr + ";")
+			} else {
+				rowsStringBuilder.WriteString("Row: <error>;")
+			}
+		default:
+		}
+	}
+
+	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, Size: %d, Rows: %s}",
+		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName.String(), t.Checksum, t.Length, t.GetSize(), rowsStringBuilder.String())
+}
+
+// safeRowToString safely converts a row to string, recovering from any panics
+func safeRowToString(row chunk.Row, fields []*types.FieldType) string {
+	defer func() {
+		if r := recover(); r != nil {
+			// Log the panic for debugging purposes if needed
+			// You can add logging here if required
+		}
+	}()
+
+	if row.IsEmpty() {
+		return ""
+	}
+
+	return row.ToString(fields)
 }
 
 // SetRows sets the Rows chunk for this DMLEvent
@@ -394,7 +472,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 
 	if filter != nil {
-		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo)
+		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs)
 		if err != nil {
 			return errors.Trace(err)
 		}

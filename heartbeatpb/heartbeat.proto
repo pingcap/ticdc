@@ -12,9 +12,10 @@ message TableSpan {
 message HeartBeatRequest {
     ChangefeedID changefeedID = 1;
     Watermark watermark = 2;
-    repeated TableSpanStatus statuses = 3;
-    bool compeleteStatus = 4; // Whether includes all table spans in the changefeed?
-    RunningError err = 5;
+    Watermark redoWatermark = 3;
+    repeated TableSpanStatus statuses = 4;
+    bool compeleteStatus = 5; // Whether includes all table spans in the changefeed?
+    RunningError err = 6;
 }
 
 message Watermark {
@@ -58,7 +59,7 @@ message DispatcherStatus {
 message HeartBeatResponse {
     ChangefeedID changefeedID = 1;
     repeated DispatcherStatus dispatcherStatuses = 2;
-    bool isRedo = 3;
+    int64 mode = 3;
 }
 
 message CheckpointTsMessage {
@@ -66,10 +67,11 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-message RedoTsMessage {
+
+message RedoMessage {
     ChangefeedID changefeedID = 1;
-    uint64 checkpointTs = 2;
-    uint64 resolvedTs = 3;
+    uint64 resolvedTs = 2;
+    uint64 checkpointTs = 3;
 }
 
 enum ScheduleAction {
@@ -82,7 +84,7 @@ message DispatcherConfig {
     uint64 startTs = 2;
     DispatcherID dispatcherID = 3;
     int64 schemaID = 4;
-    bool isRedo = 5;
+    int64 mode = 5;
 }
 
 message ScheduleDispatcherRequest {
@@ -95,7 +97,7 @@ message MergeDispatcherRequest {
     ChangefeedID changefeedID = 1;
     repeated DispatcherID dispatcherIDs = 2; // dispatcherIDs from the dispatchers that need to be merged
     DispatcherID mergedDispatcherID = 3;  // the dispatcherID of the new dispatcher to be merged to.
-    bool isRedo = 4;
+    int64 mode = 4;
 }
 
 message MaintainerHeartbeat {
@@ -194,7 +196,7 @@ message BootstrapTableSpan {
     ComponentState component_status = 4;
     uint64 checkpoint_ts = 5;
     State block_state = 6;
-    bool isRedo = 7;
+    int64 mode = 7;
 }
 
 message MaintainerCloseRequest {
@@ -248,7 +250,7 @@ message State {
 message TableSpanBlockStatus {
     DispatcherID ID = 1; // for which dispatcher
     State state = 2;
-    bool isRedo = 3;
+    int64 mode = 3;
 }
 
 message TableSpanStatus {
@@ -256,12 +258,13 @@ message TableSpanStatus {
     ComponentState component_status = 2;
     uint64 checkpoint_ts = 3;
     float event_size_per_second = 4;
-    bool isRedo = 5;
+    int64 mode = 5;
 }
 
 message BlockStatusRequest {
     ChangefeedID changefeedID = 1;
     repeated TableSpanBlockStatus blockStatuses = 2;
+    int64 mode =3;
 }
 
 enum ComponentState {

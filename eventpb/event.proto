@@ -48,8 +48,8 @@ message Event {
 
 message TxnEvent {
     repeated Event events = 1;
-    uint64 commit_ts = 2; // 跟上述 event 同时出现 -- 就是标记目前达成的 resolvedTs
-    uint64 start_ts = 3; // 事务开始时间戳
+    uint64 commit_ts = 2;
+    uint64 start_ts = 3;
 }
 
 message TableInfo {
@@ -57,11 +57,11 @@ message TableInfo {
 }
 
 message EventFeed {
-    repeated TxnEvent txn_events = 1; // 包含多个 txn events
-    uint64 resolved_ts = 2; // 跟上述 event 同时出现 -- 就是标记目前达成的 resolvedTs
-    heartbeatpb.DispatcherID dispatcher_id = 3; // 表示这个 event 是 对应哪个 dispatcher 的
-    float ratio = 4; // 表示这个 event 应该被发送到哪个 dispatcher 的 ratio
-    TableInfo table_info = 5; // 包含 table 相关信息，包括表名，主键，列名等
+    repeated TxnEvent txn_events = 1; 
+    uint64 resolved_ts = 2; 
+    heartbeatpb.DispatcherID dispatcher_id = 3; 
+    float ratio = 4; 
+    TableInfo table_info = 5; 
 }
 
 enum ActionType {
@@ -99,5 +99,5 @@ message DispatcherRequest {
 	string timezone = 15;
     uint64 epoch = 16;
     bool output_raw_change_event = 17;
-    bool isRedo = 18;
+    int64 mode = 18;
 }
