@@ -431,7 +431,6 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		now := time.Now().Unix()
 		lastSendTime := task.lastReadySendTime.Load()
 		currentInterval := task.readyInterval.Load()
-		// Skip if the interval since last send is less than 10 seconds
 		if now-lastSendTime < currentInterval {
 			return false
 		}
