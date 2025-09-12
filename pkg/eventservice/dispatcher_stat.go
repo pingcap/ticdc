@@ -265,6 +265,8 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 			zap.Stringer("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
 			zap.Uint64("resetTs", resetTs), zap.Uint64("startTs", lastTxnStartTs))
 		a.updateScanRange(resetTs, 0)
+		lastTxnCommitTs = a.lastScannedCommitTs.Load()
+		lastTxnStartTs = a.lastScannedStartTs.Load()
 	}
 
 	// the data not received by the event store yet, so just skip it.
@@ -276,9 +278,9 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	// since the CommitTsStart(and the data before startTs) is already sent to the dispatcher.
 	r := common.DataRange{
 		Span:                  a.info.GetTableSpan(),
-		CommitTsStart:         a.lastScannedCommitTs.Load(),
+		CommitTsStart:         lastTxnCommitTs,
 		CommitTsEnd:           resolvedTs,
-		LastScannedTxnStartTs: a.lastScannedStartTs.Load(),
+		LastScannedTxnStartTs: lastTxnStartTs,
 	}
 	return r, true
 }
