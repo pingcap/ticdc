@@ -89,7 +89,7 @@ type dispatcherStat struct {
 	// lastReadySendTime is the time when the ready event was last sent to dispatcher.
 	lastReadySendTime atomic.Int64
 	// readyInterval is the interval between two ready events in seconds.
-	// it will Double the interval for next time, but cap at 10 seconds
+	// it will double the interval for next time, but cap at maxReadyEventInterval.
 	readyInterval atomic.Int64
 	// isReadyRecevingData is used to indicate whether the dispatcher is ready to receive data events.
 	// It will be set to false, after it receives the pause event from the dispatcher.
