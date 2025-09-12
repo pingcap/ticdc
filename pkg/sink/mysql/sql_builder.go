@@ -41,7 +41,6 @@ type preparedDMLs struct {
 
 func (d *preparedDMLs) LogDebug() {
 	// for test
-	return
 	if log.GetLevel() != zapcore.DebugLevel {
 		return
 	}

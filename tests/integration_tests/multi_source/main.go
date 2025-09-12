@@ -287,6 +287,9 @@ func dmlWorker(ctx context.Context, db *sql.DB, table string, dbID int, threadID
 		_, err = db.Exec(insertSQL, id, id1, id2)
 		if err == nil {
 			insertSuccess++
+
+			log.S().Info("db:", dbID, " thread:", threadID, " insert sql: ", insertSQL, " values: ", []any{id, id1, id2})
+
 			if insertSuccess%100 == 0 {
 				log.S().Info("db:", dbID, " thread:", threadID, " insert success: ", insertSuccess)
 			}
@@ -302,6 +305,9 @@ func dmlWorker(ctx context.Context, db *sql.DB, table string, dbID int, threadID
 				rows, _ := result.RowsAffected()
 				if rows != 0 {
 					deleteSuccess++
+
+					log.S().Info("db:", dbID, " thread:", threadID, " delete sql: ", deleteSQL, " values: ", []any{id1, id2})
+
 					if deleteSuccess%100 == 0 {
 						log.S().Info("db:", dbID, " thread:", threadID, " delete success: ", deleteSuccess)
 					}
