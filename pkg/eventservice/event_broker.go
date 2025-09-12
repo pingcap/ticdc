@@ -430,8 +430,9 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	if task.resetTs.Load() == 0 {
 		now := time.Now().Unix()
 		lastSendTime := task.lastReadySendTime.Load()
+		currentInterval := task.readyInterval.Load()
 		// Skip if the interval since last send is less than 10 seconds
-		if now-lastSendTime < 10 {
+		if now-lastSendTime < currentInterval {
 			return false
 		}
 		remoteID := node.ID(task.info.GetServerID())
@@ -439,6 +440,12 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 		task.lastReadySendTime.Store(now)
+		newInterval := currentInterval * 2
+		maxReadyEventInterval := int64(10)
+		if newInterval > maxReadyEventInterval {
+			newInterval = maxReadyEventInterval
+		}
+		task.readyInterval.Store(newInterval)
 		updateMetricEventServiceSendCommandCount(task.info.GetMode())
 		return false
 	}
