@@ -86,7 +86,7 @@ type dispatcherStat struct {
 
 	// The epoch of the dispatcher.
 	epoch atomic.Uint64
-	// lastReadySendTime is the time when the ready event was last send to dispatcher.
+	// lastReadySendTime is the time when the ready event was last sent to dispatcher.
 	lastReadySendTime atomic.Int64
 	// isReadyRecevingData is used to indicate whether the dispatcher is ready to receive data events.
 	// It will be set to false, after it receives the pause event from the dispatcher.
