@@ -36,16 +36,11 @@ import (
 	"go.uber.org/zap"
 )
 
-type eventGroupKey struct {
-	tableID      int64
-	tableVersion uint64
-}
-
 // for multiple events, we try to batch the events of the same table into limited update / insert / delete query,
 // to enhance the performance of the sink.
 // While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
 // the process is as follows:
-//  1. we group the events by dispatcherID, and hold the order for the events of the same dispatcher
+//  1. we group the events by tableID, and hold the order for the events of the same table
 //  2. For each group,
 //     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.(TODO: support the case without pk but have uk)
 //     Otherwise,
@@ -55,7 +50,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 	// Step 1: group the events by table ID
-	eventsGroup := make(map[eventGroupKey][]*commonEvent.DMLEvent) // tableID --> events
+	eventsGroup := make(map[int64][]*commonEvent.DMLEvent) // tableID --> events
 	for _, event := range events {
 		// calculate for metrics
 		dmls.rowCount += int(event.Len())
@@ -64,16 +59,11 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 		}
 		dmls.approximateSize += event.GetSize()
 
-		// We use TableInfoVersion instead of tableInfo.GetUpdateTS() to group the events since we also need to consider the case when the table is renamed.
-		key := eventGroupKey{
-			tableID:      event.GetTableID(),
-			tableVersion: 0,
+		tableID := event.GetTableID()
+		if _, ok := eventsGroup[tableID]; !ok {
+			eventsGroup[tableID] = make([]*commonEvent.DMLEvent, 0)
 		}
-
-		if _, ok := eventsGroup[key]; !ok {
-			eventsGroup[key] = make([]*commonEvent.DMLEvent, 0)
-		}
-		eventsGroup[key] = append(eventsGroup[key], event)
+		eventsGroup[tableID] = append(eventsGroup[tableID], event)
 	}
 
 	// Step 2: prepare the dmls for each group
@@ -83,16 +73,16 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
-
+		// We check if the table versions and update ts here to avoid data loss due to unknown bug.
 		firstTableVersion := eventsInGroup[0].TableInfoVersion
-		firstTableInfo := tableInfo
+		firstTableInfoUpdateTs := tableInfo.GetUpdateTS()
 		for _, event := range eventsInGroup {
-			if event.TableInfoVersion != firstTableVersion {
-				log.Panic("events in the same group have different table versions",
-					zap.Any("firstTableInfo", firstTableInfo),
-					zap.Any("firstTableVersion", firstTableVersion),
-					zap.Any("currentEventTableVersion", event.TableInfoVersion),
-					zap.Any("currentEventTableInfo", event.TableInfo),
+			if event.TableInfoVersion != firstTableVersion || event.TableInfo.GetUpdateTS() != firstTableInfoUpdateTs {
+				log.Error("events in the same group have different table versions",
+					zap.Uint64("firstTableInfoUpdateTs", firstTableInfoUpdateTs),
+					zap.Uint64("firstTableVersion", firstTableVersion),
+					zap.Uint64("currentEventTableVersion", event.TableInfoVersion),
+					zap.Uint64("currentEventTableInfoUpdateTs", event.TableInfo.GetUpdateTS()),
 					zap.Any("events", eventsInGroup))
 			}
 		}
@@ -201,12 +191,6 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 	argsList := make([][]interface{}, 0)
 
 	batchSQL := func(events []*commonEvent.DMLEvent) {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Fatal("panic in batchSQL", zap.Any("events", events), zap.Any("firstTableInfo", events[0].TableInfo), zap.Any("error", r))
-			}
-		}()
-
 		// Only when SafeMode == false and commitTs is larger than replicatingTs,
 		// we think the data status is safe, we can use insert instead of replica sql to avoid the conflict.
 		inDataSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
@@ -771,8 +755,6 @@ func (w *Writer) batchSingleTxnDmls(
 	tableInfo *common.TableInfo,
 	translateToInsert bool,
 ) (sqls []string, values [][]interface{}) {
-	log.Debug("batchSingleTxnDmls", zap.Any("rows", rows), zap.Any("tableInfoUpdateTs", tableInfo.UpdateTS), zap.Any("translateToInsert", translateToInsert))
-
 	insertRows, updateRows, deleteRows := w.groupRowsByType(rows, tableInfo)
 
 	// handle delete
