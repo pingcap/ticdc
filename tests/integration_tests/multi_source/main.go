@@ -66,8 +66,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go switchAsyncCommit(ctx, sourceDB0)
-	util.MustExec(sourceDB0, "drop database if exists test;")
-	util.MustExec(sourceDB0, "drop database if exists mark;")
 	util.MustExec(sourceDB0, "create database mark;")
 	runDDLTest(cfg.DurationInSeconds, cfg.WorkerCount, []*sql.DB{sourceDB0, sourceDB1})
 	util.MustExec(sourceDB0, "create table mark.finish_mark(a int primary key);")
@@ -82,9 +80,9 @@ func runDDLTest(durationInSeconds int, dmlWorkerCount int, srcs []*sql.DB) {
 	}()
 
 	for i, ddlFunc := range []func(context.Context, *sql.DB){
-		// createDropSchemaDDL, truncateDDL,
+		createDropSchemaDDL, truncateDDL,
 		addDropColumnDDL, addDropColumnDDL2,
-		// modifyColumnDDL, addDropIndexDDL, DropWithRecoverDDL,
+		modifyColumnDDL, addDropIndexDDL, DropWithRecoverDDL,
 	} {
 		testName := getFunctionName(ddlFunc)
 		log.S().Info("running ddl test: ", i, " ", testName)
