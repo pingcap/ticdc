@@ -201,7 +201,6 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 	argsList := make([][]interface{}, 0)
 
 	batchSQL := func(events []*commonEvent.DMLEvent) {
-
 		defer func() {
 			if r := recover(); r != nil {
 				log.Fatal("panic in batchSQL", zap.Any("events", events), zap.Any("firstTableInfo", events[0].TableInfo), zap.Any("error", r))

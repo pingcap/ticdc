@@ -82,9 +82,9 @@ func runDDLTest(durationInSeconds int, dmlWorkerCount int, srcs []*sql.DB) {
 	}()
 
 	for i, ddlFunc := range []func(context.Context, *sql.DB){
-		//createDropSchemaDDL, truncateDDL,
+		// createDropSchemaDDL, truncateDDL,
 		addDropColumnDDL, addDropColumnDDL2,
-		//modifyColumnDDL, addDropIndexDDL, DropWithRecoverDDL,
+		// modifyColumnDDL, addDropIndexDDL, DropWithRecoverDDL,
 	} {
 		testName := getFunctionName(ddlFunc)
 		log.S().Info("running ddl test: ", i, " ", testName)

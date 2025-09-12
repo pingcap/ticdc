@@ -692,7 +692,7 @@ func TestGenerateBatchSQLWithDifferentTableVersion(t *testing.T) {
 	dmlInsertEvent3.TableInfoVersion = dropJob.BinlogInfo.FinishedTS
 	dmlInsertEvent4.TableInfoVersion = dropJob.BinlogInfo.FinishedTS
 
-	//chink1 := chunk.NewChunkWithCapacity(tableInfo1.GetFieldSlice(), 1)
+	// chink1 := chunk.NewChunkWithCapacity(tableInfo1.GetFieldSlice(), 1)
 
 	// Step 5: Try to put all 4 events in one group and call generateBatchSQL
 	// This should potentially cause a panic due to different table versions

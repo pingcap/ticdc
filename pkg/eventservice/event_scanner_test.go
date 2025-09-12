@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
-	"go.uber.org/zap"
 )
 
 type mockMounter struct {
@@ -505,8 +504,6 @@ func TestEventScannerWithDDL(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
 
-	log.Info("fizz fakeDDL ", zap.Any("fakeDDLCommitTs", fakeDDL.FinishedTs))
-
 	disp.eventStoreResolvedTs.Store(resolvedTs)
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
@@ -603,8 +600,6 @@ func TestEventScannerWithDDL(t *testing.T) {
 		}
 		_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 
-		log.Info("fizz in case 3", zap.Any("events", events), zap.Any("batchDMLLen", len(events[1].(*event.BatchDMLEvent).DMLEvents)))
-
 		require.NoError(t, err)
 		require.True(t, isInterrupted)
 		require.Equal(t, 5, len(events))
@@ -696,7 +691,6 @@ func TestEventScannerWithDDL(t *testing.T) {
 		require.Equal(t, e.GetType(), event.TypeResolvedEvent)
 		require.Equal(t, resolvedTs, e.GetCommitTs())
 	})
-
 }
 
 // TestDMLProcessor tests the processNewTransaction method of dmlProcessor

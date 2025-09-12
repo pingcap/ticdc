@@ -296,7 +296,6 @@ func (s *eventScanner) commitTxn(
 	tableUpdated := currentBatchDML.TableInfo.GetUpdateTS() != tableInfoUpdateTs
 	hasNewDDL := merger.hasDDLLessThanCommitTs(eventCommitTs)
 	if hasNewDDL || tableUpdated {
-		log.Info("fizz in commitTxn", zap.Uint64("eventCommitTs", eventCommitTs), zap.Uint64("tableInfoUpdateTs", tableInfoUpdateTs))
 		events := merger.mergeWithPrecedingDDLs(currentBatchDML)
 		session.appendEvents(events)
 		processor.resetBatchDML()
@@ -339,7 +338,6 @@ func interruptScan(
 ) {
 	// Append current batch
 	events := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
-	log.Info("fizz in interrupt scan", zap.Uint64("newCommitTs", newCommitTs), zap.Uint64("merger.lastCommitTs", merger.lastBatchDMLCommitTs), zap.Int("currentDMLEventsCount", len(events)))
 
 	if newCommitTs != merger.lastBatchDMLCommitTs {
 		// lastCommitTs may be 0, if the scanner timeout and no one row scanned.
@@ -355,11 +353,9 @@ func interruptScan(
 		} else {
 			// This means we interrupt the scan at a position where the commitTs is different from the last batchDML commitTs
 			// In this case, we need to append the DDL less than or equal to the last batchDML commitTs and the resolved-ts event with the last batchDML commitTs
-			log.Info("fizz interrupt scan", zap.Uint64("newCommitTs", newCommitTs), zap.Uint64("merger.lastCommitTs", merger.lastBatchDMLCommitTs))
 			events = append(events, merger.resolveDDLEvents(merger.lastBatchDMLCommitTs)...)
 			resolvedTs := event.NewResolvedEvent(merger.lastBatchDMLCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
 			events = append(events, resolvedTs)
-			log.Info("fizz interrupt scan 2", zap.Int("eventsCount", len(events)))
 		}
 	}
 	session.appendEvents(events)
@@ -451,7 +447,6 @@ func (s *session) exceedLimit(nBytes int64, batchDML ...*event.BatchDMLEvent) bo
 	if s.limit.isInUnitTest && len(batchDML) > 0 {
 		batchDML := batchDML[0]
 		eventCount := len(batchDML.DMLEvents)
-		log.Info("fizz in test", zap.Int("currentBatchDMLeventCount", eventCount), zap.Int64("s.eventBytes", s.eventBytes), zap.Int64("s.limit.maxDMLBytes", s.limit.maxDMLBytes))
 		return (s.eventBytes + int64(eventCount)) >= s.limit.maxDMLBytes
 	}
 
@@ -482,20 +477,15 @@ func (m *eventMerger) mergeWithPrecedingDDLs(batchDML *event.BatchDMLEvent) []ev
 		return nil
 	}
 
-	log.Info("fizz in mergeWithPrecedingDDLs 1", zap.Uint64("commitTs", batchDML.GetCommitTs()), zap.Int("m.ddlIndex", m.ddlIndex), zap.Int("len(m.ddlEvents)", len(m.ddlEvents)))
-
 	commitTs := batchDML.GetCommitTs()
 	var events []event.Event
 	// Collect all DDL events with commitTs < dml.commitTs
 	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].GetCommitTs() < commitTs {
-		log.Info("fizz in mergeWithPrecedingDDLs 2", zap.Uint64("commitTs", commitTs), zap.Uint64("m.ddlEvents[m.ddlIndex].GetCommitTs()", m.ddlEvents[m.ddlIndex].GetCommitTs()))
 		events = append(events, m.ddlEvents[m.ddlIndex])
 		m.ddlIndex++
 	}
 
 	events = append(events, batchDML)
-
-	log.Info("fizz in mergeWithPrecedingDDLs 3", zap.Int("eventsCount", len(events)))
 
 	m.lastBatchDMLCommitTs = commitTs
 	return events
@@ -522,7 +512,6 @@ func (m *eventMerger) hasDDLAtCommitTs(commitTs uint64) bool {
 	for i := m.ddlIndex; i < len(m.ddlEvents); i++ {
 		ddlCommitTs := m.ddlEvents[i].GetCommitTs()
 		if ddlCommitTs == commitTs {
-			log.Info("fizz in hasDDLAtCommitTs", zap.Uint64("commitTs", commitTs), zap.Uint64("ddlCommitTs", ddlCommitTs))
 			return true
 		}
 		// Since DDL events are sorted by commitTs, if we find a larger commitTs, we can stop
