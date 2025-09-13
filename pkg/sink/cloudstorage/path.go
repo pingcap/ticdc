@@ -212,7 +212,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	hasNewerSchemaVersion := false
 	err = f.storage.WalkDir(ctx, &storage.WalkOption{
 		SubDir:    subDir, /* use subDir to prevent walk the whole storage */
-		ObjPrefix: subDir + "schema_",
+		ObjPrefix: "schema_",
 	}, func(path string, _ int64) error {
 		schemaFileCnt++
 		if !strings.HasSuffix(path, checksumSuffix) {

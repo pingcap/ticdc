@@ -15,6 +15,7 @@ package filter
 
 import (
 	"fmt"
+	"strings"
 
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -26,6 +27,11 @@ import (
 
 // IsSysSchema returns true if the given schema is a system schema
 func IsSysSchema(db string) bool {
+	// tidb has motified the IsSystemSchema function to accept lowercase
+	// string only in this PR: https://github.com/pingcap/tidb/pull/62657 .
+	// So we should convert the db parameter to lowercase here
+	db = strings.ToLower(db)
+
 	switch db {
 	// TiCDCSystemSchema is used by TiCDC only.
 	// Tables in TiCDCSystemSchema should not be replicated by cdc.
