@@ -23,6 +23,8 @@ function prepare() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	cdc cli changefeed create -c="cf-blackhole" --sink-uri="blackhole://"
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "cf-blackhole" "normal" "null" ""
+	# sleep 1 second to wait for the changefeed to be created on cdc server
+	sleep 1
 }
 
 trap stop_tidb_cluster EXIT

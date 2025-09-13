@@ -40,7 +40,7 @@ function run() {
 	go-ycsb load mysql -P $CUR/conf/workload -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=changefeed_error
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/getAllPhysicalTablesGCFastFail=1*return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	capture_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	capture_pid=$(psutil $CDC_BINARY)
 
 	TOPIC_NAME="ticdc-sink-retry-test-$RANDOM"
 	case $SINK_TYPE in

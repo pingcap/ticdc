@@ -16,9 +16,10 @@ random_file_name=
 # Random generate the sockets config.
 # Make sure we dont use the same sock.
 randomGenSocketsConf() {
-	random_str=$(date '+%s%N')
 	if [ "$(uname)" == "Darwin" ]; then
 		random_str=$(cat /dev/random | LC_ALL=C tr -dc "a-zA-Z0-9" | head -c 10)
+	else
+		random_str=$(date '+%s%N')
 	fi
 	random_file_name="$OUT_DIR/tidb-config-$random_str.toml"
 
@@ -82,11 +83,11 @@ fi
 echo "Starting Upstream PD..."
 pd-server --version
 if [[ "$multiple_upstream_pd" == "true" ]]; then
-	pd_count=3
-	initial_cluster="pd1=http://${UP_PD_HOST_1}:${UP_PD_PEER_PORT_1},pd2=http://${UP_PD_HOST_2}:${UP_PD_PEER_PORT_2},pd3=http://${UP_PD_HOST_3}:${UP_PD_PEER_PORT_3}"
+	export pd_count=3
+	export initial_cluster="pd1=http://${UP_PD_HOST_1}:${UP_PD_PEER_PORT_1},pd2=http://${UP_PD_HOST_2}:${UP_PD_PEER_PORT_2},pd3=http://${UP_PD_HOST_3}:${UP_PD_PEER_PORT_3}"
 else
-	pd_count=1
-	initial_cluster="pd1=http://${UP_PD_HOST_1}:${UP_PD_PEER_PORT_1}"
+	export pd_count=1
+	export initial_cluster="pd1=http://${UP_PD_HOST_1}:${UP_PD_PEER_PORT_1}"
 fi
 for idx in $(seq 1 $pd_count); do
 	host="UP_PD_HOST_$idx"
