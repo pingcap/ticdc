@@ -84,6 +84,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 					zap.Uint64("currentEventTableVersion", event.TableInfoVersion),
 					zap.Uint64("currentEventTableInfoUpdateTs", event.TableInfo.GetUpdateTS()),
 					zap.Any("events", eventsInGroup))
+				return nil, errors.New(fmt.Sprintf("events in the same group have different table versions, there must be a bug in the code! firstTableVersion: %d, firstUpdateTs: %d, currentEventTableVersion: %d, currentEventTableInfoUpdateTs: %d", firstTableVersion, firstTableInfoUpdateTs, event.TableInfoVersion, event.TableInfo.GetUpdateTS()))
 			}
 		}
 
