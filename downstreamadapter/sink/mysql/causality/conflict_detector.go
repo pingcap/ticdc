@@ -97,7 +97,9 @@ func (d *ConflictDetector) Run(ctx context.Context) error {
 // ConflictKeys must be sorted by the slot index.
 func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 	start := time.Now()
+	log.Info("Add event into ConflictDetector", zap.Any("eventString", event.String()))
 	hashes := ConflictKeys(event)
+	log.Info("Finish Add event into ConflictDetector", zap.Any("eventString", event.String()), zap.Any("hashes", hashes))
 	node := d.slots.AllocNode(hashes)
 
 	event.AddPostFlushFunc(func() {

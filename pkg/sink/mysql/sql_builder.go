@@ -80,9 +80,9 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 	}
 	commitTsList := make([]uint64, len(events))
 	startTsList := make([]uint64, len(events))
-	for _, event := range events {
-		commitTsList = append(commitTsList, event.GetCommitTs())
-		startTsList = append(startTsList, event.GetStartTs())
+	for i, event := range events {
+		commitTsList[i] = event.GetCommitTs()
+		startTsList[i] = event.GetStartTs()
 	}
 	log.Debug("Event commit ts and start ts", zap.Any("commitTsList", commitTsList), zap.Any("startTsList", startTsList))
 	log.Debug("End to log a preparedDMLs")
