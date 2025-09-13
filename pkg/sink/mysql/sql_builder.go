@@ -40,7 +40,6 @@ type preparedDMLs struct {
 }
 
 func (d *preparedDMLs) LogDebug() {
-	// for test
 	if log.GetLevel() != zapcore.DebugLevel {
 		return
 	}
@@ -249,7 +248,7 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
-	for i, col := range tableInfo.GetColumns() { // 3
+	for i, col := range tableInfo.GetColumns() {
 		if col == nil || col.IsGenerated() {
 			continue
 		}
