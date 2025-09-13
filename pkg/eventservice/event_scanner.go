@@ -212,11 +212,14 @@ func (s *eventScanner) scanAndMergeEvents(
 
 			if session.exceedLimit(processor.batchDML.GetSize(), processor.batchDML) &&
 				merger.canInterrupt(rawEvent.CRTs, processor.batchDML) {
-				interruptScan(session, merger, processor, rawEvent.CRTs)
+				interruptScan(session, merger, processor, rawEvent.CRTs, rawEvent.StartTs)
 				return true, nil
 			}
 
-			s.startTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
+			err = s.startTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
+			if err != nil {
+				return false, err
+			}
 		}
 
 		if err = processor.appendRow(rawEvent); err != nil {
@@ -272,9 +275,13 @@ func (s *eventScanner) startTxn(
 	startTs, commitTs uint64,
 	tableInfo *common.TableInfo,
 	tableID int64,
-) {
-	processor.startTxn(session.dispatcherStat.id, tableID, tableInfo, startTs, commitTs)
+) error {
+	err := processor.startTxn(session.dispatcherStat.id, tableID, tableInfo, startTs, commitTs)
+	if err != nil {
+		return err
+	}
 	session.dmlCount++
+	return nil
 }
 
 func (s *eventScanner) commitTxn(
@@ -286,7 +293,6 @@ func (s *eventScanner) commitTxn(
 	if err := processor.commitTxn(); err != nil {
 		return err
 	}
-
 	currentBatchDML := processor.getCurrentBatchDML()
 
 	// Use DMLCount() instead of Len() to check if the batchDML is empty
@@ -338,6 +344,7 @@ func interruptScan(
 	merger *eventMerger,
 	processor *dmlProcessor,
 	newCommitTs uint64,
+	newStartTs uint64,
 ) {
 	// Append current batch
 	events := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
@@ -359,7 +366,10 @@ func interruptScan(
 			events = append(events, merger.resolveDDLEvents(merger.lastBatchDMLCommitTs)...)
 			resolvedTs := event.NewResolvedEvent(merger.lastBatchDMLCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
 			events = append(events, resolvedTs)
+			log.Debug("scan interrupted at different commitTs with new event", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Uint64("CommitTs", merger.lastBatchDMLCommitTs), zap.Uint64("newCommitTs", newCommitTs), zap.Duration("duration", time.Since(session.startTime)))
 		}
+	} else {
+		log.Debug("scan interrupted at the same commitTs with new event", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Uint64("startTs", processor.getCurrentBatchDML().GetStartTs()), zap.Uint64("commitTs", merger.lastBatchDMLCommitTs), zap.Uint64("newStartTs", newStartTs), zap.Uint64("newCommitTs", newCommitTs), zap.Duration("duration", time.Since(session.startTime)))
 	}
 	session.appendEvents(events)
 }
@@ -612,12 +622,12 @@ func (p *dmlProcessor) startTxn(
 	tableID int64,
 	tableInfo *common.TableInfo,
 	startTs uint64, commitTs uint64,
-) {
+) error {
 	if p.currentDML != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}
 	p.currentDML = event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
-	p.batchDML.AppendDMLEvent(p.currentDML)
+	return p.batchDML.AppendDMLEvent(p.currentDML)
 }
 
 func (p *dmlProcessor) commitTxn() error {
