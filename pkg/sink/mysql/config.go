@@ -100,7 +100,6 @@ type Config struct {
 	SafeMode               bool
 	Timezone               string
 	TLS                    string
-	ForceReplicate         bool
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -215,7 +214,6 @@ func (c *Config) Apply(
 	}
 
 	// c.EnableOldValue = config.EnableOldValue
-	c.ForceReplicate = cfg.ForceReplicate
 	// Note: The TiDBSourceID should never be 0 here, but we have found that
 	// in some problematic cases, the TiDBSourceID is 0 since something went wrong in the
 	// configuration process. So we need to check it here again.

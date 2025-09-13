@@ -296,9 +296,57 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 }
 
 // VerifyTable verify table, return ineligibleTables and EligibleTables.
-// FIXME: this is a dummy implementation, we need to implement it in the future
 func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
-	tables := &Tables{}
+	ctx := c.Request.Context()
+	cfg := &ChangefeedConfig{ReplicaConfig: GetDefaultReplicaConfig()}
+
+	if err := c.BindJSON(&cfg); err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+		return
+	}
+
+	// fill replicaConfig
+	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+
+	// verify replicaConfig
+	sinkURIParsed, err := url.Parse(cfg.SinkURI)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		return
+	}
+	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
+		return
+	}
+
+	scheme := sinkURIParsed.Scheme
+	topic := strings.TrimFunc(sinkURIParsed.Path, func(r rune) bool {
+		return r == '/'
+	})
+	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
+
+	ineligibleTables, eligibleTables, err := getVerifiedTables(ctx, replicaCfg, h.server.GetKVStorage(), cfg.StartTs, scheme, topic, protocol)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	log.Info("verify table", zap.Strings("ineligibleTables", ineligibleTables), zap.Strings("eligibleTables", eligibleTables),
+		zap.Bool("forceReplicate", replicaCfg.ForceReplicate), zap.Bool("ignoreIneligibleTable", cfg.ReplicaConfig.IgnoreIneligibleTable))
+
+	toAPIModelFunc := func(tbls []string) []TableName {
+		var apiModels []TableName
+		for _, tbl := range tbls {
+			apiModels = append(apiModels, TableName{
+				Table: tbl,
+			})
+		}
+		return apiModels
+	}
+	tables := &Tables{
+		IneligibleTables: toAPIModelFunc(ineligibleTables),
+		EligibleTables:   toAPIModelFunc(eligibleTables),
+	}
 	c.JSON(http.StatusOK, tables)
 }
 
@@ -1237,6 +1285,11 @@ func getVerifiedTables(
 	if err != nil {
 		return nil, nil, err
 	}
+	log.Info("verifyTables completed",
+		zap.Int("tableCount", len(tableInfos)),
+		zap.Strings("ineligibleTables", ineligibleTables),
+		zap.Strings("eligibleTables", eligibleTables),
+		zap.Uint64("startTs", startTs))
 
 	err = f.Verify(tableInfos)
 	if err != nil {

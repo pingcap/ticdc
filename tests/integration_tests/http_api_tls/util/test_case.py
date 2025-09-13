@@ -213,12 +213,13 @@ def update_changefeed():
     resp = rq.put(url, data=data, headers=headers, cert=CERT, verify=VERIFY)
     assert resp.status_code == rq.codes.bad_request
 
-    # update success
+    # update fail
+    # there is a ineligible table, should return error: CDC:ErrTableIneligible
     url = BASE_URL0+"/changefeeds/changefeed-test2"
     data = json.dumps({"mounter_worker_num": 32})
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers, cert=CERT, verify=VERIFY)
-    assert resp.status_code == rq.codes.ok
+    assert resp.status_code == rq.codes.bad_request
 
     # update fail
     # can't update start_ts
@@ -350,9 +351,6 @@ def set_log_level():
 
 
 def verify_table():
-    # FIXME: Enable this test case after we fully support verify table API
-    print("pass test: verify table")
-    return
     url = BASE_URL0+"/tso"
     # we need to retry since owner resign before this func call
     i = 0
