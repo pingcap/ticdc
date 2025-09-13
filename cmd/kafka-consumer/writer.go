@@ -288,6 +288,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			}
 		})
 		w.mysqlSink.AddDMLEvent(e)
+		log.Info("flush DML event", zap.Int64("tableID", e.GetTableID()), zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
 	}
 
 	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))

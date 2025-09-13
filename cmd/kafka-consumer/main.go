@@ -48,7 +48,7 @@ func main() {
 	flag.StringVar(&configFile, "config", "", "config file for changefeed")
 	flag.StringVar(&upstreamURIStr, "upstream-uri", "", "Kafka uri")
 	flag.StringVar(&logPath, "log-file", "cdc_kafka_consumer.log", "log file path")
-	flag.StringVar(&logLevel, "log-level", "info", "log file path")
+	flag.StringVar(&logLevel, "log-level", "debug", "log file path")
 	flag.BoolVar(&enableProfiling, "enable-profiling", false, "enable pprof profiling")
 
 	flag.StringVar(&consumerOption.downstreamURI, "downstream-uri", "", "downstream sink uri")
