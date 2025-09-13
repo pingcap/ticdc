@@ -39,7 +39,7 @@ type preparedDMLs struct {
 	tsPairs         []tsPair
 }
 
-func (d *preparedDMLs) LogDebug() {
+func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 	if log.GetLevel() != zapcore.DebugLevel {
 		return
 	}
@@ -78,46 +78,14 @@ func (d *preparedDMLs) LogDebug() {
 		log.Debug(fmt.Sprintf("[%03d] Query: %s", i+1, sql))
 		log.Debug(fmt.Sprintf("      Args: %s", argsStr))
 	}
+	commitTsList := make([]uint64, len(events))
+	startTsList := make([]uint64, len(events))
+	for _, event := range events {
+		commitTsList = append(commitTsList, event.GetCommitTs())
+		startTsList = append(startTsList, event.GetStartTs())
+	}
+	log.Debug("Event commit ts and start ts", zap.Any("commitTsList", commitTsList), zap.Any("startTsList", startTsList))
 	log.Debug("End to log a preparedDMLs")
-}
-
-func (d *preparedDMLs) LogInfo() {
-	// Calculate total count
-	totalCount := len(d.sqls)
-	log.Info("Start to log a preparedDMLs", zap.Int("totalSQLCount", totalCount), zap.Int("rowCount", d.rowCount))
-
-	if len(d.sqls) == 0 {
-		log.Info("No SQL statements to log")
-		return
-	}
-
-	// Log each SQL statement with its arguments
-	for i, sql := range d.sqls {
-		var args []interface{}
-		if i < len(d.values) {
-			args = d.values[i]
-		}
-
-		// Format the arguments as a string
-		argsStr := "("
-		for j, arg := range args {
-			if j > 0 {
-				argsStr += ", "
-			}
-			if arg == nil {
-				argsStr += "NULL"
-			} else if str, ok := arg.(string); ok {
-				argsStr += fmt.Sprintf(`"%s"`, str)
-			} else {
-				argsStr += fmt.Sprintf("%v", arg)
-			}
-		}
-		argsStr += ")"
-		// Log in the requested format
-		log.Info(fmt.Sprintf("[%03d] Query: %s", i+1, sql))
-		log.Info(fmt.Sprintf("      Args: %s", argsStr))
-	}
-	log.Info("End to log a preparedDMLs")
 }
 
 func (d *preparedDMLs) String() string {

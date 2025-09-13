@@ -83,7 +83,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
 	// This method is expensive, so we only log it when the log level is debug.
 
-	dmls.LogDebug()
+	dmls.LogDebug(events)
 
 	return dmls
 }
