@@ -47,6 +47,8 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
+
+	maxReadyEventIntervalSeconds = 10
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -429,10 +431,22 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
+		now := time.Now().Unix()
+		lastSendTime := task.lastReadySendTime.Load()
+		currentInterval := task.readyInterval.Load()
+		if now-lastSendTime < currentInterval {
+			return false
+		}
 		remoteID := node.ID(task.info.GetServerID())
 		event := event.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
+		task.lastReadySendTime.Store(now)
+		newInterval := currentInterval * 2
+		if newInterval > maxReadyEventIntervalSeconds {
+			newInterval = maxReadyEventIntervalSeconds
+		}
+		task.readyInterval.Store(newInterval)
 		updateMetricEventServiceSendCommandCount(task.info.GetMode())
 		return false
 	}
