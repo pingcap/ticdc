@@ -235,8 +235,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				log.Fatal("The CommitTs must be greater than the resolvedTs",
 					zap.String("EventType", "COMMITTED"),
 					zap.Uint64("CommitTs", entry.CommitTs),
-					zap.Uint64("resolvedTs", resolvedTs),
-					zap.Uint64("regionID", regionID))
+					zap.Uint64("resolvedTs", resolvedTs))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_PREWRITE:

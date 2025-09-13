@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -783,4 +785,17 @@ func TestDecodeToChunk(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, sum, checksum.Current)
 	}
+}
+
+func TestDecodeKey(t *testing.T) {
+	a := "78FFFFFE7480000000000000185F728000000000000010"
+	key, err := hex.DecodeString(a)
+	require.NoError(t, err)
+
+	raw := &common.RawKVEntry{
+		Key: key,
+	}
+	raw.Key = RemoveKeyspacePrefix(raw.Key)
+	_, err = tablecodec.DecodeRowKey(raw.Key)
+	require.NoError(t, err)
 }
