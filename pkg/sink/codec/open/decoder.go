@@ -473,15 +473,15 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 		}
 	}
 	log.Info("hyy indices", zap.Any("indices", indices))
-	// if there are multiple multi-column indices, consider as one. ???why?
-	// if len(multiColumns) != 0 {
-	// 	indices = append(indices, &timodel.IndexInfo{
-	// 		ID:      1 + int64(len(indices)),
-	// 		Name:    ast.NewCIStr("multi_idx"),
-	// 		Columns: multiColumns,
-	// 		Unique:  false,
-	// 	})
-	// }
+	//if there are multiple multi-column indices, consider as one. ???why?
+	if len(multiColumns) != 0 {
+		indices = append(indices, &timodel.IndexInfo{
+			ID:      1 + int64(len(indices)),
+			Name:    ast.NewCIStr("multi_idx"),
+			Columns: multiColumns,
+			Unique:  false,
+		})
+	}
 	return indices
 }
 
