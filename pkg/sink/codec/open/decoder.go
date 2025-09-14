@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -410,6 +411,12 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	indices := make([]*timodel.IndexInfo, 0, 1)
 	multiColumns := make([]*timodel.IndexColumn, 0, 2)
+
+	// make columns sorted by id, to make indices for different row in table be same
+	sort.Slice(columns, func(i, j int) bool {
+		return columns[i].ID < columns[j].ID
+	})
+
 	for idx, col := range columns {
 		if mysql.HasPriKeyFlag(col.GetFlag()) {
 			indexColumns := make([]*timodel.IndexColumn, 0)
@@ -444,15 +451,16 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 		}
 	}
-	// if there are multiple multi-column indices, consider as one.
-	if len(multiColumns) != 0 {
-		indices = append(indices, &timodel.IndexInfo{
-			ID:      1 + int64(len(indices)),
-			Name:    ast.NewCIStr("multi_idx"),
-			Columns: multiColumns,
-			Unique:  false,
-		})
-	}
+	log.Info("hyy indices", zap.Any("indices", indices))
+	// if there are multiple multi-column indices, consider as one. ???why?
+	// if len(multiColumns) != 0 {
+	// 	indices = append(indices, &timodel.IndexInfo{
+	// 		ID:      1 + int64(len(indices)),
+	// 		Name:    ast.NewCIStr("multi_idx"),
+	// 		Columns: multiColumns,
+	// 		Unique:  false,
+	// 	})
+	// }
 	return indices
 }
 

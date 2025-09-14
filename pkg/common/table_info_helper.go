@@ -581,9 +581,13 @@ func (s *columnSchema) initRowColInfosWithoutVirtualCols() {
 // 2. If the table has not null unique key, it's the handle key.
 // 3. If the table has no primary key and no not null unique key, it has no handleKey.
 func (s *columnSchema) initIndexColumns() {
+	defer func() {
+		log.Info("hyy IndexColumns", zap.Any("IndexColumns", s.IndexColumns), zap.Any("s.Indices", s.Indices))
+	}()
 	handleIndexOffset := -1
 	hasPrimary := len(s.HandleKeyIDs) != 0
 	for i, idx := range s.Indices {
+		log.Info("hyy initIndexColumns", zap.Any("idx", idx), zap.Any("i", i))
 		if idx.Primary {
 			// append index
 			indexColOffset := make([]int64, 0, len(idx.Columns))
@@ -645,6 +649,7 @@ func (s *columnSchema) initIndexColumns() {
 	for _, col := range selectCols {
 		s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
 	}
+
 }
 
 // TryGetCommonPkColumnIds get the IDs of primary key column if the table has common handle.
