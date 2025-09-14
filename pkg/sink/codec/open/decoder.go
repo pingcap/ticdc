@@ -405,6 +405,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		nextColumnID++
 		result = append(result, col)
 	}
+	log.Info("hyy Columns", zap.Any("columns", result))
 	return result
 }
 

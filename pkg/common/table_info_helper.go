@@ -582,7 +582,7 @@ func (s *columnSchema) initRowColInfosWithoutVirtualCols() {
 // 3. If the table has no primary key and no not null unique key, it has no handleKey.
 func (s *columnSchema) initIndexColumns() {
 	defer func() {
-		log.Info("hyy IndexColumns", zap.Any("IndexColumns", s.IndexColumns), zap.Any("s.Indices", s.Indices))
+		log.Info("hyy IndexColumns", zap.Any("IndexColumns", s.IndexColumns), zap.Any("s.Indices", s.Indices), zap.Any("columns", s.Columns))
 	}()
 	handleIndexOffset := -1
 	hasPrimary := len(s.HandleKeyIDs) != 0
