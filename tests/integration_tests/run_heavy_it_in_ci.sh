@@ -68,73 +68,73 @@ mysql_groups=(
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
 	# G00
-	'cdc cdc cdc'
+	'generate_column many_pk_or_uk multi_source'
 	# G01
-	'cdc cdc cdc'
+	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
 	# G02
-	'cdc cdc cdc'
+	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'cdc cdc cdc'
+	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
-	'cdc cdc cdc'
+	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	'cdc cdc cdc'
+	'move_table drop_many_tables'
 	# G06
-	'cdc cdc cdc'
+	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'cdc cdc cdc'
+	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'cdc cdc cdc'
+	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
 	# G09
-	'cdc cdc cdc'
+	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume'
 	# G10
-	'cdc cdc cdc'
+	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
-	'cdc cdc cdc'
+	'fail_over region_merge'
 	# G12
-	'cdc cdc cdc'
+	'ddl_for_split_tables_random_schedule'
 	# G13
-	'cdc cdc cdc'
+	'debezium01 fail_over_ddl_mix'
 	# G14
-	'cdc cdc cdc'
+	'debezium02'
 	# G15
-	'cdc cdc cdc'
+	'debezium03'
 )
 
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
 pulsar_groups=(
 	# G00
-	'cdc cdc cdc'
+	'generate_column many_pk_or_uk multi_source'
 	# G01
-	'cdc cdc cdc'
+	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
 	# G02
-	'cdc cdc cdc'
+	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'cdc cdc cdc'
+	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
-	'cdc cdc cdc'
+	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	'cdc cdc cdc'
+	'move_table drop_many_tables'
 	# G06
-	'cdc cdc cdc'
+	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'cdc cdc cdc'
+	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'cdc cdc cdc'
+	'tidb_mysql_test'
 	# G09
-	'cdc cdc cdc'
+	'mq_sink_error_resume'
 	# G10
-	'cdc cdc cdc'
+	'ddl_for_split_tables_random_schedule'
 	# G11
-	'cdc cdc cdc'
+	'ddl_with_random_move_table'
 	# G12
-	'cdc cdc cdc'
+	'fail_over region_merge'
 	# G13
-	'cdc cdc cdc'
+	'debezium01 fail_over_ddl_mix'
 	# G14
-	'cdc cdc cdc'
+	'debezium02'
 	# G15
-	'cdc cdc cdc'
+	'debezium03'
 )
 
 storage_groups=(

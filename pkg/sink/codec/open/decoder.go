@@ -425,7 +425,6 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		nextColumnID++
 		result = append(result, col)
 	}
-	log.Info("hyy Columns", zap.Any("columns", result))
 	return result
 }
 
@@ -472,8 +471,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 		}
 	}
-	log.Info("hyy indices", zap.Any("indices", indices))
-	//if there are multiple multi-column indices, consider as one. ???why?
+	//if there are multiple multi-column indices, consider as one.//???
 	if len(multiColumns) != 0 {
 		indices = append(indices, &timodel.IndexInfo{
 			ID:      1 + int64(len(indices)),

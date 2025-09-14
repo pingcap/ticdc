@@ -64,7 +64,6 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 	if !row.Row.IsEmpty() {
 		for iIdx, idxColID := range tableInfo.GetIndexColumns() {
 			key := genKeyList(&row.Row, iIdx, idxColID, dispatcherID, tableInfo)
-			log.Info("genRowKeys for row", zap.Any("iIdx", iIdx), zap.Any("idxColID", idxColID), zap.Any("key", key))
 			if len(key) == 0 {
 				continue
 			}
@@ -74,7 +73,6 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 	if !row.PreRow.IsEmpty() {
 		for iIdx, idxColID := range tableInfo.GetIndexColumns() {
 			key := genKeyList(&row.PreRow, iIdx, idxColID, dispatcherID, tableInfo)
-			log.Info("genRowKeys for preRow", zap.Any("iIdx", iIdx), zap.Any("idxColID", idxColID), zap.Any("key", key))
 			if len(key) == 0 {
 				continue
 			}
