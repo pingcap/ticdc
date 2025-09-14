@@ -140,7 +140,9 @@ func (p *saramaSyncProducer) Heartbeat() {
 		for _, b := range brokers {
 			_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
 		}
-		log.Error("saramaSyncProducer Heartbeat time", zap.Any("cost", time.Since(start)))
+		if time.Since(start) > time.Second*5 {
+			log.Error("saramaSyncProducer Heartbeat time", zap.Any("cost", time.Since(start)))
+		}
 	}()
 }
 
@@ -275,7 +277,9 @@ func (p *saramaAsyncProducer) Heartbeat() {
 		for _, b := range brokers {
 			_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
 		}
-		log.Error("saramaAsyncProducer Heartbeat time", zap.Any("cost", time.Since(start)))
+		if time.Since(start) > time.Second*5 {
+			log.Error("saramaAsyncProducer Heartbeat time", zap.Any("cost", time.Since(start)))
+		}
 	}()
 }
 

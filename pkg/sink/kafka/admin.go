@@ -42,7 +42,9 @@ func (a *saramaAdminClient) GetAllBrokers(_ context.Context) []Broker {
 			ID: broker.ID(),
 		})
 	}
-	log.Error("GetAllBrokers time", zap.Any("cost", time.Since(start)))
+	if time.Since(start) > time.Second*5 {
+		log.Error("GetAllBrokers Heartbeat time", zap.Any("cost", time.Since(start)))
+	}
 	return result
 }
 
@@ -186,7 +188,9 @@ func (a *saramaAdminClient) Heartbeat() {
 		for _, b := range brokers {
 			_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
 		}
-		log.Error("saramaAdminClient Heartbeat time", zap.Any("cost", time.Since(start)))
+		if time.Since(start) > time.Second*5 {
+			log.Error("saramaAdminClient Heartbeat time", zap.Any("cost", time.Since(start)))
+		}
 	}()
 }
 
