@@ -300,7 +300,10 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	result.StartTs = msg.getCommitTs()
 	result.CommitTs = msg.getCommitTs()
 	result.PhysicalTableID = tableInfo.TableName.TableID
-	result.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+	result.Rows = chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), 1)
+	result.AddPostFlushFunc(func() {
+		result.Rows.Destroy(1, tableInfo.GetFieldSlice())
+	})
 	result.Length++
 
 	columns := tableInfo.GetColumns()
