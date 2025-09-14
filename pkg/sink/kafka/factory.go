@@ -134,11 +134,13 @@ func (p *saramaSyncProducer) Heartbeat() {
 	if p.closed.Load() {
 		return
 	}
+	start := time.Now()
 	go func() {
 		brokers := p.client.Brokers()
 		for _, b := range brokers {
 			_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
 		}
+		log.Error("saramaSyncProducer Heartbeat time", zap.Any("cost", time.Since(start)))
 	}()
 }
 
@@ -267,11 +269,13 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) Heartbeat() {
+	start := time.Now()
 	go func() {
 		brokers := p.client.Brokers()
 		for _, b := range brokers {
 			_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
 		}
+		log.Error("saramaAsyncProducer Heartbeat time", zap.Any("cost", time.Since(start)))
 	}()
 }
 
