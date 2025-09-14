@@ -218,7 +218,7 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 	e.CommitTs = csvMsg.commitTs
 	e.TableInfo = tableInfo
 
-	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), 1)
+	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
 	e.AddPostFlushFunc(func() {
 		chk.Destroy(1, tableInfo.GetFieldSlice())
 	})

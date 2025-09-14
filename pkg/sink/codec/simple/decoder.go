@@ -650,7 +650,7 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		Length:          1,
 	}
 
-	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), 1)
+	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
 	result.AddPostFlushFunc(func() {
 		chk.Destroy(1, tableInfo.GetFieldSlice())
 	})

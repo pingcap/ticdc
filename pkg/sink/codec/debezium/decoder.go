@@ -164,7 +164,7 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	tableInfo := d.queryTableInfo()
 	commitTs := d.getCommitTs()
 	event := &commonEvent.DMLEvent{
-		Rows:            chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), 1),
+		Rows:            chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity),
 		StartTs:         commitTs,
 		CommitTs:        commitTs,
 		TableInfo:       tableInfo,

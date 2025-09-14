@@ -468,7 +468,7 @@ func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 	result.CommitTs = key.Ts
 	result.Length++
 
-	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), 1)
+	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
 	result.AddPostFlushFunc(func() {
 		chk.Destroy(1, tableInfo.GetFieldSlice())
 	})
