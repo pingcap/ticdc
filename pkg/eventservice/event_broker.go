@@ -238,10 +238,10 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
 		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
-	// log.Info("send ddl event to dispatcher",
-	// 	zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", e.TableID),
-	// 	zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
-	// 	zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+	log.Info("send ddl event to dispatcher",
+		zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", e.TableID),
+		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
+		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
 
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
