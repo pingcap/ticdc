@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"go.uber.org/zap"
 )
 
@@ -127,8 +128,11 @@ func (m *matcher) matchCachedRow(initialized bool) []*cdcpb.Event_Row {
 			// prewrite log before initialized, a committed log  with
 			// the same key and start-ts must have been received.
 			log.Info("ignore commit event without prewrite",
-				zap.Binary("key", cacheEntry.GetKey()),
-				zap.Uint64("startTs", cacheEntry.GetStartTs()))
+				zap.String("key", spanz.HexKey(cacheEntry.GetKey())),
+				zap.Uint64("startTs", cacheEntry.GetStartTs()),
+				zap.Uint64("commitTs", cacheEntry.GetCommitTs()),
+				zap.Any("opType", cacheEntry.GetOpType()),
+				zap.Any("logType", cacheEntry.GetType()))
 			continue
 		}
 		cachedCommit[top] = cacheEntry

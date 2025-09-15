@@ -238,6 +238,16 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("resolvedTs", resolvedTs))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
+			key := newMatchKey(entry)
+			if state.matcher.unmatchedValue != nil {
+				if _, exists := state.matcher.unmatchedValue[key]; exists {
+					log.Warn("receive a COMMITTED entry while there is still unmatched prewrite on the same key",
+						zap.Uint64("regionID", regionID),
+						zap.String("key", hex.EncodeToString(entry.GetKey())),
+						zap.Uint64("startTs", entry.GetStartTs()),
+						zap.Uint64("commitTs", entry.GetCommitTs()))
+				}
+			}
 		case cdcpb.Event_PREWRITE:
 			state.matcher.putPrewriteRow(entry)
 		case cdcpb.Event_COMMIT:
