@@ -217,6 +217,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastCommitTs = dml.GetCommitTs()
 		log.Debug("send dml event to dispatcher",
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+			zap.Uint64("seq", dml.Seq),
 			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
 	if lastCommitTs != 0 {
@@ -375,10 +376,14 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	}
 
 	// 3. Check whether there is any events in the data range
-	// Note: target range is (dataRange.CommitTsStart, dataRange.CommitTsEnd]
-	if dataRange.CommitTsStart >= task.eventStoreCommitTs.Load() &&
-		dataRange.LastScannedTxnStartTs != 0 &&
-		dataRange.CommitTsStart >= ddlState.MaxEventCommitTs {
+	// Note: target range is (dataRange.CommitTsStart-dataRange.LastScannedTxnStartTs, dataRange.CommitTsEnd]
+	// when `dataRange.CommitTsStart` equals `task.eventStoreCommitTs.Load()`,
+	// it is difficult to determine whether any txn events with a commitTs of `dataRange.CommitTsStart` remain unscanned.
+	// because multiple transactions may have the same commit ts.
+	// so we take the risk to do a useless scan.
+	noDMLEvent := dataRange.CommitTsStart > task.eventStoreCommitTs.Load()
+	noDDLEvent := dataRange.CommitTsStart >= ddlState.MaxEventCommitTs
+	if noDMLEvent && noDDLEvent {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
@@ -564,11 +569,22 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
+		log.Debug("not enough memory quota, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available.Load()),
+			zap.Uint64("required", uint64(sl.maxDMLBytes)))
 		return
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	if scannedBytes < 0 {
+		releaseQuota(available, uint64(sl.maxDMLBytes))
+	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
+		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	}
+
 	if err != nil {
 		log.Error("scan events failed",
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
@@ -629,11 +645,19 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 }
 
 func allocQuota(quota *atomic.Uint64, nBytes uint64) bool {
-	available := quota.Load()
-	if available < nBytes {
-		return false
+	for {
+		available := quota.Load()
+		if available < nBytes {
+			return false
+		}
+		if quota.CompareAndSwap(available, available-nBytes) {
+			return true
+		}
 	}
-	return quota.CompareAndSwap(available, available-nBytes)
+}
+
+func releaseQuota(quota *atomic.Uint64, nBytes uint64) {
+	quota.Add(nBytes)
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int, topic string) error {

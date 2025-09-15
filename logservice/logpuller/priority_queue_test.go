@@ -247,6 +247,7 @@ func TestPriorityQueue_ConcurrentOperations(t *testing.T) {
 	var mu sync.Mutex
 	consumedTasks := make([]PriorityTask, 0, totalTasks)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Start consumers
 	for i := 0; i < numConsumers; i++ {
@@ -372,11 +373,42 @@ func TestPriorityQueue_Close(t *testing.T) {
 	pq.Push(task3)
 	require.Equal(t, 3, pq.Len())
 
-	// Test that close doesn't panic
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wg := sync.WaitGroup{}
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			pq.Push(newMockPriorityTask(i, "task"))
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		defer cancel()
+
+		for i := 0; i < 1000; i++ {
+			// Test that close doesn't panic
+			require.NotPanics(t, func() {
+				pq.Close()
+			})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			// Make sure it won't block when the queue is closed
+			pq.Pop(ctx)
+		}
+	}()
+
+	wg.Wait()
 	require.NotPanics(t, func() {
 		pq.Close()
 	})
-
 	// Test that the tasks are popped
 	require.Equal(t, 0, pq.Len())
 }
@@ -402,7 +434,9 @@ func TestPriorityQueue_EmptyQueueOperations(t *testing.T) {
 
 func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
 	pq := NewPriorityQueue()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	currentTs := oracle.GoTimeToTS(time.Now())
 
 	// Create real priority tasks with different types
@@ -452,6 +486,7 @@ func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
 	require.Equal(t, 0, pq.Len())
 
 	pq.Close()
+	cancel()
 	task, err := pq.Pop(ctx)
 	require.Nil(t, task)
 	require.Error(t, err)

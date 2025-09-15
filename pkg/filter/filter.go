@@ -45,9 +45,22 @@ const (
 // Filter are safe for concurrent use.
 type Filter interface {
 	// ShouldIgnoreDML returns true if the DML event should not be handled.
-	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo) (bool, error)
+	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64) (bool, error)
+	// ShouldDiscardDDL returns true if the DDL event should not be handled.
+	ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo, startTs uint64) bool
 	// ShouldIgnoreDDL returns true if the DDL event should not be sent to downstream.
-	ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType, tableInfo *common.TableInfo) (bool, error)
+	//
+	// If a ddl is ignored, it will be sent to table trigger dispatcher to update the schema or table info,
+	// but will not be sent to downstream.
+	// Note that a ignored ddl is different from a discarded ddl. For example, suppose
+	// we have a changefeed-test with the following config:
+	//   - table filter: rules = ['test.*']
+	//   - event-filters: matcher = ["test.worker"] ignore-event = ["create table"]
+	//
+	// Then, for the following DDLs:
+	//  1. `CREATE TABLE test.worker` will be ignored, but the table will be replicated by changefeed-test.
+	//  2. `CREATE TABLE other.worker` will be discarded, and the table will not be replicated by changefeed-test.
+	ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType) (bool, error)
 	// ShouldIgnoreTable returns true if the table should be ignored.
 	ShouldIgnoreTable(schema, table string, tableInfo *common.TableInfo) bool
 	// ShouldIgnoreSchema returns true if the schema should be ignored.
@@ -102,8 +115,12 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 // 0. By startTs.
 // 1. By table name.
 // 2. By type.
-func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo) (bool, error) {
-	if f.ShouldIgnoreTable(tableInfo.GetSchemaName(), tableInfo.GetTableName(), nil) {
+func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64) (bool, error) {
+	if f.shouldIgnoreStartTs(startTs) {
+		return true, nil
+	}
+
+	if f.ShouldIgnoreTable(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo) {
 		return true, nil
 	}
 
@@ -117,30 +134,32 @@ func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, 
 	return f.dmlExprFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
 }
 
-// ShouldIgnoreDDL checks if a DDL event should be ignore by conditions below:
+// ShouldDiscardDDL checks if a DDL event should be discarded by conditions below:
 // 0. By allow list.
-// 1. By schema name.
-// 2. By table name.
-// 3. By startTs.
-// 4. By ddl type.
-// 5. By ddl query.
-func (f *filter) ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType, tableInfo *common.TableInfo) (bool, error) {
+// 1. By startTs.
+// 2. By schema name.
+// 3. By table name.
+func (f *filter) ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo, startTs uint64) bool {
 	if !isAllowedDDL(ddlType) {
-		return true, nil
+		return true
+	}
+
+	if f.shouldIgnoreStartTs(startTs) {
+		return true
 	}
 
 	// If the DDL is a schema DDL, we should ignore it if the schema is not allowed.
-	if IsSchemaDDL(ddlType) && (IsSysSchema(schema) || !f.tableFilter.MatchSchema(schema)) {
-		return true, nil
+	if IsSchemaDDL(ddlType) && f.ShouldIgnoreSchema(schema) {
+		return true
 	}
 
-	if f.ShouldIgnoreTable(schema, table, tableInfo) {
-		return true, nil
-	}
+	return f.ShouldIgnoreTable(schema, table, tableInfo)
+}
 
-	// if f.shouldIgnoreStartTs(ddl.StartTs) {
-	// 	return true, nil
-	// }
+// ShouldIgnoreDDL checks if a DDL event should be ignore by conditions below:
+// 1. By ddl type.
+// 2. By ddl query.
+func (f *filter) ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType) (bool, error) {
 	return f.sqlEventFilter.shouldSkipDDL(schema, table, query, ddlType)
 }
 

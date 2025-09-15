@@ -1318,6 +1318,196 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			nil,
 		},
+		// test rename tables to swap names
+		{
+			"rename tables to swap names",
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: ast.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:   200,
+							Name: ast.NewCIStr("t1"),
+						},
+						{
+							ID:   201,
+							Name: ast.NewCIStr("t2"),
+						},
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildRenameTablesJobForTest(
+						[]int64{100, 100},
+						[]int64{100, 100},
+						[]int64{200, 201},
+						[]string{"test", "test"},
+						[]string{"t1", "t2"},
+						[]string{"t2", "t1"},
+						1010), // rename table 200 to t2, 201 to t1
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				200: {
+					SchemaID: 100,
+					Name:     "t2",
+				},
+				201: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						200: true,
+						201: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				200: {1010},
+				201: {1010},
+			},
+			[]uint64{1010},
+			nil,
+			[]FetchTableDDLEventsTestCase{
+				{
+					tableID: 200,
+					startTs: 1000,
+					endTs:   1010,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTables),
+							FinishedTs: 1010,
+							// Query:      "RENAME TABLE `test`.`t1` TO `test`.`t2`;RENAME TABLE `test`.`t2` TO `test`.`t1`;",
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 200, 201},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t2",
+									},
+								},
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			nil,
+		},
+		// test complex rename tables and ignore-ts filter
+		// TODO: this DDL is not supported now, add it later
+		// {
+		// 	"complex rename and ignore-ts filter",
+		// 	[]mockDBInfo{
+		// 		{
+		// 			dbInfo: &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")},
+		// 			tables: []*model.TableInfo{
+		// 				{ID: 200, Name: ast.NewCIStr("a")},
+		// 				{ID: 201, Name: ast.NewCIStr("b")},
+		// 			},
+		// 		},
+		// 	},
+		// 	func() []*model.Job {
+		// 		return []*model.Job{
+		// 			// This job simulates `RENAME TABLE a to c, b to a, c to b`
+		// 			// which is effectively swapping table a and b's names.
+		// 			buildRenameTablesJobForTest(
+		// 				[]int64{100, 100},        // oldSchemaIDs
+		// 				[]int64{100, 100},        // newSchemaIDs
+		// 				[]int64{200, 201},        // tableIDs
+		// 				[]string{"test", "test"}, // oldSchemaNames
+		// 				[]string{"a", "b"},       // oldTableNames
+		// 				[]string{"b", "a"},       // newTableNames
+		// 				1010,
+		// 			),
+		// 		}
+		// 	}(),
+		// 	map[int64]*BasicTableInfo{
+		// 		200: {SchemaID: 100, Name: "b"},
+		// 		201: {SchemaID: 100, Name: "a"},
+		// 	},
+		// 	nil, // partitionMap
+		// 	map[int64]*BasicDatabaseInfo{
+		// 		100: {
+		// 			Name:   "test",
+		// 			Tables: map[int64]bool{200: true, 201: true},
+		// 		},
+		// 	},
+		// 	map[int64][]uint64{
+		// 		200: {1010},
+		// 		201: {1010},
+		// 	},
+		// 	[]uint64{1010},
+		// 	nil, // physicalTableQueryTestCases
+		// 	nil, // fetchTableDDLEventsTestCase
+		// 	[]FetchTableTriggerDDLEventsTestCase{
+		// 		// Case 1: Without filter, DDL event should be fetched.
+		// 		{
+		// 			startTs: 1000,
+		// 			limit:   10,
+		// 			result: []commonEvent.DDLEvent{
+		// 				{
+		// 					Type:       byte(model.ActionRenameTables),
+		// 					FinishedTs: 1010,
+		// 					BlockedTables: &commonEvent.InfluencedTables{
+		// 						InfluenceType: commonEvent.InfluenceTypeNormal,
+		// 						TableIDs:      []int64{0, 200, 201},
+		// 					},
+		// 					TableNameChange: &commonEvent.TableNameChange{
+		// 						AddName: []commonEvent.SchemaTableName{
+		// 							{SchemaName: "test", TableName: "a"},
+		// 							{SchemaName: "test", TableName: "b"},
+		// 						},
+		// 						DropName: []commonEvent.SchemaTableName{
+		// 							{SchemaName: "test", TableName: "a"},
+		// 							{SchemaName: "test", TableName: "b"},
+		// 						},
+		// 					},
+		// 				},
+		// 			},
+		// 		},
+		// 		// Case 2: With ignore-txn-start-ts filter, DDL event should be ignored.
+		// 		{
+		// 			tableFilter: func() filter.Filter {
+		// 				cfg := config.GetDefaultReplicaConfig()
+		// 				cfg.Filter.IgnoreTxnStartTs = []uint64{1010}
+		// 				f, err := filter.NewFilter(cfg.Filter, "UTC", false, false)
+		// 				if err != nil {
+		// 					panic("failed to create filter for test")
+		// 				}
+		// 				return f
+		// 			}(),
+		// 			startTs: 1000,
+		// 			limit:   10,
+		// 			result:  []commonEvent.DDLEvent{},
+		// 		},
+		// 	},
+		// },
 		// test create tables
 		{
 			"create tables",

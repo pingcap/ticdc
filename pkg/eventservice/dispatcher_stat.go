@@ -194,10 +194,10 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 	a.updateScanRange(resolvedTs, 0)
 }
 
-func (a *dispatcherStat) updateScanRange(commitTs, startTs uint64) {
+func (a *dispatcherStat) updateScanRange(txnCommitTs, txnStartTs uint64) {
 	if a.IsReadyRecevingData() {
-		a.lastScannedCommitTs.Store(commitTs)
-		a.lastScannedStartTs.Store(startTs)
+		a.lastScannedCommitTs.Store(txnCommitTs)
+		a.lastScannedStartTs.Store(txnStartTs)
 	}
 }
 
@@ -257,27 +257,30 @@ func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
 
 // getDataRange returns the data range that the dispatcher needs to scan.
 func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
-	startTs := a.lastScannedCommitTs.Load()
+	lastTxnCommitTs := a.lastScannedCommitTs.Load()
+	lastTxnStartTs := a.lastScannedStartTs.Load()
 	resetTs := a.resetTs.Load()
-	if startTs < resetTs {
+	if lastTxnCommitTs < resetTs {
 		log.Warn("startTs less than the resetTs, set startTs to the resetTs",
 			zap.Stringer("dispatcherID", a.id), zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
-			zap.Uint64("resetTs", resetTs), zap.Uint64("startTs", startTs))
-		startTs = resetTs
+			zap.Uint64("resetTs", resetTs), zap.Uint64("startTs", lastTxnStartTs))
+		a.updateScanRange(resetTs, 0)
+		lastTxnCommitTs = a.lastScannedCommitTs.Load()
+		lastTxnStartTs = a.lastScannedStartTs.Load()
 	}
 
 	// the data not received by the event store yet, so just skip it.
 	resolvedTs := a.eventStoreResolvedTs.Load()
-	if startTs >= resolvedTs {
+	if lastTxnCommitTs >= resolvedTs {
 		return common.DataRange{}, false
 	}
 	// Range: (CommitTsStart-lastScannedStartTs, CommitTsEnd],
 	// since the CommitTsStart(and the data before startTs) is already sent to the dispatcher.
 	r := common.DataRange{
 		Span:                  a.info.GetTableSpan(),
-		CommitTsStart:         startTs,
+		CommitTsStart:         lastTxnCommitTs,
 		CommitTsEnd:           resolvedTs,
-		LastScannedTxnStartTs: a.lastScannedStartTs.Load(),
+		LastScannedTxnStartTs: lastTxnStartTs,
 	}
 	return r, true
 }

@@ -212,7 +212,7 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 
 func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint, tableNameInDDLJob, dbNameInDDlJob string) string {
 	var builder strings.Builder
-	builder.WriteString("SET @current_ts = NOW();")
+	builder.WriteString("SET @current_ts = NOW(6);")
 
 	builder.WriteString("INSERT INTO ")
 	builder.WriteString(filter.TiCDCSystemSchema)
