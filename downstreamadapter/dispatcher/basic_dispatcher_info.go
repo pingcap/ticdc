@@ -40,6 +40,13 @@ type SharedInfo struct {
 	// if syncPointInfo is not nil, means enable Sync Point feature,
 	syncPointConfig *syncpoint.SyncPointConfig
 
+	// enableSplittableCheck controls whether to check if a table is splittable before splitting.
+	// If true, only tables with primary key and no unique key can be split.
+	// If false, all tables can be split without checking.
+	// If true, we need to check whether the ddl event received by splitted dispatcher
+	// will break the splitable of this table
+	enableSplittableCheck bool
+
 	// Shared resources
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
@@ -61,21 +68,23 @@ func NewSharedInfo(
 	integrityConfig *eventpb.IntegrityConfig,
 	filterConfig *eventpb.FilterConfig,
 	syncPointConfig *syncpoint.SyncPointConfig,
+	enableSplittableCheck bool,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
 ) *SharedInfo {
 	return &SharedInfo{
-		changefeedID:         changefeedID,
-		timezone:             timezone,
-		bdrMode:              bdrMode,
-		outputRawChangeEvent: outputRawChangeEvent,
-		integrityConfig:      integrityConfig,
-		filterConfig:         filterConfig,
-		syncPointConfig:      syncPointConfig,
-		statusesChan:         statusesChan,
-		blockStatusesChan:    blockStatusesChan,
-		errCh:                errCh,
+		changefeedID:          changefeedID,
+		timezone:              timezone,
+		bdrMode:               bdrMode,
+		outputRawChangeEvent:  outputRawChangeEvent,
+		integrityConfig:       integrityConfig,
+		filterConfig:          filterConfig,
+		syncPointConfig:       syncPointConfig,
+		enableSplittableCheck: enableSplittableCheck,
+		statusesChan:          statusesChan,
+		blockStatusesChan:     blockStatusesChan,
+		errCh:                 errCh,
 	}
 }
 

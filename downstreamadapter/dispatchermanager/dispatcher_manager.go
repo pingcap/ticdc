@@ -227,6 +227,7 @@ func NewDispatcherManager(
 		integrityCfg,
 		filterCfg,
 		syncPointConfig,
+		manager.config.EnableSplittableCheck,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),

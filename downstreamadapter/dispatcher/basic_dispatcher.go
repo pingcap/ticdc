@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -108,9 +109,15 @@ The workflow related to the dispatcher is as follows:
 */
 
 type BasicDispatcher struct {
-	id        common.DispatcherID
-	schemaID  int64
+	id       common.DispatcherID
+	schemaID int64
+
 	tableSpan *heartbeatpb.TableSpan
+	// isCompleteTable indicates whether this dispatcher is responsible for a complete table
+	// or just a part of the table (span). When true, the dispatcher handles the entire table;
+	// when false, it only handles a portion of the table.
+	isCompleteTable bool
+
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
 	startTs            uint64
 	startTsIsSyncpoint bool
@@ -175,6 +182,7 @@ func NewBasicDispatcher(
 	dispatcher := &BasicDispatcher{
 		id:                    id,
 		tableSpan:             tableSpan,
+		isCompleteTable:       common.IsCompleteSpan(tableSpan),
 		startTs:               startTs,
 		startTsIsSyncpoint:    startTsIsSyncpoint,
 		sharedInfo:            sharedInfo,
@@ -417,6 +425,16 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				d.HandleError(err)
 				return block
 			}
+			// if dispatcher is not a compelete table,
+			// we need to check whether the ddl event will break splitable of this table
+			// if break, we need to report the error to maintainer.
+			if !d.isCompleteTable {
+				if !common.IsSplitable(ddl.TableInfo) && d.sharedInfo.enableSplittableCheck {
+					d.HandleError(apperror.ErrTableAfterDDLNotSplitable.GenWithStackByArgs("unexpected ddl event; This ddl event will break splitable of this table. Only table with pk and no uk can be split."))
+					return block
+				}
+			}
+
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
@@ -579,7 +597,7 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
 				return true
 			}
-			if !common.IsCompleteSpan(d.tableSpan) {
+			if !d.isCompleteTable {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}
