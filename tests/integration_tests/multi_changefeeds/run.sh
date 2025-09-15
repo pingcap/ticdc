@@ -62,7 +62,6 @@ function run() {
 				# Insert data into each table
 				run_sql "INSERT INTO test$i.t$i (data) VALUES ('round_${round}_data_$i'), ('round_${round}_extra_$i')" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 			done
-			sleep 2
 		done
 	) &
 	DATA_WRITER_PID=$!
