@@ -26,7 +26,9 @@ import (
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"go.uber.org/zap"
 )
@@ -165,7 +167,16 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 		return nil
 	}
 
-	span := common.TableIDToComparableSpan(tableID)
+	pdClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
+	keyspaceID, err := pdClient.GetKeyspaceID(context.Background(), "SYSTEM")
+	if err != nil {
+		log.Panic("get codec from pd client failed", zap.Error(err))
+	}
+	span, err := common.TableIDToComparableSpanWithKeyspace(keyspaceID, tableID)
+	if err != nil {
+		log.Panic("tableIDToComparableSpanWithKeyspace failed",
+			zap.Uint32("keyspaceID", keyspaceID), zap.Int64("tableID", tableID), zap.Error(err))
+	}
 	wholeSpan := &heartbeatpb.TableSpan{
 		TableID:  span.TableID,
 		StartKey: span.StartKey,

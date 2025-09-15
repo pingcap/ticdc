@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
@@ -71,11 +72,15 @@ func NewMounter(tz *time.Location, integrity *integrity.Config) Mounter {
 
 // DecodeToChunk decodes the raw KV entry to a chunk, it returns the number of rows decoded.
 func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
+	raw.Key = RemoveKeyspacePrefix(raw.Key)
 	recordID, err := tablecodec.DecodeRowKey(raw.Key)
 	if err != nil {
 		return 0, nil, errors.Trace(err)
 	}
 	if !bytes.HasPrefix(raw.Key, tablePrefix) {
+		log.Warn("the key is not a table row key, skip it",
+			zap.String("schema", tableInfo.TableName.Schema), zap.String("table", tableInfo.TableName.Table),
+			zap.Int64("tableID", tableInfo.TableName.TableID), zap.Any("key", spanz.HexKey(raw.Key)))
 		return 0, nil, nil
 	}
 
@@ -157,6 +162,23 @@ func IsLegacyFormatJob(rawKV *common.RawKVEntry) bool {
 	return bytes.HasPrefix(rawKV.Key, metaPrefix)
 }
 
+const (
+	keyspacePrefixLen       = 4
+	apiV2TxnModePrefix byte = 'x'
+)
+
+// RemoveKeyspacePrefix is used to remove keyspace prefix from the key.
+func RemoveKeyspacePrefix(key []byte) []byte {
+	if len(key) <= keyspacePrefixLen {
+		return key
+	}
+
+	if key[0] != apiV2TxnModePrefix {
+		return key
+	}
+	return key[keyspacePrefixLen:]
+}
+
 // ParseDDLJob parses the job from the raw KV entry.
 func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.Job, error) {
 	var v []byte
@@ -172,6 +194,7 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		return job, err
 	}
 
+	rawKV.Key = RemoveKeyspacePrefix(rawKV.Key)
 	recordID, err := tablecodec.DecodeRowKey(rawKV.Key)
 	if err != nil {
 		return nil, errors.Trace(err)

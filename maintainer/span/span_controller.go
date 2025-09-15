@@ -27,6 +27,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
@@ -142,7 +143,16 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 			zap.Int64("table", table.TableID))
 		return
 	}
-	span := common.TableIDToComparableSpan(table.TableID)
+	pdClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
+	keyspaceID, err := pdClient.GetKeyspaceID(context.Background(), "SYSTEM")
+	if err != nil {
+		log.Panic("get keyspaceID from pd client failed", zap.Error(err))
+	}
+	span, err := common.TableIDToComparableSpanWithKeyspace(keyspaceID, table.TableID)
+	if err != nil {
+		log.Panic("tableIDToComparableSpanWithKeyspace failed",
+			zap.Uint32("keyspaceID", keyspaceID), zap.Int64("tableID", table.TableID), zap.Error(err))
+	}
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  table.TableID,
 		StartKey: span.StartKey,

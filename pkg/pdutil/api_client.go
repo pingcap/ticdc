@@ -101,6 +101,7 @@ type PDAPIClient interface {
 	CollectMemberEndpoints(ctx context.Context) ([]string, error)
 	Healthy(ctx context.Context, endpoint string) error
 	ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]RegionInfo, error)
+	GetKeyspaceID(ctx context.Context, keyspace string) (uint32, error)
 	Close()
 }
 
@@ -120,6 +121,14 @@ func NewPDAPIClient(pdClient pd.Client, conf *security.Credential) (PDAPIClient,
 		grpcClient: pdClient,
 		httpClient: dialClient,
 	}, nil
+}
+
+func (pc *pdAPIClient) GetKeyspaceID(ctx context.Context, keyspace string) (uint32, error) {
+	meta, err := pc.grpcClient.LoadKeyspace(ctx, keyspace)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	return meta.Id, nil
 }
 
 // Close the pd api client, at the moment only close idle http connections if there is any.
