@@ -20,12 +20,6 @@ function run() {
 	echo "Starting first CDC server..."
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300"
 
-	# Create databases and tables for each changefeed
-	for i in $(seq 1 $CHANGEFEED_COUNT); do
-		run_sql "CREATE DATABASE test$i;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-		run_sql "CREATE TABLE test$i.t$i (id int primary key auto_increment, data varchar(255), created_at timestamp DEFAULT CURRENT_TIMESTAMP)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	done
-
 	# Create sink URI based on sink type
 	TOPIC_NAME="ticdc-autorandom-test-$RANDOM"
 	case $SINK_TYPE in
@@ -50,6 +44,12 @@ function run() {
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
 	esac
+
+	# Create databases and tables for each changefeed
+	for i in $(seq 1 $CHANGEFEED_COUNT); do
+		run_sql "CREATE DATABASE test$i;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		run_sql "CREATE TABLE test$i.t$i (id int primary key auto_increment, data varchar(255), created_at timestamp DEFAULT CURRENT_TIMESTAMP)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	done
 
 	# Start data writing in background
 	echo "Starting data writing process..."
