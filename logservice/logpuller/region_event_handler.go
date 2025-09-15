@@ -225,7 +225,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),
 				zap.Stringer("span", &state.region.span))
-
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}

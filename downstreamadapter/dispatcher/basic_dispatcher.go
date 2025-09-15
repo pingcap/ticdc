@@ -15,6 +15,7 @@ package dispatcher
 
 import (
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,8 +27,10 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // DispatcherService defines the interface for providing dispatcher information and basic event handling.
@@ -208,7 +211,35 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 	if event.GetType() == commonEvent.TypeDDLEvent {
 		ddl := event.(*commonEvent.DDLEvent)
-		if ddl.NotSync {
+		if ddl.MultipleNotSync != nil {
+			resultQuerys := make([]string, 0)
+			tableInfos := make([]*common.TableInfo, 0)
+			querys, err := commonEvent.SplitQueries(ddl.Query)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			if len(querys) != len(ddl.MultipleTableInfos) {
+				log.Error("the querys is not equal table infos after re-split", zap.Any("querys", querys), zap.Any("tableInfos", ddl.MultipleTableInfos))
+				return errors.ErrUnexpected.GenWithStack("the querys is not equal table infos after re-split")
+			}
+			for i, notSync := range ddl.MultipleNotSync {
+				if notSync {
+					log.Info("ignore a DDL by MultipleNotSync",
+						zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl), zap.String("query", querys[i]), zap.Any("tableInfo", ddl.MultipleTableInfos[i]))
+					continue
+				} else {
+					tableInfos = append(tableInfos, ddl.MultipleTableInfos[i])
+					resultQuerys = append(resultQuerys, querys[i])
+				}
+			}
+			if len(resultQuerys) == 0 {
+				d.PassBlockEventToSink(event)
+				return nil
+			}
+			ddl.Query = strings.Join(resultQuerys, "")
+			ddl.MultipleTableInfos = tableInfos
+			ddl.MultipleNotSync = nil
+		} else if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
 			d.PassBlockEventToSink(event)
 			return nil
@@ -319,10 +350,13 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	latestResolvedTs := uint64(0)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
-		log.Debug("dispatcher receive all event",
-			zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
-			zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
-			zap.Any("event", dispatcherEvent.Event))
+		if log.GetLevel() == zapcore.DebugLevel {
+			log.Debug("dispatcher receive all event",
+				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
+				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
+				zap.Any("event", dispatcherEvent.Event))
+		}
+
 		failpoint.Inject("HandleEventsSlowly", func() {
 			lag := time.Duration(rand.Intn(5000)) * time.Millisecond
 			log.Warn("handle events slowly", zap.Duration("lag", lag))
@@ -504,6 +538,15 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				d.PassBlockEventToSink(pendingEvent)
 				failpoint.Inject("BlockAfterPass", nil)
 			}
+		} else {
+			ts, ok := d.blockEventStatus.getEventCommitTs()
+			if ok && action.CommitTs > ts {
+				log.Info("pending event's commitTs is smaller than the action's commitTs, just ignore it",
+					zap.Uint64("pendingEventCommitTs", ts),
+					zap.Uint64("actionCommitTs", action.CommitTs),
+					zap.Stringer("dispatcher", d.id))
+				return
+			}
 		}
 
 		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
@@ -608,34 +651,42 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 
 		if event.GetType() == commonEvent.TypeSyncPointEvent {
 			// deal with multi sync point commit ts in one Sync Point Event
-			// make each commitTs as a single message for maintainer
-			// Because the batch commitTs in different dispatchers can be different.
+			// we only report the latest commitTs as the blockTs.
+			// If A receive [syncpont1, syncpoint2, syncpoint3]
+			// B receive [syncpoint1]
+			// C receive [syncpoint1, syncpoint2]
+			// then A report syncpoint3, B report syncpoint1, C report syncpoint2
+			// and barrier find A checkpointTs is exceed syncpoint1 and syncpoint2,
+			// so will just make B and C pass these syncpoint, to receive the latest syncpoint3
+			// then make syncpoint3 Write successfully.
+
+			// TODO(hyy): we could consider to just use the latest commitTs to represent this batch sync point event,
+			// instead of obtain a commitTsList in the sync point event.
 			commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
 			blockTables := event.GetBlockedTables().ToPB()
 			needDroppedTables := event.GetNeedDroppedTables().ToPB()
 			needAddedTables := commonEvent.ToTablesPB(event.GetNeedAddedTables())
-			for _, commitTs := range commitTsList {
-				message := &heartbeatpb.TableSpanBlockStatus{
-					ID: d.id.ToPB(),
-					State: &heartbeatpb.State{
-						IsBlocked:         true,
-						BlockTs:           commitTs,
-						BlockTables:       blockTables,
-						NeedDroppedTables: needDroppedTables,
-						NeedAddedTables:   needAddedTables,
-						UpdatedSchemas:    nil,
-						IsSyncPoint:       true,
-						Stage:             heartbeatpb.BlockStage_WAITING,
-					},
-					Mode: d.GetMode(),
-				}
-				identifier := BlockEventIdentifier{
-					CommitTs:    commitTs,
-					IsSyncPoint: true,
-				}
-				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-				d.sharedInfo.blockStatusesChan <- message
+			commitTs := commitTsList[len(commitTsList)-1]
+			message := &heartbeatpb.TableSpanBlockStatus{
+				ID: d.id.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked:         true,
+					BlockTs:           commitTs,
+					BlockTables:       blockTables,
+					NeedDroppedTables: needDroppedTables,
+					NeedAddedTables:   needAddedTables,
+					UpdatedSchemas:    nil,
+					IsSyncPoint:       true,
+					Stage:             heartbeatpb.BlockStage_WAITING,
+				},
+				Mode: d.GetMode(),
 			}
+			identifier := BlockEventIdentifier{
+				CommitTs:    commitTs,
+				IsSyncPoint: true,
+			}
+			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+			d.sharedInfo.blockStatusesChan <- message
 		} else {
 			message := &heartbeatpb.TableSpanBlockStatus{
 				ID: d.id.ToPB(),

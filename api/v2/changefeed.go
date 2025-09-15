@@ -1251,12 +1251,10 @@ func getVerifiedTables(
 		return nil, nil, err
 	}
 	err = eventRouter.VerifyTables(tableInfos)
-	log.Error("NewEventRouter", zap.Error(err), zap.Any("tableInfos", tableInfos), zap.Any("startTs", startTs))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	log.Error("columnselector.New")
 	selectors, err := columnselector.New(replicaConfig.Sink)
 	if err != nil {
 		return nil, nil, err

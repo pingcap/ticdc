@@ -226,7 +226,7 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 	physicalTableID := tableInfo.TableName.TableID
 	for _, dml := range dmls {
 		dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
-		batchDMLEvent.AppendDMLEvent(dmlEvent)
+		_ = batchDMLEvent.AppendDMLEvent(dmlEvent)
 		rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 		for _, rawKV := range rawKvs {
 			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)

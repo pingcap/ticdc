@@ -185,7 +185,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
 			c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
-			metricEventServiceSendKvCount.Add(float64(e.Len()))
+			updateMetricEventServiceSendKvCount(d.info.GetMode(), float64(e.Len()))
 		}
 	}
 
@@ -217,6 +217,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastCommitTs = dml.GetCommitTs()
 		log.Debug("send dml event to dispatcher",
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+			zap.Uint64("seq", dml.Seq),
 			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
 	if lastCommitTs != 0 {
@@ -236,7 +237,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
 		return
 	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
-		metricEventServiceSendDDLCount.Inc()
+		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", e.TableID),
@@ -251,7 +252,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	resolvedEvent := newWrapResolvedEvent(remoteID, re, d.getEventSenderState())
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
-	metricEventServiceSendResolvedTsCount.Inc()
+	updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
 }
 
 func (c *eventBroker) sendNotReusableEvent(
@@ -263,7 +264,7 @@ func (c *eventBroker) sendNotReusableEvent(
 
 	// must success unless we can do retry later
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- wrapEvent
-	metricEventServiceSendCommandCount.Inc()
+	updateMetricEventServiceSendCommandCount(d.info.GetMode())
 }
 
 func (c *eventBroker) getMessageCh(workerIndex int, isRedo bool) chan *wrapEvent {
@@ -361,7 +362,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
-		metricEventServiceSkipResolvedTsCount.Inc()
+		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
 
@@ -370,15 +371,19 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
-		metricEventServiceSkipResolvedTsCount.Inc()
+		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
 
 	// 3. Check whether there is any events in the data range
-	// Note: target range is (dataRange.CommitTsStart, dataRange.CommitTsEnd]
-	if dataRange.CommitTsStart >= task.eventStoreCommitTs.Load() &&
-		dataRange.LastScannedTxnStartTs != 0 &&
-		dataRange.CommitTsStart >= ddlState.MaxEventCommitTs {
+	// Note: target range is (dataRange.CommitTsStart-dataRange.LastScannedTxnStartTs, dataRange.CommitTsEnd]
+	// when `dataRange.CommitTsStart` equals `task.eventStoreCommitTs.Load()`,
+	// it is difficult to determine whether any txn events with a commitTs of `dataRange.CommitTsStart` remain unscanned.
+	// because multiple transactions may have the same commit ts.
+	// so we take the risk to do a useless scan.
+	noDMLEvent := dataRange.CommitTsStart > task.eventStoreCommitTs.Load()
+	noDDLEvent := dataRange.CommitTsStart >= ddlState.MaxEventCommitTs
+	if noDMLEvent && noDDLEvent {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
@@ -428,7 +433,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		event := event.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
-		metricEventServiceSendCommandCount.Inc()
+		updateMetricEventServiceSendCommandCount(task.info.GetMode())
 		return false
 	}
 	return true
@@ -456,7 +461,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
-	metricEventServiceSendCommandCount.Inc()
+	updateMetricEventServiceSendCommandCount(task.info.GetMode())
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
@@ -564,11 +569,22 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
+		log.Debug("not enough memory quota, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available.Load()),
+			zap.Uint64("required", uint64(sl.maxDMLBytes)))
 		return
 	}
 
-	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
+	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	if scannedBytes < 0 {
+		releaseQuota(available, uint64(sl.maxDMLBytes))
+	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
+		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	}
+
 	if err != nil {
 		log.Error("scan events failed",
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
@@ -623,16 +639,25 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
 	}
+	task.info.GetMode()
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
 }
 
 func allocQuota(quota *atomic.Uint64, nBytes uint64) bool {
-	available := quota.Load()
-	if available < nBytes {
-		return false
+	for {
+		available := quota.Load()
+		if available < nBytes {
+			return false
+		}
+		if quota.CompareAndSwap(available, available-nBytes) {
+			return true
+		}
 	}
-	return quota.CompareAndSwap(available, available-nBytes)
+}
+
+func releaseQuota(quota *atomic.Uint64, nBytes uint64) {
+	quota.Add(nBytes)
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int, topic string) error {
@@ -800,7 +825,7 @@ func (c *eventBroker) close() {
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs uint64) {
 	if d.onResolvedTs(resolvedTs) {
 		d.lastReceivedResolvedTsTime.Store(time.Now())
-		metricEventStoreOutputResolved.Inc()
+		updateMetricEventStoreOutputResolved(d.info.GetMode())
 		d.onLatestCommitTs(commitTs)
 		if c.scanReady(d) {
 			c.pushTask(d, true)

@@ -174,14 +174,17 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 }
 
 func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
-	dmls := w.prepareDMLs(events)
+	dmls, err := w.prepareDMLs(events)
+
 	defer dmlsPool.Put(dmls) // Return dmls to pool after use
+	if err != nil {
+		return errors.Trace(err)
+	}
 
 	if dmls.rowCount == 0 {
 		return nil
 	}
 
-	var err error
 	if !w.cfg.DryRun {
 		err = w.execDMLWithMaxRetries(dmls)
 	} else {

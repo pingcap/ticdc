@@ -353,9 +353,9 @@ func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 // Validate the Config
 func (c *Config) Validate() error {
 	if c.EnableTiDBExtension &&
-		!(c.Protocol == config.ProtocolCanalJSON || c.Protocol == config.ProtocolAvro) {
+		!(c.Protocol == config.ProtocolCanalJSON || c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebezium) {
 		log.Warn("ignore invalid config, enable-tidb-extension"+
-			"only supports canal-json/avro protocol",
+			"only supports canal-json/avro/debezium protocol",
 			zap.Bool("enableTidbExtension", c.EnableTiDBExtension),
 			zap.String("protocol", c.Protocol.String()))
 	}

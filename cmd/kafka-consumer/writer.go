@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -82,12 +81,11 @@ type writer struct {
 	// this should only be used by the canal-json protocol
 	partitionTableAccessor *partitionTableAccessor
 
-	eventRouter      *eventrouter.EventRouter
-	protocol         config.Protocol
-	maxMessageBytes  int
-	maxBatchSize     int
-	mysqlSink        sink.Sink
-	tableSchemaStore *util.TableSchemaStore
+	eventRouter     *eventrouter.EventRouter
+	protocol        config.Protocol
+	maxMessageBytes int
+	maxBatchSize    int
+	mysqlSink       sink.Sink
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -139,8 +137,6 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
-	w.tableSchemaStore = util.NewTableSchemaStore(nil, commonType.MysqlSinkType)
-	w.mysqlSink.SetTableSchemaStore(w.tableSchemaStore)
 	return w
 }
 
@@ -292,6 +288,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			}
 		})
 		w.mysqlSink.AddDMLEvent(e)
+		log.Info("flush DML event", zap.Int64("tableID", e.GetTableID()), zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
 	}
 
 	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))
@@ -487,12 +484,6 @@ func (m *partitionTableAccessor) isPartitionTable(schema, table string) bool {
 }
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
-	ddl.AddPostFlushFunc(func() {
-		if w.tableSchemaStore != nil {
-			w.tableSchemaStore.AddEvent(ddl)
-		}
-	})
-
 	switch w.protocol {
 	case config.ProtocolCanalJSON, config.ProtocolOpen:
 	default:

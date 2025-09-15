@@ -3,7 +3,7 @@
 log-level = "info"
 
 worker-count = 4
-duration = 20
+duration = 600
 
 pd = "127.0.0.1:2379"
 
