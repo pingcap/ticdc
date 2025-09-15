@@ -809,7 +809,6 @@ func (e *eventStore) updateMetrics(ctx context.Context) error {
 }
 
 func (e *eventStore) updateMetricsOnce() {
-	log.Info("updateMetricsOnce")
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)
@@ -824,7 +823,7 @@ func (e *eventStore) updateMetricsOnce() {
 	pdTime := e.pdClock.CurrentTime()
 	pdPhyTs := oracle.GetPhysical(pdTime)
 	minResolvedTs := uint64(0)
-	unintializedSubCount := 0
+	unintializedStatCount := 0
 	e.dispatcherMeta.RLock()
 	for _, subStats := range e.dispatcherMeta.tableStats {
 		for _, subStat := range subStats {
@@ -851,7 +850,7 @@ func (e *eventStore) updateMetricsOnce() {
 						zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 				}
 			} else {
-				unintializedSubCount++
+				unintializedStatCount++
 			}
 			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
 			if minResolvedTs == 0 || resolvedTs < minResolvedTs {
@@ -865,9 +864,9 @@ func (e *eventStore) updateMetricsOnce() {
 		}
 	}
 	e.dispatcherMeta.RUnlock()
-	if unintializedSubCount > 0 {
-		log.Info("there are subscriptions not initialized",
-			zap.Int("unintializedSubCount", unintializedSubCount))
+	if unintializedStatCount > 0 {
+		log.Info("found uninitialized subscriptions",
+			zap.Int("count", unintializedStatCount))
 	}
 	if minResolvedTs == 0 {
 		metrics.EventStoreResolvedTsLagGauge.Set(0)
