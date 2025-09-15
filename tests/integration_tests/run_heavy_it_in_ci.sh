@@ -73,7 +73,7 @@ kafka_groups=(
 	# G10
 	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
-	'fail_over region_merge'
+	'fail_over region_merge multi_changefeeds'
 	# G12
 	'ddl_for_split_tables_random_schedule'
 	# G13
@@ -111,7 +111,7 @@ pulsar_groups=(
 	# G11
 	'ddl_with_random_move_table'
 	# G12
-	'fail_over region_merge'
+	'fail_over region_merge multi_changefeeds'
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
@@ -148,7 +148,7 @@ storage_groups=(
 	# G12
 	'ddl_with_random_move_table'
 	# G13
-	'fail_over region_merge'
+	'fail_over region_merge multi_changefeeds'
 	# G14
 	'fail_over_ddl_mix'
 	# G15
