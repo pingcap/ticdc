@@ -19,6 +19,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -353,7 +355,26 @@ func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.T
 func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 	result := make([]*timodel.ColumnInfo, 0)
 	var nextColumnID int64
+
+	type columnPair struct {
+		column column
+		name   string
+	}
+
+	rawColumnList := make([]columnPair, 0, len(rawColumns))
 	for name, raw := range rawColumns {
+		rawColumnList = append(rawColumnList, columnPair{
+			column: raw,
+			name:   name,
+		})
+	}
+	slices.SortFunc(rawColumnList, func(a, b columnPair) int {
+		return strings.Compare(a.name, b.name)
+	})
+
+	for _, pair := range rawColumnList {
+		name := pair.name
+		raw := pair.column
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
 		col.Name = ast.NewCIStr(name)
@@ -410,6 +431,12 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	indices := make([]*timodel.IndexInfo, 0, 1)
 	multiColumns := make([]*timodel.IndexColumn, 0, 2)
+
+	// make columns sorted by id, to make indices for different row in table be same
+	sort.Slice(columns, func(i, j int) bool {
+		return columns[i].ID < columns[j].ID
+	})
+
 	for idx, col := range columns {
 		if mysql.HasPriKeyFlag(col.GetFlag()) {
 			indexColumns := make([]*timodel.IndexColumn, 0)

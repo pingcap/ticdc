@@ -89,15 +89,20 @@ func (b *BatchDMLEvent) PopHeadDMLEvents(count int) *BatchDMLEvent {
 
 // AddDMLEvent adds a completed DMLEvent to the BatchDMLEvent
 // The DMLEvent should already have all its rows populated
-func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) {
+func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) error {
 	if dmlEvent == nil {
-		return
+		return nil
 	}
 
 	if b.TableInfo == nil {
 		b.TableInfo = dmlEvent.TableInfo
 		b.Rows = chunk.NewChunkWithCapacity(dmlEvent.TableInfo.GetFieldSlice(), defaultRowCount)
+	} else {
+		if b.TableInfo.GetUpdateTS() != dmlEvent.TableInfo.GetUpdateTS() {
+			return errors.New(fmt.Sprintf("table info version mismatch, currentDMLEventTableInfoVersion: %d, batchDMLTableInfoVersion: %d", dmlEvent.TableInfo.GetUpdateTS(), b.TableInfo.GetUpdateTS()))
+		}
 	}
+
 	dmlEvent.SetRows(b.Rows)
 
 	if len(b.DMLEvents) > 0 {
@@ -105,6 +110,8 @@ func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) {
 		dmlEvent.PreviousTotalOffset = pre.PreviousTotalOffset + len(pre.RowTypes)
 	}
 	b.DMLEvents = append(b.DMLEvents, dmlEvent)
+
+	return nil
 }
 
 func (b *BatchDMLEvent) Unmarshal(data []byte) error {
@@ -248,6 +255,11 @@ func (b *BatchDMLEvent) Len() int32 {
 		length += item.Len()
 	}
 	return length
+}
+
+// DMLCount returns the number of DML events in the batch.
+func (b *BatchDMLEvent) DMLCount() int {
+	return len(b.DMLEvents)
 }
 
 // DMLEvent represent a batch of DMLs of a whole or partial of a transaction.

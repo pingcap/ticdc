@@ -5,7 +5,7 @@ WORK_DIR=$1
 set +e
 
 # find all file that end with .txt .sql and change them to .log so the ci plugin will collect them
-find $WORK_DIR -type f -name "*.txt" -o -name "*.sql" -o -name "*fix-on*" -o -name "*.json" -o -name "*.index" | while read file; do
+find $WORK_DIR -type f -name "*.txt" -o -name "*.sql" -o -name "*sql*" -o -name "*summary*" -o -name "*.json" -o -name "*.index" | while read file; do
 	mv $file ${file%.txt}.log
 done
 

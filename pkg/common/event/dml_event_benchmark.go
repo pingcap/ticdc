@@ -113,7 +113,7 @@ func createBatchDMLEvent(b *testing.B, dmlNum, rowNum int) {
 	for k := 0; k < b.N; k++ {
 		for i := 0; i < dmlNum; i++ {
 			dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-			batchDMLEvent.AppendDMLEvent(dmlEvent)
+			_ = batchDMLEvent.AppendDMLEvent(dmlEvent)
 			for j := 0; j < rowNum; j++ {
 				for _, rawKV := range rawKvs {
 					err := dmlEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk, nil)

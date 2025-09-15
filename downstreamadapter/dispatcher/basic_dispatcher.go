@@ -351,16 +351,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		if log.GetLevel() == zapcore.DebugLevel {
-			eventString := ""
-			if dispatcherEvent.Event.GetType() == commonEvent.TypeDMLEvent {
-				eventString = dispatcherEvent.Event.(*commonEvent.DMLEvent).String()
-			}
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
 				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
-				zap.Any("event", dispatcherEvent.Event),
-				zap.String("eventString", eventString),
-			)
+				zap.Any("event", dispatcherEvent.Event))
 		}
 
 		failpoint.Inject("HandleEventsSlowly", func() {
