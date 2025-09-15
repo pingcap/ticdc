@@ -809,6 +809,7 @@ func (e *eventStore) updateMetrics(ctx context.Context) error {
 }
 
 func (e *eventStore) updateMetricsOnce() {
+	log.Info("updateMetricsOnce")
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)

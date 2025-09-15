@@ -808,10 +808,10 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 				return true
 			})
 
-			for _, d := range inActiveDispatchers {
-				log.Info("remove in-active dispatcher", zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
-				c.removeDispatcher(d.info)
-			}
+			// for _, d := range inActiveDispatchers {
+			// 	log.Info("remove in-active dispatcher", zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
+			// 	c.removeDispatcher(d.info)
+			// }
 		}
 	}
 }
