@@ -87,7 +87,7 @@ func newRegionErrorInfo(info regionInfo, err error) regionErrorInfo {
 
 type regionFeedState struct {
 	region    regionInfo
-	requestID uint64 // It is also the subscription ID
+	requestID uint64
 	matcher   *matcher
 
 	// Transform: normal -> stopped -> removed.
@@ -102,15 +102,12 @@ type regionFeedState struct {
 		// `err` is used to retrieve errors generated outside.
 		err error
 	}
-
-	worker *regionRequestWorker
 }
 
-func newRegionFeedState(region regionInfo, requestID uint64, worker *regionRequestWorker) *regionFeedState {
+func newRegionFeedState(region regionInfo, requestID uint64) *regionFeedState {
 	return &regionFeedState{
 		region:    region,
 		requestID: requestID,
-		worker:    worker,
 	}
 }
 
@@ -126,7 +123,6 @@ func (s *regionFeedState) markStopped(err error) {
 		s.state.v = stateStopped
 		s.state.err = err
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
 }
 
 // mark regionFeedState as removed if possible.
@@ -138,7 +134,6 @@ func (s *regionFeedState) markRemoved() (changed bool) {
 		changed = true
 		s.matcher.clear()
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
 	return
 }
 
@@ -162,7 +157,6 @@ func (s *regionFeedState) isInitialized() bool {
 
 func (s *regionFeedState) setInitialized() {
 	s.region.lockedRangeState.Initialized.Store(true)
-	s.worker.requestCache.resolve(s.region.subscribedSpan.subID, s.region.verID.GetID())
 }
 
 func (s *regionFeedState) getRegionID() uint64 {
