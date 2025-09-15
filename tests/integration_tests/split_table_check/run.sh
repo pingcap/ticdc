@@ -62,7 +62,7 @@ main() {
 	sleep 10
 	
 	# Check that the changefeed is still running normally
-	ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} test "normal" "" ""
+	ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} test "normal" "null" ""
 	
 	# Now execute the DDL that will break splitable (this should cause an error)
 	echo "Executing DDL that will break splitable..."
