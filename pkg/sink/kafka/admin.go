@@ -17,7 +17,6 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/log"
@@ -34,16 +33,12 @@ type saramaAdminClient struct {
 }
 
 func (a *saramaAdminClient) GetAllBrokers(_ context.Context) []Broker {
-	start := time.Now()
 	brokers := a.client.Brokers()
 	result := make([]Broker, 0, len(brokers))
 	for _, broker := range brokers {
 		result = append(result, Broker{
 			ID: broker.ID(),
 		})
-	}
-	if time.Since(start) > time.Second*5 {
-		log.Error("GetAllBrokers Heartbeat time", zap.Any("cost", time.Since(start)))
 	}
 	return result
 }
@@ -182,14 +177,10 @@ func (a *saramaAdminClient) CreateTopic(
 }
 
 func (a *saramaAdminClient) Heartbeat() {
-	start := time.Now()
 	go func() {
 		brokers := a.client.Brokers()
 		for _, b := range brokers {
 			_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
-		}
-		if time.Since(start) > time.Second*5 {
-			log.Error("saramaAdminClient Heartbeat time", zap.Any("cost", time.Since(start)))
 		}
 	}()
 }
