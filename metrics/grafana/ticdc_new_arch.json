@@ -804,7 +804,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Maintainer checkpoint lag",
+          "title": "Checkpoint Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -11507,7 +11507,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Output Row Batch Size",
+          "title": "Output Row Batch Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -13888,7 +13888,7 @@
           },
           "yaxes": [
             {
-              "format": "s",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -22803,5 +22803,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aac",
-  "version": 8
+  "version": 9
 }

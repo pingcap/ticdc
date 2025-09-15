@@ -40,13 +40,13 @@ import (
 // to enhance the performance of the sink.
 // While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
 // the process is as follows:
-//  1. we group the events by dispatcherID, and hold the order for the events of the same dispatcher
+//  1. we group the events by tableID, and hold the order for the events of the same table
 //  2. For each group,
 //     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.(TODO: support the case without pk but have uk)
 //     Otherwise,
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
-func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
+func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 	// Step 1: group the events by table ID
@@ -58,6 +58,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 			dmls.tsPairs = append(dmls.tsPairs, tsPair{startTs: event.StartTs, commitTs: event.CommitTs})
 		}
 		dmls.approximateSize += event.GetSize()
+
 		tableID := event.GetTableID()
 		if _, ok := eventsGroup[tableID]; !ok {
 			eventsGroup[tableID] = make([]*commonEvent.DMLEvent, 0)
@@ -72,6 +73,21 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
+		// We check if the table versions and update ts here to avoid data loss due to unknown bug.
+		firstTableVersion := eventsInGroup[0].TableInfoVersion
+		firstTableInfoUpdateTs := tableInfo.GetUpdateTS()
+		for _, event := range eventsInGroup {
+			if event.TableInfoVersion != firstTableVersion || event.TableInfo.GetUpdateTS() != firstTableInfoUpdateTs {
+				log.Error("events in the same group have different table versions",
+					zap.Uint64("firstTableInfoUpdateTs", firstTableInfoUpdateTs),
+					zap.Uint64("firstTableVersion", firstTableVersion),
+					zap.Uint64("currentEventTableVersion", event.TableInfoVersion),
+					zap.Uint64("currentEventTableInfoUpdateTs", event.TableInfo.GetUpdateTS()),
+					zap.Any("events", eventsInGroup))
+				return nil, errors.New(fmt.Sprintf("events in the same group have different table versions, there must be a bug in the code! firstTableVersion: %d, firstUpdateTs: %d, currentEventTableVersion: %d, currentEventTableInfoUpdateTs: %d", firstTableVersion, firstTableInfoUpdateTs, event.TableInfoVersion, event.TableInfo.GetUpdateTS()))
+			}
+		}
+
 		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg) {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else {
@@ -83,9 +99,9 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
 	// This method is expensive, so we only log it when the log level is debug.
 
-	dmls.LogDebug()
+	dmls.LogDebug(events)
 
-	return dmls
+	return dmls, nil
 }
 
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.

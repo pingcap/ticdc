@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -66,20 +67,21 @@ func main() {
 	defer cancel()
 	go switchAsyncCommit(ctx, sourceDB0)
 	util.MustExec(sourceDB0, "create database mark;")
-	runDDLTest([]*sql.DB{sourceDB0, sourceDB1})
+	runDDLTest(cfg.DurationInSeconds, cfg.WorkerCount, []*sql.DB{sourceDB0, sourceDB1})
 	util.MustExec(sourceDB0, "create table mark.finish_mark(a int primary key);")
 }
 
 // for every DDL, run the DDL continuously, and one goroutine for one TiDB instance to do some DML op
-func runDDLTest(srcs []*sql.DB) {
-	runTime := time.Second * 5
+func runDDLTest(durationInSeconds int, dmlWorkerCount int, srcs []*sql.DB) {
+	runTime := time.Second * time.Duration(durationInSeconds)
 	start := time.Now()
 	defer func() {
 		log.S().Infof("runDDLTest take %v", time.Since(start))
 	}()
 
 	for i, ddlFunc := range []func(context.Context, *sql.DB){
-		createDropSchemaDDL, truncateDDL, addDropColumnDDL, addDropColumnDDL2,
+		createDropSchemaDDL, truncateDDL,
+		addDropColumnDDL, addDropColumnDDL2,
 		modifyColumnDDL, addDropIndexDDL, DropWithRecoverDDL,
 	} {
 		testName := getFunctionName(ddlFunc)
@@ -90,8 +92,8 @@ func runDDLTest(srcs []*sql.DB) {
 
 		for idx, src := range srcs {
 			wg.Add(1)
-			go func(i int, s *sql.DB) {
-				dml(ctx, s, testName, i)
+			go func(dbID int, db *sql.DB) {
+				dml(ctx, db, testName, dbID, dmlWorkerCount)
 				wg.Done()
 			}(idx, src)
 		}
@@ -234,34 +236,80 @@ func ignoreableError(err error) bool {
 	return false
 }
 
-func dml(ctx context.Context, db *sql.DB, table string, id int) {
+// Global atomic counter for generating unique IDs across all threads
+var globalCounter int64
+
+// generateUniqueIDs generates unique ID values using atomic operations
+func generateUniqueIDs(dbID int) (id, id1, id2 int64) {
+	// Use atomic increment to ensure thread safety
+	counter := atomic.AddInt64(&globalCounter, 1)
+
+	// Generate unique IDs based on dbID and atomic counter
+	// Each dbID gets a different range to avoid conflicts
+	valueBase := int64(100000000)
+	id = counter + int64(dbID)*valueBase
+	id1 = id
+	id2 = id + 1
+
+	return id, id1, id2
+}
+
+func dml(ctx context.Context, db *sql.DB, table string, dbID int, threadNum int) {
+	if threadNum <= 0 {
+		threadNum = 1
+	}
+
+	var wg sync.WaitGroup
+
+	// Start multiple threads for concurrent DML operations
+	for i := 0; i < threadNum; i++ {
+		wg.Add(1)
+		go func(threadID int) {
+			defer wg.Done()
+			dmlWorker(ctx, db, table, dbID, threadID)
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func dmlWorker(ctx context.Context, db *sql.DB, table string, dbID int, threadID int) {
 	var err error
-	var i int
 	var insertSuccess int
 	var deleteSuccess int
 	insertSQL := fmt.Sprintf("insert into test.`%s`(id, id1, id2) values(?,?,?)", table)
 	deleteSQL := fmt.Sprintf("delete from test.`%s` where id1 = ? or id2 = ?", table)
-	k := 100000000
-	for i = 0; ; i++ {
-		_, err = db.Exec(insertSQL, i+id*k, i+id*k, i+id*k+1)
+
+	for {
+		// Generate unique IDs using atomic operations
+		id, id1, id2 := generateUniqueIDs(threadID)
+
+		_, err = db.Exec(insertSQL, id, id1, id2)
 		if err == nil {
 			insertSuccess++
+
+			log.S().Info("db:", dbID, " thread:", threadID, " insert sql: ", insertSQL, " values: ", []any{id, id1, id2})
+
 			if insertSuccess%100 == 0 {
-				log.S().Info(id, " insert success: ", insertSuccess)
+				log.S().Info("db:", dbID, " thread:", threadID, " insert success: ", insertSuccess)
 			}
 		}
 		if err != nil && !ignoreableError(err) {
-			log.Fatal("unexpected error when executing sql", zap.Error(err))
+			log.Fatal("unexpected error when executing sql", zap.String("sql", insertSQL), zap.Any("values", []any{id, id1, id2}), zap.Error(err))
 		}
 
-		if i%2 == 0 {
-			result, err := db.Exec(deleteSQL, i+id*k, i+id*k+1)
+		// Delete every other record to create some churn
+		if insertSuccess%2 == 0 {
+			result, err := db.Exec(deleteSQL, id1, id2)
 			if err == nil {
 				rows, _ := result.RowsAffected()
 				if rows != 0 {
 					deleteSuccess++
+
+					log.S().Info("db:", dbID, " thread:", threadID, " delete sql: ", deleteSQL, " values: ", []any{id1, id2})
+
 					if deleteSuccess%100 == 0 {
-						log.S().Info(id, " delete success: ", deleteSuccess)
+						log.S().Info("db:", dbID, " thread:", threadID, " delete success: ", deleteSuccess)
 					}
 				}
 			}
