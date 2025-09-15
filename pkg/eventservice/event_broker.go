@@ -783,6 +783,9 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInterval time.Duration) error {
 	ticker := time.NewTicker(tickInterval)
 	log.Info("update dispatcher send ts goroutine is started")
+	isInactiveDispatcher := func(d *dispatcherStat) bool {
+		return d.isHandshaked.Load() && time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -795,7 +798,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 				if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
 					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
 				}
-				if dispatcher.isHandshaked.Load() && time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
+				if isInactiveDispatcher(dispatcher) {
 					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
 				}
 				return true
@@ -803,7 +806,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
-				if dispatcher.isHandshaked.Load() && time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
+				if isInactiveDispatcher(dispatcher) {
 					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
 				}
 				return true
