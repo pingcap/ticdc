@@ -434,7 +434,9 @@ func TestPriorityQueue_EmptyQueueOperations(t *testing.T) {
 
 func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
 	pq := NewPriorityQueue()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	currentTs := oracle.GoTimeToTS(time.Now())
 
 	// Create real priority tasks with different types
@@ -484,6 +486,7 @@ func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
 	require.Equal(t, 0, pq.Len())
 
 	pq.Close()
+	cancel()
 	task, err := pq.Pop(ctx)
 	require.Nil(t, task)
 	require.Error(t, err)
