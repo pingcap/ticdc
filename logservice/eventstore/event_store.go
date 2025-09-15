@@ -823,7 +823,7 @@ func (e *eventStore) updateMetricsOnce() {
 	pdTime := e.pdClock.CurrentTime()
 	pdPhyTs := oracle.GetPhysical(pdTime)
 	minResolvedTs := uint64(0)
-	unintializedStatCount := 0
+	uninitializedStatCount := 0
 	e.dispatcherMeta.RLock()
 	for _, subStats := range e.dispatcherMeta.tableStats {
 		for _, subStat := range subStats {
@@ -850,7 +850,7 @@ func (e *eventStore) updateMetricsOnce() {
 						zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 				}
 			} else {
-				unintializedStatCount++
+				uninitializedStatCount++
 			}
 			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
 			if minResolvedTs == 0 || resolvedTs < minResolvedTs {
@@ -864,8 +864,8 @@ func (e *eventStore) updateMetricsOnce() {
 		}
 	}
 	e.dispatcherMeta.RUnlock()
-	if unintializedStatCount > 0 {
-		log.Info("found uninitialized subscriptions", zap.Int("count", unintializedStatCount))
+	if uninitializedStatCount > 0 {
+		log.Info("found uninitialized subscriptions", zap.Int("count", uninitializedStatCount))
 	}
 	if minResolvedTs == 0 {
 		metrics.EventStoreResolvedTsLagGauge.Set(0)
