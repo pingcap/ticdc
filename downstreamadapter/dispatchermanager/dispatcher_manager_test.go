@@ -51,6 +51,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		nil,
 		nil,
 		nil,
+		false,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
 		make(chan error, 1),
@@ -105,6 +106,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // integrityConfig
 		nil,   // filterConfig
 		nil,   // syncPointConfig
+		false,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),

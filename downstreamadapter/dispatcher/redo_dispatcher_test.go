@@ -40,7 +40,8 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		false,
 		nil,
 		nil,
-		nil, // redo dispatcher doesn't need syncPointConfig
+		nil,   // redo dispatcher doesn't need syncPointConfig
+		false, // enableSplittableCheck
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),

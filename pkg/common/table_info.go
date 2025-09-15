@@ -514,22 +514,3 @@ func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo 
 	result.InitPrivateFields()
 	return result
 }
-
-// IsSplitable returns whether the table is eligible for split in all sinks
-// Only the table with pk and no uk can always be splitted in all sinks.
-func IsSplitable(tableInfo *TableInfo) bool {
-	if tableInfo.GetPkColInfo() == nil {
-		return false
-	}
-
-	indices := tableInfo.GetIndices()
-	for _, index := range indices {
-		if index.Primary {
-			continue
-		}
-		if index.Unique {
-			return false
-		}
-	}
-	return true
-}

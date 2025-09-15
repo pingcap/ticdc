@@ -429,7 +429,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			// we need to check whether the ddl event will break splitable of this table
 			// if break, we need to report the error to maintainer.
 			if !d.isCompleteTable {
-				if !common.IsSplitable(ddl.TableInfo) && d.sharedInfo.enableSplittableCheck {
+				if !commonEvent.IsSplitable(ddl.TableInfo) && d.sharedInfo.enableSplittableCheck {
 					d.HandleError(apperror.ErrTableAfterDDLNotSplitable.GenWithStackByArgs("unexpected ddl event; This ddl event will break splitable of this table. Only table with pk and no uk can be split."))
 					return block
 				}

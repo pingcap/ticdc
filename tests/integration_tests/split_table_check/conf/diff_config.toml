@@ -1,0 +1,20 @@
+# diff config
+check-thread = 4
+
+[[check-configs]]
+# upstream
+host = "127.0.0.1"
+port = 4000
+user = "root"
+password = ""
+# downstream
+down-host = "127.0.0.1"
+down-port = 3306
+down-user = "root"
+down-password = ""
+
+# ignore check table
+ignore-tables = ["test.ignore1"]
+
+# use these tables to do diff
+tables = ["split_region.test1", "split_region.test2"]

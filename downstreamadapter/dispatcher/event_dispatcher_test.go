@@ -63,6 +63,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		}, // syncPointConfig
+		false, // enableSplittableCheck
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),
@@ -727,4 +728,109 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 
 	// Verify that all events were actually flushed
 	require.Equal(t, 0, len(mockSink.GetDMLs()))
+}
+
+// TestDispatcherSplittableCheck tests that a split table dispatcher with enableSplittableCheck=true
+// correctly reports an error when receiving a DDL that breaks splittable
+func TestDispatcherSplittableCheck(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	// Create a table with primary key and unique key (not splittable)
+	ddlJob := helper.DDL2Job("CREATE TABLE t (id INT PRIMARY KEY, email VARCHAR(100) UNIQUE)")
+	require.NotNil(t, ddlJob)
+
+	// Get table info from the DDL job
+	tableInfo := helper.GetModelTableInfo(ddlJob)
+	require.NotNil(t, tableInfo)
+
+	// Convert to common.TableInfo
+	commonTableInfo := common.WrapTableInfo("test", tableInfo)
+	require.NotNil(t, commonTableInfo)
+
+	// Verify that this table is not splittable
+	require.False(t, commonEvent.IsSplitable(commonTableInfo))
+
+	// Create a mock sink
+	sink := sink.NewMockSink(common.MysqlSinkType)
+
+	// Create an incomplete table span (split table)
+	tableSpan := getUncompleteTableSpan()
+
+	// Create shared info with enableSplittableCheck=true
+	sharedInfo := NewSharedInfo(
+		common.NewChangefeedID(),
+		"system",
+		false,
+		false,
+		nil,
+		nil,
+		&syncpoint.SyncPointConfig{
+			SyncPointInterval:  time.Duration(5 * time.Second),
+			SyncPointRetention: time.Duration(10 * time.Minute),
+		},
+		true, // enableSplittableCheck = true
+		make(chan TableSpanStatusWithSeq, 128),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		make(chan error, 1),
+	)
+
+	// Create dispatcher with the split table span
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(0), // startTs
+		1,            // schemaID
+		NewSchemaIDToDispatchers(),
+		false,
+		common.Ts(0), // pdTs
+		sink,
+		sharedInfo,
+		false,
+		&redoTs,
+	)
+
+	// Verify that the dispatcher is not a complete table (it's split)
+	require.False(t, dispatcher.isCompleteTable)
+
+	// Create a DDL event that will break splittable
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 2,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+		TableInfo: commonTableInfo,
+		Query:     "ALTER TABLE t ADD COLUMN new_col INT",
+		TableID:   1,
+	}
+
+	// Create dispatcher event
+	nodeID := node.NewID()
+	dispatcherEvent := NewDispatcherEvent(&nodeID, ddlEvent)
+
+	// Create a channel to capture errors
+	errCh := make(chan error, 1)
+
+	// Replace the error channel in shared info to capture errors
+	dispatcher.sharedInfo.errCh = errCh
+
+	// Handle the DDL event
+	block := dispatcher.HandleEvents([]DispatcherEvent{dispatcherEvent}, func() {})
+
+	// The event should be blocked
+	require.True(t, block)
+
+	// Check that an error was reported
+	select {
+	case err := <-errCh:
+		// Verify that the error is the expected splittable error
+		require.Contains(t, err.Error(), "unexpected ddl event; This ddl event will break splitable of this table. Only table with pk and no uk can be split.")
+	case <-time.After(1 * time.Second):
+		require.Fail(t, "Expected error to be reported within 1 second")
+	}
 }
