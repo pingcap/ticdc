@@ -1,5 +1,5 @@
 #!/bin/bash
-# this test case is used to test the multi changefeeds in multi servers 
+# this test case is used to test the multi changefeeds in multi servers
 # to check whether the changefeeds can be scheduling normally.
 
 set -eu
@@ -18,16 +18,16 @@ function run() {
 
 	# Start first CDC server (single node)
 	echo "Starting first CDC server..."
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" 
-	
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300"
+
 	# Create databases and tables for each changefeed
 	for i in $(seq 1 $CHANGEFEED_COUNT); do
 		run_sql "CREATE DATABASE test$i;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 		run_sql "CREATE TABLE test$i.t$i (id int primary key auto_increment, data varchar(255), created_at timestamp DEFAULT CURRENT_TIMESTAMP)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
-	
+
 	# Create sink URI based on sink type
-    TOPIC_NAME="ticdc-autorandom-test-$RANDOM"
+	TOPIC_NAME="ticdc-autorandom-test-$RANDOM"
 	case $SINK_TYPE in
 	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
@@ -37,8 +37,8 @@ function run() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	
-    # Create 6 changefeeds using the existing configs
+
+	# Create 6 changefeeds using the existing configs
 	changefeed_ids=()
 	for i in $(seq 1 $CHANGEFEED_COUNT); do
 		config_file="$CUR/conf/changefeed$i.toml"
@@ -51,7 +51,6 @@ function run() {
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
 	esac
 
-	
 	# Start data writing in background
 	echo "Starting data writing process..."
 	(
@@ -66,18 +65,17 @@ function run() {
 	) &
 	DATA_WRITER_PID=$!
 
-
 	# Start second CDC server (second node)
 	echo "Starting second CDC server..."
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8301"
-	
+
 	# Wait for coordinator to balance changefeeds
 	sleep 15
 
 	# Start third CDC server (third node)
 	echo "Starting third CDC server..."
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8302"
-	
+
 	# Wait for coordinator to rebalance changefeeds across 3 nodes
 	sleep 20
 
