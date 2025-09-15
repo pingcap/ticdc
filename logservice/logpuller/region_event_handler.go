@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -243,7 +244,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				if _, exists := state.matcher.unmatchedValue[key]; exists {
 					log.Warn("receive a COMMITTED entry while there is still unmatched prewrite on the same key",
 						zap.Uint64("regionID", regionID),
-						zap.String("key", hex.EncodeToString(entry.GetKey())),
+						zap.String("key", spanz.HexKey(entry.GetKey())),
 						zap.Uint64("startTs", entry.GetStartTs()),
 						zap.Uint64("commitTs", entry.GetCommitTs()))
 				}
