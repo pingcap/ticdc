@@ -471,7 +471,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 		}
 	}
-	//if there are multiple multi-column indices, consider as one.//???
+	// if there are multiple multi-column indices, consider as one.
 	if len(multiColumns) != 0 {
 		indices = append(indices, &timodel.IndexInfo{
 			ID:      1 + int64(len(indices)),
