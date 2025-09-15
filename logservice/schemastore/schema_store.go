@@ -276,6 +276,7 @@ func (s *schemaStore) GetTableDDLEventState(tableID int64) DDLEventState {
 	}
 }
 
+// FetchTableDDLEvents returns the ddl events which finishedTs are within the range (start, end]
 func (s *schemaStore) FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
 	currentResolvedTs := s.resolvedTs.Load()
 	if end > currentResolvedTs {

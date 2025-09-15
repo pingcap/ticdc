@@ -47,6 +47,11 @@ type scanLimit struct {
 	maxDMLBytes int64
 	// timeout is the maximum time to spend scanning
 	timeout time.Duration
+
+	// Only used in unit test, please do not set it in other places.
+	// When it is set to true, the scan will count DMLEvent as 1 byte,
+	// otherwise it will count the size of DMLEvent.
+	isInUnitTest bool
 }
 
 // eventScanner scans events from eventStore and schemaStore
@@ -136,7 +141,7 @@ func (s *eventScanner) scan(
 	return sess.eventBytes, sess.events, interrupted, err
 }
 
-// fetchDDLEvents retrieves DDL events for the scan
+// fetchDDLEvents retrieves DDL events which finishedTs are within the range (start, end]
 func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.DataRange) ([]event.Event, error) {
 	dispatcherID := stat.info.GetID()
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
@@ -205,12 +210,16 @@ func (s *eventScanner) scanAndMergeEvents(
 				return false, err
 			}
 
-			if session.limitCheck(processor.batchDML.GetSize()) {
-				interruptScan(session, merger, processor, rawEvent.CRTs)
+			if session.exceedLimit(processor.batchDML.GetSize(), processor.batchDML) &&
+				merger.canInterrupt(rawEvent.CRTs, processor.batchDML) {
+				interruptScan(session, merger, processor, rawEvent.CRTs, rawEvent.StartTs)
 				return true, nil
 			}
 
-			s.startTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
+			err = s.startTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
+			if err != nil {
+				return false, err
+			}
 		}
 
 		if err = processor.appendRow(rawEvent); err != nil {
@@ -266,29 +275,37 @@ func (s *eventScanner) startTxn(
 	startTs, commitTs uint64,
 	tableInfo *common.TableInfo,
 	tableID int64,
-) {
-	processor.startTxn(session.dispatcherStat.id, tableID, tableInfo, startTs, commitTs)
+) error {
+	err := processor.startTxn(session.dispatcherStat.id, tableID, tableInfo, startTs, commitTs)
+	if err != nil {
+		return err
+	}
 	session.dmlCount++
+	return nil
 }
 
 func (s *eventScanner) commitTxn(
 	session *session,
 	merger *eventMerger,
 	processor *dmlProcessor,
-	untilTs, updateTs uint64,
+	eventCommitTs, tableInfoUpdateTs uint64,
 ) error {
 	if err := processor.commitTxn(); err != nil {
 		return err
 	}
-	resolvedBatch := processor.getResolvedBatchDML()
-	if resolvedBatch == nil || resolvedBatch.Len() == 0 {
+	currentBatchDML := processor.getCurrentBatchDML()
+
+	// Use DMLCount() instead of Len() to check if the batchDML is empty
+	// because the batchDML may have some skipped rows, so the Len() can be 0 even if the batchDML is not empty
+	if currentBatchDML == nil || currentBatchDML.DMLCount() == 0 {
 		return nil
 	}
-	// Check if batch should be flushed
-	tableUpdated := resolvedBatch.TableInfo.GetUpdateTS() != updateTs
-	hasNewDDL := merger.hasPendingDDLs(untilTs)
+
+	// Check if should flush the current batchDML and reset a new one
+	tableUpdated := currentBatchDML.TableInfo.GetUpdateTS() != tableInfoUpdateTs
+	hasNewDDL := merger.hasDDLLessThanCommitTs(eventCommitTs)
 	if hasNewDDL || tableUpdated {
-		events := merger.appendDMLEvent(resolvedBatch)
+		events := merger.mergeWithPrecedingDDLs(currentBatchDML)
 		session.appendEvents(events)
 		processor.resetBatchDML()
 	}
@@ -308,8 +325,8 @@ func finalizeScan(
 		return err
 	}
 
-	resolvedBatch := processor.getResolvedBatchDML()
-	events := merger.appendDMLEvent(resolvedBatch)
+	resolvedBatch := processor.getCurrentBatchDML()
+	events := merger.mergeWithPrecedingDDLs(resolvedBatch)
 	events = append(events, merger.resolveDDLEvents(endTs)...)
 
 	resolveTs := event.NewResolvedEvent(endTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch.Load())
@@ -327,14 +344,16 @@ func interruptScan(
 	merger *eventMerger,
 	processor *dmlProcessor,
 	newCommitTs uint64,
+	newStartTs uint64,
 ) {
 	// Append current batch
-	events := merger.appendDMLEvent(processor.getResolvedBatchDML())
-	if newCommitTs != merger.lastCommitTs {
+	events := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
+
+	if newCommitTs != merger.lastBatchDMLCommitTs {
 		// lastCommitTs may be 0, if the scanner timeout and no one row scanned.
 		// this usually happens when the CPU is overloaded.
-		if merger.lastCommitTs == 0 {
-			log.Warn("interrupt scan when no DML event is scanned",
+		if merger.lastBatchDMLCommitTs == 0 {
+			log.Info("interrupt scan when no DML event is scanned",
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", session.dataRange.Span.TableID),
 				zap.Uint64("newCommitTs", newCommitTs),
@@ -342,10 +361,19 @@ func interruptScan(
 				zap.Int("txnCount", session.dmlCount),
 				zap.Duration("duration", time.Since(session.startTime)))
 		} else {
-			events = append(events, merger.resolveDDLEvents(merger.lastCommitTs)...)
-			resolvedTs := event.NewResolvedEvent(merger.lastCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
+			// This means we interrupt the scan at a position where the commitTs is different from the last batchDML commitTs
+			// In this case, we need to append the DDL less than or equal to the last batchDML commitTs and the resolved-ts event with the last batchDML commitTs
+			events = append(events, merger.resolveDDLEvents(merger.lastBatchDMLCommitTs)...)
+			resolvedTs := event.NewResolvedEvent(merger.lastBatchDMLCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
 			events = append(events, resolvedTs)
+			log.Debug("scan interrupted at different commitTs with new event", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Uint64("CommitTs", merger.lastBatchDMLCommitTs), zap.Uint64("newCommitTs", newCommitTs), zap.Duration("duration", time.Since(session.startTime)))
 		}
+	} else {
+		startTs := uint64(0)
+		if processor.currentDML != nil {
+			startTs = processor.currentDML.GetStartTs()
+		}
+		log.Debug("scan interrupted at the same commitTs with new event", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Uint64("startTs", startTs), zap.Uint64("commitTs", merger.lastBatchDMLCommitTs), zap.Uint64("newStartTs", newStartTs), zap.Uint64("newCommitTs", newCommitTs), zap.Duration("duration", time.Since(session.startTime)))
 	}
 	session.appendEvents(events)
 }
@@ -412,21 +440,42 @@ func (s *session) recordMetrics() {
 }
 
 func (s *session) appendEvents(events []event.Event) {
+	s.events = append(s.events, events...)
+
+	if !s.limit.isInUnitTest {
+		for _, item := range events {
+			s.eventBytes += item.GetSize()
+		}
+		return
+	}
+
+	// only for unit test
 	for _, item := range events {
-		s.events = append(s.events, item)
-		s.eventBytes += item.GetSize()
+		if item.GetType() == event.TypeBatchDMLEvent {
+			batchDML := item.(*event.BatchDMLEvent)
+			s.eventBytes += int64(len(batchDML.DMLEvents))
+		} else {
+			s.eventBytes += 1
+		}
 	}
 }
 
-func (s *session) limitCheck(nBytes int64) bool {
+func (s *session) exceedLimit(nBytes int64, batchDML ...*event.BatchDMLEvent) bool {
+	if s.limit.isInUnitTest && len(batchDML) > 0 {
+		batchDML := batchDML[0]
+		eventCount := len(batchDML.DMLEvents)
+		return (s.eventBytes + int64(eventCount)) >= s.limit.maxDMLBytes
+	}
+
 	return (s.eventBytes+nBytes) >= s.limit.maxDMLBytes || time.Since(s.startTime) > s.limit.timeout
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
 type eventMerger struct {
-	ddlEvents    []event.Event
-	ddlIndex     int
-	lastCommitTs uint64
+	ddlEvents []event.Event
+	ddlIndex  int
+	// Record the last batch dml that has been merge with preceding DDLs
+	lastBatchDMLCommitTs uint64
 }
 
 // newEventMerger creates a new event merger
@@ -439,22 +488,23 @@ func newEventMerger(
 	}
 }
 
-// appendDMLEvent appends the given DML event after all DDL events
-// that have a commit timestamp less than or equal to the DML event's commit timestamp.
-func (m *eventMerger) appendDMLEvent(dml *event.BatchDMLEvent) []event.Event {
-	if dml == nil || dml.Len() == 0 {
+// mergeWithPrecedingDDLs returns the DML event along with all preceding DDL events in timestamp order.
+func (m *eventMerger) mergeWithPrecedingDDLs(batchDML *event.BatchDMLEvent) []event.Event {
+	if batchDML == nil || batchDML.DMLCount() == 0 {
 		return nil
 	}
 
-	commitTs := dml.GetCommitTs()
+	commitTs := batchDML.GetCommitTs()
 	var events []event.Event
-	// Add all DDL events that are before the given timestamp
+	// Collect all DDL events with commitTs < dml.commitTs
 	for m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].GetCommitTs() < commitTs {
 		events = append(events, m.ddlEvents[m.ddlIndex])
 		m.ddlIndex++
 	}
-	events = append(events, dml)
-	m.lastCommitTs = commitTs
+
+	events = append(events, batchDML)
+
+	m.lastBatchDMLCommitTs = commitTs
 	return events
 }
 
@@ -468,9 +518,72 @@ func (m *eventMerger) resolveDDLEvents(endTs uint64) []event.Event {
 	return events
 }
 
-// hasPendingDDLs return true if there are DDLs
-func (m *eventMerger) hasPendingDDLs(commitTs uint64) bool {
+// hasDDLLessThanCommitTs return true if there are DDLs
+func (m *eventMerger) hasDDLLessThanCommitTs(commitTs uint64) bool {
 	return m.ddlIndex < len(m.ddlEvents) && m.ddlEvents[m.ddlIndex].GetCommitTs() < commitTs
+}
+
+// hasDDLAtCommitTs checks if there's a DDL event at the specified commitTs
+// This method doesn't modify the ddlIndex, it's used for checking only
+func (m *eventMerger) hasDDLAtCommitTs(commitTs uint64) bool {
+	for i := m.ddlIndex; i < len(m.ddlEvents); i++ {
+		ddlCommitTs := m.ddlEvents[i].GetCommitTs()
+		if ddlCommitTs == commitTs {
+			return true
+		}
+		// Since DDL events are sorted by commitTs, if we find a larger commitTs, we can stop
+		if ddlCommitTs > commitTs {
+			break
+		}
+	}
+	return false
+}
+
+// canInterrupt determines if we can interrupt the scan at the current position when reaching scan limits.
+// The function ensures that DML and DDL events with the same commitTs are processed together atomically.
+//
+// Logic:
+// 1. If currentDML.commitTs != newCommitTs: Can interrupt (different transactions)
+// 2. If currentDML.commitTs == newCommitTs: Check if there are DDL events at this commitTs
+//   - If no DDL at this commitTs: Can interrupt
+//   - If DDL exists at this commitTs: Cannot interrupt (must process together)
+//
+// Examples:
+//
+// Case 1 - Different commitTs, can interrupt:
+// Event sequence:
+//
+//	DML1(x+1) -> DML2(x+2)
+//	          ▲
+//	          └── currentDML.commitTs=x+1, newCommitTs=x+2, can interrupt
+//
+// Case 2 - Same commitTs, no DDL, can interrupt:
+// Event sequence:
+//
+//	DML1(x+1) -> DML2(x+2) -> DML3(x+2)
+//	                       ▲
+//	                       └── currentDML.commitTs=x+2, newCommitTs=x+2, no DDL at x+2, can interrupt
+//
+// Case 3 - Same commitTs, has DDL, cannot interrupt:
+// Event sequence:
+//
+//	DML1(x+1) -> DML2(x+2) -> DDL(x+2) -> DML3(x+2)
+//	                       ▲
+//	                       └── currentDML.commitTs=x+2, newCommitTs=x+2, DDL exists at x+2, cannot interrupt
+//	                           Must process DML2, DML3, DDL together atomically
+func (m *eventMerger) canInterrupt(newCommitTs uint64, currentBatchDML *event.BatchDMLEvent) bool {
+	currentDMLCommitTs := uint64(0)
+	if len(currentBatchDML.DMLEvents) > 0 {
+		currentDMLCommitTs = currentBatchDML.GetCommitTs()
+	}
+
+	if currentDMLCommitTs != newCommitTs {
+		return true
+	}
+
+	// Check if there are any DDL events at the lastCommitTs
+	// If there are, we cannot interrupt to ensure they are processed together
+	return !m.hasDDLAtCommitTs(newCommitTs)
 }
 
 // dmlProcessor handles DML event processing and batching
@@ -513,12 +626,12 @@ func (p *dmlProcessor) startTxn(
 	tableID int64,
 	tableInfo *common.TableInfo,
 	startTs uint64, commitTs uint64,
-) {
+) error {
 	if p.currentDML != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}
 	p.currentDML = event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
-	p.batchDML.AppendDMLEvent(p.currentDML)
+	return p.batchDML.AppendDMLEvent(p.currentDML)
 }
 
 func (p *dmlProcessor) commitTxn() error {
@@ -594,8 +707,8 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter)
 }
 
-// getResolvedBatchDML returns the current batch DML event
-func (p *dmlProcessor) getResolvedBatchDML() *event.BatchDMLEvent {
+// getCurrentBatchDML returns the current batch DML event
+func (p *dmlProcessor) getCurrentBatchDML() *event.BatchDMLEvent {
 	return p.batchDML
 }
 

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -86,9 +87,9 @@ func TestEventScanner(t *testing.T) {
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
-	_, events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
+	_, events, isInterrupted, err := scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
-	require.False(t, isBroken)
+	require.False(t, isInterrupted)
 	require.Equal(t, 1, len(events))
 	e := events[0]
 	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
@@ -108,9 +109,9 @@ func TestEventScanner(t *testing.T) {
 	}
 
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
-	require.False(t, isBroken)
+	require.False(t, isInterrupted)
 	require.Equal(t, 2, len(events))
 
 	e = events[0]
@@ -139,9 +140,9 @@ func TestEventScanner(t *testing.T) {
 	}
 
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
-	require.False(t, isBroken)
+	require.False(t, isInterrupted)
 	require.Equal(t, 2, len(events))
 
 	require.Equal(t, event.TypeBatchDMLEvent, events[0].GetType())
@@ -179,9 +180,9 @@ func TestEventScanner(t *testing.T) {
 		timeout:     10 * time.Second,
 	}
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
-	require.False(t, isBroken)
+	require.False(t, isInterrupted)
 	require.Equal(t, 4, len(events))
 	require.Equal(t, event.TypeDDLEvent, events[0].GetType())
 	require.Equal(t, event.TypeBatchDMLEvent, events[1].GetType())
@@ -197,7 +198,7 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, batchDML2.DMLEvents[2].GetCommitTs(), kvEvents[3].CRTs)
 
 	// case 5: Reaches scan limit, only 1 DDL and 1 DML event scanned
-	// Tests that when MaxBytes limit is reached, the scanner returns partial events with isBroken=true
+	// Tests that when MaxBytes limit is reached, the scanner returns partial events with isInterrupted=true
 	// Event sequence:
 	//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4)
 	// Expected result:
@@ -210,9 +211,9 @@ func TestEventScanner(t *testing.T) {
 	}
 
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
-	require.True(t, isBroken)
+	require.True(t, isInterrupted)
 	require.Equal(t, 3, len(events))
 
 	e = events[0]
@@ -255,9 +256,9 @@ func TestEventScanner(t *testing.T) {
 
 	require.True(t, ok)
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
-	require.True(t, isBroken)
+	require.True(t, isInterrupted)
 	require.Equal(t, 2, len(events))
 
 	// DDL
@@ -295,9 +296,9 @@ func TestEventScanner(t *testing.T) {
 	}
 
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
-	require.True(t, isBroken)
+	require.True(t, isInterrupted)
 	require.Equal(t, 3, len(events))
 
 	// DDL
@@ -336,9 +337,9 @@ func TestEventScanner(t *testing.T) {
 		timeout:     10 * time.Second,
 	}
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
-	require.False(t, isBroken)
+	require.False(t, isInterrupted)
 	require.Equal(t, 5, len(events))
 
 	firstDDL := events[0].(*event.DDLEvent)
@@ -419,9 +420,9 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 		maxDMLBytes: 10000,
 		timeout:     1000 * time.Second,
 	}
-	_, events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, isInterrupted, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
-	require.False(t, isBroken)
+	require.False(t, isInterrupted)
 	require.Equal(t, 4, len(events))
 	// DDL
 	e := events[0]
@@ -511,19 +512,19 @@ func TestEventScannerWithDDL(t *testing.T) {
 	// Tests interruption at first DML due to size limit
 	// Event sequence:
 	//   DDL(x) -> DML1(x+1) -> DML2(x+2) -> DML3(x+2) -> fakeDDL(x+2) -> DML3(x+4)
-	// Expected result (MaxBytes=1*eSize):
 	// [DDL(x), DML1(x+1), Resolved(x+1)]
 	//             ▲
 	//             └── Scanning interrupted at DML1
 	sl := scanLimit{
-		maxDMLBytes: 266,
-		timeout:     10 * time.Second,
+		maxDMLBytes:  1, // count 1 events
+		timeout:      10 * time.Second,
+		isInUnitTest: true,
 	}
 
 	ctx := context.Background()
-	_, events, isBroken, err := scanner.scan(ctx, disp, dataRange, sl)
+	_, events, isInterrupted, err := scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
-	require.True(t, isBroken)
+	require.True(t, isInterrupted)
 	require.Equal(t, 3, len(events))
 	// DDL
 	e := events[0]
@@ -540,140 +541,156 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
 
-	// case 2: Scanning interrupted at dml2
-	// Tests atomic return of DML2/DML3/fakeDDL sharing same commitTs
-	// Event sequence:
-	//   DDL(x) -> DML1(x+1) -> DML2(x+2) -> DML3(x+2) -> fakeDDL(x+2) -> DML3(x+4)
-	// Expected result:
-	//   [DDL(x), DML1(x+1), DML2(x+2)]
-	// 							▲
-	// 							└── Scanning interrupted at DML3
-	// DO NOT emit fakeDDL and ResolvedTs here, since there is still DML3 not scanned
-	sl = scanLimit{
-		maxDMLBytes: 300,
-		timeout:     1000 * time.Second,
-	}
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
-	require.NoError(t, err)
-	require.True(t, isBroken)
-	require.Equal(t, 3, len(events))
+	log.Info("pass case 1")
 
-	// DDL1
-	e = events[0]
-	require.Equal(t, e.GetType(), event.TypeDDLEvent)
-	require.Equal(t, ddlEvent.GetCommitTs(), e.GetCommitTs())
+	t.Run("Scanning interrupted at dml1", func(t *testing.T) {
+		// case 2: Scanning interrupted at dml1
+		// Tests atomic return of DML2/DML3/fakeDDL sharing same commitTs
+		// Event sequence:
+		//   DDL(x) -> DML1(x+1) -> DML2(x+2) -> DML3(x+2) -> fakeDDL(x+2) -> DML3(x+4)
+		// Expected result:
+		//   [DDL(x), DML1(x+1), Resolved(x+1)]
+		// 					▲
+		// 				    └── Scanning interrupted at DML1
+		// DO NOT emit fakeDDL and ResolvedTs here, since there is still DML3 not scanned
+		sl = scanLimit{
+			maxDMLBytes:  2,
+			timeout:      1000 * time.Second,
+			isInUnitTest: true,
+		}
+		_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+		require.NoError(t, err)
+		require.True(t, isInterrupted)
+		require.Equal(t, 3, len(events))
 
-	// DML1
-	e = events[1]
-	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
-	require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
-	require.Equal(t, dml1.CRTs, e.GetCommitTs())
+		// DDL1
+		e = events[0]
+		require.Equal(t, e.GetType(), event.TypeDDLEvent)
+		require.Equal(t, ddlEvent.GetCommitTs(), e.GetCommitTs())
 
-	// DML2
-	e = events[2]
-	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
-	require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
-	require.Equal(t, dml2.CRTs, e.GetCommitTs())
+		// DML1
+		e = events[1]
+		require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+		require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
+		require.Equal(t, dml1.CRTs, e.GetCommitTs())
 
-	// case 3: Scanning interrupted at dml3
-	// Tests atomic return of DML2/DML3/fakeDDL sharing same commitTs
-	// Event sequence:
-	//   DDL(x) -> DML1(x+1) -> DML2(x+2) -> DML3(x+2) -> fakeDDL(x+2) -> DML3(x+4)
-	// Expected result:
-	//   [DDL(x), DML1(x+1), DML2(x+2), DML3(x+2), fakeDDL(x+2), Resolved(x+2)]
-	//                                               ▲
-	//                                               └── Events with same commitTs must be returned together
-	// 										▲
-	// 										└── Scanning interrupted at DML3
-	sl = scanLimit{
-		maxDMLBytes: 556,
-		timeout:     10 * time.Second,
-	}
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
-	require.NoError(t, err)
-	require.True(t, isBroken)
-	require.Equal(t, 5, len(events))
+		// resolvedTs
+		e = events[2]
+		require.Equal(t, e.GetType(), event.TypeResolvedEvent)
+		require.Equal(t, dml1.CRTs, e.GetCommitTs())
 
-	// DDL1
-	e = events[0]
-	require.Equal(t, e.GetType(), event.TypeDDLEvent)
-	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
-	// DML1
-	e = events[1]
-	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
-	require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
-	require.Equal(t, dml1.CRTs, e.GetCommitTs())
-	// DML2 DML3
-	e = events[2]
-	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
-	require.Equal(t, dml3.CRTs, e.GetCommitTs())
-	require.Equal(t, int32(2), e.(*event.BatchDMLEvent).Len())
-	require.Equal(t, dml2.CRTs, e.(*event.BatchDMLEvent).DMLEvents[0].GetCommitTs())
-	require.Equal(t, dml3.CRTs, e.(*event.BatchDMLEvent).DMLEvents[1].GetCommitTs())
+		log.Info("pass case 2")
+	})
 
-	// fake DDL
-	e = events[3]
-	require.Equal(t, e.GetType(), event.TypeDDLEvent)
-	require.Equal(t, fakeDDL.FinishedTs, e.GetCommitTs())
-	require.Equal(t, dml3.CRTs, e.GetCommitTs())
-	// resolvedTs
-	e = events[4]
-	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
-	require.Equal(t, dml3.CRTs, e.GetCommitTs())
+	t.Run("Scanning interrupted at dml3", func(t *testing.T) {
+		// case 3: Scanning interrupted at dml3
+		// Tests atomic return of DML2/DML3/fakeDDL sharing same commitTs
+		// Event sequence:
+		//   DDL(x) -> DML1(x+1) -> DML2(x+2) -> DML3(x+2) -> fakeDDL(x+2) -> DML4(x+4)
+		// Expected result:
+		//   [DDL(x), BatchDML1[DML1(x+1)], BatchDML2[DML2(x+2), DML3(x+2)], fakeDDL(x+2), Resolved(x+2)]
+		//                                               ▲
+		//                                               └── Events with same commitTs(x+2) must be returned together
+		// 										                       ▲
+		// 										                       └── Scanning interrupted at DML3
+		sl = scanLimit{
+			maxDMLBytes:  3, // Event if we set 3, it should not be interrupted at DML2
+			timeout:      10 * time.Second,
+			isInUnitTest: true,
+		}
+		_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 
-	// case 4: Tests handling of multiple DDL events
-	// Tests that scanner correctly processes multiple DDL events
-	// Event sequence after additions:
-	//   ... -> fakeDDL2(x+5) -> fakeDDL3(x+6)
-	// Expected result:
-	// [..., fakeDDL2(x+5), fakeDDL3(x+6), Resolved(x+7)]
-	sl = scanLimit{
-		maxDMLBytes: 10000,
-		timeout:     10 * time.Second,
-	}
+		require.NoError(t, err)
+		require.True(t, isInterrupted)
+		require.Equal(t, 5, len(events))
 
-	// Add more fake DDL events
-	fakeDDL2 := event.DDLEvent{
-		FinishedTs: resolvedTs + 1,
-		TableInfo:  ddlEvent.TableInfo,
-		TableID:    ddlEvent.TableID,
-	}
-	fakeDDL3 := event.DDLEvent{
-		FinishedTs: resolvedTs + 2,
-		TableInfo:  ddlEvent.TableInfo,
-		TableID:    ddlEvent.TableID,
-	}
-	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL2)
-	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL3)
+		// DDL1
+		e = events[0]
+		require.Equal(t, e.GetType(), event.TypeDDLEvent)
+		require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
+		// DML1
+		e = events[1]
+		require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+		require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
+		require.Equal(t, dml1.CRTs, e.GetCommitTs())
 
-	resolvedTs = resolvedTs + 3
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+		// DML2 DML3
+		e = events[2]
+		require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+		require.Equal(t, dml3.CRTs, e.GetCommitTs())
+		require.Equal(t, int32(2), e.(*event.BatchDMLEvent).Len())
+		require.Equal(t, dml2.CRTs, e.(*event.BatchDMLEvent).DMLEvents[0].GetCommitTs())
+		require.Equal(t, dml3.CRTs, e.(*event.BatchDMLEvent).DMLEvents[1].GetCommitTs())
 
-	ok, dataRange = broker.getScanTaskDataRange(disp)
-	require.True(t, ok)
+		// fake DDL
+		e = events[3]
+		require.Equal(t, e.GetType(), event.TypeDDLEvent)
+		require.Equal(t, fakeDDL.FinishedTs, e.GetCommitTs())
+		require.Equal(t, dml3.CRTs, e.GetCommitTs())
+		// resolvedTs
+		e = events[4]
+		require.Equal(t, e.GetType(), event.TypeResolvedEvent)
+		require.Equal(t, dml3.CRTs, e.GetCommitTs())
 
-	_, events, isBroken, err = scanner.scan(ctx, disp, dataRange, sl)
-	require.NoError(t, err)
-	require.False(t, isBroken)
+		log.Info("pass case 3")
+	})
 
-	require.Equal(t, 8, len(events))
+	t.Run("Scanning should not be interrupted", func(t *testing.T) {
+		// case 4: Tests handling of multiple DDL events
+		// Tests that scanner correctly processes multiple DDL events
+		// Event sequence after additions:
+		//   ... -> fakeDDL2(x+5) -> fakeDDL3(x+6)
+		// Expected result:
+		// [..., fakeDDL2(x+5), fakeDDL3(x+6), Resolved(x+7)]
+		sl = scanLimit{
+			maxDMLBytes:  100,
+			timeout:      10 * time.Second,
+			isInUnitTest: true,
+		}
 
-	e = events[4]
-	require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
-	require.Equal(t, e.GetCommitTs(), kvEvents[3].CRTs)
-	require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
+		// Add more fake DDL events
+		fakeDDL2 := event.DDLEvent{
+			FinishedTs: resolvedTs + 1,
+			TableInfo:  ddlEvent.TableInfo,
+			TableID:    ddlEvent.TableID,
+		}
+		fakeDDL3 := event.DDLEvent{
+			FinishedTs: resolvedTs + 2,
+			TableInfo:  ddlEvent.TableInfo,
+			TableID:    ddlEvent.TableID,
+		}
+		mockSchemaStore.AppendDDLEvent(tableID, fakeDDL2)
+		mockSchemaStore.AppendDDLEvent(tableID, fakeDDL3)
 
-	e = events[5]
-	require.Equal(t, e.GetType(), event.TypeDDLEvent)
-	require.Equal(t, e.GetCommitTs(), fakeDDL2.FinishedTs)
+		resolvedTs = resolvedTs + 3
+		disp.eventStoreResolvedTs.Store(resolvedTs)
 
-	e = events[6]
-	require.Equal(t, e.GetType(), event.TypeDDLEvent)
-	require.Equal(t, e.GetCommitTs(), fakeDDL3.FinishedTs)
+		ok, dataRange = broker.getScanTaskDataRange(disp)
+		require.True(t, ok)
 
-	e = events[7]
-	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
-	require.Equal(t, resolvedTs, e.GetCommitTs())
+		_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+		require.NoError(t, err)
+		require.False(t, isInterrupted)
+
+		require.Equal(t, 8, len(events))
+
+		e = events[4]
+		require.Equal(t, e.GetType(), event.TypeBatchDMLEvent)
+		require.Equal(t, e.GetCommitTs(), kvEvents[3].CRTs)
+		require.Equal(t, int32(1), e.(*event.BatchDMLEvent).Len())
+
+		e = events[5]
+		require.Equal(t, e.GetType(), event.TypeDDLEvent)
+		require.Equal(t, e.GetCommitTs(), fakeDDL2.FinishedTs)
+
+		e = events[6]
+		require.Equal(t, e.GetType(), event.TypeDDLEvent)
+		require.Equal(t, e.GetCommitTs(), fakeDDL3.FinishedTs)
+
+		e = events[7]
+		require.Equal(t, e.GetType(), event.TypeResolvedEvent)
+		require.Equal(t, resolvedTs, e.GetCommitTs())
+	})
 }
 
 // TestDMLProcessor tests the processNewTransaction method of dmlProcessor
@@ -1201,11 +1218,11 @@ func TestScanSession(t *testing.T) {
 			sess.eventBytes = 500
 
 			// Test bytes below limit: 500 + 499 = 999 < 1000
-			require.False(t, sess.limitCheck(499))
+			require.False(t, sess.exceedLimit(499))
 			// Test bytes at limit: 500 + 500 = 1000 >= 1000
-			require.True(t, sess.limitCheck(500))
+			require.True(t, sess.exceedLimit(500))
 			// Test bytes exceeding limit: 500 + 501 = 1001 > 1000
-			require.True(t, sess.limitCheck(501))
+			require.True(t, sess.exceedLimit(501))
 		})
 	})
 
@@ -1219,7 +1236,7 @@ func TestScanSession(t *testing.T) {
 		sessWithTimeout.startTime = time.Now().Add(-5 * time.Second) // Simulate 5 seconds ago
 		sessWithTimeout.eventBytes = 100
 
-		require.True(t, sessWithTimeout.limitCheck(400))
+		require.True(t, sessWithTimeout.exceedLimit(400))
 	})
 }
 
@@ -1259,13 +1276,13 @@ func TestEventMerger(t *testing.T) {
 		err = processor.commitTxn()
 		require.NoError(t, err)
 
-		events := merger.appendDMLEvent(processor.getResolvedBatchDML())
+		events := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
 
 		// Only return DML event
 		require.Equal(t, 1, len(events))
 		require.Equal(t, event.TypeBatchDMLEvent, events[0].GetType())
 		require.Equal(t, kvEvents[0].CRTs, events[0].GetCommitTs())
-		require.Equal(t, kvEvents[0].CRTs, merger.lastCommitTs)
+		require.Equal(t, kvEvents[0].CRTs, merger.lastBatchDMLCommitTs)
 	})
 
 	t.Run("appendDMLEventWithDDL", func(t *testing.T) {
@@ -1292,7 +1309,7 @@ func TestEventMerger(t *testing.T) {
 		err = processor.commitTxn()
 		require.NoError(t, err)
 
-		events := merger.appendDMLEvent(processor.getResolvedBatchDML())
+		events := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
 
 		require.Equal(t, 2, len(events))
 
@@ -1301,7 +1318,7 @@ func TestEventMerger(t *testing.T) {
 		require.Equal(t, event.TypeBatchDMLEvent, events[1].GetType())
 		require.Equal(t, kvEvents[0].CRTs, events[1].GetCommitTs())
 
-		require.Equal(t, merger.lastCommitTs, kvEvents[0].CRTs)
+		require.Equal(t, merger.lastBatchDMLCommitTs, kvEvents[0].CRTs)
 	})
 
 	t.Run("MixedDMLAndDDLEvents", func(t *testing.T) {
@@ -1347,7 +1364,7 @@ func TestEventMerger(t *testing.T) {
 		err = processor.commitTxn()
 		require.NoError(t, err)
 
-		events1 := merger.appendDMLEvent(processor.getResolvedBatchDML())
+		events1 := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
 
 		// Should return DDL1 + DML1
 		require.Equal(t, 2, len(events1))
@@ -1367,7 +1384,7 @@ func TestEventMerger(t *testing.T) {
 		err = processor.commitTxn()
 		require.NoError(t, err)
 
-		events2 := merger.appendDMLEvent(processor.getResolvedBatchDML())
+		events2 := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
 
 		// Should return DDL2 + DDL3 + DML2
 		require.Equal(t, 3, len(events2))
@@ -1494,12 +1511,12 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	merger := newEventMerger([]event.Event{})
 
 	// Execute scanAndMergeEvents
-	isBroken, err := scanner.scanAndMergeEvents(sess, merger, mockIter)
+	isInterrupted, err := scanner.scanAndMergeEvents(sess, merger, mockIter)
 	events := sess.events
 
 	// Verify results
 	require.NoError(t, err)
-	require.False(t, isBroken)
+	require.False(t, isInterrupted)
 	require.Equal(t, 2, len(events)) // BatchDML + ResolvedEvent
 
 	// Verify first event is BatchDMLEvent
@@ -1535,7 +1552,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	require.Equal(t, dataRange.CommitTsEnd, resolvedEvent.ResolvedTs)
 
 	// Verify sess state was updated correctly
-	require.Equal(t, updateEvent.CRTs, merger.lastCommitTs)
+	require.Equal(t, updateEvent.CRTs, merger.lastBatchDMLCommitTs)
 	require.Equal(t, 1, sess.dmlCount)
 	require.True(t, sess.scannedBytes > 0) // Some bytes were processed
 }
@@ -1611,5 +1628,139 @@ func TestGetTableInfo4Txn(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, otherErr, err)
 		require.Nil(t, info)
+	})
+}
+
+func TestHasDDLAtLastCommitTs(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	// Create DDL events with different commit timestamps
+	ddlEvent1, _ := genEvents(helper, `create table test.t1(id int primary key)`)
+	ddlEvent2, _ := genEvents(helper, `create table test.t2(id int primary key)`)
+	ddlEvent3, _ := genEvents(helper, `create table test.t3(id int primary key)`)
+
+	// Manually set commit timestamps to control the test scenarios
+	ddlEvent1.FinishedTs = 100
+	ddlEvent2.FinishedTs = 200
+	ddlEvent3.FinishedTs = 300
+
+	ddlEvents := []event.Event{&ddlEvent1, &ddlEvent2, &ddlEvent3}
+	merger := newEventMerger(ddlEvents)
+
+	// Test case 1: DDL exists at lastCommitTs - should return true
+	merger.ddlIndex = 0
+	originalIndex := merger.ddlIndex
+	result := merger.hasDDLAtCommitTs(200)
+	require.True(t, result, "Should return true when DDL exists at CommitTs")
+	require.Equal(t, originalIndex, merger.ddlIndex, "ddlIndex should not be changed")
+
+	// Test case 2: No DDL at lastCommitTs - should return false
+	merger.ddlIndex = 0
+	originalIndex = merger.ddlIndex
+	result = merger.hasDDLAtCommitTs(150)
+	require.False(t, result, "Should return false when no DDL exists at CommitTs")
+	require.Equal(t, originalIndex, merger.ddlIndex, "ddlIndex should not be changed")
+
+	// Test case 3: DDL exists but ddlIndex is beyond it - should return false
+	merger.ddlIndex = 1 // Skip the first DDL
+	originalIndex = merger.ddlIndex
+	result = merger.hasDDLAtCommitTs(100)
+	require.False(t, result, "Should return false when ddlIndex is beyond the target CommitTs")
+	require.Equal(t, originalIndex, merger.ddlIndex, "ddlIndex should not be changed")
+}
+
+func TestCanInterrupt(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	// Create DML events with specific commit timestamps
+	dmlEvent1 := &event.DMLEvent{
+		StartTs:         100,
+		CommitTs:        101, // x+1
+		PhysicalTableID: 1,
+		Length:          1,
+	}
+	dmlEvent2 := &event.DMLEvent{
+		StartTs:         100,
+		CommitTs:        102, // x+2
+		PhysicalTableID: 1,
+		Length:          1,
+	}
+
+	// Create DDL events
+	ddlEvent1, _ := genEvents(helper, `create table test.t1(id int primary key)`)
+	ddlEvent2, _ := genEvents(helper, `create table test.t2(id int primary key)`)
+
+	// Set DDL commit timestamps
+	ddlEvent1.FinishedTs = 102 // x+2 (same as dmlEvent2 and dmlEvent3)
+	ddlEvent2.FinishedTs = 103 // x+3
+
+	t.Run("Case 1 - Different commitTs, can interrupt", func(t *testing.T) {
+		// Event sequence:
+		//	DML1(x+1) -> DML2(x+2)
+		//	          ▲
+		//	          └── currentDML.commitTs=x+1, newCommitTs=x+2, can interrupt
+
+		ddlEvents := []event.Event{&ddlEvent2} // DDL at x+3, not at x+1 or x+2
+		merger := newEventMerger(ddlEvents)
+
+		// Create BatchDMLEvent with DML1(x+1)
+		currentBatchDML := event.NewBatchDMLEvent()
+		currentBatchDML.DMLEvents = []*event.DMLEvent{dmlEvent1}
+
+		// Test: currentDML.commitTs=101(x+1), newCommitTs=102(x+2)
+		result := merger.canInterrupt(102, currentBatchDML)
+		require.True(t, result, "Should be able to interrupt when commitTs are different")
+	})
+
+	t.Run("Case 2 - Same commitTs, no DDL, can interrupt", func(t *testing.T) {
+		// Event sequence:
+		//	DML1(x+1) -> DML2(x+2) -> DML3(x+2)
+		//	                       ▲
+		//	                       └── currentDML.commitTs=x+2, newCommitTs=x+2, no DDL at x+2, can interrupt
+
+		ddlEvents := []event.Event{&ddlEvent2} // DDL at x+3, not at x+2
+		merger := newEventMerger(ddlEvents)
+
+		// Create BatchDMLEvent with DML2(x+2)
+		currentBatchDML := event.NewBatchDMLEvent()
+		currentBatchDML.DMLEvents = []*event.DMLEvent{dmlEvent2}
+
+		// Test: currentDML.commitTs=102(x+2), newCommitTs=102(x+2), no DDL at 102
+		result := merger.canInterrupt(102, currentBatchDML)
+		require.True(t, result, "Should be able to interrupt when same commitTs but no DDL exists")
+	})
+
+	t.Run("Case 3 - Same commitTs, has DDL, cannot interrupt", func(t *testing.T) {
+		// Event sequence:
+		//	DML1(x+1) -> DML2(x+2) -> DDL(x+2) -> DML3(x+2)
+		//	                       ▲
+		//	                       └── currentDML.commitTs=x+2, newCommitTs=x+2, DDL exists at x+2, cannot interrupt
+		//	                           Must process DML2, DML3, DDL together atomically
+
+		ddlEvents := []event.Event{&ddlEvent1} // DDL at x+2 (102)
+		merger := newEventMerger(ddlEvents)
+
+		// Create BatchDMLEvent with DML2(x+2)
+		currentBatchDML := event.NewBatchDMLEvent()
+		currentBatchDML.DMLEvents = []*event.DMLEvent{dmlEvent2}
+
+		// Test: currentDML.commitTs=102(x+2), newCommitTs=102(x+2), DDL exists at 102
+		result := merger.canInterrupt(102, currentBatchDML)
+		require.False(t, result, "Should NOT be able to interrupt when same commitTs and DDL exists")
+	})
+
+	t.Run("Edge case - Empty BatchDMLEvent", func(t *testing.T) {
+		// Test with empty BatchDMLEvent (no DML events)
+		ddlEvents := []event.Event{&ddlEvent1}
+		merger := newEventMerger(ddlEvents)
+
+		// Create empty BatchDMLEvent
+		currentBatchDML := event.NewBatchDMLEvent()
+
+		// Test: currentDML.commitTs=0 (empty), newCommitTs=102
+		result := merger.canInterrupt(102, currentBatchDML)
+		require.True(t, result, "Should be able to interrupt when currentBatchDML is empty")
 	})
 }

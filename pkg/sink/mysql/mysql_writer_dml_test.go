@@ -648,3 +648,70 @@ func newDMLEvent(_ *testing.T, commitTs, replicatingTs, rowCount uint64) *common
 		Length:        int32(rowCount),
 	}
 }
+
+func TestGenerateBatchSQLWithDifferentTableVersion(t *testing.T) {
+	writer, _, _ := newTestMysqlWriter(t)
+	defer writer.db.Close()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	// Step 1: Create table with 2 columns
+	createTableSQL := "create table t (id int primary key, name varchar(32), age int);"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	writer.cfg.MaxTxnRow = 10
+	writer.cfg.SafeMode = false
+
+	// Step 2: Create 2 insert events with 3 columns
+	dmlInsertEvent1 := helper.DML2Event("test", "t", "insert into t values (1, 'test1', 20)")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 1")
+	dmlInsertEvent2 := helper.DML2Event("test", "t", "insert into t values (2, 'test2', 25)")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 2")
+	// set table info version
+	dmlInsertEvent1.TableInfoVersion = job.BinlogInfo.FinishedTS
+	dmlInsertEvent2.TableInfoVersion = job.BinlogInfo.FinishedTS
+
+	// tableInfo1 := dmlInsertEvent1.TableInfo
+
+	// rawKvs := helper.DML2RawKv(job.BinlogInfo.TableInfo.ID, job.BinlogInfo.FinishedTS, "test", "t", "insert into t values (20, 'testRawKV', 20)", "insert into t values (21, 'testRawKV2', 21)")
+
+	// Step 3: Drop the age column
+	dropColumnSQL := "alter table t drop column age;"
+	dropJob := helper.DDL2Job(dropColumnSQL)
+	require.NotNil(t, dropJob)
+
+	// Step 4: Create 2 more insert events with 2 columns (after drop)
+	dmlInsertEvent3 := helper.DML2Event("test", "t", "insert into t values (3, 'test3')")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 3")
+	dmlInsertEvent4 := helper.DML2Event("test", "t", "insert into t values (4, 'test4')")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 4")
+	// set table info version
+	dmlInsertEvent3.TableInfoVersion = dropJob.BinlogInfo.FinishedTS
+	dmlInsertEvent4.TableInfoVersion = dropJob.BinlogInfo.FinishedTS
+
+	// chink1 := chunk.NewChunkWithCapacity(tableInfo1.GetFieldSlice(), 1)
+
+	// Step 5: Try to put all 4 events in one group and call generateBatchSQL
+	// This should potentially cause a panic due to different table versions
+	events := []*commonEvent.DMLEvent{dmlInsertEvent1, dmlInsertEvent2, dmlInsertEvent3, dmlInsertEvent4}
+
+	// This should return an error instead of panic since we add table version check
+	dmls, err := writer.prepareDMLs(events)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "events in the same group have different table versions")
+	require.Nil(t, dmls)
+
+	events1 := []*commonEvent.DMLEvent{dmlInsertEvent1, dmlInsertEvent2}
+	events2 := []*commonEvent.DMLEvent{dmlInsertEvent3, dmlInsertEvent4}
+	// This call is ok since we have grouped the events by table version
+	dmls, err = writer.prepareDMLs(events1)
+	require.NoError(t, err)
+	require.NotNil(t, dmls)
+
+	dmls, err = writer.prepareDMLs(events2)
+	require.NoError(t, err)
+	require.NotNil(t, dmls)
+}

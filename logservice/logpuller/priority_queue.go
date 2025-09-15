@@ -123,5 +123,4 @@ func (pq *PriorityQueue) Close() {
 	for pq.Len() > 0 {
 		pq.TryPop()
 	}
-	close(pq.signal)
 }
