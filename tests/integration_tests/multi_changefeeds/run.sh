@@ -55,7 +55,9 @@ function run() {
 	# Start data writing in background
 	echo "Starting data writing process..."
 	(
-		for round in $(seq 1 500000000000); do
+		round=0
+		while true; do
+			((round++))
 			for i in $(seq 1 $CHANGEFEED_COUNT); do
 				# Insert data into each table
 				run_sql "INSERT INTO test$i.t$i (data) VALUES ('round_${round}_data_$i'), ('round_${round}_extra_$i')" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
