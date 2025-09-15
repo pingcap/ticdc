@@ -23,6 +23,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	canal "github.com/pingcap/tiflow/proto/canal"
+	timodel "githud.com/pingcap/tidb/pkg/meta/model"
+	"githud.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -156,4 +158,19 @@ func (d *txnDecoder) NextResolvedEvent() uint64 {
 // NextDDLEvent implements the Decoder interface
 func (d *txnDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
+}
+
+func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
+	tableInfo := new(timodel.TableInfo)
+	tableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableInfo.ID)
+	tableInfo.Name = ast.NewCIStr(tableName)
+
+	columns := newTiColumns(msg)
+	tableInfo.Columns = columns
+	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
+	tableInfo.PKIsHandle = len(tableInfo.Indices) != 0
+	return commonType.NewTableInfo4Decoder(schemaName, tableInfo)
 }
