@@ -1,20 +1,29 @@
-# diff config
-check-thread = 4
+# diff Configuration.
 
-[[check-configs]]
-# upstream
-host = "127.0.0.1"
-port = 4000
-user = "root"
-password = ""
-# downstream
-down-host = "127.0.0.1"
-down-port = 3306
-down-user = "root"
-down-password = ""
+check-thread-count = 4
 
-# ignore check table
-ignore-tables = ["test.ignore1"]
+export-fix-sql = true
 
-# use these tables to do diff
-tables = ["split_region.test1", "split_region.test2"]
+check-struct-only = false
+
+[task]
+    output-dir = "/tmp/tidb_cdc_test/split_table_check/sync_diff/output"
+
+    source-instances = ["mysql1"]
+
+    target-instance = "tidb0"
+
+    target-check-tables = ["split_region.*"]
+
+[data-sources]
+[data-sources.mysql1]
+    host = "127.0.0.1"
+    port = 4000
+    user = "root"
+    password = ""
+
+[data-sources.tidb0]
+    host = "127.0.0.1"
+    port = 3306
+    user = "root"
+    password = ""
