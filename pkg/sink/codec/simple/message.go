@@ -16,7 +16,6 @@ package simple
 import (
 	"encoding/base64"
 	"fmt"
-	"sort"
 	"strconv"
 	"time"
 
@@ -216,10 +215,6 @@ func newTableSchema(tableInfo *commonType.TableInfo) *TableSchema {
 			indexes = append(indexes, index)
 		}
 	}
-
-	sort.SliceStable(colInfos, func(i, j int) bool {
-		return colInfos[i].ID < colInfos[j].ID
-	})
 
 	columns := make([]*columnSchema, 0, len(colInfos))
 	for _, col := range colInfos {
