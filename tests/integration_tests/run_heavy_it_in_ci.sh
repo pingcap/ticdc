@@ -52,7 +52,7 @@ mysql_groups=(
 	'resolve_lock merge_table drop_many_tables'
 	# G10
 	# 'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
-	''
+	'multi_changefeeds'
 	# G11
 	'ddl_reentrant force_replicate_table'
 	# G12
@@ -113,7 +113,7 @@ pulsar_groups=(
 	# G11
 	'ddl_with_random_move_table'
 	# G12
-	'fail_over region_merge'
+	'fail_over region_merge multi_changefeeds'
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
@@ -150,7 +150,7 @@ storage_groups=(
 	# G12
 	'ddl_with_random_move_table'
 	# G13
-	'fail_over region_merge'
+	'fail_over region_merge multi_changefeeds'
 	# G14
 	'fail_over_ddl_mix'
 	# G15
