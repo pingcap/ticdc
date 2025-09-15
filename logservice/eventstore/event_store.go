@@ -865,8 +865,7 @@ func (e *eventStore) updateMetricsOnce() {
 	}
 	e.dispatcherMeta.RUnlock()
 	if unintializedStatCount > 0 {
-		log.Info("found uninitialized subscriptions",
-			zap.Int("count", unintializedStatCount))
+		log.Info("found uninitialized subscriptions", zap.Int("count", unintializedStatCount))
 	}
 	if minResolvedTs == 0 {
 		metrics.EventStoreResolvedTsLagGauge.Set(0)
