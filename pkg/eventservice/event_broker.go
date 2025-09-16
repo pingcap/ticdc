@@ -463,25 +463,22 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 }
 
 func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
-	if task.isHandshaked.Load() {
+	if task.isHandshaked() {
 		return
 	}
-	if !task.isHandshaked.CompareAndSwap(false, true) {
+
+	if !task.setHandshaked() {
 		log.Panic("should not happen: sendHandshakeIfNeed should not be called concurrently")
 		return
 	}
-	// Always reset the seq of the dispatcher to 0 before sending a handshake event.
-	task.seq.Store(0)
+
 	remoteID := node.ID(task.info.GetServerID())
-	event := event.NewHandshakeEvent(
-		task.id,
-		task.startTs,
-		task.seq.Add(1),
-		task.epoch,
-		task.startTableInfo)
-	log.Debug("send handshake event to dispatcher",
-		zap.Any("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-		zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
+	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
+	log.Info("send handshake event to dispatcher",
+		zap.Stringer("dispatcherID", task.id),
+		zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
+		zap.Uint64("commitTs", event.GetCommitTs()),
+		zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 	updateMetricEventServiceSendCommandCount(task.info.GetMode())
@@ -570,7 +567,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
 	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
-		log.Debug("scan rate limit exceeded", zap.Stringer("dispatcher", task.id), zap.Int64("lastScanBytes", task.lastScanBytes.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
+		log.Debug("scan rate limit exceeded",
+			zap.Stringer("dispatcher", task.id),
+			zap.Int64("lastScanBytes", task.lastScanBytes.Load()),
+			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
 		return
 	}
 
@@ -810,7 +810,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 	ticker := time.NewTicker(tickInterval)
 	log.Info("update dispatcher send ts goroutine is started")
 	isInactiveDispatcher := func(d *dispatcherStat) bool {
-		return d.isHandshaked.Load() && time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
+		return d.isHandshaked() && time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
 	}
 	for {
 		select {
@@ -1051,23 +1051,12 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		return nil
 	}
 
-	// 1. Mark the old dispatcher as removed.
-	// This will prevent any new scan tasks from being created for the old dispatcher
-	// because onNotify will check this flag.
-	// Note: Must set the isReadyReceivingData to false before reset the dispatcher.
-	// Otherwise, the scan task goroutine will not return before reset the dispatcher.
-	oldStat.isReadyReceivingData.Store(false)
+	// Mark the old dispatcher as removed.
+	// No need to worry that the old dispatcher is still scanning,
+	// because its data will be filtered by event collector because of stale epoch.
 	oldStat.isRemoved.Store(true)
 
-	// 2. Wait for any ongoing scan task of the old dispatcher to complete.
-	for {
-		if !oldStat.isTaskScanning.Load() {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// 3. Create a new dispatcherStat and replace the old one.
+	// Create a new dispatcherStat and replace the old one.
 	// The new dispatcherStat will be used for all future operations.
 	changefeedID := dispatcherInfo.GetChangefeedID()
 	span := dispatcherInfo.GetTableSpan()
@@ -1104,6 +1093,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		if oldStat.epoch >= dispatcherInfo.GetEpoch() {
 			return nil
 		}
+		oldStat.isRemoved.Store(true)
 	}
 
 	log.Info("reset dispatcher",

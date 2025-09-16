@@ -58,6 +58,10 @@ type dispatcherStat struct {
 	// The epoch of the dispatcher.
 	// It should not be changed after the dispatcher is created.
 	epoch uint64
+	// The seq of the events that have been sent to the downstream dispatcher.
+	// It starts from 1, and increase by 1 for each event.
+	// If the dispatcher is reset, the seq should be set to 1.
+	seq atomic.Uint64
 	// syncpoint related
 	enableSyncPoint   bool
 	nextSyncPoint     atomic.Uint64
@@ -100,11 +104,6 @@ type dispatcherStat struct {
 	lastScannedCommitTs atomic.Uint64
 	lastScannedStartTs  atomic.Uint64
 
-	// The seq of the events that have been sent to the downstream dispatcher.
-	// It starts from 1, and increase by 1 for each event.
-	// If the dispatcher is reset, the seq should be set to 1.
-	seq atomic.Uint64
-
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// it is set to true in the following two cases:
 	//   1) the dispatcher is removed
@@ -120,11 +119,6 @@ type dispatcherStat struct {
 	// It will be set to false, after it receives the pause event from the dispatcher.
 	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
 	isReadyReceivingData atomic.Bool
-
-	// isHandshaked is used to indicate whether the dispatcher is ready to send data.
-	// It will be set to true, after it sends the handshake event to the dispatcher.
-	// It will be set to false, after it receives the reset event from the dispatcher.
-	isHandshaked atomic.Bool
 
 	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
 	lastReceivedHeartbeatTime atomic.Int64
@@ -200,6 +194,14 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 	a.lastSentResolvedTsTime.Store(src.lastSentResolvedTsTime.Load())
 }
 
+func (a *dispatcherStat) isHandshaked() bool {
+	return a.seq.Load() > 0
+}
+
+func (a *dispatcherStat) setHandshaked() bool {
+	return a.seq.CompareAndSwap(0, 1)
+}
+
 func (a *dispatcherStat) getEventSenderState() pevent.EventSenderState {
 	if a.IsReadyRecevingData() {
 		return pevent.EventSenderStateNormal
@@ -208,12 +210,8 @@ func (a *dispatcherStat) getEventSenderState() pevent.EventSenderState {
 }
 
 func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
-	// Only update the sentResolvedTs when the dispatcher is handshaked.
-	if a.isHandshaked.Load() {
-		a.sentResolvedTs.Store(resolvedTs)
-		a.lastSentResolvedTsTime.Store(time.Now())
-	}
-
+	a.sentResolvedTs.Store(resolvedTs)
+	a.lastSentResolvedTsTime.Store(time.Now())
 	a.updateScanRange(resolvedTs, 0)
 }
 

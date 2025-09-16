@@ -245,7 +245,8 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 			time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())-
 				time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())),
 		zap.Bool("isPaused", !snapshot.slowestDispatcher.IsReadyRecevingData()),
-		zap.Bool("isHandshaked", snapshot.slowestDispatcher.isHandshaked.Load()),
+		zap.Uint64("epoch", snapshot.slowestDispatcher.epoch),
+		zap.Uint64("seq", snapshot.slowestDispatcher.seq.Load()),
 		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
 	)
 }
