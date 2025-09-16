@@ -24,7 +24,6 @@ import (
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/api"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
@@ -107,7 +106,7 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		if err == nil {
 			return nil
 		}
-		if apperror.IsAccessDeniedError(err) {
+		if errors.IsAccessDeniedError(err) {
 			// For access denied error, we can return immediately.
 			// For other errors, we need to continue to verify the next tidb instance.
 			return errors.ErrUnauthorized.GenWithStackByArgs(username, err.Error())

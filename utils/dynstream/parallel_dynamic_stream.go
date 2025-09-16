@@ -22,7 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/log"
-	. "github.com/pingcap/ticdc/pkg/apperror"
+	. "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // Use a hasher to select target stream for the path.

@@ -16,7 +16,7 @@ package messaging
 import (
 	"sync/atomic"
 
-	. "github.com/pingcap/ticdc/pkg/apperror"
+	. "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/prometheus/client_golang/prometheus"

@@ -253,6 +253,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	dispatcher := broker.getDispatcher(dispInfo.GetID())
 	require.NotNil(t, dispatcher)
 	require.Equal(t, dispatcher.id, dispInfo.GetID())
+	dispatcher.isHandshaked.Store(true)
 
 	// Create a heartbeat with progress for the existing dispatcher
 	heartbeat := &DispatcherHeartBeatWithServerID{

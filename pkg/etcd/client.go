@@ -23,8 +23,8 @@ import (
 	"github.com/benbjohnson/clock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	pkgerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -356,7 +356,7 @@ func isRetryableError(rpcName string) retry.IsRetryable {
 				return false
 			}
 		case EtcdTxn:
-			return apperror.IsRetryableEtcdError(err)
+			return pkgerror.IsRetryableEtcdError(err)
 		default:
 			// For other types of operation, we retry directly without handling errors
 		}
