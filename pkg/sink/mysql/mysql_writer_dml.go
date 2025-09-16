@@ -687,11 +687,6 @@ func (w *Writer) multiStmtExecute(
 	// The txn can ensure the atomicity of the transaction.
 	_, err = conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
 	if err != nil {
-		// Only log the error if it's not a duplicate entry error to avoid the log flood
-		if !w.checkIsDuplicateEntryError(err) {
-			log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", multiStmtSQLWithTxn), zap.Any("multiStmtArgs", multiStmtArgs))
-		}
-
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
 	}
 	return nil
