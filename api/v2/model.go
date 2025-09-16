@@ -515,6 +515,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			RegionCountPerSpan:         c.Scheduler.RegionCountPerSpan,
 			WriteKeyThreshold:          c.Scheduler.WriteKeyThreshold,
 			SchedulingTaskCountPerNode: c.Scheduler.SchedulingTaskCountPerNode,
+			EnableSplittableCheck:      c.Scheduler.EnableSplittableCheck,
 		}
 	}
 	if c.Integrity != nil {
@@ -840,6 +841,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			RegionCountPerSpan:         cloned.Scheduler.RegionCountPerSpan,
 			WriteKeyThreshold:          cloned.Scheduler.WriteKeyThreshold,
 			SchedulingTaskCountPerNode: cloned.Scheduler.SchedulingTaskCountPerNode,
+			EnableSplittableCheck:      cloned.Scheduler.EnableSplittableCheck,
 		}
 	}
 
@@ -1053,6 +1055,11 @@ type ChangefeedSchedulerConfig struct {
 	WriteKeyThreshold int `toml:"write_key_threshold" json:"write_key_threshold"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
 	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
+	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
+	// If true, only tables with primary key and no unique key can be split.
+	// If false, all tables can be split without checking.
+	// For MySQL downstream, this is always set to true for data consistency.
+	EnableSplittableCheck bool `toml:"enable-splittable-check" json:"enable-splittable-check"`
 }
 
 // IntegrityConfig is the config for integrity check
