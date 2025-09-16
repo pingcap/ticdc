@@ -30,10 +30,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	reportMaintainerStatusInterval = time.Millisecond * 1000
-)
-
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
 // start a Manager when the ticdc server is startup. It responsible for:
 // 1. Handle bootstrap command from coordinator and report all changefeed maintainer status.
@@ -49,7 +45,7 @@ type Manager struct {
 	coordinatorID      node.ID
 	coordinatorVersion int64
 
-	selfNode *node.Info
+	nodeInfo *node.Info
 
 	// msgCh is used to cache messages from coordinator
 	msgCh chan *messaging.TargetMessage
@@ -59,7 +55,8 @@ type Manager struct {
 
 // NewMaintainerManager create a changefeed maintainer manager instance
 // and register message handler to message center
-func NewMaintainerManager(selfNode *node.Info,
+func NewMaintainerManager(
+	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
@@ -67,7 +64,7 @@ func NewMaintainerManager(selfNode *node.Info,
 		mc:            mc,
 		conf:          conf,
 		maintainers:   sync.Map{},
-		selfNode:      selfNode,
+		nodeInfo:      nodeInfo,
 		msgCh:         make(chan *messaging.TargetMessage, 1024),
 		taskScheduler: threadpool.NewThreadPoolDefault(),
 	}
@@ -122,8 +119,7 @@ func (m *Manager) Name() string {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	reportMaintainerStatusInterval := time.Millisecond * 200
-	ticker := time.NewTicker(reportMaintainerStatusInterval)
+	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
 	for {
 		select {
@@ -164,7 +160,7 @@ func (m *Manager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
 	err := m.mc.SendCommand(target)
 	if err != nil {
 		log.Warn("send command failed",
-			zap.Stringer("from", m.selfNode.ID),
+			zap.Stringer("from", m.nodeInfo.ID),
 			zap.Stringer("target", target.To),
 			zap.Error(err))
 	}
@@ -223,7 +219,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Uint64("checkpointTs", req.CheckpointTs),
 			zap.Any("info", info))
 	}
-	maintainer := NewMaintainer(cfID, m.conf, info, m.selfNode, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed)
+	maintainer := NewMaintainer(cfID, m.conf, info, m.nodeInfo, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed)
 	m.maintainers.Store(cfID, maintainer)
 	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	return nil
@@ -246,7 +242,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		}
 		// it's cascade remove, we should remove the dispatcher from all node
 		// here we create a maintainer to run the remove the dispatcher logic
-		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler)
+		cf = NewMaintainerForRemove(cfID, m.conf, m.nodeInfo, m.taskScheduler)
 		m.maintainers.Store(cfID, cf)
 	}
 	cf.(*Maintainer).pushEvent(&Event{
@@ -287,7 +283,7 @@ func (m *Manager) sendHeartbeat() {
 		m.maintainers.Range(func(key, value interface{}) bool {
 			cfMaintainer := value.(*Maintainer)
 			if cfMaintainer.statusChanged.Load() ||
-				time.Since(cfMaintainer.lastReportTime) > reportMaintainerStatusInterval {
+				time.Since(cfMaintainer.lastReportTime) > time.Second {
 				mStatus := cfMaintainer.GetMaintainerStatus()
 				response.Statuses = append(response.Statuses, mStatus)
 				cfMaintainer.statusChanged.Store(false)

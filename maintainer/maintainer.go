@@ -320,10 +320,6 @@ func (m *Maintainer) Close() {
 	m.cancel()
 	m.cleanupMetrics()
 	m.controller.Stop()
-	log.Info("changefeed maintainer closed",
-		zap.String("changefeed", m.id.String()),
-		zap.Bool("removed", m.removed.Load()),
-		zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs))
 }
 
 func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
@@ -387,15 +383,19 @@ func (m *Maintainer) initialize() error {
 }
 
 func (m *Maintainer) cleanupMetrics() {
-	metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.SpanCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.TableCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Namespace(), m.id.Name())
+	if m.removed.Load() {
+		namespace := m.id.Namespace()
+		id := m.id.Name()
+		metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(namespace, id)
+		metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(namespace, id)
+		metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(namespace, id)
+		metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(namespace, id)
+		metrics.ChangefeedStatusGauge.DeleteLabelValues(namespace, id)
+		metrics.ScheduleTaskGauge.DeleteLabelValues(namespace, id)
+		metrics.SpanCountGauge.DeleteLabelValues(namespace, id)
+		metrics.TableCountGauge.DeleteLabelValues(namespace, id)
+		metrics.MaintainerHandleEventDuration.DeleteLabelValues(namespace, id)
+	}
 }
 
 func (m *Maintainer) onInit() bool {
@@ -449,12 +449,11 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	m.changefeedRemoved.Store(changefeedRemoved)
 	closed := m.tryCloseChangefeed()
 	if closed {
-		log.Info("changefeed maintainer closed",
-			zap.Stringer("changefeed", m.id),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs))
 		m.removed.Store(true)
 		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
 		metrics.MaintainerGauge.WithLabelValues(m.id.Namespace(), m.id.Name()).Dec()
+		log.Info("changefeed maintainer closed", zap.Stringer("changefeed", m.id),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs), zap.Bool("removed", m.removed.Load()))
 	}
 }
 
