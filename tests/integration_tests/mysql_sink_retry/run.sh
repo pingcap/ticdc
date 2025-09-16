@@ -48,6 +48,8 @@ function run() {
 	check_table_exists "sink_retry.finish_mark_2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
+	check_logs_contains $WORK_DIR "Meet Duplicate Entry Error, retry the dmls in safemode"
+
 	cleanup_process $CDC_BINARY
 }
 
