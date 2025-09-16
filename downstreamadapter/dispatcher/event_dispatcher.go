@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -97,7 +96,7 @@ func (d *EventDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	// when the event dispatcher manager have table trigger event dispatcher
 	if !d.tableSpan.Equal(common.DDLSpan) {
 		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
-		return false, apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+		return false, errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
 	}
 

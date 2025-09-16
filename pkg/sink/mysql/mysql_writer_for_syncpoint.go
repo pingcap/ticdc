@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -107,7 +106,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	query = fmt.Sprintf("set global tidb_external_ts = %s", secondaryTs)
 	_, err = tx.Exec(query)
 	if err != nil {
-		if apperror.IsSyncPointIgnoreError(err) {
+		if cerror.IsSyncPointIgnoreError(err) {
 			// TODO(dongmen): to confirm if we need to log this error.
 			log.Warn("set global external ts failed, ignore this error", zap.Error(err))
 		} else {

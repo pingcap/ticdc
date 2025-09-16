@@ -22,11 +22,11 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -771,7 +771,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		// Send the message to the dispatcher.
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
-			_, ok := err.(apperror.AppError)
+			_, ok := err.(errors.AppError)
 			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Stringer("tMsg", tMsg), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -304,7 +303,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	log.Info("query ddl ts table", zap.String("query", query))
 	rows, err := w.db.Query(query)
 	if err != nil {
-		if apperror.IsTableNotExistsErr(err) {
+		if errors.IsTableNotExistsErr(err) {
 			// If this table is not existed, this means the table is first being synced
 			log.Info("ddl ts table is not found",
 				zap.String("namespace", w.ChangefeedID.Namespace()),
@@ -479,7 +478,7 @@ func (w *Writer) RemoveDDLTsItem() error {
 
 	_, err = tx.Exec(query)
 	if err != nil {
-		if apperror.IsTableNotExistsErr(err) {
+		if errors.IsTableNotExistsErr(err) {
 			// If this table is not existed, this means the changefeed has not table, so we just return nil.
 			log.Info("ddl ts table is not found when RemoveDDLTsItem",
 				zap.String("namespace", w.ChangefeedID.Namespace()),
