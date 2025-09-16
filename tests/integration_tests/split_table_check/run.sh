@@ -35,7 +35,6 @@ function prepare() {
 	# Round1-specific resources are prepared by helper functions later
 }
 
-
 build_sink_and_create_changefeed() {
 	# args: changefeed_id, config_path, topic_prefix
 	local cf_id=$1
@@ -44,21 +43,21 @@ build_sink_and_create_changefeed() {
 
 	TOPIC_NAME="${topic_prefix}-$RANDOM"
 	case $SINK_TYPE in
-		kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-		storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
-		pulsar)
-			run_pulsar_cluster $WORK_DIR normal
-			SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
-			;;
-		*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
+	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
+	storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
+	pulsar)
+		run_pulsar_cluster $WORK_DIR normal
+		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
+		;;
+	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
 	sleep 10
 	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "$cf_id" --config="$cfg_path"
 
 	case $SINK_TYPE in
-		kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-		storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-		pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
 	esac
 }
 
@@ -83,25 +82,25 @@ run_problematic_and_assert() {
 		ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "failed" "splitable" ""
 	else
 		case $SINK_TYPE in
-			mysql)
-				ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "failed" "splitable" ""
-				;;
-			*)
-				ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "normal" "null" ""
-				;;
+		mysql)
+			ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "failed" "splitable" ""
+			;;
+		*)
+			ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "normal" "null" ""
+			;;
 		esac
 	fi
 }
 
 round_with_enable_splittable_check() {
 	prepare
-	
+
 	build_sink_and_create_changefeed "test" "$CUR/conf/changefeed.toml" "ticdc-split-table-check"
 	run_normal_ops_and_check "test"
 	run_problematic_and_assert "test" "enforce"
 
 	echo "SUCCESS: Changefeed correctly reported splitable violation error"
-	
+
 	cleanup_process $CDC_BINARY
 }
 
