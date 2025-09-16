@@ -29,9 +29,9 @@ type RedoLogType int
 // more info https://github.com/tinylib/msgp/issues/158, https://github.com/tinylib/msgp/issues/149
 // so define a RedoColumnValue, RedoDDLEvent instead of using the Column, DDLEvent
 type RedoLog struct {
-	RedoRow RedoDMLEvent `msg:"row"`
-	RedoDDL RedoDDLEvent `msg:"ddl"`
-	Type    RedoLogType  `msg:"type"`
+	RedoRow *RedoDMLEvent `msg:"row"`
+	RedoDDL *RedoDDLEvent `msg:"ddl"`
+	Type    RedoLogType   `msg:"type"`
 }
 
 // RedoDMLEvent represents the DML event used in RedoLog
@@ -112,7 +112,7 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 	startTs := r.StartTs
 	commitTs := r.CommitTs
 	redoLog := &RedoLog{
-		RedoRow: RedoDMLEvent{
+		RedoRow: &RedoDMLEvent{
 			Row: &DMLEventInRedoLog{
 				StartTs:      startTs,
 				CommitTs:     commitTs,
@@ -185,7 +185,7 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
 	redoLog := &RedoLog{
-		RedoDDL: RedoDDLEvent{
+		RedoDDL: &RedoDDLEvent{
 			DDL: &DDLEventInRedoLog{
 				StartTs:  d.GetStartTs(),
 				CommitTs: d.GetCommitTs(),
