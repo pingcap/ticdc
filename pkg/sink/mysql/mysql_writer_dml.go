@@ -588,7 +588,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
 			log.Warn("inject MySQLSinkTxnRandomError")
 			err := errors.Trace(driver.ErrBadConn)
-			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
@@ -599,13 +599,13 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
 				Number: uint16(mysql.ErrDupEntry),
 			})
-			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
 		err := w.statistics.RecordBatchExecution(tryExec)
 		if err != nil {
-			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			return errors.Trace(err)
 		}
 		return nil
@@ -687,13 +687,17 @@ func (w *Writer) multiStmtExecute(
 	// The txn can ensure the atomicity of the transaction.
 	_, err = conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
 	if err != nil {
-		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", multiStmtSQLWithTxn), zap.Any("multiStmtArgs", multiStmtArgs))
+		// Only log the error if it's not a duplicate entry error to avoid the log flood
+		if !w.checkIsDuplicateEntryError(err) {
+			log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", multiStmtSQLWithTxn), zap.Any("multiStmtArgs", multiStmtArgs))
+		}
+
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
 	}
 	return nil
 }
 
-func logDMLTxnErr(
+func (w *Writer) logDMLTxnErr(
 	err error, start time.Time, changefeed string,
 	dmls *preparedDMLs,
 ) error {
@@ -706,13 +710,15 @@ func logDMLTxnErr(
 			zap.String("dmls", dmls.String()),
 			zap.Error(err))
 	} else {
-		log.Error("execute DMLs with error, can not retry",
-			zap.String("changefeed", changefeed),
-			zap.Duration("duration", time.Since(start)),
-			zap.Any("tsPairs", dmls.tsPairs),
-			zap.Int("count", dmls.rowCount),
-			zap.String("dmls", dmls.String()),
-			zap.Error(err))
+		if !w.checkIsDuplicateEntryError(err) {
+			log.Error("execute DMLs with error, can not retry",
+				zap.String("changefeed", changefeed),
+				zap.Duration("duration", time.Since(start)),
+				zap.Any("tsPairs", dmls.tsPairs),
+				zap.Int("count", dmls.rowCount),
+				zap.String("dmls", dmls.String()),
+				zap.Error(err))
+		}
 	}
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", dmls.String()))
 }

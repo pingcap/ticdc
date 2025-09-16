@@ -200,16 +200,13 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 	}
 
 	if !w.cfg.DryRun {
-		log.Info("fizz in test", zap.Any("dmls", dmls))
 		err = w.execDMLWithMaxRetries(dmls)
 		// If the error is a duplicate entry error, we will retry the dmls.
 		if w.checkIsDuplicateEntryError(err) {
-			log.Info("fizz in test", zap.Error(err))
-
+			log.Info("Meet Duplicate Entry Error, retry the dmls in safemode", zap.Error(err))
 			for _, event := range events {
 				event.Rewind()
 			}
-
 			dmls, err = w.prepareDMLs(events)
 			if err != nil {
 				return errors.Trace(err)
@@ -241,9 +238,10 @@ func (w *Writer) checkIsDuplicateEntryError(err error) bool {
 	}
 	if errors.Cause(err) == cerror.ErrMySQLDuplicateEntry ||
 		strings.Contains(err.Error(), "Duplicate entry") {
-
-		w.isInErrorCausedSafeMode = true
-		w.lastErrorCausedSafeModeTime = time.Now()
+		if !w.isInErrorCausedSafeMode {
+			w.isInErrorCausedSafeMode = true
+			w.lastErrorCausedSafeModeTime = time.Now()
+		}
 		return true
 	}
 	return false
