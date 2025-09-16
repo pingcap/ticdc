@@ -77,7 +77,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 		firstTableVersion := eventsInGroup[0].TableInfoVersion
 		firstTableInfoUpdateTs := tableInfo.GetUpdateTS()
 		for _, event := range eventsInGroup {
-			if event.TableInfoVersion != firstTableVersion || event.TableInfo.GetUpdateTS() != firstTableInfoUpdateTs {
+			if event.TableInfoVersion != firstTableVersion ||
+				event.TableInfo.GetUpdateTS() != firstTableInfoUpdateTs {
 				log.Error("events in the same group have different table versions",
 					zap.Uint64("firstTableInfoUpdateTs", firstTableInfoUpdateTs),
 					zap.Uint64("firstTableVersion", firstTableVersion),
@@ -88,7 +89,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 			}
 		}
 
-		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg) {
+		if !w.shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup) {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else {
 			queryList, argsList = w.generateBatchSQL(eventsInGroup)
@@ -111,8 +112,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 // 3. The table doesn't have virtual columns
 // 4. There's more than one row in the group
 // 5. All events have the same safe mode status
-func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent, cfg *Config) bool {
-	if !cfg.BatchDMLEnable {
+func (w *Writer) shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
+	if !w.cfg.BatchDMLEnable {
 		return false
 	}
 
@@ -122,40 +123,6 @@ func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DM
 
 	if len(events) == 1 && events[0].Len() == 1 {
 		return false
-	}
-
-	return allRowInSameSafeMode(cfg.SafeMode, events)
-}
-
-// allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.
-// Safe mode is either globally enabled via the safemode parameter, or determined per event
-// by comparing CommitTs and ReplicatingTs.
-//
-// Parameters:
-//   - safemode: If true, global safe mode is enabled and the function returns true immediately
-//   - events: A slice of DMLEvents to check for consistent safe mode status
-//
-// Returns:
-//
-//	true if either:
-//	- global safe mode is enabled (safemode=true), or
-//	- all events have the same safe mode status (all events' CommitTs > ReplicatingTs, or all ≤)
-//	false if events have inconsistent safe mode status
-func allRowInSameSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
-	if safemode {
-		return true
-	}
-
-	if len(events) == 0 {
-		return false
-	}
-
-	firstSafeMode := events[0].CommitTs > events[0].ReplicatingTs
-	for _, event := range events {
-		currentSafeMode := event.CommitTs > event.ReplicatingTs
-		if currentSafeMode != firstSafeMode {
-			return false
-		}
 	}
 
 	return true
@@ -192,25 +159,23 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 	argsList := make([][]interface{}, 0)
 
 	batchSQL := func(events []*commonEvent.DMLEvent) {
-		// Only when SafeMode == false and commitTs is larger than replicatingTs,
-		// we think the data status is safe, we can use insert instead of replica sql to avoid the conflict.
-		inDataSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
+		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode
 
 		if len(events) == 1 {
 			// only one event, we don't need to do batch
-			sql, args := w.generateSQLForSingleEvent(events[0], inDataSafeMode)
+			sql, args := w.generateSQLForSingleEvent(events[0], inSafeMode)
 			sqlList = append(sqlList, sql...)
 			argsList = append(argsList, args...)
 			return
 		}
 
-		if inDataSafeMode {
+		if inSafeMode {
+			// Insert will translate to Replace
 			sql, args := w.generateBatchSQLInSafeMode(events)
 			sqlList = append(sqlList, sql...)
 			argsList = append(argsList, args...)
 		} else {
-			// Insert will translate to Replace
-			sql, args := w.generateBatchSQLInUnsafeMode(events)
+			sql, args := w.generateBatchSQLInUnSafeMode(events)
 			sqlList = append(sqlList, sql...)
 			argsList = append(argsList, args...)
 		}
@@ -248,7 +213,7 @@ func (w *Writer) generateSQLForSingleEvent(event *commonEvent.DMLEvent, inDataSa
 	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode)
 }
 
-func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	tableInfo := events[0].TableInfo
 	type RowChangeWithKeys struct {
 		RowChange  *commonEvent.RowChange
@@ -418,10 +383,10 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 	}
 
 	// Step 3. generate sqls based on finalRowLists
-	return w.batchSingleTxnDmls(finalRowLists, tableInfo, true)
+	return w.batchSingleTxnDmls(finalRowLists, tableInfo, false)
 }
 
-func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	tableInfo := events[0].TableInfo
 
 	// step 1. divide update row to delete row and insert row, and set into map based on the key hash
@@ -511,7 +476,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		rowsList = append(rowsList, rowChanges[len(rowChanges)-1])
 	}
 	// step 3. generate sqls based on rowsList
-	return w.batchSingleTxnDmls(rowsList, tableInfo, false)
+	return w.batchSingleTxnDmls(rowsList, tableInfo, true)
 }
 
 func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
@@ -533,8 +498,9 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 }
 
 func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	inSafeMode := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
-	log.Debug("inSafeMode",
+	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode
+
+	log.Info("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
 		zap.Uint64("firstRowCommitTs", event.CommitTs),
 		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
@@ -556,14 +522,14 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		switch row.RowType {
 		case common.RowTypeUpdate:
 			if inSafeMode {
-				query, args = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
-			} else {
 				query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 				if query != "" {
 					queries = append(queries, query)
 					argsList = append(argsList, args)
 				}
 				query, args = buildInsert(event.TableInfo, row, inSafeMode)
+			} else {
+				query, args = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
 			}
 		case common.RowTypeDelete:
 			query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
@@ -751,10 +717,12 @@ func logDMLTxnErr(
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", dmls.String()))
 }
 
+// inSafeMode means we should use replace sql instead of insert sql to make sure there will not
+// be duplicate entry error.
 func (w *Writer) batchSingleTxnDmls(
 	rows []*commonEvent.RowChange,
 	tableInfo *common.TableInfo,
-	translateToInsert bool,
+	inSafeMode bool,
 ) (sqls []string, values [][]interface{}) {
 	insertRows, updateRows, deleteRows := w.groupRowsByType(rows, tableInfo)
 
@@ -792,14 +760,15 @@ func (w *Writer) batchSingleTxnDmls(
 	// handle insert
 	if len(insertRows) > 0 {
 		for _, rows := range insertRows {
-			if translateToInsert {
-				sql, value := sqlmodel.GenInsertSQL(sqlmodel.DMLInsert, rows...)
-				sqls = append(sqls, sql)
-				values = append(values, value)
-			} else {
+			if inSafeMode {
 				sql, value := sqlmodel.GenInsertSQL(sqlmodel.DMLReplace, rows...)
 				sqls = append(sqls, sql)
 				values = append(values, value)
+			} else {
+				sql, value := sqlmodel.GenInsertSQL(sqlmodel.DMLInsert, rows...)
+				sqls = append(sqls, sql)
+				values = append(values, value)
+
 			}
 		}
 	}

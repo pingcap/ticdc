@@ -53,9 +53,9 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 
 	// Build complete log content in a single string
 	var logBuilder strings.Builder
-	logBuilder.WriteString(fmt.Sprintf("=== PreparedDMLs Debug Info ===\n"))
+	logBuilder.WriteString("=== PreparedDMLs Debug Info ===\n")
 	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d\n", totalCount, d.rowCount))
-	logBuilder.WriteString(fmt.Sprintf("----------------------------------------\n"))
+	logBuilder.WriteString("----------------------------------------\n")
 
 	// Build SQL statements and arguments section
 	for i, sql := range d.sqls {
@@ -138,7 +138,7 @@ func (d *preparedDMLs) reset() {
 func buildInsert(
 	tableInfo *common.TableInfo,
 	row commonEvent.RowChange,
-	translateToInsert bool,
+	inSafeMode bool,
 ) (string, []interface{}) {
 	args := getArgs(&row.Row, tableInfo)
 	if len(args) == 0 {
@@ -146,10 +146,10 @@ func buildInsert(
 	}
 
 	var sql string
-	if translateToInsert {
-		sql = tableInfo.GetPreInsertSQL()
-	} else {
+	if inSafeMode {
 		sql = tableInfo.GetPreReplaceSQL()
+	} else {
+		sql = tableInfo.GetPreInsertSQL()
 	}
 
 	if sql == "" {
