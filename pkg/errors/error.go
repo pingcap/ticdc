@@ -14,6 +14,8 @@
 package errors
 
 import (
+	"fmt"
+
 	"github.com/pingcap/errors"
 )
 
@@ -23,6 +25,10 @@ var (
 	ErrChangeFeedNotExists = errors.Normalize(
 		"changefeed not exists, %s",
 		errors.RFCCodeText("CDC:ErrChangeFeedNotExists"),
+	)
+	ErrChangeFeedAlreadyExists = errors.Normalize(
+		"changefeed already exists, %s",
+		errors.RFCCodeText("CDC:ErrChangeFeedAlreadyExists"),
 	)
 	ErrEtcdAPIError = errors.Normalize(
 		"etcd api returns error",
@@ -363,6 +369,35 @@ var (
 		"can not found schema snapshot, ts: %d",
 		errors.RFCCodeText("CDC:ErrSchemaSnapshotNotFound"),
 	)
+	ErrSchemaStorageTableMiss = errors.Normalize(
+		"table %d not found",
+		errors.RFCCodeText("CDC:ErrSchemaStorageTableMiss"),
+	)
+	ErrSnapshotSchemaNotFound = errors.Normalize(
+		"schema %d not found in schema snapshot",
+		errors.RFCCodeText("CDC:ErrSnapshotSchemaNotFound"),
+	)
+	ErrSnapshotTableNotFound = errors.Normalize(
+		"table %d not found in schema snapshot",
+		errors.RFCCodeText("CDC:ErrSnapshotTableNotFound"),
+	)
+	ErrSnapshotSchemaExists = errors.Normalize(
+		"schema %s(%d) already exists",
+		errors.RFCCodeText("CDC:ErrSnapshotSchemaExists"),
+	)
+	ErrSnapshotTableExists = errors.Normalize(
+		"table %s.%s already exists",
+		errors.RFCCodeText("CDC:ErrSnapshotTableExists"),
+	)
+	ErrInvalidDDLJob = errors.Normalize(
+		"invalid ddl job(%d)",
+		errors.RFCCodeText("CDC:ErrInvalidDDLJob"),
+	)
+	ErrExchangePartition = errors.Normalize(
+		"exchange partition failed, %s",
+		errors.RFCCodeText("CDC:ErrExchangePartition"),
+	)
+
 	ErrCorruptedDataMutation = errors.Normalize(
 		"Changefeed %s.%s stopped due to corrupted data mutation received",
 		errors.RFCCodeText("CDC:ErrCorruptedDataMutation"))
@@ -403,6 +438,10 @@ var (
 	ErrAPIInvalidParam = errors.Normalize(
 		"invalid api parameter",
 		errors.RFCCodeText("CDC:ErrAPIInvalidParam"),
+	)
+	ErrAPIGetPDClientFailed = errors.Normalize(
+		"failed to get PDClient to connect PD, please recheck",
+		errors.RFCCodeText("CDC:ErrAPIGetPDClientFailed"),
 	)
 	ErrInternalServerError = errors.Normalize(
 		"internal server error",
@@ -555,6 +594,10 @@ var (
 		"invalid ignore event type: '%s'",
 		errors.RFCCodeText("CDC:ErrInvalidIgnoreEventType"),
 	)
+	ErrInvalidEventType = errors.Normalize(
+		"sink doesn't support this type of block event: '%s'",
+		errors.RFCCodeText("CDC:ErrInvalidEventType"),
+	)
 	ErrSyncRenameTableFailed = errors.Normalize(
 		"table's old name is not in filter rule, and its new name in filter rule "+
 			"table id '%d', ddl query: [%s], it's an unexpected behavior, "+
@@ -673,4 +716,152 @@ var (
 	ErrTCPServerClosed = errors.Normalize("The TCP server has been closed",
 		errors.RFCCodeText("CDC:ErrTCPServerClosed"),
 	)
+
+	// puller related errors
+	ErrAddRegionRequestRetryLimitExceeded = errors.Normalize(
+		"add region request retry limit exceeded",
+		errors.RFCCodeText("CDC:ErrAddRegionRequestRetryLimitExceeded"),
+	)
+
+	// Application specific errors from apperror package
+	ErrChangefeedRetryable = errors.Normalize(
+		"changefeed is in retryable state",
+		errors.RFCCodeText("CDC:ErrChangefeedRetryable"),
+	)
+	ErrChangefeedInitTableTriggerEventDispatcherFailed = errors.Normalize(
+		"failed to init table trigger event dispatcher",
+		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerEventDispatcherFailed"),
+	)
+	ErrDDLEventError = errors.Normalize(
+		"ddl event meets error",
+		errors.RFCCodeText("CDC:ErrDDLEventError"),
+	)
+	ErrTableIsNotFounded = errors.Normalize(
+		"table is not found",
+		errors.RFCCodeText("CDC:ErrTableIsNotFounded"),
+	)
+	ErrTableNotSupportMove = errors.Normalize(
+		"table is not supported to move",
+		errors.RFCCodeText("CDC:ErrTableNotSupportMove"),
+	)
+	ErrMaintainerNotFounded = errors.Normalize(
+		"maintainer is not found",
+		errors.RFCCodeText("CDC:ErrMaintainerNotFounded"),
+	)
+	ErrTimeout = errors.Normalize(
+		"timeout",
+		errors.RFCCodeText("CDC:ErrTimeout"),
+	)
+	ErrNodeIsNotFound = errors.Normalize(
+		"node is not found",
+		errors.RFCCodeText("CDC:ErrNodeIsNotFound"),
+	)
+	ErrOperatorIsNil = errors.Normalize(
+		"operator created failed",
+		errors.RFCCodeText("CDC:ErrOperatorIsNil"),
+	)
 )
+
+// ErrorType defines the type of application errors
+type ErrorType int
+
+const (
+	// ErrorTypeUnknown is the default error type.
+	ErrorTypeUnknown ErrorType = 0
+
+	ErrorTypeEpochMismatch  ErrorType = 1
+	ErrorTypeEpochSmaller   ErrorType = 2
+	ErrorTypeTaskIDMismatch ErrorType = 3
+
+	ErrorTypeInvalid    ErrorType = 101
+	ErrorTypeIncomplete ErrorType = 102
+	ErrorTypeDecodeData ErrorType = 103
+	ErrorTypeBufferFull ErrorType = 104
+	ErrorTypeDuplicate  ErrorType = 105
+	ErrorTypeNotExist   ErrorType = 106
+	ErrorTypeClosed     ErrorType = 107
+
+	ErrorTypeConnectionFailed     ErrorType = 201
+	ErrorTypeConnectionNotFound   ErrorType = 202
+	ErrorTypeMessageCongested     ErrorType = 204
+	ErrorTypeMessageReceiveFailed ErrorType = 205
+	ErrorTypeMessageSendFailed    ErrorType = 206
+	ErrorTypeTargetNotFound       ErrorType = 207
+	ErrorTypeInvalidMessage       ErrorType = 208
+	ErrorTypeTargetMismatch       ErrorType = 209
+
+	ErrorInvalidDDLEvent ErrorType = 301
+)
+
+func (t ErrorType) String() string {
+	switch t {
+	case ErrorTypeUnknown:
+		return "Unknown"
+	case ErrorTypeEpochMismatch:
+		return "EpochMismatch"
+	case ErrorTypeEpochSmaller:
+		return "EpochSmaller"
+	case ErrorTypeTaskIDMismatch:
+		return "TaskIDMismatch"
+	case ErrorTypeInvalid:
+		return "Invalid"
+	case ErrorTypeIncomplete:
+		return "Incomplete"
+	case ErrorTypeDecodeData:
+		return "DecodeData"
+	case ErrorTypeBufferFull:
+		return "BufferFull"
+	case ErrorTypeDuplicate:
+		return "Duplicate"
+	case ErrorTypeNotExist:
+		return "NotExist"
+	case ErrorTypeClosed:
+		return "Closed"
+	case ErrorTypeConnectionFailed:
+		return "ConnectionFailed"
+	case ErrorTypeConnectionNotFound:
+		return "ConnectionNotFound"
+	case ErrorTypeMessageCongested:
+		return "MessageCongested"
+	case ErrorTypeMessageReceiveFailed:
+		return "MessageReceiveFailed"
+	case ErrorTypeMessageSendFailed:
+		return "MessageSendFailed"
+	default:
+		return "Unknown"
+	}
+}
+
+// AppError represents an application-specific error
+type AppError struct {
+	Type   ErrorType
+	Reason string
+}
+
+// NewAppErrorS creates a new AppError with only type
+func NewAppErrorS(t ErrorType) *AppError {
+	return &AppError{
+		Type:   t,
+		Reason: "",
+	}
+}
+
+// NewAppError creates a new AppError with type and reason
+func NewAppError(t ErrorType, reason string) *AppError {
+	return &AppError{
+		Type:   t,
+		Reason: reason,
+	}
+}
+
+func (e AppError) Error() string {
+	return fmt.Sprintf("ErrorType: %s, Reason: %s", e.Type, e.Reason)
+}
+
+func (e AppError) GetType() ErrorType {
+	return e.Type
+}
+
+func (e AppError) Equal(err AppError) bool {
+	return e.Type == err.Type
+}

@@ -1,0 +1,20 @@
+# Tester Configuration.
+
+log-level = "info"
+
+worker-count = 4
+duration = 600
+
+pd = "127.0.0.1:2379"
+
+[[source-db]]
+host = "127.0.0.1"
+user = "root"
+password = ""
+port = 4000
+
+[[source-db]]
+host = "127.0.0.1"
+user = "root"
+password = ""
+port = 4001

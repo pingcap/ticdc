@@ -32,6 +32,7 @@ func NewConfig() *Config {
 	fs.IntVar(&cfg.JobCount, "n", 1, "total job count")
 	fs.IntVar(&cfg.Batch, "b", 1, "insert batch commit count")
 	fs.StringVar(&cfg.LogLevel, "L", "info", "log level: debug, info, warn, error, fatal")
+	fs.IntVar(&cfg.DurationInSeconds, "duration", 5, "duration in seconds")
 
 	return cfg
 }
@@ -55,6 +56,8 @@ type Config struct {
 	TargetDBCfg DBConfig `toml:"target-db" json:"target-db"`
 
 	configFile string
+
+	DurationInSeconds int `toml:"duration" json:"duration"`
 }
 
 // Parse parses flag definitions from the argument list.

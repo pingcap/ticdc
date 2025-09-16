@@ -14,7 +14,18 @@ if [ -n "$TEST_NAME" ] && [[ "$OUT_DIR" == *"/$TEST_NAME"* ]]; then
 fi
 
 log_file="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
+remainLogFile="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.remain.log"
+
+log_with_timestamp() {
+	# Clear the log file at the start of each command
+	while IFS= read -r line; do
+		echo "[$(date)] $line" >>"$remainLogFile"
+	done
+}
 
 echo "[$(date)] Executing SQL: $1" >"$log_file"
-mysql -uroot -h$2 -P$3 --default-character-set utf8mb4 -E -e "${prepare}" >"$log_file"
-mysql -uroot -h$2 -P$3 --default-character-set utf8mb4 -vv <"$1" >"$log_file"
+echo "[$(date)] Executing SQL: $1" >>"$remainLogFile"
+
+mysql -uroot -h$2 -P$3 --default-character-set utf8mb4 -E -e "${prepare}" 2>&1 | tee "$log_file" | log_with_timestamp
+
+mysql -uroot -h$2 -P$3 --default-character-set utf8mb4 -vv <"$1" 2>&1 | tee "$log_file" | log_with_timestamp

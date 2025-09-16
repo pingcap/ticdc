@@ -37,8 +37,11 @@ func NewLogWriter(invalid bool) *blackHoleWriter {
 	}
 }
 
-func (bs *blackHoleWriter) Run(_ context.Context) error {
-	return nil
+func (bs *blackHoleWriter) Run(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoEvent) (err error) {

@@ -58,7 +58,7 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64) {
 			zap.Uint64("watermark", newWatermark))
 		return
 	}
-	log.Warn("partition resolved ts fall back, ignore it, since consumer read old  message",
+	log.Warn("partition resolved ts fall back, ignore it, since consumer read old message",
 		zap.Uint64("newWatermark", newWatermark),
 		zap.Uint64("watermark", p.watermark), zap.Any("watermark", p.watermark))
 }

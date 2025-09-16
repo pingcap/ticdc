@@ -100,6 +100,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		WriteKeyThreshold:          0,
 		SchedulingTaskCountPerNode: 20,  // TODO: choose a btter value
 		RegionCountPerSpan:         100, // TODO: choose a btter value
+		EnableSplittableCheck:      false,
 	},
 	Integrity: &integrity.Config{
 		IntegrityCheckLevel:   integrity.CheckLevelNone,
@@ -259,6 +260,10 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 
 	// check sync point config
 	if util.GetOrZero(c.EnableSyncPoint) {
+		if !IsMySQLCompatibleScheme(GetScheme(sinkURI)) {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs("The SyncPoint must be disabled when the downstream is not tidb or mysql")
+		}
 		if c.SyncPointInterval != nil &&
 			*c.SyncPointInterval < minSyncPointInterval {
 			return cerror.ErrInvalidReplicaConfig.
@@ -282,7 +287,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 	if c.Scheduler == nil {
 		c.FixScheduler(false)
 	} else {
-		err := c.Scheduler.Validate()
+		err := c.Scheduler.ValidateAndAdjust(sinkURI)
 		if err != nil {
 			return err
 		}

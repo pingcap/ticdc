@@ -24,7 +24,7 @@ var (
 			Subsystem: "scheduler",
 			Name:      "task",
 			Help:      "The total number of scheduler tasks",
-		}, []string{"namespace", "changefeed"})
+		}, []string{"namespace", "changefeed", "mode"})
 
 	SpanCountGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -32,21 +32,21 @@ var (
 			Subsystem: "scheduler",
 			Name:      "span_count",
 			Help:      "The total number of spans",
-		}, []string{"namespace", "changefeed"})
+		}, []string{"namespace", "changefeed", "mode"})
 	TableCountGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
 			Name:      "table_count",
 			Help:      "The total number of tables",
-		}, []string{"namespace", "changefeed"})
+		}, []string{"namespace", "changefeed", "mode"})
 	TableStateGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
 			Name:      "table_replication_state",
 			Help:      "The total number of tables in different replication states",
-		}, []string{"namespace", "changefeed", "state"})
+		}, []string{"namespace", "changefeed", "state", "mode"})
 	SlowestTableIDGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",

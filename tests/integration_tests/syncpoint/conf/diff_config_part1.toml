@@ -9,16 +9,16 @@ check-struct-only = false
 [task]
     output-dir = "/tmp/tidb_cdc_test/syncpoint/sync_diff/output"
 
-    source-instances = ["mysql1"]
+    source-instances = ["tidb0"]
 
-    target-instance = "tidb0"
+    target-instance = "mysql1"
 
     #tables = ["usertable","simple1","simple2"]
     #tables = ["usertable"]
     target-check-tables = ["testSync.*"]
 
 [data-sources]
-[data-sources.mysql1]
+[data-sources.tidb0]
     host = "127.0.0.1"
     port = 4000
     user = "root"

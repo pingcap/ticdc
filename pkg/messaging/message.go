@@ -73,7 +73,7 @@ const (
 	TypeBlockStatusRequest
 	TypeDispatcherHeartbeat
 	TypeDispatcherHeartbeatResponse
-	TypeRedoTsMessage
+	TypeRedoMessage
 	TypeMergeDispatcherRequest
 	TypeCongestionControl
 
@@ -155,8 +155,9 @@ func (t IOType) String() string {
 		return "CheckpointTsMessage"
 	case TypeDispatcherHeartbeat:
 		return "DispatcherHeartbeat"
-	case TypeRedoTsMessage:
-		return "RedoTsMessage"
+	case TypeRedoMessage:
+		return "RedoMessage"
+		return "RedoHeartbeatMessage"
 	case TypeDispatcherHeartbeatResponse:
 		return "DispatcherHeartbeatResponse"
 	case TypeCongestionControl:
@@ -336,10 +337,10 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &commonEvent.DispatcherHeartbeat{}
 	case TypeDispatcherHeartbeatResponse:
 		m = &commonEvent.DispatcherHeartbeatResponse{}
+	case TypeRedoMessage:
+		m = &heartbeatpb.RedoMessage{}
 	case TypeCongestionControl:
 		m = &commonEvent.CongestionControl{}
-	case TypeRedoTsMessage:
-		m = &heartbeatpb.RedoTsMessage{}
 	case TypeMergeDispatcherRequest:
 		m = &heartbeatpb.MergeDispatcherRequest{}
 	default:
@@ -433,10 +434,10 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeDispatcherHeartbeat
 	case *commonEvent.DispatcherHeartbeatResponse:
 		ioType = TypeDispatcherHeartbeatResponse
+	case *heartbeatpb.RedoMessage:
+		ioType = TypeRedoMessage
 	case *commonEvent.CongestionControl:
 		ioType = TypeCongestionControl
-	case *heartbeatpb.RedoTsMessage:
-		ioType = TypeRedoTsMessage
 	case *heartbeatpb.MergeDispatcherRequest:
 		ioType = TypeMergeDispatcherRequest
 	default:

@@ -45,7 +45,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -182,7 +182,7 @@ function kill_server() {
 }
 
 main() {
-	prepare
+	prepare changefeed
 
 	create_tables
 	execute_ddl_for_normal_tables &
@@ -190,7 +190,6 @@ main() {
 	# execute_ddl_for_partition_tables &
 	# PARTITION_TABLE_DDL_PID=$!
 
-	# 启动 DML 线程
 	execute_dml 1 &
 	DML_PID_1=$!
 	execute_dml 2 &
@@ -235,7 +234,67 @@ main() {
 	cleanup_process $CDC_BINARY
 }
 
+main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
+	prepare consistent_changefeed
+
+	create_tables
+	execute_ddl_for_normal_tables &
+	NORMAL_TABLE_DDL_PID=$!
+	# execute_ddl_for_partition_tables &
+	# PARTITION_TABLE_DDL_PID=$!
+
+	execute_dml 1 &
+	DML_PID_1=$!
+	execute_dml 2 &
+	DML_PID_2=$!
+	execute_dml 3 &
+	DML_PID_3=$!
+	execute_dml 4 &
+	DML_PID_4=$!
+	execute_dml 5 &
+	DML_PID_5=$!
+	# execute_dml 6 &
+	# DML_PID_6=$!
+	# execute_dml 7 &
+	# DML_PID_7=$!
+	# execute_dml 8 &
+	# DML_PID_8=$!
+	# execute_dml 9 &
+	# DML_PID_9=$!
+	# execute_dml 10 &
+	# DML_PID_10=$!
+
+	kill_server
+
+	sleep 10
+
+	# kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
+	kill -9 $NORMAL_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
+
+	cleanup_process $CDC_BINARY
+	# to ensure row changed events have been replicated to TiCDC
+	sleep 10
+	changefeed_id="test"
+	storage_path="file://$WORK_DIR/redo"
+	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
+
+	sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
+
+	cat $WORK_DIR/consistent_diff_config.toml
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml
+}
+
 trap stop_tidb_cluster EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+stop_tidb_cluster
+# FIXME: refactor redo apply
+# main_with_consistent
+# check_logs $WORK_DIR
+# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

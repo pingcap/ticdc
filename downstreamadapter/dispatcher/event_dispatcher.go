@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -58,9 +57,9 @@ func NewEventDispatcher(
 	tableSpan *heartbeatpb.TableSpan,
 	startTs uint64,
 	schemaID int64,
+	schemaIDToDispatchers *SchemaIDToDispatchers,
 	startTsIsSyncpoint bool,
 	currentPdTs uint64,
-	dispatcherType int,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 	redoEnable bool,
@@ -71,9 +70,10 @@ func NewEventDispatcher(
 		tableSpan,
 		startTs,
 		schemaID,
+		schemaIDToDispatchers,
 		startTsIsSyncpoint,
 		currentPdTs,
-		dispatcherType,
+		common.DefaultMode,
 		sink,
 		sharedInfo,
 	)
@@ -85,7 +85,6 @@ func NewEventDispatcher(
 		redoGlobalTs: redoGlobalTs,
 	}
 	dispatcher.cacheEvents.events = make(chan cacheEvents, 1)
-
 	return dispatcher
 }
 
@@ -97,7 +96,7 @@ func (d *EventDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	// when the event dispatcher manager have table trigger event dispatcher
 	if !d.tableSpan.Equal(common.DDLSpan) {
 		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
-		return false, apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+		return false, errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
 	}
 
@@ -154,7 +153,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 	}
 }
 
-func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	// if the commit-ts of last event of dispatcherEvents is greater than redoGlobalTs,
 	// the dispatcherEvents will be cached util the redoGlobalTs is updated.
 	if d.redoEnable && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {

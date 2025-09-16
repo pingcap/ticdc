@@ -64,6 +64,16 @@ func (r *ResendTaskMap) Len() int {
 	return len(r.m)
 }
 
+func (r *ResendTaskMap) Keys() []BlockEventIdentifier {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	keys := make([]BlockEventIdentifier, 0, len(r.m))
+	for key := range r.m {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 // Considering the sync point event and ddl event may have the same commitTs,
 // we need to distinguish them.
 type BlockEventIdentifier struct {
@@ -75,9 +85,7 @@ type BlockEventStatus struct {
 	mutex             sync.Mutex
 	blockPendingEvent commonEvent.BlockEvent
 	blockStage        heartbeatpb.BlockStage
-	// record all the commitTs of this pending event
-	// mainly for the batch sync point event
-	blockCommitTsMap map[uint64]struct{}
+	blockCommitTs     uint64
 }
 
 func (b *BlockEventStatus) clear() {
@@ -86,7 +94,7 @@ func (b *BlockEventStatus) clear() {
 
 	b.blockPendingEvent = nil
 	b.blockStage = heartbeatpb.BlockStage_NONE
-	b.blockCommitTsMap = make(map[uint64]struct{})
+	b.blockCommitTs = 0
 }
 
 func (b *BlockEventStatus) setBlockEvent(event commonEvent.BlockEvent, blockStage heartbeatpb.BlockStage) {
@@ -95,14 +103,11 @@ func (b *BlockEventStatus) setBlockEvent(event commonEvent.BlockEvent, blockStag
 
 	b.blockPendingEvent = event
 	b.blockStage = blockStage
-	b.blockCommitTsMap = make(map[uint64]struct{})
+	b.blockCommitTs = event.GetCommitTs()
 
 	if event.GetType() == commonEvent.TypeSyncPointEvent {
-		for _, ts := range event.(*commonEvent.SyncPointEvent).GetCommitTsList() {
-			b.blockCommitTsMap[ts] = struct{}{}
-		}
-	} else {
-		b.blockCommitTsMap[event.GetCommitTs()] = struct{}{}
+		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
+		b.blockCommitTs = commitTsList[len(commitTsList)-1]
 	}
 }
 
@@ -142,15 +147,17 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 		return false
 	}
 
-	_, ok := b.blockCommitTsMap[action.CommitTs]
-	if ok {
-		delete(b.blockCommitTsMap, action.CommitTs)
-	}
+	return b.blockCommitTs == action.CommitTs
+}
 
-	if len(b.blockCommitTsMap) == 0 {
-		return true
+func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.blockPendingEvent == nil {
+		return 0, false
 	}
-	return false
+	return b.blockCommitTs, true
 }
 
 type SchemaIDToDispatchers struct {
@@ -405,15 +412,6 @@ func storeBootstrapState(addr *bootstrapState, state bootstrapState) {
 
 func loadBootstrapState(addr *bootstrapState) bootstrapState {
 	return bootstrapState(atomic.LoadInt32((*int32)(addr)))
-}
-
-const (
-	TypeDispatcherEvent int = iota
-	TypeDispatcherRedo
-)
-
-func IsRedoDispatcher(d DispatcherService) bool {
-	return d.GetType() == TypeDispatcherRedo
 }
 
 // addToDynamicStream add self to dynamic stream

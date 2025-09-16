@@ -359,6 +359,15 @@ func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) (
 	return c.(*Maintainer), true
 }
 
+func (m *Manager) ListMaintainers() []*Maintainer {
+	maintainers := make([]*Maintainer, 0)
+	m.maintainers.Range(func(key, value interface{}) bool {
+		maintainers = append(maintainers, value.(*Maintainer))
+		return true
+	})
+	return maintainers
+}
+
 func (m *Manager) isBootstrap() bool {
 	return m.coordinatorVersion > 0
 }

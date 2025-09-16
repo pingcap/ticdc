@@ -203,8 +203,8 @@ func (oc *Controller) GetMinCheckpointTs() uint64 {
 		if op.BlockTsForward() {
 			spanReplication := oc.spanController.GetTaskByID(op.ID())
 			if spanReplication == nil {
-				// for test
-				log.Panic("span replication is nil", zap.String("operator", op.String()))
+				log.Info("span replication is nil", zap.String("operator", op.String()))
+				continue
 			}
 			if spanReplication.GetStatus().CheckpointTs < minCheckpointTs {
 				minCheckpointTs = spanReplication.GetStatus().CheckpointTs
@@ -227,12 +227,12 @@ func (oc *Controller) pollQueueingOperator() (
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
+	op := item.OP
+	opID := op.ID()
 	oc.mu.Unlock()
 	if item.IsRemoved {
 		return nil, true
 	}
-	op := item.OP
-	opID := op.ID()
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()

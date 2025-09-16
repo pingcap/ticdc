@@ -1,10 +1,9 @@
-# Importer Configuration.
+# Tester Configuration.
 
 log-level = "info"
 
-worker-count = 10
-job-count = 1000
-batch = 10
+worker-count = 4
+duration = 20
 
 pd = "127.0.0.1:2379"
 

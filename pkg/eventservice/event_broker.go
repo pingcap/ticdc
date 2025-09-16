@@ -22,11 +22,11 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -45,6 +45,10 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
+
+	defaultReportDispatcherStatToStoreInterval = time.Second * 10
+
+	maxReadyEventIntervalSeconds = 10
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -167,7 +171,7 @@ func newEventBroker(
 	})
 
 	g.Go(func() error {
-		return c.reportDispatcherStatToStore(ctx)
+		return c.reportDispatcherStatToStore(ctx, defaultReportDispatcherStatToStoreInterval)
 	})
 
 	g.Go(func() error {
@@ -182,8 +186,8 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 	doSendDML := func(e *event.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
-			c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
-			metricEventServiceSendKvCount.Add(float64(e.Len()))
+			c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+			updateMetricEventServiceSendKvCount(d.info.GetMode(), float64(e.Len()))
 		}
 	}
 
@@ -215,6 +219,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastCommitTs = dml.GetCommitTs()
 		log.Debug("send dml event to dispatcher",
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+			zap.Uint64("seq", dml.Seq),
 			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
 	}
 	if lastCommitTs != 0 {
@@ -233,13 +238,13 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	case <-ctx.Done():
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
 		return
-	case c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- ddlEvent:
-		metricEventServiceSendDDLCount.Inc()
+	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
+		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", e.TableID),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
-		zap.Uint64("seq", e.Seq), zap.Bool("isRedo", d.info.GetIsRedo()))
+		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
 
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
@@ -247,9 +252,9 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
 	re := event.NewResolvedEvent(watermark, d.id, d.epoch.Load())
 	resolvedEvent := newWrapResolvedEvent(remoteID, re, d.getEventSenderState())
-	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- resolvedEvent
+	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
-	metricEventServiceSendResolvedTsCount.Inc()
+	updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
 }
 
 func (c *eventBroker) sendNotReusableEvent(
@@ -260,8 +265,8 @@ func (c *eventBroker) sendNotReusableEvent(
 	wrapEvent := newWrapNotReusableEvent(server, event)
 
 	// must success unless we can do retry later
-	c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- wrapEvent
-	metricEventServiceSendCommandCount.Inc()
+	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- wrapEvent
+	updateMetricEventServiceSendCommandCount(d.info.GetMode())
 }
 
 func (c *eventBroker) getMessageCh(workerIndex int, isRedo bool) chan *wrapEvent {
@@ -359,7 +364,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
-		metricEventServiceSkipResolvedTsCount.Inc()
+		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
 
@@ -368,15 +373,19 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
-		metricEventServiceSkipResolvedTsCount.Inc()
+		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
 
 	// 3. Check whether there is any events in the data range
-	// Note: target range is (dataRange.CommitTsStart, dataRange.CommitTsEnd]
-	if dataRange.CommitTsStart >= task.eventStoreCommitTs.Load() &&
-		dataRange.LastScannedTxnStartTs != 0 &&
-		dataRange.CommitTsStart >= ddlState.MaxEventCommitTs {
+	// Note: target range is (dataRange.CommitTsStart-dataRange.LastScannedTxnStartTs, dataRange.CommitTsEnd]
+	// when `dataRange.CommitTsStart` equals `task.eventStoreCommitTs.Load()`,
+	// it is difficult to determine whether any txn events with a commitTs of `dataRange.CommitTsStart` remain unscanned.
+	// because multiple transactions may have the same commit ts.
+	// so we take the risk to do a useless scan.
+	noDMLEvent := dataRange.CommitTsStart > task.eventStoreCommitTs.Load()
+	noDDLEvent := dataRange.CommitTsStart >= ddlState.MaxEventCommitTs
+	if noDMLEvent && noDDLEvent {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
@@ -422,11 +431,23 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
+		now := time.Now().Unix()
+		lastSendTime := task.lastReadySendTime.Load()
+		currentInterval := task.readyInterval.Load()
+		if now-lastSendTime < currentInterval {
+			return false
+		}
 		remoteID := node.ID(task.info.GetServerID())
 		event := event.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
-		c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
-		metricEventServiceSendCommandCount.Inc()
+		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
+		task.lastReadySendTime.Store(now)
+		newInterval := currentInterval * 2
+		if newInterval > maxReadyEventIntervalSeconds {
+			newInterval = maxReadyEventIntervalSeconds
+		}
+		task.readyInterval.Store(newInterval)
+		updateMetricEventServiceSendCommandCount(task.info.GetMode())
 		return false
 	}
 	return true
@@ -453,13 +474,13 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		zap.Any("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 		zap.Uint64("commitTs", event.GetCommitTs()), zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
-	c.getMessageCh(task.messageWorkerIndex, task.info.GetIsRedo()) <- wrapEvent
-	metricEventServiceSendCommandCount.Inc()
+	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
+	updateMetricEventServiceSendCommandCount(task.info.GetMode())
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
 func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) bool {
-	return d.enableSyncPoint && ts > d.nextSyncPoint
+	return d.enableSyncPoint && ts > d.nextSyncPoint.Load()
 }
 
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
@@ -468,9 +489,9 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 // When a period of time, there is no other dml and ddls, we will batch multiple sync point commit ts in one sync point event to enhance the speed.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
 	commitTsList := make([]uint64, 0)
-	for d.enableSyncPoint && ts > d.nextSyncPoint {
-		commitTsList = append(commitTsList, d.nextSyncPoint)
-		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
+	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
+		commitTsList = append(commitTsList, d.nextSyncPoint.Load())
+		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint.Load()).Add(d.syncPointInterval)))
 	}
 	for len(commitTsList) > 0 {
 		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
@@ -484,7 +505,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
-		c.getMessageCh(d.messageWorkerIndex, d.info.GetIsRedo()) <- syncPointEvent
+		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
 			commitTsList = commitTsList[16:]
@@ -562,11 +583,22 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
+		log.Debug("not enough memory quota, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available.Load()),
+			zap.Uint64("required", uint64(sl.maxDMLBytes)))
 		return
 	}
 
-	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
+	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	if scannedBytes < 0 {
+		releaseQuota(available, uint64(sl.maxDMLBytes))
+	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
+		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	}
+
 	if err != nil {
 		log.Error("scan events failed",
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
@@ -621,16 +653,25 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
 	}
+	task.info.GetMode()
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
 }
 
 func allocQuota(quota *atomic.Uint64, nBytes uint64) bool {
-	available := quota.Load()
-	if available < nBytes {
-		return false
+	for {
+		available := quota.Load()
+		if available < nBytes {
+			return false
+		}
+		if quota.CompareAndSwap(available, available-nBytes) {
+			return true
+		}
 	}
-	return quota.CompareAndSwap(available, available-nBytes)
+}
+
+func releaseQuota(quota *atomic.Uint64, nBytes uint64) {
+	quota.Add(nBytes)
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int, topic string) error {
@@ -730,7 +771,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		// Send the message to the dispatcher.
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
-			_, ok := err.(apperror.AppError)
+			_, ok := err.(errors.AppError)
 			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Stringer("tMsg", tMsg), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
@@ -753,9 +794,12 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	}
 }
 
-func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second * 10)
+func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInterval time.Duration) error {
+	ticker := time.NewTicker(tickInterval)
 	log.Info("update dispatcher send ts goroutine is started")
+	isInactiveDispatcher := func(d *dispatcherStat) bool {
+		return d.isHandshaked.Load() && time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -768,7 +812,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) error {
 				if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
 					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
 				}
-				if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
+				if isInactiveDispatcher(dispatcher) {
 					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
 				}
 				return true
@@ -776,14 +820,14 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) error {
 
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
-				if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
+				if isInactiveDispatcher(dispatcher) {
 					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
 				}
 				return true
 			})
 
 			for _, d := range inActiveDispatchers {
-				log.Info("remove in-active dispatcher", zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
+				log.Warn("remove in-active dispatcher", zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
 				c.removeDispatcher(d.info)
 			}
 		}
@@ -798,7 +842,7 @@ func (c *eventBroker) close() {
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs uint64) {
 	if d.onResolvedTs(resolvedTs) {
 		d.lastReceivedResolvedTsTime.Store(time.Now())
-		metricEventStoreOutputResolved.Inc()
+		updateMetricEventStoreOutputResolved(d.info.GetMode())
 		d.onLatestCommitTs(commitTs)
 		if c.scanReady(d) {
 			c.pushTask(d, true)
@@ -839,13 +883,12 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	id := info.GetID()
 	span := info.GetTableSpan()
-	startTs := info.GetStartTs()
 	changefeedID := info.GetChangefeedID()
 	workerIndex := (common.GID)(id).Hash(uint64(len(c.messageCh)))
 	scanWorkerIndex := (common.GID)(id).Hash(uint64(len(c.taskChan)))
 
 	status := c.getOrSetChangefeedStatus(changefeedID)
-	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, status)
+	dispatcher := newDispatcherStat(info, filter, scanWorkerIndex, workerIndex, status)
 	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
@@ -853,7 +896,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", startTs))
+			zap.Uint64("startTs", info.GetStartTs()))
 		return nil
 	}
 
@@ -899,9 +942,11 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
-		zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
+		zap.Stringer("dispatcherID", id),
+		zap.Int64("mode", info.GetMode()),
+		zap.Int64("tableID", span.GetTableID()),
 		zap.String("span", common.FormatTableSpan(span)),
-		zap.Uint64("startTs", startTs), zap.Bool("isRedo", info.GetIsRedo()),
+		zap.Uint64("startTs", info.GetStartTs()),
 		zap.Duration("duration", time.Since(start)))
 	return nil
 }
@@ -1022,6 +1067,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("originSeq", originSeq),
 		zap.Uint64("newSeq", stat.seq.Load()),
 		zap.Uint64("newEpoch", newEpoch),
+		zap.Bool("syncPointEnabled", stat.enableSyncPoint),
+		zap.Uint64("nextSyncPoint", stat.nextSyncPoint.Load()),
 		zap.Uint64("lastScannedCommitTs", stat.lastScannedCommitTs.Load()),
 		zap.Uint64("lastScannedStartTs", stat.lastScannedStartTs.Load()),
 		zap.Duration("resetTime", time.Since(start)))
@@ -1056,7 +1103,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 			dispatcher.checkpointTs.Store(dp.CheckpointTs)
 		}
 		// Update the last received heartbeat time to the current time.
-		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
+		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().Unix())
 	}
 	c.sendDispatcherResponse(responseMap)
 }

@@ -49,6 +49,7 @@ var (
 	maxMoveSpansCountForMerge          = 16
 	minTrafficPercentage               = 0.9
 	maxTrafficPercentage               = 1.1
+	maxLagThreshold                    = float64(30) // 30s
 )
 
 type BalanceCause string
@@ -352,8 +353,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
 
 	// only when the lag is less than 30s, we can consider to merge spans.
-	// TODO: set a better threshold
-	if lag > 30 {
+	if lag > maxLagThreshold {
 		log.Debug("the lag for the group is too large, skip merge",
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Int64("groupID", s.groupID),
@@ -1220,4 +1220,5 @@ func SetEasyThresholdForTest() {
 	balanceScoreThreshold = 1
 	minTrafficPercentage = 0.8
 	maxTrafficPercentage = 1.2
+	maxLagThreshold = 120
 }

@@ -34,20 +34,19 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // for multiple events, we try to batch the events of the same table into limited update / insert / delete query,
 // to enhance the performance of the sink.
 // While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
 // the process is as follows:
-//  1. we group the events by dispatcherID, and hold the order for the events of the same dispatcher
+//  1. we group the events by tableID, and hold the order for the events of the same table
 //  2. For each group,
 //     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.(TODO: support the case without pk but have uk)
 //     Otherwise,
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
-func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
+func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 	// Step 1: group the events by table ID
@@ -55,10 +54,11 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	for _, event := range events {
 		// calculate for metrics
 		dmls.rowCount += int(event.Len())
-		if len(dmls.startTs) == 0 || dmls.startTs[len(dmls.startTs)-1] != event.StartTs {
-			dmls.startTs = append(dmls.startTs, event.StartTs)
+		if len(dmls.tsPairs) == 0 || dmls.tsPairs[len(dmls.tsPairs)-1].startTs != event.StartTs {
+			dmls.tsPairs = append(dmls.tsPairs, tsPair{startTs: event.StartTs, commitTs: event.CommitTs})
 		}
 		dmls.approximateSize += event.GetSize()
+
 		tableID := event.GetTableID()
 		if _, ok := eventsGroup[tableID]; !ok {
 			eventsGroup[tableID] = make([]*commonEvent.DMLEvent, 0)
@@ -73,6 +73,21 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
+		// We check if the table versions and update ts here to avoid data loss due to unknown bug.
+		firstTableVersion := eventsInGroup[0].TableInfoVersion
+		firstTableInfoUpdateTs := tableInfo.GetUpdateTS()
+		for _, event := range eventsInGroup {
+			if event.TableInfoVersion != firstTableVersion || event.TableInfo.GetUpdateTS() != firstTableInfoUpdateTs {
+				log.Error("events in the same group have different table versions",
+					zap.Uint64("firstTableInfoUpdateTs", firstTableInfoUpdateTs),
+					zap.Uint64("firstTableVersion", firstTableVersion),
+					zap.Uint64("currentEventTableVersion", event.TableInfoVersion),
+					zap.Uint64("currentEventTableInfoUpdateTs", event.TableInfo.GetUpdateTS()),
+					zap.Any("events", eventsInGroup))
+				return nil, errors.New(fmt.Sprintf("events in the same group have different table versions, there must be a bug in the code! firstTableVersion: %d, firstUpdateTs: %d, currentEventTableVersion: %d, currentEventTableInfoUpdateTs: %d", firstTableVersion, firstTableInfoUpdateTs, event.TableInfoVersion, event.TableInfo.GetUpdateTS()))
+			}
+		}
+
 		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg) {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else {
@@ -83,11 +98,10 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	}
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
 	// This method is expensive, so we only log it when the log level is debug.
-	if log.GetLevel() == zapcore.DebugLevel {
-		log.Debug("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
-	}
 
-	return dmls
+	dmls.LogDebug(events)
+
+	return dmls, nil
 }
 
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
@@ -608,7 +622,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
 			log.Warn("inject MySQLSinkTxnRandomError")
 			err := errors.Trace(driver.ErrBadConn)
-			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
+			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
@@ -619,13 +633,13 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
 				Number: uint16(mysql.ErrDupEntry),
 			})
-			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
+			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
 		err := w.statistics.RecordBatchExecution(tryExec)
 		if err != nil {
-			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
+			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			return errors.Trace(err)
 		}
 		return nil
@@ -715,29 +729,26 @@ func (w *Writer) multiStmtExecute(
 
 func logDMLTxnErr(
 	err error, start time.Time, changefeed string,
-	query string, count int, startTs []common.Ts,
+	dmls *preparedDMLs,
 ) error {
-	if len(query) > 1024 {
-		query = query[:1024]
-	}
 	if isRetryableDMLError(err) {
 		log.Warn("execute DMLs with error, retry later",
 			zap.String("changefeed", changefeed),
 			zap.Duration("duration", time.Since(start)),
-			zap.Uint64s("startTs", startTs),
-			zap.Int("count", count),
-			zap.String("query", query),
+			zap.Any("tsPairs", dmls.tsPairs),
+			zap.Int("count", dmls.rowCount),
+			zap.String("dmls", dmls.String()),
 			zap.Error(err))
 	} else {
 		log.Error("execute DMLs with error, can not retry",
 			zap.String("changefeed", changefeed),
 			zap.Duration("duration", time.Since(start)),
-			zap.Uint64s("startTs", startTs),
-			zap.Int("count", count),
-			zap.String("query", query),
+			zap.Any("tsPairs", dmls.tsPairs),
+			zap.Int("count", dmls.rowCount),
+			zap.String("dmls", dmls.String()),
 			zap.Error(err))
 	}
-	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", query))
+	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", dmls.String()))
 }
 
 func (w *Writer) batchSingleTxnDmls(

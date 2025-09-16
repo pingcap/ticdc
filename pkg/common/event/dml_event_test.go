@@ -156,3 +156,42 @@ func TestEncodeAndDecodeV0(t *testing.T) {
 	reverseEvent.TableInfo = nil
 	require.Equal(t, dmlEvent, reverseEvent)
 }
+
+func TestBatchDMLEventAppendWithDifferentTableInfo(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+
+	// Create the first table and get its DML event
+	ddlJob1 := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, ddlJob1)
+	dmlEvent1 := helper.DML2Event("test", "t", insertDataSQL)
+	require.NotNil(t, dmlEvent1)
+
+	// Create a second table with different structure to get different TableInfo
+	createTableSQL2 := `create table t2 (
+		id int primary key,
+		name varchar(50),
+		age int
+	);`
+	ddlJob2 := helper.DDL2Job(createTableSQL2)
+	require.NotNil(t, ddlJob2)
+	dmlEvent2 := helper.DML2Event("test", "t2", "insert into t2 values (1, 'test', 25);")
+	require.NotNil(t, dmlEvent2)
+
+	// Ensure the two events have different TableInfo versions
+	require.NotEqual(t, dmlEvent1.TableInfo.GetUpdateTS(), dmlEvent2.TableInfo.GetUpdateTS())
+
+	// Create a BatchDMLEvent and append the first event
+	batchEvent := &BatchDMLEvent{}
+	err := batchEvent.AppendDMLEvent(dmlEvent1)
+	require.NoError(t, err)
+
+	// Try to append the second event with different TableInfo - should fail
+	err = batchEvent.AppendDMLEvent(dmlEvent2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "table info version mismatch")
+	require.Contains(t, err.Error(), "currentDMLEventTableInfoVersion")
+	require.Contains(t, err.Error(), "batchDMLTableInfoVersion")
+}

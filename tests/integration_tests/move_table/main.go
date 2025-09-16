@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	clientv2 "github.com/pingcap/ticdc/pkg/api/v2"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -60,7 +61,7 @@ func main() {
 
 	sourceNode, targetNode := getSourceAndTargetNode(cluster)
 
-	err = cluster.moveAllTables(sourceNode, targetNode)
+	err = cluster.moveAllTables(sourceNode, targetNode, common.DefaultMode)
 	if err != nil {
 		log.Fatal("failed to move tables", zap.Error(err))
 	}
@@ -149,7 +150,7 @@ func newCluster() (*cluster, error) {
 }
 
 // moveAllTables moves all tables from source node to target node
-func (c *cluster) moveAllTables(sourceNode, targetNode string) error {
+func (c *cluster) moveAllTables(sourceNode, targetNode string, mode int64) error {
 	for _, table := range c.servers[sourceNode] {
 		if table.id == 0 {
 			// table trigger dispatcher is not support to move, except the maintainer is crashed
@@ -159,7 +160,7 @@ func (c *cluster) moveAllTables(sourceNode, targetNode string) error {
 		err := c.
 			client.
 			Changefeeds().
-			MoveTable(ctx, table.changefeedNameSpace, table.changefeedName, table.id, targetNode)
+			MoveTable(ctx, table.changefeedNameSpace, table.changefeedName, table.id, targetNode, mode)
 
 		log.Info("move table",
 			zap.String("sourceNode", sourceNode),

@@ -22,18 +22,88 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap/zapcore"
 )
+
+type tsPair struct {
+	startTs  uint64
+	commitTs uint64
+}
 
 type preparedDMLs struct {
 	sqls            []string
 	values          [][]interface{}
 	rowCount        int
 	approximateSize int64
-	startTs         []uint64
+	tsPairs         []tsPair
+}
+
+func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
+	if log.GetLevel() != zapcore.DebugLevel {
+		return
+	}
+
+	// Calculate total count
+	totalCount := len(d.sqls)
+
+	if len(d.sqls) == 0 {
+		log.Debug("No SQL statements to log")
+		return
+	}
+
+	// Build complete log content in a single string
+	var logBuilder strings.Builder
+	logBuilder.WriteString(fmt.Sprintf("=== PreparedDMLs Debug Info ===\n"))
+	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d\n", totalCount, d.rowCount))
+	logBuilder.WriteString(fmt.Sprintf("----------------------------------------\n"))
+
+	// Build SQL statements and arguments section
+	for i, sql := range d.sqls {
+		var args []interface{}
+		if i < len(d.values) {
+			args = d.values[i]
+		}
+
+		// Format the arguments as a string
+		argsStr := "("
+		for j, arg := range args {
+			if j > 0 {
+				argsStr += ", "
+			}
+			if arg == nil {
+				argsStr += "NULL"
+			} else if str, ok := arg.(string); ok {
+				argsStr += fmt.Sprintf(`"%s"`, str)
+			} else {
+				argsStr += fmt.Sprintf("%v", arg)
+			}
+		}
+		argsStr += ")"
+
+		// Add formatted SQL and args to log content
+		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s\n", i+1, sql))
+		logBuilder.WriteString(fmt.Sprintf("      Args: %s\n", argsStr))
+	}
+
+	// Build timestamp information
+	commitTsList := make([]uint64, len(events))
+	startTsList := make([]uint64, len(events))
+	for i, event := range events {
+		commitTsList[i] = event.GetCommitTs()
+		startTsList[i] = event.GetStartTs()
+	}
+
+	logBuilder.WriteString(fmt.Sprintf("----------------------------------------\n"))
+	logBuilder.WriteString(fmt.Sprintf("CommitTs: %v\n", commitTsList))
+	logBuilder.WriteString(fmt.Sprintf("StartTs:  %v\n", startTsList))
+	logBuilder.WriteString(fmt.Sprintf("=== End PreparedDMLs Debug Info ===\n"))
+
+	// Output the complete log content in a single call
+	log.Debug(logBuilder.String())
 }
 
 func (d *preparedDMLs) String() string {
-	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.fmtSqls(), d.values, d.rowCount, d.approximateSize, d.startTs)
+	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.fmtSqls(), d.values, d.rowCount, d.approximateSize, d.tsPairs)
 }
 
 func (d *preparedDMLs) fmtSqls() string {
@@ -50,7 +120,7 @@ var dmlsPool = sync.Pool{
 		return &preparedDMLs{
 			sqls:    make([]string, 0, 128),
 			values:  make([][]interface{}, 0, 128),
-			startTs: make([]uint64, 0, 128),
+			tsPairs: make([]tsPair, 0, 128),
 		}
 	},
 }
@@ -58,7 +128,7 @@ var dmlsPool = sync.Pool{
 func (d *preparedDMLs) reset() {
 	d.sqls = d.sqls[:0]
 	d.values = d.values[:0]
-	d.startTs = d.startTs[:0]
+	d.tsPairs = d.tsPairs[:0]
 	d.rowCount = 0
 	d.approximateSize = 0
 }

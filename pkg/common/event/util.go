@@ -226,7 +226,7 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 	physicalTableID := tableInfo.TableName.TableID
 	for _, dml := range dmls {
 		dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
-		batchDMLEvent.AppendDMLEvent(dmlEvent)
+		_ = batchDMLEvent.AppendDMLEvent(dmlEvent)
 		rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 		for _, rawKV := range rawKvs {
 			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
@@ -453,8 +453,20 @@ func SplitQueries(queries string) ([]string, error) {
 	var res []string
 	for _, stmt := range stmts {
 		var sb strings.Builder
+		// translate TiDB feature to special comment
+		restoreFlags := format.RestoreTiDBSpecialComment
+		// escape the keyword
+		restoreFlags |= format.RestoreNameBackQuotes
+		// upper case keyword
+		restoreFlags |= format.RestoreKeyWordUppercase
+		// wrap string with single quote
+		restoreFlags |= format.RestoreStringSingleQuotes
+		// remove placement rule
+		restoreFlags |= format.SkipPlacementRuleForRestore
+		// force disable ttl
+		restoreFlags |= format.RestoreWithTTLEnableOff
 		err := stmt.Restore(&format.RestoreCtx{
-			Flags: format.DefaultRestoreFlags,
+			Flags: restoreFlags,
 			In:    &sb,
 		})
 		if err != nil {

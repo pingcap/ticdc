@@ -20,14 +20,17 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/api"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -36,6 +39,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
+	tidbkv "github.com/pingcap/tidb/pkg/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -92,6 +96,22 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	co, err := h.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	_, status, err := co.GetChangefeed(ctx, common.NewChangeFeedDisplayName(cfg.ID, cfg.Namespace))
+	if err != nil && errors.ErrChangeFeedNotExists.NotEqual(err) {
+		_ = c.Error(err)
+		return
+	}
+	if status != nil {
+		err = errors.ErrChangeFeedAlreadyExists.GenWithStackByArgs(cfg.ID)
+		_ = c.Error(err)
+		return
+	}
+
 	ts, logical, err := h.server.GetPdClient().GetTS(ctx)
 	if err != nil {
 		_ = c.Error(errors.ErrPDEtcdAPIError.GenWithStackByArgs("fail to get ts from pd client"))
@@ -134,14 +154,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
 
-	// verify changefeed filter
-	_, err = filter.NewFilter(replicaCfg.Filter, "", replicaCfg.CaseSensitive, replicaCfg.ForceReplicate)
-	if err != nil {
-		_ = c.Error(errors.ErrChangefeedUpdateRefused.
-			GenWithStackByArgs(errors.Cause(err).Error()))
-		return
-	}
-
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
@@ -152,6 +164,24 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
 		return
+	}
+
+	scheme := sinkURIParsed.Scheme
+	topic := strings.TrimFunc(sinkURIParsed.Path, func(r rune) bool {
+		return r == '/'
+	})
+	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
+
+	ineligibleTables, _, err := getVerifiedTables(ctx, replicaCfg, h.server.GetKVStorage(), cfg.StartTs, scheme, topic, protocol)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if !replicaCfg.ForceReplicate && !cfg.ReplicaConfig.IgnoreIneligibleTable {
+		if len(ineligibleTables) != 0 {
+			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+			return
+		}
 	}
 
 	pdClient := h.server.GetPdClient()
@@ -192,12 +222,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		}
 	}()
 
-	co, err := h.server.GetCoordinator()
-	if err != nil {
-		needRemoveGCSafePoint = true
-		_ = c.Error(err)
-		return
-	}
 	err = co.CreateChangefeed(ctx, info)
 	if err != nil {
 		needRemoveGCSafePoint = true
@@ -617,12 +641,23 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	// verify changefeed filter
-	_, err = filter.NewFilter(oldCfInfo.Config.Filter, "", oldCfInfo.Config.CaseSensitive, oldCfInfo.Config.ForceReplicate)
+	scheme := sinkURIParsed.Scheme
+	topic := strings.TrimFunc(sinkURIParsed.Path, func(r rune) bool {
+		return r == '/'
+	})
+	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(oldCfInfo.Config.Sink.Protocol))
+
+	// use checkpointTs get snapshot from kv storage
+	ineligibleTables, _, err := getVerifiedTables(ctx, oldCfInfo.Config, h.server.GetKVStorage(), status.CheckpointTs, scheme, topic, protocol)
 	if err != nil {
-		_ = c.Error(errors.ErrChangefeedUpdateRefused.
-			GenWithStackByArgs(errors.Cause(err).Error()))
+		_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 		return
+	}
+	if !oldCfInfo.Config.ForceReplicate && !oldCfInfo.Config.IgnoreIneligibleTable {
+		if len(ineligibleTables) != 0 {
+			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+			return
+		}
 	}
 
 	// verify sink
@@ -744,12 +779,13 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 
 	if !ok {
 		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
-		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		_ = c.Error(errors.ErrMaintainerNotFounded)
 		return
 	}
 
 	targetNodeID := c.Query("targetNodeID")
-	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID))
+	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
+	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID), mode)
 	if err != nil {
 		log.Error("failed to move table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)
@@ -818,12 +854,13 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 
 	if !ok {
 		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
-		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		_ = c.Error(errors.ErrMaintainerNotFounded)
 		return
 	}
 
 	targetNodeID := c.Query("targetNodeID")
-	err = maintainer.MoveSplitTable(int64(tableId), node.ID(targetNodeID))
+	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
+	err = maintainer.MoveSplitTable(int64(tableId), node.ID(targetNodeID), mode)
 	if err != nil {
 		log.Error("failed to move split table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)
@@ -891,11 +928,11 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 
 	if !ok {
 		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
-		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		_ = c.Error(errors.ErrMaintainerNotFounded)
 		return
 	}
-
-	err = maintainer.SplitTableByRegionCount(int64(tableId))
+	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
+	err = maintainer.SplitTableByRegionCount(int64(tableId), mode)
 	if err != nil {
 		log.Error("failed to split table by region count", zap.Error(err), zap.Int64("tableID", tableId))
 		_ = c.Error(err)
@@ -962,11 +999,12 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 
 	if !ok {
 		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
-		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		_ = c.Error(errors.ErrMaintainerNotFounded)
 		return
 	}
 
-	err = maintainer.MergeTable(int64(tableId))
+	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
+	err = maintainer.MergeTable(int64(tableId), mode)
 	if err != nil {
 		log.Error("failed to merge table", zap.Error(err), zap.Int64("tableID", tableId))
 		_ = c.Error(err)
@@ -1021,11 +1059,12 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
 	if !ok {
 		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
-		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		_ = c.Error(errors.ErrMaintainerNotFounded)
 		return
 	}
 
-	tables := maintainer.GetTables()
+	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
+	tables := maintainer.GetTables(mode)
 
 	nodeTableInfoMap := make(map[string]*NodeTableInfo)
 
@@ -1091,11 +1130,12 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 
 	if !ok {
 		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("changefeed", changefeedID.String()))
-		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		_ = c.Error(errors.ErrMaintainerNotFounded)
 		return
 	}
 
-	number := maintainer.GetDispatcherCount()
+	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
+	number := maintainer.GetDispatcherCount(mode)
 	c.JSON(http.StatusOK, &DispatcherCount{Count: number})
 }
 
@@ -1179,6 +1219,55 @@ func (h *OpenAPIV2) syncState(c *gin.Context) {
 		NowTs:            api.JSONTime(time.Unix(ts/1e3, 0)),
 		Info:             "The data syncing is not finished, please wait",
 	})
+}
+
+func getVerifiedTables(
+	ctx context.Context,
+	replicaConfig *config.ReplicaConfig,
+	storage tidbkv.Storage, startTs uint64,
+	scheme string, topic string, protocol config.Protocol,
+) ([]string, []string, error) {
+	f, err := filter.NewFilter(replicaConfig.Filter, "", replicaConfig.CaseSensitive, replicaConfig.ForceReplicate)
+	if err != nil {
+		return nil, nil, err
+	}
+	tableInfos, ineligibleTables, eligibleTables, err := schemastore.
+		VerifyTables(f, storage, startTs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	err = f.Verify(tableInfos)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !config.IsMQScheme(scheme) {
+		return ineligibleTables, eligibleTables, nil
+	}
+
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(protocol.String()), protocol == config.ProtocolAvro)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = eventRouter.VerifyTables(tableInfos)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	selectors, err := columnselector.New(replicaConfig.Sink)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = selectors.VerifyTables(tableInfos, eventRouter)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if ctx.Err() != nil {
+		return nil, nil, errors.Trace(ctx.Err())
+	}
+
+	return ineligibleTables, eligibleTables, nil
 }
 
 func GetNamespaceValueWithDefault(c *gin.Context) string {

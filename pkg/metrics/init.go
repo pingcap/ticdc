@@ -40,4 +40,5 @@ func InitMetrics(registry *prometheus.Registry) {
 	gc.InitMetrics(registry)
 	metrics.InitCloudStorageMetrics(registry)
 	mq.InitMetrics(registry)
+	InitRedoMetrics(registry)
 }
