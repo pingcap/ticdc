@@ -167,7 +167,7 @@ func newEventBroker(
 	})
 
 	g.Go(func() error {
-		return c.logUnresetDispatchers(ctx)
+		return c.logUninitializedDispatchers(ctx)
 	})
 
 	g.Go(func() error {
@@ -213,7 +213,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		}
 		// Set sequence number for the event
 		dml.Seq = d.seq.Add(1)
-		dml.Epoch = d.epoch.Load()
+		dml.Epoch = d.epoch
 
 		lastStartTs = dml.GetStartTs()
 		lastCommitTs = dml.GetCommitTs()
@@ -232,7 +232,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
-	e.Epoch = d.epoch.Load()
+	e.Epoch = d.epoch
 	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
@@ -250,7 +250,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
-	re := event.NewResolvedEvent(watermark, d.id, d.epoch.Load())
+	re := event.NewResolvedEvent(watermark, d.id, d.epoch)
 	resolvedEvent := newWrapResolvedEvent(remoteID, re, d.getEventSenderState())
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
@@ -325,9 +325,12 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 	}
 }
 
-func (c *eventBroker) logUnresetDispatchers(ctx context.Context) error {
+func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
+	isUninitialized := func(d *dispatcherStat) bool {
+		return !d.isRemoved.Load() && !d.hasReceivedFirstResolvedTs.Load()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -335,14 +338,14 @@ func (c *eventBroker) logUnresetDispatchers(ctx context.Context) error {
 		case <-ticker.C:
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
-				if dispatcher.resetTs.Load() == 0 {
+				if isUninitialized(dispatcher) {
 					log.Info("dispatcher not reset", zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
 			})
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
-				if dispatcher.resetTs.Load() == 0 {
+				if isUninitialized(dispatcher) {
 					log.Info("table trigger dispatcher not reset", zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
@@ -401,6 +404,9 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 // Note: A true return value only indicates potential scanning need,
 // final determination occurs when the scanTask is actully processed.
 func (c *eventBroker) scanReady(task scanTask) bool {
+	if task.isRemoved.Load() {
+		return false
+	}
 	// If there is already a scan task running, skip this one.
 	if task.isTaskScanning.Load() {
 		return false
@@ -430,7 +436,7 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
-	if task.resetTs.Load() == 0 {
+	if task.epoch == 0 {
 		now := time.Now().Unix()
 		lastSendTime := task.lastReadySendTime.Load()
 		currentInterval := task.readyInterval.Load()
@@ -466,9 +472,9 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	remoteID := node.ID(task.info.GetServerID())
 	event := event.NewHandshakeEvent(
 		task.id,
-		task.resetTs.Load(),
+		task.startTs,
 		task.seq.Add(1),
-		task.epoch.Load(),
+		task.epoch,
 		task.startTableInfo.Load())
 	log.Debug("send handshake event to dispatcher",
 		zap.Any("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
@@ -499,7 +505,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		if len(commitTsList) > 16 {
 			newCommitTsList = commitTsList[:16]
 		}
-		e := event.NewSyncPointEvent(d.id, newCommitTsList, d.seq.Add(1), d.epoch.Load())
+		e := event.NewSyncPointEvent(d.id, newCommitTsList, d.seq.Add(1), d.epoch)
 		log.Debug("send syncpoint event to dispatcher",
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
@@ -536,6 +542,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		remoteID     = node.ID(task.info.GetServerID())
 		changefeedID = task.info.GetChangefeedID()
 	)
+	if task.isRemoved.Load() {
+		return
+	}
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
@@ -851,6 +860,9 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs ui
 }
 
 func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
+	if d.isRemoved.Load() {
+		return
+	}
 	if force {
 		d.isTaskScanning.Store(true)
 		c.taskChan[d.scanWorkerIndex] <- d
@@ -879,16 +891,13 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) *dispatcherStat {
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	defer c.metricsCollector.metricDispatcherCount.Inc()
-	filter := info.GetFilter()
 
 	id := info.GetID()
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
-	workerIndex := (common.GID)(id).Hash(uint64(len(c.messageCh)))
-	scanWorkerIndex := (common.GID)(id).Hash(uint64(len(c.taskChan)))
 
 	status := c.getOrSetChangefeedStatus(changefeedID)
-	dispatcher := newDispatcherStat(info, filter, scanWorkerIndex, workerIndex, status)
+	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), status)
 	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
@@ -905,7 +914,15 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		id,
 		span,
 		info.GetStartTs(),
-		func(resolvedTs uint64, latestCommitTs uint64) { c.onNotify(dispatcher, resolvedTs, latestCommitTs) },
+		func(resolvedTs uint64, latestCommitTs uint64) {
+			// FIXME: whether it will become a performance bottleneck with many dispatchers?
+			d := c.getDispatcher(id)
+			// If the dispatcher is removed, or not found, just ignore the notification.
+			if d == nil || d.isRemoved.Load() {
+				return
+			}
+			c.onNotify(d, resolvedTs, latestCommitTs)
+		},
 		info.IsOnlyReuse(),
 		info.GetBdrMode(),
 	)
@@ -1017,61 +1034,66 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat.isReadyReceivingData.Store(true)
 }
 
-func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
+func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	dispatcherID := dispatcherInfo.GetID()
-
 	start := time.Now()
-	stat := c.getDispatcher(dispatcherID)
-	if stat == nil {
+	oldStat := c.getDispatcher(dispatcherID)
+	if oldStat == nil {
 		// The dispatcher is not registered, register it.
-		// FIXME: Handle the error.
-		_ = c.addDispatcher(dispatcherInfo)
-		return
+		return c.addDispatcher(dispatcherInfo)
 	}
 
-	// Must set the isRunning to false before reset the dispatcher.
+	// 1. Mark the old dispatcher as removed.
+	// This will prevent any new scan tasks from being created for the old dispatcher
+	// because onNotify will check this flag.
+	// Note: Must set the isReadyReceivingData to false before reset the dispatcher.
 	// Otherwise, the scan task goroutine will not return before reset the dispatcher.
-	stat.isReadyReceivingData.Store(false)
+	oldStat.isReadyReceivingData.Store(false)
+	oldStat.isRemoved.Store(true)
 
-	// Wait until the scan task goroutine return before reset the dispatcher.
+	// 2. Wait for any ongoing scan task of the old dispatcher to complete.
 	for {
-		if !stat.isTaskScanning.Load() {
+		if !oldStat.isTaskScanning.Load() {
 			break
 		}
-		// Give other goroutines a chance to acquire the write lock
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	originSeq := stat.seq.Load()
-	originSentResolvedTs := stat.sentResolvedTs.Load()
-	stat.resetState(dispatcherInfo.GetStartTs())
-	newEpoch := dispatcherInfo.GetEpoch()
-	for {
-		oldEpoch := stat.epoch.Load()
-		if oldEpoch >= newEpoch {
-			break
-		}
-		if stat.epoch.CompareAndSwap(oldEpoch, newEpoch) {
-			break
-		}
+	// 3. Create a new dispatcherStat and replace the old one.
+	// The new dispatcherStat will be used for all future operations.
+	changefeedID := dispatcherInfo.GetChangefeedID()
+	status := c.getOrSetChangefeedStatus(changefeedID)
+	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), status)
+	newStat.copyStatistics(oldStat)
+	span := dispatcherInfo.GetTableSpan()
+	tableInfo, err := c.schemaStore.GetTableInfo(span.GetTableID(), dispatcherInfo.GetStartTs())
+	if err != nil {
+		log.Error("get table info from schemaStore failed",
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Int64("tableID", span.GetTableID()),
+			zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
+			zap.String("span", common.FormatTableSpan(span)),
+			zap.Error(err))
+		return err
+	}
+	newStat.updateTableInfo(tableInfo)
+
+	// Replace the old dispatcherStat with the new one.
+	if newStat.info.GetTableSpan().Equal(common.DDLSpan) {
+		c.tableTriggerDispatchers.Store(dispatcherID, newStat)
+	} else {
+		c.dispatchers.Store(dispatcherID, newStat)
 	}
 
 	log.Info("reset dispatcher",
-		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", stat.id), zap.Int64("tableID", stat.info.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
-		zap.Uint64("originStartTs", stat.info.GetStartTs()),
+		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
+		zap.String("span", common.FormatTableSpan(newStat.info.GetTableSpan())),
+		zap.Uint64("originStartTs", oldStat.info.GetStartTs()),
 		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
-		zap.Uint64("originSentResolvedTs", originSentResolvedTs),
-		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()),
-		zap.Uint64("originSeq", originSeq),
-		zap.Uint64("newSeq", stat.seq.Load()),
-		zap.Uint64("newEpoch", newEpoch),
-		zap.Bool("syncPointEnabled", stat.enableSyncPoint),
-		zap.Uint64("nextSyncPoint", stat.nextSyncPoint.Load()),
-		zap.Uint64("lastScannedCommitTs", stat.lastScannedCommitTs.Load()),
-		zap.Uint64("lastScannedStartTs", stat.lastScannedStartTs.Load()),
+		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
+	return nil
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

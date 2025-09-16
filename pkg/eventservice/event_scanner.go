@@ -128,7 +128,7 @@ func (s *eventScanner) scan(
 
 	iter := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
 	if iter == nil {
-		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch.Load())
+		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch)
 		events = append(events, resolved)
 		sess.appendEvents(events)
 		return 0, sess.events, false, nil
@@ -329,7 +329,7 @@ func finalizeScan(
 	events := merger.mergeWithPrecedingDDLs(resolvedBatch)
 	events = append(events, merger.resolveDDLEvents(endTs)...)
 
-	resolveTs := event.NewResolvedEvent(endTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch.Load())
+	resolveTs := event.NewResolvedEvent(endTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch)
 	events = append(events, resolveTs)
 	sess.appendEvents(events)
 	return nil
@@ -364,7 +364,7 @@ func interruptScan(
 			// This means we interrupt the scan at a position where the commitTs is different from the last batchDML commitTs
 			// In this case, we need to append the DDL less than or equal to the last batchDML commitTs and the resolved-ts event with the last batchDML commitTs
 			events = append(events, merger.resolveDDLEvents(merger.lastBatchDMLCommitTs)...)
-			resolvedTs := event.NewResolvedEvent(merger.lastBatchDMLCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
+			resolvedTs := event.NewResolvedEvent(merger.lastBatchDMLCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch)
 			events = append(events, resolvedTs)
 			log.Debug("scan interrupted at different commitTs with new event", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Uint64("CommitTs", merger.lastBatchDMLCommitTs), zap.Uint64("newCommitTs", newCommitTs), zap.Duration("duration", time.Since(session.startTime)))
 		}

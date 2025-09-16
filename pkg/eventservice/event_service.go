@@ -228,7 +228,8 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	if !ok {
 		return
 	}
-	c.resetDispatcher(dispatcherInfo)
+	// TODO: handle the error
+	_ = c.resetDispatcher(dispatcherInfo)
 }
 
 func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
