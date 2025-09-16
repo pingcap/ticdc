@@ -22,13 +22,14 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
+	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+
 	# prepare the same data in upstream and downstream to trigger duplicate entry error
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_file $CUR/data/test.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	cd $WORK_DIR
 
-	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_sql "CREATE DATABASE sink_retry;"
 	go-ycsb load mysql -P $CUR/conf/workload -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=sink_retry
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkTxnRandomError=25%return(true)'
