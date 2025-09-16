@@ -298,7 +298,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 			return context.Cause(ctx)
 		case <-ticker.C:
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
-				stat := value.(*dispatcherStat)
+				stat := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if !c.checkAndSendReady(stat) {
 					return true
 				}
