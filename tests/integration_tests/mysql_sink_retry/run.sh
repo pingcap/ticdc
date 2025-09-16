@@ -22,7 +22,7 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-    # prepare the same data in upstream and downstream to trigger duplicate entry error
+	# prepare the same data in upstream and downstream to trigger duplicate entry error
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_file $CUR/data/test.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
