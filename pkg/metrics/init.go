@@ -16,8 +16,8 @@ package metrics
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	"github.com/pingcap/tiflow/cdc/sink/metrics/mq"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -37,8 +37,9 @@ func InitMetrics(registry *prometheus.Registry) {
 	initLogPullerMetrics(registry)
 	common.InitCommonMetrics(registry)
 	initDynamicStreamMetrics(registry)
+
+	kafka.InitMetrics(registry)
 	gc.InitMetrics(registry)
 	metrics.InitCloudStorageMetrics(registry)
-	mq.InitMetrics(registry)
 	InitRedoMetrics(registry)
 }
