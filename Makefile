@@ -128,7 +128,14 @@ UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream
 
 include tools/Makefile
 
-generate-protobuf:
+go-generate: tools/bin/msgp tools/bin/stringer tools/bin/mockery
+	@echo "go generate"
+	@go generate ./...
+
+generate-protobuf: tools/bin/protoc tools/bin/protoc-gen-gogofaster \
+	tools/bin/protoc-gen-go tools/bin/protoc-gen-go-grpc \
+	tools/bin/protoc-gen-grpc-gateway tools/bin/protoc-gen-grpc-gateway-v2 \
+	tools/bin/protoc-gen-openapiv2
 	@echo "generate-protobuf"
 	./scripts/generate-protobuf.sh
 
