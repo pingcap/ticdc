@@ -17,7 +17,7 @@ check_time=60
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
-
+	stop_tidb_cluster
 	start_tidb_cluster --workdir $WORK_DIR
 
 	cd $WORK_DIR
@@ -34,13 +34,6 @@ function prepare() {
 	# Round1-specific resources are prepared by helper functions later
 }
 
-
-# Helpers
-start_cdc_only() {
-	cd $WORK_DIR
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
-}
 
 build_sink_and_create_changefeed() {
 	# args: changefeed_id, config_path, topic_prefix
@@ -100,7 +93,7 @@ run_problematic_and_assert() {
 }
 
 round_with_enable_splittable_check() {
-	prepare changefeed
+	prepare
 	
 	build_sink_and_create_changefeed "test" "$CUR/conf/changefeed.toml" "ticdc-split-table-check"
 	run_normal_ops_and_check "test"
@@ -112,8 +105,8 @@ round_with_enable_splittable_check() {
 }
 
 round_without_enable_splittable_check() {
-	# Start only TiCDC for the second round, reuse existing TiDB cluster.
-	start_cdc_only
+	prepare
+
 	build_sink_and_create_changefeed "test-disable" "$CUR/conf/changefeed_disable.toml" "ticdc-split-table-check-disable"
 	run_normal_ops_and_check "test-disable"
 	run_problematic_and_assert "test-disable" "disabled"
