@@ -52,7 +52,7 @@ mysql_groups=(
 	# G09
 	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
 	# G10
-	'changefeed_error bdr_mode fail_over_ddl_K'
+	'changefeed_error bdr_mode fail_over_ddl_K split_table_check'
 	# G11
 	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
@@ -90,7 +90,7 @@ kafka_groups=(
 	# G09
 	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K'
+	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
@@ -128,7 +128,7 @@ pulsar_groups=(
 	# G09
 	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K'
+	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
@@ -166,7 +166,7 @@ storage_groups=(
 	# G09
 	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K'
+	'changefeed_error batch_add_table fail_over_ddl_K  split_table_check'
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12

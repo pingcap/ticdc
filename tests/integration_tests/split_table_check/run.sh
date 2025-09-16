@@ -16,8 +16,9 @@ SINK_TYPE=$1
 check_time=60
 
 function prepare() {
-	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	stop_tidb_cluster
+	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
+
 	start_tidb_cluster --workdir $WORK_DIR
 
 	cd $WORK_DIR
@@ -82,11 +83,11 @@ run_problematic_and_assert() {
 		ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "failed" "splitable" ""
 	else
 		case $SINK_TYPE in
-			kafka)
-				ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "normal" "null" ""
+			mysql)
+				ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "failed" "splitable" ""
 				;;
 			*)
-				ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "failed" "splitable" ""
+				ensure 20 check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $cf_id "normal" "null" ""
 				;;
 		esac
 	fi
