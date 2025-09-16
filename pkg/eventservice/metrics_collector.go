@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -167,7 +168,7 @@ func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) {
 	mc.broker.dispatchers.Range(func(key, value any) bool {
 		snapshot.dispatcherCount++
-		dispatcher := value.(*dispatcherStat)
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 
 		if dispatcher.IsReadyRecevingData() {
 			snapshot.runningDispatcherCount++

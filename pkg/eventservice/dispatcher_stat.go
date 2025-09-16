@@ -52,6 +52,9 @@ type dispatcherStat struct {
 	filter             filter.Filter
 	//the start ts of the dispatcher
 	startTs uint64
+	// startTableInfo is the table info at the `startTs` of the dispatcher
+	// it is set after reset.
+	startTableInfo *common.TableInfo
 	// The epoch of the dispatcher.
 	// It should not be changed after the dispatcher is created.
 	epoch uint64
@@ -87,9 +90,6 @@ type dispatcherStat struct {
 
 	// ================== above are fields need copied when reset ==================
 	// =============================================================================
-
-	// startTableInfo is the table info of the dispatcher when it is registered or reset.
-	startTableInfo atomic.Pointer[common.TableInfo]
 
 	// The sentResolvedTs of the events that have been sent to the dispatcher.
 	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
@@ -140,6 +140,7 @@ func newDispatcherStat(
 	info DispatcherInfo,
 	scanWorkerCount uint64,
 	messageWorkerCount uint64,
+	startTableInfo *common.TableInfo,
 	changefeedStatus *changefeedStatus,
 ) *dispatcherStat {
 	id := info.GetID()
@@ -152,6 +153,7 @@ func newDispatcherStat(
 		filter:             info.GetFilter(),
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
+		startTableInfo:     startTableInfo,
 	}
 
 	// A small value to avoid too many scan tasks at the first place.
@@ -203,10 +205,6 @@ func (a *dispatcherStat) getEventSenderState() pevent.EventSenderState {
 		return pevent.EventSenderStateNormal
 	}
 	return pevent.EventSenderStatePaused
-}
-
-func (a *dispatcherStat) updateTableInfo(tableInfo *common.TableInfo) {
-	a.startTableInfo.Store(tableInfo)
 }
 
 func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
