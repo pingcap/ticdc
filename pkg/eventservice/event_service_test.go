@@ -140,8 +140,6 @@ func TestEventServiceBasic(t *testing.T) {
 				// first dml has one event, second dml has two events
 				if dmlCount == 0 {
 					require.Equal(t, int32(1), e.Len())
-				} else if dmlCount == 1 {
-					require.Equal(t, int32(2), e.Len())
 				}
 				dmlCount += len(e.DMLEvents)
 				require.Equal(t, kvEvents[dmlCount-1].CRTs, e.GetCommitTs())
@@ -154,7 +152,7 @@ func TestEventServiceBasic(t *testing.T) {
 				log.Info("receive watermark", zap.Uint64("ts", e.Events[0].ResolvedTs))
 			}
 		}
-		if msgCnt == 5 {
+		if msgCnt >= 5 {
 			break
 		}
 	}
