@@ -819,7 +819,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 		case <-ticker.C:
 			inActiveDispatchers := make([]*dispatcherStat, 0)
 			c.dispatchers.Range(func(key, value interface{}) bool {
-				dispatcher := value.(*dispatcherStat)
+				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				checkpointTs := dispatcher.checkpointTs.Load()
 				if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
 					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
@@ -831,7 +831,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 			})
 
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
-				dispatcher := value.(*dispatcherStat)
+				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isInactiveDispatcher(dispatcher) {
 					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
 				}
