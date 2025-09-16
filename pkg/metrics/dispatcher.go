@@ -127,7 +127,7 @@ var (
 	})
 )
 
-func InitDispatcherMetrics(registry *prometheus.Registry) {
+func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DispatcherManagerGauge)
 	registry.MustRegister(TableTriggerEventDispatcherGauge)
 	registry.MustRegister(EventDispatcherGauge)

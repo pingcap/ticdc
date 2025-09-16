@@ -49,7 +49,7 @@ var (
 		})
 )
 
-func InitSchemaStoreMetrics(registry *prometheus.Registry) {
+func initSchemaStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(SchemaStoreResolvedTsLagGauge)
 	registry.MustRegister(SchemaStoreResolvedRegisterTableGauge)
 	registry.MustRegister(SchemaStoreGetTableInfoCounter)
