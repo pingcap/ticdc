@@ -22,6 +22,9 @@ import (
 )
 
 // RedoLogType is the type of log
+//
+//msgp:ignore DDLEvent
+//go:generate msgp
 type RedoLogType int
 
 // RedoLog defines the persistent structure of redo log
@@ -43,9 +46,9 @@ type RedoDMLEvent struct {
 
 // RedoDDLEvent represents DDL event used in redo log persistent
 type RedoDDLEvent struct {
-	DDL       *DDLEventInRedoLog `msg:"ddl"`
-	Type      byte               `msg:"type"`
-	TableName common.TableName   `msg:"table-name"`
+	DDL       *DDLEvent        `msg:"ddl"`
+	Type      byte             `msg:"type"`
+	TableName common.TableName `msg:"table-name"`
 }
 
 // DMLEventInRedoLog is used to store DMLEvent in redo log v2 format
@@ -61,13 +64,6 @@ type DMLEventInRedoLog struct {
 	PreColumns []*RedoColumn `msg:"pre-columns"`
 
 	IndexColumns [][]int `msg:"index-columns"`
-}
-
-// DDLEventInRedoLog is used to store DDLEvent in redo log v2 format
-type DDLEventInRedoLog struct {
-	StartTs  uint64 `msg:"start-ts"`
-	CommitTs uint64 `msg:"commit-ts"`
-	Query    string `msg:"query"`
 }
 
 // RedoColumn is for column meta
@@ -184,22 +180,10 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
-	redoLog := &RedoLog{
-		RedoDDL: &RedoDDLEvent{
-			DDL: &DDLEventInRedoLog{
-				StartTs:  d.GetStartTs(),
-				CommitTs: d.GetCommitTs(),
-				Query:    d.Query,
-			},
-			Type: d.Type,
-		},
-		Type: RedoLogTypeDDL,
+	return &RedoLog{
+		RedoDDL: &RedoDDLEvent{DDL: d},
+		Type:    RedoLogTypeDDL,
 	}
-	if d.TableInfo != nil {
-		redoLog.RedoDDL.TableName = d.TableInfo.TableName
-	}
-
-	return redoLog
 }
 
 // GetCommitTs returns commit timestamp of the log event.
@@ -208,7 +192,7 @@ func (r *RedoLog) GetCommitTs() common.Ts {
 	case RedoLogTypeRow:
 		return r.RedoRow.Row.CommitTs
 	case RedoLogTypeDDL:
-		return r.RedoDDL.DDL.CommitTs
+		return r.RedoDDL.DDL.GetCommitTs()
 	default:
 		log.Panic("Unexpected redo log type")
 		return 0

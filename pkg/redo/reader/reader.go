@@ -46,9 +46,9 @@ type RedoLogReader interface {
 	// Run read and decode redo logs in background.
 	Run(ctx context.Context) error
 	// ReadNextRow read one row event from redo logs.
-	ReadNextRow(ctx context.Context) (*pevent.RedoDMLEvent, bool, error)
+	ReadNextRow(ctx context.Context) (*pevent.DMLEvent, bool, error)
 	// ReadNextDDL read one ddl event from redo logs.
-	ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEvent, bool, error)
+	ReadNextDDL(ctx context.Context) (*pevent.DDLEvent, bool, error)
 	// ReadMeta reads meta from redo logs and returns the latest checkpointTs and resolvedTs
 	ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error)
 }
@@ -87,8 +87,8 @@ type LogReaderConfig struct {
 type LogReader struct {
 	cfg   *LogReaderConfig
 	meta  *misc.LogMeta
-	rowCh chan *pevent.RedoDMLEvent
-	ddlCh chan *pevent.RedoDDLEvent
+	rowCh chan *pevent.DMLEvent
+	ddlCh chan *pevent.DDLEvent
 }
 
 // newLogReader creates a LogReader instance.
@@ -106,8 +106,8 @@ func newLogReader(ctx context.Context, cfg *LogReaderConfig) (*LogReader, error)
 
 	logReader := &LogReader{
 		cfg:   cfg,
-		rowCh: make(chan *pevent.RedoDMLEvent, defaultReaderChanSize),
-		ddlCh: make(chan *pevent.RedoDDLEvent, defaultReaderChanSize),
+		rowCh: make(chan *pevent.DMLEvent, defaultReaderChanSize),
+		ddlCh: make(chan *pevent.DDLEvent, defaultReaderChanSize),
 	}
 	// remove logs in local dir first, if have logs left belongs to previous changefeed with the same name may have error when apply logs
 	if err := os.RemoveAll(cfg.Dir); err != nil {
@@ -237,7 +237,7 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 }
 
 // ReadNextRow implement the `RedoLogReader` interface.
-func (l *LogReader) ReadNextRow(ctx context.Context) (row *pevent.RedoDMLEvent, ok bool, err error) {
+func (l *LogReader) ReadNextRow(ctx context.Context) (row *pevent.DMLEvent, ok bool, err error) {
 	select {
 	case <-ctx.Done():
 		err = errors.Trace(ctx.Err())
@@ -247,7 +247,7 @@ func (l *LogReader) ReadNextRow(ctx context.Context) (row *pevent.RedoDMLEvent, 
 }
 
 // ReadNextDDL implement the `RedoLogReader` interface.
-func (l *LogReader) ReadNextDDL(ctx context.Context) (ddl *pevent.RedoDDLEvent, ok bool, err error) {
+func (l *LogReader) ReadNextDDL(ctx context.Context) (ddl *pevent.DDLEvent, ok bool, err error) {
 	select {
 	case <-ctx.Done():
 		err = errors.Trace(ctx.Err())
@@ -347,37 +347,37 @@ func (h logHeap) Len() int {
 
 func (h logHeap) Less(i, j int) bool {
 	// we separate ddl and dml, so we only need to compare dml with dml, and ddl with ddl.
-	if h[i].data.Type == pevent.RedoLogTypeDDL {
-		if h[i].data.RedoDDL.DDL == nil {
+	if h[i].data.Type == pevent.LogTypeDDL {
+		if h[i].data.DDL.DDL == nil {
 			return true
 		}
-		if h[j].data.RedoDDL.DDL == nil {
+		if h[j].data.DDL.DDL == nil {
 			return false
 		}
-		return h[i].data.RedoDDL.DDL.CommitTs < h[j].data.RedoDDL.DDL.CommitTs
+		return h[i].data.DDL.DDL.CommitTs < h[j].data.DDL.DDL.CommitTs
 	}
 
-	if h[i].data.RedoRow.Row == nil {
+	if h[i].data.Row.Row == nil {
 		return true
 	}
-	if h[j].data.RedoRow.Row == nil {
+	if h[j].data.Row.Row == nil {
 		return false
 	}
 
-	if h[i].data.RedoRow.Row.CommitTs == h[j].data.RedoRow.Row.CommitTs {
-		if h[i].data.RedoRow.Row.StartTs != h[j].data.RedoRow.Row.StartTs {
-			return h[i].data.RedoRow.Row.StartTs < h[j].data.RedoRow.Row.StartTs
+	if h[i].data.Row.Row.CommitTs == h[j].data.Row.Row.CommitTs {
+		if h[i].data.Row.Row.StartTs != h[j].data.Row.Row.StartTs {
+			return h[i].data.Row.Row.StartTs < h[j].data.Row.Row.StartTs
 		}
 		// in the same txn, we need to sort by delete/update/insert order
-		if h[i].data.RedoRow.IsDelete() {
+		if h[i].data.Row.IsDelete() {
 			return true
-		} else if h[i].data.RedoRow.IsUpdate() {
-			return !h[j].data.RedoRow.IsDelete()
+		} else if h[i].data.Row.IsUpdate() {
+			return !h[j].data.Row.IsDelete()
 		}
 		return false
 	}
 
-	return h[i].data.RedoRow.Row.CommitTs < h[j].data.RedoRow.Row.CommitTs
+	return h[i].data.Row.Row.CommitTs < h[j].data.Row.Row.CommitTs
 }
 
 func (h logHeap) Swap(i, j int) {
