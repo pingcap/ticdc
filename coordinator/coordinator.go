@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
@@ -78,9 +77,7 @@ type coordinator struct {
 	controller *Controller
 	backend    changefeed.Backend
 
-	mc            messaging.MessageCenter
-	taskScheduler threadpool.ThreadPool
-
+	mc        messaging.MessageCenter
 	gcManager gc.Manager
 	pdClient  pd.Client
 	pdClock   pdutil.Clock
@@ -119,22 +116,16 @@ func New(node *node.Info,
 	}
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
-
-	c.taskScheduler = threadpool.NewThreadPoolDefault()
-
-	controller := NewController(
+	c.controller = NewController(
 		c.version,
 		c.nodeInfo,
 		c.changefeedChangeCh,
 		c.backend,
 		c.eventCh,
-		c.taskScheduler,
 		batchSize,
 		balanceCheckInterval,
 		c.pdClient,
 	)
-
-	c.controller = controller
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.RegisterOwnerChangeHandler(
@@ -187,13 +178,18 @@ func (c *coordinator) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	eg, cctx := errgroup.WithContext(ctx)
+	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
-		return c.run(cctx)
+		return c.run(ctx)
 	})
 	eg.Go(func() error {
-		return c.runHandleEvent(cctx)
+		return c.runHandleEvent(ctx)
 	})
+
+	eg.Go(func() error {
+		return c.controller.collectMetrics(ctx)
+	})
+
 	return eg.Wait()
 }
 
@@ -409,7 +405,6 @@ func (c *coordinator) Stop() {
 	if c.closed.CompareAndSwap(false, true) {
 		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
 		c.controller.Stop()
-		c.taskScheduler.Stop()
 		c.cancel()
 		// close eventCh after cancel, to avoid send or get event from the channel
 		c.eventCh.CloseAndDrain()

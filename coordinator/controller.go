@@ -78,10 +78,7 @@ type Controller struct {
 	messageCenter    messaging.MessageCenter
 
 	changefeedChangeCh chan []*ChangefeedChange
-
-	lastPrintStatusTime time.Time
-
-	apiLock sync.RWMutex
+	apiLock            sync.RWMutex
 }
 
 type ChangefeedChange struct {
@@ -98,7 +95,6 @@ func NewController(
 	changefeedChangeCh chan []*ChangefeedChange,
 	backend changefeed.Backend,
 	eventCh *chann.DrainableChann[*Event],
-	taskScheduler threadpool.ThreadPool,
 	batchSize int,
 	balanceInterval time.Duration,
 	pdClient pd.Client,
@@ -128,16 +124,15 @@ func NewController(
 				balanceInterval,
 			),
 		}),
-		eventCh:             eventCh,
-		operatorController:  oc,
-		messageCenter:       mc,
-		changefeedDB:        changefeedDB,
-		nodeManager:         nodeManager,
-		taskScheduler:       taskScheduler,
-		backend:             backend,
-		changefeedChangeCh:  changefeedChangeCh,
-		lastPrintStatusTime: time.Now(),
-		pdClient:            pdClient,
+		eventCh:            eventCh,
+		operatorController: oc,
+		messageCenter:      mc,
+		changefeedDB:       changefeedDB,
+		nodeManager:        nodeManager,
+		taskScheduler:      threadpool.NewThreadPoolDefault(),
+		backend:            backend,
+		changefeedChangeCh: changefeedChangeCh,
+		pdClient:           pdClient,
 	}
 	c.nodeChanged.changed = false
 
@@ -171,6 +166,23 @@ func NewController(
 	}
 	c.submitPeriodTask()
 	return c
+}
+
+func (c *Controller) collectMetrics(ctx context.Context) error {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
+			metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
+			metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
+			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
+			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
+		}
+	}
 }
 
 // HandleEvent implements the event-driven process mode
@@ -214,7 +226,6 @@ func (c *Controller) checkOnNodeChanged() {
 func (c *Controller) onPeriodTask() {
 	// resend bootstrap message
 	c.sendMessages(c.bootstrapper.ResendBootstrapMessage())
-	c.collectMetrics()
 }
 
 func (c *Controller) onMessage(msg *messaging.TargetMessage) {
@@ -495,10 +506,11 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 
 func (c *Controller) Stop() {
 	c.taskHandlerMutex.Lock()
-	defer c.taskHandlerMutex.Unlock()
 	for _, h := range c.taskHandlers {
 		h.Cancel()
 	}
+	c.taskHandlerMutex.Unlock()
+	c.taskScheduler.Stop()
 }
 
 func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {
@@ -692,17 +704,6 @@ func (c *Controller) newBootstrapMessage(id node.ID) *messaging.TargetMessage {
 		id,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: c.version})
-}
-
-func (c *Controller) collectMetrics() {
-	if time.Since(c.lastPrintStatusTime) > time.Second*20 {
-		metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
-		metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
-		metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
-		metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
-		metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
-		c.lastPrintStatusTime = time.Now()
-	}
 }
 
 func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.ChangeFeedID) {
