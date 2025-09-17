@@ -22,9 +22,9 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/applier"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tiflow/pkg/applier"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
