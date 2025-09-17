@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -191,6 +192,35 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 
 	a.lastReceivedResolvedTsTime.Store(src.lastReceivedResolvedTsTime.Load())
 	a.lastSentResolvedTsTime.Store(src.lastSentResolvedTsTime.Load())
+}
+
+func (a *dispatcherStat) recalculateFirstSyncpoint(oldSyncpoint uint64) {
+	if !a.enableSyncPoint {
+		return
+	}
+
+	if oldSyncpoint < a.startTs {
+		log.Panic("old syncpoint is less than startTs",
+			zap.Stringer("dispatcherID", a.id),
+			zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
+			zap.Uint64("oldSyncpoint", oldSyncpoint),
+			zap.Uint64("startTs", a.startTs))
+	}
+
+	a.nextSyncPoint.Store(oldSyncpoint)
+	for {
+		prevSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(oldSyncpoint).Add(-a.syncPointInterval))
+		if prevSyncPoint <= a.startTs {
+			break
+		}
+		log.Info("reset sync point",
+			zap.Stringer("dispatcherID", a.id),
+			zap.Int64("tableID", a.info.GetTableSpan().GetTableID()),
+			zap.Uint64("nextSyncPoint", a.nextSyncPoint.Load()),
+			zap.Uint64("prevSyncPoint", prevSyncPoint),
+			zap.Uint64("startTs", a.startTs))
+		a.nextSyncPoint.Store(prevSyncPoint)
+	}
 }
 
 func (a *dispatcherStat) isHandshaked() bool {
