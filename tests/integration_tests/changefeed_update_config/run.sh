@@ -21,6 +21,7 @@ function prepare() {
 
     # initialize upstream data with one split table
     run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+    run_sql_file $CUR/data/pre.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 }
 
 function create_changefeed() {
