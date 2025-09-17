@@ -453,7 +453,13 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
-	s.checkpointChan <- ts
+	select {
+	case s.checkpointChan <- ts:
+	case <-s.ctx.Done():
+		return
+		// We can just drop the checkpoint ts if the channel is full to avoid blocking since the  checkpointTs will come indefinitely
+	default:
+	}
 }
 
 func (s *sink) sendCheckpoint(ctx context.Context) error {
