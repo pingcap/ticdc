@@ -246,7 +246,7 @@ Loop:
 					eventQueueEmpty = true
 					continue Loop
 				}
-				path.blocking = s.handler.Handle(path.dest, eventBuf...) // addChek
+				path.blocking = s.handler.Handle(path.dest, eventBuf...)
 				if path.blocking {
 					s.eventQueue.blockPath(path)
 				}

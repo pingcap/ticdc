@@ -453,16 +453,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
-	select {
-	case <-s.ctx.Done():
-		log.Info("The sink's context is done, failed to add checkpoint ts",
-			zap.String("namespace", s.changefeedID.Namespace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Uint64("ts", ts),
-			zap.Error(s.ctx.Err()))
-		return
-	case s.checkpointChan <- ts:
-	}
+	s.checkpointChan <- ts
 }
 
 func (s *sink) sendCheckpoint(ctx context.Context) error {
@@ -486,8 +477,8 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case <-ticker.C:
-			s.ddlProducer.Heartbeat() // 5s
-		case ts, ok := <-s.checkpointChan: // 1s
+			s.ddlProducer.Heartbeat()
+		case ts, ok := <-s.checkpointChan:
 			if !ok {
 				log.Warn("kafka sink checkpoint channel closed",
 					zap.String("namespace", s.changefeedID.Namespace()),

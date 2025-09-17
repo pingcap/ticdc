@@ -137,9 +137,11 @@ func TestEventServiceBasic(t *testing.T) {
 				_ = mockStore.AppendEvents(dispatcherInfo.id, kvEvents[2].CRTs+1, kvEvents[2])
 			case *commonEvent.BatchDMLEvent:
 				require.Equal(t, "event-collector", msg.Topic)
-				// first dml has one event
+				// first dml has one event, second dml has two events
 				if dmlCount == 0 {
 					require.Equal(t, int32(1), e.Len())
+				} else if dmlCount == 1 {
+					require.Equal(t, int32(2), e.Len())
 				}
 				dmlCount += len(e.DMLEvents)
 				require.Equal(t, kvEvents[dmlCount-1].CRTs, e.GetCommitTs())
