@@ -761,7 +761,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 
 	// Create shared info with enableSplittableCheck=true
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(),
+		common.NewChangefeedID(common.DefaultKeyspace),
 		"system",
 		false,
 		false,
