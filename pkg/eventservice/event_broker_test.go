@@ -64,7 +64,7 @@ func TestCheckNeedScan(t *testing.T) {
 
 	info := newMockDispatcherInfoForTest(t)
 	info.startTs = 100
-	disp := newDispatcherStat(info, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(info, 0, 0, nil, changefeedStatus)
 	// Set the eventStoreResolvedTs and eventStoreCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
 	disp.eventStoreResolvedTs.Store(102)
@@ -77,7 +77,7 @@ func TestCheckNeedScan(t *testing.T) {
 	disp.isTaskScanning.Store(false)
 	log.Info("Pass case 1")
 
-	// Case 2: ResetTs is 0, it should return false.
+	// Case 2: epoch is 0, it should return false.
 	// And the broker will send a ready event.
 	needScan = broker.scanReady(disp)
 	require.False(t, needScan)
@@ -89,7 +89,7 @@ func TestCheckNeedScan(t *testing.T) {
 	// And we can get a scan task.
 	// And the task.scanning should be true.
 	// And the broker will send a handshake event.
-	disp.resetTs.Store(100)
+	disp.epoch = 1
 	needScan = broker.scanReady(disp)
 	require.True(t, needScan)
 	e = <-broker.messageCh[0]
@@ -109,24 +109,22 @@ func TestOnNotify(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.epoch = 1
 	disInfo.startTs = 100
 
 	err := broker.addDispatcher(disInfo)
 	require.NoError(t, err)
 
-	disp := broker.getDispatcher(disInfo.GetID())
+	disp := broker.getDispatcher(disInfo.GetID()).Load()
 	require.NotNil(t, disp)
-	require.Equal(t, disp.id, disInfo.GetID())
+	require.Equal(t, disp, disInfo.GetID())
 
 	broker.resetDispatcher(disInfo)
-
-	disp.resetState(100)
-	require.Equal(t, disp.isHandshaked.Load(), false)
 	require.Equal(t, disp.isReadyReceivingData.Load(), true)
 	require.Equal(t, disp.lastScannedCommitTs.Load(), uint64(100))
 	require.Equal(t, disp.lastScannedStartTs.Load(), uint64(0))
 
-	disp.isHandshaked.Store(true)
+	disp.setHandshaked()
 
 	// Case 1: The resolvedTs is greater than the startTs, it should be updated.
 	notifyMsgs := notifyMsg{101, 1}
@@ -182,34 +180,34 @@ func TestCURDDispatcher(t *testing.T) {
 	dispInfo := newMockDispatcherInfoForTest(t)
 	// Case 1: Add and get a dispatcher.
 	broker.addDispatcher(dispInfo)
-	disp := broker.getDispatcher(dispInfo.GetID())
+	disp := broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 
 	// Case 2: Reset a dispatcher.
 	dispInfo.startTs = 1002
 	broker.resetDispatcher(dispInfo)
-	disp = broker.getDispatcher(dispInfo.GetID())
+	disp = broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 	// Check the resetTs is updated.
-	require.Equal(t, disp.resetTs.Load(), dispInfo.GetStartTs())
+	require.Equal(t, disp.startTs, dispInfo.GetStartTs())
 
 	// Case 3: Pause a dispatcher.
 	broker.pauseDispatcher(dispInfo)
-	disp = broker.getDispatcher(dispInfo.GetID())
+	disp = broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.False(t, disp.isReadyReceivingData.Load())
 
 	// Case 4: Resume a dispatcher.
 	broker.resumeDispatcher(dispInfo)
-	disp = broker.getDispatcher(dispInfo.GetID())
+	disp = broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.True(t, disp.isReadyReceivingData.Load())
 
 	// Case 5: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
-	disp = broker.getDispatcher(dispInfo.GetID())
+	disp = broker.getDispatcher(dispInfo.GetID()).Load()
 	require.Nil(t, disp)
 }
 
@@ -219,7 +217,7 @@ func TestHandleResolvedTs(t *testing.T) {
 
 	dispInfo := newMockDispatcherInfoForTest(t)
 	broker.addDispatcher(dispInfo)
-	disp := broker.getDispatcher(dispInfo.GetID())
+	disp := broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 
@@ -250,10 +248,10 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify dispatcher exists
-	dispatcher := broker.getDispatcher(dispInfo.GetID())
+	dispatcher := broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, dispatcher)
 	require.Equal(t, dispatcher.id, dispInfo.GetID())
-	dispatcher.isHandshaked.Store(true)
+	dispatcher.setHandshaked()
 
 	// Create a heartbeat with progress for the existing dispatcher
 	heartbeat := &DispatcherHeartBeatWithServerID{

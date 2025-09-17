@@ -551,6 +551,7 @@ type mockDispatcherInfo struct {
 	integrity         *integrity.Config
 	tz                *time.Location
 	mode              int64
+	epoch             uint64
 	enableSyncPoint   bool
 	nextSyncPoint     uint64
 	syncPointInterval time.Duration
@@ -655,7 +656,7 @@ func (m *mockDispatcherInfo) GetMode() int64 {
 }
 
 func (m *mockDispatcherInfo) GetEpoch() uint64 {
-	return 0
+	return m.epoch
 }
 
 func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {

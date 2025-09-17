@@ -35,9 +35,8 @@ type mockMounter struct {
 }
 
 func makeDispatcherReady(disp *dispatcherStat) {
-	disp.isHandshaked.Store(true)
+	disp.setHandshaked()
 	disp.isReadyReceivingData.Store(true)
-	disp.resetTs.Store(disp.info.GetStartTs())
 }
 
 func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
@@ -69,7 +68,7 @@ func TestEventScanner(t *testing.T) {
 
 	ctx := context.Background()
 
-	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, 0, 0, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -386,7 +385,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, 0, 0, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -465,7 +464,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, 0, 0, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 
 	err := broker.addDispatcher(disp.info)
@@ -1579,7 +1578,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 
-	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, 0, 0, nil, changefeedStatus)
 
 	// Prepare a table info for success case
 	helper := event.NewEventTestHelper(t)
