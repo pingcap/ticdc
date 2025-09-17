@@ -64,6 +64,9 @@ type sink struct {
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
+
+	// To perceive the context done from the upper layer
+	ctx context.Context
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
@@ -130,6 +133,8 @@ func New(
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
 		statistics:               statistics,
 		isNormal:                 atomic.NewBool(true),
+
+		ctx: ctx,
 	}, nil
 }
 
@@ -236,7 +241,13 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
-	s.checkpointChan <- ts
+	select {
+	case s.checkpointChan <- ts:
+	case <-s.ctx.Done():
+		return
+		// We can just drop the checkpoint ts if the channel is full to avoid blocking since the  checkpointTs will come indefinitely
+	default:
+	}
 }
 
 func (s *sink) sendCheckpointTs(ctx context.Context) error {

@@ -24,9 +24,9 @@ import (
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
@@ -51,7 +51,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID, mode int64) er
 
 	replications := spanController.GetTasksByTableID(tableId)
 	if len(replications) != 1 {
-		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
+		return errors.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
 	}
 
 	replication := replications[0]
@@ -63,7 +63,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID, mode int64) er
 	op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
 	ret := operatorController.AddOperator(op)
 	if !ret {
-		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+		return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
 	}
 
 	// check the op is finished or not
@@ -76,7 +76,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID, mode int64) er
 	}
 
 	if !op.IsFinished() {
-		return apperror.ErrTimeout.GenWithStackByArgs("move table operator is timeout")
+		return errors.ErrTimeout.GenWithStackByArgs("move table operator is timeout")
 	}
 
 	return nil
@@ -108,7 +108,7 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID, mode int6
 			for _, op := range opList {
 				op.OnTaskRemoved()
 			}
-			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+			return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
 		}
 		opList = append(opList, op)
 	}
@@ -139,7 +139,7 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID, mode int6
 		log.Info("wait for move split table operator finished", zap.Int("count", count))
 	}
 
-	return apperror.ErrTimeout.GenWithStackByArgs("move split table operator is timeout")
+	return errors.ErrTimeout.GenWithStackByArgs("move split table operator is timeout")
 }
 
 // only for test
@@ -154,11 +154,11 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 
 	if !spanController.IsTableExists(tableID) {
 		// the table is not exist in this node
-		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
+		return errors.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
 	}
 
 	if tableID == 0 {
-		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
+		return errors.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
 	}
 
 	replications := spanController.GetTasksByTableID(tableID)
@@ -187,7 +187,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 	op := operator.NewSplitDispatcherOperator(spanController, replications[0], splitTableSpans, []node.ID{}, nil)
 	ret := operatorController.AddOperator(op)
 	if !ret {
-		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create split dispatcher operator")
+		return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create split dispatcher operator")
 	}
 
 	count := 0
@@ -204,7 +204,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 
 	log.Info("successfully split table by region count", zap.Any("tableID", tableID), zap.Any("replications", replications))
 
-	return apperror.ErrTimeout.GenWithStackByArgs("split table operator is timeout")
+	return errors.ErrTimeout.GenWithStackByArgs("split table operator is timeout")
 }
 
 // only for test
@@ -219,11 +219,11 @@ func (c *Controller) mergeTable(tableID int64, mode int64) error {
 
 	if !spanController.IsTableExists(tableID) {
 		// the table is not exist in this node
-		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
+		return errors.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
 	}
 
 	if tableID == 0 {
-		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
+		return errors.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
 	}
 
 	replications := spanController.GetTasksByTableID(tableID)
@@ -259,7 +259,7 @@ func (c *Controller) mergeTable(tableID int64, mode int64) error {
 		moveOp := operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
 		ret := operatorController.AddOperator(moveOp)
 		if !ret {
-			return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+			return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
 		}
 
 		count := 0
@@ -276,13 +276,13 @@ func (c *Controller) mergeTable(tableID int64, mode int64) error {
 		}
 
 		if !flag {
-			return apperror.ErrTimeout.GenWithStackByArgs("move table operator before merge table is timeout")
+			return errors.ErrTimeout.GenWithStackByArgs("move table operator before merge table is timeout")
 		}
 	}
 
 	operator := operatorController.AddMergeOperator(replications[idx : idx+2])
 	if operator == nil {
-		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge operator")
+		return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge operator")
 	}
 
 	count := 0
@@ -299,7 +299,7 @@ func (c *Controller) mergeTable(tableID int64, mode int64) error {
 
 	log.Info("successfully merge table", zap.Any("tableID", tableID), zap.Any("restReplicationsLen", len(replications)-1))
 
-	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
+	return errors.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
 }
 
 func (c *Controller) checkParams(tableId int64, targetNode node.ID, mode int64) error {
@@ -310,11 +310,11 @@ func (c *Controller) checkParams(tableId int64, targetNode node.ID, mode int64) 
 
 	if !spanController.IsTableExists(tableId) {
 		// the table is not exist in this node
-		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
+		return errors.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
 	}
 
 	if tableId == 0 {
-		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableId)
+		return errors.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableId)
 	}
 
 	nodes := c.nodeManager.GetAliveNodes()
@@ -326,7 +326,7 @@ func (c *Controller) checkParams(tableId int64, targetNode node.ID, mode int64) 
 		}
 	}
 	if !hasNode {
-		return apperror.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
+		return errors.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
 	}
 
 	return nil

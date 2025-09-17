@@ -823,6 +823,7 @@ func (e *eventStore) updateMetricsOnce() {
 	pdTime := e.pdClock.CurrentTime()
 	pdPhyTs := oracle.GetPhysical(pdTime)
 	minResolvedTs := uint64(0)
+	uninitializedStatCount := 0
 	e.dispatcherMeta.RLock()
 	for _, subStats := range e.dispatcherMeta.tableStats {
 		for _, subStat := range subStats {
@@ -831,21 +832,25 @@ func (e *eventStore) updateMetricsOnce() {
 			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
 			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
 			const largeResolvedTsLagInSecs = 30
-			if subStat.initialized.Load() && resolvedLag >= largeResolvedTsLagInSecs {
-				lastReceiveDMLTimeRepr := "never"
-				if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
-					lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+			if subStat.initialized.Load() {
+				if resolvedLag >= largeResolvedTsLagInSecs {
+					lastReceiveDMLTimeRepr := "never"
+					if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
+						lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+					}
+					log.Warn("resolved ts lag is too large for initialized subscription",
+						zap.Uint64("subID", uint64(subStat.subID)),
+						zap.Int64("tableID", subStat.tableSpan.TableID),
+						zap.Uint64("resolvedTs", resolvedTs),
+						zap.Float64("resolvedLag(s)", resolvedLag),
+						zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
+						zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
+						zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
+						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
+						zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 				}
-				log.Warn("resolved ts lag is too large for initialized subscription",
-					zap.Uint64("subID", uint64(subStat.subID)),
-					zap.Int64("tableID", subStat.tableSpan.TableID),
-					zap.Uint64("resolvedTs", resolvedTs),
-					zap.Float64("resolvedLag(s)", resolvedLag),
-					zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
-					zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
-					zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
-					zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
-					zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
+			} else {
+				uninitializedStatCount++
 			}
 			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
 			if minResolvedTs == 0 || resolvedTs < minResolvedTs {
@@ -859,6 +864,9 @@ func (e *eventStore) updateMetricsOnce() {
 		}
 	}
 	e.dispatcherMeta.RUnlock()
+	if uninitializedStatCount > 0 {
+		log.Info("found uninitialized subscriptions", zap.Int("count", uninitializedStatCount))
+	}
 	if minResolvedTs == 0 {
 		metrics.EventStoreResolvedTsLagGauge.Set(0)
 		return

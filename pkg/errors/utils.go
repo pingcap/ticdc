@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package apperror
+package errors
 
 import (
 	"strings"
 
 	gmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/errno"
 	"github.com/pingcap/tidb/pkg/infoschema"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -68,11 +67,11 @@ func IsIgnorableMySQLDDLError(err error) bool {
 
 // IsRetryableDMLError check if the error is a retryable dml error.
 func IsRetryableDMLError(err error) bool {
-	if !cerror.IsRetryableError(err) {
+	if !IsRetryableError(err) {
 		return false
 	}
 	// Check if the error is connection errors that can retry safely.
-	if cerror.IsConnectionError(err) {
+	if IsConnectionError(err) {
 		return true
 	}
 	// Check if the error is a retriable TiDB error or MySQL error.
@@ -86,7 +85,7 @@ func IsRetryableDDLError(err error) bool {
 	}
 
 	// All DDLs should be idempotent in theory.
-	if cerror.IsUnretryableConnectionError(err) {
+	if IsUnretryableConnectionError(err) {
 		return true
 	}
 
