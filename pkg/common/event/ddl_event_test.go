@@ -16,8 +16,8 @@ package event
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +41,7 @@ func TestDDLEvent(t *testing.T) {
 		Query:        ddlJob.Query,
 		TableInfo:    common.WrapTableInfo(ddlJob.SchemaName, ddlJob.BinlogInfo.TableInfo),
 		FinishedTs:   ddlJob.BinlogInfo.FinishedTS,
-		Err:          apperror.ErrDDLEventError.GenWithStackByArgs("test").Error(),
+		Err:          errors.ErrDDLEventError.GenWithStackByArgs("test").Error(),
 	}
 	ddlEvent.TableInfo.InitPrivateFields()
 

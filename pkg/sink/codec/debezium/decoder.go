@@ -164,13 +164,16 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	tableInfo := d.queryTableInfo()
 	commitTs := d.getCommitTs()
 	event := &commonEvent.DMLEvent{
-		Rows:            chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1),
+		Rows:            chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity),
 		StartTs:         commitTs,
 		CommitTs:        commitTs,
 		TableInfo:       tableInfo,
 		PhysicalTableID: tableInfo.TableName.TableID,
 		Length:          1,
 	}
+	event.AddPostFlushFunc(func() {
+		event.Rows.Destroy(1, tableInfo.GetFieldSlice())
+	})
 	columns := tableInfo.GetColumns()
 	before, ok1 := d.valuePayload["before"].(map[string]interface{})
 	if ok1 {

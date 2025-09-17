@@ -22,11 +22,11 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -47,6 +47,8 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
+
+	maxReadyEventIntervalSeconds = 10
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -429,10 +431,22 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// the dispatcher is not reset yet.
 	if task.resetTs.Load() == 0 {
+		now := time.Now().Unix()
+		lastSendTime := task.lastReadySendTime.Load()
+		currentInterval := task.readyInterval.Load()
+		if now-lastSendTime < currentInterval {
+			return false
+		}
 		remoteID := node.ID(task.info.GetServerID())
 		event := event.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
+		task.lastReadySendTime.Store(now)
+		newInterval := currentInterval * 2
+		if newInterval > maxReadyEventIntervalSeconds {
+			newInterval = maxReadyEventIntervalSeconds
+		}
+		task.readyInterval.Store(newInterval)
 		updateMetricEventServiceSendCommandCount(task.info.GetMode())
 		return false
 	}
@@ -757,7 +771,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		// Send the message to the dispatcher.
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
-			_, ok := err.(apperror.AppError)
+			_, ok := err.(errors.AppError)
 			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Stringer("tMsg", tMsg), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
@@ -783,6 +797,9 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInterval time.Duration) error {
 	ticker := time.NewTicker(tickInterval)
 	log.Info("update dispatcher send ts goroutine is started")
+	isInactiveDispatcher := func(d *dispatcherStat) bool {
+		return d.isHandshaked.Load() && time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -795,7 +812,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 				if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
 					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
 				}
-				if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
+				if isInactiveDispatcher(dispatcher) {
 					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
 				}
 				return true
@@ -803,14 +820,14 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
-				if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
+				if isInactiveDispatcher(dispatcher) {
 					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
 				}
 				return true
 			})
 
 			for _, d := range inActiveDispatchers {
-				log.Info("remove in-active dispatcher", zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
+				log.Warn("remove in-active dispatcher", zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
 				c.removeDispatcher(d.info)
 			}
 		}

@@ -21,8 +21,8 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	. "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
+	. "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"

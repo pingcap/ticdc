@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -504,7 +503,7 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 				message.Err = &heartbeatpb.RunningError{
 					Time:    time.Now().String(),
 					Node:    appcontext.GetID(),
-					Code:    string(apperror.ErrorCode(err)),
+					Code:    string(errors.ErrorCode(err)),
 					Message: err.Error(),
 				}
 				e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
