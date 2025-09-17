@@ -191,7 +191,7 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 	})
 
 	// Step 3: close the sink and cancel the context, so the AddCheckpointTs will return
-	t.Run("deadlock_scenario", func(t *testing.T) {
+	t.Run("deadlock_resolve_scenario", func(t *testing.T) {
 		// Create a new mock sink for this test to avoid interference
 		deadlockMockSink := newMockKafkaSink(ctx, cancel)
 
@@ -205,19 +205,19 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 		deadlockMockSink.CloseSinkAndCancelContext()
 
 		// Now try to send a checkpoint message
-		// This should block because there's no consumer for the channel
+		// This should not block because the context is canceled
 		done := make(chan bool, 1)
 		go func() {
-			// This should block indefinitely
+			// This should not block
 			handler.Handle(deadlockDispatcherManager, checkpointTsMessage)
 			done <- true
 		}()
 
 		select {
 		case <-done:
+			// Expected: the handler should complete without blocking.
 			t.Log("Handler completed normally")
 		case <-time.After(1 * time.Second):
-			// Expected: the handler should be blocked
 			t.Fatal("deadlock: handler is blocked in AddCheckpointTs")
 		}
 	})
