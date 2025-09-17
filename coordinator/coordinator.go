@@ -315,7 +315,7 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 	if err != nil {
 		errCode, _ := errors.RFCCode(err)
 		state := config.StateWarning
-		if errors.IsChangefeedGCFastFailErrorCode(errCode) || errors.ShouldFailChangefeed(errors.New(err.Error()+string(errCode))) {
+		if errors.IsChangefeedGCFastFailErrorCode(errCode) {
 			state = config.StateFailed
 		}
 		change := &ChangefeedChange{
