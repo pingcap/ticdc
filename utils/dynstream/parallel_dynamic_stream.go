@@ -142,7 +142,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 
 	area := s.handler.GetArea(path, dest)
 	pi := newPathInfo[A, P, T, D, H](area, path, dest)
-	pi.setStream(s.streams[s.hash(path)])
+	pi.setStream(s.streams[s.hash(path)]) // cf id
 	s.pathMap.m[path] = pi
 	s.pathMap.Unlock()
 
