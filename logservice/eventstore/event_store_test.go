@@ -460,6 +460,12 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 			require.Equal(t, true, subStat.dispatchers.subscribers[dispatcherID2].isStopped.Load())
 		}
 	}
+	{
+		dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID2]
+		require.NotNil(t, dispatcherStat)
+		require.Equal(t, logpuller.SubscriptionID(2), dispatcherStat.subStat.subID)
+		require.Equal(t, logpuller.SubscriptionID(1), dispatcherStat.removingSubStat.subID)
+	}
 
 	// case 4: subStat 2 advance quicker or the same as subStat 1,
 	// dispatcher 2 read data from subStat 2 and totally remove itself from the subsriber list of subStat 1
@@ -484,5 +490,11 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 			require.NotNil(t, subStat)
 			require.Equal(t, 1, len(subStat.dispatchers.subscribers))
 		}
+	}
+	{
+		dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID2]
+		require.NotNil(t, dispatcherStat)
+		require.Equal(t, logpuller.SubscriptionID(2), dispatcherStat.subStat.subID)
+		require.Nil(t, dispatcherStat.removingSubStat)
 	}
 }

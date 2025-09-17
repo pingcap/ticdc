@@ -551,7 +551,7 @@ func (e *eventStore) RegisterDispatcher(
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
 			subStat.dispatchers.Lock()
 			defer subStat.dispatchers.Unlock()
-for _, subscriber := range subStat.dispatchers.subscribers {
+			for _, subscriber := range subStat.dispatchers.subscribers {
 				if !subscriber.isStopped.Load() {
 					subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
 				}
@@ -737,26 +737,26 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	if pendingSubStatReady {
 		e.dispatcherMeta.Lock()
 		// check stat again because we release the lock for a short period
-		stat = e.dispatcherMeta.dispatcherStats[dispatcherID]
-		if stat == nil {
-			e.dispatcherMeta.Unlock()
-			log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
-			return nil
+		stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
+		if ok {
+			// GetIterator for the same dispatcher won't be called concurrently.
+			// So if the dispatcher is not unregistered during the unlock period,
+			// we can safely update stat.pendingSubStat as stat.subStat.
+			e.stopReceiveEventFromSubStat(dispatcherID, stat.subStat)
+			stat.removingSubStat = stat.subStat
+			stat.subStat = stat.pendingSubStat
+			stat.pendingSubStat = nil
 		}
-		// GetIterator for the same dispatcher won't be called concurrently.
-		// So if the dispatcher is not unregistered during the unlock period,
-		// we can safely update stat.pendingSubStat as stat.subStat.
-		e.stopReceiveEventFromSubStat(dispatcherID, stat.subStat)
-		stat.removingSubStat = stat.subStat
-		stat.subStat = stat.pendingSubStat
-		stat.pendingSubStat = nil
-		subStat = stat.subStat
 		e.dispatcherMeta.Unlock()
 	}
 
 	if cleanRemovingSubStat {
 		e.dispatcherMeta.Lock()
-		e.detachFromSubStat(dispatcherID, stat.removingSubStat)
+		stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
+		if ok && stat.removingSubStat != nil {
+			e.detachFromSubStat(dispatcherID, stat.removingSubStat)
+			stat.removingSubStat = nil
+		}
 		e.dispatcherMeta.Unlock()
 	}
 
