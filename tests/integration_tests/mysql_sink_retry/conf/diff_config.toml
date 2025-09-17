@@ -13,7 +13,7 @@ check-struct-only = false
 
     target-instance = "tidb0"
 
-    target-check-tables = ["sink_retry.usertable"]
+    target-check-tables = ["sink_retry.usertable", "mysql_sink_retry_duplicate_entry.cdc_multi_data_type"]
 
 [data-sources]
 [data-sources.mysql1]

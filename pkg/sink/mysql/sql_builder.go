@@ -53,9 +53,7 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 
 	// Build complete log content in a single string
 	var logBuilder strings.Builder
-	logBuilder.WriteString("=== PreparedDMLs Debug Info ===\n")
-	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d\n", totalCount, d.rowCount))
-	logBuilder.WriteString("----------------------------------------\n")
+	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d :", totalCount, d.rowCount))
 
 	// Build SQL statements and arguments section
 	for i, sql := range d.sqls {
@@ -81,8 +79,8 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 		argsStr += ")"
 
 		// Add formatted SQL and args to log content
-		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s\n", i+1, sql))
-		logBuilder.WriteString(fmt.Sprintf("      Args: %s\n", argsStr))
+		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, sql))
+		logBuilder.WriteString(fmt.Sprintf("      Args: %s,", argsStr))
 	}
 
 	// Build timestamp information
@@ -93,10 +91,9 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 		startTsList[i] = event.GetStartTs()
 	}
 
-	logBuilder.WriteString(fmt.Sprintf("----------------------------------------\n"))
-	logBuilder.WriteString(fmt.Sprintf("CommitTs: %v\n", commitTsList))
-	logBuilder.WriteString(fmt.Sprintf("StartTs:  %v\n", startTsList))
-	logBuilder.WriteString(fmt.Sprintf("=== End PreparedDMLs Debug Info ===\n"))
+	logBuilder.WriteString(fmt.Sprintf("CommitTs: %v,", commitTsList))
+	logBuilder.WriteString(fmt.Sprintf("StartTs:  %v,", startTsList))
+	logBuilder.WriteString("End")
 
 	// Output the complete log content in a single call
 	log.Debug(logBuilder.String())
