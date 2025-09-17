@@ -364,7 +364,6 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		subStat := subStats[subID]
 		require.NotNil(t, subStat)
 		subStat.resolvedTs.Store(ts)
-
 	}
 	// ============ prepare two subscriptions ============
 	// add a dispatcher to create an subscription
