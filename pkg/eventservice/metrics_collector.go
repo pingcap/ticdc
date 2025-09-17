@@ -242,8 +242,8 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.eventStoreResolvedTs.Load()),
 		zap.Duration("lag", lag),
 		zap.Duration("updateDiff",
-			time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())-
-				time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())),
+			time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())-
+				time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())),
 		zap.Bool("isPaused", !snapshot.slowestDispatcher.IsReadyRecevingData()),
 		zap.Uint64("epoch", snapshot.slowestDispatcher.epoch),
 		zap.Uint64("seq", snapshot.slowestDispatcher.seq.Load()),

@@ -50,10 +50,9 @@ type dispatcherStat struct {
 	messageWorkerIndex int
 	info               DispatcherInfo
 	filter             filter.Filter
-	//the start ts of the dispatcher
+	// the start ts of the dispatcher
 	startTs uint64
 	// startTableInfo is the table info at the `startTs` of the dispatcher
-	// it is set after reset.
 	startTableInfo *common.TableInfo
 	// The epoch of the dispatcher.
 	// It should not be changed after the dispatcher is created.

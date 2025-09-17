@@ -337,16 +337,14 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 			return context.Cause(ctx)
 		case <-ticker.C:
 			c.dispatchers.Range(func(key, value interface{}) bool {
-				dispatcherPtr := value.(*atomic.Pointer[dispatcherStat])
-				dispatcher := dispatcherPtr.Load()
+				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isUninitialized(dispatcher) {
 					log.Info("dispatcher not reset", zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
 			})
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
-				dispatcherPtr := value.(*atomic.Pointer[dispatcherStat])
-				dispatcher := dispatcherPtr.Load()
+				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isUninitialized(dispatcher) {
 					log.Info("table trigger dispatcher not reset", zap.Any("dispatcherID", dispatcher.id))
 				}
@@ -410,8 +408,7 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 		return false
 	}
 
-	// make sure only one scan task can run at the same time.
-	if !task.isTaskScanning.CompareAndSwap(false, true) {
+	if task.isTaskScanning.Load() {
 		return false
 	}
 
@@ -864,6 +861,10 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs ui
 
 func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 	if d.isRemoved.Load() {
+		return
+	}
+	// make sure only one scan task can run at the same time.
+	if !d.isTaskScanning.CompareAndSwap(false, true) {
 		return
 	}
 	if force {
