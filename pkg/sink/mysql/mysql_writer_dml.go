@@ -533,11 +533,13 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
 
-	log.Info("inSafeMode",
+	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
+		zap.Bool("eventCommitTs is less than replicatingTs", event.CommitTs < event.ReplicatingTs),
 		zap.Uint64("firstRowCommitTs", event.CommitTs),
 		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
-		zap.Bool("safeMode", w.cfg.SafeMode))
+		zap.Bool("cfgSafeMode", w.cfg.SafeMode),
+		zap.Bool("isInErrorCausedSafeMode", w.isInErrorCausedSafeMode))
 
 	var (
 		queries  []string

@@ -41,10 +41,9 @@ function run() {
 	sleep 5
 
 	run_sql "CREATE TABLE sink_retry.finish_mark_1 (a int primary key);"
-	
+
 	# write the same data in upstream and downstream to trigger duplicate entry error
 	run_sql_file $CUR/data/up_data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	echo "fizz write data finish"
 
 	sleep 30
 	check_table_exists "sink_retry.finish_mark_1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
@@ -52,14 +51,10 @@ function run() {
 
 	go-ycsb load mysql -P $CUR/conf/workload -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=sink_retry
 
-
-
 	sleep 10
-
 	run_sql "CREATE TABLE sink_retry.finish_mark_2 (a int primary key);"
 	sleep 30
 	check_table_exists "sink_retry.finish_mark_2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
-	sleep 1800
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
