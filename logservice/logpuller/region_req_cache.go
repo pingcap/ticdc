@@ -67,21 +67,23 @@ type requestCache struct {
 	// channel to signal when space becomes available
 	spaceAvailable chan struct{}
 
-	lastCheckStaleRequestTime time.Time
+	lastCheckStaleRequestTime atomic.Time
 }
 
 func newRequestCache(maxPendingCount int) *requestCache {
-	return &requestCache{
+	res := &requestCache{
 		pendingQueue: make(chan regionReq, maxPendingCount), // Large buffer to reduce blocking
 		sentRequests: struct {
 			sync.RWMutex
 			regionReqs map[SubscriptionID]map[uint64]regionReq
 		}{regionReqs: make(map[SubscriptionID]map[uint64]regionReq)},
-		pendingCount:              atomic.Int64{},
-		maxPendingCount:           int64(maxPendingCount),
-		spaceAvailable:            make(chan struct{}, 16), // Buffered to avoid blocking
-		lastCheckStaleRequestTime: time.Now(),
+		pendingCount:    atomic.Int64{},
+		maxPendingCount: int64(maxPendingCount),
+		spaceAvailable:  make(chan struct{}, 16), // Buffered to avoid blocking
 	}
+
+	res.lastCheckStaleRequestTime.Store(time.Now())
+	return res
 }
 
 // add adds a new region request to the cache
@@ -221,7 +223,7 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 // clearStaleRequest clears stale requests from the cache
 // Note: Sometimes, the CDC sends the same region request to TiKV multiple times. In such cases, this method is needed to reduce the pendingSize.
 func (c *requestCache) clearStaleRequest() {
-	if time.Since(c.lastCheckStaleRequestTime) < checkStaleRequestInterval {
+	if time.Since(c.lastCheckStaleRequestTime.Load()) < checkStaleRequestInterval {
 		return
 	}
 	c.sentRequests.Lock()
@@ -247,7 +249,7 @@ func (c *requestCache) clearStaleRequest() {
 		c.pendingCount.Store(0)
 	}
 
-	c.lastCheckStaleRequestTime = time.Now()
+	c.lastCheckStaleRequestTime.Store(time.Now())
 }
 
 // clear removes all requests and returns them
