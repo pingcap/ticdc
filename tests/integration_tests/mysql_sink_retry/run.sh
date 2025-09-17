@@ -24,10 +24,6 @@ function run() {
 
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	# prepare the same data in upstream and downstream to trigger duplicate entry error
-	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql_file $CUR/data/test.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-
 	cd $WORK_DIR
 
 	run_sql "CREATE DATABASE sink_retry;"
@@ -37,6 +33,10 @@ function run() {
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"
 	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+
+	# write the same data in upstream and downstream to trigger duplicate entry error
+	run_sql_file $CUR/data/test.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	run_sql "CREATE TABLE sink_retry.finish_mark_1 (a int primary key);"
 	sleep 30
