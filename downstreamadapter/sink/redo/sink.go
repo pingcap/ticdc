@@ -78,7 +78,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
-			zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
@@ -87,7 +87,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	dmlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoRowLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
-			zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
@@ -165,7 +165,7 @@ func (s *Sink) Close(_ bool) {
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close ddl writer",
-				zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 				zap.Error(err))
 		}
@@ -173,7 +173,7 @@ func (s *Sink) Close(_ bool) {
 	if s.dmlWriter != nil {
 		if err := s.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close dml writer",
-				zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 				zap.Error(err))
 		}
@@ -182,7 +182,7 @@ func (s *Sink) Close(_ bool) {
 		s.statistics.Close()
 	}
 	log.Info("redo manager closed",
-		zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+		zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 		zap.String("changefeed", s.cfg.ChangeFeedID.Name()))
 }
 

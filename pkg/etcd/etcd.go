@@ -50,24 +50,24 @@ func CaptureInfoKeyPrefix(clusterID string) string {
 }
 
 // TaskPositionKeyPrefix is the prefix of task position keys
-func TaskPositionKeyPrefix(clusterID, namespace string) string {
-	return NamespacedPrefix(clusterID, namespace) + taskPositionKey
+func TaskPositionKeyPrefix(clusterID, keyspace string) string {
+	return KeyspacePrefix(clusterID, keyspace) + taskPositionKey
 }
 
 // ChangefeedStatusKeyPrefix is the prefix of changefeed status keys
-func ChangefeedStatusKeyPrefix(clusterID, namespace string) string {
-	return NamespacedPrefix(clusterID, namespace) + ChangefeedStatusKey
+func ChangefeedStatusKeyPrefix(clusterID, keyspace string) string {
+	return KeyspacePrefix(clusterID, keyspace) + ChangefeedStatusKey
 }
 
 // GetEtcdKeyChangeFeedList returns the prefix key of all changefeed config
-func GetEtcdKeyChangeFeedList(clusterID, namespace string) string {
-	return fmt.Sprintf("%s/changefeed/info", NamespacedPrefix(clusterID, namespace))
+func GetEtcdKeyChangeFeedList(clusterID, keyspace string) string {
+	return fmt.Sprintf("%s/changefeed/info", KeyspacePrefix(clusterID, keyspace))
 }
 
 // GetEtcdKeyChangeFeedInfo returns the key of a changefeed config
 func GetEtcdKeyChangeFeedInfo(clusterID string, changefeedID common.ChangeFeedDisplayName) string {
 	return fmt.Sprintf("%s/%s", GetEtcdKeyChangeFeedList(clusterID,
-		changefeedID.Namespace), changefeedID.Name)
+		changefeedID.Keyspace), changefeedID.Name)
 }
 
 // GetEtcdKeyCaptureInfo returns the key of a capture info
@@ -77,7 +77,7 @@ func GetEtcdKeyCaptureInfo(clusterID, id string) string {
 
 // GetEtcdKeyJob returns the key for a job status
 func GetEtcdKeyJob(clusterID string, changeFeedID common.ChangeFeedDisplayName) string {
-	return ChangefeedStatusKeyPrefix(clusterID, changeFeedID.Namespace) + "/" + changeFeedID.Name
+	return ChangefeedStatusKeyPrefix(clusterID, changeFeedID.Keyspace) + "/" + changeFeedID.Name
 }
 
 // MigrateBackupKey is the key of backup data during a migration.
@@ -117,7 +117,7 @@ type CDCEtcdClient interface {
 
 	GetUpstreamInfo(ctx context.Context,
 		upstreamID config.UpstreamID,
-		namespace string,
+		keyspace string,
 	) (*config.UpstreamInfo, error)
 
 	GetGCServiceID() string
@@ -230,8 +230,8 @@ func (c *CDCEtcdClientImpl) GetChangeFeeds(ctx context.Context) (
 	int64,
 	map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, error,
 ) {
-	// todo: support namespace
-	key := GetEtcdKeyChangeFeedList(c.ClusterID, common.DefaultNamespace)
+	// todo: support keyspace
+	key := GetEtcdKeyChangeFeedList(c.ClusterID, common.DefaultKeyspace)
 
 	resp, err := c.Client.Get(ctx, key, clientv3.WithPrefix())
 	if err != nil {
@@ -244,7 +244,7 @@ func (c *CDCEtcdClientImpl) GetChangeFeeds(ctx context.Context) (
 		if err != nil {
 			return 0, nil, err
 		}
-		details[common.NewChangeFeedDisplayName(id, common.DefaultNamespace)] = kv
+		details[common.NewChangeFeedDisplayName(id, common.DefaultKeyspace)] = kv
 	}
 	return revision, details, nil
 }
@@ -422,7 +422,7 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 			Tp:         CDCKeyTypeUpStream,
 			ClusterID:  c.ClusterID,
 			UpstreamID: upstreamInfo.ID,
-			Namespace:  info.ChangefeedID.Namespace(),
+			Keyspace:   info.ChangefeedID.Keyspace(),
 		}
 		upstreamEtcdKeyStr := upstreamInfoKey.String()
 		upstreamResp, err := c.Client.Get(ctx, upstreamEtcdKeyStr)
@@ -446,7 +446,7 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 		}
 	}
 
-	changeFeedID := common.NewChangeFeedDisplayName(info.ChangefeedID.Name(), info.ChangefeedID.Namespace())
+	changeFeedID := common.NewChangeFeedDisplayName(info.ChangefeedID.Name(), info.ChangefeedID.Keyspace())
 	infoKey := GetEtcdKeyChangeFeedInfo(c.ClusterID, changeFeedID)
 	jobKey := GetEtcdKeyJob(c.ClusterID, changeFeedID)
 	infoData, err := info.Marshal()
@@ -489,7 +489,7 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 	}
 	if !resp.Succeeded {
 		log.Warn(fmt.Sprintf("unexpected etcd transaction failure, operation: %s", operation),
-			zap.String("namespace", changeFeedID.Namespace),
+			zap.String("keyspace", changeFeedID.Keyspace),
 			zap.String("changefeed", changeFeedID.Name))
 		errMsg := fmt.Sprintf("%s changefeed %s", operation, changeFeedID)
 		return errors.ErrMetaOpFailed.GenWithStackByArgs(errMsg)
@@ -536,9 +536,9 @@ func (c *CDCEtcdClientImpl) DeleteCaptureInfo(ctx context.Context, captureID str
 	}
 	// we need to clean all task position related to this capture when the capture is offline
 	// otherwise the task positions may leak
-	// FIXME (dongmen 2022.9.28): find a way to use changefeed's namespace
-	taskKey := TaskPositionKeyPrefix(c.ClusterID, common.DefaultNamespace)
-	// the taskKey format is /tidb/cdc/{clusterID}/{namespace}/task/position/{captureID}
+	// FIXME (dongmen 2022.9.28): find a way to use changefeed's keyspace
+	taskKey := TaskPositionKeyPrefix(c.ClusterID, common.DefaultKeyspace)
+	// the taskKey format is /tidb/cdc/{clusterID}/{keyspace}/task/position/{captureID}
 	taskKey = fmt.Sprintf("%s/%s", taskKey, captureID)
 	_, err = c.Client.Delete(ctx, taskKey, clientv3.WithPrefix())
 	if err != nil {
@@ -594,13 +594,13 @@ func (c *CDCEtcdClientImpl) GetEnsureGCServiceID(tag string) string {
 // GetUpstreamInfo get a upstreamInfo from etcd server
 func (c *CDCEtcdClientImpl) GetUpstreamInfo(ctx context.Context,
 	upstreamID config.UpstreamID,
-	namespace string,
+	keyspace string,
 ) (*config.UpstreamInfo, error) {
 	Key := CDCKey{
 		Tp:         CDCKeyTypeUpStream,
 		ClusterID:  c.ClusterID,
 		UpstreamID: upstreamID,
-		Namespace:  namespace,
+		Keyspace:   keyspace,
 	}
 	KeyStr := Key.String()
 	resp, err := c.Client.Get(ctx, KeyStr)
@@ -665,7 +665,7 @@ func SetupEmbedEtcd(dir string) (clientURL *url.URL, e *embed.Etcd, err error) {
 }
 
 // extractKeySuffix extracts the suffix of an etcd key, such as extracting
-// "6a6c6dd290bc8732" from /tidb/cdc/cluster/namespace/changefeed/info/6a6c6dd290bc8732
+// "6a6c6dd290bc8732" from /tidb/cdc/cluster/keyspace/changefeed/info/6a6c6dd290bc8732
 func extractKeySuffix(key string) (string, error) {
 	subs := strings.Split(key, "/")
 	if len(subs) < 2 {

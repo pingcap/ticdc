@@ -74,18 +74,18 @@ func (m *MockProcessorInterface) EXPECT() *MockProcessorInterfaceMockRecorder {
 }
 
 // Get mocks base method.
-func (m *MockProcessorInterface) Get(ctx context.Context, namespace, changefeedID, captureID string) (*v2.ProcessorDetail, error) {
+func (m *MockProcessorInterface) Get(ctx context.Context, keyspace, changefeedID, captureID string) (*v2.ProcessorDetail, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Get", ctx, namespace, changefeedID, captureID)
+	ret := m.ctrl.Call(m, "Get", ctx, keyspace, changefeedID, captureID)
 	ret0, _ := ret[0].(*v2.ProcessorDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Get indicates an expected call of Get.
-func (mr *MockProcessorInterfaceMockRecorder) Get(ctx, namespace, changefeedID, captureID interface{}) *gomock.Call {
+func (mr *MockProcessorInterfaceMockRecorder) Get(ctx, keyspace, changefeedID, captureID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockProcessorInterface)(nil).Get), ctx, namespace, changefeedID, captureID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockProcessorInterface)(nil).Get), ctx, keyspace, changefeedID, captureID)
 }
 
 // List mocks base method.

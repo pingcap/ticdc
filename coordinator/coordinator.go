@@ -24,7 +24,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -378,7 +380,7 @@ func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeF
 		return errors.Trace(err)
 	}
 	// update gc safepoint after create changefeed
-	return c.updateGCSafepoint(ctx)
+	return c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID)
 }
 
 func (c *coordinator) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
@@ -397,8 +399,8 @@ func (c *coordinator) UpdateChangefeed(ctx context.Context, change *config.Chang
 	return c.controller.UpdateChangefeed(ctx, change)
 }
 
-func (c *coordinator) ListChangefeeds(ctx context.Context) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
-	return c.controller.ListChangefeeds(ctx)
+func (c *coordinator) ListChangefeeds(ctx context.Context, keyspace string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
+	return c.controller.ListChangefeeds(ctx, keyspace)
 }
 
 func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
@@ -426,10 +428,8 @@ func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
-func (c *coordinator) updateGCSafepoint(
-	ctx context.Context,
-) error {
-	minCheckpointTs := c.controller.calculateGCSafepoint()
+func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
+	minCheckpointTs := c.controller.calculateGlobalGCSafepoint()
 	// check if the upstream has a changefeed, if not we should update the gc safepoint
 	if minCheckpointTs == math.MaxUint64 {
 		ts := c.pdClock.CurrentTime()
@@ -441,6 +441,59 @@ func (c *coordinator) updateGCSafepoint(
 	gcSafepointUpperBound := minCheckpointTs - 1
 	err := c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, false)
 	return errors.Trace(err)
+}
+
+func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
+	barrierMap := c.controller.calculateKeyspaceGCBarrier()
+
+	for keyspaceName := range barrierMap {
+		err := c.updateKeyspaceGcBarrier(ctx, barrierMap, keyspaceName)
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	return nil
+}
+
+func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, barrierMap map[string]uint64, keyspaceName string) error {
+	// Obtain keyspace metadata from PD
+	keyspaceMeta, err := c.pdClient.LoadKeyspace(ctx, keyspaceName)
+	if err != nil {
+		return cerror.ErrLoadKeyspaceFailed.Wrap(err)
+	}
+	keyspaceID := keyspaceMeta.Id
+
+	barrierTS, ok := barrierMap[keyspaceName]
+	if !ok || barrierTS == math.MaxUint64 {
+		ts := c.pdClock.CurrentTime()
+		barrierTS = oracle.GoTimeToTS(ts)
+	}
+
+	barrierTsUpperBound := barrierTS - 1
+	err = c.gcManager.TryUpdateKeypsaceGCBarrier(ctx, keyspaceID, keyspaceName, barrierTsUpperBound, false)
+	return errors.Trace(err)
+}
+
+// updateGCSafepointByChangefeed update the gc safepoint by changefeed
+// On next gen, we should update the gc barrier for the specific keyspace
+// Otherwise we should update the global gc safepoint
+func (c *coordinator) updateGCSafepointByChangefeed(ctx context.Context, changefeedID common.ChangeFeedID) error {
+	if kerneltype.IsNextGen() {
+		barrierMap := c.controller.calculateKeyspaceGCBarrier()
+		return c.updateKeyspaceGcBarrier(ctx, barrierMap, changefeedID.Keyspace())
+	}
+	return c.updateGlobalGcSafepoint(ctx)
+}
+
+// updateGCSafepoint update the gc safepoint
+// On next gen, we should update the gc barrier for all keyspaces
+// Otherwise we should update the global gc safepoint
+func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
+	if kerneltype.IsNextGen() {
+		return c.updateAllKeyspaceGcBarriers(ctx)
+	}
+	return c.updateGlobalGcSafepoint(ctx)
 }
 
 // GetEnsureGCServiceID return the prefix for the gc service id when changefeed is creating

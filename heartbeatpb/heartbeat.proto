@@ -43,7 +43,7 @@ message ACK {
 message InfluencedDispatchers {
     InfluenceType InfluenceType = 1;
     // only exist when type is normal
-	repeated DispatcherID DispatcherIDs = 2; 
+	repeated DispatcherID DispatcherIDs = 2;
     // only exist when type is DB.
 	int64 SchemaID = 3;
     // only exist when type is all or db, and in heartbeat response.
@@ -155,7 +155,7 @@ message MaintainerBootstrapResponse {
     //
     // For nodes without a table trigger event dispatcher:
     // - checkpoint_ts is set to 0
-    uint64 checkpoint_ts = 4; 
+    uint64 checkpoint_ts = 4;
 }
 
 message MaintainerPostBootstrapRequest {
@@ -273,7 +273,7 @@ enum ComponentState {
     Removed = 2;
     Initializing = 3;
     Preparing = 4; // Preparing for merge, not ready for receive data from event collector
-    MergeReady = 5; // Ready for merge(upstream is finishing prepare data), but not begin send data to dispatcher. 
+    MergeReady = 5; // Ready for merge(upstream is finishing prepare data), but not begin send data to dispatcher.
     WaitingMerge = 6; // the old dispatcher is waiting merge ready and then be closed
 }
 
@@ -293,5 +293,5 @@ message ChangefeedID {
     uint64 high = 1;
     uint64 low = 2;
     string name = 3;
-    string namespace = 4;
+    string keyspace = 4;
 }

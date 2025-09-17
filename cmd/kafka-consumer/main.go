@@ -21,6 +21,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/google/uuid"
@@ -37,6 +38,7 @@ var (
 )
 
 func main() {
+	debug.SetMemoryLimit(14 * 1024 * 1024 * 1024)
 	var (
 		upstreamURIStr  string
 		configFile      string

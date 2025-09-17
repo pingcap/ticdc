@@ -356,9 +356,9 @@ var (
 		`bad changefeed id, please match the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$", the length should no more than %d, eg, "simple-changefeed-task"`,
 		errors.RFCCodeText("CDC:ErrInvalidChangefeedID"),
 	)
-	ErrInvalidNamespace = errors.Normalize(
-		`bad namespace, please match the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$", the length should no more than %d, eg, "simple-namespace-test"`,
-		errors.RFCCodeText("CDC:ErrInvalidNamespace"),
+	ErrInvalidKeyspace = errors.Normalize(
+		`bad keyspace, please match the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$", the length should no more than %d, eg, "simple-keyspace-test"`,
+		errors.RFCCodeText("CDC:ErrInvalidKeyspace"),
 	)
 	ErrInvalidEtcdKey = errors.Normalize(
 		"invalid key: %s",
@@ -557,6 +557,14 @@ var (
 	ErrUpdateServiceSafepointFailed = errors.Normalize(
 		"updating service safepoint failed",
 		errors.RFCCodeText("CDC:ErrUpdateServiceSafepointFailed"),
+	)
+	ErrUpdateGCBarrierFailed = errors.Normalize(
+		"updating gc barrier failed",
+		errors.RFCCodeText("CDC:ErrUpdateGCBarrierFailed"),
+	)
+	ErrLoadKeyspaceFailed = errors.Normalize(
+		"loading keyspace failed",
+		errors.RFCCodeText("CDC:ErrLoadKeyspaceFailed"),
 	)
 	ErrUpstreamMissMatch = errors.Normalize(
 		"upstream missmatch,old: %d, new %d",

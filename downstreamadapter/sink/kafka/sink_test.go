@@ -32,8 +32,7 @@ import (
 	"go.uber.org/atomic"
 )
 
-func newKafkaSinkForTest() (*sink, error) {
-	ctx := context.Background()
+func newKafkaSinkForTest(ctx context.Context) (*sink, error) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
 	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
@@ -140,8 +139,10 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	}
 	dmlEvent.CommitTs = 2
 
-	kafkaSink, err := newKafkaSinkForTest()
+	ctx, cancel := context.WithCancel(context.Background())
+	kafkaSink, err := newKafkaSinkForTest(ctx)
 	require.NoError(t, err)
+	defer cancel()
 
 	kafkaSink.ddlProducer.(*kafka.MockSaramaSyncProducer).SyncProducer.ExpectSendMessageAndSucceed()
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
@@ -157,4 +158,9 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		func() bool {
 			return count.Load() == int64(3)
 		}, 5*time.Second, time.Second)
+
+	// case 2: add checkpoint ts when sink is closed and it will not block
+	kafkaSink.Close(false)
+	cancel()
+	kafkaSink.AddCheckpointTs(12345)
 }

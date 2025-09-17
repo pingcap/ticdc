@@ -101,7 +101,7 @@ func (e Expression) validateForPulsar() error {
 		}
 	} else if !pulsarTopicNameRE.MatchString(topicName) {
 		return errors.ErrPulsarInvalidTopicExpression.GenWithStackByArgs(
-			"it should be in the format of <tenant>/<namespace>/<topic> or <topic> " +
+			"it should be in the format of <tenant>/<keyspace>/<topic> or <topic> " +
 				"and topic name must contain '{schema}'")
 	}
 

@@ -332,7 +332,7 @@ func (a *BatchEncoder) columns2AvroSchema(
 	top := &avroSchemaTop{
 		Tp:        "record",
 		Name:      common.SanitizeName(tableName.Table),
-		Namespace: getAvroNamespace(a.namespace, tableName.Schema),
+		Namespace: getAvroNamespace(a.keyspace, tableName.Schema),
 		Fields:    nil,
 	}
 	for _, info := range input.colInfos {
@@ -708,10 +708,10 @@ func SetupEncoderAndSchemaRegistry4Testing(
 	}
 
 	return &BatchEncoder{
-		namespace: commonType.DefaultNamespace,
-		schemaM:   schemaM,
-		result:    make([]*common.Message, 0, 1),
-		config:    config,
+		keyspace: commonType.DefaultKeyspace,
+		schemaM:  schemaM,
+		result:   make([]*common.Message, 0, 1),
+		config:   config,
 	}, nil
 }
 
