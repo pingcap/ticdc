@@ -15,17 +15,21 @@ package middleware
 
 import (
 	"bufio"
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
 	"go.uber.org/zap"
 )
@@ -213,5 +217,34 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 	if err != nil {
 		_ = c.Error(err)
 		return
+	}
+}
+
+// KeyspaceCheckerMiddleware check if the request keyspace is valid
+func KeyspaceCheckerMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		keyspace := c.Query(api.APIOpVarKeyspace)
+		if keyspace != "" && keyspace != common.DefaultKeyspace {
+			pdAPIClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
+
+			meta, err := pdAPIClient.LoadKeyspace(c.Request.Context(), keyspace)
+			if errors.IsKeyspaceNotExistError(err) {
+				c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+				c.Abort()
+				return
+			} else if err != nil {
+				c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
+				c.Abort()
+				return
+			}
+
+			if meta.State != keyspacepb.KeyspaceState_ENABLED {
+				c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+				c.Abort()
+				return
+			}
+		}
+
+		c.Next()
 	}
 }

@@ -135,7 +135,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		err = s.sendDDLEvent(v)
 	default:
 		log.Error("pulsar sink doesn't support this type of block event",
-			zap.String("namespace", s.changefeedID.Namespace()),
+			zap.String("namespace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
 		return errors.ErrInvalidEventType.GenWithStackByArgs(commonEvent.TypeToString(event.GetType()))
@@ -177,7 +177,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 	}
 	log.Info("pulsar sink send DDL event",
-		zap.String("namespace", s.changefeedID.Namespace()), zap.String("changefeed", s.changefeedID.Name()),
+		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
 		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()))
 	return nil
 }
@@ -197,12 +197,12 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
 func (s *sink) sendCheckpoint(ctx context.Context) error {
-	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
-	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 
 	defer func() {
-		metrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
-		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+		metrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	}()
 	var (
 		msg *common.Message
@@ -215,7 +215,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		case ts, ok := <-s.checkpointTsChan:
 			if !ok {
 				log.Info("pulsar sink checkpoint channel closed",
-					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
@@ -363,12 +363,12 @@ const (
 
 // batchEncodeRun collect messages into batch and add them to the encoder group.
 func (s *sink) batchEncodeRun(ctx context.Context) error {
-	namespace, changefeed := s.changefeedID.Namespace(), s.changefeedID.Name()
-	metricBatchDuration := metrics.WorkerBatchDuration.WithLabelValues(namespace, changefeed)
-	metricBatchSize := metrics.WorkerBatchSize.WithLabelValues(namespace, changefeed)
+	keyspace, changefeed := s.changefeedID.Keyspace(), s.changefeedID.Name()
+	metricBatchDuration := metrics.WorkerBatchDuration.WithLabelValues(keyspace, changefeed)
+	metricBatchSize := metrics.WorkerBatchSize.WithLabelValues(keyspace, changefeed)
 	defer func() {
-		metrics.WorkerBatchDuration.DeleteLabelValues(namespace, changefeed)
-		metrics.WorkerBatchSize.DeleteLabelValues(namespace, changefeed)
+		metrics.WorkerBatchDuration.DeleteLabelValues(keyspace, changefeed)
+		metrics.WorkerBatchSize.DeleteLabelValues(keyspace, changefeed)
 	}()
 
 	ticker := time.NewTicker(batchInterval)
@@ -379,7 +379,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		msgCount, err := s.batch(ctx, msgsBuf, ticker)
 		if err != nil {
 			log.Error("pulsar sink batch dml events failed",
-				zap.String("namespace", s.changefeedID.Namespace()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Error(err))
 			return errors.Trace(err)
@@ -416,7 +416,7 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 	case msg, ok := <-s.rowChan:
 		if !ok {
 			log.Info("pulsar sink row event channel closed",
-				zap.String("namespace", s.changefeedID.Namespace()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()))
 			return msgCount, nil
 		}
@@ -435,7 +435,7 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 		case msg, ok := <-s.rowChan:
 			if !ok {
 				log.Info("pulsar sink row event channel closed",
-					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return msgCount, nil
 			}
@@ -473,7 +473,7 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 		case event, ok := <-s.rowChan:
 			if !ok {
 				log.Info("pulsar sink row event channel closed",
-					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
@@ -485,8 +485,8 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 }
 
 func (s *sink) sendMessages(ctx context.Context) error {
-	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
-	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 
 	var err error
 	outCh := s.comp.encoderGroup.Output()
@@ -497,7 +497,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 		case future, ok := <-outCh:
 			if !ok {
 				log.Info("pulsar sink encoder group output channel closed",
-					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
@@ -524,7 +524,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	if s.tableSchemaStore == nil {
 		log.Warn("kafka sink table schema store is not set",
-			zap.String("namespace", s.changefeedID.Namespace()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Uint64("ts", ts))
 		return nil

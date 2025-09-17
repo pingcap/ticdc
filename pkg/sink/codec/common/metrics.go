@@ -34,5 +34,5 @@ func InitMetrics(registry *prometheus.Registry) {
 
 // CleanMetrics remove metrics belong to the given changefeed.
 func CleanMetrics(changefeedID common.ChangeFeedID) {
-	compressionRatio.DeleteLabelValues(changefeedID.Namespace(), changefeedID.Name())
+	compressionRatio.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name())
 }

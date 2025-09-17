@@ -110,11 +110,11 @@ func NewFileWriter(
 		storage:   extStorage,
 
 		metricFsyncDuration: metrics.RedoFsyncDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
 	}
 	if w.op.GetUUIDGenerator != nil {
 		w.uuidGenerator = w.op.GetUUIDGenerator()
@@ -227,11 +227,11 @@ func (w *Writer) Close() error {
 	}
 
 	metrics.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
+		DeleteLabelValues(w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(), w.logType)
 	metrics.RedoFsyncDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
+		DeleteLabelValues(w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(), w.logType)
 	metrics.RedoWriteBytesGauge.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
+		DeleteLabelValues(w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(), w.logType)
 
 	ctx, cancel := context.WithTimeout(context.Background(), redo.CloseTimeout)
 	defer cancel()
@@ -385,13 +385,13 @@ func (w *Writer) getLogFileName() string {
 		return w.op.GetLogFileName()
 	}
 	uid := w.uuidGenerator.NewString()
-	if common.DefaultNamespace == w.cfg.ChangeFeedID.Namespace() {
+	if common.DefaultKeyspace == w.cfg.ChangeFeedID.Keyspace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
 			w.cfg.CaptureID, w.cfg.ChangeFeedID.Name(), w.logType,
 			w.commitTS.Load(), uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
-		w.cfg.CaptureID, w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
+		w.cfg.CaptureID, w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
 		w.logType, w.commitTS.Load(), uid, redo.LogEXT)
 }
 

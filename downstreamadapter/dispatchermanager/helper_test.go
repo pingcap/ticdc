@@ -128,8 +128,8 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 
 	// Create CheckpointTsMessage
 	changefeedID := &heartbeatpb.ChangefeedID{
-		Namespace: "test-namespace",
-		Name:      "test-changefeed",
+		Keyspace: "test-namespace",
+		Name:     "test-changefeed",
 	}
 
 	checkpointTsMessage := NewCheckpointTsMessage(&heartbeatpb.CheckpointTsMessage{

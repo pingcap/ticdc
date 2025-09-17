@@ -18,8 +18,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/meta/metadef"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"go.uber.org/zap"
@@ -27,9 +27,9 @@ import (
 
 const (
 	// JobTableID is the id of `tidb_ddl_job`.
-	JobTableID = ddl.JobTableID
+	JobTableID = metadef.TiDBDDLJobTableID
 	// JobHistoryID is the id of `tidb_ddl_history`
-	JobHistoryID = ddl.HistoryTableID
+	JobHistoryID = metadef.TiDBDDLHistoryTableID
 )
 
 // TableIDToComparableSpan converts a TableID to a Span whose

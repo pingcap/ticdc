@@ -61,7 +61,7 @@ func (m *writeBytesSplitter) split(
 	if err != nil {
 		// Skip split.
 		log.Warn("scan regions failed, skip split span",
-			zap.String("namespace", m.changefeedID.Namespace()),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
 			zap.Error(err))
@@ -70,7 +70,7 @@ func (m *writeBytesSplitter) split(
 
 	splitInfo := m.splitRegionsByWrittenBytesV1(span.TableID, regions, spansNum)
 	log.Info("split span by written keys",
-		zap.String("namespace", m.changefeedID.Namespace()),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("span", span.String()),
 		zap.Ints("perSpanRegionCounts", splitInfo.RegionCounts),

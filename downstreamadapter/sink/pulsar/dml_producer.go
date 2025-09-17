@@ -71,7 +71,7 @@ func newDMLProducers(
 	failpointCh chan error,
 ) (*dmlProducers, error) {
 	log.Info("Creating pulsar DML producer ...",
-		zap.String("namespace", changefeedID.Namespace()),
+		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeed", changefeedID.ID().String()))
 	start := time.Now()
 
@@ -139,7 +139,7 @@ func (p *dmlProducers) asyncSendMessage(
 	failpoint.Inject("PulsarSinkAsyncSendError", func() {
 		// simulate sending message to input channel successfully but flushing
 		// message to Pulsar meets error
-		log.Info("PulsarSinkAsyncSendError error injected", zap.String("namespace", p.changefeedID.Namespace()),
+		log.Info("PulsarSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.ID().String()))
 		p.failpointCh <- errors.New("pulsar sink injected error")
 		failpoint.Return(nil)
@@ -162,7 +162,7 @@ func (p *dmlProducers) asyncSendMessage(
 			if err != nil {
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
 				log.Error("Pulsar DML producer async send error",
-					zap.String("namespace", p.changefeedID.Namespace()),
+					zap.String("keyspace", p.changefeedID.Keyspace()),
 					zap.String("changefeed", p.changefeedID.ID().String()),
 					zap.Int("messageSize", len(m.Payload)),
 					zap.String("topic", topic),
@@ -199,7 +199,7 @@ func (p *dmlProducers) close() { // We have to hold the lock to synchronize clos
 		// We need to guard against double closing the clients,
 		// which could lead to panic.
 		log.Warn("Pulsar DML producer already closed",
-			zap.String("namespace", p.changefeedID.Namespace()),
+			zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.ID().String()))
 		return
 	}
@@ -212,7 +212,7 @@ func (p *dmlProducers) close() { // We have to hold the lock to synchronize clos
 		topicName, _ := topic.(string)
 		log.Info("Async client closed in pulsar DML producer",
 			zap.Duration("duration", time.Since(start)),
-			zap.String("namespace", p.changefeedID.Namespace()),
+			zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.ID().String()), zap.String("topic", topicName))
 	}
 }

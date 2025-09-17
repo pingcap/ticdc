@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -151,4 +152,8 @@ func (m *MockPDAPIClient) CollectMemberEndpoints(ctx context.Context) ([]string,
 
 func (m *MockPDAPIClient) Healthy(ctx context.Context, endpoint string) error {
 	return nil
+}
+
+func (m *MockPDAPIClient) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
 }

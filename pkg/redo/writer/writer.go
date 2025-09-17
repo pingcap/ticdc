@@ -59,7 +59,7 @@ type LogWriterConfig struct {
 
 func (cfg LogWriterConfig) String() string {
 	return fmt.Sprintf("%s:%s:%s:%s:%d:%s:%t",
-		cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.CaptureID,
+		cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), cfg.CaptureID,
 		cfg.Dir, cfg.MaxLogSize, cfg.URI.String(), cfg.UseExternalStorage)
 }
 

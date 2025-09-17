@@ -27,10 +27,10 @@ func FilterChangefeedFiles(files []string, changefeedID common.ChangeFeedID) []s
 		res     []string
 	)
 
-	if changefeedID.Namespace() == "default" {
+	if changefeedID.Keyspace() == "default" {
 		matcher = fmt.Sprintf("_%s_", changefeedID.Name())
 	} else {
-		matcher = fmt.Sprintf("_%s_%s_", changefeedID.Namespace(), changefeedID.Name())
+		matcher = fmt.Sprintf("_%s_%s_", changefeedID.Keyspace(), changefeedID.Name())
 	}
 	for _, file := range files {
 		if strings.Contains(file, matcher) {

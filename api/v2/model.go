@@ -95,7 +95,7 @@ type PDConfig struct {
 type ChangefeedCommonInfo struct {
 	UpstreamID     uint64               `json:"upstream_id"`
 	ID             string               `json:"id"`
-	Namespace      string               `json:"namespace"`
+	Keyspace       string               `json:"keyspace"`
 	FeedState      config.FeedState     `json:"state"`
 	CheckpointTSO  uint64               `json:"checkpoint_tso"`
 	CheckpointTime api.JSONTime         `json:"checkpoint_time"`
@@ -134,7 +134,7 @@ func (c ChangefeedCommonInfo) MarshalJSON() ([]byte, error) {
 
 // ChangefeedConfig use by create changefeed api
 type ChangefeedConfig struct {
-	Namespace     string         `json:"namespace"`
+	Keyspace      string         `json:"keyspace"`
 	ID            string         `json:"changefeed_id"`
 	StartTs       uint64         `json:"start_ts"`
 	TargetTs      uint64         `json:"target_ts"`
@@ -145,7 +145,7 @@ type ChangefeedConfig struct {
 
 // ProcessorCommonInfo holds the common info of a processor
 type ProcessorCommonInfo struct {
-	Namespace    string `json:"namespace"`
+	Keyspace     string `json:"keyspace"`
 	ChangeFeedID string `json:"changefeed_id"`
 	CaptureID    string `json:"capture_id"`
 }
@@ -1079,7 +1079,7 @@ type ResolveLockReq struct {
 type ChangeFeedInfo struct {
 	UpstreamID uint64    `json:"upstream_id,omitempty"`
 	ID         string    `json:"id"`
-	Namespace  string    `json:"namespace"`
+	Keyspace   string    `json:"keyspace"`
 	SinkURI    string    `json:"sink_uri,omitempty"`
 	CreateTime time.Time `json:"create_time"`
 	// Start sync at this commit ts if `StartTs` is specify or using the CreateTime of changefeed.

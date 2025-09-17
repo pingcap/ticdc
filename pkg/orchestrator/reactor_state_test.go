@@ -31,7 +31,7 @@ import (
 
 func TestCheckCaptureAlive(t *testing.T) {
 	state := NewChangefeedReactorState(etcd.DefaultCDCClusterID,
-		common.NewChangeFeedIDWithName("test"))
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspace))
 	stateTester := NewReactorStateTester(t, state, nil)
 	state.CheckCaptureAlive("6bbc01c8-0605-4f86-a0f9-b3119109b225")
 	require.Contains(t, stateTester.ApplyPatches().Error(), "[CDC:ErrLeaseExpired]")
@@ -86,11 +86,11 @@ func TestChangefeedStateUpdate(t *testing.T) {
 		{ // common case
 			changefeedID: "test1",
 			updateKey: []string{
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/status/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
@@ -103,7 +103,7 @@ func TestChangefeedStateUpdate(t *testing.T) {
 			},
 			expected: ChangefeedReactorState{
 				ClusterID: etcd.DefaultCDCClusterID,
-				ID:        common.NewChangeFeedIDWithName("test1"),
+				ID:        common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace),
 				Info: &config.ChangeFeedInfo{
 					SinkURI:    "blackhole://",
 					CreateTime: createTime,
@@ -151,15 +151,15 @@ func TestChangefeedStateUpdate(t *testing.T) {
 		{ // test multiple capture
 			changefeedID: "test1",
 			updateKey: []string{
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/status/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/666777888/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/666777888",
@@ -174,7 +174,7 @@ func TestChangefeedStateUpdate(t *testing.T) {
 			},
 			expected: ChangefeedReactorState{
 				ClusterID: etcd.DefaultCDCClusterID,
-				ID:        common.NewChangeFeedIDWithName("test1"),
+				ID:        common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace),
 				Info: &config.ChangeFeedInfo{
 					SinkURI:    "blackhole://",
 					CreateTime: createTime,
@@ -223,20 +223,20 @@ func TestChangefeedStateUpdate(t *testing.T) {
 		{ // testing changefeedID not match
 			changefeedID: "test1",
 			updateKey: []string{
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/status/test1",
 
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/info/test-fake",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/status/test-fake",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test-fake",
 			},
 			updateValue: []string{
@@ -250,7 +250,7 @@ func TestChangefeedStateUpdate(t *testing.T) {
 			},
 			expected: ChangefeedReactorState{
 				ClusterID: etcd.DefaultCDCClusterID,
-				ID:        common.NewChangeFeedIDWithName("test1"),
+				ID:        common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace),
 				Info: &config.ChangeFeedInfo{
 					SinkURI:    "blackhole://",
 					CreateTime: createTime,
@@ -298,21 +298,21 @@ func TestChangefeedStateUpdate(t *testing.T) {
 		{ // testing value is nil
 			changefeedID: "test1",
 			updateKey: []string{
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/status/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/666777888/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/info/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/changefeed/status/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
@@ -332,7 +332,7 @@ func TestChangefeedStateUpdate(t *testing.T) {
 			},
 			expected: ChangefeedReactorState{
 				ClusterID: etcd.DefaultCDCClusterID,
-				ID:        common.NewChangeFeedIDWithName("test1"),
+				ID:        common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace),
 				Info:      nil,
 				Status:    nil,
 				TaskPositions: map[config.CaptureID]*config.TaskPosition{
@@ -343,7 +343,7 @@ func TestChangefeedStateUpdate(t *testing.T) {
 	}
 	for i, tc := range testCases {
 		state := NewChangefeedReactorState(etcd.DefaultCDCClusterID,
-			common.NewChangeFeedIDWithName(tc.changefeedID))
+			common.NewChangeFeedIDWithName(tc.changefeedID, common.DefaultKeyspace))
 		for i, k := range tc.updateKey {
 			value := []byte(tc.updateValue[i])
 			if len(value) == 0 {
@@ -362,7 +362,7 @@ func TestChangefeedStateUpdate(t *testing.T) {
 
 func TestPatchInfo(t *testing.T) {
 	state := NewChangefeedReactorState(etcd.DefaultCDCClusterID,
-		common.NewChangeFeedIDWithName("test1"))
+		common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace))
 	stateTester := NewReactorStateTester(t, state, nil)
 	state.PatchInfo(func(info *config.ChangeFeedInfo) (*config.ChangeFeedInfo, bool, error) {
 		require.Nil(t, info)
@@ -419,7 +419,7 @@ func TestPatchInfo(t *testing.T) {
 
 func TestPatchStatus(t *testing.T) {
 	state := NewChangefeedReactorState(etcd.DefaultCDCClusterID,
-		common.NewChangeFeedIDWithName("test1"))
+		common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace))
 	stateTester := NewReactorStateTester(t, state, nil)
 	state.PatchStatus(func(status *config.ChangeFeedStatus) (*config.ChangeFeedStatus, bool, error) {
 		require.Nil(t, status)
@@ -442,7 +442,7 @@ func TestPatchStatus(t *testing.T) {
 
 func TestPatchTaskPosition(t *testing.T) {
 	state := NewChangefeedReactorState(etcd.DefaultCDCClusterID,
-		common.NewChangeFeedIDWithName("test1"))
+		common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace))
 	stateTester := NewReactorStateTester(t, state, nil)
 	captureID1 := "capture1"
 	captureID2 := "capture2"
@@ -521,11 +521,11 @@ func TestGlobalStateUpdate(t *testing.T) {
 					"/owner/22317526c4fc9a38",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test2",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/upstream/12345",
 			},
 			updateValue: []string{
@@ -549,16 +549,16 @@ func TestGlobalStateUpdate(t *testing.T) {
 					config.UpstreamID(12345): {},
 				},
 				Changefeeds: map[common.ChangeFeedID]*ChangefeedReactorState{
-					common.NewChangeFeedIDWithName("test1"): {
+					common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace): {
 						ClusterID: etcd.DefaultCDCClusterID,
-						ID:        common.NewChangeFeedIDWithName("test1"),
+						ID:        common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace),
 						TaskPositions: map[config.CaptureID]*config.TaskPosition{
 							"6bbc01c8-0605-4f86-a0f9-b3119109b225": {CheckPointTs: 421980719742451713, ResolvedTs: 421980720003809281},
 						},
 					},
-					common.NewChangeFeedIDWithName("test2"): {
+					common.NewChangeFeedIDWithName("test2", common.DefaultKeyspace): {
 						ClusterID: etcd.DefaultCDCClusterID,
-						ID:        common.NewChangeFeedIDWithName("test2"),
+						ID:        common.NewChangeFeedIDWithName("test2", common.DefaultKeyspace),
 						TaskPositions: map[config.CaptureID]*config.TaskPosition{
 							"6bbc01c8-0605-4f86-a0f9-b3119109b225": {
 								CheckPointTs: 421980719742451713,
@@ -577,13 +577,13 @@ func TestGlobalStateUpdate(t *testing.T) {
 					"/owner/22317526c4fc9a38",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test2",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/owner/22317526c4fc9a37",
-				etcd.DefaultClusterAndNamespacePrefix +
+				etcd.DefaultClusterAndKeyspacePrefix +
 					"/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test1",
 				etcd.DefaultClusterAndMetaPrefix +
 					"/capture/6bbc01c8-0605-4f86-a0f9-b3119109b225",
@@ -607,9 +607,9 @@ func TestGlobalStateUpdate(t *testing.T) {
 				Captures:  map[config.CaptureID]*config.CaptureInfo{},
 				Upstreams: map[config.UpstreamID]*config.UpstreamInfo{},
 				Changefeeds: map[common.ChangeFeedID]*ChangefeedReactorState{
-					common.NewChangeFeedIDWithName("test2"): {
+					common.NewChangeFeedIDWithName("test2", common.DefaultKeyspace): {
 						ClusterID: etcd.DefaultCDCClusterID,
-						ID:        common.NewChangeFeedIDWithName("test2"),
+						ID:        common.NewChangeFeedIDWithName("test2", common.DefaultKeyspace),
 						TaskPositions: map[config.CaptureID]*config.TaskPosition{
 							"6bbc01c8-0605-4f86-a0f9-b3119109b225": {
 								CheckPointTs: 421980719742451713,
@@ -681,7 +681,7 @@ func TestCaptureChangeHooks(t *testing.T) {
 
 func TestCheckChangefeedNormal(t *testing.T) {
 	state := NewChangefeedReactorState(etcd.DefaultCDCClusterID,
-		common.NewChangeFeedIDWithName("test1"))
+		common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace))
 	stateTester := NewReactorStateTester(t, state, nil)
 	state.CheckChangefeedNormal()
 	stateTester.MustApplyPatches()
