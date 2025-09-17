@@ -46,9 +46,9 @@ type RedoLogReader interface {
 	// Run read and decode redo logs in background.
 	Run(ctx context.Context) error
 	// ReadNextRow read one row event from redo logs.
-	ReadNextRow(ctx context.Context) (pevent.RedoDMLEvent, bool, error)
+	ReadNextRow(ctx context.Context) (*pevent.DMLEvent, bool, error)
 	// ReadNextDDL read one ddl event from redo logs.
-	ReadNextDDL(ctx context.Context) (pevent.RedoDDLEvent, bool, error)
+	ReadNextDDL(ctx context.Context) (*pevent.DDLEvent, bool, error)
 	// ReadMeta reads meta from redo logs and returns the latest checkpointTs and resolvedTs
 	ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error)
 }
@@ -87,8 +87,8 @@ type LogReaderConfig struct {
 type LogReader struct {
 	cfg   *LogReaderConfig
 	meta  *misc.LogMeta
-	rowCh chan pevent.RedoDMLEvent
-	ddlCh chan pevent.RedoDDLEvent
+	rowCh chan *pevent.DMLEvent
+	ddlCh chan *pevent.DDLEvent
 }
 
 // newLogReader creates a LogReader instance.
@@ -106,8 +106,8 @@ func newLogReader(ctx context.Context, cfg *LogReaderConfig) (*LogReader, error)
 
 	logReader := &LogReader{
 		cfg:   cfg,
-		rowCh: make(chan pevent.RedoDMLEvent, defaultReaderChanSize),
-		ddlCh: make(chan pevent.RedoDDLEvent, defaultReaderChanSize),
+		rowCh: make(chan *pevent.DMLEvent, defaultReaderChanSize),
+		ddlCh: make(chan *pevent.DDLEvent, defaultReaderChanSize),
 	}
 	// remove logs in local dir first, if have logs left belongs to previous changefeed with the same name may have error when apply logs
 	if err := os.RemoveAll(cfg.Dir); err != nil {
@@ -196,10 +196,10 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 
 		switch cfg.fileType {
 		case redo.RedoRowLogFileType:
-			row := item.data.RedoRow
+			row := item.data.RedoRow.ToDMLEvent()
 			// By design only data (startTs,endTs] is needed,
 			// so filter out data may beyond the boundary.
-			if row.Row.CommitTs > cfg.startTs && row.Row.CommitTs <= cfg.endTs {
+			if row.CommitTs > cfg.startTs && row.CommitTs <= cfg.endTs {
 				select {
 				case <-egCtx.Done():
 					return errors.Trace(egCtx.Err())
@@ -207,14 +207,14 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 				}
 			}
 		case redo.RedoDDLLogFileType:
-			ddl := item.data.RedoDDL
+			ddl := item.data.RedoDDL.DDL
 			// There may exist dupilicate ddls
-			if previousDDLCommit != ddl.DDL.CommitTs && ddl.DDL.CommitTs > cfg.startTs && ddl.DDL.CommitTs <= cfg.endTs {
+			if previousDDLCommit != ddl.GetCommitTs() && ddl.GetCommitTs() > cfg.startTs && ddl.GetCommitTs() <= cfg.endTs {
 				select {
 				case <-egCtx.Done():
 					return errors.Trace(egCtx.Err())
 				case l.ddlCh <- ddl:
-					previousDDLCommit = ddl.DDL.CommitTs
+					previousDDLCommit = ddl.GetCommitTs()
 				}
 			}
 		}
@@ -237,7 +237,7 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 }
 
 // ReadNextRow implement the `RedoLogReader` interface.
-func (l *LogReader) ReadNextRow(ctx context.Context) (row pevent.RedoDMLEvent, ok bool, err error) {
+func (l *LogReader) ReadNextRow(ctx context.Context) (row *pevent.DMLEvent, ok bool, err error) {
 	select {
 	case <-ctx.Done():
 		err = errors.Trace(ctx.Err())
@@ -247,7 +247,7 @@ func (l *LogReader) ReadNextRow(ctx context.Context) (row pevent.RedoDMLEvent, o
 }
 
 // ReadNextDDL implement the `RedoLogReader` interface.
-func (l *LogReader) ReadNextDDL(ctx context.Context) (ddl pevent.RedoDDLEvent, ok bool, err error) {
+func (l *LogReader) ReadNextDDL(ctx context.Context) (ddl *pevent.DDLEvent, ok bool, err error) {
 	select {
 	case <-ctx.Done():
 		err = errors.Trace(ctx.Err())
@@ -354,7 +354,7 @@ func (h logHeap) Less(i, j int) bool {
 		if h[j].data.RedoDDL.DDL == nil {
 			return false
 		}
-		return h[i].data.RedoDDL.DDL.CommitTs < h[j].data.RedoDDL.DDL.CommitTs
+		return h[i].data.RedoDDL.DDL.GetCommitTs() < h[j].data.RedoDDL.DDL.GetCommitTs()
 	}
 
 	if h[i].data.RedoRow.Row == nil {

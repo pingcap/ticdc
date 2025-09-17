@@ -249,7 +249,7 @@ func (w *Writer) GetInputCh() chan writer.RedoEvent {
 
 func (w *Writer) write(event writer.RedoEvent) error {
 	rl := event.ToRedoLog()
-	data, err := codec.MarshalRedoLog(rl, nil)
+	data, err := codec.MarshalRedoLog(rl)
 	if err != nil {
 		return errors.WrapError(errors.ErrMarshalFailed, err)
 	}

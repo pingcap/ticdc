@@ -340,7 +340,7 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCac
 
 func (f *fileWorkerGroup) encodeData(event writer.RedoEvent) (*event.RedoLog, []byte, error) {
 	rl := event.ToRedoLog()
-	rawData, err := codec.MarshalRedoLog(rl, nil)
+	rawData, err := codec.MarshalRedoLog(rl)
 	if err != nil {
 		return nil, nil, err
 	}

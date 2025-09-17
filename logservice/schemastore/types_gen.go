@@ -228,6 +228,12 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "FinishedTs")
 				return
 			}
+		case "start_ts":
+			z.StartTs, err = dc.ReadUint64()
+			if err != nil {
+				err = msgp.WrapError(err, "StartTs")
+				return
+			}
 		case "table_info_value":
 			z.TableInfoValue, err = dc.ReadBytes(z.TableInfoValue)
 			if err != nil {
@@ -284,9 +290,9 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 26
+	// map header, size 27
 	// write "id"
-	err = en.Append(0xde, 0x0, 0x1a, 0xa2, 0x69, 0x64)
+	err = en.Append(0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
 	if err != nil {
 		return
 	}
@@ -537,6 +543,16 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 		err = msgp.WrapError(err, "FinishedTs")
 		return
 	}
+	// write "start_ts"
+	err = en.Append(0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x74, 0x73)
+	if err != nil {
+		return
+	}
+	err = en.WriteUint64(z.StartTs)
+	if err != nil {
+		err = msgp.WrapError(err, "StartTs")
+		return
+	}
 	// write "table_info_value"
 	err = en.Append(0xb0, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x5f, 0x76, 0x61, 0x6c, 0x75, 0x65)
 	if err != nil {
@@ -600,9 +616,9 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 // MarshalMsg implements msgp.Marshaler
 func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 26
+	// map header, size 27
 	// string "id"
-	o = append(o, 0xde, 0x0, 0x1a, 0xa2, 0x69, 0x64)
+	o = append(o, 0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.ID)
 	// string "type"
 	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
@@ -682,6 +698,9 @@ func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	// string "finished_ts"
 	o = append(o, 0xab, 0x66, 0x69, 0x6e, 0x69, 0x73, 0x68, 0x65, 0x64, 0x5f, 0x74, 0x73)
 	o = msgp.AppendUint64(o, z.FinishedTs)
+	// string "start_ts"
+	o = append(o, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x74, 0x73)
+	o = msgp.AppendUint64(o, z.StartTs)
 	// string "table_info_value"
 	o = append(o, 0xb0, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x5f, 0x76, 0x61, 0x6c, 0x75, 0x65)
 	o = msgp.AppendBytes(o, z.TableInfoValue)
@@ -925,6 +944,12 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				err = msgp.WrapError(err, "FinishedTs")
 				return
 			}
+		case "start_ts":
+			z.StartTs, bts, err = msgp.ReadUint64Bytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "StartTs")
+				return
+			}
 		case "table_info_value":
 			z.TableInfoValue, bts, err = msgp.ReadBytesBytes(bts, z.TableInfoValue)
 			if err != nil {
@@ -994,7 +1019,7 @@ func (z *PersistedDDLEvent) Msgsize() (s int) {
 	for za0005 := range z.ExtraTableNames {
 		s += msgp.StringPrefixSize + len(z.ExtraTableNames[za0005])
 	}
-	s += 16 + msgp.ArrayHeaderSize + (len(z.PrevPartitions) * (msgp.Int64Size)) + 6 + msgp.StringPrefixSize + len(z.Query) + 15 + msgp.Int64Size + 12 + msgp.Uint64Size + 17 + msgp.BytesPrefixSize + len(z.TableInfoValue) + 23 + msgp.BytesPrefixSize + len(z.ExtraTableInfoValue) + 23 + msgp.ArrayHeaderSize
+	s += 16 + msgp.ArrayHeaderSize + (len(z.PrevPartitions) * (msgp.Int64Size)) + 6 + msgp.StringPrefixSize + len(z.Query) + 15 + msgp.Int64Size + 12 + msgp.Uint64Size + 9 + msgp.Uint64Size + 17 + msgp.BytesPrefixSize + len(z.TableInfoValue) + 23 + msgp.BytesPrefixSize + len(z.ExtraTableInfoValue) + 23 + msgp.ArrayHeaderSize
 	for za0007 := range z.MultipleTableInfosValue {
 		s += msgp.BytesPrefixSize + len(z.MultipleTableInfosValue[za0007])
 	}

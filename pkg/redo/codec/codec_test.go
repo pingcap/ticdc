@@ -36,14 +36,14 @@ func TestDDLRedoConvert(t *testing.T) {
 	}
 
 	redoLog := ddl.ToRedoLog()
-	data, err := MarshalRedoLog(redoLog, nil)
+	data, err := MarshalRedoLog(redoLog)
 	require.Nil(t, err)
 
 	data1 := data
-	redoLog2, data, err := UnmarshalRedoLog(data)
+	redoLog2, err := UnmarshalRedoLog(data)
 	require.Nil(t, err)
-	require.Zero(t, len(data))
 
-	data2, err := MarshalRedoLog(redoLog2, nil)
+	data2, err := MarshalRedoLog(redoLog2)
+	require.Nil(t, err)
 	require.Equal(t, data1, data2)
 }

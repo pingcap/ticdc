@@ -15,6 +15,7 @@ package codec
 
 import (
 	"encoding/binary"
+	"encoding/json"
 
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/tinylib/msgp/msgp"
@@ -39,7 +40,7 @@ var (
 )
 
 // UnmarshalRedoLog unmarshals a RedoLog from the given byte slice.
-func UnmarshalRedoLog(bts []byte) (r *pevent.RedoLog, o []byte, err error) {
+func UnmarshalRedoLog(bts []byte) (r *pevent.RedoLog, err error) {
 	if len(bts) < versionPrefixLength {
 		err = msgp.ErrShortBytes
 		return
@@ -60,13 +61,13 @@ func UnmarshalRedoLog(bts []byte) (r *pevent.RedoLog, o []byte, err error) {
 	switch version {
 	case 1:
 		// FIXME: for redo v1, dml events need some transforms.
-		if o, err = r.UnmarshalMsg(bts); err != nil {
+		if err = json.Unmarshal(bts, r); err != nil {
 			return
 		}
 	case latestVersion:
 		if version == latestVersion {
 			r = new(pevent.RedoLog)
-			if o, err = r.UnmarshalMsg(bts); err != nil {
+			if err = json.Unmarshal(bts, r); err != nil {
 				return
 			}
 		} else {
@@ -77,16 +78,12 @@ func UnmarshalRedoLog(bts []byte) (r *pevent.RedoLog, o []byte, err error) {
 }
 
 // MarshalRedoLog marshals a RedoLog into bytes.
-func MarshalRedoLog(r *pevent.RedoLog, b []byte) (o []byte, err error) {
+func MarshalRedoLog(r *pevent.RedoLog) (o []byte, err error) {
+	b := make([]byte, 0)
 	b = append(b, versionPrefix[:]...)
 	b = binary.BigEndian.AppendUint16(b, latestVersion)
-	o, err = r.MarshalMsg(b)
-	return
-}
-
-// MarshalDDLAsRedoLog converts a DDLEvent into RedoLog, and then marshals it.
-func MarshalDDLAsRedoLog(d *pevent.DDLEvent, b []byte) (o []byte, err error) {
-	o, err = MarshalRedoLog(d.ToRedoLog(), b)
+	v, err := json.Marshal(r)
+	o = append(b, v...)
 	return
 }
 
