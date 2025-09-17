@@ -99,7 +99,7 @@ func (db *ChangefeedDB) AddReplicatingMaintainer(task *Changefeed, nodeID node.I
 }
 
 // StopByChangefeedID stop a changefeed by the changefeed id
-// if remove is true, it will remove the changefeed from the chagnefeed DB
+// if remove is true, it will remove the changefeed from the changefeed DB
 // if remove is false, moves task to stopped map
 // if the changefeed is scheduled, it will return the scheduled node
 func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool) node.ID {

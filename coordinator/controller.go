@@ -529,13 +529,13 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	// the remove changefeed may not finished, so we need to wait a moment
 	count := 0
 	for count < createChangefeedMaxRetry {
-		if ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName); ok {
-			log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
-			time.Sleep(createChangefeedRetryInterval)
-			count += 1
-		} else {
+		ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName)
+		if !ok {
 			break
 		}
+		log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
+		time.Sleep(createChangefeedRetryInterval)
+		count += 1
 	}
 	if count >= createChangefeedMaxRetry {
 		return errors.New("changefeed is still in scheduling, please try again later")
@@ -576,14 +576,15 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 		return errors.New("changefeed not found")
 	}
 	if err := c.backend.PauseChangefeed(ctx, id); err != nil {
-		return errors.Trace(err)
+		return err
 	}
-	if clone, err := cf.GetInfo().Clone(); err != nil {
-		return errors.Trace(err)
-	} else {
-		clone.State = config.StateStopped
-		cf.SetInfo(clone)
+
+	clone, err := cf.GetInfo().Clone()
+	if err != nil {
+		return err
 	}
+	clone.State = config.StateStopped
+	cf.SetInfo(clone)
 	c.operatorController.StopChangefeed(ctx, id, false)
 	return nil
 }
@@ -603,21 +604,23 @@ func (c *Controller) ResumeChangefeed(
 		return errors.New("changefeed not found")
 	}
 	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
-		return errors.Trace(err)
+		return err
 	}
-	if clone, err := cf.GetInfo().Clone(); err != nil {
-		return errors.Trace(err)
-	} else {
-		clone.State = config.StateNormal
-		clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
-		cf.SetInfo(clone)
+
+	clone, err := cf.GetInfo().Clone()
+	if err != nil {
+		return err
 	}
+
+	clone.State = config.StateNormal
+	clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	cf.SetInfo(clone)
 
 	status := cf.GetClonedStatus()
 	status.CheckpointTs = newCheckpointTs
-	_, _, err := cf.ForceUpdateStatus(status)
-	if err != nil {
-		return errors.New(err.Message)
+	_, _, runningErr := cf.ForceUpdateStatus(status)
+	if runningErr != nil {
+		return errors.New(runningErr.Message)
 	}
 	c.moveChangefeedToSchedulingQueue(id, true, overwriteCheckpointTs)
 	return nil

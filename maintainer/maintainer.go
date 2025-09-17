@@ -383,7 +383,8 @@ func (m *Maintainer) initialize() error {
 }
 
 func (m *Maintainer) cleanupMetrics() {
-	if m.removed.Load() {
+	// the changefeed is paused, should not delete the metrics
+	if m.changefeedRemoved.Load() {
 		namespace := m.id.Namespace()
 		id := m.id.Name()
 		metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(namespace, id)
