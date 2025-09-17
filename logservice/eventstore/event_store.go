@@ -566,6 +566,8 @@ func (e *eventStore) RegisterDispatcher(
 	// Note: don't hold any lock when call Subscribe
 	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	log.Info("new subscription created",
+		zap.Stringer("dispatcherID", dispatcherID),
+		zap.Uint64("startTs", startTs),
 		zap.Uint64("subscriptionID", uint64(subStat.subID)),
 		zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
