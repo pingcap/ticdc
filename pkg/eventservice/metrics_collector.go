@@ -166,10 +166,7 @@ func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 
 // collectDispatcherMetrics collects metrics related to dispatchers
 func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) {
-	mc.broker.dispatchers.Range(func(key, value any) bool {
-		snapshot.dispatcherCount++
-		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
-
+	processDispatcher := func(dispatcher *dispatcherStat) {
 		if dispatcher.IsReadyRecevingData() {
 			snapshot.runningDispatcherCount++
 		} else {
@@ -195,7 +192,18 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		if snapshot.slowestDispatcher == nil || snapshot.slowestDispatcher.sentResolvedTs.Load() < watermark {
 			snapshot.slowestDispatcher = dispatcher
 		}
+	}
 
+	mc.broker.dispatchers.Range(func(key, value any) bool {
+		snapshot.dispatcherCount++
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		processDispatcher(dispatcher)
+		return true
+	})
+	mc.broker.tableTriggerDispatchers.Range(func(key, value any) bool {
+		snapshot.dispatcherCount++
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		processDispatcher(dispatcher)
 		return true
 	})
 }
