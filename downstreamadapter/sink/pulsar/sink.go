@@ -183,7 +183,13 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
-	s.checkpointTsChan <- ts
+	select {
+	case s.checkpointTsChan <- ts:
+	case <-s.ctx.Done():
+		return
+		// We can just drop the checkpoint ts if the channel is full to avoid blocking since the  checkpointTs will come indefinitely
+	default:
+	}
 }
 
 func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
