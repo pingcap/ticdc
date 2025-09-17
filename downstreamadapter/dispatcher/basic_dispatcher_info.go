@@ -41,10 +41,10 @@ type SharedInfo struct {
 	syncPointConfig *syncpoint.SyncPointConfig
 
 	// enableSplittableCheck controls whether to check if a table is splittable before splitting.
-	// If true, only tables with primary key and no unique key can be split.
+	// If true, only tables with a primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
-	// If true, we need to check whether the ddl event received by splitted dispatcher
-	// will break the splitable of this table
+	// If true, we need to check whether a DDL event received by a split dispatcher
+	// will break the splittability of this table.
 	enableSplittableCheck bool
 
 	// Shared resources
