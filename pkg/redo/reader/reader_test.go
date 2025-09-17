@@ -62,7 +62,7 @@ func genLogFile(
 				},
 			}
 			log := event.ToRedoLog()
-			rawData, err := codec.MarshalRedoLog(log, nil)
+			rawData, err := codec.MarshalRedoLog(log)
 			require.Nil(t, err)
 			_, err = w.Write(rawData)
 			require.Nil(t, err)
@@ -73,7 +73,7 @@ func genLogFile(
 			TableInfo:  &common.TableInfo{},
 		}
 		log := event.ToRedoLog()
-		rawData, err := codec.MarshalRedoLog(log, nil)
+		rawData, err := codec.MarshalRedoLog(log)
 		require.Nil(t, err)
 		_, err = w.Write(rawData)
 		require.Nil(t, err)
@@ -110,8 +110,8 @@ func TestReadLogs(t *testing.T) {
 			UseExternalStorage: true,
 		},
 		meta:  meta,
-		rowCh: make(chan *pevent.RedoDMLEvent, defaultReaderChanSize),
-		ddlCh: make(chan *pevent.RedoDDLEvent, defaultReaderChanSize),
+		rowCh: make(chan *pevent.DMLEvent, defaultReaderChanSize),
+		ddlCh: make(chan *pevent.DDLEvent, defaultReaderChanSize),
 	}
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
@@ -122,13 +122,13 @@ func TestReadLogs(t *testing.T) {
 		row, ok, err := r.ReadNextRow(egCtx)
 		require.True(t, ok)
 		require.NoError(t, err)
-		require.Equal(t, ts, row.Row.CommitTs)
+		require.Equal(t, ts, row.CommitTs)
 	}
 	for _, ts := range expectedDDLs {
 		ddl, ok, err := r.ReadNextDDL(egCtx)
 		require.True(t, ok)
 		require.NoError(t, err)
-		require.Equal(t, ts, ddl.DDL.CommitTs)
+		require.Equal(t, ts, ddl.GetCommitTs())
 	}
 
 	cancel()
@@ -161,8 +161,8 @@ func TestLogReaderClose(t *testing.T) {
 			UseExternalStorage: true,
 		},
 		meta:  meta,
-		rowCh: make(chan *pevent.RedoDMLEvent, 1),
-		ddlCh: make(chan *pevent.RedoDDLEvent, 1),
+		rowCh: make(chan *pevent.DMLEvent, 1),
+		ddlCh: make(chan *pevent.DDLEvent, 1),
 	}
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {

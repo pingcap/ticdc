@@ -196,10 +196,10 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 
 		switch cfg.fileType {
 		case redo.RedoRowLogFileType:
-			row := item.data.RedoRow
+			row := item.data.RedoRow.ToDMLEvent()
 			// By design only data (startTs,endTs] is needed,
 			// so filter out data may beyond the boundary.
-			if row.Row.CommitTs > cfg.startTs && row.Row.CommitTs <= cfg.endTs {
+			if row.CommitTs > cfg.startTs && row.CommitTs <= cfg.endTs {
 				select {
 				case <-egCtx.Done():
 					return errors.Trace(egCtx.Err())
@@ -207,14 +207,14 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 				}
 			}
 		case redo.RedoDDLLogFileType:
-			ddl := item.data.RedoDDL
+			ddl := item.data.RedoDDL.DDL
 			// There may exist dupilicate ddls
-			if previousDDLCommit != ddl.DDL.CommitTs && ddl.DDL.CommitTs > cfg.startTs && ddl.DDL.CommitTs <= cfg.endTs {
+			if previousDDLCommit != ddl.GetCommitTs() && ddl.GetCommitTs() > cfg.startTs && ddl.GetCommitTs() <= cfg.endTs {
 				select {
 				case <-egCtx.Done():
 					return errors.Trace(egCtx.Err())
 				case l.ddlCh <- ddl:
-					previousDDLCommit = ddl.DDL.CommitTs
+					previousDDLCommit = ddl.GetCommitTs()
 				}
 			}
 		}
@@ -347,37 +347,37 @@ func (h logHeap) Len() int {
 
 func (h logHeap) Less(i, j int) bool {
 	// we separate ddl and dml, so we only need to compare dml with dml, and ddl with ddl.
-	if h[i].data.Type == pevent.LogTypeDDL {
-		if h[i].data.DDL.DDL == nil {
+	if h[i].data.Type == pevent.RedoLogTypeDDL {
+		if h[i].data.RedoDDL.DDL == nil {
 			return true
 		}
-		if h[j].data.DDL.DDL == nil {
+		if h[j].data.RedoDDL.DDL == nil {
 			return false
 		}
-		return h[i].data.DDL.DDL.CommitTs < h[j].data.DDL.DDL.CommitTs
+		return h[i].data.RedoDDL.DDL.GetCommitTs() < h[j].data.RedoDDL.DDL.GetCommitTs()
 	}
 
-	if h[i].data.Row.Row == nil {
+	if h[i].data.RedoRow.Row == nil {
 		return true
 	}
-	if h[j].data.Row.Row == nil {
+	if h[j].data.RedoRow.Row == nil {
 		return false
 	}
 
-	if h[i].data.Row.Row.CommitTs == h[j].data.Row.Row.CommitTs {
-		if h[i].data.Row.Row.StartTs != h[j].data.Row.Row.StartTs {
-			return h[i].data.Row.Row.StartTs < h[j].data.Row.Row.StartTs
+	if h[i].data.RedoRow.Row.CommitTs == h[j].data.RedoRow.Row.CommitTs {
+		if h[i].data.RedoRow.Row.StartTs != h[j].data.RedoRow.Row.StartTs {
+			return h[i].data.RedoRow.Row.StartTs < h[j].data.RedoRow.Row.StartTs
 		}
 		// in the same txn, we need to sort by delete/update/insert order
-		if h[i].data.Row.IsDelete() {
+		if h[i].data.RedoRow.IsDelete() {
 			return true
-		} else if h[i].data.Row.IsUpdate() {
-			return !h[j].data.Row.IsDelete()
+		} else if h[i].data.RedoRow.IsUpdate() {
+			return !h[j].data.RedoRow.IsDelete()
 		}
 		return false
 	}
 
-	return h[i].data.Row.Row.CommitTs < h[j].data.Row.Row.CommitTs
+	return h[i].data.RedoRow.Row.CommitTs < h[j].data.RedoRow.Row.CommitTs
 }
 
 func (h logHeap) Swap(i, j int) {

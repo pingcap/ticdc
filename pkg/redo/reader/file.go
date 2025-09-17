@@ -289,7 +289,7 @@ func sortAndWriteFile(
 			// If the commitTs is equal or less than startTs, we should skip this log.
 			continue
 		}
-		data, err := codec.MarshalRedoLog(item, nil)
+		data, err := codec.MarshalRedoLog(item)
 		if err != nil {
 			return cerror.WrapError(cerror.ErrMarshalFailed, err)
 		}
@@ -347,7 +347,7 @@ func (r *reader) Read() (*pevent.RedoLog, error) {
 		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
 	}
 
-	redoLog, _, err := codec.UnmarshalRedoLog(data[:recBytes])
+	redoLog, err := codec.UnmarshalRedoLog(data[:recBytes])
 	if err != nil {
 		if r.isTornEntry(data) {
 			// just return io.EOF, since if torn write it is the last redoLog entry

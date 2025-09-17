@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE_2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,70 +17,81 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 )
 
 // RedoLogType is the type of log
-//
-//msgp:ignore DDLEvent
-//go:generate msgp
 type RedoLogType int
 
-// RedoLog defines the persistent structure of redo log
-// since MsgPack do not support types that are defined in another package,
-// more info https://github.com/tinylib/msgp/issues/158, https://github.com/tinylib/msgp/issues/149
-// so define a RedoColumnValue, RedoDDLEvent instead of using the Column, DDLEvent
 type RedoLog struct {
-	RedoRow *RedoDMLEvent `msg:"row"`
-	RedoDDL *RedoDDLEvent `msg:"ddl"`
-	Type    RedoLogType   `msg:"type"`
+	RedoRow *RedoDMLEvent `json:"redo_row"`
+	RedoDDL *RedoDDLEvent `json:"redo_ddl"`
+	Type    RedoLogType   `json:"log_type"`
 }
 
 // RedoDMLEvent represents the DML event used in RedoLog
 type RedoDMLEvent struct {
-	Row        *DMLEventInRedoLog `msg:"row"`
-	Columns    []RedoColumnValue  `msg:"columns"`
-	PreColumns []RedoColumnValue  `msg:"pre-columns"`
+	Row        *DMLEventInRedoLog `json:"row"`
+	Columns    []RedoColumnValue  `json:"columns"`
+	PreColumns []RedoColumnValue  `json:"pre_columns"`
+}
+
+// ToDMLEvent converts RowChangedEventInRedoLog to RowChangedEvent
+func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   r.Row.Table.TableID,
+		Name: ast.NewCIStr(r.Row.Table.Table),
+	}
+	// setIndexColumns(tidbTableInfo, r.Row.IndexColumns),
+	tableInfo := common.WrapTableInfo(r.Row.Table.Schema, tidbTableInfo)
+
+	tableInfo.TableName.IsPartition = r.Row.Table.IsPartition
+	row := NewDMLEvent(common.NewDispatcherID(),
+		r.Row.Table.TableID,
+		r.Row.StartTs,
+		r.Row.CommitTs,
+		tableInfo,
+	)
+	return row
 }
 
 // RedoDDLEvent represents DDL event used in redo log persistent
 type RedoDDLEvent struct {
-	DDL       *DDLEvent        `msg:"ddl"`
-	Type      byte             `msg:"type"`
-	TableName common.TableName `msg:"table-name"`
+	DDL       *DDLEvent        `json:"ddl"`
+	TableName common.TableName `json:"table"`
 }
 
 // DMLEventInRedoLog is used to store DMLEvent in redo log v2 format
 type DMLEventInRedoLog struct {
-	StartTs  uint64 `msg:"start-ts"`
-	CommitTs uint64 `msg:"commit-ts"`
+	StartTs  uint64 `json:"start_ts"`
+	CommitTs uint64 `json:"commit_ts"`
 
 	// Table contains the table name and table ID.
 	// NOTICE: We store the physical table ID here, not the logical table ID.
-	Table *common.TableName `msg:"table"`
+	Table *common.TableName `json:"table"`
 
-	Columns    []*RedoColumn `msg:"columns"`
-	PreColumns []*RedoColumn `msg:"pre-columns"`
+	Columns    []*RedoColumn `json:"columns"`
+	PreColumns []*RedoColumn `json:"pre_columns"`
 
-	IndexColumns [][]int `msg:"index-columns"`
+	IndexColumns [][]int `json:"index_columns"`
 }
 
 // RedoColumn is for column meta
 type RedoColumn struct {
-	Name      string `msg:"name"`
-	Type      byte   `msg:"type"`
-	Charset   string `msg:"charset"`
-	Collation string `msg:"collation"`
+	Name      string `json:"name"`
+	Type      byte   `json:"type"`
+	Charset   string `json:"charset"`
+	Collation string `json:"collation"`
+	Flag      uint64 `json:"flag"`
 }
 
 // RedoColumnValue stores Column change
 type RedoColumnValue struct {
-	// Fields from Column and can't be marshaled directly in Column.
-	Value interface{} `msg:"column"`
-	// msgp transforms empty byte slice into nil, PTAL msgp#247.
-	ValueIsEmptyBytes bool   `msg:"value-is-empty-bytes"`
-	Flag              uint64 `msg:"flag"`
+	Value             interface{} `json:"value"`
+	ValueIsEmptyBytes bool        `json:"value_is_empty_bytes"`
+	Flag              uint64      `json:"flag"`
 }
 
 type RedoRowEvent struct {
@@ -263,4 +274,23 @@ func getIndexColumns(tableInfo *common.TableInfo) [][]int {
 		indexColumns = append(indexColumns, offsets)
 	}
 	return indexColumns
+}
+
+func getIndexInfo(indexColumns [][]int) []*timodel.IndexInfo {
+	indexInfos := make([]*timodel.IndexInfo, len(indexColumns))
+	// for _, index := range indexColumns {
+	// 	indexInfo := &timodel.IndexInfo{}
+	// 	for _, id := range index {
+
+	// 	}
+	// }
+	// rowColumnsOffset := tableInfo.GetRowColumnsOffset()
+	// for _, index := range tableInfo.GetIndexColumns() {
+	// 	offsets := make([]int, 0, len(index))
+	// 	for _, id := range index {
+	// 		offsets = append(offsets, rowColumnsOffset[id])
+	// 	}
+	// 	indexColumns = append(indexColumns, offsets)
+	// }
+	return indexInfos
 }
