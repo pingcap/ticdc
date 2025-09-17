@@ -1,3 +1,4 @@
+## this case is used to verify the new changefeed config afer update changefeed take effect. Such as filter or split table
 #!/bin/bash
 
 set -eu
@@ -51,6 +52,11 @@ function write_data_round() {
     run_sql "insert into split_region.test1(id) values (101),(102),(103),(104),(105)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 }
 
+function write_data_round2() {
+    # write some rows to ensure replication
+    run_sql "insert into split_region.test1(id) values (1101),(1102),(1013),(1104),(1015)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+}
+
 function check_dispatcher_gt_two() {
     local ipAddr="127.0.0.1:8300"
     local changefeedID="test"
@@ -87,7 +93,7 @@ function main() {
     run_sql "create database if not exists test; create table if not exists test.t1(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
     # continue to write data after resume to advance checkpoint
-    write_data_round
+    write_data_round2
 
     # wait until checkpoint tso exceeds the recorded tso
     retry=60

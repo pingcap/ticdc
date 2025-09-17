@@ -46,7 +46,7 @@ mysql_groups=(
 	# G06
 	'http_api http_api_tls ddl_wait fail_over_ddl_G'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H'
+	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config'
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
@@ -84,7 +84,7 @@ kafka_groups=(
 	# G06
 	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
-	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H'
+	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
@@ -122,7 +122,7 @@ pulsar_groups=(
 	# G06
 	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
-	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H'
+	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
@@ -160,7 +160,7 @@ storage_groups=(
 	# G06
 	'lossy_ddl fail_over_ddl_G'
 	# G07
-	'storage_cleanup fail_over_ddl_H'
+	'storage_cleanup fail_over_ddl_H changefeed_update_config'
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
