@@ -1061,15 +1061,19 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	// The new dispatcherStat will be used for all future operations.
 	changefeedID := dispatcherInfo.GetChangefeedID()
 	span := dispatcherInfo.GetTableSpan()
-	tableInfo, err := c.schemaStore.GetTableInfo(span.GetTableID(), dispatcherInfo.GetStartTs())
-	if err != nil {
-		log.Error("get table info from schemaStore failed",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Int64("tableID", span.GetTableID()),
-			zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
-			zap.String("span", common.FormatTableSpan(span)),
-			zap.Error(err))
-		return err
+	var tableInfo *common.TableInfo
+	if !span.Equal(common.DDLSpan) {
+		var err error
+		tableInfo, err = c.schemaStore.GetTableInfo(span.GetTableID(), dispatcherInfo.GetStartTs())
+		if err != nil {
+			log.Error("get table info from schemaStore failed",
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Int64("tableID", span.GetTableID()),
+				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
+				zap.String("span", common.FormatTableSpan(span)),
+				zap.Error(err))
+			return err
+		}
 	}
 	status := c.getOrSetChangefeedStatus(changefeedID)
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
