@@ -240,7 +240,7 @@ func TestRequestCacheAdd_StaleRequestCleanup(t *testing.T) {
 	cache.sentRequests.Unlock()
 
 	// Manually set lastCheckStaleRequestTime to bypass the time interval check
-	cache.lastCheckStaleRequestTime = time.Now().Add(-checkStaleRequestInterval - time.Second)
+	cache.lastCheckStaleRequestTime.Store(time.Now().Add(-checkStaleRequestInterval - time.Second))
 
 	// Manually trigger stale cleanup by calling clearStaleRequest
 	cache.clearStaleRequest()
@@ -271,7 +271,7 @@ func TestRequestCacheAdd_WithStoppedRegion(t *testing.T) {
 	require.Equal(t, 1, cache.getPendingCount())
 
 	// Manually set lastCheckStaleRequestTime to bypass the time interval check
-	cache.lastCheckStaleRequestTime = time.Now().Add(-checkStaleRequestInterval - time.Second)
+	cache.lastCheckStaleRequestTime.Store(time.Now().Add(-checkStaleRequestInterval - time.Second))
 
 	// Manually trigger cleanup of stopped region
 	cache.clearStaleRequest()
