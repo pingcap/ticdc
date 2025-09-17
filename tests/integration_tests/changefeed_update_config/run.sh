@@ -36,8 +36,8 @@ function create_changefeed() {
     *) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
     esac
 
-    # create with default config
-    run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test"
+    # create with initial filter config [*.*]
+    run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed_init.toml"
 
     case $SINK_TYPE in
     kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -77,13 +77,36 @@ function main() {
     # sync part of data under default config
     write_data_round
 
-    # pause, update config (reuse ddl_for_split_tables changefeed.toml), then resume
+    # pause, update config (add filter [!test.*] with scheduler), then resume
     run_cdc_cli changefeed pause -c "test"
     run_cdc_cli changefeed update -c "test" --config="$CUR/conf/changefeed.toml" --no-confirm
     run_cdc_cli changefeed resume -c "test"
 
-    # continue to write data after resume
+    # record current tso, then create a new upstream table to be filtered
+    current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+    run_sql "create database if not exists test; create table if not exists test.t1(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+
+    # continue to write data after resume to advance checkpoint
     write_data_round
+
+    # wait until checkpoint tso exceeds the recorded tso
+    retry=60
+    cnt=0
+    while [[ $cnt -lt $retry ]]; do
+        checkpoint=$(cdc cli changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq -r '.checkpoint_tso')
+        if [[ "$checkpoint" != "null" && "$checkpoint" -gt "$current_tso" ]]; then
+            break
+        fi
+        sleep 2
+        cnt=$((cnt+1))
+    done
+    if [[ $cnt -ge $retry ]]; then
+        echo "checkpoint tso did not exceed current tso in time: checkpoint=$checkpoint, current_tso=$current_tso"
+        exit 1
+    fi
+
+    # ensure downstream does NOT have filtered table
+    check_table_not_exists test.t1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
     # check data consistency
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
