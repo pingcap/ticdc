@@ -29,28 +29,28 @@ import (
 )
 
 func TestNewController(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	controller := NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	controller := NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
 	require.False(t, controller.enableTableAcrossNodes)
 }
 
 func TestController_AddNewTable(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -61,6 +61,7 @@ func TestController_AddNewTable(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultKeyspaceID,
 		common.DefaultMode,
 	)
 
@@ -82,11 +83,11 @@ func TestController_AddNewTable(t *testing.T) {
 }
 
 func TestController_GetTaskByID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -97,6 +98,7 @@ func TestController_GetTaskByID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultKeyspaceID,
 		common.DefaultMode,
 	)
 
@@ -135,11 +137,11 @@ func TestController_GetTaskByID(t *testing.T) {
 }
 
 func TestController_GetTasksByTableID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -150,6 +152,7 @@ func TestController_GetTasksByTableID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultKeyspaceID,
 		common.DefaultMode,
 	)
 
@@ -171,11 +174,11 @@ func TestController_GetTasksByTableID(t *testing.T) {
 }
 
 func TestController_GetTasksBySchemaID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -186,6 +189,7 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultKeyspaceID,
 		common.DefaultMode,
 	)
 
@@ -211,11 +215,11 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 }
 
 func TestController_UpdateSchemaID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -226,6 +230,7 @@ func TestController_UpdateSchemaID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultKeyspaceID,
 		common.DefaultMode,
 	)
 
@@ -252,11 +257,11 @@ func TestController_UpdateSchemaID(t *testing.T) {
 }
 
 func TestController_Statistics(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -267,6 +272,7 @@ func TestController_Statistics(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		common.DefaultKeyspaceID,
 		common.DefaultMode,
 	)
 
@@ -410,14 +416,14 @@ func TestMarkSpanAbsent(t *testing.T) {
 
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true}, common.DefaultMode)
+	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true}, common.DefaultKeyspaceID, common.DefaultMode)
 }

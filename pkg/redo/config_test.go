@@ -50,7 +50,7 @@ func TestParseLogFileName(t *testing.T) {
 			name: "happy row .log",
 			args: arg{
 				name: fmt.Sprintf(RedoLogFileFormatV2, "cp",
-					"namespace", "test",
+					"keyspace", "test",
 					RedoRowLogFileType, 1, uuid.NewString(), LogEXT),
 			},
 			wantTs:       1,
@@ -70,7 +70,7 @@ func TestParseLogFileName(t *testing.T) {
 			name: "happy row .tmp",
 			args: arg{
 				name: fmt.Sprintf(RedoLogFileFormatV2, "cp",
-					"namespace", "test",
+					"keyspace", "test",
 					RedoRowLogFileType, 1, uuid.NewString(), LogEXT) + TmpEXT,
 			},
 			wantTs:       1,
@@ -90,7 +90,7 @@ func TestParseLogFileName(t *testing.T) {
 			name: "happy ddl .log",
 			args: arg{
 				name: fmt.Sprintf(RedoLogFileFormatV2, "cp",
-					"namespace", "test",
+					"keyspace", "test",
 					RedoDDLLogFileType, 1, uuid.NewString(), LogEXT),
 			},
 			wantTs:       1,
@@ -110,7 +110,7 @@ func TestParseLogFileName(t *testing.T) {
 			name: "happy ddl .sort",
 			args: arg{
 				name: fmt.Sprintf(RedoLogFileFormatV2, "cp",
-					"namespace", "test",
+					"keyspace", "test",
 					RedoDDLLogFileType, 1, uuid.NewString(), LogEXT) + SortLogEXT,
 			},
 			wantTs:       1,
@@ -130,7 +130,7 @@ func TestParseLogFileName(t *testing.T) {
 			name: "happy ddl .tmp",
 			args: arg{
 				name: fmt.Sprintf(RedoLogFileFormatV2, "cp",
-					"namespace", "test",
+					"keyspace", "test",
 					RedoDDLLogFileType, 1, uuid.NewString(), LogEXT) + TmpEXT,
 			},
 			wantTs:       1,

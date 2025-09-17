@@ -35,15 +35,15 @@ import (
 func TestOneBlockEvent(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	startTs := uint64(10)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
@@ -161,15 +161,15 @@ func TestOneBlockEvent(t *testing.T) {
 func TestNormalBlock(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
@@ -329,15 +329,15 @@ func TestNormalBlock(t *testing.T) {
 func TestNormalBlockWithTableTrigger(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 3; id++ {
@@ -475,15 +475,15 @@ func TestSchemaBlock(t *testing.T) {
 	nmap["node1"] = &node.Info{ID: "node1"}
 	nmap["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
@@ -646,15 +646,15 @@ func TestSyncPointBlock(t *testing.T) {
 	nmap["node1"] = &node.Info{ID: "node1"}
 	nmap["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -808,15 +808,15 @@ func TestSyncPointBlock(t *testing.T) {
 func TestNonBlocked(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 
@@ -861,15 +861,15 @@ func TestNonBlocked(t *testing.T) {
 func TestUpdateCheckpointTs(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -916,15 +916,15 @@ func TestUpdateCheckpointTs(t *testing.T) {
 func TestHandleBlockBootstrapResponse(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	var dispatcherIDs []*heartbeatpb.DispatcherID
@@ -1077,15 +1077,15 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 func TestSyncPointBlockPerf(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
 	for id := 1; id < 1000; id++ {
@@ -1157,15 +1157,15 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 	testutil.SetUpTestServices()
 
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	tableID := int64(1)
@@ -1175,7 +1175,7 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 
 	spanController.AddNewTable(commonEvent.Table{SchemaID: schemaID, TableID: tableID}, startTs)
 
-	span := common.TableIDToComparableSpan(tableID)
+	span := common.TableIDToComparableSpan(0, tableID)
 	startKey := span.StartKey
 	endKey := span.EndKey
 
@@ -1364,15 +1364,15 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 
 	// Setup table trigger event dispatcher (DDL dispatcher)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	// Setup dispatcher A
@@ -1381,7 +1381,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 	startTs := uint64(9)
 	ddlTs := uint64(10)
 
-	span := common.TableIDToComparableSpan(tableID)
+	span := common.TableIDToComparableSpan(0, tableID)
 	dispatcherA := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: span.StartKey,
@@ -1510,15 +1510,15 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
 	// Setup table trigger event dispatcher (DDL dispatcher)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", "")
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
 
 	// Setup two normal dispatchers
@@ -1528,7 +1528,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	startTs := uint64(9)
 
 	// Create dispatcher1 for table1
-	span1 := common.TableIDToComparableSpan(tableID1)
+	span1 := common.TableIDToComparableSpan(0, tableID1)
 	dispatcher1 := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
 		TableID:  tableID1,
 		StartKey: span1.StartKey,
@@ -1536,7 +1536,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	}, startTs, common.DefaultMode)
 
 	// Create dispatcher2 for table2
-	span2 := common.TableIDToComparableSpan(tableID2)
+	span2 := common.TableIDToComparableSpan(0, tableID2)
 	dispatcher2 := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
 		TableID:  tableID2,
 		StartKey: span2.StartKey,

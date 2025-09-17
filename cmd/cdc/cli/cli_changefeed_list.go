@@ -29,17 +29,17 @@ const timeFormat = "2006-01-02 15:04:05.000"
 
 // changefeedCommonInfo holds some common used information of a changefeed.
 type changefeedCommonInfo struct {
-	ID        string                `json:"id"`
-	Namespace string                `json:"namespace"`
-	Summary   *owner.ChangefeedResp `json:"summary"`
+	ID       string                `json:"id"`
+	Keyspace string                `json:"keyspace"`
+	Summary  *owner.ChangefeedResp `json:"summary"`
 }
 
 // listChangefeedOptions defines flags for the `cli changefeed list` command.
 type listChangefeedOptions struct {
 	apiClient v2.APIV2Interface
 
-	listAll   bool
-	namespace string
+	listAll  bool
+	keyspace string
 }
 
 // newListChangefeedOptions creates new options for the `cli changefeed list` command.
@@ -50,7 +50,7 @@ func newListChangefeedOptions() *listChangefeedOptions {
 // addFlags receives a *cobra.Command reference and binds
 // flags related to template printing to it.
 func (o *listChangefeedOptions) addFlags(cmd *cobra.Command) {
-	cmd.PersistentFlags().StringVarP(&o.namespace, "namespace", "n", "default", "Replication task (changefeed) Namespace")
+	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", "default", "Replication task (changefeed) Keyspace")
 	cmd.PersistentFlags().BoolVarP(&o.listAll, "all", "a", false, "List all replication tasks(including removed and finished)")
 }
 
@@ -68,7 +68,7 @@ func (o *listChangefeedOptions) complete(f factory.Factory) error {
 func (o *listChangefeedOptions) run(cmd *cobra.Command) error {
 	ctx := context.Background()
 
-	raw, err := o.apiClient.Changefeeds().List(ctx, o.namespace, "all")
+	raw, err := o.apiClient.Changefeeds().List(ctx, o.keyspace, "all")
 	if err != nil {
 		return err
 	}
@@ -82,8 +82,8 @@ func (o *listChangefeedOptions) run(cmd *cobra.Command) error {
 			}
 		}
 		cfci := &changefeedCommonInfo{
-			ID:        cf.ID,
-			Namespace: cf.Namespace,
+			ID:       cf.ID,
+			Keyspace: cf.Keyspace,
 			Summary: &owner.ChangefeedResp{
 				FeedState:    string(cf.FeedState),
 				TSO:          cf.CheckpointTSO,

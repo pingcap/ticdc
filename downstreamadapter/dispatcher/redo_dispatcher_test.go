@@ -34,7 +34,7 @@ func redoCallback() {
 
 func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *RedoDispatcher {
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(),
+		common.NewChangefeedID(common.DefaultKeyspace),
 		"system",
 		false,
 		false,
@@ -74,7 +74,8 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	tableInfo := dmlEvent.TableInfo
 
 	sink := sink.NewMockSink(common.MysqlSinkType)
-	tableSpan := getCompleteTableSpan()
+	tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+	require.NoError(t, err)
 	dispatcher := newRedoDispatcherForTest(sink, tableSpan)
 	require.Equal(t, uint64(0), dispatcher.GetCheckpointTs())
 	require.Equal(t, uint64(0), dispatcher.GetResolvedTs())
@@ -368,7 +369,7 @@ func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 func TestRedoTableTriggerEventDispatcherInMysql(t *testing.T) {
 	redoCount = 0
 
-	ddlTableSpan := common.DDLSpan
+	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.MysqlSinkType)
 	tableTriggerEventDispatcher := newRedoDispatcherForTest(sink, ddlTableSpan)
 
@@ -434,7 +435,7 @@ func TestRedoTableTriggerEventDispatcherInMysql(t *testing.T) {
 func TestRedoTableTriggerEventDispatcherInKafka(t *testing.T) {
 	redoCount = 0
 
-	ddlTableSpan := common.DDLSpan
+	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.KafkaSinkType)
 	tableTriggerEventDispatcher := newRedoDispatcherForTest(sink, ddlTableSpan)
 
@@ -512,7 +513,9 @@ func TestRedoDispatcherClose(t *testing.T) {
 
 	{
 		sink := sink.NewMockSink(common.MysqlSinkType)
-		dispatcher := newRedoDispatcherForTest(sink, getCompleteTableSpan())
+		tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+		require.NoError(t, err)
+		dispatcher := newRedoDispatcherForTest(sink, tableSpan)
 
 		// ===== dml event =====
 		nodeID := node.NewID()
@@ -533,7 +536,9 @@ func TestRedoDispatcherClose(t *testing.T) {
 	// test sink is not normal
 	{
 		sink := sink.NewMockSink(common.MysqlSinkType)
-		dispatcher := newRedoDispatcherForTest(sink, getCompleteTableSpan())
+		tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+		require.NoError(t, err)
+		dispatcher := newRedoDispatcherForTest(sink, tableSpan)
 
 		// ===== dml event =====
 		nodeID := node.NewID()
@@ -576,7 +581,8 @@ func TestRedoBatchDMLEventsPartialFlush(t *testing.T) {
 	dmlEvent3.Length = 1
 
 	mockSink := sink.NewMockSink(common.MysqlSinkType)
-	tableSpan := getCompleteTableSpan()
+	tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+	require.NoError(t, err)
 	dispatcher := newRedoDispatcherForTest(mockSink, tableSpan)
 
 	// Create a redoCallback that records when it's called

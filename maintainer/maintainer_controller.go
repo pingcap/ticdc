@@ -64,7 +64,9 @@ type Controller struct {
 
 	enableTableAcrossNodes bool
 	batchSize              int
-	enableRedo             bool
+
+	keyspaceID uint32
+	enableRedo bool
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -73,6 +75,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	cfConfig *config.ReplicaConfig,
 	ddlSpan, redoDDLSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration,
+	keyspaceID uint32,
 	enableRedo bool,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
@@ -81,7 +84,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	var splitter *split.Splitter
 	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
 		enableTableAcrossNodes = true
-		splitter = split.NewSplitter(changefeedID, cfConfig.Scheduler)
+		splitter = split.NewSplitter(keyspaceID, changefeedID, cfConfig.Scheduler)
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -91,14 +94,14 @@ func NewController(changefeedID common.ChangeFeedID,
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, common.DefaultMode)
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, keyspaceID, common.DefaultMode)
 
 	var (
 		redoSpanController *span.Controller
 		redoOC             *operator.Controller
 	)
 	if enableRedo {
-		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, common.RedoMode)
+		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, keyspaceID, common.RedoMode)
 		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize)
 	}
 	// Create operator controller using spanController
@@ -124,6 +127,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		batchSize:              batchSize,
 		splitter:               splitter,
+		keyspaceID:             keyspaceID,
 		enableRedo:             enableRedo,
 	}
 }
@@ -183,6 +187,10 @@ func (c *Controller) Stop() {
 	for _, handler := range c.taskHandles {
 		handler.Cancel()
 	}
+}
+
+func (c *Controller) GetKeyspaceID() uint32 {
+	return c.keyspaceID
 }
 
 // RemoveNode is called when a node is removed

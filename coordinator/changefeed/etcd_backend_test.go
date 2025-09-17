@@ -147,7 +147,7 @@ func TestPauseChangefeed(t *testing.T) {
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
 
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	info := &config.ChangeFeedInfo{State: config.StateNormal}
 	status := &config.ChangeFeedStatus{Progress: config.ProgressStopping}
 
@@ -169,7 +169,7 @@ func TestDeleteChangefeed(t *testing.T) {
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
 
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), NewFuncMatcher(func(i interface{}) bool {
 		ops := i.([]clientv3.Op)
@@ -193,7 +193,7 @@ func TestResumeChangefeed(t *testing.T) {
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
 
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	info := &config.ChangeFeedInfo{State: config.StateStopped}
 	status := &config.ChangeFeedStatus{CheckpointTs: 100}
 
@@ -215,7 +215,7 @@ func TestSetChangefeedProgress(t *testing.T) {
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
 
-	changefeedID := common.NewChangeFeedIDWithName("test")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	status := &config.ChangeFeedStatus{Progress: config.ProgressNone}
 
 	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).Return(status, int64(0), nil).Times(1)
@@ -236,7 +236,7 @@ func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 	backend := NewEtcdBackend(cdcClient)
 
 	cps := map[common.ChangeFeedID]uint64{
-		common.NewChangeFeedIDWithName("test1"): 100,
+		common.NewChangeFeedIDWithName("test1", common.DefaultKeyspace): 100,
 	}
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: false}, nil).Times(1)
 	err := backend.UpdateChangefeedCheckpointTs(context.Background(), cps)
@@ -244,7 +244,7 @@ func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 
 	cps = make(map[common.ChangeFeedID]uint64)
 	for i := 0; i < 129; i++ {
-		cps[common.NewChangeFeedIDWithName(fmt.Sprintf("%d", i))] = 100
+		cps[common.NewChangeFeedIDWithName(fmt.Sprintf("%d", i), common.DefaultKeyspace)] = 100
 	}
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: true}, nil).Times(2)
 	err = backend.UpdateChangefeedCheckpointTs(context.Background(), cps)

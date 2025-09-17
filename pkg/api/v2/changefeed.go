@@ -19,6 +19,7 @@ import (
 	"strconv"
 
 	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/api/internal/rest"
 	"github.com/pingcap/ticdc/pkg/common"
 )
@@ -32,30 +33,30 @@ type ChangefeedsGetter interface {
 // We can also mock the changefeed operations by implement this interface.
 type ChangefeedInterface interface {
 	// Create creates a changefeed
-	Create(ctx context.Context, cfg *v2.ChangefeedConfig) (*v2.ChangeFeedInfo, error)
+	Create(ctx context.Context, cfg *v2.ChangefeedConfig, keyspace string) (*v2.ChangeFeedInfo, error)
 	// VerifyTable verifies table for a changefeed
-	VerifyTable(ctx context.Context, cfg *v2.VerifyTableConfig) (*v2.Tables, error)
+	VerifyTable(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error)
 	// Update updates a changefeed
 	Update(ctx context.Context, cfg *v2.ChangefeedConfig,
-		namespace string, name string) (*v2.ChangeFeedInfo, error)
+		keyspace string, name string) (*v2.ChangeFeedInfo, error)
 	// Resume resumes a changefeed with given config
-	Resume(ctx context.Context, cfg *v2.ResumeChangefeedConfig, namespace string, name string) error
+	Resume(ctx context.Context, cfg *v2.ResumeChangefeedConfig, keyspace string, name string) error
 	// Delete deletes a changefeed by name
-	Delete(ctx context.Context, namespace string, name string) error
+	Delete(ctx context.Context, keyspace string, name string) error
 	// Pause pauses a changefeed with given name
-	Pause(ctx context.Context, namespace string, name string) error
+	Pause(ctx context.Context, keyspace string, name string) error
 	// Get gets a changefeed detaail info
-	Get(ctx context.Context, namespace string, name string) (*v2.ChangeFeedInfo, error)
+	Get(ctx context.Context, keyspace string, name string) (*v2.ChangeFeedInfo, error)
 	// List lists all changefeeds
-	List(ctx context.Context, namespace string, state string) ([]v2.ChangefeedCommonInfo, error)
+	List(ctx context.Context, keyspace string, state string) ([]v2.ChangefeedCommonInfo, error)
 	// Move Table to target node, it just for make test case now. **Not for public use.**
-	MoveTable(ctx context.Context, namespace string, name string, tableID int64, targetNode string, mode int64) error
+	MoveTable(ctx context.Context, keyspace string, name string, tableID int64, targetNode string, mode int64) error
 	// Move dispatchers in a split Table to target node, it just for make test case now. **Not for public use.**
-	MoveSplitTable(ctx context.Context, namespace string, name string, tableID int64, targetNode string, mode int64) error
+	MoveSplitTable(ctx context.Context, keyspace string, name string, tableID int64, targetNode string, mode int64) error
 	// split table based on region count, it just for make test case now. **Not for public use.**
-	SplitTableByRegionCount(ctx context.Context, namespace string, name string, tableID int64, mode int64) error
+	SplitTableByRegionCount(ctx context.Context, keyspace string, name string, tableID int64, mode int64) error
 	// merge table, it just for make test case now. **Not for public use.**
-	MergeTable(ctx context.Context, namespace string, name string, tableID int64, mode int64) error
+	MergeTable(ctx context.Context, keyspace string, name string, tableID int64, mode int64) error
 }
 
 // changefeeds implements ChangefeedInterface
@@ -72,10 +73,12 @@ func newChangefeeds(c *APIV2Client) *changefeeds {
 
 func (c *changefeeds) Create(ctx context.Context,
 	cfg *v2.ChangefeedConfig,
+	keyspace string,
 ) (*v2.ChangeFeedInfo, error) {
 	result := &v2.ChangeFeedInfo{}
+	u := fmt.Sprintf("changefeeds?%s=%s", api.APIOpVarKeyspace, keyspace)
 	err := c.client.Post().
-		WithURI("changefeeds").
+		WithURI(u).
 		WithBody(cfg).
 		Do(ctx).Into(result)
 	return result, err
@@ -83,10 +86,12 @@ func (c *changefeeds) Create(ctx context.Context,
 
 func (c *changefeeds) VerifyTable(ctx context.Context,
 	cfg *v2.VerifyTableConfig,
+	keyspace string,
 ) (*v2.Tables, error) {
 	result := &v2.Tables{}
+	u := fmt.Sprintf("verify_table?%s=%s", api.APIOpVarKeyspace, keyspace)
 	err := c.client.Post().
-		WithURI("verify_table").
+		WithURI(u).
 		WithBody(cfg).
 		Do(ctx).
 		Into(result)
@@ -94,10 +99,10 @@ func (c *changefeeds) VerifyTable(ctx context.Context,
 }
 
 func (c *changefeeds) Update(ctx context.Context,
-	cfg *v2.ChangefeedConfig, namespace string, name string,
+	cfg *v2.ChangefeedConfig, keyspace string, name string,
 ) (*v2.ChangeFeedInfo, error) {
 	result := &v2.ChangeFeedInfo{}
-	u := fmt.Sprintf("changefeeds/%s?namespace=%s", name, namespace)
+	u := fmt.Sprintf("changefeeds/%s?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	err := c.client.Put().
 		WithURI(u).
 		WithBody(cfg).
@@ -108,9 +113,9 @@ func (c *changefeeds) Update(ctx context.Context,
 
 // Resume a changefeed
 func (c *changefeeds) Resume(ctx context.Context,
-	cfg *v2.ResumeChangefeedConfig, namespace string, name string,
+	cfg *v2.ResumeChangefeedConfig, keyspace string, name string,
 ) error {
-	u := fmt.Sprintf("changefeeds/%s/resume?namespace=%s", name, namespace)
+	u := fmt.Sprintf("changefeeds/%s/resume?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	return c.client.Post().
 		WithURI(u).
 		WithBody(cfg).
@@ -119,9 +124,9 @@ func (c *changefeeds) Resume(ctx context.Context,
 
 // Delete a changefeed
 func (c *changefeeds) Delete(ctx context.Context,
-	namespace string, name string,
+	keyspace string, name string,
 ) error {
-	u := fmt.Sprintf("changefeeds/%s?namespace=%s", name, namespace)
+	u := fmt.Sprintf("changefeeds/%s?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	return c.client.Delete().
 		WithURI(u).
 		Do(ctx).Error()
@@ -129,9 +134,9 @@ func (c *changefeeds) Delete(ctx context.Context,
 
 // Pause a changefeed
 func (c *changefeeds) Pause(ctx context.Context,
-	namespace string, name string,
+	keyspace string, name string,
 ) error {
-	u := fmt.Sprintf("changefeeds/%s/pause?namespace=%s", name, namespace)
+	u := fmt.Sprintf("changefeeds/%s/pause?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	return c.client.Post().
 		WithURI(u).
 		Do(ctx).Error()
@@ -139,14 +144,14 @@ func (c *changefeeds) Pause(ctx context.Context,
 
 // Get gets a changefeed detaail info
 func (c *changefeeds) Get(ctx context.Context,
-	namespace string, name string,
+	keyspace string, name string,
 ) (*v2.ChangeFeedInfo, error) {
 	err := common.ValidateChangefeedID(name)
 	if err != nil {
 		return nil, err
 	}
 	result := new(v2.ChangeFeedInfo)
-	u := fmt.Sprintf("changefeeds/%s?namespace=%s", name, namespace)
+	u := fmt.Sprintf("changefeeds/%s?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	err = c.client.Get().
 		WithURI(u).
 		Do(ctx).
@@ -156,11 +161,12 @@ func (c *changefeeds) Get(ctx context.Context,
 
 // List lists all changefeeds
 func (c *changefeeds) List(ctx context.Context,
-	namespace string, state string,
+	keyspace string, state string,
 ) ([]v2.ChangefeedCommonInfo, error) {
 	result := &v2.ListResponse[v2.ChangefeedCommonInfo]{}
+	u := fmt.Sprintf("changefeeds?%s=%s", api.APIOpVarKeyspace, keyspace)
 	err := c.client.Get().
-		WithURI("changefeeds?namespace="+namespace).
+		WithURI(u).
 		WithParam("state", state).
 		Do(ctx).
 		Into(result)
@@ -169,9 +175,9 @@ func (c *changefeeds) List(ctx context.Context,
 
 // MoveTable to target node, it just for make test case now. **Not for public use.**
 func (c *changefeeds) MoveTable(ctx context.Context,
-	namespace string, name string, tableID int64, targetNode string, mode int64,
+	keyspace string, name string, tableID int64, targetNode string, mode int64,
 ) error {
-	url := fmt.Sprintf("changefeeds/%s/move_table?namespace=%s", name, namespace)
+	url := fmt.Sprintf("changefeeds/%s/move_table?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	err := c.client.Post().
 		WithURI(url).
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).
@@ -183,9 +189,9 @@ func (c *changefeeds) MoveTable(ctx context.Context,
 
 // move dispatchers in a split table to target node, it just for make test case now. **Not for public use.**
 func (c *changefeeds) MoveSplitTable(ctx context.Context,
-	namespace string, name string, tableID int64, targetNode string, mode int64,
+	keyspace string, name string, tableID int64, targetNode string, mode int64,
 ) error {
-	url := fmt.Sprintf("changefeeds/%s/move_split_table?namespace=%s", name, namespace)
+	url := fmt.Sprintf("changefeeds/%s/move_split_table?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	err := c.client.Post().
 		WithURI(url).
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).
@@ -197,9 +203,9 @@ func (c *changefeeds) MoveSplitTable(ctx context.Context,
 
 // SplitTableByRegionCount split table based on region count, it just for make test case now. **Not for public use.**
 func (c *changefeeds) SplitTableByRegionCount(ctx context.Context,
-	namespace string, name string, tableID int64, mode int64,
+	keyspace string, name string, tableID int64, mode int64,
 ) error {
-	url := fmt.Sprintf("changefeeds/%s/split_table_by_region_count?namespace=%s", name, namespace)
+	url := fmt.Sprintf("changefeeds/%s/split_table_by_region_count?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	err := c.client.Post().
 		WithURI(url).
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).
@@ -210,9 +216,9 @@ func (c *changefeeds) SplitTableByRegionCount(ctx context.Context,
 
 // MergeTable merge table, it just for make test case now. **Not for public use.**
 func (c *changefeeds) MergeTable(ctx context.Context,
-	namespace string, name string, tableID int64, mode int64,
+	keyspace string, name string, tableID int64, mode int64,
 ) error {
-	url := fmt.Sprintf("changefeeds/%s/merge_table?namespace=%s", name, namespace)
+	url := fmt.Sprintf("changefeeds/%s/merge_table?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	err := c.client.Post().
 		WithURI(url).
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).

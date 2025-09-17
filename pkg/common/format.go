@@ -98,10 +98,11 @@ func FormatTableSpan(s *heartbeatpb.TableSpan) string {
 		return ""
 	}
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s",
+	sb.WriteString(fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s, keyspaceID: %d",
 		s.TableID,
 		hex.EncodeToString(s.StartKey),
-		hex.EncodeToString(s.EndKey)))
+		hex.EncodeToString(s.EndKey),
+		s.KeyspaceID))
 	sb.WriteString("\n")
 	return sb.String()
 }

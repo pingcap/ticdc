@@ -28,6 +28,7 @@ import (
 const regionWrittenKeyBase = 1
 
 type writeBytesSplitter struct {
+	keyspaceID   uint32
 	changefeedID common.ChangeFeedID
 	pdAPIClient  pdutil.PDAPIClient
 }
@@ -40,9 +41,11 @@ type splitRegionsInfo struct {
 }
 
 func newWriteBytesSplitter(
+	keyspaceID uint32,
 	changefeedID common.ChangeFeedID,
 ) *writeBytesSplitter {
 	return &writeBytesSplitter{
+		keyspaceID:   keyspaceID,
 		changefeedID: changefeedID,
 		pdAPIClient:  appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient),
 	}
@@ -54,14 +57,15 @@ func (m *writeBytesSplitter) split(
 	spansNum int,
 ) []*heartbeatpb.TableSpan {
 	regions, err := m.pdAPIClient.ScanRegions(ctx, heartbeatpb.TableSpan{
-		TableID:  span.TableID,
-		StartKey: span.StartKey,
-		EndKey:   span.EndKey,
+		TableID:    span.TableID,
+		StartKey:   span.StartKey,
+		EndKey:     span.EndKey,
+		KeyspaceID: m.keyspaceID,
 	})
 	if err != nil {
 		// Skip split.
 		log.Warn("scan regions failed, skip split span",
-			zap.String("namespace", m.changefeedID.Namespace()),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
 			zap.Error(err))
@@ -70,7 +74,7 @@ func (m *writeBytesSplitter) split(
 
 	splitInfo := m.splitRegionsByWrittenBytesV1(span.TableID, regions, spansNum)
 	log.Info("split span by written keys",
-		zap.String("namespace", m.changefeedID.Namespace()),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("span", span.String()),
 		zap.Ints("perSpanRegionCounts", splitInfo.RegionCounts),
@@ -148,9 +152,10 @@ func (m *writeBytesSplitter) splitRegionsByWrittenBytesV1(
 		if restSpans == 1 {
 			if restWeight < int64(writeLimitPerSpan) {
 				spans = append(spans, &heartbeatpb.TableSpan{
-					TableID:  tableID,
-					StartKey: decodeKey(regions[spanStartIndex].StartKey),
-					EndKey:   decodeKey(regions[len(regions)-1].EndKey),
+					TableID:    tableID,
+					StartKey:   decodeKey(regions[spanStartIndex].StartKey),
+					EndKey:     decodeKey(regions[len(regions)-1].EndKey),
+					KeyspaceID: m.keyspaceID,
 				})
 
 				lastSpanRegionCount := len(regions) - spanStartIndex
@@ -174,9 +179,10 @@ func (m *writeBytesSplitter) splitRegionsByWrittenBytesV1(
 		// then every region will be a span.
 		if restRegions <= restSpans {
 			spans = append(spans, &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: decodeKey(regions[spanStartIndex].StartKey),
-				EndKey:   decodeKey(regions[i].EndKey),
+				TableID:    tableID,
+				StartKey:   decodeKey(regions[spanStartIndex].StartKey),
+				EndKey:     decodeKey(regions[i].EndKey),
+				KeyspaceID: m.keyspaceID,
 			})
 			regionCounts = append(regionCounts, regionCount)
 			weights = append(weights, spanWriteWeight)
@@ -195,9 +201,10 @@ func (m *writeBytesSplitter) splitRegionsByWrittenBytesV1(
 		// spanStartIndex to i to as a span.
 		if spanWriteWeight > writeLimitPerSpan {
 			spans = append(spans, &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: decodeKey(regions[spanStartIndex].StartKey),
-				EndKey:   decodeKey(regions[i].EndKey),
+				TableID:    tableID,
+				StartKey:   decodeKey(regions[spanStartIndex].StartKey),
+				EndKey:     decodeKey(regions[i].EndKey),
+				KeyspaceID: m.keyspaceID,
 			})
 			regionCounts = append(regionCounts, regionCount)
 			weights = append(weights, spanWriteWeight)

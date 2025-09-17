@@ -167,7 +167,7 @@ func (d *BasicDispatcher) GetEventSizePerSecond() float32 {
 }
 
 func (d *BasicDispatcher) IsTableTriggerEventDispatcher() bool {
-	return d.tableSpan == common.DDLSpan
+	return d.tableSpan.Equal(common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID))
 }
 
 // SetStartTs only be called after the dispatcher is created

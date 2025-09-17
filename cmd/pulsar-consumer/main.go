@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 
@@ -38,6 +39,7 @@ var (
 )
 
 func main() {
+	debug.SetMemoryLimit(14 * 1024 * 1024 * 1024)
 	cmd := &cobra.Command{
 		Use: "pulsar consumer",
 		Run: run,

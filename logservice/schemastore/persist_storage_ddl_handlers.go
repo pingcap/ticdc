@@ -1630,7 +1630,7 @@ func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filte
 	}
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{common.DDLSpan.TableID},
+		TableIDs:      []int64{common.DDLSpanTableID},
 	}
 	return ddlEvent, true, err
 }
@@ -1684,7 +1684,7 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 	}
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{common.DDLSpan.TableID},
+		TableIDs:      []int64{common.DDLSpanTableID},
 	}
 	if isPartitionTable(rawEvent.TableInfo) {
 		physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
@@ -1729,7 +1729,7 @@ func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.F
 		allPhysicalTableIDs := getAllPartitionIDs(rawEvent.TableInfo)
 		allPhysicalTableIDsAndDDLSpanID := make([]int64, 0, len(rawEvent.TableInfo.Partition.Definitions)+1)
 		allPhysicalTableIDsAndDDLSpanID = append(allPhysicalTableIDsAndDDLSpanID, allPhysicalTableIDs...)
-		allPhysicalTableIDsAndDDLSpanID = append(allPhysicalTableIDsAndDDLSpanID, common.DDLSpan.TableID)
+		allPhysicalTableIDsAndDDLSpanID = append(allPhysicalTableIDsAndDDLSpanID, common.DDLSpanTableID)
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      allPhysicalTableIDsAndDDLSpanID,
@@ -1741,7 +1741,7 @@ func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.F
 	} else {
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{rawEvent.TableID, common.DDLSpan.TableID},
+			TableIDs:      []int64{rawEvent.TableID, common.DDLSpanTableID},
 		}
 		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -1827,7 +1827,7 @@ func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filt
 	if isPartitionTable(rawEvent.TableInfo) {
 		prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
 		prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
-		prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, common.DDLSpan.TableID)
+		prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, common.DDLSpanTableID)
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      prevPartitionsAndDDLSpanID,
@@ -1861,7 +1861,7 @@ func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filt
 		}
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{rawEvent.TableID, common.DDLSpan.TableID},
+			TableIDs:      []int64{rawEvent.TableID, common.DDLSpanTableID},
 		}
 	}
 	return ddlEvent, true, err
@@ -1910,7 +1910,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 		if !ignorePrevTable {
 			allPhysicalIDsAndDDLSpanID := make([]int64, 0, len(allPhysicalIDs)+1)
 			allPhysicalIDsAndDDLSpanID = append(allPhysicalIDsAndDDLSpanID, allPhysicalIDs...)
-			allPhysicalIDsAndDDLSpanID = append(allPhysicalIDsAndDDLSpanID, common.DDLSpan.TableID)
+			allPhysicalIDsAndDDLSpanID = append(allPhysicalIDsAndDDLSpanID, common.DDLSpanTableID)
 			ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
 				TableIDs:      allPhysicalIDsAndDDLSpanID,
@@ -1971,7 +1971,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 		if !ignorePrevTable {
 			ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
-				TableIDs:      []int64{rawEvent.TableID, common.DDLSpan.TableID},
+				TableIDs:      []int64{rawEvent.TableID, common.DDLSpanTableID},
 			}
 			if !ignoreCurrentTable {
 				if rawEvent.ExtraSchemaID != rawEvent.SchemaID {
@@ -2039,7 +2039,7 @@ func buildDDLEventForAddPartition(rawEvent *PersistedDDLEvent, tableFilter filte
 	}
 	prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
 	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
-	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, common.DDLSpan.TableID)
+	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, common.DDLSpanTableID)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      prevPartitionsAndDDLSpanID,
@@ -2068,7 +2068,7 @@ func buildDDLEventForDropPartition(rawEvent *PersistedDDLEvent, tableFilter filt
 	}
 	prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
 	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
-	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, common.DDLSpan.TableID)
+	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, common.DDLSpanTableID)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      prevPartitionsAndDDLSpanID,
@@ -2106,7 +2106,7 @@ func buildDDLEventForDropView(rawEvent *PersistedDDLEvent, tableFilter filter.Fi
 	}
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{common.DDLSpan.TableID},
+		TableIDs:      []int64{common.DDLSpanTableID},
 	}
 	return ddlEvent, true, err
 }
@@ -2121,7 +2121,7 @@ func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent,
 	}
 	prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
 	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
-	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, common.DDLSpan.TableID)
+	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, common.DDLSpanTableID)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      prevPartitionsAndDDLSpanID,
@@ -2193,7 +2193,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	if !ignoreNormalTable && !ignorePartitionTable {
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{rawEvent.TableID, targetPartitionID, common.DDLSpan.TableID},
+			TableIDs:      []int64{rawEvent.TableID, targetPartitionID, common.DDLSpanTableID},
 		}
 		if rawEvent.SchemaID != rawEvent.ExtraSchemaID {
 			ddlEvent.UpdatedSchemas = []commonEvent.SchemaIDChange{
@@ -2212,7 +2212,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	} else if !ignoreNormalTable {
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{rawEvent.TableID, common.DDLSpan.TableID},
+			TableIDs:      []int64{rawEvent.TableID, common.DDLSpanTableID},
 		}
 		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -2228,7 +2228,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	} else if !ignorePartitionTable {
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{targetPartitionID, common.DDLSpan.TableID},
+			TableIDs:      []int64{targetPartitionID, common.DDLSpanTableID},
 		}
 		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -2260,7 +2260,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	}
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{common.DDLSpan.TableID},
+		TableIDs:      []int64{common.DDLSpanTableID},
 	}
 	querys, err := commonEvent.SplitQueries(rawEvent.Query)
 	if err != nil {
@@ -2403,7 +2403,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	}
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{common.DDLSpan.TableID},
+		TableIDs:      []int64{common.DDLSpanTableID},
 	}
 	physicalTableCount := 0
 	logicalTableCount := 0
@@ -2500,7 +2500,7 @@ func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFi
 	}
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{common.DDLSpan.TableID},
+		TableIDs:      []int64{common.DDLSpanTableID},
 	}
 	if len(rawEvent.PrevPartitions) > 0 {
 		ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, rawEvent.PrevPartitions...)
@@ -2536,7 +2536,7 @@ func buildDDLEventForRemovePartitioning(rawEvent *PersistedDDLEvent, tableFilter
 	}
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{common.DDLSpan.TableID},
+		TableIDs:      []int64{common.DDLSpanTableID},
 	}
 	ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, rawEvent.PrevPartitions...)
 	ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{

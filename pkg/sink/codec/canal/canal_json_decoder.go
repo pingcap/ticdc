@@ -40,6 +40,11 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
+type tableKey struct {
+	schema string
+	table  string
+}
+
 type bufferedJSONDecoder struct {
 	buf     *bytes.Buffer
 	decoder *json.Decoder
@@ -81,8 +86,9 @@ type decoder struct {
 
 	config *common.Config
 
-	storage      storage.ExternalStorage
-	upstreamTiDB *sql.DB
+	storage        storage.ExternalStorage
+	upstreamTiDB   *sql.DB
+	tableInfoCache map[tableKey]*commonType.TableInfo
 }
 
 var tableIDAllocator = common.NewTableIDAllocator()
@@ -111,60 +117,61 @@ func NewDecoder(
 
 	tableIDAllocator.Clean()
 	return &decoder{
-		config:       codecConfig,
-		decoder:      newBufferedJSONDecoder(),
-		storage:      externalStorage,
-		upstreamTiDB: db,
+		config:         codecConfig,
+		decoder:        newBufferedJSONDecoder(),
+		storage:        externalStorage,
+		upstreamTiDB:   db,
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
 	}, nil
 }
 
 // AddKeyValue implements the Decoder interface
-func (b *decoder) AddKeyValue(_, value []byte) {
-	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+func (d *decoder) AddKeyValue(_, value []byte) {
+	value, err := common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
 		log.Panic("decompress data failed",
-			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
 			zap.Any("value", value),
 			zap.Error(err))
 	}
-	if _, err = b.decoder.Write(value); err != nil {
+	if _, err = d.decoder.Write(value); err != nil {
 		log.Panic("add value to the decoder failed", zap.Any("value", value), zap.Error(err))
 	}
 }
 
 // HasNext implements the Decoder interface
-func (b *decoder) HasNext() (common.MessageType, bool) {
-	if b.decoder.Len() == 0 {
+func (d *decoder) HasNext() (common.MessageType, bool) {
+	if d.decoder.Len() == 0 {
 		return common.MessageTypeUnknown, false
 	}
 
 	var msg canalJSONMessageInterface = &JSONMessage{}
-	if b.config.EnableTiDBExtension {
+	if d.config.EnableTiDBExtension {
 		msg = &canalJSONMessageWithTiDBExtension{
 			JSONMessage: &JSONMessage{},
 			Extensions:  &tidbExtension{},
 		}
 	}
 
-	if err := b.decoder.Decode(msg); err != nil {
+	if err := d.decoder.Decode(msg); err != nil {
 		log.Panic("canal-json decode failed",
-			zap.ByteString("data", b.decoder.Bytes()),
+			zap.ByteString("data", d.decoder.Bytes()),
 			zap.Error(err))
 	}
-	b.msg = msg
-	return b.msg.messageType(), true
+	d.msg = msg
+	return d.msg.messageType(), true
 }
 
-func (b *decoder) assembleClaimCheckDMLEvent(
+func (d *decoder) assembleClaimCheckDMLEvent(
 	ctx context.Context, claimCheckLocation string,
 ) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
-	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
+	data, err := d.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
 		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 	}
 
-	if !b.config.LargeMessageHandle.ClaimCheckRawValue {
+	if !d.config.LargeMessageHandle.ClaimCheckRawValue {
 		claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 		if err != nil {
 			log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
@@ -172,10 +179,10 @@ func (b *decoder) assembleClaimCheckDMLEvent(
 		data = claimCheckM.Value
 	}
 
-	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, data)
+	value, err := common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, data)
 	if err != nil {
 		log.Panic("decompress data failed",
-			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
 			zap.Any("data", data), zap.Error(err))
 	}
 	message := &canalJSONMessageWithTiDBExtension{}
@@ -184,8 +191,8 @@ func (b *decoder) assembleClaimCheckDMLEvent(
 		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err))
 	}
 
-	b.msg = message
-	return b.NextDMLEvent()
+	d.msg = message
+	return d.NextDMLEvent()
 }
 
 func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string) {
@@ -219,7 +226,7 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 	return data, mysqlTypeMap
 }
 
-func (b *decoder) assembleHandleKeyOnlyDMLEvent(
+func (d *decoder) assembleHandleKeyOnlyDMLEvent(
 	ctx context.Context, message *canalJSONMessageWithTiDBExtension,
 ) *commonEvent.DMLEvent {
 	var (
@@ -246,61 +253,64 @@ func (b *decoder) assembleHandleKeyOnlyDMLEvent(
 	}
 	switch eventType {
 	case "INSERT":
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
+		holder := common.MustSnapshotQuery(ctx, d.upstreamTiDB, commitTs, schema, table, conditions)
 		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 	case "UPDATE":
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
+		holder := common.MustSnapshotQuery(ctx, d.upstreamTiDB, commitTs, schema, table, conditions)
 		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 
-		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
+		holder = common.MustSnapshotQuery(ctx, d.upstreamTiDB, commitTs-1, schema, table, conditions)
 		old, _ := buildData(holder)
 		result.Old = []map[string]interface{}{old}
 	case "DELETE":
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
+		holder := common.MustSnapshotQuery(ctx, d.upstreamTiDB, commitTs-1, schema, table, conditions)
 		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 	}
 
-	b.msg = result
-	return b.NextDMLEvent()
+	d.msg = result
+	return d.NextDMLEvent()
 }
 
 // NextDMLEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
-	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
 		log.Panic("message type is not row changed",
-			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
+			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
 	}
 
-	message, withExtension := b.msg.(*canalJSONMessageWithTiDBExtension)
+	message, withExtension := d.msg.(*canalJSONMessageWithTiDBExtension)
 	if withExtension {
 		ctx := context.Background()
-		if message.Extensions.OnlyHandleKey && b.upstreamTiDB != nil {
-			return b.assembleHandleKeyOnlyDMLEvent(ctx, message)
+		if message.Extensions.OnlyHandleKey && d.upstreamTiDB != nil {
+			return d.assembleHandleKeyOnlyDMLEvent(ctx, message)
 		}
 		if message.Extensions.ClaimCheckLocation != "" {
-			return b.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
+			return d.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
-	return b.canalJSONMessage2DMLEvent()
+	return d.canalJSONMessage2DMLEvent()
 }
 
-func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
-	msg := b.msg
-	tableInfo := queryTableInfo(msg)
+func (d *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
+	msg := d.msg
+	tableInfo := d.queryTableInfo(msg)
 
 	result := new(commonEvent.DMLEvent)
 	result.TableInfo = tableInfo
 	result.StartTs = msg.getCommitTs()
 	result.CommitTs = msg.getCommitTs()
 	result.PhysicalTableID = tableInfo.TableName.TableID
-	result.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+	result.Rows = chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
+	result.AddPostFlushFunc(func() {
+		result.Rows.Destroy(1, tableInfo.GetFieldSlice())
+	})
 	result.Length++
 
 	columns := tableInfo.GetColumns()
@@ -333,37 +343,43 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 
 // NextDDLEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
-	if b.msg == nil || b.msg.messageType() != common.MessageTypeDDL {
+func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
+	if d.msg == nil || d.msg.messageType() != common.MessageTypeDDL {
 		log.Panic("message type is not DDL Event",
-			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
+			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
 	}
 
 	result := new(commonEvent.DDLEvent)
-	result.FinishedTs = b.msg.getCommitTs()
-	result.SchemaName = *b.msg.getSchema()
-	result.TableName = *b.msg.getTable()
-	result.Query = b.msg.getQuery()
+	result.FinishedTs = d.msg.getCommitTs()
+	result.SchemaName = *d.msg.getSchema()
+	result.TableName = *d.msg.getTable()
+	result.Query = d.msg.getQuery()
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
 	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
 
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
+	cacheKey := tableKey{
+		schema: result.SchemaName,
+		table:  result.TableName,
+	}
+	// if receive a table level DDL, just remove the table info to trigger create a new one.
+	delete(d.tableInfoCache, cacheKey)
 	return result
 }
 
 // NextResolvedEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (b *decoder) NextResolvedEvent() uint64 {
-	if b.msg == nil || b.msg.messageType() != common.MessageTypeResolved {
-		log.Panic("message type is not watermark", zap.Any("messageType", b.msg.messageType()))
+func (d *decoder) NextResolvedEvent() uint64 {
+	if d.msg == nil || d.msg.messageType() != common.MessageTypeResolved {
+		log.Panic("message type is not watermark", zap.Any("messageType", d.msg.messageType()))
 	}
 
-	withExtensionEvent, ok := b.msg.(*canalJSONMessageWithTiDBExtension)
+	withExtensionEvent, ok := d.msg.(*canalJSONMessageWithTiDBExtension)
 	if !ok {
 		log.Panic("canal-json resolved event message should have tidb extension, but not found",
-			zap.Any("msg", b.msg))
+			zap.Any("msg", d.msg))
 	}
 	return withExtensionEvent.Extensions.WatermarkTs
 }
@@ -501,24 +517,29 @@ func formatValue(value any, ft types.FieldType) any {
 	return nil
 }
 
-func queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
-	tableInfo := newTableInfo(msg)
-	return tableInfo
-}
-
-func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
-	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableInfo.ID)
-	tableInfo.Name = ast.NewCIStr(tableName)
 
-	columns := newTiColumns(msg)
-	tableInfo.Columns = columns
-	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
-	tableInfo.PKIsHandle = len(tableInfo.Indices) != 0
-	return commonType.NewTableInfo4Decoder(schemaName, tableInfo)
+	cacheKey := tableKey{
+		schema: schemaName,
+		table:  tableName,
+	}
+	tableInfo, ok := d.tableInfoCache[cacheKey]
+	if !ok {
+		tidbTableInfo := new(timodel.TableInfo)
+		tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+		tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+		tidbTableInfo.Name = ast.NewCIStr(tableName)
+
+		columns := newTiColumns(msg)
+		tidbTableInfo.Columns = columns
+		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
+		tidbTableInfo.PKIsHandle = len(tidbTableInfo.Indices) != 0
+		tableInfo = commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
+		d.tableInfoCache[cacheKey] = tableInfo
+	}
+	return tableInfo
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {

@@ -1562,11 +1562,11 @@ type schemaStoreWithErr struct {
 	getTableInfoError error
 }
 
-func (s *schemaStoreWithErr) GetTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+func (s *schemaStoreWithErr) GetTableInfo(keyspaceID uint32, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if s.getTableInfoError != nil {
 		return nil, s.getTableInfoError
 	}
-	return s.mockSchemaStore.GetTableInfo(tableID, ts)
+	return s.mockSchemaStore.GetTableInfo(common.DefaultKeyspaceID, tableID, ts)
 }
 
 func TestGetTableInfo4Txn(t *testing.T) {

@@ -29,18 +29,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func getCompleteTableSpanWithTableID(tableID int64) *heartbeatpb.TableSpan {
+func getCompleteTableSpanWithTableID(keyspaceID uint32, tableID int64) (*heartbeatpb.TableSpan, error) {
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID: tableID,
 	}
-	startKey, endKey := common.GetTableRange(tableSpan.TableID)
+	startKey, endKey, err := common.GetKeyspaceTableRange(keyspaceID, tableSpan.TableID)
+	if err != nil {
+		return nil, err
+	}
 	tableSpan.StartKey = common.ToComparableKey(startKey)
 	tableSpan.EndKey = common.ToComparableKey(endKey)
-	return tableSpan
+	return tableSpan, nil
 }
 
-func getCompleteTableSpan() *heartbeatpb.TableSpan {
-	return getCompleteTableSpanWithTableID(1)
+func getCompleteTableSpan(keyspaceID uint32) (*heartbeatpb.TableSpan, error) {
+	return getCompleteTableSpanWithTableID(keyspaceID, 1)
 }
 
 func getUncompleteTableSpan() *heartbeatpb.TableSpan {
@@ -53,7 +56,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(),
+		common.NewChangefeedID(common.DefaultKeyspace),
 		"system",
 		false,
 		false,
@@ -106,7 +109,8 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	tableInfo := dmlEvent.TableInfo
 
 	sink := sink.NewMockSink(common.MysqlSinkType)
-	tableSpan := getCompleteTableSpan()
+	tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+	require.NoError(t, err)
 	dispatcher := newDispatcherForTest(sink, tableSpan)
 	require.Equal(t, uint64(0), dispatcher.GetCheckpointTs())
 	require.Equal(t, uint64(0), dispatcher.GetResolvedTs())
@@ -448,7 +452,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	count = 0
 
-	ddlTableSpan := common.DDLSpan
+	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.MysqlSinkType)
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
@@ -528,7 +532,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	count = 0
 
-	ddlTableSpan := common.DDLSpan
+	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.KafkaSinkType)
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
@@ -621,7 +625,9 @@ func TestDispatcherClose(t *testing.T) {
 
 	{
 		sink := sink.NewMockSink(common.MysqlSinkType)
-		dispatcher := newDispatcherForTest(sink, getCompleteTableSpan())
+		tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+		require.NoError(t, err)
+		dispatcher := newDispatcherForTest(sink, tableSpan)
 
 		// ===== dml event =====
 		nodeID := node.NewID()
@@ -642,7 +648,9 @@ func TestDispatcherClose(t *testing.T) {
 	// test sink is not normal
 	{
 		sink := sink.NewMockSink(common.MysqlSinkType)
-		dispatcher := newDispatcherForTest(sink, getCompleteTableSpan())
+		tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+		require.NoError(t, err)
+		dispatcher := newDispatcherForTest(sink, tableSpan)
 
 		// ===== dml event =====
 		nodeID := node.NewID()
@@ -687,7 +695,8 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 	dmlEvent3.Length = 1
 
 	mockSink := sink.NewMockSink(common.MysqlSinkType)
-	tableSpan := getCompleteTableSpan()
+	tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+	require.NoError(t, err)
 	dispatcher := newDispatcherForTest(mockSink, tableSpan)
 
 	// Create a callback that records when it's called

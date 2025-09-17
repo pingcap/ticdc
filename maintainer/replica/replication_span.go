@@ -93,6 +93,7 @@ func NewWorkingSpanReplication(
 		zap.Uint64("checkpointTs", status.CheckpointTs),
 		zap.String("componentStatus", status.ComponentStatus.String()),
 		zap.Int64("schemaID", SchemaID),
+		zap.Uint32("keyspaceID", span.KeyspaceID),
 		zap.Int64("tableID", span.TableID),
 		zap.Int64("groupID", int64(r.groupID)),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
@@ -126,9 +127,14 @@ func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
 
 func (r *SpanReplication) initGroupID() {
 	r.groupID = replica.DefaultGroupID
-	span := heartbeatpb.TableSpan{TableID: r.Span.TableID, StartKey: r.Span.StartKey, EndKey: r.Span.EndKey}
+	span := heartbeatpb.TableSpan{
+		TableID:    r.Span.TableID,
+		StartKey:   r.Span.StartKey,
+		EndKey:     r.Span.EndKey,
+		KeyspaceID: r.Span.KeyspaceID,
+	}
 	// check if the table is split
-	totalSpan := common.TableIDToComparableSpan(span.TableID)
+	totalSpan := common.TableIDToComparableSpan(r.Span.KeyspaceID, span.TableID)
 	if !common.IsSubSpan(span, totalSpan) {
 		log.Warn("invalid span range", zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("id", r.ID.String()), zap.Int64("tableID", span.TableID),
@@ -139,6 +145,7 @@ func (r *SpanReplication) initGroupID() {
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)
 	}
+	log.Info("init groupID", zap.Any("span", span), zap.Any("totalSpan", totalSpan))
 }
 
 func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
