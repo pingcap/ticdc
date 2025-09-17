@@ -823,11 +823,8 @@ func (e *eventStore) stopReceiveEventFromSubStat(dispatcherID common.DispatcherI
 	}
 	subStat.dispatchers.Lock()
 	defer subStat.dispatchers.Unlock()
-	for id, subscriber := range subStat.dispatchers.subscribers {
-		if id == dispatcherID {
-			subscriber.isStopped.Store(true)
-			break
-		}
+	if subscriber, ok := subStat.dispatchers.subscribers[dispatcherID]; ok {
+		subscriber.isStopped.Store(true)
 	}
 }
 
