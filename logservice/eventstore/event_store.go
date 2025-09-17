@@ -725,11 +725,13 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	} else {
 		db = tryGetDB(stat.subStat, stat.removingSubStat == nil)
 		subStat = stat.subStat
-		if db == nil {
+		if db != nil {
+			if stat.removingSubStat != nil {
+				cleanRemovingSubStat = true
+			}
+		} else if stat.removingSubStat != nil {
 			db = tryGetDB(stat.removingSubStat, true)
 			subStat = stat.removingSubStat
-		} else if stat.removingSubStat != nil {
-			cleanRemovingSubStat = true
 		}
 	}
 	e.dispatcherMeta.RUnlock()
