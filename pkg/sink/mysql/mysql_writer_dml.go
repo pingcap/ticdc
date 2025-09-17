@@ -535,7 +535,6 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
-		zap.Bool("eventCommitTs is less than replicatingTs", event.CommitTs < event.ReplicatingTs),
 		zap.Uint64("firstRowCommitTs", event.CommitTs),
 		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 		zap.Bool("cfgSafeMode", w.cfg.SafeMode),
