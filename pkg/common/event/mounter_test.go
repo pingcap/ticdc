@@ -14,11 +14,13 @@
 package event
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"

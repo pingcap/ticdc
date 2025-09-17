@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -235,10 +236,19 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				log.Fatal("The CommitTs must be greater than the resolvedTs",
 					zap.String("EventType", "COMMITTED"),
 					zap.Uint64("CommitTs", entry.CommitTs),
-					zap.Uint64("resolvedTs", resolvedTs),
-					zap.Uint64("regionID", regionID))
+					zap.Uint64("resolvedTs", resolvedTs))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
+			key := newMatchKey(entry)
+			if state.matcher.unmatchedValue != nil {
+				if _, exists := state.matcher.unmatchedValue[key]; exists {
+					log.Warn("receive a COMMITTED entry while there is still unmatched prewrite on the same key",
+						zap.Uint64("regionID", regionID),
+						zap.String("key", spanz.HexKey(entry.GetKey())),
+						zap.Uint64("startTs", entry.GetStartTs()),
+						zap.Uint64("commitTs", entry.GetCommitTs()))
+				}
+			}
 		case cdcpb.Event_PREWRITE:
 			state.matcher.putPrewriteRow(entry)
 		case cdcpb.Event_COMMIT:

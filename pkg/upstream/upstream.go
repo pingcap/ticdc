@@ -105,7 +105,7 @@ func CreateTiStore(urls string, credential *security.Credential) (tidbkv.Storage
 		return nil, errors.Trace(err)
 	}
 
-	tiPath := fmt.Sprintf("tikv://%s?disableGC=true", urlv.HostString())
+	tiPath := fmt.Sprintf("tikv://%s?disableGC=true&keyspaceName=SYSTEM", urlv.HostString())
 	securityCfg := tikvconfig.Security{
 		ClusterSSLCA:    credential.CAPath,
 		ClusterSSLCert:  credential.CertPath,

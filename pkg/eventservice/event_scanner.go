@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"go.uber.org/zap"
 )
 
@@ -223,11 +224,13 @@ func (s *eventScanner) scanAndMergeEvents(
 		}
 
 		if err = processor.appendRow(rawEvent); err != nil {
-			log.Error("append row failed", zap.Error(err),
+			log.Error("append row failed",
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
+				zap.Any("key", spanz.HexKey(rawEvent.Key)),
 				zap.Uint64("startTs", rawEvent.StartTs),
-				zap.Uint64("commitTs", rawEvent.CRTs))
+				zap.Uint64("commitTs", rawEvent.CRTs),
+				zap.Error(err))
 			return false, err
 		}
 	}
@@ -677,6 +680,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		log.Panic("no current DML event to append to")
 	}
 
+	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
 	if !rawEvent.IsUpdate() {
 		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}

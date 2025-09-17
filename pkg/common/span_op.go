@@ -16,12 +16,15 @@ package common
 import (
 	"bytes"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/codec"
+	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
 
@@ -43,16 +46,16 @@ func TableIDToComparableSpan(tableID int64) heartbeatpb.TableSpan {
 	}
 }
 
-// TableIDToComparableRange returns a range of a table,
-// start and end are encoded in Comparable format.
-func TableIDToComparableRange(tableID int64) (start, end heartbeatpb.TableSpan) {
-	tableSpan := TableIDToComparableSpan(tableID)
-	start = tableSpan
-	start.EndKey = nil
-	end = tableSpan
-	end.StartKey = tableSpan.EndKey
-	end.EndKey = nil
-	return
+func TableIDToComparableSpanWithKeyspace(keyspaceID uint32, tableID int64) (heartbeatpb.TableSpan, error) {
+	startKey, endKey, err := GetKeyspaceTableRange(keyspaceID, tableID)
+	if err != nil {
+		return heartbeatpb.TableSpan{}, errors.Trace(err)
+	}
+	return heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: ToComparableKey(startKey),
+		EndKey:   ToComparableKey(endKey),
+	}, nil
 }
 
 func IsCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
@@ -90,6 +93,30 @@ func GetTableRange(tableID int64) (startKey, endKey []byte) {
 	start = append(tablePrefix, sep, recordMarker)
 	end = append(tablePrefix, sep, recordMarker+1)
 	return start, end
+}
+
+func GetKeyspaceTableRange(keyspaceID uint32, tableID int64) (startKey, endKey []byte, err error) {
+	startKey, endKey = GetTableRange(tableID)
+
+	// If the the keyspaceID is 0, that means we are in the classic mode
+	// fallback to the original table range
+	if keyspaceID == 0 {
+		return startKey, endKey, nil
+	}
+
+	// The tikv.NewCodecV2 method requires a keyspace meta
+	// But it actually use the keyspaceID only
+	// We construct a KeyspaceMeta to make the codec happy
+	meta := &keyspacepb.KeyspaceMeta{
+		Id: keyspaceID,
+	}
+	codec, err := tikv.NewCodecV2(tikv.ModeTxn, meta)
+	if err != nil {
+		return nil, nil, errors.Trace(err)
+	}
+
+	startKey, endKey = codec.EncodeRange(startKey, endKey)
+	return startKey, endKey, nil
 }
 
 // StartCompare compares two start keys.
