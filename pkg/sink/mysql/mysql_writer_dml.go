@@ -120,9 +120,42 @@ func (w *Writer) shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*co
 	if !hasPK || hasVirtualCols {
 		return false
 	}
-
 	if len(events) == 1 && events[0].Len() == 1 {
 		return false
+	}
+
+	return allRowInSameSafeMode(w.cfg.SafeMode, events)
+}
+
+// allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.
+// Safe mode is either globally enabled via the safemode parameter, or determined per event
+// by comparing CommitTs and ReplicatingTs.
+//
+// Parameters:
+//   - safemode: If true, global safe mode is enabled and the function returns true immediately
+//   - events: A slice of DMLEvents to check for consistent safe mode status
+//
+// Returns:
+//
+//	true if either:
+//	- global safe mode is enabled (safemode=true), or
+//	- all events have the same safe mode status (all events' CommitTs > ReplicatingTs, or all ≤)
+//	false if events have inconsistent safe mode status
+func allRowInSameSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
+	if safemode {
+		return true
+	}
+
+	if len(events) == 0 {
+		return false
+	}
+
+	firstSafeMode := events[0].CommitTs > events[0].ReplicatingTs
+	for _, event := range events {
+		currentSafeMode := event.CommitTs > event.ReplicatingTs
+		if currentSafeMode != firstSafeMode {
+			return false
+		}
 	}
 
 	return true
@@ -159,7 +192,7 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 	argsList := make([][]interface{}, 0)
 
 	batchSQL := func(events []*commonEvent.DMLEvent) {
-		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode
+		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || events[0].CommitTs < events[0].ReplicatingTs
 
 		if len(events) == 1 {
 			// only one event, we don't need to do batch
@@ -498,7 +531,7 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 }
 
 func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode
+	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
 
 	log.Info("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),

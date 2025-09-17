@@ -39,7 +39,7 @@ const (
 
 	defaultSupportVectorVersion = "8.4.0"
 
-	defaultErrorCausedSafeModeDurationInSeconds = 20 * time.Second
+	defaultErrorCausedSafeModeDuration = 5 * time.Second
 )
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
@@ -99,7 +99,7 @@ func NewWriter(
 		needFormat:             needFormatVectorType,
 
 		isInErrorCausedSafeMode:     false,
-		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDurationInSeconds,
+		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {
