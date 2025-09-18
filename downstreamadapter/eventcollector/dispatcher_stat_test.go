@@ -621,7 +621,7 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 			name: "first event is not handshake",
 			event: dispatcher.DispatcherEvent{
 				Event: &mockEvent{
-					eventType: commonEvent.TypeDMLEvent,
+					eventType: commonEvent.TypeResolvedEvent,
 					epoch:     1,
 				},
 			},
@@ -657,7 +657,7 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 			name: "stale epoch event",
 			event: dispatcher.DispatcherEvent{
 				Event: &mockEvent{
-					eventType: commonEvent.TypeDMLEvent,
+					eventType: commonEvent.TypeResolvedEvent,
 					epoch:     1,
 				},
 			},
