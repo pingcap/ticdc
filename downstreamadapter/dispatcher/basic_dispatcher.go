@@ -46,7 +46,7 @@ type DispatcherService interface {
 	GetFilterConfig() *eventpb.FilterConfig
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
-	GetStartTsIsSyncpoint() bool
+	GetSkipSyncpointSameAsStartTs() bool
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
@@ -64,7 +64,7 @@ type Dispatcher interface {
 	SetSeq(seq uint64)
 	SetStartTs(startTs uint64)
 	SetCurrentPDTs(currentPDTs uint64)
-	SetStartTsIsSyncpoint(startTsIsSyncpoint bool)
+	SetSkipSyncpointSameAsStartTs(skipSyncpointSameAsStartTs bool)
 	SetComponentStatus(status heartbeatpb.ComponentState)
 	GetRemovingStatus() bool
 	GetHeartBeatInfo(h *HeartBeatInfo)
@@ -118,8 +118,15 @@ type BasicDispatcher struct {
 	isCompleteTable bool
 
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
-	startTs            uint64
-	startTsIsSyncpoint bool
+	startTs uint64
+
+	// skipSyncpointSameAsStartTs is used to determine whether we need to skip the syncpoint event which is same as the startTs
+	// skipSyncpointSameAsStartTs only maybe true in MysqlSink.
+	// it's used to deal with the corner case when ddl commitTs is same as the syncpointTs commitTs
+	// For example, syncpointInterval = 10, ddl commitTs = 20, syncpointTs = 20
+	// case 1: ddl and syncpoint is flushed successfully, and then restart --> startTs = 20, skipSyncpointSameAsStartTs = true
+	// case 2: ddl is flushed successfully, syncpointTs not and then restart --> startTs = 20, skipSyncpointSameAsStartTs = false --> receive syncpoint first
+	skipSyncpointSameAsStartTs bool
 	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
 	// to determine whether the insert event should use `Replace` or just `Insert`
@@ -172,31 +179,31 @@ func NewBasicDispatcher(
 	startTs uint64,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
-	startTsIsSyncpoint bool,
+	skipSyncpointSameAsStartTs bool,
 	currentPDTs uint64,
 	mode int64,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                    id,
-		tableSpan:             tableSpan,
-		isCompleteTable:       common.IsCompleteSpan(tableSpan),
-		startTs:               startTs,
-		startTsIsSyncpoint:    startTsIsSyncpoint,
-		sharedInfo:            sharedInfo,
-		sink:                  sink,
-		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		resolvedTs:            startTs,
-		isRemoving:            atomic.Bool{},
-		blockEventStatus:      BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:         NewTableProgress(),
-		schemaID:              schemaID,
-		schemaIDToDispatchers: schemaIDToDispatchers,
-		resendTaskMap:         newResendTaskMap(),
-		creationPDTs:          currentPDTs,
-		mode:                  mode,
-		BootstrapState:        BootstrapFinished,
+		id:                         id,
+		tableSpan:                  tableSpan,
+		isCompleteTable:            common.IsCompleteSpan(tableSpan),
+		startTs:                    startTs,
+		skipSyncpointSameAsStartTs: skipSyncpointSameAsStartTs,
+		sharedInfo:                 sharedInfo,
+		sink:                       sink,
+		componentStatus:            newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		resolvedTs:                 startTs,
+		isRemoving:                 atomic.Bool{},
+		blockEventStatus:           BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:              NewTableProgress(),
+		schemaID:                   schemaID,
+		schemaIDToDispatchers:      schemaIDToDispatchers,
+		resendTaskMap:              newResendTaskMap(),
+		creationPDTs:               currentPDTs,
+		mode:                       mode,
+		BootstrapState:             BootstrapFinished,
 	}
 
 	return dispatcher

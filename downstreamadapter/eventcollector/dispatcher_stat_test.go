@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test", common.DefaultKeyspace)
@@ -42,6 +43,8 @@ type mockDispatcher struct {
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
+
+	skipSyncpointSameAsStartTs bool
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -91,8 +94,8 @@ func (m *mockDispatcher) GetSyncPointInterval() time.Duration {
 	return time.Second * 10
 }
 
-func (m *mockDispatcher) GetStartTsIsSyncpoint() bool {
-	return false
+func (m *mockDispatcher) GetSkipSyncpointSameAsStartTs() bool {
+	return m.skipSyncpointSameAsStartTs
 }
 
 func (m *mockDispatcher) GetResolvedTs() uint64 {
@@ -1106,6 +1109,54 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 				got := stat.handleBatchDataEvents(tt.events)
 				require.Equal(t, tt.want, got)
 			}
+		})
+	}
+}
+
+func TestNewDispatcherResetRequest(t *testing.T) {
+	syncPointInterval := 10 * time.Second
+	startTs := oracle.GoTimeToTS(time.Unix(0, 0).Add(1000 * syncPointInterval))
+	nextSyncpointTs := oracle.GoTimeToTS(time.Unix(0, 0).Add(1001 * syncPointInterval))
+
+	cases := []struct {
+		name                       string
+		resetTs                    uint64
+		skipSyncpointSameAsStartTs bool
+		expectedSyncPointTs        uint64
+	}{
+		{
+			name:                       "reset at startTs, skipSyncpointSameAsStartTs is true",
+			resetTs:                    startTs,
+			skipSyncpointSameAsStartTs: true,
+			expectedSyncPointTs:        nextSyncpointTs,
+		},
+		{
+			name:                       "reset at startTs, skipSyncpointSameAsStartTs is false",
+			resetTs:                    startTs,
+			skipSyncpointSameAsStartTs: false,
+			expectedSyncPointTs:        startTs,
+		},
+		{
+			name:                       "reset at nextSyncpointTs, skipSyncpointSameAsStartTs is true",
+			resetTs:                    nextSyncpointTs,
+			skipSyncpointSameAsStartTs: true,
+			expectedSyncPointTs:        nextSyncpointTs,
+		},
+		{
+			name:                       "reset at nextSyncpointTs, skipSyncpointSameAsStartTs is false",
+			resetTs:                    nextSyncpointTs,
+			skipSyncpointSameAsStartTs: false,
+			expectedSyncPointTs:        nextSyncpointTs,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDisp := newMockDispatcher(common.NewDispatcherID(), startTs)
+			mockDisp.skipSyncpointSameAsStartTs = tc.skipSyncpointSameAsStartTs
+			stat := newDispatcherStat(mockDisp, nil, nil)
+			resetReq := stat.newDispatcherResetRequest("local", tc.resetTs, 1)
+			require.Equal(t, tc.expectedSyncPointTs, resetReq.SyncPointTs)
 		})
 	}
 }
