@@ -306,7 +306,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		c.changefeedID,
 		common.NewDispatcherIDFromPB(spanInfo.ID),
 		spanInfo.SchemaID,
-		spanInfo.Span.Copy(),
+		spanInfo.Span,
 		status,
 		node,
 	)
