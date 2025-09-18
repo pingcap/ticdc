@@ -369,7 +369,6 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 		log.Warn("receive non-handshake event before handshake event, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Stringer("from", event.From),
 			zap.Any("event", event.Event))
 		return false
 	}
