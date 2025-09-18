@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
@@ -396,6 +397,14 @@ type tableKey struct {
 	table  string
 }
 
+// newTableKey return tableKey with lower case
+func newTableKey(schema, table string) tableKey {
+	return tableKey{
+		strings.ToLower(schema),
+		strings.ToLower(table),
+	}
+}
+
 type partitionTableAccessor struct {
 	memo map[tableKey]struct{}
 }
@@ -468,7 +477,7 @@ func newPartitionTableAccessor() *partitionTableAccessor {
 }
 
 func (m *partitionTableAccessor) add(schema, table string) {
-	key := tableKey{schema: schema, table: table}
+	key := newTableKey(schema, table)
 	_, ok := m.memo[key]
 	if ok {
 		return
@@ -478,7 +487,7 @@ func (m *partitionTableAccessor) add(schema, table string) {
 }
 
 func (m *partitionTableAccessor) isPartitionTable(schema, table string) bool {
-	key := tableKey{schema: schema, table: table}
+	key := newTableKey(schema, table)
 	_, ok := m.memo[key]
 	return ok
 }
