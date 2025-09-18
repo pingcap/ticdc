@@ -1,0 +1,6 @@
+[scheduler]
+enable-table-across-nodes = true
+region-threshold = 2
+enable-splittable-check = false
+
+

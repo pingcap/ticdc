@@ -33,7 +33,7 @@ func NewCreatorFactory(config *config.PulsarConfig, changefeedID commonType.Chan
 		URL: config.BrokerURL,
 		CustomMetricsLabels: map[string]string{
 			"changefeed": changefeedID.ID().String(),
-			"namespace":  changefeedID.Namespace(),
+			"keyspace":   changefeedID.Keyspace(),
 		},
 		ConnectionTimeout: config.ConnectionTimeout.Duration(),
 		OperationTimeout:  config.OperationTimeout.Duration(),

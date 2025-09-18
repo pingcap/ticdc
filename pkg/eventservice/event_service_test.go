@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -137,11 +138,9 @@ func TestEventServiceBasic(t *testing.T) {
 				_ = mockStore.AppendEvents(dispatcherInfo.id, kvEvents[2].CRTs+1, kvEvents[2])
 			case *commonEvent.BatchDMLEvent:
 				require.Equal(t, "event-collector", msg.Topic)
-				// first dml has one event, second dml has two events
+				// first dml has one event
 				if dmlCount == 0 {
 					require.Equal(t, int32(1), e.Len())
-				} else if dmlCount == 1 {
-					require.Equal(t, int32(2), e.Len())
 				}
 				dmlCount += len(e.DMLEvents)
 				require.Equal(t, kvEvents[dmlCount-1].CRTs, e.GetCommitTs())
@@ -154,7 +153,7 @@ func TestEventServiceBasic(t *testing.T) {
 				log.Info("receive watermark", zap.Uint64("ts", e.Events[0].ResolvedTs))
 			}
 		}
-		if msgCnt == 5 {
+		if msgCnt >= 5 {
 			break
 		}
 	}
@@ -433,7 +432,7 @@ func (m *mockSchemaStore) AppendDDLEvent(id common.TableID, ddls ...commonEvent.
 	}
 }
 
-func (m *mockSchemaStore) GetTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+func (m *mockSchemaStore) GetTableInfo(keyspaceID uint32, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if info, ok := m.TableInfo[tableID]; ok {
 		if info.deleteVersion <= uint64(ts) {
 			return nil, &schemastore.TableDeletedError{}
@@ -450,30 +449,31 @@ func (m *mockSchemaStore) GetTableInfo(tableID common.TableID, ts common.Ts) (*c
 	return nil, nil
 }
 
-func (m *mockSchemaStore) GetAllPhysicalTables(snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
+func (m *mockSchemaStore) GetAllPhysicalTables(keyspaceID uint32, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
 	return nil, nil
 }
 
-func (m *mockSchemaStore) GetTableDDLEventState(tableID int64) schemastore.DDLEventState {
+func (m *mockSchemaStore) GetTableDDLEventState(keyspaceID uint32, tableID int64) (schemastore.DDLEventState, error) {
 	return schemastore.DDLEventState{
 		ResolvedTs:       m.resolvedTs,
 		MaxEventCommitTs: m.maxDDLCommitTs,
-	}
+	}, nil
 }
 
 func (m *mockSchemaStore) RegisterTable(
+	keyspaceID uint32,
 	tableID int64,
 	startTS common.Ts,
 ) error {
 	return nil
 }
 
-func (m *mockSchemaStore) UnregisterTable(_ int64) error {
+func (m *mockSchemaStore) UnregisterTable(_ uint32, _ int64) error {
 	return nil
 }
 
 // GetNextDDLEvents returns the next ddl event which finishedTs is within the range (start, end]
-func (m *mockSchemaStore) FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
+func (m *mockSchemaStore) FetchTableDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
 	events := m.DDLEvents[tableID]
 	if len(events) == 0 {
 		return nil, nil
@@ -490,8 +490,16 @@ func (m *mockSchemaStore) FetchTableDDLEvents(dispatcherID common.DispatcherID, 
 	return events[l:r], nil
 }
 
-func (m *mockSchemaStore) FetchTableTriggerDDLEvents(tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	return nil, 0, nil
+}
+
+func (m *mockSchemaStore) RegisterKeyspace(ctx context.Context, keyspaceName string) error {
+	return nil
+}
+
+func (m *mockSchemaStore) GetKVStorage(keyspaceID uint32) (kv.Storage, error) {
+	return nil, nil
 }
 
 type mockSpanStats struct {

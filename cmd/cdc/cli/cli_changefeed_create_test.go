@@ -126,7 +126,7 @@ func TestChangefeedCreateCli(t *testing.T) {
 	cmd := newCmdCreateChangefeed(f)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "cf.toml")
-	err := os.WriteFile(configPath, []byte("enable-sync-point=true\r\nsync-point-interval='20m'"), 0o644)
+	err := os.WriteFile(configPath, []byte("enable-sync-point=false\r\nsync-point-interval='20m'"), 0o644)
 	require.Nil(t, err)
 	os.Args = []string{
 		"create",
@@ -156,10 +156,10 @@ func TestChangefeedCreateCli(t *testing.T) {
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(&v2.Tso{
 		Timestamp: time.Now().Unix() * 1000,
 	}, nil)
-	f.changefeeds.EXPECT().VerifyTable(gomock.Any(), gomock.Any()).Return(&v2.Tables{
+	f.changefeeds.EXPECT().VerifyTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.Tables{
 		IneligibleTables: []v2.TableName{{}},
 	}, nil)
-	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&v2.ChangeFeedInfo{}, nil)
+	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.ChangeFeedInfo{}, nil)
 	require.Nil(t, cmd.Execute())
 
 	cmd = newCmdCreateChangefeed(f)

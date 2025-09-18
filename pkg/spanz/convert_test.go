@@ -29,8 +29,8 @@ func TestHashableSpan(t *testing.T) {
 	m[hashableSpan{}] = 1
 	require.Equal(t, 1, m[hashableSpan{}])
 
-	span := toHashableSpan(common.TableIDToComparableSpan(1))
-	require.EqualValues(t, common.TableIDToComparableSpan(1), span.toSpan())
+	span := toHashableSpan(common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1))
+	require.EqualValues(t, common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1), span.toSpan())
 }
 
 func TestHashableSpanHeapAlloc(t *testing.T) {

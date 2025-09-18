@@ -1,0 +1,8 @@
+[scheduler]
+enable-table-across-nodes = true
+region-threshold = 2
+
+[filter]
+rules = ['*.*','!test.*']
+
+

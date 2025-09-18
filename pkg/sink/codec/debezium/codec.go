@@ -51,7 +51,7 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 	var err error
 	writer.WriteObjectField(fieldName, func() {
 		for i, colInfo := range tableInfo.GetColumns() {
-			if !columnSelector.Select(colInfo) {
+			if colInfo.IsVirtualGenerated() || !columnSelector.Select(colInfo) {
 				continue
 			}
 			err = c.writeDebeziumFieldValue(writer, row, i, colInfo)

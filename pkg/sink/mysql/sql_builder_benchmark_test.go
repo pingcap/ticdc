@@ -25,7 +25,7 @@ func BenchmarkBuildInsert(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _ = buildInsert(tableInfo, insert, false)
+			_, _ = buildInsert(tableInfo, insert, true)
 		}
 	})
 }

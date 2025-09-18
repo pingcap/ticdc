@@ -31,7 +31,7 @@ import (
 type cfMeta struct {
 	UpstreamID     uint64                     `json:"upstream_id"`
 	ID             string                     `json:"id"`
-	Namespace      string                     `json:"namespace"`
+	Keyspace       string                     `json:"keyspace"`
 	SinkURI        string                     `json:"sink_uri"`
 	Config         *v2.ReplicaConfig          `json:"config"`
 	CreateTime     api.JSONTime               `json:"create_time"`
@@ -53,7 +53,7 @@ type queryChangefeedOptions struct {
 	apiClientV2  apiv2client.APIV2Interface
 	changefeedID string
 	simplified   bool
-	namespace    string
+	keyspace     string
 }
 
 // newQueryChangefeedOptions creates new options for the `cli changefeed query` command.
@@ -64,7 +64,7 @@ func newQueryChangefeedOptions() *queryChangefeedOptions {
 // addFlags receives a *cobra.Command reference and binds
 // flags related to template printing to it.
 func (o *queryChangefeedOptions) addFlags(cmd *cobra.Command) {
-	cmd.PersistentFlags().StringVarP(&o.namespace, "namespace", "n", "default", "Replication task (changefeed) Namespace")
+	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", "default", "Replication task (changefeed) Keyspace")
 	cmd.PersistentFlags().BoolVarP(&o.simplified, "simple", "s", false, "Output simplified replication status")
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
@@ -84,7 +84,7 @@ func (o *queryChangefeedOptions) complete(f factory.Factory) error {
 func (o *queryChangefeedOptions) run(cmd *cobra.Command) error {
 	ctx := context.Background()
 	if o.simplified {
-		infos, err := o.apiClientV2.Changefeeds().List(ctx, o.namespace, "all")
+		infos, err := o.apiClientV2.Changefeeds().List(ctx, o.keyspace, "all")
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -96,14 +96,14 @@ func (o *queryChangefeedOptions) run(cmd *cobra.Command) error {
 		return cerror.ErrChangeFeedNotExists.GenWithStackByArgs(o.changefeedID)
 	}
 
-	detail, err := o.apiClientV2.Changefeeds().Get(ctx, o.namespace, o.changefeedID)
+	detail, err := o.apiClientV2.Changefeeds().Get(ctx, o.keyspace, o.changefeedID)
 	if err != nil && cerror.ErrChangeFeedNotExists.NotEqual(err) {
 		return err
 	}
 	meta := &cfMeta{
 		UpstreamID:     detail.UpstreamID,
 		ID:             detail.ID,
-		Namespace:      detail.Namespace,
+		Keyspace:       detail.Keyspace,
 		SinkURI:        detail.SinkURI,
 		Config:         detail.Config,
 		CreateTime:     api.JSONTime(detail.CreateTime),

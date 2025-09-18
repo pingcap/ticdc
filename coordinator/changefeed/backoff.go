@@ -134,7 +134,7 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, confi
 			log.Info("changefeed is recovered from warning state,"+
 				"its checkpointTs is greater than lastRetryCheckpointTs,"+
 				"it will be changed to normal state",
-				zap.String("namespace", m.id.Namespace()),
+				zap.String("keyspace", m.id.Keyspace()),
 				zap.String("changefeed", m.id.Name()),
 				zap.Uint64("checkpointTs", status.CheckpointTs))
 			// reset the retry backoff

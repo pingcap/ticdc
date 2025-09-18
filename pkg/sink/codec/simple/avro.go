@@ -367,7 +367,7 @@ func (a *avroMarshaller) collectColumns(
 	result := rowMapPool.Get().(map[string]interface{})
 	for i, colInfo := range tableInfo.GetColumns() {
 		if colInfo != nil {
-			if !columnSelector.Select(colInfo) {
+			if colInfo.IsVirtualGenerated() || !columnSelector.Select(colInfo) {
 				continue
 			}
 			if onlyHandleKey && !tableInfo.IsHandleKey(colInfo.ID) {

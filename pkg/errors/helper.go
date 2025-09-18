@@ -117,10 +117,20 @@ var changefeedUnRetryableErrors = []*errors.Error{
 	ErrKafkaInvalidConfig,
 	ErrMySQLInvalidConfig,
 	ErrStorageSinkInvalidConfig,
+
+	// gc related errors
+	ErrGCTTLExceeded,
+	ErrSnapshotLostByGC,
+	ErrStartTsBeforeGC,
+
+	ErrTableAfterDDLNotSplitable,
 }
 
 // ShouldFailChangefeed returns true if an error is a changefeed not retry error.
 func ShouldFailChangefeed(err error) bool {
+	if err == nil {
+		return false
+	}
 	for _, e := range changefeedUnRetryableErrors {
 		if e.Equal(err) {
 			return true
@@ -155,4 +165,25 @@ func IsCliUnprintableError(err error) bool {
 // WrapChangefeedUnretryableErr wraps an error into ErrChangefeedUnRetryable.
 func WrapChangefeedUnretryableErr(err error, args ...interface{}) error {
 	return WrapError(ErrChangefeedUnretryable, err, args...)
+}
+
+// ErrorCode returns the RFC error code for the given error.
+// If the error is a changefeed unretryable error, returns ErrChangefeedUnretryable.
+// otherwise, return ErrChangefeedRetryable
+func ErrorCode(err error) errors.RFCErrorCode {
+	for _, e := range changefeedUnRetryableErrors {
+		if e.Equal(err) {
+			return ErrChangefeedUnretryable.RFCCode()
+		}
+		if code, ok := RFCCode(err); ok {
+			if code == e.RFCCode() {
+				return ErrChangefeedUnretryable.RFCCode()
+			}
+		}
+		if strings.Contains(err.Error(), string(e.RFCCode())) {
+			return ErrChangefeedUnretryable.RFCCode()
+		}
+	}
+
+	return ErrChangefeedRetryable.RFCCode()
 }

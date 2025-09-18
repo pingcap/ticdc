@@ -138,9 +138,9 @@ func newFileWorkerGroup(
 		},
 		flushCh: make(chan *fileCache, 32),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
 	}
 }
 
@@ -150,7 +150,7 @@ func (f *fileWorkerGroup) Run(
 	defer func() {
 		f.close()
 		log.Warn("redo file workers closed",
-			zap.String("namespace", f.cfg.ChangeFeedID.Namespace()),
+			zap.String("keyspace", f.cfg.ChangeFeedID.Keyspace()),
 			zap.String("changefeed", f.cfg.ChangeFeedID.Name()),
 			zap.Error(err))
 	}()
@@ -165,7 +165,7 @@ func (f *fileWorkerGroup) Run(
 		})
 	}
 	log.Info("redo file workers started",
-		zap.String("namespace", f.cfg.ChangeFeedID.Namespace()),
+		zap.String("keyspace", f.cfg.ChangeFeedID.Keyspace()),
 		zap.String("changefeed", f.cfg.ChangeFeedID.Name()),
 		zap.Int("workerNum", f.workerNum))
 	return eg.Wait()
@@ -173,9 +173,9 @@ func (f *fileWorkerGroup) Run(
 
 func (f *fileWorkerGroup) close() {
 	metrics.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
+		DeleteLabelValues(f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(), f.logType)
 	metrics.RedoWriteBytesGauge.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
+		DeleteLabelValues(f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(), f.logType)
 }
 
 func (f *fileWorkerGroup) input(ctx context.Context, event writer.RedoEvent) error {
@@ -384,7 +384,7 @@ func (f *fileWorkerGroup) writeToCache(
 		}
 		file := f.newFileCache(data, rl.GetCommitTs())
 		f.files = append(f.files, file)
-		return
+		return err
 	}
 
 	_, err = file.writer.Write(data)
@@ -431,12 +431,12 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 		return f.op.GetLogFileName()
 	}
 	uid := f.uuidGenerator.NewString()
-	if common.DefaultNamespace == f.cfg.ChangeFeedID.Namespace() {
+	if common.DefaultKeyspace == f.cfg.ChangeFeedID.Keyspace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
 			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.logType,
 			maxCommitTS, uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
-		f.cfg.CaptureID, f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(),
+		f.cfg.CaptureID, f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(),
 		f.logType, maxCommitTS, uid, redo.LogEXT)
 }

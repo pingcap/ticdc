@@ -21,6 +21,9 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -30,25 +33,19 @@ import (
 
 // LockResolver resolves lock in the given region.
 type LockResolver interface {
-	Resolve(ctx context.Context, regionID uint64, maxVersion uint64) error
+	Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) error
 }
 
-type resolver struct {
-	kvStorage tikv.Storage
-}
+type resolver struct{}
 
 // NewLockerResolver returns a LockResolver.
-func NewLockerResolver(
-	kvStorage tikv.Storage,
-) LockResolver {
-	return &resolver{
-		kvStorage: kvStorage,
-	}
+func NewLockerResolver() LockResolver {
+	return &resolver{}
 }
 
 const scanLockLimit = 1024
 
-func (r *resolver) Resolve(ctx context.Context, regionID uint64, maxVersion uint64) (err error) {
+func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
 	var totalLocks []*txnkv.Lock
 
 	start := time.Now()
@@ -73,12 +70,24 @@ func (r *resolver) Resolve(ctx context.Context, regionID uint64, maxVersion uint
 		Limit:      scanLockLimit,
 	})
 
+	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceMeta := keyspaceManager.GetKeyspaceByID(keyspaceID)
+	if keyspaceMeta == nil {
+		return cerror.ErrInvalidKeyspace
+	}
+
+	storage, err := keyspaceManager.GetStorage(keyspaceMeta.Name)
+	if err != nil {
+		return err
+	}
+	kvStorage := storage.(tikv.Storage)
+
 	bo := tikv.NewGcResolveLockMaxBackoffer(ctx)
 	var loc *tikv.KeyLocation
 	var key []byte
 	flushRegion := func() error {
 		var err error
-		loc, err = r.kvStorage.GetRegionCache().LocateRegionByID(bo, regionID)
+		loc, err = kvStorage.GetRegionCache().LocateRegionByID(bo, regionID)
 		if err != nil {
 			return err
 		}
@@ -95,7 +104,7 @@ func (r *resolver) Resolve(ctx context.Context, regionID uint64, maxVersion uint
 		default:
 		}
 		req.ScanLock().StartKey = key
-		resp, err := r.kvStorage.SendReq(bo, req, loc.Region, tikv.ReadTimeoutMedium)
+		resp, err := kvStorage.SendReq(bo, req, loc.Region, tikv.ReadTimeoutMedium)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -127,7 +136,7 @@ func (r *resolver) Resolve(ctx context.Context, regionID uint64, maxVersion uint
 		}
 		totalLocks = append(totalLocks, locks...)
 
-		_, err1 := r.kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
+		_, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
 		if err1 != nil {
 			return errors.Trace(err1)
 		}

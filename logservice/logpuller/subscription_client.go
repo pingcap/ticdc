@@ -83,10 +83,11 @@ type SubscriptionID uint64
 const InvalidSubscriptionID SubscriptionID = 0
 
 type resolveLockTask struct {
-	regionID uint64
-	targetTs uint64
-	state    *regionlock.LockedRangeState
-	create   time.Time
+	keyspaceID uint32
+	regionID   uint64
+	targetTs   uint64
+	state      *regionlock.LockedRangeState
+	create     time.Time
 }
 
 // rangeTask represents a task to subscribe a range span of a table.
@@ -696,8 +697,9 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 
 		for _, regionMeta := range regionMetas {
 			regionSpan := heartbeatpb.TableSpan{
-				StartKey: regionMeta.StartKey,
-				EndKey:   regionMeta.EndKey,
+				StartKey:   regionMeta.StartKey,
+				EndKey:     regionMeta.EndKey,
+				KeyspaceID: subscribedSpan.span.KeyspaceID,
 			}
 			// NOTE: the End key return by the PD API will be nil to represent the biggest key.
 			// So we need to fix it by calling spanz.HackSpan.
@@ -929,7 +931,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		}
 	}
 
-	doResolve := func(regionID uint64, state *regionlock.LockedRangeState, targetTs uint64) {
+	doResolve := func(keyspaceID uint32, regionID uint64, state *regionlock.LockedRangeState, targetTs uint64) {
 		if state.ResolvedTs.Load() > targetTs || !state.Initialized.Load() {
 			return
 		}
@@ -939,8 +941,9 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 			}
 		}
 
-		if err := s.lockResolver.Resolve(ctx, regionID, targetTs); err != nil {
+		if err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs); err != nil {
 			log.Warn("subscription client resolve lock fail",
+				zap.Uint32("keyspaceID", keyspaceID),
 				zap.Uint64("regionID", regionID),
 				zap.Error(err))
 		}
@@ -956,7 +959,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		case <-gcTicker.C:
 			gcResolveLastRun()
 		case task := <-s.resolveLockTaskCh:
-			doResolve(task.regionID, task.state, task.targetTs)
+			doResolve(task.keyspaceID, task.regionID, task.state, task.targetTs)
 		}
 	}
 }
@@ -1031,10 +1034,11 @@ func (s *subscriptionClient) newSubscribedSpan(
 		targetTs := rt.staleLocksTargetTs.Load()
 		if state.ResolvedTs.Load() < targetTs && state.Initialized.Load() {
 			s.resolveLockTaskCh <- resolveLockTask{
-				regionID: regionID,
-				targetTs: targetTs,
-				state:    state,
-				create:   time.Now(),
+				keyspaceID: span.KeyspaceID,
+				regionID:   regionID,
+				targetTs:   targetTs,
+				state:      state,
+				create:     time.Now(),
 			}
 		}
 	}

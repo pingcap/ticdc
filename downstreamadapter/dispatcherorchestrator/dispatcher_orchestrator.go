@@ -23,10 +23,10 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -112,7 +112,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				Err: &heartbeatpb.RunningError{
 					Time:    time.Now().String(),
 					Node:    from.String(),
-					Code:    string(apperror.ErrorCode(err)),
+					Code:    string(errors.ErrorCode(err)),
 					Message: err.Error(),
 				},
 			}
@@ -121,7 +121,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.mutex.Lock()
 		m.dispatcherManagers[cfId] = manager
 		m.mutex.Unlock()
-		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Namespace(), cfId.Name()).Inc()
+		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	} else {
 		// Check and potentially add a table trigger event dispatcher.
 		// This is necessary during maintainer node migration, as the existing
@@ -206,7 +206,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.String("actualDispatcherID",
 				common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId).String()))
 
-		err := apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+		err := errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
 
 		response := &heartbeatpb.MaintainerPostBootstrapResponse{
@@ -214,7 +214,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			Err: &heartbeatpb.RunningError{
 				Time:    time.Now().String(),
 				Node:    from.String(),
-				Code:    string(apperror.ErrorCode(err)),
+				Code:    string(errors.ErrorCode(err)),
 				Message: err.Error(),
 			},
 		}
@@ -251,7 +251,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	if manager, ok := m.dispatcherManagers[cfId]; ok {
 		if closed := manager.TryClose(req.Removed); closed {
 			delete(m.dispatcherManagers, cfId)
-			metrics.DispatcherManagerGauge.WithLabelValues(cfId.Namespace(), cfId.Name()).Dec()
+			metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
 			response.Success = true
 		} else {
 			response.Success = false
@@ -344,7 +344,7 @@ func (m *DispatcherOrchestrator) handleDispatcherError(
 		Err: &heartbeatpb.RunningError{
 			Time:    time.Now().String(),
 			Node:    from.String(),
-			Code:    string(apperror.ErrorCode(err)),
+			Code:    string(errors.ErrorCode(err)),
 			Message: err.Error(),
 		},
 	}

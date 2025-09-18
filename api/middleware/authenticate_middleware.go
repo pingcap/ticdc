@@ -24,7 +24,6 @@ import (
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/api"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
@@ -32,15 +31,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb-dashboard/util/distro"
-	"github.com/pingcap/tidb/pkg/domain/infosync"
+	"github.com/pingcap/tidb/pkg/domain/serverinfo"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 )
 
 const (
 	// Refer to https://github.com/pingcap/tidb/blob/release-7.5/pkg/domain/infosync/info.go#L78-L79.
-	topologyTiDB    = infosync.TopologyInformationPath
-	topologyTiDBTTL = infosync.TopologySessionTTL
+	topologyTiDB    = serverinfo.TopologyInformationPath
+	topologyTiDBTTL = serverinfo.TopologySessionTTL
 	// defaultTimeout is the default timeout for etcd and mysql operations.
 	defaultTimeout = time.Second * 2
 )
@@ -107,7 +106,7 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		if err == nil {
 			return nil
 		}
-		if apperror.IsAccessDeniedError(err) {
+		if errors.IsAccessDeniedError(err) {
 			// For access denied error, we can return immediately.
 			// For other errors, we need to continue to verify the next tidb instance.
 			return errors.ErrUnauthorized.GenWithStackByArgs(username, err.Error())

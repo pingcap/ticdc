@@ -166,15 +166,16 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	taskScheduler threadpool.ThreadPool,
 	checkpointTs uint64,
 	newChangefeed bool,
+	keyspaceID uint32,
 ) *Maintainer {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
-	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(cfID, checkpointTs, selfNode, common.DefaultMode)
+	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.DefaultMode)
 	var redoDDLSpan *replica.SpanReplication
 	enableRedo := redo.IsConsistentEnabled(cfg.Config.Consistent.Level)
 	if enableRedo {
-		_, redoDDLSpan = newDDLSpan(cfID, checkpointTs, selfNode, common.RedoMode)
+		_, redoDDLSpan = newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.RedoMode)
 	}
 	m := &Maintainer{
 		id:                cfID,
@@ -182,7 +183,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), enableRedo),
+			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), keyspaceID, enableRedo),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -197,19 +198,19 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		newChangefeed:         newChangefeed,
 		enableRedo:            enableRedo,
 
-		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
-		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
-		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
-		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "default"),
+		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "default"),
+		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "default"),
+		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 
-		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "redo"),
-		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "redo"),
-		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "redo"),
+		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "redo"),
+		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "redo"),
+		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "redo"),
 	}
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
@@ -229,7 +230,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		m.createBootstrapMessageFactory(),
 	)
 
-	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
+	metrics.MaintainerGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 
@@ -254,13 +255,14 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	conf *config.SchedulerConfig,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
+	keyspaceID uint32,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false)
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false, keyspaceID)
 	m.cascadeRemoving.Store(true)
 	return m
 }
@@ -387,15 +389,15 @@ func (m *Maintainer) initialize() error {
 }
 
 func (m *Maintainer) cleanupMetrics() {
-	metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.SpanCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.TableCountGauge.DeleteLabelValues(m.id.Namespace(), m.id.Name())
-	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Namespace(), m.id.Name())
+	metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.SpanCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.TableCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
 }
 
 func (m *Maintainer) onInit() bool {
@@ -454,7 +456,7 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs))
 		m.removed.Store(true)
 		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
-		metrics.MaintainerGauge.WithLabelValues(m.id.Namespace(), m.id.Name()).Dec()
+		metrics.MaintainerGauge.WithLabelValues(m.id.Keyspace(), m.id.Name()).Dec()
 	}
 }
 
@@ -789,11 +791,11 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 	return config.IsMySQLCompatibleScheme(scheme), nil
 }
 
-func newDDLSpan(cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, mode int64) (common.DispatcherID, *replica.SpanReplication) {
+func newDDLSpan(keyspaceID uint32, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, mode int64) (common.DispatcherID, *replica.SpanReplication) {
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
-		common.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.KeyspaceDDLSpan(keyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
@@ -1014,8 +1016,8 @@ func (m *Maintainer) collectMetrics() {
 			m.redoTableCountGauge.Set(float64(totalTableCount))
 			m.redoScheduledTaskGauge.Set(float64(scheduling))
 		}
-		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
-		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working", common.StringMode(mode)).Set(float64(working))
+		metrics.TableStateGauge.WithLabelValues(m.id.Keyspace(), m.id.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
+		metrics.TableStateGauge.WithLabelValues(m.id.Keyspace(), m.id.Name(), "Working", common.StringMode(mode)).Set(float64(working))
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		updateMetric(common.DefaultMode)

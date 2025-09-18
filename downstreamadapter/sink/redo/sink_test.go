@@ -123,7 +123,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 			UseFileBackend:        useFileBackend,
 		}
 		startTs := uint64(100)
-		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test"), startTs, cfg)
+		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspace), startTs, cfg)
 		defer dmlMgr.Close(false)
 
 		var eg errgroup.Group
@@ -213,7 +213,7 @@ func TestRedoSinkError(t *testing.T) {
 		EncodingWorkerNum:     workerNumberForTest,
 		FlushWorkerNum:        workerNumberForTest,
 	}
-	logMgr := New(ctx, common.NewChangeFeedIDWithName("test"), 0, cfg)
+	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspace), 0, cfg)
 	defer logMgr.Close(false)
 
 	var eg errgroup.Group
@@ -272,7 +272,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 		UseFileBackend:        useFileBackend,
 	}
-	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test"), 0, cfg)
+	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspace), 0, cfg)
 	defer dmlMgr.Close(false)
 
 	var eg errgroup.Group
@@ -288,7 +288,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	for i := 0; i < numOfTables; i++ {
 		tableID := common.TableID(i)
 		tables = append(tables, tableID)
-		span := common.TableIDToComparableSpan(tableID)
+		span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
 		ts := startTs
 		maxTsMap.ReplaceOrInsert(span, &ts)
 	}
@@ -321,7 +321,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 					dmlMgr.AddDMLEvent(row)
 				}
 			}
-		}(common.TableIDToComparableSpan(tableID))
+		}(common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID))
 	}
 	wg.Wait()
 

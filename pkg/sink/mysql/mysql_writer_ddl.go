@@ -21,7 +21,6 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -112,7 +111,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 	return retry.Do(w.ctx, func() error {
 		err := w.statistics.RecordDDLExecution(func() error { return w.execDDL(event) })
 		if err != nil {
-			if apperror.IsIgnorableMySQLDDLError(err) {
+			if errors.IsIgnorableMySQLDDLError(err) {
 				// NOTE: don't change the log, some tests depend on it.
 				log.Info("Execute DDL failed, but error can be ignored",
 					zap.String("ddl", event.Query),
@@ -138,7 +137,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(defaultDDLMaxRetry),
-		retry.WithIsRetryableErr(apperror.IsRetryableDDLError))
+		retry.WithIsRetryableErr(errors.IsRetryableDDLError))
 }
 
 // waitDDLDone wait current ddl
@@ -205,7 +204,7 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 		err := w.checkAndWaitAsyncDDLDoneDownstream(tableID)
 		if err != nil {
 			log.Error("check previous asynchronous ddl failed",
-				zap.String("namespace", w.ChangefeedID.Namespace()),
+				zap.String("keyspace", w.ChangefeedID.Keyspace()),
 				zap.Stringer("changefeed", w.ChangefeedID),
 				zap.Error(err))
 		}

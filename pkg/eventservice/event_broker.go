@@ -22,11 +22,11 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -306,9 +306,9 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				startTs := stat.sentResolvedTs.Load()
 				remoteID := node.ID(stat.info.GetServerID())
 				// TODO: maybe limit 1 is enough.
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.filter, startTs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.info.GetTableSpan().KeyspaceID, stat.filter, startTs, 100)
 				if err != nil {
-					log.Error("table trigger ddl events fetch failed", zap.Stringer("dispatcherID", stat.id), zap.Error(err))
+					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
 				}
 				for _, e := range ddlEvents {
@@ -372,7 +372,11 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	}
 
 	// 2. Constrain the data range by the ddl state of the table.
-	ddlState := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().TableID)
+	ddlState, err := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().KeyspaceID, task.info.GetTableSpan().TableID)
+	if err != nil {
+		log.Error("GetTableDDLEventState failed", zap.Uint32("keyspaceID", task.info.GetTableSpan().KeyspaceID), zap.Int64("tableID", task.info.GetTableSpan().TableID), zap.Error(err))
+		return false, common.DataRange{}
+	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
@@ -780,7 +784,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		// Send the message to the dispatcher.
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
-			_, ok := err.(apperror.AppError)
+			_, ok := err.(errors.AppError)
 			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Stringer("tMsg", tMsg), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
@@ -902,7 +906,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
-	if span.Equal(common.DDLSpan) {
+	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
@@ -940,7 +944,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return nil
 	}
 
-	err := c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
+	err := c.schemaStore.RegisterTable(span.KeyspaceID, span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
@@ -991,7 +995,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat.isReadyReceivingData.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
 
-	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
+	span := dispatcherInfo.GetTableSpan()
+	c.schemaStore.UnregisterTable(span.KeyspaceID, span.TableID)
 	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",
@@ -1062,9 +1067,9 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	changefeedID := dispatcherInfo.GetChangefeedID()
 	span := dispatcherInfo.GetTableSpan()
 	var tableInfo *common.TableInfo
-	if !span.Equal(common.DDLSpan) {
+	if !span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		var err error
-		tableInfo, err = c.schemaStore.GetTableInfo(span.GetTableID(), dispatcherInfo.GetStartTs())
+		tableInfo, err = c.schemaStore.GetTableInfo(span.KeyspaceID, span.GetTableID(), dispatcherInfo.GetStartTs())
 		if err != nil {
 			log.Error("get table info from schemaStore failed",
 				zap.Stringer("dispatcherID", dispatcherID),
