@@ -272,7 +272,7 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 	return builder.String()
 }
 
-// GetStartTsList return the startTs list and startTsIsSyncpoint list for each table in the tableIDs list.
+// GetStartTsList return the startTs list and skipSyncpointSameAsStartTs list for each table in the tableIDs list.
 // For each table,
 //  1. If no ddl-ts-v1 table or no the row for the table , startTs = 0; -- means the table is new.
 //  2. Else,
@@ -284,8 +284,8 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 //     2.2.2.1 if the latest ddl job time is larger than the createdAt, startTs = ddlTs
 //     2.2.2.2 else startTs = ddlTs - 1
 //
-// for the startTsIsSyncpoint List, only when the ddlTs is finished or we query find the last ddl job time is larger than the createdAt,
-// the startTsIsSyncpoint equals the query result in ddl_ts table, otherwise, the startTsIsSyncpoint is false.
+// for the skipSyncpointSameAsStartTs List, only when the ddlTs is finished or we query find the last ddl job time is larger than the createdAt,
+// the skipSyncpointSameAsStartTs equals the query result in ddl_ts table, otherwise, the skipSyncpointSameAsStartTs is false.
 func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
 	// when split table enabled, there may have some same tableID in tableIDs
