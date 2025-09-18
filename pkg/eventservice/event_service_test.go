@@ -125,6 +125,7 @@ func TestEventServiceBasic(t *testing.T) {
 				// 1. When a Dispatcher is register, it will send a ReadyEvent to the eventCollector.
 				// 2. The eventCollector will send a reset request to the eventService.
 				// 3. We are here to simulate the reset request.
+				dispatcherInfo.epoch = 1
 				esImpl.resetDispatcher(dispatcherInfo)
 				_ = mockStore.AppendEvents(dispatcherInfo.id, resolvedTs+1)
 			case *commonEvent.HandshakeEvent:
