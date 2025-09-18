@@ -510,8 +510,6 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.TableID = tableInfo.TableName.TableID
 	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
 
-	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
 		result.ExtraTableName = preTableInfo.GetTableName()
@@ -524,6 +522,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
+	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	return result
 }
 
