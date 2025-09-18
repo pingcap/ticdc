@@ -16,6 +16,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
@@ -36,6 +38,8 @@ const (
 	networkDriftDuration = 5 * time.Second
 
 	defaultSupportVectorVersion = "8.4.0"
+
+	defaultErrorCausedSafeModeDuration = 5 * time.Second
 )
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
@@ -60,6 +64,13 @@ type Writer struct {
 
 	statistics *metrics.Statistics
 	needFormat bool
+
+	// When encountered an `Duplicate entry` error, we will set the `isInErrorCausedSafeMode` to true,
+	// and set the `lastErrorCausedSafeModeTime` to the current time.
+	// After the `errorCausedSafeModeDuration`, we will set the `isInErrorCausedSafeMode` to false.
+	isInErrorCausedSafeMode     bool
+	lastErrorCausedSafeModeTime time.Time
+	errorCausedSafeModeDuration time.Duration
 
 	// for dry-run mode
 	blockerTicker *time.Ticker
@@ -86,6 +97,9 @@ func NewWriter(
 		stmtCache:              cfg.stmtCache,
 		statistics:             statistics,
 		needFormat:             needFormatVectorType,
+
+		isInErrorCausedSafeMode:     false,
+		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {
@@ -174,32 +188,72 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 }
 
 func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
-	dmls, err := w.prepareDMLs(events)
+	w.updateIsInErrorCausedSafeMode()
 
+	dmls, err := w.prepareDMLs(events)
 	defer dmlsPool.Put(dmls) // Return dmls to pool after use
 	if err != nil {
 		return errors.Trace(err)
 	}
-
 	if dmls.rowCount == 0 {
 		return nil
 	}
 
 	if !w.cfg.DryRun {
 		err = w.execDMLWithMaxRetries(dmls)
+		// If the error is a duplicate entry error, we will retry the dmls.
+		if w.checkIsDuplicateEntryError(err) {
+			log.Info("Meet Duplicate Entry Error, retry the dmls in safemode", zap.Error(err))
+			for _, event := range events {
+				event.Rewind()
+			}
+			dmls, err = w.prepareDMLs(events)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			err = w.execDMLWithMaxRetries(dmls)
+		}
+
 	} else {
 		w.tryDryRunBlock()
 		err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
 			return dmls.rowCount, dmls.approximateSize, nil
 		})
 	}
+
 	if err != nil {
 		return errors.Trace(err)
 	}
+
 	for _, event := range events {
 		event.PostFlush()
 	}
+
 	return nil
+}
+
+func (w *Writer) checkIsDuplicateEntryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Cause(err) == cerror.ErrMySQLDuplicateEntry ||
+		strings.Contains(err.Error(), "Duplicate entry") {
+		if !w.isInErrorCausedSafeMode {
+			w.isInErrorCausedSafeMode = true
+			w.lastErrorCausedSafeModeTime = time.Now()
+		}
+		return true
+	}
+	return false
+}
+
+func (w *Writer) updateIsInErrorCausedSafeMode() {
+	if !w.isInErrorCausedSafeMode {
+		return
+	}
+	if time.Since(w.lastErrorCausedSafeModeTime) > w.errorCausedSafeModeDuration {
+		w.isInErrorCausedSafeMode = false
+	}
 }
 
 func (w *Writer) tryDryRunBlock() {

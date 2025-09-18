@@ -306,9 +306,9 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				startTs := stat.sentResolvedTs.Load()
 				remoteID := node.ID(stat.info.GetServerID())
 				// TODO: maybe limit 1 is enough.
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.filter, startTs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.info.GetTableSpan().KeyspaceID, stat.filter, startTs, 100)
 				if err != nil {
-					log.Error("table trigger ddl events fetch failed", zap.Stringer("dispatcherID", stat.id), zap.Error(err))
+					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
 				}
 				for _, e := range ddlEvents {
@@ -369,7 +369,11 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	}
 
 	// 2. Constrain the data range by the ddl state of the table.
-	ddlState := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().TableID)
+	ddlState, err := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().KeyspaceID, task.info.GetTableSpan().TableID)
+	if err != nil {
+		log.Error("GetTableDDLEventState failed", zap.Uint32("keyspaceID", task.info.GetTableSpan().KeyspaceID), zap.Int64("tableID", task.info.GetTableSpan().TableID), zap.Error(err))
+		return false, common.DataRange{}
+	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
@@ -889,7 +893,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	status := c.getOrSetChangefeedStatus(changefeedID)
 	dispatcher := newDispatcherStat(info, filter, scanWorkerIndex, workerIndex, status)
-	if span.Equal(common.DDLSpan) {
+	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
@@ -920,7 +924,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return nil
 	}
 
-	err := c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
+	err := c.schemaStore.RegisterTable(span.KeyspaceID, span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
@@ -929,7 +933,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		)
 		return err
 	}
-	tableInfo, err := c.schemaStore.GetTableInfo(span.GetTableID(), info.GetStartTs())
+	tableInfo, err := c.schemaStore.GetTableInfo(span.KeyspaceID, span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("get table info from schemaStore failed",
 			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
@@ -979,7 +983,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat.(*dispatcherStat).isReadyReceivingData.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
 
-	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
+	span := dispatcherInfo.GetTableSpan()
+	c.schemaStore.UnregisterTable(span.KeyspaceID, span.TableID)
 	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",

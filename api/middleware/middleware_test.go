@@ -19,10 +19,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,30 +139,35 @@ func TestForwardToCoordinatorMiddleware(t *testing.T) {
 func TestForwardToCoordinator(t *testing.T) {
 	tests := []struct {
 		name          string
-		setupMock     func(s *mockServer)
+		setupMock     func(s *mockServer, ts *httptest.Server)
 		expectedError bool
+		ts            *httptest.Server
 	}{
 		{
 			name: "successful forward",
-			setupMock: func(s *mockServer) {
+			setupMock: func(s *mockServer, ts *httptest.Server) {
+				peer := strings.TrimPrefix(ts.URL, "http://")
 				s.selfInfo = &node.Info{ID: "test-node-1"}
 				s.coordinatorInfo = &node.Info{
 					ID:            "coordinator-1",
-					AdvertiseAddr: "127.0.0.1:8300",
+					AdvertiseAddr: peer,
 				}
 			},
 			expectedError: false,
+			ts: httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})),
 		},
 		{
 			name: "self info error",
-			setupMock: func(s *mockServer) {
+			setupMock: func(s *mockServer, ts *httptest.Server) {
 				s.selfInfoErr = errors.New("self info error")
 			},
 			expectedError: true,
 		},
 		{
 			name: "get coordinator error",
-			setupMock: func(s *mockServer) {
+			setupMock: func(s *mockServer, ts *httptest.Server) {
 				s.selfInfo = &node.Info{ID: "test-node-1"}
 				s.coordinatorErr = errors.New("coordinator not found")
 			},
@@ -172,7 +180,7 @@ func TestForwardToCoordinator(t *testing.T) {
 			// Create mock server
 			ms := &mockServer{}
 			if tt.setupMock != nil {
-				tt.setupMock(ms)
+				tt.setupMock(ms, tt.ts)
 			}
 
 			// Create gin context
@@ -188,6 +196,10 @@ func TestForwardToCoordinator(t *testing.T) {
 				assert.NotNil(t, c.Errors.Last())
 			} else {
 				assert.Nil(t, c.Errors.Last())
+			}
+
+			if tt.ts != nil {
+				tt.ts.Close()
 			}
 		})
 	}
@@ -213,4 +225,17 @@ func (s *mockServer) SelfInfo() (*node.Info, error) {
 
 func (s *mockServer) GetCoordinatorInfo(ctx context.Context) (*node.Info, error) {
 	return s.coordinatorInfo, s.coordinatorErr
+}
+
+type mockPDAPIClient struct {
+	pdutil.PDAPIClient
+	keyspace *keyspacepb.KeyspaceMeta
+	err      error
+}
+
+func (m *mockPDAPIClient) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.keyspace, nil
 }

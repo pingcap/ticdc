@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -176,23 +177,23 @@ func (m *Manager) collectMetrics(ctx context.Context) error {
 			m.maintainers.Range(func(key, value interface{}) bool {
 				cf := value.(*Maintainer)
 
-				namespace := cf.id.Namespace()
+				keyspace := cf.id.Keyspace()
 				changefeedID := cf.id.Name()
 				watermark := cf.getWatermark()
 
 				physicalTime := oracle.GetPhysical(pdClock.CurrentTime())
 
 				phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
-				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(namespace, changefeedID).Set(float64(phyCkpTs))
+				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, changefeedID).Set(float64(phyCkpTs))
 				lag := float64(physicalTime-phyCkpTs) / 1e3
-				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(namespace, changefeedID).Set(lag)
+				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, changefeedID).Set(lag)
 
 				phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
-				metrics.ChangefeedResolvedTsGauge.WithLabelValues(namespace, changefeedID).Set(float64(phyResolvedTs))
+				metrics.ChangefeedResolvedTsGauge.WithLabelValues(keyspace, changefeedID).Set(float64(phyResolvedTs))
 				lag = float64(physicalTime-phyResolvedTs) / 1e3
-				metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(namespace, changefeedID).Set(lag)
+				metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(keyspace, changefeedID).Set(lag)
 
-				metrics.ChangefeedStatusGauge.WithLabelValues(namespace, changefeedID).Set(float64(cf.info.State.ToInt()))
+				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, changefeedID).Set(float64(cf.info.State.ToInt()))
 
 				return true
 			})
@@ -301,7 +302,16 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Uint64("checkpointTs", req.CheckpointTs),
 			zap.Any("info", info))
 	}
-	maintainer := NewMaintainer(cfID, m.conf, info, m.nodeInfo, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed)
+
+	ctx := context.Background()
+	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, cfID.Keyspace())
+	if err != nil {
+		// BUG tenfyzhong 2025-09-11 17:29:08 how to process err
+		log.Error("load keyspace meta fail", zap.String("keyspace", cfID.Keyspace()))
+	}
+
+	maintainer := NewMaintainer(cfID, m.conf, info, m.nodeInfo, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, keyspaceMeta.Id)
 	m.maintainers.Store(cfID, maintainer)
 	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	return nil
@@ -322,9 +332,18 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 				State:        heartbeatpb.ComponentState_Stopped,
 			}
 		}
+
+		ctx := context.Background()
+		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+		keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, cfID.Keyspace())
+		if err != nil {
+			// BUG tenfyzhong 2025-09-11 17:29:08 how to process err
+			log.Error("load keyspace meta fail", zap.String("keyspace", cfID.Keyspace()))
+		}
+
 		// it's cascade remove, we should remove the dispatcher from all node
 		// here we create a maintainer to run the remove the dispatcher logic
-		cf = NewMaintainerForRemove(cfID, m.conf, m.nodeInfo, m.taskScheduler)
+		cf = NewMaintainerForRemove(cfID, m.conf, m.nodeInfo, m.taskScheduler, keyspaceMeta.Id)
 		m.maintainers.Store(cfID, cf)
 	}
 	cf.(*Maintainer).pushEvent(&Event{

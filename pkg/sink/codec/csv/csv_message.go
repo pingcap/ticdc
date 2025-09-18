@@ -390,7 +390,7 @@ func rowChangeColumns2CSVColumns(csvConfig *common.Config, row *chunk.Row, table
 	for i, col := range tableInfo.GetColumns() {
 		// column could be nil in a condition described in
 		// https://github.com/pingcap/ticdc/issues/6198#issuecomment-1191132951
-		if col == nil {
+		if col == nil || col.IsVirtualGenerated() {
 			continue
 		}
 

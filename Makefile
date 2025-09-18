@@ -122,13 +122,13 @@ P=3
 # Add new packages here if you want to include them in unit tests.
 UT_PACKAGES_DISPATCHER := ./pkg/sink/cloudstorage/... ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreamadapter/sink/... ./downstreamadapter/dispatcher/... ./downstreamadapter/dispatchermanager/... ./downstreamadapter/eventcollector/... ./pkg/sink/...
 UT_PACKAGES_MAINTAINER := ./maintainer/... ./pkg/scheduler/...
-UT_PACKAGES_COORDINATOR := ./coordinator/... 
+UT_PACKAGES_COORDINATOR := ./coordinator/...
 UT_PACKAGES_LOGSERVICE := ./logservice/...
-UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/... ./pkg/common/...
+UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/... ./pkg/common/... ./api/middleware/...
 
 include tools/Makefile
 
-generate-protobuf:
+generate-protobuf: tools/bin/protoc tools/bin/protoc-gen-go tools/bin/protoc-gen-go-grpc tools/bin/protoc-gen-gogofaster
 	@echo "generate-protobuf"
 	./scripts/generate-protobuf.sh
 
@@ -246,6 +246,23 @@ unit_test_in_verify_ci: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	@echo "Running unit tests..."
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest \
+	-parallel=16 \
+	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
+	$(UT_PACKAGES_DISPATCHER) \
+	$(UT_PACKAGES_MAINTAINER) \
+	$(UT_PACKAGES_COORDINATOR) \
+	$(UT_PACKAGES_LOGSERVICE) \
+	$(UT_PACKAGES_OTHERS) \
+	|| { $(FAILPOINT_DISABLE); exit 1; }
+	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
+	$(FAILPOINT_DISABLE)
+
+unit_test_in_verify_ci_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
+	mkdir -p "$(TEST_DIR)"
+	$(FAILPOINT_ENABLE)
+	@echo "Running unit tests..."
+	@export log_level=error;\
+	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
 	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
 	$(UT_PACKAGES_DISPATCHER) \

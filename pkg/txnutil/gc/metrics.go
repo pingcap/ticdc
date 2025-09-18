@@ -33,10 +33,30 @@ var (
 			Name:      "cdc_gc_safepoint",
 			Help:      "the value of CDC GC safepoint",
 		})
+
+	minGCBarrierGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "gc",
+			Name:      "min_gc_barrier",
+			Help:      "The min value all of GC barrier",
+		}, []string{"namespace"},
+	)
+
+	cdcGCBarrierGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "gc",
+			Name:      "cdc_gc_barrier",
+			Help:      "The value of CDC GC barrier",
+		}, []string{"namespace"},
+	)
 )
 
 // InitMetrics registers all metrics used gc manager
 func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(minServiceGCSafePointGauge)
 	registry.MustRegister(cdcGCSafePointGauge)
+	registry.MustRegister(minGCBarrierGauge)
+	registry.MustRegister(cdcGCBarrierGauge)
 }

@@ -266,7 +266,10 @@ func assembleEvent(
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
-	event.Rows = chunk.NewChunkWithCapacity(event.TableInfo.GetFieldSlice(), 1)
+	event.Rows = chunk.NewChunkFromPoolWithCapacity(event.TableInfo.GetFieldSlice(), chunk.InitialCapacity)
+	event.AddPostFlushFunc(func() {
+		event.Rows.Destroy(1, event.TableInfo.GetFieldSlice())
+	})
 	event.Length++
 	common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
 

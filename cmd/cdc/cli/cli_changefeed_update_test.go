@@ -120,7 +120,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 				Sink: &v2.SinkConfig{},
 			},
 		}, nil)
-	f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "ns", "abc").
+	f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "ks", "abc").
 		Return(&v2.ChangeFeedInfo{}, nil)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "cf.toml")
@@ -135,7 +135,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 		"--schema-registry=a",
 		"--sort-engine=memory",
 		"--changefeed-id=abc",
-		"--namespace=ns",
+		"--keyspace=ks",
 		"--sort-dir=a",
 		"--upstream-pd=pd",
 		"--upstream-ca=ca",
@@ -163,11 +163,11 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	require.Nil(t, cmd.Execute())
 
 	cmd = newCmdUpdateChangefeed(f)
-	f.changefeeds.EXPECT().Get(gomock.Any(), "ns", "abcd").
+	f.changefeeds.EXPECT().Get(gomock.Any(), "ks", "abcd").
 		Return(&v2.ChangeFeedInfo{ID: "abcd"}, errors.New("test"))
 	o.commonChangefeedOptions.noConfirm = true
 	o.commonChangefeedOptions.sortEngine = "unified"
 	o.changefeedID = "abcd"
-	o.namespace = "ns"
+	o.keyspace = "ks"
 	require.NotNil(t, o.run(cmd))
 }

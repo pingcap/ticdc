@@ -359,7 +359,7 @@ func (a *jsonMarshaller) formatColumns(
 	colInfos := tableInfo.GetColumns()
 	result := make(map[string]interface{}, len(colInfos))
 	for i, colInfo := range colInfos {
-		if !columnSelector.Select(colInfo) {
+		if colInfo.IsVirtualGenerated() || !columnSelector.Select(colInfo) {
 			continue
 		}
 		if colInfo != nil {

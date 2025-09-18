@@ -29,13 +29,15 @@ func (s *TableSpan) Less(other *TableSpan) bool {
 func (s *TableSpan) Equal(other *TableSpan) bool {
 	return s.TableID == other.TableID &&
 		bytes.Equal(s.StartKey, other.StartKey) &&
-		bytes.Equal(s.EndKey, other.EndKey)
+		bytes.Equal(s.EndKey, other.EndKey) &&
+		s.KeyspaceID == other.KeyspaceID
 }
 
 func (s *TableSpan) Copy() *TableSpan {
 	return &TableSpan{
-		TableID:  s.TableID,
-		StartKey: s.StartKey,
-		EndKey:   s.EndKey,
+		TableID:    s.TableID,
+		StartKey:   s.StartKey,
+		EndKey:     s.EndKey,
+		KeyspaceID: s.KeyspaceID,
 	}
 }

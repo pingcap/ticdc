@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
@@ -47,6 +48,8 @@ const dataDir = "schema_store"
 //  3. metadata which describes the valid data range on disk
 type persistentStorage struct {
 	rootDir string
+
+	keyspaceID uint32
 
 	pdCli pd.Client
 
@@ -127,13 +130,14 @@ func openDB(dbPath string) *pebble.DB {
 }
 
 func newPersistentStorage(
-	ctx context.Context,
 	root string,
+	keyspaceID uint32,
 	pdCli pd.Client,
 	storage kv.Storage,
 ) *persistentStorage {
 	dataStorage := &persistentStorage{
 		rootDir:                root,
+		keyspaceID:             keyspaceID,
 		pdCli:                  pdCli,
 		kvStorage:              storage,
 		tableMap:               make(map[int64]*BasicTableInfo),
@@ -148,12 +152,27 @@ func newPersistentStorage(
 	return dataStorage
 }
 
+func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) {
+	if kerneltype.IsClassic() {
+		return gc.SetServiceGCSafepoint(ctx, p.pdCli, "cdc-new-store", 0, 0)
+	}
+
+	gcClient := p.pdCli.GetGCStatesClient(p.keyspaceID)
+	gcState, err := gc.GetGCState(ctx, gcClient)
+	if err != nil {
+		return 0, err
+	}
+
+	return gcState.TxnSafePoint, nil
+}
+
 func (p *persistentStorage) initialize(ctx context.Context) {
 	var gcSafePoint uint64
 	for {
 		var err error
-		gcSafePoint, err = gc.SetServiceGCSafepoint(ctx, p.pdCli, "cdc-new-store", 0, 0)
+		gcSafePoint, err = p.getGcSafePoint(ctx)
 		if err == nil {
+			log.Info("GetGCState success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcState", gcSafePoint))
 			break
 		}
 
@@ -165,7 +184,8 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		}
 	}
 
-	dbPath := fmt.Sprintf("%s/%s", p.rootDir, dataDir)
+	dbPath := fmt.Sprintf("%s/%s/%d", p.rootDir, dataDir, p.keyspaceID)
+
 	// FIXME: currently we don't try to reuse data at restart, when we need, just remove the following line
 	if err := os.RemoveAll(dbPath); err != nil {
 		log.Panic("fail to remove path")
@@ -201,11 +221,11 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		}
 	}
 	if !isDataReusable {
-		p.initializeFromKVStorage(dbPath, p.kvStorage, gcSafePoint)
+		p.initializeFromKVStorage(dbPath, gcSafePoint)
 	}
 }
 
-func (p *persistentStorage) initializeFromKVStorage(dbPath string, storage kv.Storage, gcTs uint64) {
+func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) {
 	now := time.Now()
 	if err := os.RemoveAll(dbPath); err != nil {
 		log.Fatal("fail to remove path in initializeFromKVStorage")
@@ -216,7 +236,7 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, storage kv.St
 		zap.Uint64("snapTs", gcTs))
 
 	var err error
-	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshot(p.db, storage, gcTs, true); err != nil {
+	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshot(p.db, p.kvStorage, gcTs, true); err != nil {
 		// TODO: retry
 		log.Fatal("fail to initialize from kv snapshot")
 	}
@@ -540,7 +560,7 @@ func (p *persistentStorage) gc(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			gcSafePoint, err := gc.SetServiceGCSafepoint(ctx, p.pdCli, "cdc-new-store", 0, 0)
+			gcSafePoint, err := p.getGcSafePoint(ctx)
 			if err != nil {
 				log.Warn("get ts failed", zap.Error(err))
 				continue

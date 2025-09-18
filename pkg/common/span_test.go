@@ -120,7 +120,7 @@ func TestIntersect(t *testing.T) {
 func TestGetTableRange(t *testing.T) {
 	t.Parallel()
 
-	startKey, endKey := GetTableRange(123)
+	startKey, endKey := getTableRange(123)
 	require.Equal(t, -1, bytes.Compare(startKey, endKey))
 	prefix := []byte(tablecodec.GenTableRecordPrefix(123))
 	require.GreaterOrEqual(t, 0, bytes.Compare(startKey, prefix))

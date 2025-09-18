@@ -37,6 +37,7 @@ import (
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
 	"github.com/pingcap/tidb/pkg/session"
+	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -69,7 +70,7 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 	ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
 		conf.AlterPrimaryKey = true
 	})
-	session.SetSchemaLease(time.Second)
+	vardef.SetSchemaLease(time.Second)
 	session.DisableStats4Test()
 	domain, err := session.BootstrapSession(store)
 	require.NoError(t, err)
@@ -395,7 +396,7 @@ func (s *EventTestHelper) getLastKeyValue(tableID int64) (key, value []byte) {
 	require.NoError(s.t, err)
 	defer txn.Rollback() //nolint:errcheck
 
-	start, end := common.GetTableRange(tableID)
+	start, end, _ := common.GetKeyspaceTableRange(common.DefaultKeyspaceID, tableID)
 	iter, err := txn.Iter(start, end)
 	require.NoError(s.t, err)
 	defer iter.Close()
@@ -488,4 +489,24 @@ func BatchDML(dml *DMLEvent) *BatchDMLEvent {
 		TableInfo: dml.TableInfo,
 		Rows:      dml.Rows,
 	}
+}
+
+// IsSplitable returns whether the table is eligible for split in all sinks
+// Only the table with pk and no uk can always be splitted in all sinks.
+// Notice: please ensure the logic of IsSplitable is totally the same with isSplitable in utils
+func IsSplitable(tableInfo *common.TableInfo) bool {
+	if tableInfo.GetPkColInfo() == nil {
+		return false
+	}
+
+	indices := tableInfo.GetIndices()
+	for _, index := range indices {
+		if index.Primary {
+			continue
+		}
+		if index.Unique {
+			return false
+		}
+	}
+	return true
 }

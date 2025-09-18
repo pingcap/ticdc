@@ -182,7 +182,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	if !def.IsTableSchema() {
 		// only check schema for table
 		log.Error("invalid table schema",
-			zap.String("namespace", f.changefeedID.Namespace()),
+			zap.String("keyspace", f.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
 			zap.Any("tableInfo", tableInfo))
@@ -212,7 +212,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	hasNewerSchemaVersion := false
 	err = f.storage.WalkDir(ctx, &storage.WalkOption{
 		SubDir:    subDir, /* use subDir to prevent walk the whole storage */
-		ObjPrefix: subDir + "schema_",
+		ObjPrefix: "schema_",
 	}, func(path string, _ int64) error {
 		schemaFileCnt++
 		if !strings.HasSuffix(path, checksumSuffix) {
@@ -221,7 +221,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		version, parsedChecksum := mustParseSchemaName(path)
 		if parsedChecksum != checksum {
 			log.Error("invalid schema file name",
-				zap.String("namespace", f.changefeedID.Namespace()),
+				zap.String("keyspace", f.changefeedID.Keyspace()),
 				zap.Stringer("changefeedID", f.changefeedID.ID()),
 				zap.String("path", path), zap.Any("checksum", checksum))
 			errMsg := fmt.Sprintf("invalid schema filename in storage sink, "+
@@ -246,7 +246,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	// Case 2: the table meta path is not empty.
 	if schemaFileCnt != 0 && lastVersion != 0 {
 		log.Info("table schema file with exact version not found, using latest available",
-			zap.String("namespace", f.changefeedID.Namespace()),
+			zap.String("keyspace", f.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
 			zap.Uint64("tableVersion", lastVersion),
@@ -262,7 +262,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	//  b. the schema file is deleted by the consumer. We write schema file to external storage too.
 	if schemaFileCnt != 0 && lastVersion == 0 {
 		log.Warn("no table schema file found in an non-empty meta path",
-			zap.String("namespace", f.changefeedID.Namespace()),
+			zap.String("keyspace", f.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
 			zap.Uint32("checksum", checksum))
@@ -494,7 +494,7 @@ func RemoveEmptyDirs(
 			files, err := os.ReadDir(path)
 			if err == nil && len(files) == 0 {
 				log.Debug("Deleting empty directory",
-					zap.String("namespace", id.Namespace()),
+					zap.String("keyspace", id.Keyspace()),
 					zap.Stringer("changeFeedID", id.ID()),
 					zap.String("path", path))
 				os.Remove(path)

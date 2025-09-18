@@ -4,9 +4,10 @@ package heartbeatpb;
 option go_package = "github.com/pingcap/ticdc/heartbeatpb";
 
 message TableSpan {
-    int64 TableID   = 1;
-	bytes StartKey  = 2;
-	bytes EndKey    = 3;
+    int64 TableID = 1;
+    bytes StartKey = 2;
+    bytes EndKey = 3;
+    uint32 KeyspaceID = 4;
 }
 
 message HeartBeatRequest {
@@ -14,14 +15,14 @@ message HeartBeatRequest {
     Watermark watermark = 2;
     Watermark redoWatermark = 3;
     repeated TableSpanStatus statuses = 4;
-    bool compeleteStatus = 5; // Whether includes all table spans in the changefeed?
+    bool compeleteStatus = 5;  // Whether includes all table spans in the changefeed?
     RunningError err = 6;
 }
 
 message Watermark {
-    uint64 checkpointTs = 1; // min checkpointTs of all tables in the DispatcherManager
-    uint64 resolvedTs = 2;   // min resolvedTs of all tables in the DispatcherManager
-    uint64 seq = 3; // sequence number, it's used to check whether the watermark is outdated
+    uint64 checkpointTs = 1;  // min checkpointTs of all tables in the DispatcherManager
+    uint64 resolvedTs = 2;    // min resolvedTs of all tables in the DispatcherManager
+    uint64 seq = 3;           // sequence number, it's used to check whether the watermark is outdated
 }
 
 enum Action {
@@ -31,21 +32,21 @@ enum Action {
 
 message DispatcherAction {
     Action action = 1;
-    uint64 CommitTs = 2; // DDLCommitTs
-    bool IsSyncPoint = 3; // sync point Event and ddl Event could have the same CommitTs, so we need to distinguish them.
+    uint64 CommitTs = 2;   // DDLCommitTs
+    bool IsSyncPoint = 3;  // sync point Event and ddl Event could have the same CommitTs, so we need to distinguish them.
 }
 
 message ACK {
-    uint64 CommitTs = 1; // DDLCommitTs
-    bool IsSyncPoint = 2; // sync point Event and ddl Event could have the same CommitTs, so we need to distinguish them.
+    uint64 CommitTs = 1;   // DDLCommitTs
+    bool IsSyncPoint = 2;  // sync point Event and ddl Event could have the same CommitTs, so we need to distinguish them.
 }
 
 message InfluencedDispatchers {
     InfluenceType InfluenceType = 1;
     // only exist when type is normal
-	repeated DispatcherID DispatcherIDs = 2; 
+    repeated DispatcherID DispatcherIDs = 2;
     // only exist when type is DB.
-	int64 SchemaID = 3;
+    int64 SchemaID = 3;
     // only exist when type is all or db, and in heartbeat response.
     DispatcherID excludeDispatcherId = 4;
 }
@@ -66,7 +67,6 @@ message CheckpointTsMessage {
     ChangefeedID changefeedID = 1;
     uint64 checkpointTs = 2;
 }
-
 
 message RedoMessage {
     ChangefeedID changefeedID = 1;
@@ -95,8 +95,8 @@ message ScheduleDispatcherRequest {
 
 message MergeDispatcherRequest {
     ChangefeedID changefeedID = 1;
-    repeated DispatcherID dispatcherIDs = 2; // dispatcherIDs from the dispatchers that need to be merged
-    DispatcherID mergedDispatcherID = 3;  // the dispatcherID of the new dispatcher to be merged to.
+    repeated DispatcherID dispatcherIDs = 2;  // dispatcherIDs from the dispatchers that need to be merged
+    DispatcherID mergedDispatcherID = 3;      // the dispatcherID of the new dispatcher to be merged to.
     int64 mode = 4;
 }
 
@@ -121,14 +121,14 @@ message CoordinatorBootstrapResponse {
     repeated MaintainerStatus statuses = 1;
 }
 
-message AddMaintainerRequest  {
+message AddMaintainerRequest {
     ChangefeedID id = 1;
     bytes config = 2;
     uint64 checkpoint_ts = 3;
-    bool is_new_changefeed = 4; // only true when the changefeed is new created or resumed with overwriteCheckpointTs
+    bool is_new_changefeed = 4;  // only true when the changefeed is new created or resumed with overwriteCheckpointTs
 }
 
-message RemoveMaintainerRequest  {
+message RemoveMaintainerRequest {
     ChangefeedID id = 1;
     bool cascade = 2;
     bool removed = 3;
@@ -139,8 +139,8 @@ message MaintainerBootstrapRequest {
     bytes config = 2;
     uint64 start_ts = 3;
     DispatcherID table_trigger_event_dispatcher_id = 4;
-    bool is_new_changefeed = 5; // only true when the changefeed is new created or resumed with overwriteCheckpointTs
-    DispatcherID redo_table_trigger_event_dispatcher_id = 6; // only for redo
+    bool is_new_changefeed = 5;                               // only true when the changefeed is new created or resumed with overwriteCheckpointTs
+    DispatcherID redo_table_trigger_event_dispatcher_id = 6;  // only for redo
 }
 
 message MaintainerBootstrapResponse {
@@ -155,7 +155,7 @@ message MaintainerBootstrapResponse {
     //
     // For nodes without a table trigger event dispatcher:
     // - checkpoint_ts is set to 0
-    uint64 checkpoint_ts = 4; 
+    uint64 checkpoint_ts = 4;
 }
 
 message MaintainerPostBootstrapRequest {
@@ -181,7 +181,6 @@ message TableInfo {
     string TableName = 2;
 }
 
-
 enum BlockStage {
     NONE = 0;
     WAITING = 1;
@@ -191,7 +190,7 @@ enum BlockStage {
 
 message BootstrapTableSpan {
     DispatcherID ID = 1;
-    int64  SchemaID = 2;
+    int64 SchemaID = 2;
     TableSpan span = 3;
     ComponentState component_status = 4;
     uint64 checkpoint_ts = 5;
@@ -219,9 +218,9 @@ enum InfluenceType {
 message InfluencedTables {
     InfluenceType InfluenceType = 1;
     // only exist when type is normal
-	repeated int64 TableIDs  = 2;
+    repeated int64 TableIDs = 2;
     // only exist when type is DB.
-	int64 SchemaID = 3;
+    int64 SchemaID = 3;
 }
 
 message Table {
@@ -237,24 +236,24 @@ message SchemaIDChange {
 }
 
 message State {
-    bool IsBlocked      = 1;
-    uint64 BlockTs         = 2;
+    bool IsBlocked = 1;
+    uint64 BlockTs = 2;
     InfluencedTables BlockTables = 3;
-    InfluencedTables NeedDroppedTables =4;
+    InfluencedTables NeedDroppedTables = 4;
     repeated Table NeedAddedTables = 5;
     repeated SchemaIDChange UpdatedSchemas = 6;
     bool IsSyncPoint = 7;
-    BlockStage stage = 8; // means whether the block is waiting / writing / done
+    BlockStage stage = 8;  // means whether the block is waiting / writing / done
 }
 
 message TableSpanBlockStatus {
-    DispatcherID ID = 1; // for which dispatcher
+    DispatcherID ID = 1;  // for which dispatcher
     State state = 2;
     int64 mode = 3;
 }
 
 message TableSpanStatus {
-    DispatcherID ID = 1; // for which dispatcher
+    DispatcherID ID = 1;  // for which dispatcher
     ComponentState component_status = 2;
     uint64 checkpoint_ts = 3;
     float event_size_per_second = 4;
@@ -264,7 +263,7 @@ message TableSpanStatus {
 message BlockStatusRequest {
     ChangefeedID changefeedID = 1;
     repeated TableSpanBlockStatus blockStatuses = 2;
-    int64 mode =3;
+    int64 mode = 3;
 }
 
 enum ComponentState {
@@ -272,9 +271,9 @@ enum ComponentState {
     Stopped = 1;
     Removed = 2;
     Initializing = 3;
-    Preparing = 4; // Preparing for merge, not ready for receive data from event collector
-    MergeReady = 5; // Ready for merge(upstream is finishing prepare data), but not begin send data to dispatcher. 
-    WaitingMerge = 6; // the old dispatcher is waiting merge ready and then be closed
+    Preparing = 4;     // Preparing for merge, not ready for receive data from event collector
+    MergeReady = 5;    // Ready for merge(upstream is finishing prepare data), but not begin send data to dispatcher.
+    WaitingMerge = 6;  // the old dispatcher is waiting merge ready and then be closed
 }
 
 message RunningError {
@@ -293,5 +292,5 @@ message ChangefeedID {
     uint64 high = 1;
     uint64 low = 2;
     string name = 3;
-    string namespace = 4;
+    string keyspace = 4;
 }

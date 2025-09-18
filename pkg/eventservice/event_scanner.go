@@ -37,8 +37,8 @@ type eventGetter interface {
 // schemaGetter is the interface for getting schema info and ddl events
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
-	FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
-	GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error)
+	FetchTableDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
+	GetTableInfo(keyspaceID uint32, tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
 // ScanLimit defines the limits for a scan operation
@@ -145,7 +145,13 @@ func (s *eventScanner) scan(
 func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.DataRange) ([]event.Event, error) {
 	dispatcherID := stat.info.GetID()
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
-		dispatcherID, dataRange.Span.TableID, stat.filter, dataRange.CommitTsStart, dataRange.CommitTsEnd)
+		stat.info.GetTableSpan().KeyspaceID,
+		dispatcherID,
+		dataRange.Span.TableID,
+		stat.filter,
+		dataRange.CommitTsStart,
+		dataRange.CommitTsEnd,
+	)
 	if err != nil {
 		log.Error("get ddl events failed", zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", dataRange.Span.TableID), zap.Error(err))
@@ -244,7 +250,7 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 }
 
 func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
-	tableInfo, err := s.schemaGetter.GetTableInfo(tableID, ts)
+	tableInfo, err := s.schemaGetter.GetTableInfo(dispatcher.info.GetTableSpan().KeyspaceID, tableID, ts)
 	if err == nil {
 		return tableInfo, nil
 	}
@@ -676,6 +682,8 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if p.currentDML == nil {
 		log.Panic("no current DML event to append to")
 	}
+
+	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
 
 	if !rawEvent.IsUpdate() {
 		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)

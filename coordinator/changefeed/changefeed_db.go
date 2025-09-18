@@ -158,6 +158,21 @@ func (db *ChangefeedDB) GetAllChangefeeds() []*Changefeed {
 	return cfs
 }
 
+// GetAllChangefeedsByKeyspace returns all changefeeds by keyspace
+func (db *ChangefeedDB) GetAllChangefeedsByKeyspace(keyspace string) []*Changefeed {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+
+	cfs := make([]*Changefeed, 0, len(db.changefeeds))
+	for _, cf := range db.changefeeds {
+		if cf.ID.DisplayName.Keyspace != keyspace {
+			continue
+		}
+		cfs = append(cfs, cf)
+	}
+	return cfs
+}
+
 // BindChangefeedToNode binds the changefeed to the node, it will remove the task from the old node and add it to the new node
 // ,and it also marks the task as scheduling
 func (db *ChangefeedDB) BindChangefeedToNode(old, new node.ID, task *Changefeed) {
@@ -259,8 +274,8 @@ func (db *ChangefeedDB) MarkMaintainerScheduling(cf *Changefeed) {
 	db.MarkSchedulingWithoutLock(cf)
 }
 
-// CalculateGCSafepoint calculates the minimum checkpointTs of all changefeeds that replicating the upstream TiDB cluster.
-func (db *ChangefeedDB) CalculateGCSafepoint() uint64 {
+// CalculateGlobalGCSafepoint calculates the global minimum checkpointTs of all changefeeds that replicating the upstream TiDB cluster.
+func (db *ChangefeedDB) CalculateGlobalGCSafepoint() uint64 {
 	db.lock.RLock()
 	defer db.lock.RUnlock()
 
@@ -277,6 +292,32 @@ func (db *ChangefeedDB) CalculateGCSafepoint() uint64 {
 		}
 	}
 	return minCpts
+}
+
+// CalculateKeyspaceGCBarrier calculates the minimum keyspace-based checkpointTs of all changefeeds that replicating the upstream TiDB cluster.
+func (db *ChangefeedDB) CalculateKeyspaceGCBarrier() map[string]uint64 {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+
+	keyspaceGCBarrier := make(map[string]uint64)
+	for _, cf := range db.changefeeds {
+		info := cf.GetInfo()
+		if info == nil || !info.NeedBlockGC() {
+			continue
+		}
+
+		minCpts := keyspaceGCBarrier[cf.ID.Keyspace()]
+		if minCpts == 0 {
+			minCpts = math.MaxUint64
+		}
+
+		checkpointTs := cf.GetLastSavedCheckPointTs()
+		if minCpts > checkpointTs {
+			keyspaceGCBarrier[cf.ID.Keyspace()] = checkpointTs
+		}
+
+	}
+	return keyspaceGCBarrier
 }
 
 // ReplaceStoppedChangefeed updates the stopped changefeed

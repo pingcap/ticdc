@@ -55,10 +55,10 @@ func TestSplitRegionsByWrittenKeysUniform(t *testing.T) {
 	preTest()
 	re := require.New(t)
 
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{100, 100, 100, 100, 100, 100, 100}) // region id: [2,3,4,5,6,7,8]
-	splitter := newWriteBytesSplitter(cfID)
+	splitter := newWriteBytesSplitter(0, cfID)
 	info := splitter.splitRegionsByWrittenBytesV1(0, cloneRegions(regions), 1)
 	re.Len(info.RegionCounts, 1)
 	re.EqualValues(7, info.RegionCounts[0])
@@ -120,10 +120,10 @@ func TestSplitRegionsByWrittenKeysHotspot1(t *testing.T) {
 	re := require.New(t)
 
 	// Hotspots
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{100, 1, 100, 1, 1, 1, 100})
-	splitter := newWriteBytesSplitter(cfID)
+	splitter := newWriteBytesSplitter(0, cfID)
 	info := splitter.splitRegionsByWrittenBytesV1(0, regions, 4) // [2], [3,4], [5,6,7], [8]
 	re.Len(info.RegionCounts, 4)
 	re.EqualValues(1, info.RegionCounts[0])
@@ -151,10 +151,10 @@ func TestSplitRegionsByWrittenKeysHotspot2(t *testing.T) {
 	re := require.New(t)
 
 	// Hotspots
-	cfID := common.NewChangeFeedIDWithName("test")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	regions, startKeys, endKeys := prepareRegionsInfo(
 		[]int{1000, 1, 1, 1, 100, 1, 99})
-	splitter := newWriteBytesSplitter(cfID)
+	splitter := newWriteBytesSplitter(0, cfID)
 	info := splitter.splitRegionsByWrittenBytesV1(0, regions, 4) // [2], [3,4,5,6], [7], [8]
 	re.Len(info.Spans, 4)
 	re.EqualValues(startKeys[2], info.Spans[0].StartKey)
@@ -170,8 +170,8 @@ func TestSplitRegionsByWrittenKeysHotspot2(t *testing.T) {
 func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 	preTest()
 	re := require.New(t)
-	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteBytesSplitter(cfID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	splitter := newWriteBytesSplitter(0, cfID)
 	baseSpanNum := 3
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
 	info := splitter.splitRegionsByWrittenBytesV1(0, regions, baseSpanNum) // [2,3,4], [5,6,7], [8]
@@ -195,8 +195,8 @@ func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
 	preTest()
 	re := require.New(t)
-	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteBytesSplitter(cfID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	splitter := newWriteBytesSplitter(0, cfID)
 	baseSpanNum := 7 // spans >= regions, expect each region as a span
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
 	info := splitter.splitRegionsByWrittenBytesV1(0, regions, baseSpanNum)
@@ -215,8 +215,8 @@ func TestSplitRegionsByWrittenKeysConfig(t *testing.T) {
 	preTest()
 	re := require.New(t)
 
-	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteBytesSplitter(cfID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	splitter := newWriteBytesSplitter(0, cfID)
 	regions, _, _ := prepareRegionsInfo([]int{1, 1, 1, 1, 1, 1, 1})
 	// verify table id propagated and spans not empty when spansNum>0
 	info := splitter.splitRegionsByWrittenBytesV1(1, regions, 3)
@@ -243,8 +243,8 @@ func TestSplitRegionEven(t *testing.T) {
 			WrittenBytes: 2,
 		}
 	}
-	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteBytesSplitter(cfID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	splitter := newWriteBytesSplitter(0, cfID)
 	info := splitter.splitRegionsByWrittenBytesV1(tblID, regions, 5)
 	require.Len(t, info.RegionCounts, 5)
 	require.Len(t, info.Weights, 5)
@@ -260,8 +260,8 @@ func TestSplitRegionEven(t *testing.T) {
 func TestSpanRegionLimit(t *testing.T) {
 	preTest()
 	// simplify: ensure function runs with many regions without panicking
-	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newWriteBytesSplitter(cfID)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	splitter := newWriteBytesSplitter(0, cfID)
 
 	// deterministically generate writtenKeys with varied distribution
 	totalRegionNumbers := 1000

@@ -26,22 +26,18 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/heap"
-	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
+	"github.com/pingcap/tidb/pkg/meta/metadef"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
 
-var (
-	once         sync.Once
-	ddlTableInfo *event.DDLTableInfo
-	// ddl puller should never filter any DDL jobs even if
-	// the changefeed is in BDR mode, because the DDL jobs should
-	// be filtered before they are sent to the sink
-	ddlPullerFilterLoop = false
-)
+// ddl puller should never filter any DDL jobs even if
+// the changefeed is in BDR mode, because the DDL jobs should
+// be filtered before they are sent to the sink
+const ddlPullerFilterLoop = false
 
 type ddlJobFetcher struct {
 	ctx               context.Context
@@ -58,12 +54,18 @@ type ddlJobFetcher struct {
 	advanceResolvedTs func(resolvedTS uint64)
 
 	kvStorage kv.Storage
+
+	keyspaceID uint32
+
+	ddlTableInfo         *event.DDLTableInfo
+	onceInitddlTableInfo sync.Once
 }
 
 func newDDLJobFetcher(
 	ctx context.Context,
 	subClient logpuller.SubscriptionClient,
 	kvStorage kv.Storage,
+	keyspaceID uint32,
 	cacheDDLEvent func(ddlEvent DDLJobWithCommitTs),
 	advanceResolvedTs func(resolvedTS uint64),
 ) *ddlJobFetcher {
@@ -73,6 +75,7 @@ func newDDLJobFetcher(
 		cacheDDLEvent:     cacheDDLEvent,
 		advanceResolvedTs: advanceResolvedTs,
 		kvStorage:         kvStorage,
+		keyspaceID:        keyspaceID,
 	}
 	ddlJobFetcher.resolvedTsTracker.resolvedTsItemMap = make(map[logpuller.SubscriptionID]*resolvedTsItem)
 	ddlJobFetcher.resolvedTsTracker.resolvedTsHeap = heap.NewHeap[*resolvedTsItem]()
@@ -80,8 +83,12 @@ func newDDLJobFetcher(
 	return ddlJobFetcher
 }
 
-func (p *ddlJobFetcher) run(startTs uint64) {
-	for _, span := range getAllDDLSpan() {
+func (p *ddlJobFetcher) run(startTs uint64) error {
+	spans, err := getAllDDLSpan(p.keyspaceID)
+	if err != nil {
+		return err
+	}
+	for _, span := range spans {
 		subID := p.subClient.AllocSubscriptionID()
 		item := &resolvedTsItem{
 			resolvedTs: 0,
@@ -93,6 +100,7 @@ func (p *ddlJobFetcher) run(startTs uint64) {
 		}
 		p.subClient.Subscribe(subID, span, startTs, p.input, advanceSubSpanResolvedTs, 0, ddlPullerFilterLoop)
 	}
+	return nil
 }
 
 func (p *ddlJobFetcher) tryAdvanceResolvedTs(subID logpuller.SubscriptionID, newResolvedTs uint64) {
@@ -146,14 +154,14 @@ func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, erro
 		return nil, nil
 	}
 	if !event.IsLegacyFormatJob(rawKV) {
-		once.Do(func() {
-			if err := initDDLTableInfo(p.ctx, p.kvStorage); err != nil {
+		p.onceInitddlTableInfo.Do(func() {
+			if err := p.initDDLTableInfo(p.ctx, p.kvStorage); err != nil {
 				log.Fatal("init ddl table info failed", zap.Error(err))
 			}
 		})
 	}
 
-	return event.ParseDDLJob(rawKV, ddlTableInfo)
+	return event.ParseDDLJob(rawKV, p.ddlTableInfo)
 }
 
 // getSnapshotMeta returns tidb meta information
@@ -162,7 +170,7 @@ func getSnapshotMeta(tiStore kv.Storage, ts uint64) meta.Reader {
 	return meta.NewReader(snapshot)
 }
 
-func initDDLTableInfo(ctx context.Context, kvStorage kv.Storage) error {
+func (p *ddlJobFetcher) initDDLTableInfo(ctx context.Context, kvStorage kv.Storage) error {
 	version, err := kvStorage.CurrentVersion(kv.GlobalTxnScope)
 	if err != nil {
 		return errors.Trace(err)
@@ -195,9 +203,9 @@ func initDDLTableInfo(ctx context.Context, kvStorage kv.Storage) error {
 		return errors.Trace(err)
 	}
 
-	ddlTableInfo = &event.DDLTableInfo{}
-	ddlTableInfo.DDLJobTable = common.WrapTableInfo(db.Name.L, tableInfo)
-	ddlTableInfo.JobMetaColumnIDinJobTable = col.ID
+	p.ddlTableInfo = &event.DDLTableInfo{}
+	p.ddlTableInfo.DDLJobTable = common.WrapTableInfo(db.Name.L, tableInfo)
+	p.ddlTableInfo.JobMetaColumnIDinJobTable = col.ID
 
 	// for tidb_ddl_history
 	historyTableInfo, err := findTableByName(tbls, "tidb_ddl_history")
@@ -210,8 +218,8 @@ func initDDLTableInfo(ctx context.Context, kvStorage kv.Storage) error {
 		return errors.Trace(err)
 	}
 
-	ddlTableInfo.DDLHistoryTable = common.WrapTableInfo(db.Name.L, historyTableInfo)
-	ddlTableInfo.JobMetaColumnIDinHistoryTable = historyTableCol.ID
+	p.ddlTableInfo.DDLHistoryTable = common.WrapTableInfo(db.Name.L, historyTableInfo)
+	p.ddlTableInfo.JobMetaColumnIDinHistoryTable = historyTableCol.ID
 
 	return nil
 }
@@ -252,26 +260,36 @@ func findColumnByName(cols []*model.ColumnInfo, name string) (*model.ColumnInfo,
 
 const (
 	// JobTableID is the id of `tidb_ddl_job`.
-	JobTableID = ddl.JobTableID
+	JobTableID = metadef.TiDBDDLJobTableID
 	// JobHistoryID is the id of `tidb_ddl_history`
-	JobHistoryID = ddl.HistoryTableID
+	JobHistoryID = metadef.TiDBDDLHistoryTableID
 )
 
-func getAllDDLSpan() []heartbeatpb.TableSpan {
+func getAllDDLSpan(keyspaceID uint32) ([]heartbeatpb.TableSpan, error) {
 	spans := make([]heartbeatpb.TableSpan, 0, 2)
-	start, end := common.GetTableRange(JobTableID)
+
+	start, end, err := common.GetKeyspaceTableRange(keyspaceID, JobTableID)
+	if err != nil {
+		return nil, err
+	}
+
 	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:  JobTableID,
-		StartKey: common.ToComparableKey(start),
-		EndKey:   common.ToComparableKey(end),
+		TableID:    JobTableID,
+		StartKey:   common.ToComparableKey(start),
+		EndKey:     common.ToComparableKey(end),
+		KeyspaceID: keyspaceID,
 	})
-	start, end = common.GetTableRange(JobHistoryID)
+	start, end, err = common.GetKeyspaceTableRange(keyspaceID, JobHistoryID)
+	if err != nil {
+		return nil, err
+	}
 	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:  JobHistoryID,
-		StartKey: common.ToComparableKey(start),
-		EndKey:   common.ToComparableKey(end),
+		TableID:    JobHistoryID,
+		StartKey:   common.ToComparableKey(start),
+		EndKey:     common.ToComparableKey(end),
+		KeyspaceID: keyspaceID,
 	})
-	return spans
+	return spans, nil
 }
 
 type resolvedTsItem struct {

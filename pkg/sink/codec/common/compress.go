@@ -30,7 +30,7 @@ func Compress(changefeedID common.ChangeFeedID, cc string, data []byte) ([]byte,
 	newSize := len(compressed)
 	ratio := float64(oldSize) / float64(newSize) * 100
 
-	compressionRatio.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()).Observe(ratio)
+	compressionRatio.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()).Observe(ratio)
 
 	return compressed, nil
 }

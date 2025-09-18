@@ -205,10 +205,10 @@ func (c *Changefeed) GetClonedStatus() *heartbeatpb.MaintainerStatus {
 	cfID := status.ChangefeedID
 	if cfID != nil {
 		clone.ChangefeedID = &heartbeatpb.ChangefeedID{
-			High:      cfID.High,
-			Low:       cfID.Low,
-			Name:      cfID.Name,
-			Namespace: cfID.Namespace,
+			High:     cfID.High,
+			Low:      cfID.Low,
+			Name:     cfID.Name,
+			Keyspace: cfID.Keyspace,
 		}
 	}
 
