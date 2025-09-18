@@ -329,7 +329,7 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 	isUninitialized := func(d *dispatcherStat) bool {
-		return !d.isRemoved.Load() && !d.hasReceivedFirstResolvedTs.Load()
+		return !d.isRemoved.Load() && d.seq.Load() == 0
 	}
 	for {
 		select {
