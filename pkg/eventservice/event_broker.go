@@ -532,10 +532,9 @@ func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
 func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	var interrupted bool
 	defer func() {
+		task.isTaskScanning.Store(false)
 		if interrupted {
 			c.pushTask(task, false)
-		} else {
-			task.isTaskScanning.Store(false)
 		}
 	}()
 
