@@ -111,9 +111,7 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 
 func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
 	delete(s.allTasks, replica.ID)
-	if _, ok := s.splitReadyTasks[replica.ID]; ok {
-		delete(s.splitReadyTasks, replica.ID)
-	}
+	delete(s.splitReadyTasks, replica.ID)
 }
 
 func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
@@ -154,9 +152,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 			s.splitReadyTasks[status.ID] = status
 		}
 	} else {
-		if _, ok := s.splitReadyTasks[status.ID]; ok {
-			delete(s.splitReadyTasks, status.ID)
-		}
+		delete(s.splitReadyTasks, status.ID)
 	}
 }
 

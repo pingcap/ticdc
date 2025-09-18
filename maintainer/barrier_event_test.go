@@ -48,7 +48,7 @@ func TestScheduleEvent(t *testing.T) {
 		IsBlocked:         true,
 		BlockTs:           10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_Normal, TableIDs: []int64{1}},
-		NeedAddedTables:   []*heartbeatpb.Table{{2, 1, true}, {3, 1, true}},
+		NeedAddedTables:   []*heartbeatpb.Table{{TableID: 2, SchemaID: 1, Splitable: true}, {TableID: 3, SchemaID: 1, Splitable: true}},
 	}, true)
 	event.scheduleBlockEvent()
 	// drop table will be executed first
@@ -61,7 +61,7 @@ func TestScheduleEvent(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_DB,
 			SchemaID:      1,
 		},
-		NeedAddedTables: []*heartbeatpb.Table{{4, 1, true}},
+		NeedAddedTables: []*heartbeatpb.Table{{TableID: 4, SchemaID: 1, Splitable: true}},
 	}, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
@@ -74,7 +74,7 @@ func TestScheduleEvent(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_Normal,
 			TableIDs:      []int64{4},
 		},
-		NeedAddedTables: []*heartbeatpb.Table{{5, 1, true}},
+		NeedAddedTables: []*heartbeatpb.Table{{TableID: 5, SchemaID: 1, Splitable: true}},
 	}, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
