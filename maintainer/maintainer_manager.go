@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
@@ -121,14 +120,6 @@ func (m *Manager) Name() string {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	g, ctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		return m.handleMessages(ctx)
-	})
-	return g.Wait()
-}
-
-func (m *Manager) handleMessages(ctx context.Context) error {
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
 	for {
