@@ -40,8 +40,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// Decoder implement the Decoder interface
-type Decoder struct {
+var tableIDAllocator = common.NewTableIDAllocator()
+
+// decoder implement the Decoder interface
+type decoder struct {
 	config *common.Config
 
 	marshaller marshaller
@@ -52,8 +54,6 @@ type Decoder struct {
 	value []byte
 	msg   *message
 	memo  TableInfoProvider
-
-	blockedTablesMemo *blockedTablesMemo
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
@@ -83,14 +83,13 @@ func NewDecoder(
 	}
 
 	m, err := newMarshaller(config)
-	return &Decoder{
+	tableIDAllocator.Clean()
+	return &decoder{
 		config:     config,
 		marshaller: m,
 
 		storage:      externalStorage,
 		upstreamTiDB: db,
-
-		blockedTablesMemo: newBlockedTablesMemo(),
 
 		memo:           newMemoryTableInfoProvider(),
 		cachedMessages: list.New(),
@@ -98,7 +97,7 @@ func NewDecoder(
 }
 
 // AddKeyValue add the received key and values to the Decoder,
-func (d *Decoder) AddKeyValue(_, value []byte) {
+func (d *decoder) AddKeyValue(_, value []byte) {
 	if d.value != nil {
 		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
@@ -113,7 +112,7 @@ func (d *Decoder) AddKeyValue(_, value []byte) {
 }
 
 // HasNext returns whether there is any event need to be consumed
-func (d *Decoder) HasNext() (common.MessageType, bool) {
+func (d *decoder) HasNext() (common.MessageType, bool) {
 	if d.value == nil {
 		return common.MessageTypeUnknown, false
 	}
@@ -138,7 +137,7 @@ func (d *Decoder) HasNext() (common.MessageType, bool) {
 }
 
 // NextResolvedEvent returns the next resolved event if exists
-func (d *Decoder) NextResolvedEvent() uint64 {
+func (d *decoder) NextResolvedEvent() uint64 {
 	if d.msg.Type != MessageTypeWatermark {
 		log.Panic("message type is not watermark", zap.Any("messageType", d.msg.Type))
 	}
@@ -149,7 +148,7 @@ func (d *Decoder) NextResolvedEvent() uint64 {
 }
 
 // NextDMLEvent returns the next dml event if exists
-func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
 		log.Panic("invalid data for the DML event", zap.Any("message", d.msg))
 	}
@@ -177,13 +176,13 @@ func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	event := buildDMLEvent(d.msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
 	d.msg = nil
 
-	d.blockedTablesMemo.add(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
+	tableIDAllocator.AddBlockTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
 
 	log.Debug("row changed event assembled", zap.Any("event", event))
 	return event
 }
 
-func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *commonEvent.DMLEvent {
+func (d *decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := d.storage.ReadFile(context.Background(), claimCheckFileName)
 	if err != nil {
@@ -215,7 +214,7 @@ func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *
 	return d.NextDMLEvent()
 }
 
-func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.DMLEvent {
+func (d *decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.DMLEvent {
 	tableInfo := d.memo.Read(m.Schema, m.Table, m.SchemaVersion)
 	if tableInfo == nil {
 		log.Debug("table info not found for the event, "+
@@ -264,7 +263,7 @@ func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.
 	return d.NextDMLEvent()
 }
 
-func (d *Decoder) buildData(
+func (d *decoder) buildData(
 	holder *common.ColumnsHolder, fieldTypeMap map[string]*types.FieldType, timezone string,
 ) map[string]interface{} {
 	columnsCount := holder.Length()
@@ -281,7 +280,7 @@ func (d *Decoder) buildData(
 }
 
 // NextDDLEvent returns the next DDL event if exists
-func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
+func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if d.msg == nil {
 		log.Panic("msg is not set when parse the DDL event")
 	}
@@ -304,7 +303,7 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 }
 
 // GetCachedEvents returns the cached events
-func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
+func (d *decoder) GetCachedEvents() []*commonEvent.DMLEvent {
 	result := d.CachedRowChangedEvents
 	d.CachedRowChangedEvents = nil
 	return result
@@ -491,44 +490,7 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 	return commonType.NewTableInfo4Decoder(schema, tidbTableInfo)
 }
 
-type accessKey struct {
-	schema string
-	table  string
-}
-
-type blockedTablesMemo struct {
-	memo map[accessKey]map[int64]struct{}
-}
-
-func newBlockedTablesMemo() *blockedTablesMemo {
-	return &blockedTablesMemo{
-		memo: make(map[accessKey]map[int64]struct{}),
-	}
-}
-
-func (m *blockedTablesMemo) add(schema, table string, tableID int64) {
-	key := accessKey{schema, table}
-	if _, ok := m.memo[key]; !ok {
-		m.memo[key] = make(map[int64]struct{})
-	}
-	if _, exists := m.memo[key][tableID]; !exists {
-		m.memo[key][tableID] = struct{}{}
-		log.Info("add table id to blocked list",
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID))
-	}
-}
-
-func (m *blockedTablesMemo) GetBlockedTables(schema, table string) []int64 {
-	key := accessKey{schema, table}
-	blocked := m.memo[key]
-	result := make([]int64, 0, len(blocked))
-	for item := range blocked {
-		result = append(result, item)
-	}
-	return result
-}
-
-func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
+func (d *decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	var (
 		tableInfo    *commonType.TableInfo
 		preTableInfo *commonType.TableInfo
@@ -546,7 +508,9 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
 	result.TableID = tableInfo.TableName.TableID
-	d.blockedTablesMemo.add(result.SchemaName, result.TableName, result.TableID)
+	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
+
+	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
@@ -560,7 +524,6 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	result.BlockedTables = common.GetBlockedTables(d.blockedTablesMemo, result)
 	return result
 }
 
