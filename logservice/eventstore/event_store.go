@@ -617,9 +617,12 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		}
 		// calculate the new checkpoint ts of the subscription
 		var newCheckpointTs uint64
+
+		subStat.dispatchers.Lock()
 		for id := range subStat.dispatchers.subscribers {
 			dispatcherStat, ok := e.dispatcherMeta.dispatcherStats[id]
 			if !ok {
+				log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", id))
 				continue
 			}
 
@@ -627,6 +630,8 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				newCheckpointTs = dispatcherStat.checkpointTs
 			}
 		}
+		subStat.dispatchers.Unlock()
+
 		resolvedTs := subStat.resolvedTs.Load()
 		// newCheckpointTs maybe larger than subStat's resolvedTs,
 		// because dispatcher may depend on multiple subStats.
