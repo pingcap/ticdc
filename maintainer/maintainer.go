@@ -33,14 +33,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -67,8 +65,6 @@ type Maintainer struct {
 	info       *config.ChangeFeedInfo
 	selfNode   *node.Info
 	controller *Controller
-
-	pdClock pdutil.Clock
 
 	eventCh *chann.DrainableChann[*Event]
 
@@ -142,16 +138,11 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
-	cancel                         context.CancelFunc
-	changefeedCheckpointTsGauge    prometheus.Gauge
-	changefeedCheckpointTsLagGauge prometheus.Gauge
-	changefeedResolvedTsGauge      prometheus.Gauge
-	changefeedResolvedTsLagGauge   prometheus.Gauge
-	changefeedStatusGauge          prometheus.Gauge
-	scheduledTaskGauge             prometheus.Gauge
-	spanCountGauge                 prometheus.Gauge
-	tableCountGauge                prometheus.Gauge
-	handleEventDuration            prometheus.Observer
+	cancel              context.CancelFunc
+	scheduledTaskGauge  prometheus.Gauge
+	spanCountGauge      prometheus.Gauge
+	tableCountGauge     prometheus.Gauge
+	handleEventDuration prometheus.Observer
 
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
@@ -189,7 +180,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		closedNodes:           make(map[node.ID]struct{}),
 		statusChanged:         atomic.NewBool(true),
 		info:                  info,
-		pdClock:               appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		ddlSpan:               ddlSpan,
 		redoDDLSpan:           redoDDLSpan,
 		checkpointTsByCapture: newWatermarkCaptureMap(),
@@ -197,15 +187,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		newChangefeed:         newChangefeed,
 		enableRedo:            enableRedo,
 
-		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
-		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
-		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
-		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
-		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
+		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
+		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
+		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "default"),
+		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
 
 		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "redo"),
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(cfID.Namespace(), cfID.Name(), "redo"),
@@ -387,11 +372,6 @@ func (m *Maintainer) cleanupMetrics() {
 	if m.changefeedRemoved.Load() {
 		namespace := m.id.Namespace()
 		id := m.id.Name()
-		metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(namespace, id)
-		metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(namespace, id)
-		metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(namespace, id)
-		metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(namespace, id)
-		metrics.ChangefeedStatusGauge.DeleteLabelValues(namespace, id)
 		metrics.ScheduleTaskGauge.DeleteLabelValues(namespace, id)
 		metrics.SpanCountGauge.DeleteLabelValues(namespace, id)
 		metrics.TableCountGauge.DeleteLabelValues(namespace, id)
@@ -637,28 +617,9 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
 			)
-
 			m.setWatermark(*newWatermark)
-			m.updateMetrics()
 		}
 	}
-}
-
-func (m *Maintainer) updateMetrics() {
-	watermark := m.getWatermark()
-
-	pdTime := m.pdClock.CurrentTime()
-	phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
-	m.changefeedCheckpointTsGauge.Set(float64(phyCkpTs))
-	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
-	m.changefeedCheckpointTsLagGauge.Set(lag)
-
-	phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
-	m.changefeedResolvedTsGauge.Set(float64(phyResolvedTs))
-	lag = float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
-	m.changefeedResolvedTsLagGauge.Set(lag)
-
-	m.changefeedStatusGauge.Set(float64(m.info.State.ToInt()))
 }
 
 // send message to other components

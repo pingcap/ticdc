@@ -25,9 +25,13 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
@@ -119,6 +123,84 @@ func (m *Manager) Name() string {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return m.handleMessages(ctx)
+	})
+	return g.Wait()
+}
+
+type metric struct {
+	checkpointTs uint64
+	resolvedTs   uint64
+	state        config.FeedState
+}
+
+type metricsCollector struct {
+	// common.ChangefeedID -> metric
+	memo sync.Map
+}
+
+func newMetricsCollector() *metricsCollector {
+	return &metricsCollector{
+		memo: sync.Map{},
+	}
+}
+
+func (m *metricsCollector) add() {
+
+}
+
+func (m *metricsCollector) remove(changefeed common.ChangeFeedID) {
+	m.memo.Delete(changefeed)
+}
+
+func (m *metricsCollector) update(changefeed common.ChangeFeedID, resolvedTs, checkpointTs uint64, state config.FeedState) {
+	m.memo.Store(changefeed, metric{
+		checkpointTs: checkpointTs,
+		resolvedTs:   resolvedTs,
+		state:        state,
+	})
+}
+
+func (m *Manager) collectMetrics(ctx context.Context) error {
+	//	changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			m.maintainers.Range(func(key, value interface{}) bool {
+				cf := value.(*Maintainer)
+
+				namespace := cf.id.Namespace()
+				changefeedID := cf.id.Name()
+				watermark := cf.getWatermark()
+
+				physicalTime := oracle.GetPhysical(pdClock.CurrentTime())
+
+				phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
+				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(namespace, changefeedID).Set(float64(phyCkpTs))
+				lag := float64(physicalTime-phyCkpTs) / 1e3
+				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(namespace, changefeedID).Set(lag)
+
+				phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
+				metrics.ChangefeedResolvedTsGauge.WithLabelValues(namespace, changefeedID).Set(float64(phyResolvedTs))
+				lag = float64(physicalTime-phyResolvedTs) / 1e3
+				metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(namespace, changefeedID).Set(lag)
+
+				metrics.ChangefeedStatusGauge.WithLabelValues(namespace, changefeedID).Set(float64(cf.info.State.ToInt()))
+
+				return true
+			})
+		}
+	}
+}
+
+func (m *Manager) handleMessages(ctx context.Context) error {
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
 	for {
