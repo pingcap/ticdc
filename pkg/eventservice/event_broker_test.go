@@ -215,6 +215,55 @@ func TestCURDDispatcher(t *testing.T) {
 	require.Nil(t, dispPtr)
 }
 
+func TestResetDispatcher(t *testing.T) {
+	broker, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	// 1. Reset a non-existent dispatcher.
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.resetDispatcher(dispInfo)
+	require.Nil(t, err, "resetting a non-existent dispatcher should not return an error")
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.Nil(t, dispPtr, "dispatcher should not be created after a failed reset")
+
+	// 2. Add a dispatcher first.
+	err = broker.addDispatcher(dispInfo)
+	require.Nil(t, err)
+	dispPtr = broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+	oldStat := dispPtr.Load()
+	require.Equal(t, uint64(0), oldStat.epoch)
+	require.Equal(t, dispInfo.startTs, oldStat.startTs)
+
+	// 3. Reset with a stale epoch.
+	staleDispInfo := newMockDispatcherInfo(t, 400, dispInfo.GetID(), 100, eventpb.ActionType_ACTION_TYPE_RESET)
+	staleDispInfo.epoch = 0 // same as oldStat.epoch
+	err = broker.resetDispatcher(staleDispInfo)
+	require.Nil(t, err)
+	currentStat := dispPtr.Load()
+	require.Same(t, oldStat, currentStat, "dispatcherStat should not be replaced with a stale epoch")
+
+	// 4. Successful reset.
+	resetDispInfo := newMockDispatcherInfo(t, 500, dispInfo.GetID(), 100, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetDispInfo.epoch = 1 // new epoch
+
+	// Set some statistics to check if they are copied.
+	oldStat.checkpointTs.Store(120)
+	oldStat.hasReceivedFirstResolvedTs.Store(true)
+	oldStat.currentScanLimitInBytes.Store(2048)
+
+	err = broker.resetDispatcher(resetDispInfo)
+	require.Nil(t, err)
+
+	newStat := dispPtr.Load()
+	require.NotSame(t, oldStat, newStat, "dispatcherStat should be replaced")
+	require.True(t, oldStat.isRemoved.Load(), "old dispatcherStat should be marked as removed")
+
+	require.Equal(t, uint64(1), newStat.epoch)
+	require.Equal(t, uint64(500), newStat.startTs)
+	require.Equal(t, dispInfo.GetID(), newStat.id)
+}
+
 func TestHandleResolvedTs(t *testing.T) {
 	broker, _, _ := newEventBrokerForTest()
 	defer broker.close()
