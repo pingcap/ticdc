@@ -252,14 +252,14 @@ func ValidateStorage(uri *url.URL) error {
 }
 
 const (
-	// RedoLogFileFormatV1 was used before v6.1.0, which doesn't contain namespace information
+	// RedoLogFileFormatV1 was used before v6.1.0, which doesn't contain keyspace information
 	// layout: captureID_changefeedID_fileType_maxEventCommitTs_uuid.fileExtName
 	RedoLogFileFormatV1 = "%s_%s_%s_%d_%s%s"
-	// RedoLogFileFormatV2 is available since v6.1.0, which contains namespace information
-	// layout: captureID_namespace_changefeedID_fileType_maxEventCommitTs_uuid.fileExtName
+	// RedoLogFileFormatV2 is available since v6.1.0, which contains keyspace information
+	// layout: captureID_keyspace_changefeedID_fileType_maxEventCommitTs_uuid.fileExtName
 	RedoLogFileFormatV2 = "%s_%s_%s_%s_%d_%s%s"
-	// RedoMetaFileFormat is the format of redo meta file, which contains namespace information.
-	// layout: captureID_namespace_changefeedID_fileType_uuid.fileExtName
+	// RedoMetaFileFormat is the format of redo meta file, which contains keyspace information.
+	// layout: captureID_keyspace_changefeedID_fileType_uuid.fileExtName
 	RedoMetaFileFormat = "%s_%s_%s_%s_%s%s"
 )
 
@@ -279,7 +279,7 @@ func ParseLogFileName(name string) (uint64, string, error) {
 
 	// if .sort, the name should be like
 	// fmt.Sprintf("%s_%s_%s_%d_%s_%d%s", w.cfg.captureID,
-	// w.cfg.changeFeedID.Namespace,w.cfg.changeFeedID.ID,
+	// w.cfg.changeFeedID.Keyspace,w.cfg.changeFeedID.ID,
 	// w.cfg.fileType, w.commitTS.Load(), uuid, LogEXT)+SortLogEXT
 	if ext == SortLogEXT {
 		name = strings.TrimSuffix(name, SortLogEXT)
@@ -290,10 +290,10 @@ func ParseLogFileName(name string) (uint64, string, error) {
 	}
 
 	var commitTs uint64
-	var captureID, namespace, changefeedID, fileType, uid string
-	// if the namespace is not default, the log looks like:
+	var captureID, keyspace, changefeedID, fileType, uid string
+	// if the keyspace is not default, the log looks like:
 	// fmt.Sprintf("%s_%s_%s_%s_%d_%s%s", w.cfg.captureID,
-	// w.cfg.changeFeedID.Namespace,w.cfg.changeFeedID.ID,
+	// w.cfg.changeFeedID.Keyspace,w.cfg.changeFeedID.ID,
 	// w.cfg.fileType, w.commitTS.Load(), uuid, redo.LogEXT)
 	// otherwise it looks like:
 	// fmt.Sprintf("%s_%s_%s_%d_%s%s", w.cfg.captureID,
@@ -305,7 +305,7 @@ func ParseLogFileName(name string) (uint64, string, error) {
 	)
 	if len(strings.Split(name, "_")) == 6 {
 		formatStr = logFormat2ParseFormat(RedoLogFileFormatV2)
-		vars = []any{&captureID, &namespace, &changefeedID, &fileType, &commitTs, &uid}
+		vars = []any{&captureID, &keyspace, &changefeedID, &fileType, &commitTs, &uid}
 	} else {
 		formatStr = logFormat2ParseFormat(RedoLogFileFormatV1)
 		vars = []any{&captureID, &changefeedID, &fileType, &commitTs, &uid}

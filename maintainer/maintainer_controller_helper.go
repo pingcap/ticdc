@@ -165,11 +165,12 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 		return nil
 	}
 
-	span := common.TableIDToComparableSpan(tableID)
+	span := common.TableIDToComparableSpan(c.GetKeyspaceID(), tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
-		TableID:  span.TableID,
-		StartKey: span.StartKey,
-		EndKey:   span.EndKey,
+		TableID:    span.TableID,
+		StartKey:   span.StartKey,
+		EndKey:     span.EndKey,
+		KeyspaceID: c.GetKeyspaceID(),
 	}
 	splitTableSpans := spanController.GetSplitter().Split(context.Background(), wholeSpan, 0, split.SplitTypeRegionCount)
 

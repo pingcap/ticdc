@@ -71,6 +71,7 @@ func NewMounter(tz *time.Location, integrity *integrity.Config) Mounter {
 
 // DecodeToChunk decodes the raw KV entry to a chunk, it returns the number of rows decoded.
 func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
+	raw.Key = RemoveKeyspacePrefix(raw.Key)
 	recordID, err := tablecodec.DecodeRowKey(raw.Key)
 	if err != nil {
 		return 0, nil, errors.Trace(err)
@@ -157,6 +158,24 @@ func IsLegacyFormatJob(rawKV *common.RawKVEntry) bool {
 	return bytes.HasPrefix(rawKV.Key, metaPrefix)
 }
 
+const (
+	keyspacePrefixLen       = 4
+	apiV2TxnModePrefix byte = 'x'
+)
+
+// RemoveKeyspacePrefix is used to remove keyspace prefix from the key.
+func RemoveKeyspacePrefix(key []byte) []byte {
+	if len(key) <= keyspacePrefixLen {
+		return key
+	}
+
+	if key[0] != apiV2TxnModePrefix {
+		log.Warn("the first byte of key is not 'x', it may not be in api v2 txn mode", zap.Any("byte", key[0]))
+		return key
+	}
+	return key[keyspacePrefixLen:]
+}
+
 // ParseDDLJob parses the job from the raw KV entry.
 func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.Job, error) {
 	var v []byte
@@ -172,6 +191,7 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		return job, err
 	}
 
+	rawKV.Key = RemoveKeyspacePrefix(rawKV.Key)
 	recordID, err := tablecodec.DecodeRowKey(rawKV.Key)
 	if err != nil {
 		return nil, errors.Trace(err)

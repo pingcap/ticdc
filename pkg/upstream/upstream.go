@@ -24,6 +24,7 @@ import (
 	"github.com/benbjohnson/clock"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -99,13 +100,16 @@ func newUpstream(pdEndpoints []string,
 // CreateTiStore creates a tikv storage client
 // Note: It will return a same storage if the urls connect to a same pd cluster,
 // so must be careful when you call storage.Close().
-func CreateTiStore(urls string, credential *security.Credential) (tidbkv.Storage, error) {
+func CreateTiStore(urls string, credential *security.Credential, keyspaceName string) (tidbkv.Storage, error) {
 	urlv, err := common.NewURLsValue(urls)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	tiPath := fmt.Sprintf("tikv://%s?disableGC=true", urlv.HostString())
+	if kerneltype.IsNextGen() && keyspaceName != "" {
+		tiPath += "&keyspaceName=" + keyspaceName
+	}
 	securityCfg := tikvconfig.Security{
 		ClusterSSLCA:    credential.CAPath,
 		ClusterSSLCert:  credential.CertPath,
@@ -171,7 +175,7 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 	}
 	up.ID = clusterID
 
-	up.KVStorage, err = CreateTiStore(strings.Join(up.PdEndpoints, ","), up.SecurityConfig)
+	up.KVStorage, err = CreateTiStore(strings.Join(up.PdEndpoints, ","), up.SecurityConfig, "")
 	if err != nil {
 		up.err.Store(err)
 		return errors.Trace(err)

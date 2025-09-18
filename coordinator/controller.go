@@ -626,11 +626,11 @@ func (c *Controller) UpdateChangefeed(ctx context.Context, change *config.Change
 	return nil
 }
 
-func (c *Controller) ListChangefeeds(_ context.Context) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
+func (c *Controller) ListChangefeeds(_ context.Context, keyspace string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
 	c.apiLock.RLock()
 	defer c.apiLock.RUnlock()
 
-	cfs := c.changefeedDB.GetAllChangefeeds()
+	cfs := c.changefeedDB.GetAllChangefeedsByKeyspace(keyspace)
 	infos := make([]*config.ChangeFeedInfo, 0, len(cfs))
 	statuses := make([]*config.ChangeFeedStatus, 0, len(cfs))
 	for _, cf := range cfs {
@@ -729,8 +729,12 @@ func (c *Controller) moveChangefeedToSchedulingQueue(
 	c.changefeedDB.MoveToSchedulingQueue(id, resetBackoff, overwriteCheckpointTs)
 }
 
-func (c *Controller) calculateGCSafepoint() uint64 {
-	return c.changefeedDB.CalculateGCSafepoint()
+func (c *Controller) calculateGlobalGCSafepoint() uint64 {
+	return c.changefeedDB.CalculateGlobalGCSafepoint()
+}
+
+func (c *Controller) calculateKeyspaceGCBarrier() map[string]uint64 {
+	return c.changefeedDB.CalculateKeyspaceGCBarrier()
 }
 
 func shouldRunChangefeed(state config.FeedState) bool {

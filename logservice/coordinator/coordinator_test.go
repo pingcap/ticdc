@@ -42,8 +42,8 @@ func TestGetCandidateNodes(t *testing.T) {
 	// initialize table spans
 	tableID1 := int64(100)
 	tableID2 := int64(101)
-	span1 := common.TableIDToComparableSpan(tableID1)
-	span2 := common.TableIDToComparableSpan(tableID2)
+	span1 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID1)
+	span2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID2)
 
 	// initialize event store states
 	coordinator.updateEventStoreState(nodeID1, &logservicepb.EventStoreState{

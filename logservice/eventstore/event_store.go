@@ -57,6 +57,12 @@ var (
 
 type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 
+// Subscriber represents the dispatcher which depends on the subscription.
+type Subscriber struct {
+	notifyFunc ResolvedTsNotifier
+	isStopped  atomic.Bool
+}
+
 type EventStore interface {
 	common.SubModule
 
@@ -98,13 +104,31 @@ type dispatcherStat struct {
 	tableSpan *heartbeatpb.TableSpan
 	// the max ts of events which is not needed by this dispatcher
 	checkpointTs uint64
-	// the subscription which this dispatcher is currently depends on
-	subStat *subscriptionStat
-	// the subscription which this dispatcher finally depends on.
-	// the difference between subStat and pendingSubStat is that
-	// subStat may have span larger than dispatcher span,
-	// while pendingSubStat must have span the same as dispatcher span.
-	pendingSubStat *subscriptionStat
+	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
+	//   1) if there is no existing subscriptions which can be reused,
+	//      or there is a existing subscription with exact span match,
+	//      the dispatcher will just have a `subStat`.
+	//   2) if a dispatcher can only find an existing subscription which has a larger containing span,
+	//      it will reuse this existing subscription as `subStat`
+	//      and create a new subscription with exact span, and set it as `pendingSubStat`.
+	//   3) when `pendingStat` is ready, we try to switch `pendingStat` to `subStat`,
+	//      and set the old `subStat` as `removingSubStat`.
+	//      the reason why `removingSubStat` is need is that if we remove old `subStat` directly,
+	//      there is a gap between the time when old `subStat` is removed
+	//      and when the old `subStat` send a new resolved ts to the dispatcher.
+	//      the new resolved ts may trigger a new scan task,
+	// 		and if the new `subStat` doesn't advance to new resolved ts,
+	//      the scan task cannot work as expected which break our design.
+	//      so the correct way to remove the old `subStat` is
+	//      a) set old `subStat` as `removingSubStat`
+	//      b) stop receive resolve ts event from `removingSubStat`
+	//      c) during later scan requests, when the new `subStat` can cover the scan range,
+	// 		   remove the `removingSubStat`. if not, we can still use `removingSubStat` temporarily.
+	//         (note: at most one later scan requests
+	//          maybe triggered by the resolved ts event from old `subStat`)
+	pendingSubStat  *subscriptionStat
+	subStat         *subscriptionStat
+	removingSubStat *subscriptionStat
 }
 
 type subscriptionStat struct {
@@ -114,7 +138,7 @@ type subscriptionStat struct {
 	// dispatchers depend on this subscription
 	dispatchers struct {
 		sync.Mutex
-		notifiers map[common.DispatcherID]ResolvedTsNotifier
+		subscribers map[common.DispatcherID]*Subscriber
 	}
 	// the index of the db which stores the data of the subscription
 	// used to clean obselete data of the subscription
@@ -405,7 +429,10 @@ func (e *eventStore) RegisterDispatcher(
 					e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 					subStat.idleTime.Store(0)
 					subStat.dispatchers.Lock()
-					subStat.dispatchers.notifiers[dispatcherID] = notifier
+					subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
+						notifyFunc: notifier,
+						isStopped:  atomic.Bool{},
+					}
 					subStat.dispatchers.Unlock()
 					e.dispatcherMeta.Unlock()
 					log.Info("reuse existing subscription with exact span match",
@@ -435,7 +462,10 @@ func (e *eventStore) RegisterDispatcher(
 		e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 		bestMatch.idleTime.Store(0)
 		bestMatch.dispatchers.Lock()
-		bestMatch.dispatchers.notifiers[dispatcherID] = notifier
+		bestMatch.dispatchers.subscribers[dispatcherID] = &Subscriber{
+			notifyFunc: notifier,
+			isStopped:  atomic.Bool{},
+		}
 		bestMatch.dispatchers.Unlock()
 		e.dispatcherMeta.Unlock()
 		log.Info("reuse existing subscription with smallest containing span",
@@ -467,8 +497,11 @@ func (e *eventStore) RegisterDispatcher(
 		dbIndex:   chIndex,
 		eventCh:   e.chs[chIndex],
 	}
-	subStat.dispatchers.notifiers = make(map[common.DispatcherID]ResolvedTsNotifier)
-	subStat.dispatchers.notifiers[dispatcherID] = notifier
+	subStat.dispatchers.subscribers = make(map[common.DispatcherID]*Subscriber)
+	subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
+		notifyFunc: notifier,
+		isStopped:  atomic.Bool{},
+	}
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
 	subStat.maxEventCommitTs.Store(startTs)
@@ -518,8 +551,10 @@ func (e *eventStore) RegisterDispatcher(
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
 			subStat.dispatchers.Lock()
 			defer subStat.dispatchers.Unlock()
-			for _, notifier := range subStat.dispatchers.notifiers {
-				notifier(ts, subStat.maxEventCommitTs.Load())
+			for _, subscriber := range subStat.dispatchers.subscribers {
+				if !subscriber.isStopped.Load() {
+					subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
+				}
 			}
 			CounterResolved.Inc()
 			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
@@ -531,6 +566,8 @@ func (e *eventStore) RegisterDispatcher(
 	// Note: don't hold any lock when call Subscribe
 	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	log.Info("new subscription created",
+		zap.Stringer("dispatcherID", dispatcherID),
+		zap.Uint64("startTs", startTs),
 		zap.Uint64("subscriptionID", uint64(subStat.subID)),
 		zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
@@ -580,7 +617,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		}
 		// calculate the new checkpoint ts of the subscription
 		var newCheckpointTs uint64
-		for id := range subStat.dispatchers.notifiers {
+		for id := range subStat.dispatchers.subscribers {
 			dispatcherStat := e.dispatcherMeta.dispatcherStats[id]
 			if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
 				newCheckpointTs = dispatcherStat.checkpointTs
@@ -640,8 +677,16 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		return nil
 	}
 
-	tryGetDB := func(subStat *subscriptionStat) *pebble.DB {
+	tryGetDB := func(subStat *subscriptionStat, force bool) *pebble.DB {
 		if subStat == nil {
+			if force {
+				log.Panic("subStat is nil, should not happen",
+					zap.Stringer("dispatcherID", dispatcherID),
+					zap.Int64("tableID", dataRange.Span.GetTableID()),
+					zap.Uint64("commitTsStart", dataRange.CommitTsStart),
+					zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
+					zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs))
+			}
 			return nil
 		}
 		checkpointTs := subStat.checkpointTs.Load()
@@ -649,10 +694,23 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 			log.Panic("dataRange startTs is smaller than subscriptionStat checkpointTs, it should not happen",
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", dataRange.Span.GetTableID()),
-				zap.Uint64("startTs", dataRange.CommitTsStart),
-				zap.Uint64("checkpointTs", checkpointTs))
+				zap.Uint64("commitTsStart", dataRange.CommitTsStart),
+				zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
+				zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
+				zap.Uint64("subStatCheckpointTs", checkpointTs),
+				zap.Uint64("subStatResolvedTs", subStat.resolvedTs.Load()))
 		}
 		if dataRange.CommitTsEnd > subStat.resolvedTs.Load() {
+			if force {
+				log.Panic("dataRange endTs is larger than subscriptionStat resolvedTs, it should not happen",
+					zap.Stringer("dispatcherID", dispatcherID),
+					zap.Int64("tableID", dataRange.Span.GetTableID()),
+					zap.Uint64("commitTsStart", dataRange.CommitTsStart),
+					zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
+					zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
+					zap.Uint64("subStatCheckpointTs", checkpointTs),
+					zap.Uint64("subStatResolvedTs", subStat.resolvedTs.Load()))
+			}
 			return nil
 		}
 		return e.dbs[subStat.dbIndex]
@@ -660,43 +718,50 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 
 	// get from pendingSubStat first,
 	// because its span is more close to dispatcher span if it's not nil
-	var needUpgradeLock bool
-	db := tryGetDB(stat.pendingSubStat)
+	var pendingSubStatReady bool
+	var cleanRemovingSubStat bool
+	db := tryGetDB(stat.pendingSubStat, false)
 	subStat := stat.pendingSubStat
 	if db != nil {
-		needUpgradeLock = true
+		pendingSubStatReady = true
 	} else {
-		db = tryGetDB(stat.subStat)
+		db = tryGetDB(stat.subStat, stat.removingSubStat == nil)
 		subStat = stat.subStat
+		if db != nil {
+			if stat.removingSubStat != nil {
+				cleanRemovingSubStat = true
+			}
+		} else if stat.removingSubStat != nil {
+			db = tryGetDB(stat.removingSubStat, true)
+			subStat = stat.removingSubStat
+		}
 	}
-	if db == nil {
-		e.dispatcherMeta.RUnlock()
-		log.Panic("fail to find db for dispatcher",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(stat.tableSpan)),
-			zap.Uint64("startTs", dataRange.CommitTsStart),
-			zap.Uint64("endTs", dataRange.CommitTsEnd))
-	}
-	if needUpgradeLock {
-		e.dispatcherMeta.RUnlock()
+	e.dispatcherMeta.RUnlock()
+
+	if pendingSubStatReady {
 		e.dispatcherMeta.Lock()
 		// check stat again because we release the lock for a short period
-		stat = e.dispatcherMeta.dispatcherStats[dispatcherID]
-		if stat == nil {
-			e.dispatcherMeta.Unlock()
-			log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
-			return nil
+		stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
+		if ok {
+			// GetIterator for the same dispatcher won't be called concurrently.
+			// So if the dispatcher is not unregistered during the unlock period,
+			// we can safely update stat.pendingSubStat as stat.subStat.
+			e.stopReceiveEventFromSubStat(dispatcherID, stat.subStat)
+			stat.removingSubStat = stat.subStat
+			stat.subStat = stat.pendingSubStat
+			stat.pendingSubStat = nil
 		}
-		// GetIterator for the same dispatcher won't be called concurrently.
-		// So if the dispatcher is not unregistered during the unlock period,
-		// we can safely update the stat.subStat to stat.pendingSubStat.
-		e.detachFromSubStat(dispatcherID, stat.subStat)
-		stat.subStat = stat.pendingSubStat
-		stat.pendingSubStat = nil
-		subStat = stat.subStat
 		e.dispatcherMeta.Unlock()
-	} else {
-		e.dispatcherMeta.RUnlock()
+	}
+
+	if cleanRemovingSubStat {
+		e.dispatcherMeta.Lock()
+		stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
+		if ok && stat.removingSubStat != nil {
+			e.detachFromSubStat(dispatcherID, stat.removingSubStat)
+			stat.removingSubStat = nil
+		}
+		e.dispatcherMeta.Unlock()
 	}
 
 	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
@@ -742,13 +807,24 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	}
 	subStat.dispatchers.Lock()
 	defer subStat.dispatchers.Unlock()
-	delete(subStat.dispatchers.notifiers, dispatcherID)
-	if len(subStat.dispatchers.notifiers) == 0 {
+	delete(subStat.dispatchers.subscribers, dispatcherID)
+	if len(subStat.dispatchers.subscribers) == 0 {
 		subStat.idleTime.Store(time.Now().UnixMilli())
 		log.Info("subscription is idle, set idle time",
 			zap.Uint64("subscriptionID", uint64(subStat.subID)),
 			zap.Int("dbIndex", subStat.dbIndex),
 			zap.Int64("tableID", subStat.tableSpan.TableID))
+	}
+}
+
+func (e *eventStore) stopReceiveEventFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {
+	if subStat == nil {
+		return
+	}
+	subStat.dispatchers.Lock()
+	defer subStat.dispatchers.Unlock()
+	if subscriber, ok := subStat.dispatchers.subscribers[dispatcherID]; ok {
+		subscriber.isStopped.Store(true)
 	}
 }
 

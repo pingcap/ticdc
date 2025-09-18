@@ -22,10 +22,12 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -102,6 +104,43 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
+
+	err = mock.ExpectationsWereMet()
+	require.NoError(t, err)
+}
+
+func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.CommitTs = 2
+	dmlEvent.ReplicatingTs = 1
+	dmlEvent.DispatcherID = common.NewDispatcherID()
+
+	// First execution should fail with duplicate entry error
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
+		WithArgs(1, "test").
+		WillReturnError(fmt.Errorf("Error 1062: Duplicate entry '1' for key 'PRIMARY'"))
+
+	// Second execution should use REPLACE (safe mode) and succeed
+	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
+		WithArgs(1, "test").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
+	require.NoError(t, err)
+
+	// Verify that writer is now in error-caused safe mode
+	require.True(t, writer.isInErrorCausedSafeMode)
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
@@ -441,7 +480,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectExec("SET @current_ts = NOW(6);INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint, created_at) VALUES ('default', 'test/test', '1', 1, '', '', 1, 0, @current_ts) ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=VALUES(created_at), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	// for dml event
+	// for dml event, it is a replace since we set it's commitTs less than replicatingTs
 	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(3, "test3").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -549,4 +588,85 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestCheckIsDuplicateEntryError(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+
+	// Test case 1: nil error should return false
+	result := writer.checkIsDuplicateEntryError(nil)
+	require.False(t, result)
+	require.False(t, writer.isInErrorCausedSafeMode)
+
+	// Test case 2: should return true and set safe mode
+	// The issue is that GenWithStackByArgs creates a new error instance that doesn't equal the original
+	// So let's test the string matching path instead
+	beforeTime := time.Now()
+	duplicateErr := fmt.Errorf("Error 1062: Duplicate entry 'test' for key 'PRIMARY'")
+	result = writer.checkIsDuplicateEntryError(duplicateErr)
+
+	require.True(t, result)
+	require.True(t, writer.isInErrorCausedSafeMode)
+	require.True(t, writer.lastErrorCausedSafeModeTime.After(beforeTime) || writer.lastErrorCausedSafeModeTime.Equal(beforeTime))
+
+	// Reset for next test
+	writer.isInErrorCausedSafeMode = false
+
+	// Reset for next test
+	writer.isInErrorCausedSafeMode = false
+
+	// Test case 3: Wrap Error with "Duplicate entry" in message should return true
+	beforeTime = time.Now()
+	stringErr2 := fmt.Errorf("Error 1062: Duplicate entry 'test' for key 'PRIMARY'")
+	testErr := cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(stringErr2, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", "test sql", "test args")))
+	result = writer.checkIsDuplicateEntryError(testErr)
+
+	require.True(t, result)
+	require.True(t, writer.isInErrorCausedSafeMode)
+	require.True(t, writer.lastErrorCausedSafeModeTime.After(beforeTime) || writer.lastErrorCausedSafeModeTime.Equal(beforeTime))
+
+	// Reset for next test
+	writer.isInErrorCausedSafeMode = false
+
+	// Test case 4: Other errors should return false and not set safe mode
+	otherErr := fmt.Errorf("some other MySQL error")
+	result = writer.checkIsDuplicateEntryError(otherErr)
+
+	require.False(t, result)
+	require.False(t, writer.isInErrorCausedSafeMode)
+}
+
+func TestUpdateIsInErrorCausedSafeMode(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+
+	// Test case 1: When not in safe mode, should do nothing
+	writer.isInErrorCausedSafeMode = false
+	writer.updateIsInErrorCausedSafeMode()
+	require.False(t, writer.isInErrorCausedSafeMode)
+
+	// Test case 2: When in safe mode but time hasn't elapsed, should remain in safe mode
+	writer.isInErrorCausedSafeMode = true
+	writer.lastErrorCausedSafeModeTime = time.Now()
+	writer.errorCausedSafeModeDuration = 10 * time.Second
+
+	writer.updateIsInErrorCausedSafeMode()
+	require.True(t, writer.isInErrorCausedSafeMode)
+
+	// Test case 3: When in safe mode and time has elapsed, should exit safe mode
+	writer.isInErrorCausedSafeMode = true
+	writer.lastErrorCausedSafeModeTime = time.Now().Add(-15 * time.Second) // 15 seconds ago
+	writer.errorCausedSafeModeDuration = 10 * time.Second                  // 10 second duration
+
+	writer.updateIsInErrorCausedSafeMode()
+	require.False(t, writer.isInErrorCausedSafeMode)
+
+	// Test case 4: Edge case - exactly at the duration boundary should exit safe mode
+	writer.isInErrorCausedSafeMode = true
+	writer.lastErrorCausedSafeModeTime = time.Now().Add(-10*time.Second - time.Millisecond) // Just over 10 seconds ago
+	writer.errorCausedSafeModeDuration = 10 * time.Second
+
+	writer.updateIsInErrorCausedSafeMode()
+	require.False(t, writer.isInErrorCausedSafeMode)
 }

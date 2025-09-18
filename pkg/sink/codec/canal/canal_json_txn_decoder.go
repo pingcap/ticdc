@@ -21,6 +21,8 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
@@ -111,7 +113,10 @@ func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 	result.Length++                    // todo: set this field correctly
 	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
 	result.TableInfo = tableInfo
-	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
+	result.AddPostFlushFunc(func() {
+		chk.Destroy(1, tableInfo.GetFieldSlice())
+	})
 	result.CommitTs = msg.getCommitTs()
 
 	columns := tableInfo.GetColumns()
@@ -153,4 +158,19 @@ func (d *txnDecoder) NextResolvedEvent() uint64 {
 // NextDDLEvent implements the Decoder interface
 func (d *txnDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
+}
+
+func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
+	tableInfo := new(timodel.TableInfo)
+	tableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableInfo.ID)
+	tableInfo.Name = ast.NewCIStr(tableName)
+
+	columns := newTiColumns(msg)
+	tableInfo.Columns = columns
+	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
+	tableInfo.PKIsHandle = len(tableInfo.Indices) != 0
+	return commonType.NewTableInfo4Decoder(schemaName, tableInfo)
 }

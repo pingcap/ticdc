@@ -255,7 +255,7 @@ func TestCalculateMinResolvedTs(t *testing.T) {
 
 func Benchmark100KRegions(b *testing.B) {
 	ctx := context.Background()
-	startKey, endKey := common.GetTableRange(1)
+	startKey, endKey, _ := common.GetKeyspaceTableRange(common.DefaultKeyspaceID, 1)
 	l := NewRangeLock(1, startKey, endKey, 100)
 
 	for i := 1; i <= 100*1000; i++ {

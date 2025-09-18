@@ -122,6 +122,8 @@ var changefeedUnRetryableErrors = []*errors.Error{
 	ErrGCTTLExceeded,
 	ErrSnapshotLostByGC,
 	ErrStartTsBeforeGC,
+
+	ErrTableAfterDDLNotSplitable,
 }
 
 // ShouldFailChangefeed returns true if an error is a changefeed not retry error.

@@ -15,16 +15,20 @@ package middleware
 
 import (
 	"bufio"
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/api"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
 	"go.uber.org/zap"
@@ -213,5 +217,45 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 	if err != nil {
 		_ = c.Error(err)
 		return
+	}
+}
+
+// KeyspaceCheckerMiddleware check if the request keyspace is valid
+func KeyspaceCheckerMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// we not need to check keyspace for classic mode
+		// if the classic mode supports multiple keyspaces in future
+		// we need to remove this if block
+		if kerneltype.IsClassic() {
+			c.Next()
+			return
+		}
+
+		ks := c.Query(api.APIOpVarKeyspace)
+		if ks == "" {
+			c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+			c.Abort()
+			return
+		}
+
+		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+		meta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), ks)
+		if errors.IsKeyspaceNotExistError(err) {
+			c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+			c.Abort()
+			return
+		} else if err != nil {
+			c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
+			c.Abort()
+			return
+		}
+
+		if meta.State != keyspacepb.KeyspaceState_ENABLED {
+			c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+			c.Abort()
+			return
+		}
+
+		c.Next()
 	}
 }

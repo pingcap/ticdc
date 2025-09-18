@@ -27,9 +27,11 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
@@ -101,6 +103,7 @@ type PDAPIClient interface {
 	CollectMemberEndpoints(ctx context.Context) ([]string, error)
 	Healthy(ctx context.Context, endpoint string) error
 	ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]RegionInfo, error)
+	LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error)
 	Close()
 }
 
@@ -271,6 +274,13 @@ func (pc *pdAPIClient) scanRegions(
 	}
 
 	return regions, nil
+}
+
+func (pc *pdAPIClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error) {
+	if kerneltype.IsClassic() {
+		return &keyspacepb.KeyspaceMeta{}, nil
+	}
+	return pc.grpcClient.LoadKeyspace(ctx, name)
 }
 
 // ServiceSafePoint contains gc service safe point

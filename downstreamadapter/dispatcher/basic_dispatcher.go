@@ -108,9 +108,15 @@ The workflow related to the dispatcher is as follows:
 */
 
 type BasicDispatcher struct {
-	id        common.DispatcherID
-	schemaID  int64
+	id       common.DispatcherID
+	schemaID int64
+
 	tableSpan *heartbeatpb.TableSpan
+	// isCompleteTable indicates whether this dispatcher is responsible for a complete table
+	// or just a part of the table (span). When true, the dispatcher handles the entire table;
+	// when false, it only handles a portion of the table.
+	isCompleteTable bool
+
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
 	startTs            uint64
 	startTsIsSyncpoint bool
@@ -175,6 +181,7 @@ func NewBasicDispatcher(
 	dispatcher := &BasicDispatcher{
 		id:                    id,
 		tableSpan:             tableSpan,
+		isCompleteTable:       common.IsCompleteSpan(tableSpan),
 		startTs:               startTs,
 		startTsIsSyncpoint:    startTsIsSyncpoint,
 		sharedInfo:            sharedInfo,
@@ -417,6 +424,16 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				d.HandleError(err)
 				return block
 			}
+			// if the dispatcher is not for a complete table,
+			// we need to check whether the ddl event will break the splittability of this table
+			// if it breaks, we need to report the error to the maintainer.
+			if !d.isCompleteTable {
+				if !commonEvent.IsSplitable(ddl.TableInfo) && d.sharedInfo.enableSplittableCheck {
+					d.HandleError(errors.ErrTableAfterDDLNotSplitable.GenWithStackByArgs("unexpected ddl event; This ddl event will break splitable of this table. Only table with pk and no uk can be split."))
+					return block
+				}
+			}
+
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
@@ -579,7 +596,7 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
 				return true
 			}
-			if !common.IsCompleteSpan(d.tableSpan) {
+			if !d.isCompleteTable {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}
@@ -720,7 +737,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && d.tableSpan != common.DDLSpan {
+	if event.GetUpdatedSchemas() != nil && d.tableSpan != common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID) {
 		for _, schemaIDChange := range event.GetUpdatedSchemas() {
 			if schemaIDChange.TableID == d.tableSpan.TableID {
 				if schemaIDChange.OldSchemaID != d.schemaID {

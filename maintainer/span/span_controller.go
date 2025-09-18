@@ -76,6 +76,8 @@ type Controller struct {
 	ddlDispatcherID        common.DispatcherID
 	mode                   int64
 	enableSplittableCheck  bool
+
+	keyspaceID uint32
 }
 
 // NewController creates a new span controller
@@ -84,6 +86,7 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	keyspaceID uint32,
 	mode int64,
 ) *Controller {
 	c := &Controller{
@@ -96,6 +99,7 @@ func NewController(
 		mode:                   mode,
 		enableTableAcrossNodes: schedulerCfg != nil && schedulerCfg.EnableTableAcrossNodes,
 		enableSplittableCheck:  schedulerCfg != nil && schedulerCfg.EnableSplittableCheck,
+		keyspaceID:             keyspaceID,
 	}
 
 	c.reset(c.ddlSpan)
@@ -142,11 +146,15 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 			zap.Int64("table", table.TableID))
 		return
 	}
-	span := common.TableIDToComparableSpan(table.TableID)
+
+	keyspaceID := c.GetkeyspaceID()
+
+	span := common.TableIDToComparableSpan(keyspaceID, table.TableID)
 	tableSpan := &heartbeatpb.TableSpan{
-		TableID:  table.TableID,
-		StartKey: span.StartKey,
-		EndKey:   span.EndKey,
+		TableID:    table.TableID,
+		StartKey:   span.StartKey,
+		EndKey:     span.EndKey,
+		KeyspaceID: keyspaceID,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 
@@ -160,6 +168,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 // AddWorkingSpans adds working spans
 func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {
 	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *replica.SpanReplication) bool {
+		stm.Span.KeyspaceID = c.GetkeyspaceID()
 		c.AddReplicatingSpan(stm)
 		return true
 	})
@@ -170,6 +179,7 @@ func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
+		span.KeyspaceID = c.GetkeyspaceID()
 		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
@@ -551,4 +561,8 @@ func (c *Controller) GetAbsentForTest(limit int) []*replica.SpanReplication {
 	ret := c.GetAbsent()
 	limit = min(limit, len(ret))
 	return ret[:limit]
+}
+
+func (c Controller) GetkeyspaceID() uint32 {
+	return c.keyspaceID
 }
