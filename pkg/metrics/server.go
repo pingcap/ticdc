@@ -60,4 +60,5 @@ func InitServerMetrics(registry *prometheus.Registry) {
 		collectors.WithGoCollections(collectors.GoRuntimeMemStatsCollection | collectors.GoRuntimeMetricsCollection)))
 	registry.MustRegister(GoGC)
 	registry.MustRegister(GoMaxProcs)
+	InitNodeMetrics(registry)
 }
