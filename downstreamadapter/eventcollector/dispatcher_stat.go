@@ -365,7 +365,7 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 		return false
 	}
 	// check the invariant that handshake event is the first event of every epoch
-	if event.GetType() != commonEvent.TypeHandshakeEvent && d.epoch.Load() == 0 {
+	if event.GetType() != commonEvent.TypeHandshakeEvent && d.lastEventSeq.Load() == 0 {
 		log.Warn("receive non-handshake event before handshake event, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),

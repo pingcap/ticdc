@@ -183,6 +183,10 @@ func newTestEventCollector(localServerID node.ID) *EventCollector {
 	return New(localServerID)
 }
 
+func TestIgnoreHandshakeEvent(t *testing.T) {
+
+}
+
 func TestVerifyEventSequence(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -618,6 +622,93 @@ func TestHandleSignalEvent(t *testing.T) {
 			stat.handleSignalEvent(tt.event)
 			require.Equal(t, tt.expectedEventServiceID, stat.connState.getEventServiceID())
 			require.Equal(t, tt.expectedReadyReceived, stat.connState.readyEventReceived.Load())
+		})
+	}
+}
+
+func TestIsFromCurrentEpoch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		event          dispatcher.DispatcherEvent
+		epoch          uint64
+		lastEventSeq   uint64
+		expectedResult bool
+	}{
+		{
+			name: "first event is not handshake",
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeDMLEvent,
+					epoch:     1,
+				},
+			},
+			epoch:          1,
+			lastEventSeq:   0,
+			expectedResult: false,
+		},
+		{
+			name: "first event is handshake",
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeHandshakeEvent,
+					epoch:     1,
+				},
+			},
+			epoch:          1,
+			lastEventSeq:   0,
+			expectedResult: true,
+		},
+		{
+			name: "subsequent event with correct epoch",
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeDMLEvent,
+					epoch:     1,
+				},
+			},
+			epoch:          1,
+			lastEventSeq:   1,
+			expectedResult: true,
+		},
+		{
+			name: "stale epoch event",
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeDMLEvent,
+					epoch:     1,
+				},
+			},
+			epoch:          2, // dispatcher epoch is 2, event epoch is 1
+			lastEventSeq:   1,
+			expectedResult: false,
+		},
+		{
+			name: "batch dml with correct epoch",
+			event: dispatcher.DispatcherEvent{
+				Event: &commonEvent.BatchDMLEvent{
+					DMLEvents: []*commonEvent.DMLEvent{
+						{Epoch: 2},
+						{Epoch: 2},
+					},
+				},
+			},
+			epoch:          2,
+			lastEventSeq:   5,
+			expectedResult: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stat := &dispatcherStat{
+				target: newMockDispatcher(common.NewDispatcherID(), 0),
+			}
+			stat.epoch.Store(tt.epoch)
+			stat.lastEventSeq.Store(tt.lastEventSeq)
+			result := stat.isFromCurrentEpoch(tt.event)
+			require.Equal(t, tt.expectedResult, result)
 		})
 	}
 }
