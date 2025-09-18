@@ -42,8 +42,8 @@ import (
 
 var tableIDAllocator = common.NewTableIDAllocator()
 
-// decoder implement the Decoder interface
-type decoder struct {
+// Decoder implement the Decoder interface
+type Decoder struct {
 	config *common.Config
 
 	marshaller marshaller
@@ -84,7 +84,7 @@ func NewDecoder(
 
 	m, err := newMarshaller(config)
 	tableIDAllocator.Clean()
-	return &decoder{
+	return &Decoder{
 		config:     config,
 		marshaller: m,
 
@@ -97,7 +97,7 @@ func NewDecoder(
 }
 
 // AddKeyValue add the received key and values to the Decoder,
-func (d *decoder) AddKeyValue(_, value []byte) {
+func (d *Decoder) AddKeyValue(_, value []byte) {
 	if d.value != nil {
 		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
@@ -112,7 +112,7 @@ func (d *decoder) AddKeyValue(_, value []byte) {
 }
 
 // HasNext returns whether there is any event need to be consumed
-func (d *decoder) HasNext() (common.MessageType, bool) {
+func (d *Decoder) HasNext() (common.MessageType, bool) {
 	if d.value == nil {
 		return common.MessageTypeUnknown, false
 	}
@@ -137,7 +137,7 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 }
 
 // NextResolvedEvent returns the next resolved event if exists
-func (d *decoder) NextResolvedEvent() uint64 {
+func (d *Decoder) NextResolvedEvent() uint64 {
 	if d.msg.Type != MessageTypeWatermark {
 		log.Panic("message type is not watermark", zap.Any("messageType", d.msg.Type))
 	}
@@ -148,7 +148,7 @@ func (d *decoder) NextResolvedEvent() uint64 {
 }
 
 // NextDMLEvent returns the next dml event if exists
-func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
 		log.Panic("invalid data for the DML event", zap.Any("message", d.msg))
 	}
@@ -182,7 +182,7 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	return event
 }
 
-func (d *decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *commonEvent.DMLEvent {
+func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := d.storage.ReadFile(context.Background(), claimCheckFileName)
 	if err != nil {
@@ -214,7 +214,7 @@ func (d *decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *
 	return d.NextDMLEvent()
 }
 
-func (d *decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.DMLEvent {
+func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.DMLEvent {
 	tableInfo := d.memo.Read(m.Schema, m.Table, m.SchemaVersion)
 	if tableInfo == nil {
 		log.Debug("table info not found for the event, "+
@@ -263,7 +263,7 @@ func (d *decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.
 	return d.NextDMLEvent()
 }
 
-func (d *decoder) buildData(
+func (d *Decoder) buildData(
 	holder *common.ColumnsHolder, fieldTypeMap map[string]*types.FieldType, timezone string,
 ) map[string]interface{} {
 	columnsCount := holder.Length()
@@ -280,7 +280,7 @@ func (d *decoder) buildData(
 }
 
 // NextDDLEvent returns the next DDL event if exists
-func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
+func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if d.msg == nil {
 		log.Panic("msg is not set when parse the DDL event")
 	}
@@ -303,7 +303,7 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 }
 
 // GetCachedEvents returns the cached events
-func (d *decoder) GetCachedEvents() []*commonEvent.DMLEvent {
+func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
 	result := d.CachedRowChangedEvents
 	d.CachedRowChangedEvents = nil
 	return result
@@ -490,7 +490,7 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 	return commonType.NewTableInfo4Decoder(schema, tidbTableInfo)
 }
 
-func (d *decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
+func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	var (
 		tableInfo    *commonType.TableInfo
 		preTableInfo *commonType.TableInfo

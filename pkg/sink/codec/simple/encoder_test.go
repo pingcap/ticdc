@@ -60,7 +60,7 @@ func TestEncodeCheckpoint(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			dec.AddKeyValue(m.Key, m.Value)
@@ -101,7 +101,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(createTableDDL)
@@ -151,7 +151,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 
 	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	dec, ok := rowEventDecoder.(*decoder)
+	dec, ok := rowEventDecoder.(*Decoder)
 	require.True(t, ok)
 
 	m, err := enc.EncodeDDLEvent(createTableDDL)
@@ -369,7 +369,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(dropDBEvent)
@@ -805,7 +805,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(createTableDDLEvent)
@@ -953,7 +953,7 @@ func TestColumnFlags(t *testing.T) {
 
 		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
-		dec, ok := rowEventDecoder.(*decoder)
+		dec, ok := rowEventDecoder.(*Decoder)
 		require.True(t, ok)
 
 		dec.AddKeyValue(m.Key, m.Value)
@@ -1035,7 +1035,7 @@ func TestEncodeIntegerTypes(t *testing.T) {
 
 		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
-		dec, ok := rowEventDecoder.(*decoder)
+		dec, ok := rowEventDecoder.(*Decoder)
 		require.True(t, ok)
 
 		dec.AddKeyValue(m.Key, m.Value)
@@ -1114,7 +1114,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 
 		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
-		dec, ok := rowEventDecoder.(*decoder)
+		dec, ok := rowEventDecoder.(*Decoder)
 		require.True(t, ok)
 
 		dec.AddKeyValue(m.Key, m.Value)
@@ -1229,7 +1229,7 @@ func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
 		decodedDDL := dec.NextDDLEvent()
 		require.NotNil(t, decodedDDL)
 
-		cachedEvents := dec.(*decoder).GetCachedEvents()
+		cachedEvents := dec.(*Decoder).GetCachedEvents()
 		for idx, decodedRow := range cachedEvents {
 			require.NotNil(t, decodedRow)
 			require.NotNil(t, decodedRow.TableInfo)
@@ -1269,7 +1269,7 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 
 	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	dec, ok := rowEventDecoder.(*decoder)
+	dec, ok := rowEventDecoder.(*Decoder)
 	require.True(t, ok)
 
 	dec.AddKeyValue(messages[0].Key, messages[0].Value)
@@ -1342,7 +1342,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			dec.AddKeyValue(m.Key, m.Value)
@@ -1416,7 +1416,7 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(ddlEvent)
@@ -1568,7 +1568,7 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 
 				rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 				require.NoError(t, err)
-				dec, ok := rowEventDecoder.(*decoder)
+				dec, ok := rowEventDecoder.(*Decoder)
 				require.True(t, ok)
 
 				dec.AddKeyValue(m.Key, m.Value)
@@ -1645,7 +1645,7 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, db)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			enc.(*Encoder).config.MaxMessageBytes = 500
@@ -1740,7 +1740,7 @@ func TestMarshallerError(t *testing.T) {
 
 	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	dec, ok := rowEventDecoder.(*decoder)
+	dec, ok := rowEventDecoder.(*Decoder)
 	require.True(t, ok)
 	dec.marshaller = mockMarshaller
 
