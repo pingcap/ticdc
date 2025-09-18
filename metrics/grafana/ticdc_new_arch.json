@@ -3030,66 +3030,6 @@
       "id": 11,
       "panels": [
         {
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "List of all alive TiCDC server node IDs and their addresses",
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto"
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 6,
-            "w": 12,
-            "x": 0,
-            "y": 23
-          },
-          "id": 20001,
-          "options": {
-            "showHeader": true,
-            "sortBy": [
-              {
-                "desc": false,
-                "displayName": "node_id"
-              }
-            ]
-          },
-          "pluginVersion": "7.5.17",
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "ticdc_server_node_info",
-              "format": "table",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "",
-              "refId": "A"
-            }
-          ],
-          "title": "TiCDC Server Nodes",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "Value": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "node_id": "Node ID",
-                  "address": "Address"
-                }
-              }
-            }
-          ],
-          "type": "table"
-        },
-        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,

@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -121,8 +120,6 @@ func (c *NodeManager) Tick(
 
 	if changed {
 		log.Info("server change detected")
-		// update node metrics
-		c.updateNodeMetrics(allNodes)
 		// handle info change event
 		c.nodeChangeHandlers.RLock()
 		defer c.nodeChangeHandlers.RUnlock()
@@ -188,15 +185,4 @@ func (c *NodeManager) RegisterOwnerChangeHandler(leaseID string, handler OwnerCh
 
 func (c *NodeManager) Close(_ context.Context) error {
 	return nil
-}
-
-// updateNodeMetrics updates the node metrics based on current alive nodes
-func (c *NodeManager) updateNodeMetrics(allNodes map[node.ID]*node.Info) {
-	// First, clear all existing metrics
-	metrics.ServerNodeInfo.Reset()
-
-	// Then, set metrics for all alive nodes
-	for nodeID, info := range allNodes {
-		metrics.ServerNodeInfo.WithLabelValues(string(nodeID), info.AdvertiseAddr).Set(1)
-	}
 }
