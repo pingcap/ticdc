@@ -33,12 +33,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -66,6 +68,7 @@ type Maintainer struct {
 	selfNode   *node.Info
 	controller *Controller
 
+	pdClock pdutil.Clock
 	eventCh *chann.DrainableChann[*Event]
 
 	mc messaging.MessageCenter
@@ -138,7 +141,13 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
-	cancel              context.CancelFunc
+	cancel context.CancelFunc
+
+	changefeedCheckpointTsGauge    prometheus.Gauge
+	changefeedCheckpointTsLagGauge prometheus.Gauge
+	changefeedResolvedTsGauge      prometheus.Gauge
+	changefeedResolvedTsLagGauge   prometheus.Gauge
+
 	scheduledTaskGauge  prometheus.Gauge
 	spanCountGauge      prometheus.Gauge
 	tableCountGauge     prometheus.Gauge
@@ -168,6 +177,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	if enableRedo {
 		_, redoDDLSpan = newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.RedoMode)
 	}
+
+	var (
+		keyspace = cfID.Keyspace()
+		name     = cfID.Name()
+	)
 	m := &Maintainer{
 		id:                cfID,
 		selfNode:          selfNode,
@@ -181,6 +195,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		closedNodes:           make(map[node.ID]struct{}),
 		statusChanged:         atomic.NewBool(true),
 		info:                  info,
+		pdClock:               appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		ddlSpan:               ddlSpan,
 		redoDDLSpan:           redoDDLSpan,
 		checkpointTsByCapture: newWatermarkCaptureMap(),
@@ -188,14 +203,19 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		newChangefeed:         newChangefeed,
 		enableRedo:            enableRedo,
 
-		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "default"),
-		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "default"),
-		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "default"),
-		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name),
+		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name),
+		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(keyspace, name),
+		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(keyspace, name),
 
-		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "redo"),
-		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "redo"),
-		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "redo"),
+		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspace, name, "default"),
+		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspace, name, "default"),
+		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(keyspace, name, "default"),
+		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(keyspace, name),
+
+		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspace, name, "redo"),
+		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspace, name, "redo"),
+		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspace, name, "redo"),
 	}
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
@@ -215,7 +235,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		m.createBootstrapMessageFactory(),
 	)
 
-	metrics.MaintainerGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()).Inc()
+	metrics.MaintainerGauge.WithLabelValues(keyspace, name).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 
@@ -370,15 +390,16 @@ func (m *Maintainer) initialize() error {
 }
 
 func (m *Maintainer) cleanupMetrics() {
-	// the changefeed is paused, should not delete the metrics
-	if m.changefeedRemoved.Load() {
-		keyspace := m.id.Keyspace()
-		id := m.id.Name()
-		metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, id)
-		metrics.SpanCountGauge.DeleteLabelValues(keyspace, id)
-		metrics.TableCountGauge.DeleteLabelValues(keyspace, id)
-		metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, id)
-	}
+	keyspace := m.id.Keyspace()
+	name := m.id.Name()
+	metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(keyspace, name)
+	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
+	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(keyspace, name)
+	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name)
+	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name)
+	metrics.TableCountGauge.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
 }
 
 func (m *Maintainer) onInit() bool {
@@ -620,8 +641,24 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
 			)
 			m.setWatermark(*newWatermark)
+			m.updateMetrics()
 		}
 	}
+}
+
+func (m *Maintainer) updateMetrics() {
+	watermark := m.getWatermark()
+
+	pdPhysicalTime := oracle.GetPhysical(m.pdClock.CurrentTime())
+	phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
+	m.changefeedCheckpointTsGauge.Set(float64(phyCkpTs))
+	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
+	m.changefeedCheckpointTsLagGauge.Set(lag)
+
+	phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
+	m.changefeedResolvedTsGauge.Set(float64(phyResolvedTs))
+	lag = float64(pdPhysicalTime-phyResolvedTs) / 1e3
+	m.changefeedResolvedTsLagGauge.Set(lag)
 }
 
 // send message to other components
