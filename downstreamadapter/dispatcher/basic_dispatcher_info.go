@@ -148,12 +148,12 @@ func (d *BasicDispatcher) GetStartTs() uint64 {
 	return d.startTs
 }
 
-func (d *BasicDispatcher) SetStartTsIsSyncpoint(startTsIsSyncpoint bool) {
-	d.startTsIsSyncpoint = startTsIsSyncpoint
+func (d *BasicDispatcher) SetSkipSyncpointSameAsStartTs(skipSyncpointSameAsStartTs bool) {
+	d.skipSyncpointSameAsStartTs = skipSyncpointSameAsStartTs
 }
 
-func (d *BasicDispatcher) GetStartTsIsSyncpoint() bool {
-	return d.startTsIsSyncpoint
+func (d *BasicDispatcher) GetSkipSyncpointSameAsStartTs() bool {
+	return d.skipSyncpointSameAsStartTs
 }
 
 func (d *BasicDispatcher) GetSyncPointInterval() time.Duration {

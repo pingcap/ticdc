@@ -83,7 +83,7 @@ func (m *mockEventDispatcher) GetSyncPointInterval() time.Duration {
 	return time.Second
 }
 
-func (m *mockEventDispatcher) GetStartTsIsSyncpoint() bool {
+func (m *mockEventDispatcher) GetSkipSyncpointSameAsStartTs() bool {
 	return false
 }
 

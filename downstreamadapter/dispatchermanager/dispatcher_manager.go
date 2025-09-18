@@ -364,9 +364,9 @@ func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int6
 		newStartTsList []int64
 		err            error
 	)
-	startTsIsSyncpointList := make([]bool, len(startTsList))
+	skipSyncpointSameAsStartTsList := make([]bool, len(startTsList))
 	if e.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, startTsIsSyncpointList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
+		newStartTsList, skipSyncpointSameAsStartTsList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -379,7 +379,7 @@ func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int6
 	} else {
 		newStartTsList = startTsList
 	}
-	return newStartTsList, startTsIsSyncpointList, nil
+	return newStartTsList, skipSyncpointSameAsStartTsList, nil
 }
 
 // removeDDLTs means we don't need to check startTs from ddl_ts_table when sink is mysql-class,
@@ -408,7 +408,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 	// If there is a ddl event and a syncpoint event at the same time, we ensure the syncpoint event always after the ddl event.
 	// So we need to know whether the commitTs is from a syncpoint event or a ddl event,
 	// to decide whether we need to send generate the syncpoint event of this commitTs to downstream.
-	newStartTsList, startTsIsSyncpointList, err := e.getStartTsFromMysqlSink(tableIds, startTsList, removeDDLTs)
+	newStartTsList, skipSyncpointSameAsStartTsList, err := e.getStartTsFromMysqlSink(tableIds, startTsList, removeDDLTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -431,7 +431,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			uint64(newStartTsList[idx]),
 			schemaIds[idx],
 			e.schemaIDToDispatchers,
-			startTsIsSyncpointList[idx],
+			skipSyncpointSameAsStartTsList[idx],
 			currentPdTs,
 			e.sink,
 			e.sharedInfo,

@@ -639,7 +639,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse
 			FilterConfig:         d.target.GetFilterConfig(),
 			EnableSyncPoint:      d.target.EnableSyncPoint(),
 			SyncPointInterval:    uint64(syncPointInterval.Seconds()),
-			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
+			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetSkipSyncpointSameAsStartTs()),
 			OnlyReuse:            onlyReuse,
 			BdrMode:              d.target.GetBDRMode(),
 			Mode:                 d.target.GetMode(),
@@ -658,7 +658,7 @@ func (d *dispatcherStat) newDispatcherResetRequest(serverId string, resetTs uint
 	// so we just take care of the case that resetTs is same as startTs
 	skipSyncpointSameAsResetTs := false
 	if resetTs == d.target.GetStartTs() {
-		skipSyncpointSameAsResetTs = d.target.GetStartTsIsSyncpoint()
+		skipSyncpointSameAsResetTs = d.target.GetSkipSyncpointSameAsStartTs()
 	}
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
