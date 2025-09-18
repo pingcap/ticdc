@@ -15,17 +15,22 @@ package eventservice
 
 import (
 	"testing"
+	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 func TestNewDispatcherStat(t *testing.T) {
 	t.Parallel()
 
-	startTs := uint64(50)
+	now := time.Now()
+	startTs := oracle.GoTimeToTS(now.Add(-2 * time.Second))
+	syncPointInterval := time.Second * 10
 	// Mock dispatcher info
 	info := newMockDispatcherInfo(
 		t,
@@ -34,14 +39,22 @@ func TestNewDispatcherStat(t *testing.T) {
 		1,
 		eventpb.ActionType_ACTION_TYPE_REGISTER,
 	)
+	info.enableSyncPoint = true
+	info.nextSyncPoint = syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, false)
+	info.syncPointInterval = syncPointInterval
 
 	workerCount := uint64(1)
 	status := newChangefeedStatus(info.GetChangefeedID())
 	stat := newDispatcherStat(info, workerCount, workerCount, nil, status)
 
 	require.Equal(t, info.GetID(), stat.id)
+	require.Equal(t, 0, stat.scanWorkerIndex)
 	require.Equal(t, 0, stat.messageWorkerIndex)
 	require.Equal(t, startTs, stat.startTs)
+	require.Equal(t, uint64(0), stat.epoch)
+	require.True(t, stat.enableSyncPoint)
+	require.Equal(t, uint64(0), stat.nextSyncPoint)
+	require.Equal(t, syncPointInterval, stat.syncPointInterval)
 	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
@@ -51,42 +64,40 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, info.GetSyncPointInterval(), stat.syncPointInterval)
 }
 
-// func TestResetSyncpoint(t *testing.T) {
-// 	t.Parallel()
+func TestResetSyncpoint(t *testing.T) {
+	t.Parallel()
 
-// 	now := time.Now()
-// 	firstSyncPoint := oracle.GoTimeToTS(now)
-// 	syncPointInterval := time.Second * 10
-// 	secondSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(syncPointInterval))
-// 	thirdSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(2 * syncPointInterval))
-// 	startTs := oracle.GoTimeToTS(now.Add(-2 * time.Second))
+	firstSyncPoint := oracle.GoTimeToTS(now)
 
-// 	{
-// 		info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-// 		info.enableSyncPoint = true
-// 		info.nextSyncPoint = syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, false)
-// 		info.syncPointInterval = syncPointInterval
-// 		status := newChangefeedStatus(info.GetChangefeedID())
-// 		stat := newDispatcherStat(info, 1, 1, nil, status)
-// 		require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
-// 	}
+	secondSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(syncPointInterval))
+	thirdSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(2 * syncPointInterval))
 
-// 	{
-// 		info := newMockDispatcherInfo(t, firstSyncPoint+1, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-// 		info.enableSyncPoint = true
-// 		info.nextSyncPoint = firstSyncPoint
-// 		info.syncPointInterval = syncPointInterval
-// 		status := newChangefeedStatus(info.GetChangefeedID())
-// 		stat := newDispatcherStat(info, 1, 1, nil, status)
-// 		require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
-// 	}
+	{
+		info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+		info.enableSyncPoint = true
+		info.nextSyncPoint = syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, false)
+		info.syncPointInterval = syncPointInterval
+		status := newChangefeedStatus(info.GetChangefeedID())
+		stat := newDispatcherStat(info, 1, 1, nil, status)
+		require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
+	}
 
-// 	require.Equal(t, thirdSyncPoint, stat.nextSyncPoint.Load())
-// 	stat.resetState(secondSyncPoint - 1)
-// 	require.Equal(t, secondSyncPoint, stat.nextSyncPoint.Load())
-// 	stat.resetState(startTs)
-// 	require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
-// }
+	{
+		info := newMockDispatcherInfo(t, firstSyncPoint+1, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_RESET)
+		info.enableSyncPoint = true
+		info.syncPointInterval = syncPointInterval
+		status := newChangefeedStatus(info.GetChangefeedID())
+		stat := newDispatcherStat(info, 1, 1, nil, status)
+		stat.recalculateFirstSyncpoint()
+		require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
+	}
+
+	require.Equal(t, thirdSyncPoint, stat.nextSyncPoint.Load())
+	stat.resetState(secondSyncPoint - 1)
+	require.Equal(t, secondSyncPoint, stat.nextSyncPoint.Load())
+	stat.resetState(startTs)
+	require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
+}
 
 func TestDispatcherStatResolvedTs(t *testing.T) {
 	t.Parallel()

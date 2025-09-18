@@ -1078,7 +1078,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	status := c.getOrSetChangefeedStatus(changefeedID)
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
-	newStat.recalculateFirstSyncpoint(oldStat.nextSyncPoint.Load())
 
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {

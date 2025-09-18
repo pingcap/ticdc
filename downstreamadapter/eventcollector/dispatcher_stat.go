@@ -665,9 +665,8 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64)
 			FilterConfig:      d.target.GetFilterConfig(),
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
-			// Note: it is hard to calculate the next sync point ts based on resetTs
-			//       because we don't have similar functionality like `d.target.GetStartTsIsSyncpoint()` for resetTs.
-			SyncPointTs: 0,
+			// Note: after reset, we can filter reduduant syncpoint at event collector side
+			SyncPointTs: syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, false),
 			// OnlyReuse:         false,
 			BdrMode:              d.target.GetBDRMode(),
 			Mode:                 d.target.GetMode(),
