@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test", common.DefaultKeyspace)
@@ -42,6 +43,8 @@ type mockDispatcher struct {
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
+
+	skipSyncpointSameAsStartTs bool
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -92,7 +95,7 @@ func (m *mockDispatcher) GetSyncPointInterval() time.Duration {
 }
 
 func (m *mockDispatcher) GetSkipSyncpointSameAsStartTs() bool {
-	return false
+	return m.skipSyncpointSameAsStartTs
 }
 
 func (m *mockDispatcher) GetResolvedTs() uint64 {
@@ -1107,5 +1110,47 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 				require.Equal(t, tt.want, got)
 			}
 		})
+	}
+}
+
+func TestNewDispatcherResetRequest(t *testing.T) {
+	syncPointInterval := 10 * time.Second
+	startTs := oracle.GoTimeToTS(time.Unix(0, 0).Add(1000 * syncPointInterval))
+	nextSyncpointTs := oracle.GoTimeToTS(time.Unix(0, 0).Add(1001 * syncPointInterval))
+
+	// case 1: reset at startTs, skipSyncpointSameAsStartTs is true
+	{
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), startTs)
+		mockDisp.skipSyncpointSameAsStartTs = true
+		stat := newDispatcherStat(mockDisp, nil, nil)
+		resetReq := stat.newDispatcherResetRequest("local", startTs, 1)
+		require.Equal(t, nextSyncpointTs, resetReq.SyncPointTs)
+	}
+
+	// case 2: reset at startTs, skipSyncpointSameAsStartTs is false
+	{
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), startTs)
+		mockDisp.skipSyncpointSameAsStartTs = false
+		stat := newDispatcherStat(mockDisp, nil, nil)
+		resetReq := stat.newDispatcherResetRequest("local", startTs, 1)
+		require.Equal(t, startTs, resetReq.SyncPointTs)
+	}
+
+	// case 3: reset at nextSyncpointTs, skipSyncpointSameAsStartTs is true
+	{
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), startTs)
+		mockDisp.skipSyncpointSameAsStartTs = true
+		stat := newDispatcherStat(mockDisp, nil, nil)
+		resetReq := stat.newDispatcherResetRequest("local", nextSyncpointTs, 1)
+		require.Equal(t, nextSyncpointTs, resetReq.SyncPointTs)
+	}
+
+	// case 4: reset at nextSyncpointTs, skipSyncpointSameAsStartTs is false
+	{
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), startTs)
+		mockDisp.skipSyncpointSameAsStartTs = false
+		stat := newDispatcherStat(mockDisp, nil, nil)
+		resetReq := stat.newDispatcherResetRequest("local", nextSyncpointTs, 1)
+		require.Equal(t, nextSyncpointTs, resetReq.SyncPointTs)
 	}
 }
