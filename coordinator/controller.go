@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -171,6 +172,8 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	for {
 		select {
 		case <-ctx.Done():
@@ -181,6 +184,21 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 			metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
+
+			c.changefeedDB.Foreach(func(c *changefeed.Changefeed) {
+				info := c.GetInfo()
+				keyspace := info.ChangefeedID.Keyspace()
+				name := info.ChangefeedID.Name()
+
+				physicalTime := oracle.GetPhysical(pdClock.CurrentTime())
+
+				phyCkpTs := oracle.ExtractPhysical(c.GetLastSavedCheckPointTs())
+				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
+				lag := float64(physicalTime-phyCkpTs) / 1e3
+				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+
+				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
+			})
 		}
 	}
 }

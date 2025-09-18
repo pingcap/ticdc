@@ -221,6 +221,15 @@ func (db *ChangefeedDB) GetByChangefeedDisplayName(displayName common.ChangeFeed
 	return db.changefeeds[db.changefeedDisplayNames[displayName]]
 }
 
+func (db *ChangefeedDB) Foreach(fn func(*Changefeed)) {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+
+	for _, cf := range db.changefeeds {
+		fn(cf)
+	}
+}
+
 // MoveToSchedulingQueue moves a changefeed to the absent map, and waiting for scheduling
 func (db *ChangefeedDB) MoveToSchedulingQueue(
 	id common.ChangeFeedID,
