@@ -618,7 +618,11 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		// calculate the new checkpoint ts of the subscription
 		var newCheckpointTs uint64
 		for id := range subStat.dispatchers.subscribers {
-			dispatcherStat := e.dispatcherMeta.dispatcherStats[id]
+			dispatcherStat, ok := e.dispatcherMeta.dispatcherStats[id]
+			if !ok {
+				continue
+			}
+
 			if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
 				newCheckpointTs = dispatcherStat.checkpointTs
 			}
