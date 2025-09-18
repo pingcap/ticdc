@@ -294,6 +294,7 @@ func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.Chang
 	if err != nil {
 		return errors.Trace(err)
 	}
+
 	status.Progress = progress
 	jobValue, err := status.Marshal()
 	if err != nil {
