@@ -28,8 +28,7 @@ import (
 func TestNewDispatcherStat(t *testing.T) {
 	t.Parallel()
 
-	now := time.Now()
-	startTs := oracle.GoTimeToTS(now.Add(-2 * time.Second))
+	startTs := oracle.GoTimeToTS(time.Now())
 	syncPointInterval := time.Second * 10
 	// Mock dispatcher info
 	info := newMockDispatcherInfo(
@@ -53,50 +52,12 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, startTs, stat.startTs)
 	require.Equal(t, uint64(0), stat.epoch)
 	require.True(t, stat.enableSyncPoint)
-	require.Equal(t, uint64(0), stat.nextSyncPoint)
+	require.Equal(t, info.nextSyncPoint, stat.nextSyncPoint.Load())
 	require.Equal(t, syncPointInterval, stat.syncPointInterval)
 	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
 	require.True(t, stat.isReadyReceivingData.Load())
-	require.False(t, stat.enableSyncPoint)
-	require.Equal(t, info.GetSyncPointTs(), stat.nextSyncPoint.Load())
-	require.Equal(t, info.GetSyncPointInterval(), stat.syncPointInterval)
-}
-
-func TestResetSyncpoint(t *testing.T) {
-	t.Parallel()
-
-	firstSyncPoint := oracle.GoTimeToTS(now)
-
-	secondSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(syncPointInterval))
-	thirdSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(2 * syncPointInterval))
-
-	{
-		info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-		info.enableSyncPoint = true
-		info.nextSyncPoint = syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, false)
-		info.syncPointInterval = syncPointInterval
-		status := newChangefeedStatus(info.GetChangefeedID())
-		stat := newDispatcherStat(info, 1, 1, nil, status)
-		require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
-	}
-
-	{
-		info := newMockDispatcherInfo(t, firstSyncPoint+1, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_RESET)
-		info.enableSyncPoint = true
-		info.syncPointInterval = syncPointInterval
-		status := newChangefeedStatus(info.GetChangefeedID())
-		stat := newDispatcherStat(info, 1, 1, nil, status)
-		stat.recalculateFirstSyncpoint()
-		require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
-	}
-
-	require.Equal(t, thirdSyncPoint, stat.nextSyncPoint.Load())
-	stat.resetState(secondSyncPoint - 1)
-	require.Equal(t, secondSyncPoint, stat.nextSyncPoint.Load())
-	stat.resetState(startTs)
-	require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
 }
 
 func TestDispatcherStatResolvedTs(t *testing.T) {
@@ -122,26 +83,39 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
 	stat := newDispatcherStat(info, 1, 1, nil, status)
-	stat.eventStoreResolvedTs.Store(200)
+	stat.setHandshaked()
 
-	// Normal case
+	// case 1: get range after resolved ts update
+	stat.onResolvedTs(200)
 	r, ok := stat.getDataRange()
 	require.True(t, ok)
 	require.Equal(t, uint64(100), r.CommitTsStart)
+	require.Equal(t, uint64(0), r.LastScannedTxnStartTs)
 	require.Equal(t, uint64(200), r.CommitTsEnd)
 	require.Equal(t, info.GetTableSpan(), r.Span)
 
-	// When watermark equals resolvedTs
-	stat.setHandshaked()
+	// case 2: get range after scan range update
+	stat.updateScanRange(130, 120)
+	r, ok = stat.getDataRange()
+	require.True(t, ok)
+	require.Equal(t, uint64(130), r.CommitTsStart)
+	require.Equal(t, uint64(120), r.LastScannedTxnStartTs)
+	require.Equal(t, uint64(200), r.CommitTsEnd)
+	require.Equal(t, info.GetTableSpan(), r.Span)
+
+	// case 3: get range after sent resolved ts update
 	stat.updateSentResolvedTs(200)
 	r, ok = stat.getDataRange()
 	require.False(t, ok)
 
-	// When reset, the data range should be start from the reset ts.
-	stat.startTs = 150
+	// case 4: get range after resolved ts update again
+	stat.onResolvedTs(300)
 	r, ok = stat.getDataRange()
 	require.True(t, ok)
-	require.Equal(t, uint64(150), r.CommitTsStart)
+	require.Equal(t, uint64(200), r.CommitTsStart)
+	require.Equal(t, uint64(0), r.LastScannedTxnStartTs)
+	require.Equal(t, uint64(300), r.CommitTsEnd)
+	require.Equal(t, info.GetTableSpan(), r.Span)
 }
 
 func TestDispatcherStatUpdateWatermark(t *testing.T) {

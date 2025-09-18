@@ -64,7 +64,7 @@ func TestCheckNeedScan(t *testing.T) {
 
 	info := newMockDispatcherInfoForTest(t)
 	info.startTs = 100
-	disp := newDispatcherStat(info, 0, 0, nil, changefeedStatus)
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	// Set the eventStoreResolvedTs and eventStoreCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
 	disp.eventStoreResolvedTs.Store(102)
@@ -85,7 +85,7 @@ func TestCheckNeedScan(t *testing.T) {
 	require.Equal(t, event.TypeReadyEvent, e.msgType)
 	log.Info("Pass case 2")
 
-	// Case 3: ResetTs is not 0, it should return true.
+	// Case 3: epoch is not 0, it should return true.
 	// And we can get a scan task.
 	// And the task.scanning should be true.
 	// And the broker will send a handshake event.
@@ -117,9 +117,10 @@ func TestOnNotify(t *testing.T) {
 
 	disp := broker.getDispatcher(disInfo.GetID()).Load()
 	require.NotNil(t, disp)
-	require.Equal(t, disp, disInfo.GetID())
+	require.Equal(t, disInfo.GetID(), disp.id)
 
-	broker.resetDispatcher(disInfo)
+	err = broker.resetDispatcher(disInfo)
+	require.Nil(t, err)
 	require.Equal(t, disp.isReadyReceivingData.Load(), true)
 	require.Equal(t, disp.lastScannedCommitTs.Load(), uint64(100))
 	require.Equal(t, disp.lastScannedStartTs.Load(), uint64(0))
@@ -179,14 +180,17 @@ func TestCURDDispatcher(t *testing.T) {
 
 	dispInfo := newMockDispatcherInfoForTest(t)
 	// Case 1: Add and get a dispatcher.
-	broker.addDispatcher(dispInfo)
+	err := broker.addDispatcher(dispInfo)
+	require.Nil(t, err)
 	disp := broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 
 	// Case 2: Reset a dispatcher.
 	dispInfo.startTs = 1002
-	broker.resetDispatcher(dispInfo)
+	dispInfo.epoch = 2
+	err = broker.resetDispatcher(dispInfo)
+	require.Nil(t, err)
 	disp = broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
@@ -207,8 +211,8 @@ func TestCURDDispatcher(t *testing.T) {
 
 	// Case 5: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
-	disp = broker.getDispatcher(dispInfo.GetID()).Load()
-	require.Nil(t, disp)
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.Nil(t, dispPtr)
 }
 
 func TestHandleResolvedTs(t *testing.T) {
@@ -216,7 +220,8 @@ func TestHandleResolvedTs(t *testing.T) {
 	defer broker.close()
 
 	dispInfo := newMockDispatcherInfoForTest(t)
-	broker.addDispatcher(dispInfo)
+	err := broker.addDispatcher(dispInfo)
+	require.Nil(t, err)
 	disp := broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())

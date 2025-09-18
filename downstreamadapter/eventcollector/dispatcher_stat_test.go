@@ -1109,3 +1109,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 		})
 	}
 }
+
+func TestNewDispatcherResetRequest(t *testing.T) {
+
+}
