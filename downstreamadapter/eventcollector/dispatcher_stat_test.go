@@ -94,11 +94,7 @@ func (m *mockDispatcher) GetSyncPointInterval() time.Duration {
 	return time.Second * 10
 }
 
-<<<<<<< HEAD
-func (m *mockDispatcher) GetStartTsIsSyncpoint() bool {
-=======
 func (m *mockDispatcher) GetSkipSyncpointSameAsStartTs() bool {
->>>>>>> master
 	return m.skipSyncpointSameAsStartTs
 }
 
