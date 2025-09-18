@@ -204,11 +204,13 @@ func (c *coordinator) run(ctx context.Context) error {
 	failpoint.Inject("InjectUpdateGCTickerInterval", func(val failpoint.Value) {
 		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
-	gcTick := time.NewTicker(updateGCTickerInterval)
 
-	defer gcTick.Stop()
+	gcTicker := time.NewTicker(updateGCTickerInterval)
 	updateMetricsTicker := time.NewTicker(time.Second * 1)
-	defer updateMetricsTicker.Stop()
+	defer func() {
+		gcTicker.Stop()
+		updateMetricsTicker.Stop()
+	}()
 
 	failpoint.Inject("coordinator-run-with-error", func() error {
 		return errors.New("coordinator run with error")
@@ -217,7 +219,7 @@ func (c *coordinator) run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-gcTick.C:
+		case <-gcTicker.C:
 			if err := c.updateGCSafepoint(ctx); err != nil {
 				log.Warn("update gc safepoint failed",
 					zap.Error(err))
@@ -307,32 +309,37 @@ func (c *coordinator) handleStateChange(
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
 func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.ChangeFeedID, reportedCheckpointTs uint64) {
 	err := c.gcManager.CheckStaleCheckpointTs(ctx, id, reportedCheckpointTs)
+	if err == nil {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err != nil {
-		errCode, _ := errors.RFCCode(err)
-		state := config.StateWarning
-		if errors.IsChangefeedGCFastFailErrorCode(errCode) {
-			state = config.StateFailed
-		}
-		change := &ChangefeedChange{
-			changefeedID: id,
-			state:        state,
-			err: &config.RunningError{
-				Code:    string(errCode),
-				Message: err.Error(),
-			},
-			changeType: ChangeState,
-		}
-		select {
-		case <-ctx.Done():
-			log.Warn("Failed to send state change event to stateChangedCh since context timeout, "+
-				"there may be a lot of state need to be handled. Try next time",
-				zap.String("changefeed", id.String()),
-				zap.Error(ctx.Err()))
-			return
-		case c.changefeedChangeCh <- []*ChangefeedChange{change}:
-		}
+
+	errCode, _ := errors.RFCCode(err)
+	state := config.StateWarning
+	if errors.IsChangefeedGCFastFailErrorCode(errCode) {
+		state = config.StateFailed
+	}
+
+	change := &ChangefeedChange{
+		changefeedID: id,
+		state:        state,
+		err: &config.RunningError{
+			Code:    string(errCode),
+			Message: err.Error(),
+		},
+		changeType: ChangeState,
+	}
+
+	select {
+	case <-ctx.Done():
+		log.Warn("Failed to send state change event to stateChangedCh since context timeout, "+
+			"there may be a lot of state need to be handled. Try next time",
+			zap.String("changefeed", id.String()),
+			zap.Error(ctx.Err()))
+		return
+	case c.changefeedChangeCh <- []*ChangefeedChange{change}:
 	}
 }
 
