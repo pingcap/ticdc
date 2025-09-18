@@ -566,42 +566,42 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	// item, ok := c.changefeedMap.Load(changefeedID)
-	// if !ok {
-	// 	log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
-	// }
+	item, ok := c.changefeedMap.Load(changefeedID)
+	if !ok {
+		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
+	}
 
-	// status := item.(*changefeedStatus)
-	// item, ok = status.availableMemoryQuota.Load(remoteID)
-	// if !ok {
-	// 	log.Info("available memory quota is not set, skip scan",
-	// 		zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
-	// 	return
-	// }
-	// available := item.(*atomic.Uint64)
+	status := item.(*changefeedStatus)
+	item, ok = status.availableMemoryQuota.Load(remoteID)
+	if !ok {
+		log.Info("available memory quota is not set, skip scan",
+			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+		return
+	}
+	available := item.(*atomic.Uint64)
 
-	// if available.Load() < c.scanLimitInBytes {
-	// 	task.resetScanLimit()
-	// }
+	if available.Load() < c.scanLimitInBytes {
+		task.resetScanLimit()
+	}
 
 	sl := c.calculateScanLimit(task)
-	// ok = allocQuota(available, uint64(sl.maxDMLBytes))
-	// if !ok {
-	// 	log.Debug("not enough memory quota, skip scan",
-	// 		zap.String("changefeed", changefeedID.String()),
-	// 		zap.String("remote", remoteID.String()),
-	// 		zap.Uint64("available", available.Load()),
-	// 		zap.Uint64("required", uint64(sl.maxDMLBytes)))
-	// 	return
-	// }
+	ok = allocQuota(available, uint64(sl.maxDMLBytes))
+	if !ok {
+		log.Debug("not enough memory quota, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available.Load()),
+			zap.Uint64("required", uint64(sl.maxDMLBytes)))
+		return
+	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
-	// if scannedBytes < 0 {
-	// 	releaseQuota(available, uint64(sl.maxDMLBytes))
-	// } else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
-	// 	releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
-	// }
+	if scannedBytes < 0 {
+		releaseQuota(available, uint64(sl.maxDMLBytes))
+	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
+		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	}
 
 	if err != nil {
 		log.Error("scan events failed",
