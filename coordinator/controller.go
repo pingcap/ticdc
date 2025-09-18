@@ -198,6 +198,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
 
 				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
+				log.Info("record changefeed level metrics", zap.String("keyspace", keyspace), zap.String("name", name))
 			})
 		}
 	}
