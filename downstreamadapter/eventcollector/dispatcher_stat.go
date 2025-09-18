@@ -361,7 +361,19 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 			}
 		}
 	}
-	return event.GetEpoch() == d.epoch.Load()
+	if event.GetEpoch() != d.epoch.Load() {
+		return false
+	}
+	// check the invariant that handshake event is the first event of every epoch
+	if event.GetType() != commonEvent.TypeHandshakeEvent && d.epoch.Load() == 0 {
+		log.Warn("receive non-handshake event before handshake event, ignore it",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("from", event.From),
+			zap.Any("event", event.Event))
+		return false
+	}
+	return true
 }
 
 // handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
