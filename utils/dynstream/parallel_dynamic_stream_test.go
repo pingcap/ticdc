@@ -162,9 +162,6 @@ func TestParallelDynamicStreamStress(t *testing.T) {
 	handlers := make([]*mockHandler, streamCount)
 	done := make(chan struct{})
 
-	// Track panics to ensure they're handled properly
-	var panicCount atomic.Int64
-
 	// Create all streams
 	for i := 0; i < streamCount; i++ {
 		handlers[i] = &mockHandler{}
@@ -180,13 +177,6 @@ func TestParallelDynamicStreamStress(t *testing.T) {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					panicCount.Add(1)
-					// Log but don't fail the test - we want to see if panics occur
-					t.Logf("Worker %d recovered from panic: %v", workerID, r)
-				}
-			}()
 
 			streamID := workerID % streamCount
 			stream := streams[streamID]
@@ -231,12 +221,6 @@ func TestParallelDynamicStreamStress(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				panicCount.Add(1)
-				t.Logf("Close goroutine recovered from panic: %v", r)
-			}
-		}()
 
 		// Wait a bit for operations to start
 		time.Sleep(50 * time.Millisecond)
@@ -270,14 +254,7 @@ func TestParallelDynamicStreamStress(t *testing.T) {
 		}
 	}
 
-	// Report results
-	totalPanics := panicCount.Load()
-	t.Logf("Stress test completed: %d streams, %d workers, %d panics detected",
-		streamCount, workerCount, totalPanics)
-
 	// The test passes if it completes without crashing
-	// Panics are logged but not treated as failures since they may be expected
-	// during concurrent shutdown scenarios
 }
 
 // TestParallelDynamicStreamConcurrentClose tests the specific scenario that can cause
@@ -311,19 +288,12 @@ func TestParallelDynamicStreamConcurrentClose(t *testing.T) {
 
 			var wg sync.WaitGroup
 			done := make(chan struct{})
-			var panicCount atomic.Int64
 
 			// Launch pushers
 			for i := 0; i < pushers; i++ {
 				wg.Add(1)
 				go func(pusherID int) {
 					defer wg.Done()
-					defer func() {
-						if r := recover(); r != nil {
-							panicCount.Add(1)
-							// Expected during concurrent close
-						}
-					}()
 
 					eventID := 0
 					for {
@@ -351,11 +321,6 @@ func TestParallelDynamicStreamConcurrentClose(t *testing.T) {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					defer func() {
-						if r := recover(); r != nil {
-							panicCount.Add(1)
-						}
-					}()
 
 					// Wait a tiny bit then close
 					time.Sleep(time.Millisecond)
@@ -367,9 +332,6 @@ func TestParallelDynamicStreamConcurrentClose(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 			close(done)
 			wg.Wait()
-
-			totalPanics := panicCount.Load()
-			t.Logf("Iteration %d: %d panics detected", iter, totalPanics)
 		})
 		log.Info("pass iteration", zap.Int("iter", iter))
 	}
