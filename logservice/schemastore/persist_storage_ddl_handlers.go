@@ -635,8 +635,11 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			// And because SchemaStore is the source of truth inside cdc,
 			// we can use event.ExtraSchemaID(even it is wrong) to update the internal state of the cdc.
 			// But event.Query will be emit to downstream(out of cdc), we must make it correct.
+			//
+			// InvolvingSchemaInfo returns the schema info involved in the job.
+			// The value should be stored in lower case.
 			event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
-				args.job.InvolvingSchemaInfo[0].Database, event.ExtraTableName,
+				args.job.InvolvingSchemaInfo[0].Database, args.job.InvolvingSchemaInfo[0].Table,
 				event.SchemaName, event.TableName)
 		}
 
