@@ -1,4 +1,46 @@
 {
+  "__inputs": [
+    {
+      "name": "DS_TEST-CLUSTER",
+      "label": "${DS_TEST-CLUSTER}",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "7.5.17"
+    },
+    {
+      "type": "panel",
+      "id": "graph",
+      "name": "Graph",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "heatmap",
+      "name": "Heatmap",
+      "version": ""
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    }
+  ],
   "annotations": {
     "list": [
       {
@@ -18,7 +60,7 @@
         "useValueForTime": false
       },
       {
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "enable": true,
         "expr": "max(ticdc_owner_checkpoint_ts_lag) by (changefeed, instance) > BOOL $spike_threshold",
         "hide": true,
@@ -33,7 +75,7 @@
         "useValueForTime": false
       },
       {
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "enable": false,
         "expr": "delta(up{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\"tikv|ticdc|tidb|pd\"}[30s]) < BOOL 0",
         "hide": false,
@@ -49,7 +91,7 @@
         "type": "tags"
       },
       {
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "enable": false,
         "expr": "sum(ALERTS{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", alertstate=\"firing\", alertname=~\"ticdc.*\"}) by (alertname) > BOOL 0",
         "hide": false,
@@ -63,7 +105,7 @@
         "type": "tags"
       },
       {
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "enable": false,
         "expr": "delta(tikv_cdc_region_resolve_status{status=\"resolved\"}[30s]) < BOOL -800",
         "hide": false,
@@ -105,7 +147,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Represents the total amount of data written by the upstream cluster of TiCDC, not the total amount of data that CDC needs to pull.",
           "fieldConfig": {
             "defaults": {},
@@ -202,7 +244,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of bytes written into the event store pebble storage",
           "fieldConfig": {
             "defaults": {},
@@ -294,7 +336,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of dml events that sink flushes to downstream per second.",
           "fieldConfig": {
             "defaults": {
@@ -393,7 +435,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -492,7 +534,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
@@ -595,7 +637,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Changefeed memory quota",
           "fieldConfig": {
             "defaults": {},
@@ -703,7 +745,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
@@ -800,7 +842,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
@@ -906,7 +948,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -981,7 +1023,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {
@@ -1087,7 +1129,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {
@@ -1185,7 +1227,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {
@@ -1292,7 +1334,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -1382,7 +1424,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of events that puller outputs to sorter \n per second",
           "fieldConfig": {
             "defaults": {
@@ -1485,7 +1527,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The total number of events that puller outputs",
           "fieldConfig": {
             "defaults": {
@@ -1589,7 +1631,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The total number of events that EventService outputs",
           "fieldConfig": {
             "defaults": {
@@ -1693,7 +1735,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The total number of events that puller outputs",
           "fieldConfig": {
             "defaults": {
@@ -1798,7 +1840,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of rows that event collector received per second.",
           "fieldConfig": {
             "defaults": {
@@ -1903,7 +1945,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The total number of events that Event Collector received",
           "fieldConfig": {
             "defaults": {
@@ -2006,7 +2048,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of rows that sink flushes to downstream per second.",
           "fieldConfig": {
             "defaults": {
@@ -2111,7 +2153,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of rows(events) that are flushed by sink.",
           "fieldConfig": {
             "defaults": {
@@ -2231,7 +2273,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Uptime of TiCDC and TiKV",
           "fieldConfig": {
             "defaults": {
@@ -2346,7 +2388,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Goroutine count of TiCDC",
           "fieldConfig": {
             "defaults": {
@@ -2455,7 +2497,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The count of open FD count of TiCDC",
           "fieldConfig": {
             "defaults": {
@@ -2556,7 +2598,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "CPU usage of TiCDC",
           "fieldConfig": {
             "defaults": {
@@ -2672,7 +2714,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Memory usage of TiCDC",
           "fieldConfig": {
             "defaults": {
@@ -2781,7 +2823,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The history of TiCDC cluster ownership, owner node has a value that is great than 0",
           "fieldConfig": {
             "defaults": {},
@@ -2882,7 +2924,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The history of PD cluster leadership, leader node has a value that is great than 0",
           "fieldConfig": {
             "defaults": {},
@@ -2998,7 +3040,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The table count of each ticdc node",
           "editable": true,
@@ -3110,7 +3152,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The table count of each changefeed",
           "editable": true,
@@ -3222,7 +3264,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {
               "unit": "dateTimeAsIso"
@@ -3328,7 +3370,7 @@
           "cacheTimeout": null,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The checkpoint ts of changefeeds.",
           "fieldConfig": {
             "defaults": {
@@ -3456,7 +3498,7 @@
           "cacheTimeout": null,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The resolved ts of changefeeds.",
           "fieldConfig": {
             "defaults": {},
@@ -3581,7 +3623,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
@@ -3684,7 +3726,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
@@ -3791,7 +3833,7 @@
           }
         },
         {
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The status of each changefeed.\n\n0: Normal\n\n1 and 6: Warning\n\n2: Failed\n\n3: Stopped\n\n4: Finished\n\n-1: Unknown",
           "fieldConfig": {
             "defaults": {
@@ -3956,7 +3998,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of errors that interrupt changefeed per minute ",
           "fieldConfig": {
             "defaults": {},
@@ -4070,7 +4112,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
@@ -4167,7 +4209,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
@@ -4264,7 +4306,7 @@
           "bars": true,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of errors that interrupt Eventfeed RPC",
           "fieldConfig": {
             "defaults": {
@@ -4363,7 +4405,7 @@
           "bars": true,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of PD scheduling operator.",
           "fieldConfig": {
             "defaults": {
@@ -4462,7 +4504,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "99.9% of TiDB query durations.",
           "fieldConfig": {
             "defaults": {},
@@ -4556,7 +4598,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The min resolved ts lag of each TiKV",
           "editable": true,
@@ -4679,7 +4721,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of changed rows that are written to downstream per second",
           "fieldConfig": {
             "defaults": {
@@ -4782,7 +4824,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "99.9% of TiCDC sink write durations.",
           "fieldConfig": {
             "defaults": {},
@@ -4884,7 +4926,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The number of incremental scan tasks per minute",
           "fieldConfig": {
@@ -4983,7 +5025,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The total time of incremental scan region takes per minute",
           "editable": true,
@@ -5083,7 +5125,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The number of leaders on each TiKV instance",
           "editable": true,
@@ -5186,7 +5228,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The number of the processed TiKV admin command",
           "editable": true,
@@ -5286,7 +5328,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The rate of TiKV advancing resolved ts.",
           "fieldConfig": {
@@ -5385,7 +5427,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The number of unresolved region per TiKV",
           "editable": true,
@@ -5485,7 +5527,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "99.99% of the number of regions that TiKV checks. ",
           "fieldConfig": {
@@ -5583,7 +5625,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The number of failed count of advancing resolved ts.",
           "fieldConfig": {
@@ -5682,7 +5724,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "99.99% of the duration that TiKV check leader takes. ",
           "fieldConfig": {
@@ -5787,7 +5829,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The number of regions that take a long time(more than 60s) to scan",
           "editable": true,
@@ -5904,7 +5946,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
@@ -6007,7 +6049,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
@@ -6110,7 +6152,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
@@ -6224,7 +6266,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -6337,7 +6379,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of KV client dispatched event per second",
           "fieldConfig": {
             "defaults": {
@@ -6448,7 +6490,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "To prevent excessive accumulation of region request tasks on the TiKV side, CDC will implement rate limiting on the number of requests it initiates.",
           "fieldConfig": {
             "defaults": {},
@@ -6538,7 +6580,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -6647,7 +6689,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "To prevent excessive accumulation of region request tasks on the TiKV side, CDC will implement rate limiting on the number of requests it initiates.",
           "fieldConfig": {
             "defaults": {},
@@ -6737,7 +6779,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Log puller memory quota",
           "fieldConfig": {
             "defaults": {},
@@ -6836,7 +6878,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The size of batch resolved regions count",
           "fieldConfig": {
             "defaults": {},
@@ -6933,7 +6975,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -6997,7 +7039,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -7094,7 +7136,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of events received by event store.",
           "fieldConfig": {
             "defaults": {},
@@ -7192,7 +7234,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -7297,7 +7339,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The amount of pending data stored on-disk for event store",
           "fieldConfig": {
             "defaults": {},
@@ -7393,7 +7435,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The amount of pending data stored in-memory for event store",
           "fieldConfig": {
             "defaults": {},
@@ -7489,7 +7531,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of subscriptions created by event store.",
           "fieldConfig": {
             "defaults": {},
@@ -7589,7 +7631,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of scan requests received by event store",
           "fieldConfig": {
             "defaults": {},
@@ -7688,7 +7730,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -7788,7 +7830,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of bytes scanned by event store.",
           "fieldConfig": {
             "defaults": {},
@@ -7886,7 +7928,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of bytes written by event store.",
           "fieldConfig": {
             "defaults": {},
@@ -7984,7 +8026,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of entries scanned by event store.",
           "fieldConfig": {
             "defaults": {},
@@ -8082,7 +8124,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time of sorter write",
           "fieldConfig": {
             "defaults": {},
@@ -8200,7 +8242,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8271,7 +8313,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time of sorter write",
           "fieldConfig": {
             "defaults": {},
@@ -8346,7 +8388,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of write requests received by event store",
           "fieldConfig": {
             "defaults": {},
@@ -8452,7 +8494,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8524,7 +8566,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time of sorter write",
           "fieldConfig": {
             "defaults": {},
@@ -8608,7 +8650,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time of event store iterator first read duration",
           "fieldConfig": {
             "defaults": {},
@@ -8692,7 +8734,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -8785,7 +8827,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8883,7 +8925,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8980,7 +9022,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -9085,7 +9127,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -9149,7 +9191,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -9271,7 +9313,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -9346,7 +9388,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -9454,7 +9496,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -9545,7 +9587,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -9636,7 +9678,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -9735,7 +9777,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -9826,7 +9868,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -9917,7 +9959,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {
@@ -10015,7 +10057,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -10111,7 +10153,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -10204,7 +10246,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Event Service Available Memory",
           "fieldConfig": {
             "defaults": {},
@@ -10309,7 +10351,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -10437,7 +10479,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
@@ -10551,7 +10593,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
@@ -10662,7 +10704,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
@@ -10776,7 +10818,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Duration of dispatcher creation",
           "fieldConfig": {
             "defaults": {},
@@ -10892,7 +10934,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -10989,7 +11031,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "the number of registered dispatchers in event collector",
           "editable": true,
@@ -11100,7 +11142,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of rows that event collector received per second.",
           "fieldConfig": {
             "defaults": {
@@ -11213,7 +11255,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -11297,7 +11339,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -11387,7 +11429,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -11485,7 +11527,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -11596,7 +11638,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Row count for batch to the downstream sink.",
           "fieldConfig": {
             "defaults": {},
@@ -11696,7 +11738,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Row count for total output rows.",
           "fieldConfig": {
             "defaults": {},
@@ -11788,7 +11830,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "DDL count and executing duration",
           "fieldConfig": {
             "defaults": {},
@@ -11893,7 +11935,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Count of errors in the last minute.",
           "fieldConfig": {
             "defaults": {},
@@ -12000,7 +12042,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Duration of event staying in conflict detector",
           "fieldConfig": {
             "defaults": {},
@@ -12122,7 +12164,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Full flush (backend flush + callback + conflict detector notify) duration",
           "fieldConfig": {
             "defaults": {},
@@ -12228,7 +12270,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Sink worker busy ratio",
           "fieldConfig": {
             "defaults": {},
@@ -12326,7 +12368,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -12423,7 +12465,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Distribution of flush transaction duration to backend",
           "fieldConfig": {
             "defaults": {},
@@ -12543,7 +12585,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "MQ worker send messages to Kafka, this metric record the time cost on send every message.",
           "fieldConfig": {
             "defaults": {},
@@ -12649,7 +12691,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Bytes / second written off all brokers.\nvalue = one-minute moving average rate of Bytes per second",
           "fieldConfig": {
             "defaults": {
@@ -12752,7 +12794,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The current number of in-flight requests awaiting a response for all brokers.",
           "fieldConfig": {
             "defaults": {
@@ -12855,7 +12897,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The request latency in ms for all brokers.\n\nvalue = request latency histogram's mean",
           "fieldConfig": {
             "defaults": {
@@ -12958,7 +13000,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Requests / second sent to all brokers.\nvalue = one-minute moving average rate of events per second",
           "fieldConfig": {
             "defaults": {
@@ -13061,7 +13103,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Records count per request send to the kafka\nvalue = one-minute moving average of response receive rate",
           "fieldConfig": {
             "defaults": {
@@ -13164,7 +13206,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The compression ratio times 100 of record batches for all topics. Compression ratio = Size of original data / Size of compressed data * 100",
           "fieldConfig": {
             "defaults": {},
@@ -13265,7 +13307,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -13363,7 +13405,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {},
@@ -13461,7 +13503,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "MQ worker batch multiple messages into one when using batched encode protocol, this metric record the time cost on batch messages.",
           "fieldConfig": {
             "defaults": {},
@@ -13567,7 +13609,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "MQ worker batch multiple messages into one when using batched encode protocol, this metrics track each batch's size",
           "fieldConfig": {
             "defaults": {},
@@ -13674,7 +13716,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "MQ worker send large message to the external storage, this metrics record the message count",
           "fieldConfig": {
             "defaults": {},
@@ -13772,7 +13814,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "MQ worker send large message to the external storage, this metric record the time cost on send every message.",
           "fieldConfig": {
             "defaults": {},
@@ -13878,7 +13920,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "the number of message count of checkpointTs message",
           "fieldConfig": {
             "defaults": {},
@@ -13976,7 +14018,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "this metric record the time cost of the MQ worker encode and send  checkpointTs messages to downstream ",
           "fieldConfig": {
             "defaults": {},
@@ -14097,7 +14139,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The total number of tables in different replication states.\n\n0: ReplicationSetStateUnknown means the replication state is unknown, it should not happen.\n\n1: ReplicationSetStateAbsent means there is no one replicates or prepares it.\n\n2: ReplicationSetStatePrepare means it needs to add a secondary.\n\n3: ReplicationSetStateCommit means it needs to promote secondary to primary.\n\n4: ReplicationSetStateReplicating means there is exactly one capture that is replicating the table.\n\n5: ReplicationSetStateRemoving means all captures need to stop replication eventually.\n\n",
           "editable": true,
@@ -14208,7 +14250,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The total number of different schedule tasks.",
           "editable": true,
@@ -14321,7 +14363,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The total number of spans",
           "fieldConfig": {
             "defaults": {
@@ -14424,7 +14466,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The total number of tables",
           "fieldConfig": {
             "defaults": {
@@ -14527,7 +14569,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of current operator count",
           "fieldConfig": {
             "defaults": {
@@ -14654,7 +14696,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of total operator count ",
           "fieldConfig": {
             "defaults": {
@@ -14758,7 +14800,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "duration for each operator",
           "fieldConfig": {
             "defaults": {},
@@ -14864,7 +14906,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "duration for split span do once check",
           "fieldConfig": {
             "defaults": {},
@@ -14970,7 +15012,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The ID of the slowest table",
           "editable": true,
@@ -15083,7 +15125,7 @@
           "cacheTimeout": null,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The checkpoint ts of the slowest table.",
           "fieldConfig": {
             "defaults": {
@@ -15204,7 +15246,7 @@
           "cacheTimeout": null,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The resolved ts of the slowest table.",
           "fieldConfig": {
             "defaults": {},
@@ -15322,7 +15364,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The state of the slowest table.\n\n0: ReplicationSetStateUnknown means the replication state is unknown, it should not happen.\n\n1: ReplicationSetStateAbsent means there is no one replicates or prepares it.\n\n2: ReplicationSetStatePrepare means it needs to add a secondary.\n\n3: ReplicationSetStateCommit means it needs to promote secondary to primary.\n\n4: ReplicationSetStateReplicating means there is exactly one capture that is replicating the table.\n\n5: ReplicationSetStateRemoving means all captures need to stop replication eventually.\n\n",
           "editable": true,
@@ -15451,7 +15493,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of established Eventfeed RPC between TiCDC and TiKV",
           "fieldConfig": {
             "defaults": {
@@ -15585,7 +15627,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of KV client received events from TiKV per seconds",
           "fieldConfig": {
             "defaults": {
@@ -15690,7 +15732,7 @@
           "bars": true,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of errors that interrupt Eventfeed RPC",
           "fieldConfig": {
             "defaults": {
@@ -15813,7 +15855,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of KV client dispatched event per second",
           "fieldConfig": {
             "defaults": {
@@ -15934,7 +15976,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Active stream count of each gRPC connection",
           "fieldConfig": {
             "defaults": {
@@ -16037,7 +16079,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": null,
           "description": "Percentiles of Eventfeed message size",
           "fieldConfig": {
@@ -16146,7 +16188,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of regions that are being scanned",
           "fieldConfig": {
             "defaults": {
@@ -16251,7 +16293,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The count of regoin cache operation initiated by TiCDC",
           "fieldConfig": {
@@ -16366,7 +16408,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The size of batch resolved regions count",
           "fieldConfig": {
             "defaults": {},
@@ -16439,7 +16481,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of regions that have not connected to TiKV",
           "fieldConfig": {
             "defaults": {
@@ -16544,7 +16586,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The count of resolve lock RPC initiated by TiCDC",
           "fieldConfig": {
@@ -16650,7 +16692,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "fieldConfig": {
@@ -16758,7 +16800,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The number of events that puller outputs to sorter \n per second",
           "fieldConfig": {
             "defaults": {
@@ -16861,7 +16903,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Estimate the remaining time for a changefeed initialization (on a specific capture)",
           "fieldConfig": {
             "defaults": {
@@ -16981,7 +17023,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The count of different kinds of gRPC message",
           "fieldConfig": {
@@ -17087,7 +17129,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "Outbound network traffic of TiKV CDC component",
           "editable": true,
@@ -17200,7 +17242,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "CPU usage of TiKV CDC component",
           "fieldConfig": {
@@ -17321,7 +17363,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The TiKV-CDC memory quota usage per TiKV instance",
           "editable": true,
@@ -17439,7 +17481,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The memory usage per TiKV instance",
           "editable": true,
@@ -17557,7 +17599,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The number of incremental scan task in different status.",
           "fieldConfig": {
@@ -17676,7 +17718,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "fieldConfig": {
@@ -17800,7 +17842,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time consumed to CDC incremental scan",
           "fieldConfig": {
             "defaults": {},
@@ -17874,7 +17916,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The time cost on sink incremental scan data",
           "fieldConfig": {
@@ -17989,7 +18031,7 @@
           "bars": true,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The total bytes of TiKV CDC incremental scan",
           "editable": true,
@@ -18100,7 +18142,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The speed of TiKV CDC incremental scan",
           "editable": true,
@@ -18211,7 +18253,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The speed of TiKV CDC incremental scan read from the disk",
           "editable": true,
@@ -18324,7 +18366,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The min resolved ts of each TiKV",
           "editable": true,
@@ -18465,7 +18507,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "fieldConfig": {
@@ -18570,7 +18612,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "fieldConfig": {
@@ -18692,7 +18734,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The ID of the min resolved region of each TiKV",
           "editable": true,
@@ -18812,7 +18854,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time consumed to get an old value (both from cache and from disk)",
           "fieldConfig": {
             "defaults": {},
@@ -18885,7 +18927,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The total number of cache entries in the old value cache.",
           "fieldConfig": {
@@ -19023,7 +19065,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "fieldConfig": {
@@ -19137,7 +19179,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
@@ -19272,7 +19314,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The latency distributions of fsync called by redo writer",
           "fieldConfig": {
             "defaults": {},
@@ -19346,7 +19388,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The latency distributions of flushall called by redo writer",
           "fieldConfig": {
             "defaults": {},
@@ -19420,7 +19462,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The latency distributions of writeLog called by redoManager",
           "fieldConfig": {
             "defaults": {},
@@ -19494,7 +19536,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The latency distributions of flushLog called by redoManager",
           "fieldConfig": {
             "defaults": {},
@@ -19559,7 +19601,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The total count of rows that are processed by redo writer",
           "fieldConfig": {
             "defaults": {},
@@ -19669,7 +19711,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Total number of bytes redo log written",
           "fieldConfig": {
             "defaults": {},
@@ -19765,7 +19807,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Redo bgUpdateLog worker busy ratio",
           "fieldConfig": {
             "defaults": {},
@@ -19879,7 +19921,7 @@
           "cacheTimeout": null,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "TiCDC process rss memory usage. TiCDC heap memory size in use ",
           "editable": true,
           "error": false,
@@ -20069,7 +20111,7 @@
           "cacheTimeout": null,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Count of live objects.",
           "editable": true,
           "error": false,
@@ -20186,7 +20228,7 @@
           "cacheTimeout": null,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "TiCDC process Go garbage collection STW pause duration",
           "editable": true,
           "error": false,
@@ -20316,7 +20358,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The throughput of Go's memory allocator.",
           "fieldConfig": {
             "defaults": {},
@@ -20479,7 +20521,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -20584,7 +20626,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -20689,7 +20731,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -20794,7 +20836,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -20890,7 +20932,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -20986,7 +21028,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -21082,7 +21124,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -21179,7 +21221,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -21278,7 +21320,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -21373,7 +21415,7 @@
           }
         },
         {
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -21468,7 +21510,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {
               "unit": "s"
@@ -21568,7 +21610,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {
@@ -21669,7 +21711,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "test-cluster",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
           "fieldConfig": {
             "defaults": {
@@ -21784,7 +21826,7 @@
           "text": "None",
           "value": ""
         },
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "definition": "",
         "description": null,
         "error": null,
@@ -21816,7 +21858,7 @@
           "text": "None",
           "value": ""
         },
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "definition": "",
         "description": null,
         "error": null,
@@ -21847,7 +21889,7 @@
           "text": "All",
           "value": "$__all"
         },
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, namespace)",
         "description": null,
         "error": null,
@@ -21878,7 +21920,7 @@
           "text": "All",
           "value": "$__all"
         },
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, changefeed)",
         "description": null,
         "error": null,
@@ -21909,7 +21951,7 @@
           "text": "All",
           "value": "$__all"
         },
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
         "description": null,
         "error": null,
@@ -21940,7 +21982,7 @@
           "text": "All",
           "value": "$__all"
         },
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "definition": "label_values(tikv_engine_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, instance)",
         "description": null,
         "error": null,
@@ -22027,7 +22069,7 @@
           "text": "All",
           "value": "$__all"
         },
-        "datasource": "test-cluster",
+        "datasource": "${DS_TEST-CLUSTER}",
         "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
         "description": null,
         "error": null,
