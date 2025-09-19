@@ -45,10 +45,10 @@ const latestTrafficIndex = 0
 var (
 	minTrafficBalanceThreshold         = float64(1024 * 1024) // 1MB
 	maxMoveSpansCountForTrafficBalance = 4
-	balanceScoreThreshold              = 10
+	balanceScoreThreshold              = 20
 	maxMoveSpansCountForMerge          = 16
-	minTrafficPercentage               = 0.9
-	maxTrafficPercentage               = 1.1
+	minTrafficPercentage               = 0.75
+	maxTrafficPercentage               = 1.3
 	maxLagThreshold                    = float64(30) // 30s
 )
 
