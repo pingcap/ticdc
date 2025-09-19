@@ -104,6 +104,6 @@ function run() {
 }
 
 trap stop_tidb_cluster EXIT
-test_old_arch_compatibility $*
+run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
