@@ -2312,11 +2312,7 @@ func TestApplyDDLJobs(t *testing.T) {
 							zap.Uint64("endTs", testCase.endTs),
 							zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
 							zap.String("expectedEvents", formatDDLEventsForTest(testCase.result)),
-							zap.String("actualEvents", formatDDLEventsForTest(events)),
-							zap.String("ddl", testCase.result[1].Query),
-							zap.String("ddl1", events[1].Query),
-							zap.Int("len", len(events)),
-						)
+							zap.String("actualEvents", formatDDLEventsForTest(events)))
 						t.Fatalf("fetchTableDDLEvents result wrong")
 					}
 				}
