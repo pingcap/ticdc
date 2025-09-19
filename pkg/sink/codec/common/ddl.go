@@ -165,7 +165,11 @@ func GetBlockedTables(
 		if err != nil {
 			log.Panic("parse statement failed", zap.Any("DDL", ddl), zap.Error(err))
 		}
-		schemaName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
+		// The query in job maybe "RENAME TABLE table1 to table2"
+		oldSchemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
+		if oldSchemaName != "" {
+			schemaName = oldSchemaName
+		}
 		tableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
 
 		ddl.ExtraSchemaName = schemaName
