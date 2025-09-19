@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/tidb/pkg/util/naming"
 	"go.uber.org/zap"
 )
 
@@ -287,18 +288,9 @@ func ValidateChangefeedID(changefeedID string) error {
 	return nil
 }
 
-const keyspaceMaxLen = 128
-
-var keyspaceRe = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
-
-// ValidateKeyspace returns true if the keyspace matches
-// the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$",
-// length no more than "changeFeedIDMaxLen", eg, "simple-changefeed-task".
+// ValidateKeyspace use the naming rules of TiDB to check the validation of the keyspace
 func ValidateKeyspace(keyspace string) error {
-	if !keyspaceRe.MatchString(keyspace) || len(keyspace) > keyspaceMaxLen {
-		return errors.ErrInvalidKeyspace.GenWithStackByArgs(keyspaceRe)
-	}
-	return nil
+	return errors.Trace(naming.CheckKeyspaceName(keyspace))
 }
 
 func NewChangefeedID4Test(keyspace, name string) ChangeFeedID {

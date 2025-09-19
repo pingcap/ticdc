@@ -170,7 +170,6 @@ func RemoveKeyspacePrefix(key []byte) []byte {
 	}
 
 	if key[0] != apiV2TxnModePrefix {
-		log.Warn("the first byte of key is not 'x', it may not be in api v2 txn mode", zap.Any("byte", key[0]))
 		return key
 	}
 	return key[keyspacePrefixLen:]

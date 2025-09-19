@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -461,6 +462,23 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	if err != nil {
 		log.Panic("load all changefeeds failed", zap.Error(err))
 	}
+
+	// Register keyspace
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	registeredKeyspace := make(map[string]struct{})
+	ctx := context.Background()
+	for id := range allChangefeeds {
+		if _, ok := registeredKeyspace[id.Keyspace()]; ok {
+			continue
+		}
+
+		err := schemaStore.RegisterKeyspace(ctx, id.Keyspace())
+		if err != nil {
+			log.Error("RegisterKeyspace failed", zap.String("keyspace", id.Keyspace()), zap.Error(err))
+		}
+		registeredKeyspace[id.Keyspace()] = struct{}{}
+	}
+
 	log.Info("load all changefeeds", zap.Int("size", len(allChangefeeds)))
 	// Compare all changefeeds and running changefeeds, and add them to changefeedDB
 	for cfID, cfMeta := range allChangefeeds {

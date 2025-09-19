@@ -268,3 +268,96 @@ func (f *FuncMarcher) Matches(x interface{}) bool {
 func (f *FuncMarcher) String() string {
 	return "func"
 }
+
+func TestExtractKeySuffix(t *testing.T) {
+	type args struct {
+		key string
+	}
+	tests := []struct {
+		name             string
+		args             args
+		wantKs           string
+		wantCf           string
+		wantIsStatus     bool
+		wantIsChangefeed bool
+	}{
+		{
+			name: "an empty key",
+			args: args{
+				key: "",
+			},
+			wantIsChangefeed: false,
+		},
+		{
+			name: "an invalid key",
+			args: args{
+				key: "foobar",
+			},
+			wantIsChangefeed: false,
+		},
+		{
+			name: "an slash key",
+			args: args{
+				key: "/",
+			},
+			wantIsChangefeed: false,
+		},
+		{
+			name: "3 parts",
+			args: args{
+				key: "/tidb/cdc/default",
+			},
+			wantIsChangefeed: false,
+		},
+		{
+			name: "not a changefeed",
+			args: args{
+				key: "/tidb/cdc/default/keyspace1/foobar/info/hello",
+			},
+			wantIsChangefeed: false,
+		},
+		{
+			name: "a changefeed info",
+			args: args{
+				key: "/tidb/cdc/default/keyspace1/changefeed/info/hello",
+			},
+			wantKs:           "keyspace1",
+			wantCf:           "hello",
+			wantIsStatus:     false,
+			wantIsChangefeed: true,
+		},
+		{
+			name: "a changefeed status",
+			args: args{
+				key: "/tidb/cdc/default/keyspace1/changefeed/status/hello",
+			},
+			wantKs:           "keyspace1",
+			wantCf:           "hello",
+			wantIsStatus:     true,
+			wantIsChangefeed: true,
+		},
+		{
+			name: "an invalid changefeed status",
+			args: args{
+				key: "/tidb/cdc/default/keyspace1/changefeed/status",
+			},
+			wantIsChangefeed: false,
+		},
+		{
+			name: "capture info",
+			args: args{
+				key: "/tidb/cdc/default/__cdc_meta__/capture/786afb7b-c780-48df-8fb6-567d4647c007",
+			},
+			wantIsChangefeed: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotKs, gotCf, gotIsStatus, gotIsChangefeed := extractKeySuffix(tt.args.key)
+			require.Equal(t, tt.wantKs, gotKs)
+			require.Equal(t, tt.wantCf, gotCf)
+			require.Equal(t, tt.wantIsStatus, gotIsStatus)
+			require.Equal(t, tt.wantIsChangefeed, gotIsChangefeed)
+		})
+	}
+}

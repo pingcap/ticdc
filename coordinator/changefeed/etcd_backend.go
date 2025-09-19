@@ -45,9 +45,9 @@ func NewEtcdBackend(etcdClient etcd.CDCEtcdClient) *EtcdBackend {
 }
 
 func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeFeedID]*ChangefeedMetaWrapper, error) {
-	changefeedPrefix := etcd.KeyspacePrefix(b.etcdClient.GetClusterID(), common.DefaultKeyspace) + "/changefeed"
+	allDataPrefix := etcd.BaseKey(b.etcdClient.GetClusterID())
 
-	resp, err := b.etcdClient.GetEtcdClient().Get(ctx, changefeedPrefix, clientv3.WithPrefix())
+	resp, err := b.etcdClient.GetEtcdClient().Get(ctx, allDataPrefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -56,7 +56,11 @@ func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeF
 	cfMap := make(map[common.ChangeFeedID]*ChangefeedMetaWrapper)
 	for _, kv := range resp.Kvs {
 		key := string(kv.Key)
-		ns, cf, isStatus := extractKeySuffix(key)
+		ks, cf, isStatus, isChangefeed := extractKeySuffix(key)
+		if !isChangefeed {
+			continue
+		}
+
 		if isStatus {
 			status := &config.ChangeFeedStatus{}
 			err = status.Unmarshal(kv.Value)
@@ -65,7 +69,7 @@ func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeF
 					zap.String("key", key), zap.Error(err))
 				continue
 			}
-			statusMap[common.NewChangeFeedDisplayName(cf, ns)] = status
+			statusMap[common.NewChangeFeedDisplayName(cf, ks)] = status
 		} else {
 			detail := &config.ChangeFeedInfo{}
 			err = detail.Unmarshal(kv.Value)
@@ -80,7 +84,7 @@ func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeF
 					zap.String("key", key))
 				detail.ChangefeedID = common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 					Name:     cf,
-					Keyspace: ns,
+					Keyspace: ks,
 				})
 				if data, err := detail.Marshal(); err != nil {
 					log.Warn("failed to marshal change feed Info, ignore",
@@ -358,9 +362,27 @@ func (b *EtcdBackend) UpdateChangefeedCheckpointTs(ctx context.Context, cps map[
 // extractKeySuffix extracts the suffix of an etcd key, such as extracting
 // "6a6c6dd290bc8732" from /tidb/cdc/cluster/keyspace/changefeed/info/6a6c6dd290bc8732
 // or from /tidb/cdc/cluster/keyspace/changefeed/status/6a6c6dd290bc8732
-func extractKeySuffix(key string) (string, string, bool) {
+func extractKeySuffix(key string) (ks string, cf string, isStatus bool, isChangefeed bool) {
+	const keyspaceIndex = 4
+	const changefeedItemIndex = 5
+	const statusIndex = 6
+	const changefeedIDIndex = 7
+
 	subs := strings.Split(key, "/")
-	return subs[len(subs)-4], subs[len(subs)-1], subs[len(subs)-2] == "status"
+	if len(subs) <= changefeedItemIndex || subs[changefeedItemIndex] != "changefeed" {
+		isChangefeed = false
+		return ks, cf, isStatus, isChangefeed
+	}
+	if len(subs) <= changefeedIDIndex {
+		isChangefeed = false
+		return ks, cf, isStatus, isChangefeed
+	}
+
+	ks = subs[keyspaceIndex]
+	cf = subs[changefeedIDIndex]
+	isStatus = subs[statusIndex] == "status"
+	isChangefeed = true
+	return ks, cf, isStatus, isChangefeed
 }
 
 func logEtcdOps(ops []clientv3.Op, committed bool) {

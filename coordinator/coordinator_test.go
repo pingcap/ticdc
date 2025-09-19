@@ -35,6 +35,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -242,6 +243,9 @@ func TestCoordinatorScheduling(t *testing.T) {
 		info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
+
+	mockSchemaStore := eventservice.NewMockSchemaStore()
+	appcontext.SetService(appcontext.SchemaStore, mockSchemaStore)
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	m := NewMaintainerManager(mc)

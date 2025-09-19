@@ -256,7 +256,13 @@ func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchema
 func (s *schemaStore) initialize(ctx context.Context) {
 	// we should fetch ddl at startup for classic mode
 	if kerneltype.IsClassic() {
-		s.RegisterKeyspace(ctx, common.DefaultKeyspace)
+		err := s.RegisterKeyspace(ctx, common.DefaultKeyspace)
+		if err != nil {
+			// initialize is called when the server starts
+			// if the keyspace register failed, we can panic the server to let
+			// it register again
+			log.Panic("RegisterKeyspace failed", zap.Error(err))
+		}
 	}
 }
 

@@ -39,7 +39,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-//go:generate mockery --name=fileWriter --inpackage --quiet
+//go:generate mockery --name=fileWriter --filename=file_mock.go --inpackage --quiet
 type fileWriter interface {
 	Run(ctx context.Context) error
 	IsRunning() bool

@@ -710,7 +710,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Create a mock mounter and schema getter
 	mockMounter := &mockMounter{}
-	mockSchemaGetter := newMockSchemaStore()
+	mockSchemaGetter := NewMockSchemaStore()
 	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
 	// Test case 0: create a new DML processor
@@ -933,7 +933,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Create a mock mounter and schema getter
 	mockMounter := &mockMounter{}
-	mockSchemaGetter := newMockSchemaStore()
+	mockSchemaGetter := NewMockSchemaStore()
 	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
 	// Test case 1: appendRow before txn started, illegal usage.
@@ -1264,7 +1264,7 @@ func TestEventMerger(t *testing.T) {
 			}...)
 
 		tableID := ddlEvent.TableID
-		mockSchemaGetter := newMockSchemaStore()
+		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
 		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false)
@@ -1297,7 +1297,7 @@ func TestEventMerger(t *testing.T) {
 		merger := newEventMerger([]event.Event{&ddlEvent})
 
 		tableID := ddlEvent.TableID
-		mockSchemaGetter := newMockSchemaStore()
+		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false)
 
@@ -1325,7 +1325,7 @@ func TestEventMerger(t *testing.T) {
 		helper := event.NewEventTestHelper(t)
 		defer helper.Close()
 
-		mockSchemaGetter := newMockSchemaStore()
+		mockSchemaGetter := NewMockSchemaStore()
 
 		ddlEvent1, kvEvents1 := genEvents(helper,
 			`create table test.t1(id int primary key, c char(50))`,
@@ -1460,7 +1460,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 		"update test.t_uk set a = 20 where id = 1")
 
 	// Create mock components
-	mockSchemaGetter := newMockSchemaStore()
+	mockSchemaGetter := NewMockSchemaStore()
 	mockSchemaGetter.AppendDDLEvent(tableID, *ddlEvent)
 
 	// Create a mock iterator that returns only the single update event

@@ -128,7 +128,14 @@ UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream
 
 include tools/Makefile
 
-generate-protobuf: tools/bin/protoc tools/bin/protoc-gen-go tools/bin/protoc-gen-go-grpc tools/bin/protoc-gen-gogofaster
+go-generate: tools/bin/msgp tools/bin/stringer tools/bin/mockery
+	@echo "go generate"
+	@go generate ./...
+
+generate-protobuf: tools/bin/protoc tools/bin/protoc-gen-gogofaster \
+	tools/bin/protoc-gen-go tools/bin/protoc-gen-go-grpc \
+	tools/bin/protoc-gen-grpc-gateway tools/bin/protoc-gen-grpc-gateway-v2 \
+	tools/bin/protoc-gen-openapiv2
 	@echo "generate-protobuf"
 	./scripts/generate-protobuf.sh
 
@@ -301,7 +308,7 @@ check-makefiles: format-makefiles
 format-makefiles: $(MAKE_FILES)
 	$(SED_IN_PLACE) -e 's/^\(\t*\)  /\1\t/g' -e 's/^\(\t*\) /\1/' -- $?
 
-check: check-copyright fmt tidy check-diff-line-width check-ticdc-dashboard check-makefiles
+check: check-copyright fmt tidy generate_mock go-generate check-diff-line-width check-ticdc-dashboard check-makefiles
 	@git --no-pager diff --exit-code || (echo "Please add changed files!" && false)
 
 clean:

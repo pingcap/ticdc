@@ -69,7 +69,7 @@ type writer struct {
 	ddlWithMaxCommitTs map[int64]uint64
 
 	// this should only be used by the canal-json protocol
-	partitionTableAccessor *partitionTableAccessor
+	partitionTableAccessor *common.PartitionTableAccessor
 
 	eventRouter *eventrouter.EventRouter
 	protocol    config.Protocol
@@ -80,7 +80,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	w := &writer{
 		protocol:               o.protocol,
 		progresses:             make([]*partitionProgress, o.partitionNum),
-		partitionTableAccessor: newPartitionTableAccessor(),
+		partitionTableAccessor: common.NewPartitionTableAccessor(),
 		ddlList:                make([]*commonEvent.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
 	}
@@ -391,15 +391,6 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 	return true
 }
 
-type tableKey struct {
-	schema string
-	table  string
-}
-
-type partitionTableAccessor struct {
-	memo map[tableKey]struct{}
-}
-
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 	switch w.protocol {
 	case config.ProtocolCanalJSON, config.ProtocolOpen:
@@ -414,7 +405,7 @@ func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 		log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
 	}
 	if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
-		w.partitionTableAccessor.add(ddl.GetSchemaName(), ddl.GetTableName())
+		w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
 	}
 }
 
@@ -442,7 +433,7 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 	case config.ProtocolCanalJSON:
 		// for partition table, the canal-json message cannot assign physical table id to each dml message,
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
-		if w.partitionTableAccessor.isPartitionTable(schema, table) {
+		if w.partitionTableAccessor.IsPartitionTable(schema, table) {
 			log.Warn("DML events fallback, but it's canal-json and partition table, still append it",
 				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
 				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
@@ -459,26 +450,4 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 	default:
 		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
 	}
-}
-
-func newPartitionTableAccessor() *partitionTableAccessor {
-	return &partitionTableAccessor{
-		memo: make(map[tableKey]struct{}),
-	}
-}
-
-func (m *partitionTableAccessor) add(schema, table string) {
-	key := tableKey{schema: schema, table: table}
-	_, ok := m.memo[key]
-	if ok {
-		return
-	}
-	m.memo[key] = struct{}{}
-	log.Info("add partition table to the accessor", zap.String("schema", schema), zap.String("table", table))
-}
-
-func (m *partitionTableAccessor) isPartitionTable(schema, table string) bool {
-	key := tableKey{schema: schema, table: table}
-	_, ok := m.memo[key]
-	return ok
 }

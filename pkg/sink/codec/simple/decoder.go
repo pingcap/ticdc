@@ -40,6 +40,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var tableIDAllocator = common.NewTableIDAllocator()
+
 // Decoder implement the Decoder interface
 type Decoder struct {
 	config *common.Config
@@ -52,8 +54,6 @@ type Decoder struct {
 	value []byte
 	msg   *message
 	memo  TableInfoProvider
-
-	blockedTablesMemo *blockedTablesMemo
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
@@ -83,14 +83,13 @@ func NewDecoder(
 	}
 
 	m, err := newMarshaller(config)
+	tableIDAllocator.Clean()
 	return &Decoder{
 		config:     config,
 		marshaller: m,
 
 		storage:      externalStorage,
 		upstreamTiDB: db,
-
-		blockedTablesMemo: newBlockedTablesMemo(),
 
 		memo:           newMemoryTableInfoProvider(),
 		cachedMessages: list.New(),
@@ -177,7 +176,7 @@ func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	event := buildDMLEvent(d.msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
 	d.msg = nil
 
-	d.blockedTablesMemo.add(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
+	tableIDAllocator.AddBlockTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
 
 	log.Debug("row changed event assembled", zap.Any("event", event))
 	return event
@@ -491,43 +490,6 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 	return commonType.NewTableInfo4Decoder(schema, tidbTableInfo)
 }
 
-type accessKey struct {
-	schema string
-	table  string
-}
-
-type blockedTablesMemo struct {
-	memo map[accessKey]map[int64]struct{}
-}
-
-func newBlockedTablesMemo() *blockedTablesMemo {
-	return &blockedTablesMemo{
-		memo: make(map[accessKey]map[int64]struct{}),
-	}
-}
-
-func (m *blockedTablesMemo) add(schema, table string, tableID int64) {
-	key := accessKey{schema, table}
-	if _, ok := m.memo[key]; !ok {
-		m.memo[key] = make(map[int64]struct{})
-	}
-	if _, exists := m.memo[key][tableID]; !exists {
-		m.memo[key][tableID] = struct{}{}
-		log.Info("add table id to blocked list",
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID))
-	}
-}
-
-func (m *blockedTablesMemo) GetBlockedTables(schema, table string) []int64 {
-	key := accessKey{schema, table}
-	blocked := m.memo[key]
-	result := make([]int64, 0, len(blocked))
-	for item := range blocked {
-		result = append(result, item)
-	}
-	return result
-}
-
 func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	var (
 		tableInfo    *commonType.TableInfo
@@ -546,7 +508,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
 	result.TableID = tableInfo.TableName.TableID
-	d.blockedTablesMemo.add(result.SchemaName, result.TableName, result.TableID)
+	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
 
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
@@ -560,7 +522,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	result.BlockedTables = common.GetBlockedTables(d.blockedTablesMemo, result)
+	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	return result
 }
 

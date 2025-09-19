@@ -36,7 +36,7 @@ func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	es := newMockEventStore(100)
-	ss := newMockSchemaStore()
+	ss := NewMockSchemaStore()
 	mc := newMockMessageCenter()
 	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC, &integrity.Config{
 		IntegrityCheckLevel:   integrity.CheckLevelNone,
