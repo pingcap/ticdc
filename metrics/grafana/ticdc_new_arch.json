@@ -11540,24 +11540,16 @@
         },
         {
           "aliasColors": {},
-          "bars": false,
           "dashLength": 10,
-          "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "DDL count and executing duration",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
+          "description": "DDL count executing duration",
           "fill": 1,
-          "fillGradient": 0,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
             "y": 103
           },
-          "hiddenSeries": false,
           "id": 613,
           "legend": {
             "alignAsTable": true,
@@ -11576,10 +11568,8 @@
           "options": {
             "alertThreshold": true
           },
-          "percentage": false,
           "pluginVersion": "7.5.17",
           "pointradius": 2,
-          "points": false,
           "renderer": "flot",
           "seriesOverrides": [
             {
@@ -11588,31 +11578,27 @@
             }
           ],
           "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
           "targets": [
             {
-              "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_ddl_exec_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_ddl_exec_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance) / \nsum(rate(ticdc_sink_ddl_exec_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance)",
+              "legendFormat": "avg-{{namespace}}-{{changefeed}}-{{instance}}",
               "interval": "",
-              "legendFormat": "count-{{namespace}}-{{changefeed}}-{{instance}}",
+              "exemplar": true,
               "queryType": "randomWalk",
               "refId": "A"
             },
             {
-              "exemplar": true,
               "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_ddl_exec_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,namespace,changefeed,instance))",
-              "hide": false,
-              "interval": "",
               "legendFormat": "99.9-duration-{{namespace}}-{{changefeed}}-{{instance}}",
+              "interval": "",
+              "exemplar": true,
+              "hide": false,
               "refId": "B"
             }
           ],
           "thresholds": [],
-          "timeFrom": null,
           "timeRegions": [],
-          "timeShift": null,
-          "title": "Output DDL Count & Executing Duration",
+          "title": "Output DDL Executing Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -11620,28 +11606,143 @@
           },
           "type": "graph",
           "xaxis": {
-            "buckets": null,
             "mode": "time",
-            "name": null,
             "show": true,
-            "values": []
+            "values": [],
+            "name": null,
+            "buckets": null
           },
           "yaxes": [
             {
               "format": "s",
               "logBase": 1,
               "min": "0",
-              "show": true
+              "show": true,
+              "$$hashKey": "object:129"
             },
             {
-              "format": "s",
+              "format": "short",
               "logBase": 1,
-              "show": true
+              "show": false,
+              "$$hashKey": "object:130"
             }
           ],
           "yaxis": {
             "align": false
-          }
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "bars": false,
+          "dashes": false,
+          "fillGradient": 0,
+          "hiddenSeries": false,
+          "percentage": false,
+          "points": false,
+          "stack": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null
+        },
+        {
+          "aliasColors": {},
+          "dashLength": 10,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "DDL count / minutes",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 103
+          },
+          "id": 22261,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "/duration/",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "targets": [
+            {
+              "expr": "sum(increase(ticdc_sink_ddl_exec_duration_bucket{le=\"+Inf\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance)",
+              "legendFormat": "count-{{namespace}}-{{changefeed}}-{{instance}}",
+              "interval": "",
+              "exemplar": true,
+              "queryType": "randomWalk",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeRegions": [],
+          "title": "Output DDL Count / Minutes",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "show": true,
+            "values": [],
+            "name": null,
+            "buckets": null
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "logBase": 1,
+              "min": "0",
+              "show": true,
+              "$$hashKey": "object:129"
+            },
+            {
+              "format": "short",
+              "logBase": 1,
+              "show": true,
+              "$$hashKey": "object:130"
+            }
+          ],
+          "yaxis": {
+            "align": false
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "bars": false,
+          "dashes": false,
+          "fillGradient": 0,
+          "hiddenSeries": false,
+          "percentage": false,
+          "points": false,
+          "stack": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null
         },
         {
           "aliasColors": {},
@@ -11752,7 +11853,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 103
+            "y": 111
           },
           "hiddenSeries": false,
           "id": 614,

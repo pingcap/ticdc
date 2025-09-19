@@ -544,7 +544,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 
 	// still waiting for all dispatcher to reach the block commit ts
 	if !be.selected.Load() {
-		if time.Since(be.lastResendTime) > 30*time.Second {
+		if time.Since(be.lastWarningLogTime) > time.Second*10 {
 			log.Info("barrier event is not being selected",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.Uint64("commitTs", be.commitTs),
