@@ -479,6 +479,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		zap.Stringer("dispatcherID", task.id),
 		zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 		zap.Uint64("commitTs", event.GetCommitTs()),
+		zap.Uint64("epoch", event.GetEpoch()),
 		zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
