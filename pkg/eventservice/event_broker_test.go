@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -262,6 +263,47 @@ func TestResetDispatcher(t *testing.T) {
 	require.Equal(t, uint64(1), newStat.epoch)
 	require.Equal(t, uint64(500), newStat.startTs)
 	require.Equal(t, dispInfo.GetID(), newStat.id)
+}
+
+func TestResetDispatcherConcurrently(t *testing.T) {
+	broker, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	// 1. Add a dispatcher first.
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
+
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+	initialStat := dispPtr.Load()
+	require.Equal(t, uint64(0), initialStat.epoch)
+
+	// 2. Prepare for concurrent resets.
+	concurrency := 10
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+
+	maxEpoch := uint64(concurrency)
+
+	// 3. Spawn goroutines to reset concurrently.
+	for i := 1; i <= concurrency; i++ {
+		go func(epoch uint64) {
+			defer wg.Done()
+			resetInfo := newMockDispatcherInfo(t, 500+epoch, dispInfo.GetID(), 100, eventpb.ActionType_ACTION_TYPE_RESET)
+			resetInfo.epoch = epoch
+			err := broker.resetDispatcher(resetInfo)
+			require.NoError(t, err)
+		}(uint64(i))
+	}
+
+	// 4. Wait for all goroutines to finish.
+	wg.Wait()
+
+	// 5. Verify the final state has the max epoch.
+	finalStat := dispPtr.Load()
+	require.Equal(t, maxEpoch, finalStat.epoch, "the final epoch should be the maximum one")
+	require.Equal(t, 500+maxEpoch, finalStat.startTs, "the final startTs should correspond to the max epoch")
 }
 
 func TestHandleResolvedTs(t *testing.T) {
