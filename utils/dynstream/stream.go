@@ -14,6 +14,7 @@
 package dynstream
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,6 +54,9 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	wg sync.WaitGroup
 
 	startTime time.Time
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
@@ -67,6 +71,7 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		option:     option,
 		startTime:  time.Now(),
 	}
+	s.ctx, s.cancel = context.WithCancel(context.Background())
 
 	if option.UseBuffer {
 		s.inChan = make(chan eventWrap[A, P, T, D, H], 64)
@@ -80,7 +85,7 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 }
 
 func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
-	s.in() <- eventWrap[A, P, T, D, H]{pathInfo: path, newPath: true}
+	s.addEvent(eventWrap[A, P, T, D, H]{pathInfo: path, newPath: true})
 }
 
 func (s *stream[A, P, T, D, H]) getPendingSize() int {
@@ -90,11 +95,15 @@ func (s *stream[A, P, T, D, H]) getPendingSize() int {
 	return len(s.eventChan) + int(s.eventQueue.totalPendingLength.Load())
 }
 
-func (s *stream[A, P, T, D, H]) in() chan eventWrap[A, P, T, D, H] {
+func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
+	ch := s.eventChan
 	if s.option.UseBuffer {
-		return s.inChan
+		ch = s.inChan
 	}
-	return s.eventChan
+	select {
+	case <-s.ctx.Done():
+	case ch <- event:
+	}
 }
 
 // Start the stream.
@@ -116,11 +125,7 @@ func (s *stream[A, P, T, D, H]) start() {
 // wait is by default true, which means to wait for the goroutines to exit.
 func (s *stream[A, P, T, D, H]) close() {
 	if s.isClosed.CompareAndSwap(false, true) {
-		if s.option.UseBuffer {
-			close(s.inChan)
-		} else {
-			close(s.eventChan)
-		}
+		s.cancel()
 	}
 	s.wg.Wait()
 }
@@ -128,13 +133,12 @@ func (s *stream[A, P, T, D, H]) close() {
 func (s *stream[A, P, T, D, H]) receiver() {
 	buffer := deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue)
 	defer func() {
-		// Move all remaining events in the buffer to the outChan.
+		// Move all remaining events out of the buffer.
 		for {
-			event, ok := buffer.FrontRef()
+			_, ok := buffer.FrontRef()
 			if !ok {
 				break
 			} else {
-				s.outChan <- *event
 				buffer.PopFront()
 				s.bufferCount.Add(-1)
 			}
@@ -146,12 +150,16 @@ func (s *stream[A, P, T, D, H]) receiver() {
 	for {
 		event, ok := buffer.FrontRef()
 		if !ok {
-			e, ok := <-s.inChan
-			if !ok {
+			select {
+			case <-s.ctx.Done():
 				return
+			case e, ok := <-s.inChan:
+				if !ok {
+					return
+				}
+				buffer.PushBack(e)
+				s.bufferCount.Add(1)
 			}
-			buffer.PushBack(e)
-			s.bufferCount.Add(1)
 		} else {
 			select {
 			case e, ok := <-s.inChan:
@@ -163,6 +171,8 @@ func (s *stream[A, P, T, D, H]) receiver() {
 			case s.outChan <- *event:
 				buffer.PopFront()
 				s.bufferCount.Add(-1)
+			case <-s.ctx.Done():
+				return
 			}
 		}
 	}
@@ -191,12 +201,6 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 				zap.Any("recover", r),
 				zap.Stack("stack"))
 		}
-
-		// Move remaining events in the eventChan to pendingQueue.
-		for e := range s.eventChan {
-			handleEvent(e)
-		}
-
 		s.wg.Done()
 	}()
 
@@ -225,15 +229,22 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 Loop:
 	for {
 		if eventQueueEmpty {
-			e, ok := <-s.eventChan
-			if !ok {
-				// The stream is closed.
+			select {
+			case <-s.ctx.Done():
+				log.Info("fizz ctx done, return handleLoop")
 				return
+			case e, ok := <-s.eventChan:
+				if !ok {
+					return
+				}
+				handleEvent(e)
+				eventQueueEmpty = false
 			}
-			handleEvent(e)
-			eventQueueEmpty = false
 		} else {
 			select {
+			case <-s.ctx.Done():
+				log.Info("fizz ctx done, return handleLoop")
+				return
 			case e, ok := <-s.eventChan:
 				if !ok {
 					return
