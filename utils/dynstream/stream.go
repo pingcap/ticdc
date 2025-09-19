@@ -49,12 +49,11 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	option Option
 
-	isClosed atomic.Bool
-
 	wg sync.WaitGroup
 
 	startTime time.Time
 
+	closed atomic.Bool
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -108,7 +107,7 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 
 // Start the stream.
 func (s *stream[A, P, T, D, H]) start() {
-	if s.isClosed.Load() {
+	if s.closed.Load() {
 		panic("The stream has been closed.")
 	}
 
@@ -124,7 +123,7 @@ func (s *stream[A, P, T, D, H]) start() {
 // Close the stream and wait for all goroutines to exit.
 // wait is by default true, which means to wait for the goroutines to exit.
 func (s *stream[A, P, T, D, H]) close() {
-	if s.isClosed.CompareAndSwap(false, true) {
+	if s.closed.CompareAndSwap(false, true) {
 		s.cancel()
 	}
 	s.wg.Wait()
@@ -231,7 +230,6 @@ Loop:
 		if eventQueueEmpty {
 			select {
 			case <-s.ctx.Done():
-				log.Info("fizz ctx done, return handleLoop")
 				return
 			case e, ok := <-s.eventChan:
 				if !ok {
@@ -243,7 +241,6 @@ Loop:
 		} else {
 			select {
 			case <-s.ctx.Done():
-				log.Info("fizz ctx done, return handleLoop")
 				return
 			case e, ok := <-s.eventChan:
 				if !ok {

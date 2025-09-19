@@ -185,7 +185,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 
 	s.setMemControl(pi, as...)
 
-	if pi.stream.isClosed.Load() {
+	if pi.stream.closed.Load() {
 		return nil
 	}
 

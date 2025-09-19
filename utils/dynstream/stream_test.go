@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,9 +75,6 @@ func (h *mockHandler) Handle(dest any, events ...*mockEvent) (await bool) {
 	if event.done != nil {
 		event.done.Done()
 	}
-
-	log.Info("fizz handle event")
-
 	return false
 }
 
