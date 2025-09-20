@@ -15,7 +15,6 @@ package dispatcher
 
 import (
 	"math/rand"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -223,37 +222,13 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
+	// For ddl event, we need to check whether it should be sent to downstream.
+	// It may be marked as not sync by filter when building the event.
 	if event.GetType() == commonEvent.TypeDDLEvent {
 		ddl := event.(*commonEvent.DDLEvent)
-		if ddl.MultipleNotSync != nil {
-			resultQuerys := make([]string, 0)
-			tableInfos := make([]*common.TableInfo, 0)
-			querys, err := commonEvent.SplitQueries(ddl.Query)
-			if err != nil {
-				return errors.Trace(err)
-			}
-			if len(querys) != len(ddl.MultipleTableInfos) {
-				log.Error("the querys is not equal table infos after re-split", zap.Any("querys", querys), zap.Any("tableInfos", ddl.MultipleTableInfos))
-				return errors.ErrUnexpected.GenWithStack("the querys is not equal table infos after re-split")
-			}
-			for i, notSync := range ddl.MultipleNotSync {
-				if notSync {
-					log.Info("ignore a DDL by MultipleNotSync",
-						zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl), zap.String("query", querys[i]), zap.Any("tableInfo", ddl.MultipleTableInfos[i]))
-					continue
-				} else {
-					tableInfos = append(tableInfos, ddl.MultipleTableInfos[i])
-					resultQuerys = append(resultQuerys, querys[i])
-				}
-			}
-			if len(resultQuerys) == 0 {
-				d.PassBlockEventToSink(event)
-				return nil
-			}
-			ddl.Query = strings.Join(resultQuerys, "")
-			ddl.MultipleTableInfos = tableInfos
-			ddl.MultipleNotSync = nil
-		} else if ddl.NotSync {
+		// If NotSync is true, it means the DDL should not be sent to downstream.
+		// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
+		if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
 			d.PassBlockEventToSink(event)
 			return nil

@@ -431,7 +431,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
-		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, tableID)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -501,7 +501,8 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+			// the tableID of buildDDLEvent is not used in this function, set it to 0
+			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -844,10 +845,13 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	return false
 }
 
-func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+// NOTE: tableID is only used in fetchTableDDLEvents to fetch exchange table partition and rename tables DDL
+// for the corresponding dispatcher.
+// It's not used in fetchTableTriggerDDLEvents, so it can be 0.
+func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))
 	}
-	return handler.buildDDLEventFunc(rawEvent, tableFilter)
+	return handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
 }
