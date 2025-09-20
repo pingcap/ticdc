@@ -39,7 +39,9 @@ run_case() {
 	local case=$1
 	local script=$2
 	local sink_type=$3
+	echo -e "\033[0;34m" # Set text color to blue
 	echo "=================>> Running test $script using Sink-Type: $sink_type... <<================="
+	echo -e "\033[0m" # Reset text color to default, no color
 	PATH="$CUR/../bin:$CUR/_utils:$PATH" \
 		LD_LIBRARY_PATH="$CUR/../bin:$CUR/_utils:$PATH" \
 		OUT_DIR=$OUT_DIR \

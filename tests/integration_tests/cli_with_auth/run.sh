@@ -45,7 +45,7 @@ function run() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config "$WORK_DIR/server.toml"
 
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 
 	TOPIC_NAME="ticdc-cli-test-$RANDOM"
 	case $SINK_TYPE in

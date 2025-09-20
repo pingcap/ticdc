@@ -22,30 +22,44 @@ ${PKILL} oauth_server || true
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 
-kill -9 $(lsof -i tcp:${UP_TIDB_PORT} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_TIDB_OTHER_PORT} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_TIDB_STATUS} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_TIDB_OTHER_STATUS} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${DOWN_TIDB_PORT} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${DOWN_TIDB_STATUS} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_PD_PORT_1} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_PD_PEER_PORT_1} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_PD_PORT_2} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_PD_PEER_PORT_2} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_PD_PORT_3} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_PD_PEER_PORT_3} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${DOWN_PD_PORT} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${DOWN_PD_PEER_PORT} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_TIKV_PORT_1} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_TIKV_STATUS_PORT_1} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_TIKV_PORT_2} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_TIKV_STATUS_PORT_2} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_TIKV_PORT_3} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${UP_TIKV_STATUS_PORT_3} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${DOWN_TIKV_PORT} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:${DOWN_TIKV_STATUS_PORT} -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:9500 -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:17000 -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:6650 -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:6651 -t 2>/dev/null) &>/dev/null || true
-kill -9 $(lsof -i tcp:9096 -t 2>/dev/null) &>/dev/null || true
+killport() {
+	if [ -z "$1" ]; then
+		return 0
+	fi
+
+	pid=$(lsof -i tcp:$1 -t 2>/dev/null | tail -n1)
+	if [ -z "$pid" ]; then
+		return 0
+	fi
+
+	kill -9 "$pid" &>/dev/null
+	return 0
+}
+
+killport "${UP_TIDB_PORT}"
+killport "${UP_TIDB_OTHER_PORT}"
+killport "${UP_TIDB_STATUS}"
+killport "${UP_TIDB_OTHER_STATUS}"
+killport "${DOWN_TIDB_PORT}"
+killport "${DOWN_TIDB_STATUS}"
+killport "${UP_PD_PORT_1}"
+killport "${UP_PD_PEER_PORT_1}"
+killport "${UP_PD_PORT_2}"
+killport "${UP_PD_PEER_PORT_2}"
+killport "${UP_PD_PORT_3}"
+killport "${UP_PD_PEER_PORT_3}"
+killport "${DOWN_PD_PORT}"
+killport "${DOWN_PD_PEER_PORT}"
+killport "${UP_TIKV_PORT_1}"
+killport "${UP_TIKV_STATUS_PORT_1}"
+killport "${UP_TIKV_PORT_2}"
+killport "${UP_TIKV_STATUS_PORT_2}"
+killport "${UP_TIKV_PORT_3}"
+killport "${UP_TIKV_STATUS_PORT_3}"
+killport "${DOWN_TIKV_PORT}"
+killport "${DOWN_TIKV_STATUS_PORT}"
+killport "9500"
+killport "17000"
+killport "6650"
+killport "6651"
+killport "9096"

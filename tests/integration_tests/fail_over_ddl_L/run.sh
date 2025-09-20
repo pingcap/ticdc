@@ -72,7 +72,7 @@ function failOverCaseL-1() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
@@ -122,7 +122,7 @@ function failOverCaseL-2() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
@@ -181,7 +181,7 @@ function failOverCaseL-3() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
@@ -243,7 +243,7 @@ function failOverCaseL-4() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
