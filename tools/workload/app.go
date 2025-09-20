@@ -22,18 +22,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
+	pdc "workload/schema/dc"
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
+
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -73,6 +75,7 @@ const (
 	crawler    = "crawler"
 	bank2      = "bank2"
 	bankUpdate = "bank_update"
+	dc         = "dc"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -129,6 +132,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pbank2.NewBank2Workload()
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
+	case dc:
+		workload = pdc.NewDCWorkload()
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
