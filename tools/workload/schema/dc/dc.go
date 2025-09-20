@@ -93,7 +93,7 @@ const createTable2 = `CREATE TABLE IF NOT EXISTS t_%d (
   col4 date DEFAULT NULL,
   col5 bigint(20) DEFAULT '0',
   col6 date DEFAULT NULL,
-  PRIMARY KEY (id) /*T![clustered_index] CLUSTERED */,
+  PRIMARY KEY (id),
   UNIQUE KEY key (col1)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin AUTO_INCREMENT=2993907144'
 `
