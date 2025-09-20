@@ -551,11 +551,11 @@ func (e *eventStore) RegisterDispatcher(
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
 			subStat.dispatchers.Lock()
 			defer subStat.dispatchers.Unlock()
-			for _, subscriber := range subStat.dispatchers.subscribers {
-				if !subscriber.isStopped.Load() {
-					subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
-				}
-			}
+			// for _, subscriber := range subStat.dispatchers.subscribers {
+			// 	if !subscriber.isStopped.Load() {
+			// 		subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
+			// 	}
+			// }
 			CounterResolved.Inc()
 			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
