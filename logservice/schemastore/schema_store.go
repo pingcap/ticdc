@@ -55,7 +55,7 @@ type SchemaStore interface {
 	// TODO: add a parameter limit
 	FetchTableDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error)
 
-	FetchTableTriggerDDLEvents(keyspaceID uint32, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
+	FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
 
 	// RegisterKeyspace register a keyspace to fetch table ddl
 	RegisterKeyspace(ctx context.Context, keyspaceName string) error
@@ -377,7 +377,7 @@ func (s *schemaStore) FetchTableDDLEvents(keyspaceID uint32, dispatcherID common
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
-func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	if limit == 0 {
 		log.Panic("limit cannot be 0")
 	}
@@ -401,10 +401,13 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, tableFilter 
 		return events, events[limit-1].FinishedTs, nil
 	}
 	end := currentResolvedTs
+	// after we get currentResolvedTs, there may be new ddl events with FinishedTs > currentResolvedTs
+	// so we need to extend the end to include these new ddl events
 	if len(events) > 0 && events[len(events)-1].FinishedTs > currentResolvedTs {
 		end = events[len(events)-1].FinishedTs
 	}
 	log.Debug("FetchTableTriggerDDLEvents end",
+		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("start", start),
 		zap.Int("limit", limit),
 		zap.Uint64("end", end),

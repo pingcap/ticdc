@@ -141,7 +141,7 @@ func (m *mockSchemaStore) FetchTableDDLEvents(keyspaceID uint32, dispatcherID co
 	return events[l:r], nil
 }
 
-func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	return nil, 0, nil
 }
 

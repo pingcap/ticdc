@@ -178,7 +178,7 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
 
 		// Track min resolved timestamps
-		resolvedTs := dispatcher.eventStoreResolvedTs.Load()
+		resolvedTs := dispatcher.receivedResolvedTs.Load()
 		if resolvedTs < snapshot.receivedMinResolvedTs {
 			snapshot.receivedMinResolvedTs = resolvedTs
 		}
@@ -247,7 +247,7 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 	log.Warn("slowest dispatcher",
 		zap.Stringer("dispatcherID", snapshot.slowestDispatcher.id),
 		zap.Uint64("sentResolvedTs", snapshot.slowestDispatcher.sentResolvedTs.Load()),
-		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.eventStoreResolvedTs.Load()),
+		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.receivedResolvedTs.Load()),
 		zap.Duration("lag", lag),
 		zap.Duration("updateDiff",
 			time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())-

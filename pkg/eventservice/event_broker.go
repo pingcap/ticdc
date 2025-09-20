@@ -305,12 +305,12 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				c.sendHandshakeIfNeed(stat)
 				startTs := stat.sentResolvedTs.Load()
 				remoteID := node.ID(stat.info.GetServerID())
-				// TODO: maybe limit 1 is enough.
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.info.GetTableSpan().KeyspaceID, stat.filter, startTs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.info.GetTableSpan().KeyspaceID, key.(common.DispatcherID), stat.filter, startTs, 100)
 				if err != nil {
 					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
 				}
+				stat.receivedResolvedTs.Store(endTs)
 				for _, e := range ddlEvents {
 					ep := &e
 					c.sendDDL(ctx, remoteID, ep, stat)
@@ -615,7 +615,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if err != nil {
 		log.Error("scan events failed",
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()),
+			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}

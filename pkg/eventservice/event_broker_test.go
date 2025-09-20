@@ -66,9 +66,9 @@ func TestCheckNeedScan(t *testing.T) {
 	info := newMockDispatcherInfoForTest(t)
 	info.startTs = 100
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
-	// Set the eventStoreResolvedTs and eventStoreCommitTs to 102 and 101.
+	// Set the receivedResolvedTs and eventStoreCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
-	disp.eventStoreResolvedTs.Store(102)
+	disp.receivedResolvedTs.Store(102)
 	disp.eventStoreCommitTs.Store(101)
 
 	// Case 1: Is scanning, and mustCheck is false, it should return false.
@@ -131,13 +131,13 @@ func TestOnNotify(t *testing.T) {
 	// Case 1: The resolvedTs is greater than the startTs, it should be updated.
 	notifyMsgs := notifyMsg{101, 1}
 	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
-	require.Equal(t, uint64(101), disp.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(101), disp.receivedResolvedTs.Load())
 	log.Info("Pass case 1")
 
 	// Case 2: The eventStoreCommitTs is greater than the startTs, it triggers a scan task.
 	notifyMsgs = notifyMsg{102, 101}
 	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
-	require.Equal(t, uint64(102), disp.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(102), disp.receivedResolvedTs.Load())
 	require.True(t, disp.isTaskScanning.Load())
 	task := <-broker.taskChan[disp.scanWorkerIndex]
 	require.Equal(t, task.id, disp.id)
@@ -147,13 +147,13 @@ func TestOnNotify(t *testing.T) {
 	// should not trigger a new scan task.
 	notifyMsgs = notifyMsg{103, 101}
 	broker.onNotify(disp, notifyMsgs.resolvedTs, notifyMsgs.latestCommitTs)
-	require.Equal(t, uint64(103), disp.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(103), disp.receivedResolvedTs.Load())
 	after := time.After(50 * time.Millisecond)
 	select {
 	case <-after:
 		log.Info("Pass case 3")
 	case task := <-broker.taskChan[disp.scanWorkerIndex]:
-		log.Info("trigger a new scan task", zap.Any("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("eventStoreCommitTs", task.eventStoreCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
+		log.Info("trigger a new scan task", zap.Any("task", task.id.String()), zap.Any("resolvedTs", task.receivedResolvedTs.Load()), zap.Any("eventStoreCommitTs", task.eventStoreCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
 		require.Fail(t, "should not trigger a new scan task")
 	}
 

@@ -69,9 +69,8 @@ type dispatcherStat struct {
 	// =============================================================================
 	// ================== below are fields need copied when reset ==================
 
-	// The max resolved ts received from event store.
-	// it's updated after the event store receive resolved-ts event.
-	eventStoreResolvedTs atomic.Uint64
+	// The max resolved ts received from event store/schema store.
+	receivedResolvedTs atomic.Uint64
 
 	// The max commit ts of dml events received from event store.
 	// it's updated after the event store receive DML events.
@@ -160,7 +159,7 @@ func newDispatcherStat(
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
 	}
 	startTs := info.GetStartTs()
-	dispStat.eventStoreResolvedTs.Store(startTs)
+	dispStat.receivedResolvedTs.Store(startTs)
 	dispStat.checkpointTs.Store(startTs)
 
 	dispStat.sentResolvedTs.Store(startTs)
@@ -223,7 +222,7 @@ func (a *dispatcherStat) updateScanRange(txnCommitTs, txnStartTs uint64) {
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
 func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
-	if resolvedTs <= a.eventStoreResolvedTs.Load() {
+	if resolvedTs <= a.receivedResolvedTs.Load() {
 		return false
 	}
 	if !a.hasReceivedFirstResolvedTs.Load() {
@@ -232,7 +231,7 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 		a.lastUpdateScanLimitTime.Store(time.Now())
 		a.hasReceivedFirstResolvedTs.Store(true)
 	}
-	return util.CompareAndMonotonicIncrease(&a.eventStoreResolvedTs, resolvedTs)
+	return util.CompareAndMonotonicIncrease(&a.receivedResolvedTs, resolvedTs)
 }
 
 func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
@@ -245,7 +244,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	lastTxnStartTs := a.lastScannedStartTs.Load()
 
 	// the data not received by the event store yet, so just skip it.
-	resolvedTs := a.eventStoreResolvedTs.Load()
+	resolvedTs := a.receivedResolvedTs.Load()
 	if lastTxnCommitTs >= resolvedTs {
 		return common.DataRange{}, false
 	}
