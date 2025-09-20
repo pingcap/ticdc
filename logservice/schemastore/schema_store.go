@@ -401,6 +401,8 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID
 		return events, events[limit-1].FinishedTs, nil
 	}
 	end := currentResolvedTs
+	// after we get currentResolvedTs, there may be new ddl events with FinishedTs > currentResolvedTs
+	// so we need to extend the end to include these new ddl events
 	if len(events) > 0 && events[len(events)-1].FinishedTs > currentResolvedTs {
 		end = events[len(events)-1].FinishedTs
 	}
