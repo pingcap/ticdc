@@ -26,58 +26,45 @@ type notificationTask struct {
 }
 
 type NotificationQueue struct {
-	fastChan chan notificationTask
-	mu       sync.RWMutex
-	tasks    *list.List
-	taskMap  map[NotifierID]*list.Element // 快速查找
-	cond     *sync.Cond
+	mu      sync.RWMutex
+	tasks   *list.List
+	taskMap map[NotifierID]*list.Element // 快速查找
+	cond    *sync.Cond
 }
 
 func NewNotificationQueue() *NotificationQueue {
 	q := &NotificationQueue{
-		fastChan: make(chan notificationTask, 10000),
-		tasks:    list.New(),
-		taskMap:  make(map[NotifierID]*list.Element),
+		tasks:   list.New(),
+		taskMap: make(map[NotifierID]*list.Element),
 	}
 	q.cond = sync.NewCond(&q.mu)
 	return q
 }
 
 func (q *NotificationQueue) Enqueue(task notificationTask) {
-	select {
-	case q.fastChan <- task:
-		return
-	default:
-		q.mu.Lock()
-		defer q.mu.Unlock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
 
-		if elem, exists := q.taskMap[task.notifierID]; exists {
-			// 合并任务
-			existing := elem.Value.(notificationTask)
-			if task.resolvedTs > existing.resolvedTs {
-				existing.resolvedTs = task.resolvedTs
-			}
-			if task.maxCommitTs > existing.maxCommitTs {
-				existing.maxCommitTs = task.maxCommitTs
-			}
-			elem.Value = existing
-		} else {
-			// 添加新任务
-			elem := q.tasks.PushBack(task)
-			q.taskMap[task.notifierID] = elem
+	if elem, exists := q.taskMap[task.notifierID]; exists {
+		// 合并任务
+		existing := elem.Value.(notificationTask)
+		if task.resolvedTs > existing.resolvedTs {
+			existing.resolvedTs = task.resolvedTs
 		}
-
-		q.cond.Signal()
+		if task.maxCommitTs > existing.maxCommitTs {
+			existing.maxCommitTs = task.maxCommitTs
+		}
+		elem.Value = existing
+	} else {
+		// 添加新任务
+		elem := q.tasks.PushBack(task)
+		q.taskMap[task.notifierID] = elem
 	}
+
+	q.cond.Signal()
 }
 
 func (q *NotificationQueue) Dequeue() (notificationTask, bool) {
-	select {
-	case task := <-q.fastChan:
-		return task, true
-	default:
-	}
-
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
