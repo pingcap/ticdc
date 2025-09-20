@@ -13,7 +13,11 @@
 
 package kafka
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/pingcap/ticdc/pkg/sink/codec"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	requestsInFlightGauge = prometheus.NewGaugeVec(
@@ -74,51 +78,6 @@ var (
 			Name:      "kafka_producer_response_rate",
 			Help:      "Responses/second received from all brokers.",
 		}, []string{"namespace", "changefeed", "broker"})
-
-	// ClientRetryGauge only for kafka-go client to track internal retry count.
-	ClientRetryGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "kafka_producer_retry_count",
-			Help:      "Kafka client send request retry count",
-		}, []string{"namespace", "changefeed"})
-
-	// ClientErrorGauge only for kafka-go client to track internal error count.
-	ClientErrorGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "kafka_producer_err_count",
-			Help:      "Kafka client send request retry count",
-		}, []string{"namespace", "changefeed"})
-
-	// BatchDurationGauge only for kafka-go client to track internal batch duration.
-	BatchDurationGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "kafka_producer_batch_duration",
-			Help:      "Kafka client internal average batch message time cost in milliseconds",
-		}, []string{"namespace", "changefeed"})
-
-	// BatchMessageCountGauge only for kafka-go client to track each batch's messages count.
-	BatchMessageCountGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "kafka_producer_batch_message_count",
-			Help:      "Kafka client internal average batch message count",
-		}, []string{"namespace", "changefeed"})
-
-	// BatchSizeGauge only for kafka-go client to track each batch's size in bytes.
-	BatchSizeGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "kafka_producer_batch_size",
-			Help:      "Kafka client internal average batch size in bytes",
-		}, []string{"namespace", "changefeed"})
 )
 
 // InitMetrics registers all metrics in this file.
@@ -131,10 +90,6 @@ func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(requestsInFlightGauge)
 	registry.MustRegister(responseRateGauge)
 
-	// only used by kafka sink v2.
-	registry.MustRegister(BatchDurationGauge)
-	registry.MustRegister(BatchMessageCountGauge)
-	registry.MustRegister(BatchSizeGauge)
-	registry.MustRegister(ClientRetryGauge)
-	registry.MustRegister(ClientErrorGauge)
+	claimcheck.InitMetrics(registry)
+	codec.InitMetrics(registry)
 }

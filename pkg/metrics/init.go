@@ -16,30 +16,29 @@ package metrics
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 func InitMetrics(registry *prometheus.Registry) {
-	InitServerMetrics(registry)
-	InitSchedulerMetrics(registry)
-	InitChangefeedMetrics(registry)
-	InitDispatcherMetrics(registry)
-	InitMessagingMetrics(registry)
-	InitSinkMetrics(registry)
-	InitPullerMetrics(registry)
-	InitEventStoreMetrics(registry)
-	InitSchemaStoreMetrics(registry)
-	InitEventServiceMetrics(registry)
-	InitMaintainerMetrics(registry)
-	InitCoordinatorMetrics(registry)
-	InitLogPullerMetrics(registry)
+	initServerMetrics(registry)
+	initSchedulerMetrics(registry)
+	initChangefeedMetrics(registry)
+	initDispatcherMetrics(registry)
+	initMessagingMetrics(registry)
+	initSinkMetrics(registry)
+	initPullerMetrics(registry)
+	initEventStoreMetrics(registry)
+	initSchemaStoreMetrics(registry)
+	initEventServiceMetrics(registry)
+	initMaintainerMetrics(registry)
+	initCoordinatorMetrics(registry)
+	initLogPullerMetrics(registry)
 	common.InitCommonMetrics(registry)
-	InitDynamicStreamMetrics(registry)
+	initDynamicStreamMetrics(registry)
+
 	kafka.InitMetrics(registry)
-	codec.InitMetrics(registry)
 	gc.InitMetrics(registry)
 	metrics.InitCloudStorageMetrics(registry)
 	InitRedoMetrics(registry)

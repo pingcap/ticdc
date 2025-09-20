@@ -50,7 +50,7 @@ var (
 		}, []string{"state"})
 )
 
-func InitCoordinatorMetrics(registry *prometheus.Registry) {
+func initCoordinatorMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CoordinatorCreatedOperatorCount)
 	registry.MustRegister(CoordinatorFinishedOperatorCount)
 	registry.MustRegister(CoordinatorOperatorDuration)

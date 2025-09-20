@@ -200,7 +200,7 @@ var (
 )
 
 // InitMetrics registers all metrics in this file.
-func InitSinkMetrics(registry *prometheus.Registry) {
+func initSinkMetrics(registry *prometheus.Registry) {
 	// common sink metrics
 	registry.MustRegister(ExecBatchHistogram)
 	registry.MustRegister(TotalWriteBytesCounter)

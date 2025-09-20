@@ -146,8 +146,7 @@ var (
 		}, []string{"namespace", "changefeed", "group_id"})
 )
 
-// InitMetrics registers all metrics used in scheduler
-func InitSchedulerMetrics(registry *prometheus.Registry) {
+func initSchedulerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ScheduleTaskGauge)
 
 	registry.MustRegister(SpanCountGauge)

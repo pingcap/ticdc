@@ -51,7 +51,7 @@ var (
 		}, []string{"namespace", "changefeed", "type"})
 )
 
-func InitMaintainerMetrics(registry *prometheus.Registry) {
+func initMaintainerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerHandleEventDuration)
 	registry.MustRegister(OperatorCount)
 	registry.MustRegister(OperatorDuration)

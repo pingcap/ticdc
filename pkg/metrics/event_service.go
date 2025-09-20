@@ -139,8 +139,8 @@ var (
 	})
 )
 
-// InitEventServiceMetrics registers all metrics in this file.
-func InitEventServiceMetrics(registry *prometheus.Registry) {
+// initEventServiceMetrics registers all metrics in this file.
+func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceChannelSizeGauge)
 	registry.MustRegister(EventServiceSendEventCount)
 	registry.MustRegister(EventServiceSendEventDuration)

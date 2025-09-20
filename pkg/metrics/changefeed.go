@@ -107,8 +107,7 @@ var (
 		}, []string{"namespace", "changefeed"})
 )
 
-// InitMetrics registers all metrics used in owner
-func InitChangefeedMetrics(registry *prometheus.Registry) {
+func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ChangefeedBarrierTsGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
