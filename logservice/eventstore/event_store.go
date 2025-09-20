@@ -57,10 +57,23 @@ var (
 
 type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 
+type NotifierID uint64
+
+var notifierIDGen atomic.Uint64
+
 // Subscriber represents the dispatcher which depends on the subscription.
 type Subscriber struct {
+	notifierID NotifierID
 	notifyFunc ResolvedTsNotifier
 	isStopped  atomic.Bool
+}
+
+func newSubscriber(notifyFunc ResolvedTsNotifier) *Subscriber {
+	return &Subscriber{
+		notifierID: NotifierID(notifierIDGen.Add(1)),
+		notifyFunc: notifyFunc,
+		isStopped:  atomic.Bool{},
+	}
 }
 
 type EventStore interface {
@@ -202,6 +215,10 @@ type eventStore struct {
 	// which need to be uploaded to log coordinator periodically.
 	subscriptionChangeCh *chann.DrainableChann[SubscriptionChange]
 
+	notificationQueue *NotificationQueue
+
+	notificationWorkers []*notificationWorker
+
 	// To manage background goroutines.
 	wg sync.WaitGroup
 
@@ -244,6 +261,8 @@ func New(
 		gcManager: newGCManager(),
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
+
+		notificationQueue: NewNotificationQueue(),
 	}
 
 	// create a write task pool per db instance
@@ -253,6 +272,8 @@ func New(
 	}
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
 	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
+
+	store.initNotificationWorkers(64)
 
 	return store
 }
@@ -429,10 +450,7 @@ func (e *eventStore) RegisterDispatcher(
 					e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 					subStat.idleTime.Store(0)
 					subStat.dispatchers.Lock()
-					subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-						notifyFunc: notifier,
-						isStopped:  atomic.Bool{},
-					}
+					subStat.dispatchers.subscribers[dispatcherID] = newSubscriber(notifier)
 					subStat.dispatchers.Unlock()
 					e.dispatcherMeta.Unlock()
 					log.Info("reuse existing subscription with exact span match",
@@ -462,10 +480,7 @@ func (e *eventStore) RegisterDispatcher(
 		e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 		bestMatch.idleTime.Store(0)
 		bestMatch.dispatchers.Lock()
-		bestMatch.dispatchers.subscribers[dispatcherID] = &Subscriber{
-			notifyFunc: notifier,
-			isStopped:  atomic.Bool{},
-		}
+		bestMatch.dispatchers.subscribers[dispatcherID] = newSubscriber(notifier)
 		bestMatch.dispatchers.Unlock()
 		e.dispatcherMeta.Unlock()
 		log.Info("reuse existing subscription with smallest containing span",
@@ -498,10 +513,7 @@ func (e *eventStore) RegisterDispatcher(
 		eventCh:   e.chs[chIndex],
 	}
 	subStat.dispatchers.subscribers = make(map[common.DispatcherID]*Subscriber)
-	subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-		notifyFunc: notifier,
-		isStopped:  atomic.Bool{},
-	}
+	subStat.dispatchers.subscribers[dispatcherID] = newSubscriber(notifier)
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
 	subStat.maxEventCommitTs.Store(startTs)
@@ -551,11 +563,16 @@ func (e *eventStore) RegisterDispatcher(
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
 			subStat.dispatchers.Lock()
 			defer subStat.dispatchers.Unlock()
-			// for _, subscriber := range subStat.dispatchers.subscribers {
-			// 	if !subscriber.isStopped.Load() {
-			// 		subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
-			// 	}
-			// }
+			for _, subscriber := range subStat.dispatchers.subscribers {
+				if !subscriber.isStopped.Load() {
+					e.notificationQueue.Enqueue(notificationTask{
+						notifierID:  subscriber.notifierID,
+						notifier:    subscriber.notifyFunc,
+						resolvedTs:  ts,
+						maxCommitTs: subStat.maxEventCommitTs.Load(),
+					})
+				}
+			}
 			CounterResolved.Inc()
 			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
@@ -807,6 +824,41 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:       dataRange.CommitTsStart,
 		endTs:         dataRange.CommitTsEnd,
 		rowCount:      0,
+	}
+}
+
+type notificationWorker struct {
+	queue *NotificationQueue
+	stop  chan struct{}
+}
+
+func (w *notificationWorker) run() {
+	for {
+		select {
+		// TODO: remove select
+		case <-w.stop:
+			return
+		default:
+			task, ok := w.queue.Dequeue()
+			if !ok {
+				continue
+			}
+
+			task.notifier(task.resolvedTs, task.maxCommitTs)
+		}
+	}
+}
+
+func (e *eventStore) initNotificationWorkers(poolSize int) {
+	e.notificationWorkers = make([]*notificationWorker, poolSize)
+
+	for i := 0; i < poolSize; i++ {
+		worker := &notificationWorker{
+			queue: e.notificationQueue,
+			stop:  make(chan struct{}),
+		}
+		e.notificationWorkers[i] = worker
+		go worker.run()
 	}
 }
 
