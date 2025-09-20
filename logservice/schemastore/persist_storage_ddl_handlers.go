@@ -624,6 +624,8 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			zap.String("ExtraSchemaName", event.ExtraSchemaName),
 			zap.String("ExtraTableName", event.ExtraTableName),
 			zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
+		// InvolvingSchemaInfo returns the schema info involved in the job.
+		// The value should be stored in lower case.
 		if args.job.InvolvingSchemaInfo[0].Database != strings.ToLower(event.SchemaName) {
 			// The query in job maybe "RENAME TABLE table1 to test2.table2", we need rebuild it here.
 			//
@@ -636,9 +638,6 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			// And because SchemaStore is the source of truth inside cdc,
 			// we can use event.ExtraSchemaID(even it is wrong) to update the internal state of the cdc.
 			// But event.Query will be emit to downstream(out of cdc), we must make it correct.
-			//
-			// InvolvingSchemaInfo returns the schema info involved in the job.
-			// The value should be stored in lower case.
 			oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
 			oldTableName := args.job.InvolvingSchemaInfo[0].Table
 			stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
