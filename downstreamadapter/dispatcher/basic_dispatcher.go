@@ -223,37 +223,53 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
+	// For ddl event, we need to check whether it should be sent to downstream.
+	// It may be marked as not sync by filter when building the event.
 	if event.GetType() == commonEvent.TypeDDLEvent {
 		ddl := event.(*commonEvent.DDLEvent)
+		// We need to check MultipleNotSync first.
+		// If MultipleNotSync is not nil, it means the DDL involves multiple tables.
+		// Such as create multiple tables, rename multiple tables.
+		// In this case, NotSync is always false and not effective.
+		// We need to check MultipleNotSync to determine which table DDL should be sent to downstream.
 		if ddl.MultipleNotSync != nil {
-			resultQuerys := make([]string, 0)
-			tableInfos := make([]*common.TableInfo, 0)
-			querys, err := commonEvent.SplitQueries(ddl.Query)
+			newEvent, err := ddl.Clone()
 			if err != nil {
 				return errors.Trace(err)
 			}
-			if len(querys) != len(ddl.MultipleTableInfos) {
-				log.Error("the querys is not equal table infos after re-split", zap.Any("querys", querys), zap.Any("tableInfos", ddl.MultipleTableInfos))
+			resultQuerys := make([]string, 0)
+			tableInfos := make([]*common.TableInfo, 0)
+			querys, err := commonEvent.SplitQueries(newEvent.Query)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			if len(querys) != len(newEvent.MultipleTableInfos) {
+				log.Error("the querys is not equal table infos after re-split", zap.Any("querys", querys), zap.Any("tableInfos", newEvent.MultipleTableInfos))
 				return errors.ErrUnexpected.GenWithStack("the querys is not equal table infos after re-split")
 			}
-			for i, notSync := range ddl.MultipleNotSync {
+			for i, notSync := range newEvent.MultipleNotSync {
 				if notSync {
 					log.Info("ignore a DDL by MultipleNotSync",
-						zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl), zap.String("query", querys[i]), zap.Any("tableInfo", ddl.MultipleTableInfos[i]))
+						zap.Stringer("dispatcher", d.id), zap.Any("ddl", newEvent), zap.String("query", querys[i]), zap.Any("tableInfo", newEvent.MultipleTableInfos[i]))
 					continue
 				} else {
-					tableInfos = append(tableInfos, ddl.MultipleTableInfos[i])
+					tableInfos = append(tableInfos, newEvent.MultipleTableInfos[i])
 					resultQuerys = append(resultQuerys, querys[i])
 				}
 			}
 			if len(resultQuerys) == 0 {
-				d.PassBlockEventToSink(event)
+				d.PassBlockEventToSink(newEvent)
 				return nil
 			}
-			ddl.Query = strings.Join(resultQuerys, "")
-			ddl.MultipleTableInfos = tableInfos
-			ddl.MultipleNotSync = nil
+			newEvent.Query = strings.Join(resultQuerys, "")
+			newEvent.MultipleTableInfos = tableInfos
+			newEvent.MultipleNotSync = nil
+			d.tableProgress.Add(newEvent)
+			return d.sink.WriteBlockEvent(newEvent)
 		} else if ddl.NotSync {
+			// For single table ddl, we just need to check NotSync.
+			// If NotSync is true, it means the DDL should not be sent to downstream.
+			// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
 			d.PassBlockEventToSink(event)
 			return nil

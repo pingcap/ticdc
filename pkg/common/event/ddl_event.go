@@ -16,9 +16,9 @@ package event
 import (
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -106,14 +106,35 @@ type DDLEvent struct {
 	// should be sent to downstream.
 	// So we should send the `TRUNCATE TABLE` DDL event to table trigger,
 	// to ensure the new truncated table can be handled correctly.
+	// If the DDL involves multiple tables, this field is not effective.
+	// In this case, use MultipleNotSync instead.
 	NotSync bool `msg:"not_sync"`
 	// MultipleNotSync is used to indicate whether multiple table DDLs should be synced to downstream.
+	// Such as create multiple tables, rename multiple tables.
+	// If one of the multiple table DDLs should not be synced, the corresponding index in MultipleNotSync is true.
+	// Otherwise, it is false.
+	// If the DDL involves only one table, this field is nil.
+	// This field is used together with MultipleTableInfos and query.
+	// The length of MultipleNotSync should be equal to the length of MultipleTableInfos.
 	MultipleNotSync []bool `msg:"multiple_not_sync"`
 }
 
 func (d *DDLEvent) String() string {
 	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, TableID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, FinishedTs: %d, Seq: %d, State: %s, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TableNameInDDLJob: %s, DBNameInDDLJob: %s, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
 		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.TableID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.State, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TableNameInDDLJob, d.DBNameInDDLJob, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
+}
+
+func (d *DDLEvent) Clone() (*DDLEvent, error) {
+	bytes, err := d.Marshal()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	newEvent := &DDLEvent{}
+	err = newEvent.Unmarshal(bytes)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return newEvent, nil
 }
 
 func (d *DDLEvent) GetType() int {
