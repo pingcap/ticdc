@@ -16,6 +16,7 @@ package dispatchermanager
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -58,8 +59,9 @@ type HeartBeatCollector struct {
 	mergeDispatcherRequestDynamicStream     dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler]
 	mc                                      messaging.MessageCenter
 
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
+	wg       sync.WaitGroup
+	cancel   context.CancelFunc
+	isClosed atomic.Bool
 }
 
 func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
@@ -106,6 +108,10 @@ func (c *HeartBeatCollector) Run(ctx context.Context) {
 }
 
 func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) error {
+	if c.isClosed.Load() {
+		return nil
+	}
+
 	m.SetHeartbeatRequestQueue(c.heartBeatReqQueue)
 	m.SetBlockStatusRequestQueue(c.blockStatusReqQueue)
 	err := c.heartBeatResponseDynamicStream.AddPath(m.changefeedID.Id, m)
@@ -124,16 +130,28 @@ func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) err
 }
 
 func (c *HeartBeatCollector) RegisterCheckpointTsMessageDs(m *DispatcherManager) error {
+	if c.isClosed.Load() {
+		return nil
+	}
+
 	err := c.checkpointTsMessageDynamicStream.AddPath(m.changefeedID.Id, m)
 	return errors.Trace(err)
 }
 
 func (c *HeartBeatCollector) RegisterRedoMessageDs(m *DispatcherManager) error {
+	if c.isClosed.Load() {
+		return nil
+	}
+
 	err := c.redoMessageDynamicStream.AddPath(m.changefeedID.Id, m)
 	return errors.Trace(err)
 }
 
 func (c *HeartBeatCollector) RemoveDispatcherManager(id common.ChangeFeedID) error {
+	if c.isClosed.Load() {
+		return nil
+	}
+
 	err := c.heartBeatResponseDynamicStream.RemovePath(id.Id)
 	if err != nil {
 		return errors.Trace(err)
@@ -150,6 +168,10 @@ func (c *HeartBeatCollector) RemoveDispatcherManager(id common.ChangeFeedID) err
 }
 
 func (c *HeartBeatCollector) RemoveCheckpointTsMessage(changefeedID common.ChangeFeedID) error {
+	if c.isClosed.Load() {
+		return nil
+	}
+
 	if c.checkpointTsMessageDynamicStream == nil {
 		return nil
 	}
@@ -158,6 +180,10 @@ func (c *HeartBeatCollector) RemoveCheckpointTsMessage(changefeedID common.Chang
 }
 
 func (c *HeartBeatCollector) RemoveRedoMessage(changefeedID common.ChangeFeedID) error {
+	if c.isClosed.Load() {
+		return nil
+	}
+
 	if c.redoMessageDynamicStream == nil {
 		return nil
 	}
@@ -254,6 +280,7 @@ func (c *HeartBeatCollector) Close() {
 	c.mc.DeRegisterHandler(messaging.HeartbeatCollectorTopic)
 	c.cancel()
 	c.wg.Wait()
+	c.isClosed.Store(true)
 
 	c.checkpointTsMessageDynamicStream.Close()
 	c.redoMessageDynamicStream.Close()
