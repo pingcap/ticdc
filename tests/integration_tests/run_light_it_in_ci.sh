@@ -62,7 +62,7 @@ mysql_groups=(
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
 	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables old_arch_compatibility'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
