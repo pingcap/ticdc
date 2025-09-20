@@ -78,7 +78,7 @@ func TestEventScanner(t *testing.T) {
 	// [Resolved(ts=102)]
 	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 
-	disp.eventStoreResolvedTs.Store(102)
+	disp.receivedResolvedTs.Store(102)
 	sl := scanLimit{
 		maxDMLBytes: 1000,
 		timeout:     10 * time.Second,
@@ -98,7 +98,7 @@ func TestEventScanner(t *testing.T) {
 	broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
 
 	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
@@ -129,7 +129,7 @@ func TestEventScanner(t *testing.T) {
 	err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
 	require.NoError(t, err)
 
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	require.True(t, ok)
 	dataRange.CommitTsStart = ddlEvent.GetCommitTs()
 
@@ -170,7 +170,7 @@ func TestEventScanner(t *testing.T) {
 	//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4) -> Resolved(ts=x+5)
 	// Expected result:
 	// [DDL(x), BatchDML_1[DML(x+1)], BatchDML_2[DML(x+2), DML(x+3), DML(x+4)], Resolved(x+5)]
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
@@ -411,7 +411,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	dml1 := kvEvents[1]
 	dml2 := kvEvents[2]
 	mockSchemaStore.DeleteTable(tableID, dml2.CRTs)
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
@@ -503,7 +503,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
 
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
@@ -662,7 +662,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 		mockSchemaStore.AppendDDLEvent(tableID, fakeDDL3)
 
 		resolvedTs = resolvedTs + 3
-		disp.eventStoreResolvedTs.Store(resolvedTs)
+		disp.receivedResolvedTs.Store(resolvedTs)
 
 		ok, dataRange = broker.getScanTaskDataRange(disp)
 		require.True(t, ok)

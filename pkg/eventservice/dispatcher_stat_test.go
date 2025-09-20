@@ -54,7 +54,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.True(t, stat.enableSyncPoint)
 	require.Equal(t, info.nextSyncPoint, stat.nextSyncPoint.Load())
 	require.Equal(t, syncPointInterval, stat.syncPointInterval)
-	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
+	require.Equal(t, startTs, stat.receivedResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
 	require.True(t, stat.isReadyReceivingData.Load())
@@ -70,7 +70,7 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 	// Test normal update
 	updated := stat.onResolvedTs(150)
 	require.True(t, updated)
-	require.Equal(t, uint64(150), stat.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(150), stat.receivedResolvedTs.Load())
 
 	// Test same ts update
 	updated = stat.onResolvedTs(150)
@@ -126,20 +126,20 @@ func TestDispatcherStatUpdateWatermark(t *testing.T) {
 
 	// Case 1: no new events, only watermark change
 	stat.onResolvedTs(200)
-	require.Equal(t, uint64(200), stat.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(200), stat.receivedResolvedTs.Load())
 
 	// Case 2: new events, and watermark increase
 	stat.onLatestCommitTs(300)
 	stat.onResolvedTs(400)
 	require.Equal(t, uint64(300), stat.eventStoreCommitTs.Load())
-	require.Equal(t, uint64(400), stat.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(400), stat.receivedResolvedTs.Load())
 
 	// Case 3: new events, and watermark decrease
 	// watermark should not decrease
 	stat.onLatestCommitTs(500)
 	stat.onResolvedTs(300)
 	require.Equal(t, uint64(500), stat.eventStoreCommitTs.Load())
-	require.Equal(t, uint64(400), stat.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(400), stat.receivedResolvedTs.Load())
 }
 
 func TestResolvedTsCache(t *testing.T) {
