@@ -215,7 +215,7 @@ type eventStore struct {
 	// which need to be uploaded to log coordinator periodically.
 	subscriptionChangeCh *chann.DrainableChann[SubscriptionChange]
 
-	notificationQueue *NotificationQueue
+	notificationQueue *chann.DrainableChann[NotificationTask]
 
 	notificationWorkers []*notificationWorker
 
@@ -262,7 +262,7 @@ func New(
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
 
-		notificationQueue: NewNotificationQueue(),
+		notificationQueue: chann.NewAutoDrainChann[NotificationTask](),
 	}
 
 	// create a write task pool per db instance
@@ -565,12 +565,12 @@ func (e *eventStore) RegisterDispatcher(
 			defer subStat.dispatchers.Unlock()
 			for _, subscriber := range subStat.dispatchers.subscribers {
 				if !subscriber.isStopped.Load() {
-					e.notificationQueue.Enqueue(notificationTask{
+					e.notificationQueue.In() <- NotificationTask{
 						notifierID:  subscriber.notifierID,
 						notifier:    subscriber.notifyFunc,
 						resolvedTs:  ts,
 						maxCommitTs: subStat.maxEventCommitTs.Load(),
-					})
+					}
 				}
 			}
 			CounterResolved.Inc()
@@ -828,7 +828,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 }
 
 type notificationWorker struct {
-	queue *NotificationQueue
+	queue *chann.DrainableChann[NotificationTask]
 	stop  chan struct{}
 }
 
@@ -838,14 +838,10 @@ func (w *notificationWorker) run() {
 		// TODO: remove select
 		case <-w.stop:
 			return
-		default:
-			task, ok := w.queue.Dequeue()
-			if !ok {
-				continue
-			}
-
+		case task := <-w.queue.Out():
 			task.notifier(task.resolvedTs, task.maxCommitTs)
 		}
+
 	}
 }
 

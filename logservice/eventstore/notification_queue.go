@@ -18,7 +18,7 @@ import (
 	"sync"
 )
 
-type notificationTask struct {
+type NotificationTask struct {
 	notifierID  NotifierID
 	notifier    ResolvedTsNotifier
 	resolvedTs  uint64
@@ -41,13 +41,13 @@ func NewNotificationQueue() *NotificationQueue {
 	return q
 }
 
-func (q *NotificationQueue) Enqueue(task notificationTask) {
+func (q *NotificationQueue) Enqueue(task NotificationTask) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	if elem, exists := q.taskMap[task.notifierID]; exists {
 		// 合并任务
-		existing := elem.Value.(notificationTask)
+		existing := elem.Value.(NotificationTask)
 		if task.resolvedTs > existing.resolvedTs {
 			existing.resolvedTs = task.resolvedTs
 		}
@@ -64,7 +64,7 @@ func (q *NotificationQueue) Enqueue(task notificationTask) {
 	q.cond.Signal()
 }
 
-func (q *NotificationQueue) Dequeue() (notificationTask, bool) {
+func (q *NotificationQueue) Dequeue() (NotificationTask, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -73,7 +73,7 @@ func (q *NotificationQueue) Dequeue() (notificationTask, bool) {
 	}
 
 	front := q.tasks.Front()
-	task := front.Value.(notificationTask)
+	task := front.Value.(NotificationTask)
 	q.tasks.Remove(front)
 	delete(q.taskMap, task.notifierID)
 
