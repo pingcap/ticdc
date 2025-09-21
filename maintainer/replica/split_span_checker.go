@@ -1002,7 +1002,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
 ) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID) {
-	log.Debug("checkBalanceTraffic try to balance traffic",
+	log.Info("checkBalanceTraffic try to balance traffic",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
 		zap.Any("aliveNodeIDs", aliveNodeIDs),

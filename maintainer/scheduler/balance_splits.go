@@ -76,7 +76,7 @@ func (s *balanceSplitsScheduler) Name() string {
 func (s *balanceSplitsScheduler) Execute() time.Time {
 	if s.operatorController.OperatorSize() > 0 || s.spanController.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance split
-		return time.Now().Add(time.Second * 5)
+		return time.Now().Add(time.Second * 15)
 	}
 	availableSize := s.batchSize
 	// We check the state of each group as following. Since each step has dependencies before and after,
@@ -142,9 +142,9 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 
 		if availableSize <= 0 {
 			// too many schedule ops, wait for next tick
-			return time.Now().Add(5 * time.Second)
+			return time.Now().Add(15 * time.Second)
 		}
 	}
 
-	return time.Now().Add(5 * time.Second)
+	return time.Now().Add(15 * time.Second)
 }
