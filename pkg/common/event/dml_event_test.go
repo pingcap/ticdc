@@ -112,7 +112,7 @@ func TestBatchDMLEvent(t *testing.T) {
 		}
 	}
 
-	require.True(t, reverseEvent.IsPaused())
+	require.False(t, reverseEvent.IsPaused())
 
 	// Compare the remaining content of the two events.
 	require.Equal(t, dmlEvent.TableInfo.GetFieldSlice(), reverseEvent.TableInfo.GetFieldSlice())
