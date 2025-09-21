@@ -96,12 +96,6 @@ func TestCheckNeedScan(t *testing.T) {
 	e = <-broker.messageCh[0]
 	require.Equal(t, event.TypeHandshakeEvent, e.msgType)
 	log.Info("Pass case 3")
-
-	// Case 4: The task.isRunning is false, it should return false.
-	disp.isReadyReceivingData.Store(false)
-	needScan = broker.scanReady(disp)
-	require.False(t, needScan)
-	log.Info("Pass case 4")
 }
 
 func TestOnNotify(t *testing.T) {
@@ -122,7 +116,6 @@ func TestOnNotify(t *testing.T) {
 
 	err = broker.resetDispatcher(disInfo)
 	require.Nil(t, err)
-	require.Equal(t, disp.isReadyReceivingData.Load(), true)
 	require.Equal(t, disp.lastScannedCommitTs.Load(), uint64(100))
 	require.Equal(t, disp.lastScannedStartTs.Load(), uint64(0))
 

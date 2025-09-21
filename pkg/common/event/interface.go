@@ -188,42 +188,6 @@ func ToSchemaIDChangePB(SchemaIDChange []SchemaIDChange) []*heartbeatpb.SchemaID
 	return res
 }
 
-type EventSenderState byte
-
-const (
-	EventSenderStateNormal EventSenderState = iota
-	EventSenderStatePaused
-)
-
-func (s EventSenderState) String() string {
-	switch s {
-	case EventSenderStateNormal:
-		return "normal"
-	case EventSenderStatePaused:
-		return "paused"
-	}
-	return "unknown"
-}
-
-func (s EventSenderState) encode() []byte {
-	return []byte{byte(s)}
-}
-
-func (s *EventSenderState) decode(data []byte) {
-	if len(data) == 0 {
-		return
-	}
-	*s = EventSenderState(data[0])
-}
-
-func (s EventSenderState) GetSize() int {
-	return 1
-}
-
-func (s EventSenderState) IsPaused() bool {
-	return s == EventSenderStatePaused
-}
-
 type Selector interface {
 	Select(colInfo *model.ColumnInfo) bool
 }

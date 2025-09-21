@@ -274,8 +274,6 @@ type DMLEvent struct {
 	Seq uint64 `json:"seq"`
 	// Epoch is the epoch of the event. It is set by event service.
 	Epoch uint64 `json:"epoch"`
-	// State is the state of sender when sending this event.
-	State EventSenderState `json:"state"`
 	// Length is the number of rows in the transaction.
 	// Note: it is the logic length of the transaction, not the number of physical rows in the Rows chunk.
 	// For an update event, it has two physical rows in the Rows chunk.
@@ -643,7 +641,7 @@ func (t *DMLEvent) GetSize() int64 {
 }
 
 func (t *DMLEvent) IsPaused() bool {
-	return t.State.IsPaused()
+	return false
 }
 
 func (t *DMLEvent) encode() ([]byte, error) {
@@ -660,9 +658,9 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Version(1) + DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
-	// Seq(8) + Epoch(8) + State(1) + Length(4) + AApproximateSize(8) + PreviousTotalOffset(4)
+	// Seq(8) + Epoch(8) + Length(4) + AApproximateSize(8) + PreviousTotalOffset(4)
 	// + size of len(t.RowTypes)(4) + len(t.RowTypes)
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + t.State.GetSize() + 4 + 8 + 4*2 + len(t.RowTypes)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4 + 8 + 4*2 + len(t.RowTypes)
 	size += 4 // len(t.RowKeys)
 	for i := 0; i < len(t.RowKeys); i++ {
 		size += 4 + len(t.RowKeys[i]) // size + contents of t.RowKeys[i]
@@ -697,9 +695,6 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	// Epoch
 	binary.LittleEndian.PutUint64(buf[offset:], t.Epoch)
 	offset += 8
-	// State
-	copy(buf[offset:], t.State.encode())
-	offset += t.State.GetSize()
 	// Length
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.Length))
 	offset += 4
@@ -764,8 +759,6 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	offset += 8
 	t.Epoch = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
-	t.State.decode(data[offset:])
-	offset += t.State.GetSize()
 	t.Length = int32(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4
 	t.ApproximateSize = int64(binary.LittleEndian.Uint64(data[offset:]))

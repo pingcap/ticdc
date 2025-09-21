@@ -36,7 +36,6 @@ type mockMounter struct {
 
 func makeDispatcherReady(disp *dispatcherStat) {
 	disp.setHandshaked()
-	disp.isReadyReceivingData.Store(true)
 }
 
 func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
@@ -1479,12 +1478,10 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	stat := &dispatcherStat{
-		info:                 disInfo,
-		id:                   dispatcherID,
-		isReadyReceivingData: atomic.Bool{},
-		isRemoved:            atomic.Bool{},
+		info:      disInfo,
+		id:        dispatcherID,
+		isRemoved: atomic.Bool{},
 	}
-	stat.isReadyReceivingData.Store(true)
 
 	dataRange := common.DataRange{
 		Span: &heartbeatpb.TableSpan{

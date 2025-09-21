@@ -87,7 +87,6 @@ func TestBatchDMLEvent(t *testing.T) {
 	require.NotNil(t, ddlJob)
 
 	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
-	dmlEvent.State = EventSenderStatePaused
 	require.NotNil(t, dmlEvent)
 
 	batchDMLEvent := &BatchDMLEvent{
