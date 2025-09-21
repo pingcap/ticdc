@@ -624,35 +624,34 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			zap.String("ExtraSchemaName", event.ExtraSchemaName),
 			zap.String("ExtraTableName", event.ExtraTableName),
 			zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
+		// The query in job maybe "RENAME TABLE table1 to test2.table2", we need rebuild it here.
+		//
+		// Note: Why use args.job.InvolvingSchemaInfo to build query?
+		// because event.ExtraSchemaID may not be accurate for rename table in some case.
+		// after pr: https://github.com/pingcap/tidb/pull/43341,
+		// assume there is a table `test.t` and a ddl: `rename table t to test2.t;`, and its commit ts is `100`.
+		// if you get a ddl snapshot at ts `99`, table `t` is already in `test2`.
+		// so event.ExtraSchemaName will also be `test2`.
+		// And because SchemaStore is the source of truth inside cdc,
+		// we can use event.ExtraSchemaID(even it is wrong) to update the internal state of the cdc.
+		// But event.Query will be emit to downstream(out of cdc), we must make it correct.
+		//
 		// InvolvingSchemaInfo returns the schema info involved in the job.
 		// The value should be stored in lower case.
-		if args.job.InvolvingSchemaInfo[0].Database != strings.ToLower(event.SchemaName) {
-			// The query in job maybe "RENAME TABLE table1 to test2.table2", we need rebuild it here.
-			//
-			// Note: Why use args.job.InvolvingSchemaInfo to build query?
-			// because event.ExtraSchemaID may not be accurate for rename table in some case.
-			// after pr: https://github.com/pingcap/tidb/pull/43341,
-			// assume there is a table `test.t` and a ddl: `rename table t to test2.t;`, and its commit ts is `100`.
-			// if you get a ddl snapshot at ts `99`, table `t` is already in `test2`.
-			// so event.ExtraSchemaName will also be `test2`.
-			// And because SchemaStore is the source of truth inside cdc,
-			// we can use event.ExtraSchemaID(even it is wrong) to update the internal state of the cdc.
-			// But event.Query will be emit to downstream(out of cdc), we must make it correct.
-			oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
-			oldTableName := args.job.InvolvingSchemaInfo[0].Table
-			stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
-			if err != nil {
-				log.Error("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
-			} else {
-				oldTableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
-				if schemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O; schemaName != "" {
-					oldSchemaName = schemaName
-				}
+		oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
+		oldTableName := args.job.InvolvingSchemaInfo[0].Table
+		stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
+		if err != nil {
+			log.Error("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
+		} else {
+			oldTableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
+			if schemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O; schemaName != "" {
+				oldSchemaName = schemaName
 			}
-			event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
-				oldSchemaName, oldTableName,
-				event.SchemaName, event.TableName)
 		}
+		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
+			oldSchemaName, oldTableName,
+			event.SchemaName, event.TableName)
 	}
 	return event
 }

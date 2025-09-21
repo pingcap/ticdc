@@ -903,8 +903,8 @@ func TestApplyDDLJobs(t *testing.T) {
 							},
 						},
 						{
-							Type: byte(model.ActionRenameTable),
-							// Query:      "RENAME TABLE `test2`.`t2` TO `test2`.`t3`",
+							Type:       byte(model.ActionRenameTable),
+							Query:      "RENAME TABLE `test2`.`t2` TO `test2`.`t3`",
 							FinishedTs: 1030,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
