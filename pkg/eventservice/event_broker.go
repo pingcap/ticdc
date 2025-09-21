@@ -1006,36 +1006,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	)
 }
 
-func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
-	statPtr := c.getDispatcher(dispatcherInfo.GetID())
-	if statPtr == nil {
-		return
-	}
-	stat := statPtr.Load()
-	log.Info("pause dispatcher",
-		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", stat.id), zap.Int64("tableID", stat.info.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
-		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()), zap.Uint64("seq", stat.seq.Load()))
-	stat.isReadyReceivingData.Store(false)
-	stat.resetScanLimit()
-}
-
-func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
-	statPtr := c.getDispatcher(dispatcherInfo.GetID())
-	if statPtr == nil {
-		return
-	}
-	stat := statPtr.Load()
-	log.Info("resume dispatcher",
-		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", stat.id), zap.Int64("tableID", stat.info.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
-		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
-		zap.Uint64("seq", stat.seq.Load()))
-	stat.isReadyReceivingData.Store(true)
-}
-
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	dispatcherID := dispatcherInfo.GetID()
 	start := time.Now()

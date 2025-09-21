@@ -198,19 +198,7 @@ func TestCURDDispatcher(t *testing.T) {
 	// Check the resetTs is updated.
 	require.Equal(t, disp.startTs, dispInfo.GetStartTs())
 
-	// Case 3: Pause a dispatcher.
-	broker.pauseDispatcher(dispInfo)
-	disp = broker.getDispatcher(dispInfo.GetID()).Load()
-	require.NotNil(t, disp)
-	require.False(t, disp.isReadyReceivingData.Load())
-
-	// Case 4: Resume a dispatcher.
-	broker.resumeDispatcher(dispInfo)
-	disp = broker.getDispatcher(dispInfo.GetID()).Load()
-	require.NotNil(t, disp)
-	require.True(t, disp.isReadyReceivingData.Load())
-
-	// Case 5: Remove a dispatcher.
+	// Case 3: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
 	dispPtr := broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, dispPtr)
