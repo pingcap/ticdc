@@ -23,6 +23,11 @@ message EventStoreState {
     map<int64, TableState> TableStates = 1; 
 }
 
+message ChangefeedStates {
+    // changefeedID -> resolvedTs
+    map<string, uint64> States = 1;
+}
+
 message ReusableEventServiceRequest {
     heartbeatpb.DispatcherID ID = 1;
     heartbeatpb.TableSpan Span = 2;

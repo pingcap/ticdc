@@ -184,8 +184,9 @@ func (d *dispatcherHeapItem) LessThan(other *dispatcherHeapItem) bool {
 }
 
 type changefeedStat struct {
-	mutex sync.Mutex
-	heap  *heap.Heap[*dispatcherHeapItem]
+	mutex      sync.Mutex
+	heap       *heap.Heap[*dispatcherHeapItem]
+	dispatcher map[common.DispatcherID]*dispatcherHeapItem
 }
 
 type eventWithCallback struct {
@@ -449,6 +450,10 @@ func (e *eventStore) RegisterDispatcher(
 	}
 	stat.resolvedTs.Store(startTs)
 
+	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
+		util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs)
+		notifier(resolvedTs, latestCommitTs)
+	}
 	// Optimized "get or create" pattern for sync.Map to avoid unnecessary allocations.
 	// 1. Fast path: Try to load the existing changefeedStat to avoid allocation.
 	var cfStat *changefeedStat
@@ -457,15 +462,20 @@ func (e *eventStore) RegisterDispatcher(
 	} else {
 		// 2. Slow path: If it doesn't exist, create a new one and use LoadOrStore
 		// to atomically add it, preventing race conditions.
-		newCfStat := &changefeedStat{heap: heap.NewHeap[*dispatcherHeapItem]()}
+		newCfStat := &changefeedStat{
+			heap:       heap.NewHeap[*dispatcherHeapItem](),
+			dispatcher: make(map[common.DispatcherID]*dispatcherHeapItem),
+		}
 		actual, _ := e.changefeedMeta.LoadOrStore(changefeedID, newCfStat)
 		cfStat = actual.(*changefeedStat)
 	}
 
 	cfStat.mutex.Lock()
-	cfStat.heap.AddOrUpdate(&dispatcherHeapItem{
+	item := &dispatcherHeapItem{
 		stat: stat,
-	})
+	}
+	cfStat.heap.AddOrUpdate(item)
+	cfStat.dispatcher[dispatcherID] = item
 	cfStat.mutex.Unlock()
 
 	e.dispatcherMeta.Lock()
@@ -488,7 +498,7 @@ func (e *eventStore) RegisterDispatcher(
 					subStat.idleTime.Store(0)
 					subStat.dispatchers.Lock()
 					subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-						notifyFunc: notifier,
+						notifyFunc: wrappedNotifier,
 						isStopped:  atomic.Bool{},
 					}
 					subStat.dispatchers.Unlock()
@@ -521,7 +531,7 @@ func (e *eventStore) RegisterDispatcher(
 		bestMatch.idleTime.Store(0)
 		bestMatch.dispatchers.Lock()
 		bestMatch.dispatchers.subscribers[dispatcherID] = &Subscriber{
-			notifyFunc: notifier,
+			notifyFunc: wrappedNotifier,
 			isStopped:  atomic.Bool{},
 		}
 		bestMatch.dispatchers.Unlock()
@@ -558,7 +568,7 @@ func (e *eventStore) RegisterDispatcher(
 	}
 	subStat.dispatchers.subscribers = make(map[common.DispatcherID]*Subscriber)
 	subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-		notifyFunc: notifier,
+		notifyFunc: wrappedNotifier,
 		isStopped:  atomic.Bool{},
 	}
 	subStat.checkpointTs.Store(startTs)
@@ -665,16 +675,9 @@ func (e *eventStore) removeDispatcherFromChangefeedStat(changefeedID common.Chan
 		cfStat := v.(*changefeedStat)
 		cfStat.mutex.Lock()
 		defer cfStat.mutex.Unlock()
-
-		var itemToRemove *dispatcherHeapItem
-		for _, item := range cfStat.heap.All() {
-			if item.stat.dispatcherID == dispatcherID {
-				itemToRemove = item
-				break
-			}
-		}
-		if itemToRemove != nil {
+		if itemToRemove, ok := cfStat.dispatcher[dispatcherID]; ok {
 			cfStat.heap.Remove(itemToRemove)
+			delete(cfStat.dispatcher, dispatcherID)
 		}
 
 		// If the changefeed has no more dispatchers, remove the changefeed stat.
@@ -1046,6 +1049,29 @@ func (e *eventStore) updateMetricsOnce() {
 	minResolvedPhyTs := oracle.ExtractPhysical(minResolvedTs)
 	eventStoreResolvedTsLag := float64(pdPhyTs-minResolvedPhyTs) / 1e3
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLag)
+
+	// Collect resolved ts for each changefeed and send to log coordinator.
+	cfStates := &logservicepb.ChangefeedStates{
+		States: make(map[string]uint64),
+	}
+	e.changefeedMeta.Range(func(key, value interface{}) bool {
+		changefeedID := key.(common.ChangeFeedID)
+		cfStat := value.(*changefeedStat)
+
+		cfStat.mutex.Lock()
+		top, ok := cfStat.heap.PeekTop()
+		cfStat.mutex.Unlock()
+
+		if ok {
+			cfStates.States[changefeedID.String()] = top.stat.resolvedTs.Load()
+		}
+		return true
+	})
+
+	coordinatorID := e.getCoordinatorInfo()
+	if coordinatorID != "" && len(cfStates.States) > 0 {
+		e.messageCenter.SendEvent(messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, cfStates))
+	}
 }
 
 func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) error {
