@@ -247,7 +247,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.String("redoTs", m.redoTs.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
-
 	return m
 }
 
