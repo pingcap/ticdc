@@ -46,7 +46,7 @@ type DispatcherService interface {
 	GetFilterConfig() *eventpb.FilterConfig
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
-	GetStartTsIsSyncpoint() bool
+	GetSkipSyncpointSameAsStartTs() bool
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
@@ -64,7 +64,7 @@ type Dispatcher interface {
 	SetSeq(seq uint64)
 	SetStartTs(startTs uint64)
 	SetCurrentPDTs(currentPDTs uint64)
-	SetStartTsIsSyncpoint(startTsIsSyncpoint bool)
+	SetSkipSyncpointSameAsStartTs(skipSyncpointSameAsStartTs bool)
 	SetComponentStatus(status heartbeatpb.ComponentState)
 	GetRemovingStatus() bool
 	GetHeartBeatInfo(h *HeartBeatInfo)
@@ -108,12 +108,25 @@ The workflow related to the dispatcher is as follows:
 */
 
 type BasicDispatcher struct {
-	id        common.DispatcherID
-	schemaID  int64
+	id       common.DispatcherID
+	schemaID int64
+
 	tableSpan *heartbeatpb.TableSpan
+	// isCompleteTable indicates whether this dispatcher is responsible for a complete table
+	// or just a part of the table (span). When true, the dispatcher handles the entire table;
+	// when false, it only handles a portion of the table.
+	isCompleteTable bool
+
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
-	startTs            uint64
-	startTsIsSyncpoint bool
+	startTs uint64
+
+	// skipSyncpointSameAsStartTs is used to determine whether we need to skip the syncpoint event which is same as the startTs
+	// skipSyncpointSameAsStartTs only maybe true in MysqlSink.
+	// it's used to deal with the corner case when ddl commitTs is same as the syncpointTs commitTs
+	// For example, syncpointInterval = 10, ddl commitTs = 20, syncpointTs = 20
+	// case 1: ddl and syncpoint is flushed successfully, and then restart --> startTs = 20, skipSyncpointSameAsStartTs = true
+	// case 2: ddl is flushed successfully, syncpointTs not and then restart --> startTs = 20, skipSyncpointSameAsStartTs = false --> receive syncpoint first
+	skipSyncpointSameAsStartTs bool
 	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
 	// to determine whether the insert event should use `Replace` or just `Insert`
@@ -166,30 +179,31 @@ func NewBasicDispatcher(
 	startTs uint64,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
-	startTsIsSyncpoint bool,
+	skipSyncpointSameAsStartTs bool,
 	currentPDTs uint64,
 	mode int64,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                    id,
-		tableSpan:             tableSpan,
-		startTs:               startTs,
-		startTsIsSyncpoint:    startTsIsSyncpoint,
-		sharedInfo:            sharedInfo,
-		sink:                  sink,
-		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		resolvedTs:            startTs,
-		isRemoving:            atomic.Bool{},
-		blockEventStatus:      BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:         NewTableProgress(),
-		schemaID:              schemaID,
-		schemaIDToDispatchers: schemaIDToDispatchers,
-		resendTaskMap:         newResendTaskMap(),
-		creationPDTs:          currentPDTs,
-		mode:                  mode,
-		BootstrapState:        BootstrapFinished,
+		id:                         id,
+		tableSpan:                  tableSpan,
+		isCompleteTable:            common.IsCompleteSpan(tableSpan),
+		startTs:                    startTs,
+		skipSyncpointSameAsStartTs: skipSyncpointSameAsStartTs,
+		sharedInfo:                 sharedInfo,
+		sink:                       sink,
+		componentStatus:            newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		resolvedTs:                 startTs,
+		isRemoving:                 atomic.Bool{},
+		blockEventStatus:           BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:              NewTableProgress(),
+		schemaID:                   schemaID,
+		schemaIDToDispatchers:      schemaIDToDispatchers,
+		resendTaskMap:              newResendTaskMap(),
+		creationPDTs:               currentPDTs,
+		mode:                       mode,
+		BootstrapState:             BootstrapFinished,
 	}
 
 	return dispatcher
@@ -417,6 +431,16 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				d.HandleError(err)
 				return block
 			}
+			// if the dispatcher is not for a complete table,
+			// we need to check whether the ddl event will break the splittability of this table
+			// if it breaks, we need to report the error to the maintainer.
+			if !d.isCompleteTable {
+				if !commonEvent.IsSplitable(ddl.TableInfo) && d.sharedInfo.enableSplittableCheck {
+					d.HandleError(errors.ErrTableAfterDDLNotSplitable.GenWithStackByArgs("unexpected ddl event; This ddl event will break splitable of this table. Only table with pk and no uk can be split."))
+					return block
+				}
+			}
+
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
@@ -579,7 +603,7 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
 				return true
 			}
-			if !common.IsCompleteSpan(d.tableSpan) {
+			if !d.isCompleteTable {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}
@@ -625,7 +649,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 
 			if event.GetNeedAddedTables() != nil {
 				// When the ddl need add tables, we need the maintainer to block the forwarding of checkpointTs
-				// Because the the new add table should join the calculation of checkpointTs
+				// Because the new add table should join the calculation of checkpointTs
 				// So the forwarding of checkpointTs should be blocked until the new dispatcher is created.
 				// While there is a time gap between dispatcher send the block status and
 				// maintainer begin to create dispatcher(and block the forwaring checkpoint)
@@ -720,7 +744,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && d.tableSpan != common.DDLSpan {
+	if event.GetUpdatedSchemas() != nil && d.tableSpan != common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID) {
 		for _, schemaIDChange := range event.GetUpdatedSchemas() {
 			if schemaIDChange.TableID == d.tableSpan.TableID {
 				if schemaIDChange.OldSchemaID != d.schemaID {

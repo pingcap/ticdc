@@ -21,10 +21,6 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 )
 
-//go:generate msgp
-//
-//msgp:ignore DDLEvent
-
 type RowChangedEvent struct {
 	PhysicalTableID int64
 

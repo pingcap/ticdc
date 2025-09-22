@@ -92,6 +92,17 @@ func mustNewModelTableInfo(table string, cols []*model.ColumnInfo, indices []*mo
 	return ti
 }
 
+// Helper to create a model.IndexInfo
+func newIndexInfo(name string, cols []*model.IndexColumn, isPrimary, isUnique bool) *model.IndexInfo {
+	return &model.IndexInfo{
+		Name:    ast.NewCIStr(name),
+		Columns: cols,
+		Primary: isPrimary,
+		Unique:  isUnique,
+		State:   model.StatePublic,
+	}
+}
+
 // datumsToChunkRow converts datums to a chunk.Row for testing.
 // Note: This is a simplified helper for testing purposes. A real implementation might exist in a helper package.
 func datumsToChunkRow(datums []types.Datum, ti *common.TableInfo) chunk.Row {
@@ -319,22 +330,22 @@ func TestShouldIgnoreDDL(t *testing.T) {
 	require.NoError(t, err)
 
 	// DDL matches an event filter rule (drop table), should ignore.
-	ignore, err := f.ShouldIgnoreDDL("test", "t1", "DROP TABLE t1", model.ActionDropTable)
+	ignore, err := f.ShouldIgnoreDDL("test", "t1", "DROP TABLE t1", model.ActionDropTable, nil)
 	require.NoError(t, err)
 	require.True(t, ignore)
 
 	// DDL (create table) does not match event filter, should not ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable)
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, nil)
 	require.NoError(t, err)
 	require.False(t, ignore)
 
 	// DDL matches an SQL regex rule, should ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t2", "DROP TABLE t2", model.ActionDropTable)
+	ignore, err = f.ShouldIgnoreDDL("test", "t2", "DROP TABLE t2", model.ActionDropTable, nil)
 	require.NoError(t, err)
 	require.True(t, ignore)
 
 	// DDL does not match any rule, should not ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t3", "CREATE TABLE t3(id int)", model.ActionCreateTable)
+	ignore, err = f.ShouldIgnoreDDL("test", "t3", "CREATE TABLE t3(id int)", model.ActionCreateTable, nil)
 	require.NoError(t, err)
 	require.False(t, ignore)
 }
@@ -472,7 +483,7 @@ func TestShouldIgnoreDDLCaseSensitivity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, err := NewFilter(cfg, "UTC", tc.caseSensitive, false)
 			require.NoError(t, err)
-			ignore, err := f.ShouldIgnoreDDL(tc.schema, tc.table, tc.query, model.ActionDropTable)
+			ignore, err := f.ShouldIgnoreDDL(tc.schema, tc.table, tc.query, model.ActionDropTable, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.shouldIgnore, ignore, tc.msg)
 		})
@@ -527,6 +538,71 @@ func TestShouldIgnoreStartTs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsEligible(t *testing.T) {
+	t.Parallel()
+
+	// 1. Table with PK
+	tiWithPK := mustNewModelTableInfo("t1",
+		[]*model.ColumnInfo{
+			newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag),
+		}, nil)
+
+	// 2. Table with UK on not-null column
+	tiWithUK := mustNewModelTableInfo("t2",
+		[]*model.ColumnInfo{
+			newColumnInfo(1, "id", mysql.TypeLong, mysql.NotNullFlag),
+		},
+		[]*model.IndexInfo{
+			newIndexInfo("uk_id", []*model.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}}, false, true),
+		})
+
+	// 3. Table with UK on nullable column (ineligible)
+	tiWithNullableUK := mustNewModelTableInfo("t3",
+		[]*model.ColumnInfo{
+			newColumnInfo(1, "id", mysql.TypeLong, 0),
+		},
+		[]*model.IndexInfo{
+			newIndexInfo("uk_id", []*model.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}}, false, true),
+		})
+
+	// 4. Table with no PK or UK (ineligible)
+	tiNoKey := mustNewModelTableInfo("t4",
+		[]*model.ColumnInfo{
+			newColumnInfo(1, "id", mysql.TypeLong, 0),
+		}, nil)
+
+	// 5. View (eligible)
+	tiView := mustNewModelTableInfo("v1", nil, nil)
+	tiView.View = &model.ViewInfo{}
+
+	// 6. Sequence (ineligible)
+	tiSeq := mustNewModelTableInfo("s1", nil, nil)
+	tiSeq.Sequence = &model.SequenceInfo{}
+
+	cfg := config.NewDefaultFilterConfig()
+	// test with forceReplicate = false
+	f, err := NewFilter(cfg, "UTC", true, false)
+	require.NoError(t, err)
+	filterImpl := f.(*filter)
+	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithPK)))
+	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithUK)))
+	require.False(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithNullableUK)))
+	require.False(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiNoKey)))
+	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiView)))
+	require.False(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiSeq)))
+
+	// test with forceReplicate = true
+	f, err = NewFilter(cfg, "UTC", true, true)
+	require.NoError(t, err)
+	filterImpl = f.(*filter)
+	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithPK)))
+	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithUK)))
+	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithNullableUK)))
+	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiNoKey)))
+	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiView)))
+	require.False(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiSeq)), "Sequence should always be ineligible")
 }
 
 func TestIsAllowedDDL(t *testing.T) {
@@ -605,7 +681,7 @@ func createTestEventFilterRule() *eventpb.EventFilterRule {
 }
 
 func createTestChangeFeedID(name string) common.ChangeFeedID {
-	return common.NewChangeFeedIDWithName(name)
+	return common.NewChangeFeedIDWithName(name, common.DefaultKeyspace)
 }
 
 // Helper functions to verify filter instances

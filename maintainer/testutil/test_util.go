@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -31,7 +32,7 @@ import (
 
 // GetTableSpanByID returns a mock TableSpan for testing
 func GetTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
-	totalSpan := common.TableIDToComparableSpan(id)
+	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, id)
 	return &heartbeatpb.TableSpan{
 		TableID:  totalSpan.TableID,
 		StartKey: totalSpan.StartKey,
@@ -151,4 +152,8 @@ func (m *MockPDAPIClient) CollectMemberEndpoints(ctx context.Context) ([]string,
 
 func (m *MockPDAPIClient) Healthy(ctx context.Context, endpoint string) error {
 	return nil
+}
+
+func (m *MockPDAPIClient) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
 }

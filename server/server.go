@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -44,8 +45,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/tcpserver"
 	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
@@ -80,8 +79,7 @@ type server struct {
 
 	EtcdClient etcd.CDCEtcdClient
 
-	KVStorage kv.Storage
-	PDClock   pdutil.Clock
+	PDClock pdutil.Clock
 
 	tcpServer tcpserver.TCPServer
 
@@ -151,13 +149,14 @@ func (c *server) initialize(ctx context.Context) error {
 		appctx.GetService[messaging.MessageCenter](appctx.MessageCenter).OnNodeChanges)
 
 	conf := config.GetGlobalServerConfig()
+	schemaStore := schemastore.New(ctx, conf.DataDir, c.pdClient, c.pdEndpoints)
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore: 8,
 		}, c.pdClient,
-		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), c.security,
+		txnutil.NewLockerResolver(),
+		c.security,
 	)
-	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.KVStorage)
 	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient)
 	eventService := eventservice.New(eventStore, schemaStore)
 	c.upstreamManager = upstream.NewManager(ctx, upstream.NodeTopologyCfg{
@@ -234,6 +233,10 @@ func (c *server) setPreServices(ctx context.Context) error {
 	httpServer := NewHttpServer(c, c.tcpServer.HTTP1Listener())
 	httpServer.Run(ctx)
 	c.preServices = append(c.preServices, httpServer)
+
+	keyspaceManager := keyspace.NewKeyspaceManager(c.pdEndpoints)
+	appctx.SetService(appctx.KeyspaceManager, keyspaceManager)
+	c.preServices = append(c.preServices, keyspaceManager)
 
 	log.Info("pre services all set", zap.Any("preServicesNum", len(c.preServices)))
 	return nil
@@ -485,8 +488,4 @@ func (c *server) GetEtcdClient() etcd.CDCEtcdClient {
 
 func (c *server) GetMaintainerManager() *maintainer.Manager {
 	return appctx.GetService[*maintainer.Manager](appctx.MaintainerManager)
-}
-
-func (c *server) GetKVStorage() kv.Storage {
-	return c.KVStorage
 }

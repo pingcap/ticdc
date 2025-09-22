@@ -118,7 +118,7 @@ func initContext(serverId node.ID) {
 // 				Protocol: &canalJsonProtocol,
 // 			},
 // 		}
-// 		changefeedID := common.NewChangeFeedIDWithName("test" + strconv.Itoa(db_index))
+// 		changefeedID := common.NewChangeFeedIDWithName("test" + strconv.Itoa(db_index), common.DefaultKeyspace)
 // 		DispatcherManager, _, err := dispatchermanager.NewDispatcherManager(changefeedID, &changefeedConfig, nil, 0, serverId)
 // 		if err != nil {
 // 			t.Fatal(err)

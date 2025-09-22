@@ -14,6 +14,8 @@
 package common
 
 import (
+	"strings"
+
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
 )
@@ -25,6 +27,14 @@ type blockedTableProvider interface {
 type accessKey struct {
 	schema string
 	table  string
+}
+
+// newAccessKey return accessKey with lower case
+func newAccessKey(schema, table string) accessKey {
+	return accessKey{
+		strings.ToLower(schema),
+		strings.ToLower(table),
+	}
 }
 
 // tableIDAllocator is a fake table id allocator
@@ -53,12 +63,12 @@ func (a *tableIDAllocator) allocateByKey(key accessKey) int64 {
 
 // Allocate allocates a table id
 func (a *tableIDAllocator) Allocate(schema, table string) int64 {
-	key := accessKey{schema, table}
+	key := newAccessKey(schema, table)
 	return a.allocateByKey(key)
 }
 
 func (a *tableIDAllocator) GetBlockedTables(schema, table string) []int64 {
-	key := accessKey{schema, table}
+	key := newAccessKey(schema, table)
 	blocked := a.blockedTableIDs[key]
 	result := make([]int64, 0, len(blocked))
 	for item := range blocked {
@@ -68,7 +78,7 @@ func (a *tableIDAllocator) GetBlockedTables(schema, table string) []int64 {
 }
 
 func (a *tableIDAllocator) AddBlockTableID(schema string, table string, physicalTableID int64) {
-	key := accessKey{schema, table}
+	key := newAccessKey(schema, table)
 	if _, ok := a.blockedTableIDs[key]; !ok {
 		a.blockedTableIDs[key] = make(map[int64]struct{})
 	}
@@ -84,4 +94,30 @@ func (a *tableIDAllocator) Clean() {
 	a.currentTableID = 0
 	clear(a.tableIDs)
 	clear(a.blockedTableIDs)
+}
+
+type PartitionTableAccessor struct {
+	memo map[accessKey]struct{}
+}
+
+func NewPartitionTableAccessor() *PartitionTableAccessor {
+	return &PartitionTableAccessor{
+		memo: make(map[accessKey]struct{}),
+	}
+}
+
+func (m *PartitionTableAccessor) Add(schema, table string) {
+	key := newAccessKey(schema, table)
+	_, ok := m.memo[key]
+	if ok {
+		return
+	}
+	m.memo[key] = struct{}{}
+	log.Info("add partition table to the accessor", zap.String("schema", schema), zap.String("table", table))
+}
+
+func (m *PartitionTableAccessor) IsPartitionTable(schema, table string) bool {
+	key := newAccessKey(schema, table)
+	_, ok := m.memo[key]
+	return ok
 }

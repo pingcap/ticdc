@@ -236,7 +236,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 					return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
 				}
 				info.UpstreamID = upstreamID
-				info.ChangefeedID.DisplayName.Namespace = common.DefaultNamespace
+				info.ChangefeedID.DisplayName.Keyspace = common.DefaultKeyspace
 				// changefeed id is a part of etcd key path
 				// for example:  /tidb/cdc/changefeed/info/abcd,  abcd is the changefeed
 				info.ChangefeedID.DisplayName.Name = strings.TrimPrefix(string(v.Key), oldChangefeedPrefix+"/")
@@ -475,9 +475,9 @@ func (m *migrator) Migrate(ctx context.Context) error {
 	}
 
 	m.keyPrefixes.addPair("/tidb/cdc/changefeed/info",
-		etcd.DefaultClusterAndNamespacePrefix+etcd.ChangefeedInfoKey)
+		etcd.DefaultClusterAndKeyspacePrefix+etcd.ChangefeedInfoKey)
 	m.keyPrefixes.addPair("/tidb/cdc/job",
-		etcd.DefaultClusterAndNamespacePrefix+etcd.ChangefeedStatusKey)
+		etcd.DefaultClusterAndKeyspacePrefix+etcd.ChangefeedStatusKey)
 
 	return m.migrate(ctx, version == noMetaVersion, oldVersion)
 }
@@ -540,7 +540,7 @@ func (m *migrator) saveUpstreamInfo(ctx context.Context) error {
 		Tp:         etcd.CDCKeyTypeUpStream,
 		ClusterID:  m.cli.GetClusterID(),
 		UpstreamID: upstreamID,
-		Namespace:  common.DefaultNamespace,
+		Keyspace:   common.DefaultKeyspace,
 	}
 	upstreamKeyStr := upstreamKey.String()
 	upstreamInfo := &config.UpstreamInfo{

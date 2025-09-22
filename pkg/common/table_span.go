@@ -88,14 +88,18 @@ func IsTableSpanConsecutive(prev *heartbeatpb.TableSpan, current *heartbeatpb.Ta
 	return false
 }
 
-// DDLSpanSchemaID is the special schema id for DDL
-var DDLSpanSchemaID int64 = 0
+const (
+	// DDLSpanSchemaID is the special schema id for DDL
+	DDLSpanSchemaID int64 = 0
 
-// DDLSpan is the special span for Table Trigger Event Dispatcher
-var DDLSpan = &heartbeatpb.TableSpan{
-	TableID:  0,
-	StartKey: TableIDToComparableSpan(0).StartKey,
-	EndKey:   TableIDToComparableSpan(0).EndKey,
+	// DDLSpanTableID is the special table id for DDL
+	DDLSpanTableID int64 = 0
+)
+
+// KeyspaceDDLSpan is the a special keyspace span for Table Trigger Event Dispatcher
+func KeyspaceDDLSpan(keyspaceID uint32) *heartbeatpb.TableSpan {
+	span := TableIDToComparableSpan(keyspaceID, DDLSpanTableID)
+	return &span
 }
 
 func LessTableSpan(t1, t2 *heartbeatpb.TableSpan) bool {

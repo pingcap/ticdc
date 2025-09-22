@@ -72,8 +72,8 @@ func main() {
 }
 
 type tableInfo struct {
-	changefeedNameSpace string
-	changefeedName      string
+	changefeedKeySpace string
+	changefeedName     string
 
 	// table id
 	id int64
@@ -130,9 +130,9 @@ func newCluster() (*cluster, error) {
 		for _, nodeTableInfo := range nodeTableInfos {
 			for _, tableID := range nodeTableInfo.TableIDs {
 				serversMap[nodeTableInfo.NodeID] = append(serversMap[nodeTableInfo.NodeID], tableInfo{
-					changefeedNameSpace: changefeed.Namespace,
-					changefeedName:      changefeed.ID,
-					id:                  tableID,
+					changefeedKeySpace: changefeed.Keyspace,
+					changefeedName:     changefeed.ID,
+					id:                 tableID,
 				})
 			}
 		}
@@ -160,7 +160,7 @@ func (c *cluster) moveAllTables(sourceNode, targetNode string, mode int64) error
 		err := c.
 			client.
 			Changefeeds().
-			MoveTable(ctx, table.changefeedNameSpace, table.changefeedName, table.id, targetNode, mode)
+			MoveTable(ctx, table.changefeedKeySpace, table.changefeedName, table.id, targetNode, mode)
 
 		log.Info("move table",
 			zap.String("sourceNode", sourceNode),

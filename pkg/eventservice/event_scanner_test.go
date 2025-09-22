@@ -35,9 +35,8 @@ type mockMounter struct {
 }
 
 func makeDispatcherReady(disp *dispatcherStat) {
-	disp.isHandshaked.Store(true)
+	disp.setHandshaked()
 	disp.isReadyReceivingData.Store(true)
-	disp.resetTs.Store(disp.info.GetStartTs())
 }
 
 func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
@@ -69,7 +68,7 @@ func TestEventScanner(t *testing.T) {
 
 	ctx := context.Background()
 
-	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -79,7 +78,7 @@ func TestEventScanner(t *testing.T) {
 	// [Resolved(ts=102)]
 	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
 
-	disp.eventStoreResolvedTs.Store(102)
+	disp.receivedResolvedTs.Store(102)
 	sl := scanLimit{
 		maxDMLBytes: 1000,
 		timeout:     10 * time.Second,
@@ -99,7 +98,7 @@ func TestEventScanner(t *testing.T) {
 	broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(tableID, ddlEvent)
 
 	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
@@ -130,7 +129,7 @@ func TestEventScanner(t *testing.T) {
 	err = broker.eventStore.(*mockEventStore).AppendEvents(dispatcherID, resolvedTs, kvEvents...)
 	require.NoError(t, err)
 
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	require.True(t, ok)
 	dataRange.CommitTsStart = ddlEvent.GetCommitTs()
 
@@ -171,7 +170,7 @@ func TestEventScanner(t *testing.T) {
 	//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4) -> Resolved(ts=x+5)
 	// Expected result:
 	// [DDL(x), BatchDML_1[DML(x+1)], BatchDML_2[DML(x+2), DML(x+3), DML(x+4)], Resolved(x+5)]
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange = broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
@@ -386,7 +385,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -412,7 +411,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	dml1 := kvEvents[1]
 	dml2 := kvEvents[2]
 	mockSchemaStore.DeleteTable(tableID, dml2.CRTs)
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
@@ -465,7 +464,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 
 	err := broker.addDispatcher(disp.info)
@@ -504,7 +503,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
 
-	disp.eventStoreResolvedTs.Store(resolvedTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
@@ -663,7 +662,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 		mockSchemaStore.AppendDDLEvent(tableID, fakeDDL3)
 
 		resolvedTs = resolvedTs + 3
-		disp.eventStoreResolvedTs.Store(resolvedTs)
+		disp.receivedResolvedTs.Store(resolvedTs)
 
 		ok, dataRange = broker.getScanTaskDataRange(disp)
 		require.True(t, ok)
@@ -710,7 +709,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Create a mock mounter and schema getter
 	mockMounter := &mockMounter{}
-	mockSchemaGetter := newMockSchemaStore()
+	mockSchemaGetter := NewMockSchemaStore()
 	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
 	// Test case 0: create a new DML processor
@@ -933,7 +932,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Create a mock mounter and schema getter
 	mockMounter := &mockMounter{}
-	mockSchemaGetter := newMockSchemaStore()
+	mockSchemaGetter := NewMockSchemaStore()
 	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
 	// Test case 1: appendRow before txn started, illegal usage.
@@ -1264,7 +1263,7 @@ func TestEventMerger(t *testing.T) {
 			}...)
 
 		tableID := ddlEvent.TableID
-		mockSchemaGetter := newMockSchemaStore()
+		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
 		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false)
@@ -1297,7 +1296,7 @@ func TestEventMerger(t *testing.T) {
 		merger := newEventMerger([]event.Event{&ddlEvent})
 
 		tableID := ddlEvent.TableID
-		mockSchemaGetter := newMockSchemaStore()
+		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false)
 
@@ -1325,7 +1324,7 @@ func TestEventMerger(t *testing.T) {
 		helper := event.NewEventTestHelper(t)
 		defer helper.Close()
 
-		mockSchemaGetter := newMockSchemaStore()
+		mockSchemaGetter := NewMockSchemaStore()
 
 		ddlEvent1, kvEvents1 := genEvents(helper,
 			`create table test.t1(id int primary key, c char(50))`,
@@ -1460,7 +1459,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 		"update test.t_uk set a = 20 where id = 1")
 
 	// Create mock components
-	mockSchemaGetter := newMockSchemaStore()
+	mockSchemaGetter := NewMockSchemaStore()
 	mockSchemaGetter.AppendDDLEvent(tableID, *ddlEvent)
 
 	// Create a mock iterator that returns only the single update event
@@ -1562,11 +1561,11 @@ type schemaStoreWithErr struct {
 	getTableInfoError error
 }
 
-func (s *schemaStoreWithErr) GetTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+func (s *schemaStoreWithErr) GetTableInfo(keyspaceID uint32, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if s.getTableInfoError != nil {
 		return nil, s.getTableInfoError
 	}
-	return s.mockSchemaStore.GetTableInfo(tableID, ts)
+	return s.mockSchemaStore.GetTableInfo(common.DefaultKeyspaceID, tableID, ts)
 }
 
 func TestGetTableInfo4Txn(t *testing.T) {
@@ -1579,7 +1578,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 
-	disp := newDispatcherStat(disInfo, nil, 0, 0, changefeedStatus)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
 
 	// Prepare a table info for success case
 	helper := event.NewEventTestHelper(t)

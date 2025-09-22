@@ -35,6 +35,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -243,6 +244,9 @@ func TestCoordinatorScheduling(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 
+	mockSchemaStore := eventservice.NewMockSchemaStore()
+	appcontext.SetService(appcontext.SchemaStore, mockSchemaStore)
+
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	m := NewMaintainerManager(mc)
 	go m.Run(ctx)
@@ -267,8 +271,8 @@ func TestCoordinatorScheduling(t *testing.T) {
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 	for i := 0; i < cfSize; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-			Name:      fmt.Sprintf("%d", i),
-			Namespace: common.DefaultNamespace,
+			Name:     fmt.Sprintf("%d", i),
+			Keyspace: common.DefaultKeyspace,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
@@ -323,8 +327,8 @@ func TestScaleNode(t *testing.T) {
 	changefeedNumber := 6
 	for i := 0; i < changefeedNumber; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
-			Name:      fmt.Sprintf("%d", i),
-			Namespace: common.DefaultNamespace,
+			Name:     fmt.Sprintf("%d", i),
+			Keyspace: common.DefaultKeyspace,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
@@ -427,7 +431,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 
 	removingCf1 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
-			ChangefeedID: common.NewChangeFeedIDWithName("cf1"),
+			ChangefeedID: common.NewChangeFeedIDWithName("cf1", common.DefaultKeyspace),
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateNormal,
 		},
@@ -435,7 +439,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	}
 	removingCf2 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
-			ChangefeedID: common.NewChangeFeedIDWithName("cf2"),
+			ChangefeedID: common.NewChangeFeedIDWithName("cf2", common.DefaultKeyspace),
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateNormal,
 		},
@@ -443,7 +447,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	}
 	stopingCf1 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
-			ChangefeedID: common.NewChangeFeedIDWithName("cf1"),
+			ChangefeedID: common.NewChangeFeedIDWithName("cf1", common.DefaultKeyspace),
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateStopped,
 		},
@@ -452,7 +456,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 
 	stopingCf2 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
-			ChangefeedID: common.NewChangeFeedIDWithName("cf2"),
+			ChangefeedID: common.NewChangeFeedIDWithName("cf2", common.DefaultKeyspace),
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateStopped,
 		},

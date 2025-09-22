@@ -20,7 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"github.com/pingcap/log"
@@ -31,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/tidb/pkg/util/memory"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
@@ -119,11 +117,6 @@ func (c *server) prepare(ctx context.Context) error {
 			zap.Error(err),
 			zap.String("advertiseAddr", conf.AdvertiseAddr),
 			zap.Strings("upstreamEndpoints", c.pdEndpoints))
-	}
-
-	c.KVStorage, err = upstream.CreateTiStore(strings.Join(allPDEndpoints, ","), conf.Security)
-	if err != nil {
-		return errors.Trace(err)
 	}
 
 	appctx.SetService(appctx.RegionCache, tikv.NewRegionCache(c.pdClient))

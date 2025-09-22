@@ -148,7 +148,7 @@ func (d *dispatcherStat) run() {
 
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(false))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), false))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -167,7 +167,7 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	epoch := d.epoch.Add(1)
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(resetTs, epoch))
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch))
 	d.eventCollector.enqueueMessageForSend(msg)
 	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
 		zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -198,7 +198,7 @@ func (d *dispatcherStat) removeFrom(serverID node.ID) {
 	log.Info("Send remove dispatcher request to event service",
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID))
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRemoveRequest())
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRemoveRequest(d.eventCollector.getLocalServerID().String()))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -212,7 +212,7 @@ func (d *dispatcherStat) pause() {
 		return
 	}
 	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherPauseRequest())
+	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherPauseRequest(d.eventCollector.getLocalServerID().String()))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -226,7 +226,7 @@ func (d *dispatcherStat) resume() {
 		return
 	}
 	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherResumeRequest())
+	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherResumeRequest(d.eventCollector.getLocalServerID().String()))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -361,7 +361,18 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 			}
 		}
 	}
-	return event.GetEpoch() == d.epoch.Load()
+	if event.GetEpoch() != d.epoch.Load() {
+		return false
+	}
+	// check the invariant that handshake event is the first event of every epoch
+	if event.GetType() != commonEvent.TypeHandshakeEvent && d.lastEventSeq.Load() == 0 {
+		log.Warn("receive non-handshake event before handshake event, ignore it",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Any("event", event.Event))
+		return false
+	}
+	return true
 }
 
 // handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
@@ -624,7 +635,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 	}
 }
 
-func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse bool) *messaging.DispatcherRequest {
 	startTs := d.target.GetStartTs()
 	syncPointInterval := d.target.GetSyncPointInterval()
 	return &messaging.DispatcherRequest{
@@ -634,15 +645,16 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 			TableSpan:    d.target.GetTableSpan(),
 			StartTs:      startTs,
 			// ServerId is the id of the request sender.
-			ServerId:             d.eventCollector.getLocalServerID().String(),
+			ServerId:             serverId,
 			ActionType:           eventpb.ActionType_ACTION_TYPE_REGISTER,
 			FilterConfig:         d.target.GetFilterConfig(),
 			EnableSyncPoint:      d.target.EnableSyncPoint(),
 			SyncPointInterval:    uint64(syncPointInterval.Seconds()),
-			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
+			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetSkipSyncpointSameAsStartTs()),
 			OnlyReuse:            onlyReuse,
 			BdrMode:              d.target.GetBDRMode(),
 			Mode:                 d.target.GetMode(),
+			Epoch:                0,
 			Timezone:             d.target.GetTimezone(),
 			Integrity:            d.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
@@ -650,8 +662,15 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(onlyReuse bool) *messaging
 	}
 }
 
-func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherResetRequest(serverId string, resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
 	syncPointInterval := d.target.GetSyncPointInterval()
+
+	// after reset during normal run time, we can filter reduduant syncpoint at event collector side
+	// so we just take care of the case that resetTs is same as startTs
+	skipSyncpointSameAsResetTs := false
+	if resetTs == d.target.GetStartTs() {
+		skipSyncpointSameAsResetTs = d.target.GetSkipSyncpointSameAsStartTs()
+	}
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
 			ChangefeedId: d.target.GetChangefeedID().ToPB(),
@@ -659,16 +678,16 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64)
 			TableSpan:    d.target.GetTableSpan(),
 			StartTs:      resetTs,
 			// ServerId is the id of the request sender.
-			ServerId:          d.eventCollector.getLocalServerID().String(),
+			ServerId:          serverId,
 			ActionType:        eventpb.ActionType_ACTION_TYPE_RESET,
 			FilterConfig:      d.target.GetFilterConfig(),
 			EnableSyncPoint:   d.target.EnableSyncPoint(),
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
-			BdrMode:           d.target.GetBDRMode(),
-			Mode:              d.target.GetMode(),
-			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, d.target.GetStartTsIsSyncpoint()),
-			Epoch:             epoch,
+			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, skipSyncpointSameAsResetTs),
 			// OnlyReuse:         false,
+			BdrMode:              d.target.GetBDRMode(),
+			Mode:                 d.target.GetMode(),
+			Epoch:                epoch,
 			Timezone:             d.target.GetTimezone(),
 			Integrity:            d.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
@@ -676,42 +695,42 @@ func (d *dispatcherStat) newDispatcherResetRequest(resetTs uint64, epoch uint64)
 	}
 }
 
-func (d *dispatcherStat) newDispatcherRemoveRequest() *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.DispatcherRequest {
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
 			ChangefeedId: d.target.GetChangefeedID().ToPB(),
 			DispatcherId: d.target.GetId().ToPB(),
 			TableSpan:    d.target.GetTableSpan(),
 			// ServerId is the id of the request sender.
-			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ServerId:   serverId,
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
 			Mode:       d.target.GetMode(),
 		},
 	}
 }
 
-func (d *dispatcherStat) newDispatcherPauseRequest() *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherPauseRequest(serverId string) *messaging.DispatcherRequest {
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
 			ChangefeedId: d.target.GetChangefeedID().ToPB(),
 			DispatcherId: d.target.GetId().ToPB(),
 			TableSpan:    d.target.GetTableSpan(),
 			// ServerId is the id of the request sender.
-			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ServerId:   serverId,
 			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
 			Mode:       d.target.GetMode(),
 		},
 	}
 }
 
-func (d *dispatcherStat) newDispatcherResumeRequest() *messaging.DispatcherRequest {
+func (d *dispatcherStat) newDispatcherResumeRequest(serverId string) *messaging.DispatcherRequest {
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{
 			ChangefeedId: d.target.GetChangefeedID().ToPB(),
 			DispatcherId: d.target.GetId().ToPB(),
 			TableSpan:    d.target.GetTableSpan(),
 			// ServerId is the id of the request sender.
-			ServerId:   d.eventCollector.getLocalServerID().String(),
+			ServerId:   serverId,
 			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
 			Mode:       d.target.GetMode(),
 		},

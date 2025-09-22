@@ -177,10 +177,10 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 		// because there is only one subStat, we know its subID is 1
 		subStat := subStats[logpuller.SubscriptionID(1)]
 		require.NotNil(t, subStat)
-		require.Equal(t, 1, len(subStat.dispatchers.notifiers))
+		require.Equal(t, 1, len(subStat.dispatchers.subscribers))
 		require.Equal(t, int64(0), subStat.idleTime.Load())
 		store.UnregisterDispatcher(dispatcherID3)
-		require.Equal(t, 0, len(subStat.dispatchers.notifiers))
+		require.Equal(t, 0, len(subStat.dispatchers.subscribers))
 		require.NotEqual(t, int64(0), subStat.idleTime.Load())
 	}
 }
@@ -237,7 +237,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		// subStat with subID 1 should have two dispatchers
 		subStat := subStats[logpuller.SubscriptionID(1)]
 		require.NotNil(t, subStat)
-		require.Equal(t, 2, len(subStat.dispatchers.notifiers))
+		require.Equal(t, 2, len(subStat.dispatchers.subscribers))
 	}
 	// add a dispatcher(onlyReuse=false) with the same span
 	{
@@ -253,7 +253,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		// subStat with subID 1 should have three dispatchers
 		subStat := subStats[logpuller.SubscriptionID(1)]
 		require.NotNil(t, subStat)
-		require.Equal(t, 3, len(subStat.dispatchers.notifiers))
+		require.Equal(t, 3, len(subStat.dispatchers.subscribers))
 	}
 	// test unregister dispatcherID3 can remove its dependency on two subscriptions
 	{
@@ -263,12 +263,12 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			require.Equal(t, 2, len(subStat.dispatchers.notifiers))
+			require.Equal(t, 2, len(subStat.dispatchers.subscribers))
 		}
 		{
 			subStat := subStats[logpuller.SubscriptionID(3)]
 			require.NotNil(t, subStat)
-			require.Equal(t, 0, len(subStat.dispatchers.notifiers))
+			require.Equal(t, 0, len(subStat.dispatchers.subscribers))
 		}
 	}
 }
@@ -352,12 +352,20 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 	}
 }
 
-func TestEventStoreGetIterator(t *testing.T) {
+func TestEventStoreSwitchSubStat(t *testing.T) {
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 
 	dispatcherID1 := common.NewDispatcherID()
 	dispatcherID2 := common.NewDispatcherID()
 	tableID := int64(1)
+
+	updateSubStatResolvedTs := func(subID logpuller.SubscriptionID, ts uint64) {
+		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStat := subStats[subID]
+		require.NotNil(t, subStat)
+		subStat.resolvedTs.Store(ts)
+	}
+	// ============ prepare two subscriptions ============
 	// add a dispatcher to create an subscription
 	{
 		span := &heartbeatpb.TableSpan{
@@ -369,6 +377,7 @@ func TestEventStoreGetIterator(t *testing.T) {
 		require.True(t, ok)
 	}
 	// add a dispatcher(onlyReuse=false) with a containing span
+	// it will reuse the first subscription and create a new one
 	{
 		span := &heartbeatpb.TableSpan{
 			TableID:  tableID,
@@ -378,16 +387,15 @@ func TestEventStoreGetIterator(t *testing.T) {
 		ok := store.RegisterDispatcher(dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
-	// update subStat 1 resolvedTs
+
+	// =========== check two subscriptions are created ============
 	{
 		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
-		{
-			subStat := subStats[logpuller.SubscriptionID(1)]
-			require.NotNil(t, subStat)
-			subStat.resolvedTs.Store(200)
-		}
+		require.Equal(t, 2, len(subStats))
 	}
-	// get iterator from subStat 1
+
+	// case 1: dispatcher 2 use data from subStat 1
+	updateSubStatResolvedTs(1, 200)
 	{
 		iter := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
@@ -401,16 +409,9 @@ func TestEventStoreGetIterator(t *testing.T) {
 		iterImpl := iter.(*eventStoreIter)
 		require.True(t, iterImpl.needCheckSpan)
 	}
-	// update subStat 2 resolvedTs
-	{
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
-		{
-			subStat := subStats[logpuller.SubscriptionID(2)]
-			require.NotNil(t, subStat)
-			subStat.resolvedTs.Store(200)
-		}
-	}
-	// get iterator from subStat 2
+
+	// case 2: subStat 2 is ready, dispatcher 2 read data from subStat 2 and stop listen subStat 1
+	updateSubStatResolvedTs(2, 200)
 	{
 		iter := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
@@ -424,13 +425,76 @@ func TestEventStoreGetIterator(t *testing.T) {
 		iterImpl := iter.(*eventStoreIter)
 		require.False(t, iterImpl.needCheckSpan)
 	}
-	// check dispatcher 2 is no longer depend on subStat 1
+	// check dispatcher 2 is no longer receive event from subStat 1
 	{
 		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			require.Equal(t, 1, len(subStat.dispatchers.notifiers))
+			require.Equal(t, 2, len(subStat.dispatchers.subscribers))
+			require.Equal(t, true, subStat.dispatchers.subscribers[dispatcherID2].isStopped.Load())
 		}
+	}
+
+	// case 3: subStat 1 advance quicker than subStat 2, dispatcher 2 can still read data from subStat 1
+	updateSubStatResolvedTs(1, 220)
+	{
+		iter := store.GetIterator(dispatcherID2, common.DataRange{
+			Span: &heartbeatpb.TableSpan{
+				TableID:  tableID,
+				StartKey: []byte("b"),
+				EndKey:   []byte("h"),
+			},
+			CommitTsStart: 100,
+			CommitTsEnd:   220,
+		})
+		iterImpl := iter.(*eventStoreIter)
+		require.True(t, iterImpl.needCheckSpan)
+	}
+	{
+		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		{
+			subStat := subStats[logpuller.SubscriptionID(1)]
+			require.NotNil(t, subStat)
+			require.Equal(t, 2, len(subStat.dispatchers.subscribers))
+			require.Equal(t, true, subStat.dispatchers.subscribers[dispatcherID2].isStopped.Load())
+		}
+	}
+	{
+		dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID2]
+		require.NotNil(t, dispatcherStat)
+		require.Equal(t, logpuller.SubscriptionID(2), dispatcherStat.subStat.subID)
+		require.Equal(t, logpuller.SubscriptionID(1), dispatcherStat.removingSubStat.subID)
+	}
+
+	// case 4: subStat 2 advance quicker or the same as subStat 1,
+	// dispatcher 2 read data from subStat 2 and totally remove itself from the subsriber list of subStat 1
+	updateSubStatResolvedTs(2, 220)
+	{
+		iter := store.GetIterator(dispatcherID2, common.DataRange{
+			Span: &heartbeatpb.TableSpan{
+				TableID:  tableID,
+				StartKey: []byte("b"),
+				EndKey:   []byte("h"),
+			},
+			CommitTsStart: 100,
+			CommitTsEnd:   220,
+		})
+		iterImpl := iter.(*eventStoreIter)
+		require.False(t, iterImpl.needCheckSpan)
+	}
+	{
+		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		{
+			subStat := subStats[logpuller.SubscriptionID(1)]
+			require.NotNil(t, subStat)
+			require.Equal(t, 1, len(subStat.dispatchers.subscribers))
+		}
+	}
+	{
+		dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID2]
+		require.NotNil(t, dispatcherStat)
+		require.Equal(t, logpuller.SubscriptionID(2), dispatcherStat.subStat.subID)
+		require.Nil(t, dispatcherStat.removingSubStat)
 	}
 }

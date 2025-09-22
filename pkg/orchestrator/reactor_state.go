@@ -289,7 +289,7 @@ func (s *ChangefeedReactorState) ResumeChangefeed(overwriteCheckpointTs uint64) 
 				AdminJobType:      config.AdminNone,
 			}
 			log.Info("overwriting the tableCheckpoint ts",
-				zap.String("namespace", s.ID.Namespace()),
+				zap.String("keyspace", s.ID.Keyspace()),
 				zap.String("changefeed", s.ID.Name()),
 				zap.Any("oldCheckpointTs", oldCheckpointTs),
 				zap.Any("newCheckpointTs", status.CheckpointTs),
@@ -310,7 +310,7 @@ func (s *ChangefeedReactorState) TakeProcessorErrors() []*config.RunningError {
 			}
 			runningErrors[position.Error.Code] = position.Error
 			log.Error("processor reports an error",
-				zap.String("namespace", s.ID.Namespace()),
+				zap.String("keyspace", s.ID.Keyspace()),
 				zap.String("changefeed", s.ID.Name()),
 				zap.String("captureID", captureID),
 				zap.Any("error", position.Error))
@@ -343,7 +343,7 @@ func (s *ChangefeedReactorState) TakeProcessorWarnings() []*config.RunningError 
 			}
 			runningWarnings[position.Warning.Code] = position.Warning
 			log.Warn("processor reports a warning",
-				zap.String("namespace", s.ID.Namespace()),
+				zap.String("keyspace", s.ID.Keyspace()),
 				zap.String("changefeed", s.ID.Name()),
 				zap.String("captureID", captureID),
 				zap.Any("warning", position.Warning))
@@ -408,7 +408,7 @@ func (s *ChangefeedReactorState) UpdateChangefeedState(feedState config.FeedStat
 				previous := info.Epoch
 				info.Epoch = epoch
 				log.Info("update changefeed epoch",
-					zap.String("namespace", s.ID.Namespace()),
+					zap.String("keyspace", s.ID.Keyspace()),
 					zap.String("changefeed", s.ID.Name()),
 					zap.Uint64("perviousEpoch", previous),
 					zap.Uint64("currentEpoch", info.Epoch))

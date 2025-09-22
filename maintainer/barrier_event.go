@@ -104,7 +104,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		switch status.BlockTables.InfluenceType {
 		case heartbeatpb.InfluenceType_Normal:
 			if dynamicSplitEnabled {
-				event.rangeChecker = range_checker.NewTableSpanRangeChecker(status.BlockTables.TableIDs)
+				event.rangeChecker = range_checker.NewTableSpanRangeChecker(spanController.GetkeyspaceID(), status.BlockTables.TableIDs)
 			} else {
 				event.rangeChecker = range_checker.NewTableCountChecker(len(status.BlockTables.TableIDs))
 			}
@@ -126,8 +126,8 @@ func (be *BarrierEvent) createRangeCheckerForTypeAll() {
 		for _, rep := range reps {
 			tbls = append(tbls, rep.Span.TableID)
 		}
-		tbls = append(tbls, common.DDLSpan.TableID)
-		be.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
+		tbls = append(tbls, common.DDLSpanTableID)
+		be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), tbls)
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(be.spanController.TaskSize())
 	}
@@ -142,8 +142,8 @@ func (be *BarrierEvent) createRangeCheckerForTypeDB() {
 			tbls = append(tbls, rep.Span.TableID)
 		}
 
-		tbls = append(tbls, common.DDLSpan.TableID)
-		be.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
+		tbls = append(tbls, common.DDLSpanTableID)
+		be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), tbls)
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(
 			be.spanController.GetTaskSizeBySchemaID(be.blockedDispatchers.SchemaID) + 1 /*table trigger event dispatcher*/)
@@ -359,7 +359,7 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 		switch be.blockedDispatchers.InfluenceType {
 		case heartbeatpb.InfluenceType_Normal:
 			if be.dynamicSplitEnabled {
-				be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.blockedDispatchers.TableIDs)
+				be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), be.blockedDispatchers.TableIDs)
 			} else {
 				be.rangeChecker = range_checker.NewTableCountChecker(len(be.blockedDispatchers.TableIDs))
 			}
@@ -544,7 +544,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 
 	// still waiting for all dispatcher to reach the block commit ts
 	if !be.selected.Load() {
-		if time.Since(be.lastResendTime) > 30*time.Second {
+		if time.Since(be.lastWarningLogTime) > time.Second*10 {
 			log.Info("barrier event is not being selected",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.Uint64("commitTs", be.commitTs),

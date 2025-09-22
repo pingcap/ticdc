@@ -495,7 +495,10 @@ func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 	result.CommitTs = key.Ts
 	result.Length++
 
-	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
+	result.AddPostFlushFunc(func() {
+		chk.Destroy(1, tableInfo.GetFieldSlice())
+	})
 	columns := tableInfo.GetColumns()
 	if len(value.Delete) != 0 {
 		data := collectAllColumnsValue(value.Delete, columns)

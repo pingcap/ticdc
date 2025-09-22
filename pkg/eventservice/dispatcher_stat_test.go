@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
@@ -27,7 +28,8 @@ import (
 func TestNewDispatcherStat(t *testing.T) {
 	t.Parallel()
 
-	startTs := uint64(50)
+	startTs := oracle.GoTimeToTS(time.Now())
+	syncPointInterval := time.Second * 10
 	// Mock dispatcher info
 	info := newMockDispatcherInfo(
 		t,
@@ -36,47 +38,26 @@ func TestNewDispatcherStat(t *testing.T) {
 		1,
 		eventpb.ActionType_ACTION_TYPE_REGISTER,
 	)
+	info.enableSyncPoint = true
+	info.nextSyncPoint = syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, false)
+	info.syncPointInterval = syncPointInterval
 
-	workerIndex := 1
+	workerCount := uint64(1)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(info, info.filter, workerIndex, workerIndex, status)
+	stat := newDispatcherStat(info, workerCount, workerCount, nil, status)
 
 	require.Equal(t, info.GetID(), stat.id)
-	require.Equal(t, workerIndex, stat.messageWorkerIndex)
-	require.Equal(t, uint64(0), stat.resetTs.Load())
-	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
+	require.Equal(t, 0, stat.scanWorkerIndex)
+	require.Equal(t, 0, stat.messageWorkerIndex)
+	require.Equal(t, startTs, stat.startTs)
+	require.Equal(t, uint64(0), stat.epoch)
+	require.True(t, stat.enableSyncPoint)
+	require.Equal(t, info.nextSyncPoint, stat.nextSyncPoint.Load())
+	require.Equal(t, syncPointInterval, stat.syncPointInterval)
+	require.Equal(t, startTs, stat.receivedResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
 	require.True(t, stat.isReadyReceivingData.Load())
-	require.False(t, stat.enableSyncPoint)
-	require.Equal(t, info.GetSyncPointTs(), stat.nextSyncPoint.Load())
-	require.Equal(t, info.GetSyncPointInterval(), stat.syncPointInterval)
-}
-
-func TestResetSyncpoint(t *testing.T) {
-	t.Parallel()
-
-	now := time.Now()
-	firstSyncPoint := oracle.GoTimeToTS(now)
-	syncPointInterval := time.Second * 10
-	secondSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(syncPointInterval))
-	thirdSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(firstSyncPoint).Add(2 * syncPointInterval))
-	startTs := oracle.GoTimeToTS(now.Add(-2 * time.Second))
-
-	info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	info.enableSyncPoint = true
-	info.nextSyncPoint = firstSyncPoint
-	info.syncPointInterval = syncPointInterval
-	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(info, info.filter, 1, 1, status)
-
-	stat.nextSyncPoint.Store(thirdSyncPoint)
-	stat.resetState(secondSyncPoint)
-	require.Equal(t, thirdSyncPoint, stat.nextSyncPoint.Load())
-	stat.resetState(secondSyncPoint - 1)
-	require.Equal(t, secondSyncPoint, stat.nextSyncPoint.Load())
-	stat.resetState(startTs)
-	require.Equal(t, firstSyncPoint, stat.nextSyncPoint.Load())
 }
 
 func TestDispatcherStatResolvedTs(t *testing.T) {
@@ -84,12 +65,12 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 
 	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(info, info.filter, 1, 1, status)
+	stat := newDispatcherStat(info, 1, 1, nil, status)
 
 	// Test normal update
 	updated := stat.onResolvedTs(150)
 	require.True(t, updated)
-	require.Equal(t, uint64(150), stat.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(150), stat.receivedResolvedTs.Load())
 
 	// Test same ts update
 	updated = stat.onResolvedTs(150)
@@ -101,51 +82,64 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 
 	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(info, info.filter, 1, 1, status)
-	stat.eventStoreResolvedTs.Store(200)
+	stat := newDispatcherStat(info, 1, 1, nil, status)
+	stat.setHandshaked()
 
-	// Normal case
+	// case 1: get range after resolved ts update
+	stat.onResolvedTs(200)
 	r, ok := stat.getDataRange()
 	require.True(t, ok)
 	require.Equal(t, uint64(100), r.CommitTsStart)
+	require.Equal(t, uint64(0), r.LastScannedTxnStartTs)
 	require.Equal(t, uint64(200), r.CommitTsEnd)
 	require.Equal(t, info.GetTableSpan(), r.Span)
 
-	// When watermark equals resolvedTs
-	stat.isHandshaked.Store(true)
+	// case 2: get range after scan range update
+	stat.updateScanRange(130, 120)
+	r, ok = stat.getDataRange()
+	require.True(t, ok)
+	require.Equal(t, uint64(130), r.CommitTsStart)
+	require.Equal(t, uint64(120), r.LastScannedTxnStartTs)
+	require.Equal(t, uint64(200), r.CommitTsEnd)
+	require.Equal(t, info.GetTableSpan(), r.Span)
+
+	// case 3: get range after sent resolved ts update
 	stat.updateSentResolvedTs(200)
 	r, ok = stat.getDataRange()
 	require.False(t, ok)
 
-	// When reset, the data range should be start from the reset ts.
-	stat.resetState(150)
+	// case 4: get range after resolved ts update again
+	stat.onResolvedTs(300)
 	r, ok = stat.getDataRange()
 	require.True(t, ok)
-	require.Equal(t, uint64(150), r.CommitTsStart)
+	require.Equal(t, uint64(200), r.CommitTsStart)
+	require.Equal(t, uint64(0), r.LastScannedTxnStartTs)
+	require.Equal(t, uint64(300), r.CommitTsEnd)
+	require.Equal(t, info.GetTableSpan(), r.Span)
 }
 
 func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	startTs := uint64(100)
 	info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status := newChangefeedStatus(info.GetChangefeedID())
-	stat := newDispatcherStat(info, info.filter, 1, 1, status)
+	stat := newDispatcherStat(info, 1, 1, nil, status)
 
 	// Case 1: no new events, only watermark change
 	stat.onResolvedTs(200)
-	require.Equal(t, uint64(200), stat.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(200), stat.receivedResolvedTs.Load())
 
 	// Case 2: new events, and watermark increase
 	stat.onLatestCommitTs(300)
 	stat.onResolvedTs(400)
 	require.Equal(t, uint64(300), stat.eventStoreCommitTs.Load())
-	require.Equal(t, uint64(400), stat.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(400), stat.receivedResolvedTs.Load())
 
 	// Case 3: new events, and watermark decrease
 	// watermark should not decrease
 	stat.onLatestCommitTs(500)
 	stat.onResolvedTs(300)
 	require.Equal(t, uint64(500), stat.eventStoreCommitTs.Load())
-	require.Equal(t, uint64(400), stat.eventStoreResolvedTs.Load())
+	require.Equal(t, uint64(400), stat.receivedResolvedTs.Load())
 }
 
 func TestResolvedTsCache(t *testing.T) {

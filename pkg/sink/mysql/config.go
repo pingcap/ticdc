@@ -100,7 +100,6 @@ type Config struct {
 	SafeMode               bool
 	Timezone               string
 	TLS                    string
-	ForceReplicate         bool
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -215,7 +214,6 @@ func (c *Config) Apply(
 	}
 
 	// c.EnableOldValue = config.EnableOldValue
-	c.ForceReplicate = cfg.ForceReplicate
 	// Note: The TiDBSourceID should never be 0 here, but we have found that
 	// in some problematic cases, the TiDBSourceID is 0 since something went wrong in the
 	// configuration process. So we need to check it here again.
@@ -456,7 +454,7 @@ func getSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) 
 		return errors.Trace(err)
 	}
 
-	name := fmt.Sprintf("cdc_mysql_tls%s_%s", changefeedID.Namespace(), changefeedID.ID())
+	name := fmt.Sprintf("cdc_mysql_tls%s_%s", changefeedID.Keyspace(), changefeedID.ID())
 	err = dmysql.RegisterTLSConfig(name, tlsCfg)
 	if err != nil {
 		return cerror.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")

@@ -29,7 +29,7 @@ type ProcessorsGetter interface {
 // ProcessorInterface has methods to work with Processor items.
 // We can also mock the processor operations by implement this interface.
 type ProcessorInterface interface {
-	Get(ctx context.Context, namespace string, changefeedID, captureID string) (*v2.ProcessorDetail, error)
+	Get(ctx context.Context, keyspace string, changefeedID, captureID string) (*v2.ProcessorDetail, error)
 	List(ctx context.Context) ([]v2.ProcessorCommonInfo, error)
 }
 
@@ -58,12 +58,12 @@ func (p *processors) List(ctx context.Context) ([]v2.ProcessorCommonInfo, error)
 // Get gets the processor with given `changefeedID` and `captureID`.
 func (p *processors) Get(
 	ctx context.Context,
-	namespace,
+	keyspace,
 	changefeedID,
 	captureID string,
 ) (*v2.ProcessorDetail, error) {
 	result := &v2.ProcessorDetail{}
-	u := fmt.Sprintf("processors/%s/%s?namespace=%s", changefeedID, captureID, namespace)
+	u := fmt.Sprintf("processors/%s/%s?keyspace=%s", changefeedID, captureID, keyspace)
 	err := p.client.Get().
 		WithURI(u).
 		Do(ctx).

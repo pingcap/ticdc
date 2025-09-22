@@ -7,13 +7,13 @@ export-fix-sql = true
 check-struct-only = false
 
 [task]
-    output-dir = "/tmp/tidb_cdc_test/sink_retry/sync_diff/output"
+    output-dir = "/tmp/tidb_cdc_test/mysql_sink_retry/sync_diff/output"
 
     source-instances = ["mysql1"]
 
     target-instance = "tidb0"
 
-    target-check-tables = ["sink_retry.usertable"]
+    target-check-tables = ["sink_retry.usertable", "mysql_sink_retry_duplicate_entry.cdc_multi_data_type"]
 
 [data-sources]
 [data-sources.mysql1]

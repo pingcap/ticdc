@@ -37,8 +37,8 @@ type eventGetter interface {
 // schemaGetter is the interface for getting schema info and ddl events
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
-	FetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
-	GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error)
+	FetchTableDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
+	GetTableInfo(keyspaceID uint32, tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
 // ScanLimit defines the limits for a scan operation
@@ -128,7 +128,7 @@ func (s *eventScanner) scan(
 
 	iter := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
 	if iter == nil {
-		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch.Load())
+		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch)
 		events = append(events, resolved)
 		sess.appendEvents(events)
 		return 0, sess.events, false, nil
@@ -145,7 +145,13 @@ func (s *eventScanner) scan(
 func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.DataRange) ([]event.Event, error) {
 	dispatcherID := stat.info.GetID()
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
-		dispatcherID, dataRange.Span.TableID, stat.filter, dataRange.CommitTsStart, dataRange.CommitTsEnd)
+		stat.info.GetTableSpan().KeyspaceID,
+		dispatcherID,
+		dataRange.Span.TableID,
+		stat.filter,
+		dataRange.CommitTsStart,
+		dataRange.CommitTsEnd,
+	)
 	if err != nil {
 		log.Error("get ddl events failed", zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", dataRange.Span.TableID), zap.Error(err))
@@ -244,7 +250,7 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 }
 
 func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
-	tableInfo, err := s.schemaGetter.GetTableInfo(tableID, ts)
+	tableInfo, err := s.schemaGetter.GetTableInfo(dispatcher.info.GetTableSpan().KeyspaceID, tableID, ts)
 	if err == nil {
 		return tableInfo, nil
 	}
@@ -329,7 +335,7 @@ func finalizeScan(
 	events := merger.mergeWithPrecedingDDLs(resolvedBatch)
 	events = append(events, merger.resolveDDLEvents(endTs)...)
 
-	resolveTs := event.NewResolvedEvent(endTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch.Load())
+	resolveTs := event.NewResolvedEvent(endTs, sess.dispatcherStat.id, sess.dispatcherStat.epoch)
 	events = append(events, resolveTs)
 	sess.appendEvents(events)
 	return nil
@@ -364,7 +370,7 @@ func interruptScan(
 			// This means we interrupt the scan at a position where the commitTs is different from the last batchDML commitTs
 			// In this case, we need to append the DDL less than or equal to the last batchDML commitTs and the resolved-ts event with the last batchDML commitTs
 			events = append(events, merger.resolveDDLEvents(merger.lastBatchDMLCommitTs)...)
-			resolvedTs := event.NewResolvedEvent(merger.lastBatchDMLCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch.Load())
+			resolvedTs := event.NewResolvedEvent(merger.lastBatchDMLCommitTs, session.dispatcherStat.id, session.dispatcherStat.epoch)
 			events = append(events, resolvedTs)
 			log.Debug("scan interrupted at different commitTs with new event", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Uint64("CommitTs", merger.lastBatchDMLCommitTs), zap.Uint64("newCommitTs", newCommitTs), zap.Duration("duration", time.Since(session.startTime)))
 		}
@@ -676,6 +682,8 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if p.currentDML == nil {
 		log.Panic("no current DML event to append to")
 	}
+
+	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
 
 	if !rawEvent.IsUpdate() {
 		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)

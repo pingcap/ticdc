@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -165,10 +166,7 @@ func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 
 // collectDispatcherMetrics collects metrics related to dispatchers
 func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) {
-	mc.broker.dispatchers.Range(func(key, value any) bool {
-		snapshot.dispatcherCount++
-		dispatcher := value.(*dispatcherStat)
-
+	collect := func(dispatcher *dispatcherStat) {
 		if dispatcher.IsReadyRecevingData() {
 			snapshot.runningDispatcherCount++
 		} else {
@@ -180,7 +178,7 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
 
 		// Track min resolved timestamps
-		resolvedTs := dispatcher.eventStoreResolvedTs.Load()
+		resolvedTs := dispatcher.receivedResolvedTs.Load()
 		if resolvedTs < snapshot.receivedMinResolvedTs {
 			snapshot.receivedMinResolvedTs = resolvedTs
 		}
@@ -194,7 +192,18 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		if snapshot.slowestDispatcher == nil || snapshot.slowestDispatcher.sentResolvedTs.Load() < watermark {
 			snapshot.slowestDispatcher = dispatcher
 		}
+	}
 
+	mc.broker.dispatchers.Range(func(key, value any) bool {
+		snapshot.dispatcherCount++
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		collect(dispatcher)
+		return true
+	})
+	mc.broker.tableTriggerDispatchers.Range(func(key, value any) bool {
+		snapshot.dispatcherCount++
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		collect(dispatcher)
 		return true
 	})
 }
@@ -238,13 +247,14 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 	log.Warn("slowest dispatcher",
 		zap.Stringer("dispatcherID", snapshot.slowestDispatcher.id),
 		zap.Uint64("sentResolvedTs", snapshot.slowestDispatcher.sentResolvedTs.Load()),
-		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.eventStoreResolvedTs.Load()),
+		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.receivedResolvedTs.Load()),
 		zap.Duration("lag", lag),
 		zap.Duration("updateDiff",
-			time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())-
-				time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())),
+			time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())-
+				time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())),
 		zap.Bool("isPaused", !snapshot.slowestDispatcher.IsReadyRecevingData()),
-		zap.Bool("isHandshaked", snapshot.slowestDispatcher.isHandshaked.Load()),
+		zap.Uint64("epoch", snapshot.slowestDispatcher.epoch),
+		zap.Uint64("seq", snapshot.slowestDispatcher.seq.Load()),
 		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
 	)
 }

@@ -46,13 +46,13 @@ mysql_groups=(
 	# G06
 	'http_api http_api_tls ddl_wait fail_over_ddl_G'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H'
+	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config'
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
 	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
 	# G10
-	'changefeed_error bdr_mode fail_over_ddl_K'
+	'changefeed_error bdr_mode fail_over_ddl_K split_table_check'
 	# G11
 	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
@@ -62,7 +62,7 @@ mysql_groups=(
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
 	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables old_arch_compatibility'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
@@ -84,13 +84,13 @@ kafka_groups=(
 	# G06
 	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
-	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H'
+	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
 	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K'
+	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
@@ -122,13 +122,13 @@ pulsar_groups=(
 	# G06
 	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
-	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H'
+	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
 	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K'
+	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
@@ -160,13 +160,13 @@ storage_groups=(
 	# G06
 	'lossy_ddl fail_over_ddl_G'
 	# G07
-	'storage_cleanup fail_over_ddl_H'
+	'storage_cleanup fail_over_ddl_H changefeed_update_config'
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
 	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K'
+	'changefeed_error batch_add_table fail_over_ddl_K  split_table_check'
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12

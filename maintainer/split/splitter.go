@@ -45,13 +45,14 @@ type Splitter struct {
 
 // Now we only support Split span by region count,  each span will contains similar count of regions.
 func NewSplitter(
+	keyspaceID uint32,
 	changefeedID common.ChangeFeedID,
 	config *config.ChangefeedSchedulerConfig,
 ) *Splitter {
 	return &Splitter{
 		changefeedID:          changefeedID,
 		regionCounterSplitter: newRegionCountSplitter(changefeedID, config.RegionCountPerSpan, config.RegionThreshold),
-		writeBytesSplitter:    newWriteBytesSplitter(changefeedID),
+		writeBytesSplitter:    newWriteBytesSplitter(keyspaceID, changefeedID),
 	}
 }
 

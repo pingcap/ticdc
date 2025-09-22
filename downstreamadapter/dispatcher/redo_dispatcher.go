@@ -42,7 +42,7 @@ func NewRedoDispatcher(
 	startTs uint64,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
-	startTsIsSyncpoint bool,
+	skipSyncpointSameAsStartTs bool,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *RedoDispatcher {
@@ -52,7 +52,7 @@ func NewRedoDispatcher(
 		startTs,
 		schemaID,
 		schemaIDToDispatchers,
-		startTsIsSyncpoint,
+		skipSyncpointSameAsStartTs,
 		0,
 		common.RedoMode,
 		sink,

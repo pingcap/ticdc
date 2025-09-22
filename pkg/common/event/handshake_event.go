@@ -42,14 +42,14 @@ type HandshakeEvent struct {
 func NewHandshakeEvent(
 	dispatcherID common.DispatcherID,
 	resolvedTs common.Ts,
-	seq uint64,
 	epoch uint64,
 	tableInfo *common.TableInfo,
 ) HandshakeEvent {
 	return HandshakeEvent{
-		Version:      HandshakeEventVersion,
-		ResolvedTs:   resolvedTs,
-		Seq:          seq,
+		Version:    HandshakeEventVersion,
+		ResolvedTs: resolvedTs,
+		// handshake event always have seq 1
+		Seq:          1,
 		Epoch:        epoch,
 		DispatcherID: dispatcherID,
 		TableInfo:    tableInfo,

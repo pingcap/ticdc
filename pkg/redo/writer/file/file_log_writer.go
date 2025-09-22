@@ -48,7 +48,7 @@ func NewLogWriter(
 		changeFeedID := cfg.ChangeFeedID
 		dataDir := config.GetGlobalServerConfig().DataDir
 		cfg.Dir = filepath.Join(dataDir, config.DefaultRedoDir,
-			changeFeedID.Namespace(), changeFeedID.Name())
+			changeFeedID.Keyspace(), changeFeedID.Name())
 	} else {
 		// When local storage or NFS is used, we use redoDir as the final storage path.
 		cfg.Dir = cfg.URI.Path
@@ -85,7 +85,7 @@ func (l *logWriter) writeEvents(ctx context.Context, events ...writer.RedoEvent)
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("namespace", l.cfg.ChangeFeedID.Namespace()),
+				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
 				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
 				zap.String("capture", l.cfg.CaptureID))
 			continue
@@ -101,7 +101,7 @@ func (l *logWriter) asyncWriteEvents(ctx context.Context, events ...writer.RedoE
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("namespace", l.cfg.ChangeFeedID.Namespace()),
+				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
 				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
 				zap.String("capture", l.cfg.CaptureID))
 			continue

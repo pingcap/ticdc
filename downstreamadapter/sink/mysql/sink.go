@@ -137,17 +137,17 @@ func (s *Sink) Run(ctx context.Context) error {
 }
 
 func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
-	namespace := s.changefeedID.Namespace()
+	keyspace := s.changefeedID.Keyspace()
 	changefeed := s.changefeedID.Name()
 
-	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
-	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
-	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
+	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
-		metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerTotalDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerHandledRows.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -239,7 +239,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		err = s.ddlWriter.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
 	default:
 		log.Panic("mysql sink meet unknown event type",
-			zap.String("namespace", s.changefeedID.Namespace()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("event", event))
 	}
@@ -253,12 +253,12 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
 
-// GetStartTsList return the startTs list and startTsIsSyncpoint list for each table in the tableIDs list.
+// GetStartTsList return the startTs list and skipSyncpointSameAsStartTs list for each table in the tableIDs list.
 // If removeDDLTs is true, we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
-// If removeDDLTs is false, we need to query the ddl ts from the ddl_ts table, and return the startTs list and startTsIsSyncpoint list.
-// The startTsIsSyncpoint list is used to determine whether the startTs is a syncpoint event.
+// If removeDDLTs is false, we need to query the ddl ts from the ddl_ts table, and return the startTs list and skipSyncpointSameAsStartTs list.
+// The skipSyncpointSameAsStartTs list is used to determine whether we need to skip the syncpoint event which is same as the startTs
 // when the startTs in input list is larger than the the startTs from ddlTs,
-// we need to set the related startTsIsSyncpoint to false, and return the input startTs value.
+// we need to set the related skipSyncpointSameAsStartTs to false, and return the input startTs value.
 func (s *Sink) GetStartTsList(
 	tableIds []int64,
 	startTsList []int64,
