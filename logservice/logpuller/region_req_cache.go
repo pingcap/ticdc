@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	checkStaleRequestInterval = time.Second * 5
-	requestGCLifeTime         = time.Minute * 10
+	checkStaleRequestInterval = time.Second * 10
+	requestGCLifeTime         = time.Minute * 20
 	addReqRetryInterval       = time.Millisecond * 1
 	addReqRetryLimit          = 3
 )
@@ -93,7 +93,6 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 	ticker := time.NewTicker(addReqRetryInterval)
 	defer ticker.Stop()
 	addReqRetryLimit := addReqRetryLimit
-	c.clearStaleRequest()
 
 	for {
 		current := c.pendingCount.Load()
@@ -186,8 +185,6 @@ func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 
 // resolve marks a region as initialized and removes it from sent requests
 func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) bool {
-	defer c.clearStaleRequest()
-
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
 	regionReqs, ok := c.sentRequests.regionReqs[subscriptionID]
@@ -205,9 +202,11 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 		delete(regionReqs, regionID)
 		c.decPendingCount()
 		cost := time.Since(req.createTime).Seconds()
-		if cost > 0 {
+		if cost > 0 && cost < 7200.0 {
 			log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 			metrics.RegionRequestFinishScanDuration.Observe(cost)
+		} else {
+			log.Info("region request duration abnormal, skip metric", zap.Float64("cost", cost), zap.Uint64("regionID", regionID))
 		}
 		// Notify waiting add operations that there's space available
 		select {

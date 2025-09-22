@@ -59,7 +59,15 @@ var (
 			Subsystem: "subscription_client",
 			Name:      "region_request_finish_scan_duration",
 			Help:      "duration (s) for region request to be finished.",
-			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+			// 使用更细粒度的桶配置，减少插值误差
+			// 0.1ms-1s 用线性桶，1s-300s 用指数桶
+			Buckets: append(
+				prometheus.LinearBuckets(0.0001, 0.0001, 50), // 0.1ms-5ms, step=0.1ms
+				append(
+					prometheus.LinearBuckets(0.01, 0.01, 100),      // 10ms-1s, step=10ms
+					prometheus.ExponentialBuckets(2.0, 2.0, 16)..., // 2s-512s
+				)...,
+			),
 		})
 	SubscriptionClientAddRegionRequestDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
