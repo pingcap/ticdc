@@ -123,7 +123,7 @@ func (s *eventService) Run(ctx context.Context) error {
 			case eventpb.ActionType_ACTION_TYPE_RESET:
 				s.resetDispatcher(info)
 			default:
-				log.Panic("invalid action type", zap.Any("info", info))
+				log.Warn("invalid action type, ingore it", zap.Any("info", info))
 			}
 		case heartbeat := <-s.dispatcherHeartbeat:
 			s.handleDispatcherHeartbeat(heartbeat)
