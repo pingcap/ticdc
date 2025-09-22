@@ -33,7 +33,7 @@ const (
 // tempTxnInsertEventStorage is used to store insert events in the same transaction
 // once you begin to read events from storage, you should read all events before you write new events
 type tempTxnInsertEventStorage struct {
-	events []*commonEvent.DMLEvent
+	events []*commonEvent.RedoDMLEvent
 	// when events num exceed flushThreshold, write all events to file
 	flushThreshold int
 	dir            string
@@ -51,7 +51,7 @@ type tempTxnInsertEventStorage struct {
 
 func newTempTxnInsertEventStorage(flushThreshold int, dir string) *tempTxnInsertEventStorage {
 	return &tempTxnInsertEventStorage{
-		events:         make([]*commonEvent.DMLEvent, 0),
+		events:         make([]*commonEvent.RedoDMLEvent, 0),
 		flushThreshold: flushThreshold,
 		dir:            dir,
 		txnCommitTs:    0,
@@ -71,7 +71,7 @@ func (t *tempTxnInsertEventStorage) initializeAddEvent(ts common.Ts) {
 	t.readingFile = nil
 }
 
-func (t *tempTxnInsertEventStorage) addEvent(event *commonEvent.DMLEvent) error {
+func (t *tempTxnInsertEventStorage) addEvent(event *commonEvent.RedoDMLEvent) error {
 	// do some pre check
 	if !event.IsInsert() {
 		log.Panic("event is not insert event", zap.Any("event", event))
@@ -80,11 +80,11 @@ func (t *tempTxnInsertEventStorage) addEvent(event *commonEvent.DMLEvent) error 
 		log.Panic("should read all events before write new event")
 	}
 	if !t.hasEvent() {
-		t.initializeAddEvent(event.CommitTs)
+		t.initializeAddEvent(event.Row.CommitTs)
 	} else {
-		if t.txnCommitTs != event.CommitTs {
+		if t.txnCommitTs != event.Row.CommitTs {
 			log.Panic("commit ts of events should be the same",
-				zap.Uint64("commitTs", event.CommitTs),
+				zap.Uint64("commitTs", event.Row.CommitTs),
 				zap.Uint64("txnCommitTs", t.txnCommitTs))
 		}
 	}
@@ -104,7 +104,7 @@ func (t *tempTxnInsertEventStorage) addEvent(event *commonEvent.DMLEvent) error 
 	return nil
 }
 
-func (t *tempTxnInsertEventStorage) writeEventsToFile(events ...*commonEvent.DMLEvent) error {
+func (t *tempTxnInsertEventStorage) writeEventsToFile(events ...*commonEvent.RedoDMLEvent) error {
 	if !t.useFileStorage {
 		t.useFileStorage = true
 		var err error
@@ -113,7 +113,8 @@ func (t *tempTxnInsertEventStorage) writeEventsToFile(events ...*commonEvent.DML
 			return err
 		}
 	}
-	for _, event := range events {
+	for _, e := range events {
+		event := e.ToDMLEvent()
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
@@ -146,7 +147,7 @@ func (t *tempTxnInsertEventStorage) hasEvent() bool {
 	return len(t.events) > 0 || len(t.eventSizes) > 0
 }
 
-func (t *tempTxnInsertEventStorage) readFromFile() (*commonEvent.DMLEvent, error) {
+func (t *tempTxnInsertEventStorage) readFromFile() (*commonEvent.RedoDMLEvent, error) {
 	if len(t.eventSizes) == 0 {
 		return nil, nil
 	}
@@ -171,10 +172,10 @@ func (t *tempTxnInsertEventStorage) readFromFile() (*commonEvent.DMLEvent, error
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
-	return &redoLog.RedoRow, nil
+	return redoLog.RedoRow, nil
 }
 
-func (t *tempTxnInsertEventStorage) readNextEvent() (*commonEvent.DMLEvent, error) {
+func (t *tempTxnInsertEventStorage) readNextEvent() (*commonEvent.RedoDMLEvent, error) {
 	if !t.hasEvent() {
 		return nil, nil
 	}

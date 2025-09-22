@@ -34,7 +34,7 @@ type updateEventSplitter struct {
 	// pendingEvent is the event that trigger the process to emit events from tempStorage, it can be
 	// 1) an insert event in the same transaction(because there will be no more update and delete events in the same transaction)
 	// 2) a new event in the next transaction
-	pendingEvent *event.DMLEvent
+	pendingEvent *event.RedoDMLEvent
 	// meetInsertInCurTxn is used to indicate whether we meet an insert event in the current transaction
 	// this is to add some check to ensure that insert events are emitted after other kinds of events in the same transaction
 	meetInsertInCurTxn bool
@@ -49,12 +49,12 @@ func newUpdateEventSplitter(rd reader.RedoLogReader, dir string) *updateEventSpl
 	}
 }
 
-func (u *updateEventSplitter) checkEventOrder(event *event.DMLEvent) {
+func (u *updateEventSplitter) checkEventOrder(event *event.RedoDMLEvent) {
 	if event == nil {
 		return
 	}
 	// meeet a new transaction
-	if event.StartTs != u.prevTxnStartTs {
+	if event.Row.StartTs != u.prevTxnStartTs {
 		u.meetInsertInCurTxn = false
 		return
 	}
@@ -75,7 +75,7 @@ func (u *updateEventSplitter) readNextRow(ctx context.Context) (*event.RedoDMLEv
 			if u.tempStorage.hasEvent() {
 				return u.tempStorage.readNextEvent()
 			}
-			var event *event.DMLEvent
+			var event *event.RedoDMLEvent
 			var err error
 			event, u.pendingEvent, err = processEvent(u.pendingEvent, u.prevTxnStartTs, u.tempStorage)
 			if err != nil {
@@ -105,7 +105,7 @@ func (u *updateEventSplitter) readNextRow(ctx context.Context) (*event.RedoDMLEv
 		} else {
 			u.checkEventOrder(event)
 			prevTxnStartTs := u.prevTxnStartTs
-			u.prevTxnStartTs = event.StartTs
+			u.prevTxnStartTs = event.Row.StartTs
 			var err error
 			event, u.pendingEvent, err = processEvent(event, prevTxnStartTs, u.tempStorage)
 			if err != nil {

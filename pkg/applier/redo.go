@@ -18,18 +18,19 @@ import (
 	"net/url"
 	"time"
 
+	"go.uber.org/atomic"
+
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -62,20 +63,17 @@ type RedoApplier struct {
 	rd             reader.RedoLogReader
 	updateSplitter *updateEventSplitter
 
-	mysqlSink       sink.Sink
+	mysqlSink       *mysql.Sink
 	appliedDDLCount uint64
 
-	memQuota     int64
-	pendingQuota uint64
-
-	tableResolvedTsMap map[common.TableID]any
-	appliedLogCount    uint64
+	eventsGroup     map[commonType.TableID]*eventsGroup
+	appliedLogCount uint64
 
 	errCh chan error
 
 	// changefeedID is used to identify the changefeed that this applier belongs to.
 	// not used for now.
-	changefeedID common.ChangeFeedID
+	changefeedID commonType.ChangeFeedID
 }
 
 // NewRedoApplier creates a new RedoApplier instance
@@ -116,29 +114,17 @@ func (ra *RedoApplier) catchError(ctx context.Context) error {
 }
 
 func (ra *RedoApplier) initSink(ctx context.Context) (err error) {
-	replicaConfig := &config.ChangefeedConfig{}
-	ra.mysqlSink, err = sink.New(ctx, replicaConfig, ra.changefeedID)
+	replicaConfig := &config.ChangefeedConfig{
+		SinkURI: ra.cfg.SinkURI,
+	}
+	sink, err := sink.New(ctx, replicaConfig, ra.changefeedID)
 	if err != nil {
 		return err
 	}
-	ra.tableResolvedTsMap = make(map[common.TableID]any)
-	return nil
-}
+	ra.mysqlSink = sink.(*mysql.Sink)
 
-func (ra *RedoApplier) bgReleaseQuota(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			// for tableID, tableSink := range ra.tableSinks {
-			// 	checkpointTs := tableSink.GetCheckpointTs()
-			// 	ra.memQuota.Release(spanz.TableIDToComparableSpan(tableID), checkpointTs)
-			// }
-		}
-	}
+	ra.eventsGroup = make(map[commonType.TableID]*eventsGroup)
+	return nil
 }
 
 func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
@@ -154,7 +140,7 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	}
 	defer ra.mysqlSink.Close(true)
 
-	shouldApplyDDL := func(row *event.RedoDMLEvent, ddl *event.RedoDDLEvent) bool {
+	shouldApplyDDL := func(row *commonEvent.RedoDMLEvent, ddl *commonEvent.RedoDDLEvent) bool {
 		if ddl == nil {
 			return false
 		} else if row == nil {
@@ -195,11 +181,10 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 		}
 	}
 	// wait all tables to flush data
-	for tableID := range ra.tableResolvedTsMap {
+	for tableID := range ra.eventsGroup {
 		if err := ra.waitTableFlush(ctx, tableID, resolvedTs); err != nil {
 			return err
 		}
-		ra.tableSinks[tableID].Close()
 	}
 
 	log.Info("apply redo log finishes",
@@ -210,21 +195,29 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 }
 
 func (ra *RedoApplier) applyDDL(
-	ctx context.Context, ddl *event.RedoDDLEvent, checkpointTs uint64,
+	ctx context.Context, ddl *commonEvent.RedoDDLEvent, checkpointTs uint64,
 ) error {
 	shouldSkip := func() bool {
+		if ddl.DDL == nil {
+			// Note this could only happen when using old version of cdc, and the commit ts
+			// of the DDL should be equal to checkpoint ts or resolved ts.
+			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
+			return true
+		}
 		if ddl.DDL.CommitTs == checkpointTs {
 			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
 				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
 				return true
 			}
 		}
-		// if ddl.DDL == nil {
-		// 	// Note this could omly happen when using old version of cdc, and the commit ts
-		// 	// of the DDL should be equal to checkpoint ts or resolved ts.
-		// 	log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
-		// 	return true
-		// }
+		newStartTsList, _, err := ra.mysqlSink.GetStartTsList([]int64{ddl.TableName.TableID}, []int64{0}, false)
+		if err != nil {
+			log.Error("get startTs list failed", zap.Any("ddl", ddl))
+			return true
+		}
+		if newStartTsList[0] > int64(checkpointTs) {
+			return true
+		}
 		return false
 	}
 	if shouldSkip() {
@@ -233,12 +226,12 @@ func (ra *RedoApplier) applyDDL(
 	log.Warn("apply DDL", zap.Any("ddl", ddl))
 	// Wait all tables to flush data before applying DDL.
 	// TODO: only block tables that are affected by this DDL.
-	for tableID := range ra.tableSinks {
-		if err := ra.waitTableFlush(ctx, tableID, ddl.CommitTs); err != nil {
+	for tableID := range ra.eventsGroup {
+		if err := ra.waitTableFlush(ctx, tableID, ddl.DDL.CommitTs); err != nil {
 			return err
 		}
 	}
-	if err := ra.ddlSink.WriteDDLEvent(ctx, ddl); err != nil {
+	if err := ra.mysqlSink.WriteBlockEvent(ddl.ToDDLEvent()); err != nil {
 		return err
 	}
 	ra.appliedDDLCount++
@@ -246,90 +239,62 @@ func (ra *RedoApplier) applyDDL(
 }
 
 func (ra *RedoApplier) applyRow(
-	row *event.RedoDMLEvent, checkpointTs common.Ts,
+	row *commonEvent.RedoDMLEvent, checkpointTs commonType.Ts,
 ) error {
-	rowSize := uint64(row.ApproximateSize)
-	// if rowSize > ra.pendingQuota {
-	// 	if err := ra.resetQuota(uint64(row.ApproximateSize)); err != nil {
-	// 		return err
-	// 	}
-	// }
-	ra.pendingQuota -= rowSize
-
-	tableID := row.GetTableID()
-	if _, ok := ra.tableSinks[tableID]; !ok {
-		tableSink := ra.sinkFactory.CreateTableSink(
-			common.NewChangeFeedIDWithName(applierChangefeed),
-			common.TableIDToComparableSpan(tableID),
-			checkpointTs,
-			pdutil.NewClock4Test(),
-			prometheus.NewCounter(prometheus.CounterOpts{}),
-			prometheus.NewHistogram(prometheus.HistogramOpts{}),
-		)
-		ra.tableSinks[tableID] = tableSink
-	}
-	if _, ok := ra.tableResolvedTsMap[tableID]; !ok {
-		// Initialize table record using checkpointTs.
+	tableID := row.Row.Table.TableID
+	if _, ok := ra.eventsGroup[tableID]; !ok {
+		ra.eventsGroup[tableID] = NewEventsGroup(0, tableID)
 	}
 
-	ra.tableSinks[tableID].AppendRowChangedEvents(row)
-	record := ra.tableResolvedTsMap[tableID]
-	record.Size += rowSize
-	if row.CommitTs > record.ResolvedTs.Ts {
-		// Use batch resolvedTs to flush data as quickly as possible.
-	} else if row.CommitTs < ra.tableResolvedTsMap[tableID].ResolvedTs.Ts {
+	if row.Row.CommitTs < ra.eventsGroup[tableID].highWatermark {
 		log.Panic("commit ts of redo log regressed",
 			zap.Int64("tableID", tableID),
-			zap.Uint64("commitTs", row.CommitTs),
-			zap.Any("resolvedTs", ra.tableResolvedTsMap[tableID]))
+			zap.Uint64("commitTs", row.Row.CommitTs),
+			zap.Any("resolvedTs", ra.eventsGroup[tableID].highWatermark))
 	}
+	ra.eventsGroup[tableID].Append(row.ToDMLEvent(), false)
 
 	ra.appliedLogCount++
 	return nil
 }
 
 func (ra *RedoApplier) waitTableFlush(
-	ctx context.Context, tableID common.TableID, rts common.Ts,
+	ctx context.Context, tableID commonType.TableID, rts commonType.Ts,
 ) error {
-	ticker := time.NewTicker(warnDuration)
-	defer ticker.Stop()
-
-	oldTableRecord := ra.tableResolvedTsMap[tableID]
-	if oldTableRecord.ResolvedTs.Ts < rts {
-		// Use new batch resolvedTs to flush data.
-	} else if oldTableRecord.ResolvedTs.Ts > rts {
+	if ra.eventsGroup[tableID].highWatermark > rts {
 		log.Panic("resolved ts of redo log regressed",
-			zap.Any("oldResolvedTs", oldTableRecord),
+			zap.Any("oldResolvedTs", ra.eventsGroup[tableID].highWatermark),
 			zap.Any("newResolvedTs", rts))
 	}
 
-	tableRecord := ra.tableResolvedTsMap[tableID]
-	if err := ra.tableSinks[tableID].UpdateResolvedTs(tableRecord.ResolvedTs); err != nil {
-		return err
-	}
+	var flushed atomic.Int64
 
+	events := ra.eventsGroup[tableID].Resolve(rts)
+	total := len(events)
+	done := make(chan struct{}, 1)
+	for _, e := range events {
+		e.AddPostFlushFunc(func() {
+			if flushed.Inc() == int64(total) {
+				close(done)
+			}
+		})
+		ra.mysqlSink.AddDMLEvent(e)
+	}
 	// Make sure all events are flushed to downstream.
-	for !ra.tableSinks[tableID].GetCheckpointTs().EqualOrGreater(tableRecord.ResolvedTs) {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			log.Warn(
-				"Table sink is not catching up with resolved ts for a long time",
-				zap.Int64("tableID", tableID),
-				zap.Any("resolvedTs", tableRecord.ResolvedTs),
-				zap.Any("checkpointTs", ra.tableSinks[tableID].GetCheckpointTs()),
-			)
-		default:
-			time.Sleep(flushWaitDuration)
-		}
+	start := time.Now()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-done:
+		log.Info("flush DML events done", zap.Uint64("resolvedTs", rts),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+	case <-ticker.C:
+		log.Panic("DML events cannot be flushed in 1 minute", zap.Uint64("resolvedTs", rts),
+			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 	}
 
-	// reset new record
-	// ra.tableResolvedTsMap[tableID] = &memquota.MemConsumeRecord{
-	// 	ResolvedTs: tableRecord.ResolvedTs.AdvanceBatch(),
-	// 	Size:       0,
-	// }
 	return nil
 }
 
@@ -345,29 +310,30 @@ func createRedoReaderImpl(ctx context.Context, cfg *RedoApplierConfig) (reader.R
 
 // processEvent return (event to emit, pending event)
 func processEvent(
-	dml *event.DMLEvent,
-	prevTxnStartTs common.Ts,
+	dml *commonEvent.RedoDMLEvent,
+	prevTxnStartTs commonType.Ts,
 	tempStorage *tempTxnInsertEventStorage,
-) (*event.DMLEvent, *event.DMLEvent, error) {
+) (*commonEvent.RedoDMLEvent, *commonEvent.RedoDMLEvent, error) {
 	if dml == nil {
 		log.Panic("event should not be nil")
 	}
 
 	// meet a new transaction
-	if prevTxnStartTs != 0 && prevTxnStartTs != dml.StartTs {
+	if prevTxnStartTs != 0 && prevTxnStartTs != dml.Row.StartTs {
 		if tempStorage.hasEvent() {
 			// emit the insert events in the previous transaction
 			return nil, dml, nil
 		}
 	}
-	row, ok := dml.GetNextRow()
-	e := &event.RowEvent{
+	event := dml.ToDMLEvent()
+	row, ok := event.GetNextRow()
+	e := &commonEvent.RowEvent{
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}
 	// if row.Row {
 	// 	return dml, nil, nil
-	// } else if event.IsInsert() {
+	// } else if commonEvent.IsInsert() {
 	// 	if tempStorage.hasEvent() {
 	// 		// pend current event and emit the insert events in temp storage first to release memory
 	// 		return nil, dml, nil
@@ -379,7 +345,7 @@ func processEvent(
 	// nolint
 	if row.IsDelete() {
 		return event, nil, nil
-	} else if event.IsInsert() {
+	} else if commonEvent.IsInsert() {
 		if tempStorage.hasEvent() {
 			// pend current event and emit the insert events in temp storage first to release memory
 			return nil, event, nil
@@ -421,12 +387,6 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	})
 	ra.updateSplitter = newUpdateEventSplitter(ra.rd, ra.cfg.Dir)
 
-	// ra.memQuota = memquota.NewMemQuota(model.DefaultChangeFeedID(applierChangefeed),
-	// 	config.DefaultChangefeedMemoryQuota, "sink")
-	// eg.Go(func() error {
-	// 	return ra.bgReleaseQuota(egCtx)
-	// })
-
 	eg.Go(func() error {
 		return ra.consumeLogs(egCtx)
 	})
@@ -443,17 +403,17 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 
 // ShouldSplitUpdateEvent determines if the split event is needed to align the old format based on
 // whether the handle key column or unique key has been modified.
-// If is modified, we need to use splitUpdateEvent to split the update event into a delete and an insert event.
+// If is modified, we need to use splitUpdateEvent to split the update event into a delete and an insert commonEvent.
 func ShouldSplitUpdateEvent(updateEvent *RowChangedEvent) bool {
 	// nil event will never be split.
 	if updateEvent == nil {
 		return false
 	}
 
-	tableInfo := updateEvent.TableInfo
-	for i := range updateEvent.Columns {
-		col := updateEvent.Columns[i]
-		preCol := updateEvent.PreColumns[i]
+	tableInfo := updatecommonEvent.TableInfo
+	for i := range updatecommonEvent.Columns {
+		col := updatecommonEvent.Columns[i]
+		preCol := updatecommonEvent.PreColumns[i]
 		if isNonEmptyUniqueOrHandleCol(col, tableInfo) && isNonEmptyUniqueOrHandleCol(preCol, tableInfo) {
 			colValueString := ColumnValueString(col.Value)
 			preColValueString := ColumnValueString(preCol.Value)
@@ -466,7 +426,7 @@ func ShouldSplitUpdateEvent(updateEvent *RowChangedEvent) bool {
 	return false
 }
 
-// SplitUpdateEvent splits an update event into a delete and an insert event.
+// SplitUpdateEvent splits an update event into a delete and an insert commonEvent.
 func SplitUpdateEvent(
 	updateEvent *RowChangedEvent,
 ) (*RowChangedEvent, *RowChangedEvent, error) {
@@ -480,24 +440,24 @@ func SplitUpdateEvent(
 	// our two events need Columns and PreColumns respectively,
 	// so it won't have an impact and no more full deep copy wastes memory.
 	deleteEvent := *updateEvent
-	deleteEvent.Columns = nil
-	if deleteEvent.Checksum != nil {
-		deleteEvent.Checksum.Current = 0
+	deletecommonEvent.Columns = nil
+	if deletecommonEvent.Checksum != nil {
+		deletecommonEvent.Checksum.Current = 0
 	}
 
 	insertEvent := *updateEvent
-	// NOTICE: clean up pre cols for insert event.
-	insertEvent.PreColumns = nil
-	if insertEvent.Checksum != nil {
-		insertEvent.Checksum.Previous = 0
+	// NOTICE: clean up pre cols for insert commonEvent.
+	insertcommonEvent.PreColumns = nil
+	if insertcommonEvent.Checksum != nil {
+		insertcommonEvent.Checksum.Previous = 0
 	}
 
-	log.Debug("split update event", zap.Uint64("startTs", updateEvent.StartTs),
-		zap.Uint64("commitTs", updateEvent.CommitTs),
-		zap.String("schema", updateEvent.TableInfo.TableName.Schema),
-		zap.String("table", updateEvent.TableInfo.GetTableName()),
-		zap.Any("preCols", updateEvent.PreColumns),
-		zap.Any("cols", updateEvent.Columns))
+	log.Debug("split update event", zap.Uint64("startTs", updatecommonEvent.StartTs),
+		zap.Uint64("commitTs", updatecommonEvent.CommitTs),
+		zap.String("schema", updatecommonEvent.TableInfo.TableName.Schema),
+		zap.String("table", updatecommonEvent.TableInfo.GetTableName()),
+		zap.Any("preCols", updatecommonEvent.PreColumns),
+		zap.Any("cols", updatecommonEvent.Columns))
 
 	return &deleteEvent, &insertEvent, nil
 }
