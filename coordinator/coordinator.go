@@ -206,7 +206,7 @@ func (c *coordinator) run(ctx context.Context) error {
 	})
 
 	gcTicker := time.NewTicker(updateGCTickerInterval)
-	gcTicker.Stop()
+	defer gcTicker.Stop()
 
 	failpoint.Inject("coordinator-run-with-error", func() error {
 		return errors.New("coordinator run with error")
