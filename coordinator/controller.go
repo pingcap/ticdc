@@ -183,7 +183,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
 
-c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
+			c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
 				info := cf.GetInfo()
 				keyspace := info.ChangefeedID.Keyspace()
 				name := info.ChangefeedID.Name()
