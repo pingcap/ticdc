@@ -21,13 +21,14 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
 
 // RedoLogType is the type of log
+//
+//go:generate msgp
 type RedoLogType int
 
 // RedoLog defines the persistent structure of redo log
@@ -93,6 +94,7 @@ type RedoColumnValue struct {
 	Flag              uint64 `msg:"flag"`
 }
 
+//msgp:ignore RedoRowEvent
 type RedoRowEvent struct {
 	StartTs   uint64
 	CommitTs  uint64
@@ -133,8 +135,7 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeRow,
 	}
 	if r.TableInfo != nil {
-		redoLog.RedoRow.Row.Table = new(commonType.TableName)
-		*redoLog.RedoRow.Row.Table = r.TableInfo.TableName
+		redoLog.RedoRow.Row.Table = &r.TableInfo.TableName
 		redoLog.RedoRow.Row.IndexColumns = getIndexColumns(r.TableInfo)
 
 		columnCount := len(r.TableInfo.GetColumns())
@@ -402,7 +403,7 @@ func collectAllColumnsValue(data []RedoColumnValue, columns []*timodel.ColumnInf
 	}
 }
 
-func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {
+func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.Chunk) {
 	if raw == nil {
 		chk.AppendNull(idx)
 		return
