@@ -426,6 +426,12 @@ func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID,
 	return operators
 }
 
+func (oc *Controller) Close() {
+	metrics.OperatorCount.DeleteLabelValues(model.DefaultNamespace, oc.changefeedID.Name())
+	metrics.TotalOperatorCount.DeleteLabelValues(model.DefaultNamespace, oc.changefeedID.Name())
+	metrics.OperatorDuration.DeleteLabelValues(model.DefaultNamespace, oc.changefeedID.Name())
+}
+
 // =========== following func only for test ===========
 func (oc *Controller) RemoveOp(id common.DispatcherID) {
 	oc.mu.Lock()

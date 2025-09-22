@@ -187,6 +187,10 @@ func (c *Controller) Stop() {
 	for _, handler := range c.taskHandles {
 		handler.Cancel()
 	}
+	c.operatorController.Close()
+	if c.enableRedo {
+		c.redoOperatorController.Close()
+	}
 }
 
 func (c *Controller) GetKeyspaceID() uint32 {
