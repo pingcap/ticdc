@@ -516,6 +516,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			WriteKeyThreshold:          c.Scheduler.WriteKeyThreshold,
 			SchedulingTaskCountPerNode: c.Scheduler.SchedulingTaskCountPerNode,
 			EnableSplittableCheck:      c.Scheduler.EnableSplittableCheck,
+			BalanceScoreThreshold:      c.Scheduler.BalanceScoreThreshold,
+			MinTrafficPercentage:       c.Scheduler.MinTrafficPercentage,
+			MaxTrafficPercentage:       c.Scheduler.MaxTrafficPercentage,
 		}
 	}
 	if c.Integrity != nil {
@@ -842,6 +845,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			WriteKeyThreshold:          cloned.Scheduler.WriteKeyThreshold,
 			SchedulingTaskCountPerNode: cloned.Scheduler.SchedulingTaskCountPerNode,
 			EnableSplittableCheck:      cloned.Scheduler.EnableSplittableCheck,
+			BalanceScoreThreshold:      cloned.Scheduler.BalanceScoreThreshold,
+			MinTrafficPercentage:       cloned.Scheduler.MinTrafficPercentage,
+			MaxTrafficPercentage:       cloned.Scheduler.MaxTrafficPercentage,
 		}
 	}
 
@@ -1060,6 +1066,13 @@ type ChangefeedSchedulerConfig struct {
 	// If false, all tables can be split without checking.
 	// For MySQL downstream, this is always set to true for data consistency.
 	EnableSplittableCheck bool `toml:"enable-splittable-check" json:"enable-splittable-check"`
+	// These config is used for adjust the frequency of balancing traffic.
+	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
+	BalanceScoreThreshold int `toml:"balance-score-threshold" json:"balance-score-threshold"`
+	// MinTrafficPercentage is the minimum traffic percentage for balancing traffic. Larger value means less frequent balancing.
+	MinTrafficPercentage float64 `toml:"min-traffic-percentage" json:"min-traffic-percentage"`
+	// MaxTrafficPercentage is the maximum traffic percentage for balancing traffic. Less value means less frequent balancing.
+	MaxTrafficPercentage float64 `toml:"max-traffic-percentage" json:"max-traffic-percentage"`
 }
 
 // IntegrityConfig is the config for integrity check

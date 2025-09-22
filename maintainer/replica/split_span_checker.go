@@ -45,10 +45,7 @@ const latestTrafficIndex = 0
 var (
 	minTrafficBalanceThreshold         = float64(1024 * 1024) // 1MB
 	maxMoveSpansCountForTrafficBalance = 4
-	balanceScoreThreshold              = 20
 	maxMoveSpansCountForMerge          = 16
-	minTrafficPercentage               = 0.75
-	maxTrafficPercentage               = 1.3
 	maxLagThreshold                    = float64(30) // 30s
 )
 
@@ -147,6 +144,10 @@ type SplitSpanChecker struct {
 	// when regionThreshold is 0, we don't check the region count
 	regionThreshold int
 
+	balanceScoreThreshold int
+	minTrafficPercentage  float64
+	maxTrafficPercentage  float64
+
 	balanceCondition BalanceCondition
 
 	regionCache split.RegionCache
@@ -179,6 +180,9 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 		allTasks:               make(map[common.DispatcherID]*splitSpanStatus),
 		writeThreshold:         schedulerCfg.WriteKeyThreshold,
 		regionThreshold:        schedulerCfg.RegionThreshold,
+		balanceScoreThreshold:  schedulerCfg.BalanceScoreThreshold,
+		minTrafficPercentage:   schedulerCfg.MinTrafficPercentage,
+		maxTrafficPercentage:   schedulerCfg.MaxTrafficPercentage,
 		regionCache:            regionCache,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
@@ -1062,7 +1066,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	balanceCauseByMaxNode := true
 	balanceCauseByMinNode := true
 	for idx, traffic := range lastThreeTrafficPerNode[minTrafficNodeID] {
-		if traffic > avgLastThreeTraffic[idx]*minTrafficPercentage {
+		if traffic > avgLastThreeTraffic[idx]*s.minTrafficPercentage {
 			shouldBalance = false
 			balanceCauseByMinNode = false
 			break
@@ -1072,7 +1076,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	if !shouldBalance {
 		shouldBalance = true
 		for idx, traffic := range lastThreeTrafficPerNode[maxTrafficNodeID] {
-			if traffic < avgLastThreeTraffic[idx]*maxTrafficPercentage || traffic < minTrafficBalanceThreshold {
+			if traffic < avgLastThreeTraffic[idx]*s.maxTrafficPercentage || traffic < minTrafficBalanceThreshold {
 				shouldBalance = false
 				balanceCauseByMaxNode = false
 				break
@@ -1095,7 +1099,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 			zap.Any("groupID", s.groupID),
 			zap.Any("changefeedID", s.changefeedID),
 		)
-		if s.balanceCondition.balanceScore < balanceScoreThreshold {
+		if s.balanceCondition.balanceScore < s.balanceScoreThreshold {
 			// now is unbalanced, but we want to check more times to avoid balance too frequently
 			return
 		}
@@ -1221,8 +1225,5 @@ func (s *SplitSpanChecker) Name() string {
 // for test only
 func SetEasyThresholdForTest() {
 	minTrafficBalanceThreshold = 1
-	balanceScoreThreshold = 1
-	minTrafficPercentage = 0.8
-	maxTrafficPercentage = 1.2
 	maxLagThreshold = 120
 }

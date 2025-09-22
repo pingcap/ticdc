@@ -101,6 +101,9 @@ var defaultReplicaConfig = &ReplicaConfig{
 		SchedulingTaskCountPerNode: 20,  // TODO: choose a btter value
 		RegionCountPerSpan:         100, // TODO: choose a btter value
 		EnableSplittableCheck:      false,
+		BalanceScoreThreshold:      20,
+		MinTrafficPercentage:       0.8,
+		MaxTrafficPercentage:       1.25,
 	},
 	Integrity: &integrity.Config{
 		IntegrityCheckLevel:   integrity.CheckLevelNone,
