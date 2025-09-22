@@ -642,7 +642,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		oldTableName := args.job.InvolvingSchemaInfo[0].Table
 		stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
 		if err != nil {
-			log.Error("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
+			log.Warn("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
 		} else {
 			oldTableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
 			if schemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O; schemaName != "" {
