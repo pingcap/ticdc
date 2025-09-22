@@ -137,6 +137,8 @@ type subscriptionStat struct {
 	tableSpan *heartbeatpb.TableSpan
 	// dispatchers depend on this subscription
 	dispatchers struct {
+		// Note: avoid holding this lock too much,
+		// otherwise it may have impact on sending resolved ts to dispatchers
 		sync.Mutex
 		subscribers map[common.DispatcherID]*Subscriber
 	}
@@ -595,6 +597,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
 
 	e.detachFromSubStat(dispatcherID, stat.subStat)
 	e.detachFromSubStat(dispatcherID, stat.pendingSubStat)
+	e.detachFromSubStat(dispatcherID, stat.removingSubStat)
 	delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 }
 
