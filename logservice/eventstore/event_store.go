@@ -102,6 +102,8 @@ type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	// data span of this dispatcher
 	tableSpan *heartbeatpb.TableSpan
+
+	resolvedTs atomic.Uint64
 	// the max ts of events which is not needed by this dispatcher
 	checkpointTs uint64
 	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
@@ -167,6 +169,20 @@ type subscriptionStat struct {
 }
 
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
+
+type dispatcherHeapItem struct {
+	stat      *dispatcherStat
+	heapIndex int
+}
+
+func (d *dispatcherHeapItem) SetHeapIndex(index int) { d.heapIndex = index }
+func (d *dispatcherHeapItem) GetHeapIndex() int      { return d.heapIndex }
+func (d *dispatcherHeapItem) LessThan(other *dispatcherHeapItem) bool {
+	return d.stat.re
+}
+
+type changefeedStat struct {
+}
 
 type eventWithCallback struct {
 	subID   logpuller.SubscriptionID
@@ -411,6 +427,7 @@ func (e *eventStore) RegisterDispatcher(
 		tableSpan:    dispatcherSpan,
 		checkpointTs: startTs,
 	}
+	stat.resolvedTs.Store(startTs)
 
 	e.dispatcherMeta.Lock()
 	var bestMatch *subscriptionStat
