@@ -13,9 +13,6 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR
 	cd $WORK_DIR
 
-	resp=$(curl -X POST http://127.0.0.1:20181/debug/dup-key/enable)
-	echo "$resp"
-
 	export GO_FAILPOINTS=''
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 
