@@ -145,8 +145,6 @@ type Maintainer struct {
 
 	changefeedCheckpointTsGauge    prometheus.Gauge
 	changefeedCheckpointTsLagGauge prometheus.Gauge
-	changefeedResolvedTsGauge      prometheus.Gauge
-	changefeedResolvedTsLagGauge   prometheus.Gauge
 
 	scheduledTaskGauge  prometheus.Gauge
 	spanCountGauge      prometheus.Gauge
@@ -205,8 +203,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name),
 		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name),
-		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(keyspace, name),
-		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(keyspace, name),
 
 		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspace, name, "default"),
 		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspace, name, "default"),
@@ -394,8 +390,6 @@ func (m *Maintainer) cleanupMetrics() {
 	name := m.id.Name()
 	metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
-	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(keyspace, name)
-	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name)
 	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name)
 	metrics.TableCountGauge.DeleteLabelValues(keyspace, name)
@@ -654,11 +648,6 @@ func (m *Maintainer) updateMetrics() {
 	m.changefeedCheckpointTsGauge.Set(float64(phyCkpTs))
 	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 	m.changefeedCheckpointTsLagGauge.Set(lag)
-
-	phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
-	m.changefeedResolvedTsGauge.Set(float64(phyResolvedTs))
-	lag = float64(pdPhysicalTime-phyResolvedTs) / 1e3
-	m.changefeedResolvedTsLagGauge.Set(lag)
 }
 
 // send message to other components

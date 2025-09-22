@@ -50,21 +50,6 @@ var (
 			Help:      "The current PD ts",
 		}, []string{"namespace", "changefeed"})
 
-	ChangefeedResolvedTsGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "resolved_ts",
-			Help:      "resolved ts of changefeeds",
-		}, []string{"namespace", "changefeed"})
-	ChangefeedResolvedTsLagGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "resolved_ts_lag",
-			Help:      "resolved ts lag of changefeeds in seconds",
-		}, []string{"namespace", "changefeed"})
-
 	CoordinatorCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -111,8 +96,6 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ChangefeedBarrierTsGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
-	registry.MustRegister(ChangefeedResolvedTsGauge)
-	registry.MustRegister(ChangefeedResolvedTsLagGauge)
 	registry.MustRegister(CurrentPDTsGauge)
 	registry.MustRegister(CoordinatorCounter)
 	registry.MustRegister(MaintainerGauge)

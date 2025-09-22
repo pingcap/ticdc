@@ -109,7 +109,7 @@ func New() LogCoordinator {
 func (c *logCoordinator) Run(ctx context.Context) error {
 	broadcastTick := time.NewTicker(time.Second)
 	defer broadcastTick.Stop()
-	metricTick := time.NewTicker(10 * time.Second)
+	metricTick := time.NewTicker(5 * time.Second)
 	defer metricTick.Stop()
 
 	for {
@@ -193,17 +193,28 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 	c.changefeedStates.Lock()
 	defer c.changefeedStates.Unlock()
 
-	// First, remove all old states for the reporting node.
-	// This handles cases where a changefeed is removed from a node.
+	// Create a set of incoming changefeed GIDs for efficient lookup.
+	incomingGIDs := make(map[common.GID]struct{})
+	for _, state := range states.States {
+		cfID := common.NewChangefeedIDFromPB(state.GetChangefeedID())
+		incomingGIDs[cfID.ID()] = struct{}{}
+	}
+
+	// First, handle changefeeds that might have been removed from the reporting node.
 	for gid, state := range c.changefeedStates.m {
+		// If the node was previously reporting for this changefeed...
 		if _, exists := state.nodeStates[from]; exists {
-			delete(state.nodeStates, from)
-			// If the changefeed has no more nodes, remove the changefeed state
-			// and its associated metrics.
-			if len(state.nodeStates) == 0 {
-				metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
-				metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
-				delete(c.changefeedStates.m, gid)
+			// ...but is no longer in the incoming message, it means the changefeed was removed from this node.
+			if _, incoming := incomingGIDs[gid]; !incoming {
+				delete(state.nodeStates, from)
+				log.Info("changefeed removed from node", zap.Stringer("changefeedID", state.cfID), zap.String("nodeID", string(from)))
+				// If the changefeed has no more nodes, remove the changefeed state and its associated metrics.
+				if len(state.nodeStates) == 0 {
+					metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					delete(c.changefeedStates.m, gid)
+					log.Info("changefeed state removed as it has no active nodes", zap.Stringer("changefeedID", state.cfID))
+				}
 			}
 		}
 	}
