@@ -95,13 +95,23 @@ func (s *stream[A, P, T, D, H]) getPendingSize() int {
 }
 
 func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
-	ch := s.eventChan
-	if s.option.UseBuffer {
-		ch = s.inChan
+	if s.closed.Load() {
+		return
 	}
+	eventChan := s.eventChan
+	if s.option.UseBuffer {
+		eventChan = s.inChan
+	}
+	// Fast path: try direct send without blocking to avoid context check
 	select {
-	case <-s.ctx.Done():
-	case ch <- event:
+	case eventChan <- event:
+		return
+	default:
+		// Slow path: with close check while waiting
+		select {
+		case <-s.ctx.Done():
+		case eventChan <- event:
+		}
 	}
 }
 
@@ -148,6 +158,9 @@ func (s *stream[A, P, T, D, H]) receiver() {
 
 	for {
 		event, ok := buffer.FrontRef()
+		if s.closed.Load() {
+			return
+		}
 		if !ok {
 			select {
 			case <-s.ctx.Done():
@@ -160,6 +173,11 @@ func (s *stream[A, P, T, D, H]) receiver() {
 				s.bufferCount.Add(1)
 			}
 		} else {
+
+			if s.closed.Load() {
+				return
+			}
+
 			select {
 			case e, ok := <-s.inChan:
 				if !ok {
@@ -228,6 +246,11 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 Loop:
 	for {
 		if eventQueueEmpty {
+
+			if s.closed.Load() {
+				return
+			}
+
 			select {
 			case <-s.ctx.Done():
 				return
@@ -239,6 +262,10 @@ Loop:
 				eventQueueEmpty = false
 			}
 		} else {
+			if s.closed.Load() {
+				return
+			}
+
 			select {
 			case <-s.ctx.Done():
 				return
