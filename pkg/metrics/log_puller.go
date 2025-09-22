@@ -13,7 +13,11 @@
 
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	LogPullerPrewriteCacheRowNum = prometheus.NewGauge(
@@ -59,15 +63,27 @@ var (
 			Subsystem: "subscription_client",
 			Name:      "region_request_finish_scan_duration",
 			Help:      "duration (s) for region request to be finished.",
-			// 使用更细粒度的桶配置，减少插值误差
-			// 0.1ms-1s 用线性桶，1s-300s 用指数桶
 			Buckets: append(
 				prometheus.LinearBuckets(0.0001, 0.0001, 50), // 0.1ms-5ms, step=0.1ms
 				append(
 					prometheus.LinearBuckets(0.01, 0.01, 100),      // 10ms-1s, step=10ms
-					prometheus.ExponentialBuckets(2.0, 2.0, 16)..., // 2s-512s
+					prometheus.ExponentialBuckets(2.0, 2.0, 16)..., // >= 2s
 				)...,
 			),
+		})
+	RegionRequestFinishScanDurationSummary = prometheus.NewSummary(
+		prometheus.SummaryOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "region_request_finish_scan_duration_summary",
+			Help:      "duration (s) for region request to be finished (summary with quantiles).",
+			Objectives: map[float64]float64{
+				0.5:  0.01,  // P50, error±1%
+				0.90: 0.01,  // P90, error±1%
+				0.95: 0.005, // P95, error±0.5%
+				0.99: 0.001, // P99, error±0.1%
+			},
+			MaxAge: 10 * time.Minute,
 		})
 	SubscriptionClientAddRegionRequestDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -93,5 +109,7 @@ func InitLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
 	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)
+	registry.MustRegister(RegionRequestFinishScanDurationSummary)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
+
 }

@@ -205,6 +205,7 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 		if cost > 0 && cost < 7200.0 {
 			log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 			metrics.RegionRequestFinishScanDuration.Observe(cost)
+			metrics.RegionRequestFinishScanDurationSummary.Observe(cost)
 		} else {
 			log.Info("region request duration abnormal, skip metric", zap.Float64("cost", cost), zap.Uint64("regionID", regionID))
 		}
