@@ -215,10 +215,9 @@ func (ra *RedoApplier) applyDDL(
 		}
 		newStartTsList, _, err := ra.mysqlSink.GetStartTsList([]int64{ddl.TableName.TableID}, []int64{0}, false)
 		if err != nil {
-			log.Error("get startTs list failed", zap.Any("ddl", ddl))
-			return true
+			log.Error("get startTs list failed", zap.Any("ddl", ddl), zap.Error(err))
 		}
-		if newStartTsList[0] > int64(checkpointTs) {
+		if len(newStartTsList) > 0 && newStartTsList[0] > int64(checkpointTs) {
 			return true
 		}
 		return false
