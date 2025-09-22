@@ -1007,6 +1007,11 @@ func (m *Maintainer) collectMetrics() {
 		working := spanController.GetReplicatingSize()
 		absent := spanController.GetAbsentSize()
 
+		workingTasks := spanController.GetReplicating()
+		for _, task := range workingTasks {
+			log.Info("hyy scheduling task", zap.String("task", task.GetID().String()))
+		}
+
 		if common.IsDefaultMode(mode) {
 			m.spanCountGauge.Set(float64(totalSpanCount))
 			m.tableCountGauge.Set(float64(totalTableCount))
