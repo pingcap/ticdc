@@ -23,9 +23,12 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
 	"github.com/phayes/freeport"
+	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
+	pkgMysql "github.com/pingcap/ticdc/pkg/sink/mysql"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmysql "github.com/pingcap/tidb/pkg/parser/mysql"
@@ -107,7 +110,8 @@ func TestApply(t *testing.T) {
 	}
 
 	// DML sink and DDL sink share the same db
-	// db := getMockDB(t)
+	db := getMockDB(t)
+
 	createRedoReaderBak := createRedoReader
 	createRedoReader = createMockReader
 	defer func() {
@@ -325,10 +329,13 @@ func TestApply(t *testing.T) {
 	cfg := &RedoApplierConfig{
 		SinkURI: "mysql://127.0.0.1:4000/?worker-count=1&max-txn-row=1" +
 			"&tidb_placement_mode=ignore&safe-mode=true&cache-prep-stmts=false" +
-			"&multi-stmt-enable=false",
+			"&multi-stmt-enable=false&enable-ddl-ts=false",
 		Dir: dir,
 	}
 	ap := NewRedoApplier(cfg)
+	// use mock db init sink
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, ap.changefeedID, pkgMysql.New(), db, false)
+	ap.eventsGroup = make(map[commonType.TableID]*eventsGroup)
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
 }
@@ -346,6 +353,7 @@ func TestApplyBigTxn(t *testing.T) {
 	}
 
 	// DML sink and DDL sink share the same db
+	db := getMockDBForBigTxn(t)
 
 	createRedoReaderBak := createRedoReader
 	createRedoReader = createMockReader
@@ -513,10 +521,13 @@ func TestApplyBigTxn(t *testing.T) {
 	cfg := &RedoApplierConfig{
 		SinkURI: "mysql://127.0.0.1:4000/?worker-count=1&max-txn-row=1" +
 			"&tidb_placement_mode=ignore&safe-mode=true&cache-prep-stmts=false" +
-			"&multi-stmt-enable=false",
+			"&multi-stmt-enable=false&enable-ddl-ts=false",
 		Dir: dir,
 	}
 	ap := NewRedoApplier(cfg)
+	// use mock db init sink
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, ap.changefeedID, pkgMysql.New(), db, false)
+	ap.eventsGroup = make(map[commonType.TableID]*eventsGroup)
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
 }

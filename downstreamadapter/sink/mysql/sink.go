@@ -85,10 +85,10 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
+	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
 }
 
-func newMySQLSink(
+func NewMySQLSink(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	cfg *mysql.Config,

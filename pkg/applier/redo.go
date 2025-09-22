@@ -18,8 +18,6 @@ import (
 	"net/url"
 	"time"
 
-	"go.uber.org/atomic"
-
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
@@ -30,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -113,6 +112,10 @@ func (ra *RedoApplier) catchError(ctx context.Context) error {
 }
 
 func (ra *RedoApplier) initSink(ctx context.Context) (err error) {
+	if ra.mysqlSink != nil || ra.eventsGroup != nil {
+		log.Warn("redo applier has initialized")
+		return nil
+	}
 	replicaConfig := &config.ChangefeedConfig{
 		SinkURI:    ra.cfg.SinkURI,
 		SinkConfig: &config.SinkConfig{},
