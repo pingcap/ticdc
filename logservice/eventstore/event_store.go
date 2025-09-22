@@ -1052,7 +1052,7 @@ func (e *eventStore) updateMetricsOnce() {
 
 	// Collect resolved ts for each changefeed and send to log coordinator.
 	cfStates := &logservicepb.ChangefeedStates{
-		States: make(map[string]uint64),
+		States: make([]*logservicepb.ChangefeedStateEntry, 0),
 	}
 	e.changefeedMeta.Range(func(key, value interface{}) bool {
 		changefeedID := key.(common.ChangeFeedID)
@@ -1063,7 +1063,10 @@ func (e *eventStore) updateMetricsOnce() {
 		cfStat.mutex.Unlock()
 
 		if ok {
-			cfStates.States[changefeedID.String()] = top.stat.resolvedTs.Load()
+			cfStates.States = append(cfStates.States, &logservicepb.ChangefeedStateEntry{
+				ChangefeedID: changefeedID.ToPB(),
+				ResolvedTs:   top.stat.resolvedTs.Load(),
+			})
 		}
 		return true
 	})

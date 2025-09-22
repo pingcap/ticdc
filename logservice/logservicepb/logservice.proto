@@ -23,9 +23,14 @@ message EventStoreState {
     map<int64, TableState> TableStates = 1; 
 }
 
+message ChangefeedStateEntry {
+    heartbeatpb.ChangefeedID ChangefeedID = 1;
+    uint64 ResolvedTs = 2;
+}
+
 message ChangefeedStates {
-    // changefeedID -> resolvedTs
-    map<string, uint64> States = 1;
+    // A list of changefeed states.
+    repeated ChangefeedStateEntry States = 1;
 }
 
 message ReusableEventServiceRequest {
