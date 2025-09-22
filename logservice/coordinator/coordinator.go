@@ -189,6 +189,7 @@ func (c *logCoordinator) updateEventStoreState(nodeID node.ID, newState *logserv
 
 	c.eventStoreStates.m[nodeID] = newState
 }
+
 func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservicepb.ChangefeedStates) {
 	c.changefeedStates.Lock()
 	defer c.changefeedStates.Unlock()
