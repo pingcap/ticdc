@@ -39,6 +39,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -67,6 +68,7 @@ type EventStore interface {
 	common.SubModule
 
 	RegisterDispatcher(
+		changefeedID common.ChangeFeedID,
 		dispatcherID common.DispatcherID,
 		span *heartbeatpb.TableSpan,
 		startTS uint64,
@@ -75,7 +77,7 @@ type EventStore interface {
 		bdrMode bool,
 	) bool
 
-	UnregisterDispatcher(dispatcherID common.DispatcherID)
+	UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID)
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
@@ -178,10 +180,12 @@ type dispatcherHeapItem struct {
 func (d *dispatcherHeapItem) SetHeapIndex(index int) { d.heapIndex = index }
 func (d *dispatcherHeapItem) GetHeapIndex() int      { return d.heapIndex }
 func (d *dispatcherHeapItem) LessThan(other *dispatcherHeapItem) bool {
-	return d.stat.re
+	return d.stat.resolvedTs.Load() < other.stat.resolvedTs.Load()
 }
 
 type changefeedStat struct {
+	mutex sync.Mutex
+	heap  *heap.Heap[*dispatcherHeapItem]
 }
 
 type eventWithCallback struct {
@@ -230,6 +234,9 @@ type eventStore struct {
 		// table id -> subscription stats
 		tableStats map[int64]subscriptionStats
 	}
+
+	// changefeed id -> changefeedStat
+	changefeedMeta sync.Map
 }
 
 const (
@@ -392,6 +399,7 @@ func (e *eventStore) Close(ctx context.Context) error {
 }
 
 func (e *eventStore) RegisterDispatcher(
+	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	dispatcherSpan *heartbeatpb.TableSpan,
 	startTs uint64,
@@ -399,6 +407,18 @@ func (e *eventStore) RegisterDispatcher(
 	onlyReuse bool,
 	bdrMode bool,
 ) bool {
+	// Defer a cleanup function that will run if registration fails.
+	// The success flag is set to true only at the end of successful registration paths.
+	success := false
+	defer func() {
+		if !success {
+			log.Info("register dispatcher failed, cleaning up from changefeed stat",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID))
+			e.removeDispatcherFromChangefeedStat(changefeedID, dispatcherID)
+		}
+	}()
+
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
@@ -428,6 +448,25 @@ func (e *eventStore) RegisterDispatcher(
 		checkpointTs: startTs,
 	}
 	stat.resolvedTs.Store(startTs)
+
+	// Optimized "get or create" pattern for sync.Map to avoid unnecessary allocations.
+	// 1. Fast path: Try to load the existing changefeedStat to avoid allocation.
+	var cfStat *changefeedStat
+	if actual, ok := e.changefeedMeta.Load(changefeedID); ok {
+		cfStat = actual.(*changefeedStat)
+	} else {
+		// 2. Slow path: If it doesn't exist, create a new one and use LoadOrStore
+		// to atomically add it, preventing race conditions.
+		newCfStat := &changefeedStat{heap: heap.NewHeap[*dispatcherHeapItem]()}
+		actual, _ := e.changefeedMeta.LoadOrStore(changefeedID, newCfStat)
+		cfStat = actual.(*changefeedStat)
+	}
+
+	cfStat.mutex.Lock()
+	cfStat.heap.AddOrUpdate(&dispatcherHeapItem{
+		stat: stat,
+	})
+	cfStat.mutex.Unlock()
 
 	e.dispatcherMeta.Lock()
 	var bestMatch *subscriptionStat
@@ -498,6 +537,7 @@ func (e *eventStore) RegisterDispatcher(
 			zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
 		// when onlyReuse is true, we don't need a exact span match
 		if onlyReuse {
+			success = true
 			return true
 		}
 	} else {
@@ -597,25 +637,52 @@ func (e *eventStore) RegisterDispatcher(
 		ResolvedTs:   startTs,
 	}
 	metrics.EventStoreSubscriptionGauge.Inc()
+	success = true
 	return true
 }
 
-func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
-	log.Info("unregister dispatcher", zap.Stringer("dispatcherID", dispatcherID))
+func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
+	log.Info("unregister dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
 	defer func() {
-		log.Info("unregister dispatcher done", zap.Stringer("dispatcherID", dispatcherID))
+		log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
 	}()
 	e.dispatcherMeta.Lock()
-	defer e.dispatcherMeta.Unlock()
-	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
-	if !ok {
-		return
+	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
+		e.detachFromSubStat(dispatcherID, stat.subStat)
+		e.detachFromSubStat(dispatcherID, stat.pendingSubStat)
+		e.detachFromSubStat(dispatcherID, stat.removingSubStat)
+		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
+	e.dispatcherMeta.Unlock()
 
-	e.detachFromSubStat(dispatcherID, stat.subStat)
-	e.detachFromSubStat(dispatcherID, stat.pendingSubStat)
-	e.detachFromSubStat(dispatcherID, stat.removingSubStat)
-	delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
+	e.removeDispatcherFromChangefeedStat(changefeedID, dispatcherID)
+}
+
+// removeDispatcherFromChangefeedStat removes a dispatcher from its changefeed's statistics.
+// If the changefeed becomes empty after the removal, the changefeed statistic itself is deleted.
+func (e *eventStore) removeDispatcherFromChangefeedStat(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
+	if v, ok := e.changefeedMeta.Load(changefeedID); ok {
+		cfStat := v.(*changefeedStat)
+		cfStat.mutex.Lock()
+		defer cfStat.mutex.Unlock()
+
+		var itemToRemove *dispatcherHeapItem
+		for _, item := range cfStat.heap.All() {
+			if item.stat.dispatcherID == dispatcherID {
+				itemToRemove = item
+				break
+			}
+		}
+		if itemToRemove != nil {
+			cfStat.heap.Remove(itemToRemove)
+		}
+
+		// If the changefeed has no more dispatchers, remove the changefeed stat.
+		if cfStat.heap.IsEmpty() {
+			e.changefeedMeta.Delete(changefeedID)
+			log.Info("changefeed stat is empty, removed it", zap.Stringer("changefeedID", changefeedID))
+		}
+	}
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(

@@ -897,6 +897,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	start := time.Now()
 	success := c.eventStore.RegisterDispatcher(
+		changefeedID,
 		id,
 		span,
 		info.GetStartTs(),
@@ -970,7 +971,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat.isRemoved.Store(true)
-	c.eventStore.UnregisterDispatcher(id)
+	c.eventStore.UnregisterDispatcher(changefeedID, id)
 
 	span := dispatcherInfo.GetTableSpan()
 	c.schemaStore.UnregisterTable(span.KeyspaceID, span.TableID)
