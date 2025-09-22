@@ -369,10 +369,10 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea, dynstream.ResumeArea:
 				// Ignore it, because it is no need to pause and resume an area in event collector.
-			case dynstream.PausePath:
-				feedback.Dest.pause()
-			case dynstream.ResumePath:
-				feedback.Dest.resume()
+				// case dynstream.PausePath:
+				// 	feedback.Dest.pause()
+				// case dynstream.ResumePath:
+				// 	feedback.Dest.resume()
 			}
 		case feedback := <-c.redoDs.Feedback():
 			switch feedback.FeedbackType {
