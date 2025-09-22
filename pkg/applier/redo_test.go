@@ -23,13 +23,13 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
 	"github.com/phayes/freeport"
+	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/redo/reader"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	mysqlParser "github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/cdc/redo/reader"
-	mysqlDDL "github.com/pingcap/tiflow/cdc/sink/ddlsink/mysql"
-	"github.com/pingcap/tiflow/cdc/sink/dmlsink/txn"
-	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	pmysql "github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,16 +39,16 @@ var _ reader.RedoLogReader = &MockReader{}
 type MockReader struct {
 	checkpointTs uint64
 	resolvedTs   uint64
-	redoLogCh    chan *model.RowChangedEvent
-	ddlEventCh   chan *model.DDLEvent
+	redoLogCh    chan *commonEvent.RedoDMLEvent
+	ddlEventCh   chan *commonEvent.RedoDDLEvent
 }
 
 // NewMockReader creates a new MockReader
 func NewMockReader(
 	checkpointTs uint64,
 	resolvedTs uint64,
-	redoLogCh chan *model.RowChangedEvent,
-	ddlEventCh chan *model.DDLEvent,
+	redoLogCh chan *commonEvent.RedoDMLEvent,
+	ddlEventCh chan *commonEvent.RedoDDLEvent,
 ) *MockReader {
 	return &MockReader{
 		checkpointTs: checkpointTs,
@@ -64,28 +64,34 @@ func (br *MockReader) Run(ctx context.Context) error {
 }
 
 // ReadNextRow implements LogReader.ReadNextRow
-func (br *MockReader) ReadNextRow(ctx context.Context) (*model.RowChangedEvent, error) {
+func (br *MockReader) ReadNextRow(ctx context.Context) (row *commonEvent.RedoDMLEvent, ok bool, err error) {
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
-	case row := <-br.redoLogCh:
-		return row, nil
+		return nil, false, ctx.Err()
+	case row, ok = <-br.redoLogCh:
 	}
+	return
 }
 
 // ReadNextDDL implements LogReader.ReadNextDDL
-func (br *MockReader) ReadNextDDL(ctx context.Context) (*model.DDLEvent, error) {
+func (br *MockReader) ReadNextDDL(ctx context.Context) (ddl *commonEvent.RedoDDLEvent, ok bool, err error) {
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
-	case ddl := <-br.ddlEventCh:
-		return ddl, nil
+		return nil, false, ctx.Err()
+	case ddl, ok = <-br.ddlEventCh:
 	}
+	return
 }
 
 // ReadMeta implements LogReader.ReadMeta
 func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error) {
 	return br.checkpointTs, br.resolvedTs, nil
+}
+
+func newFieldType(tp byte, flag uint) *types.FieldType {
+	ft := types.NewFieldType(tp)
+	ft.SetFlag(flag)
+	return ft
 }
 
 func TestApply(t *testing.T) {
@@ -94,193 +100,218 @@ func TestApply(t *testing.T) {
 
 	checkpointTs := uint64(1000)
 	resolvedTs := uint64(2000)
-	redoLogCh := make(chan *model.RowChangedEvent, 1024)
-	ddlEventCh := make(chan *model.DDLEvent, 1024)
+	redoLogCh := make(chan *commonEvent.RedoDMLEvent, 1024)
+	ddlEventCh := make(chan *commonEvent.RedoDDLEvent, 1024)
 	createMockReader := func(ctx context.Context, cfg *RedoApplierConfig) (reader.RedoLogReader, error) {
 		return NewMockReader(checkpointTs, resolvedTs, redoLogCh, ddlEventCh), nil
 	}
 
 	// DML sink and DDL sink share the same db
-	db := getMockDB(t)
-	dbConnFactory := pmysql.NewDBConnectionFactoryForTest()
-	dbConnFactory.SetStandardConnectionFactory(func(ctx context.Context, dsnStr string) (*sql.DB, error) {
-		return db, nil
-	})
-
-	getDMLDBConnBak := txn.GetDBConnImpl
-	txn.GetDBConnImpl = dbConnFactory
-	getDDLDBConnBak := mysqlDDL.GetDBConnImpl
-	mysqlDDL.GetDBConnImpl = dbConnFactory
+	// db := getMockDB(t)
 	createRedoReaderBak := createRedoReader
 	createRedoReader = createMockReader
 	defer func() {
 		createRedoReader = createRedoReaderBak
-		txn.GetDBConnImpl = getDMLDBConnBak
-		mysqlDDL.GetDBConnImpl = getDDLDBConnBak
 	}()
 
-	tableInfo := model.BuildTableInfo("test", "t1", []*model.Column{
-		{
-			Name: "a",
-			Type: mysqlParser.TypeLong,
-			Flag: model.HandleKeyFlag | model.PrimaryKeyFlag,
-		}, {
-			Name: "b",
-			Type: mysqlParser.TypeString,
-			Flag: 0,
+	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+		Name:  ast.NewCIStr("t"),
+		State: timodel.StatePublic,
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("a"),
+				FieldType: *newFieldType(pmysql.TypeLong, pmysql.PriKeyFlag),
+			}, {
+				Name:      ast.NewCIStr("b"),
+				FieldType: *newFieldType(pmysql.TypeString, 0),
+			},
 		},
-	}, [][]int{{0}})
-	dmls := []*model.RowChangedEvent{
+	})
+	dmls := []*commonEvent.RedoDMLEvent{
 		{
-			StartTs:   1100,
-			CommitTs:  1200,
-			TableInfo: tableInfo,
-			Columns: model.Columns2ColumnDatas([]*model.Column{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1100,
+				CommitTs: 1200,
+				Table:    &tableInfo.TableName,
+				Columns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			Columns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: 1,
 				}, {
-					Name:  "b",
 					Value: "2",
 				},
-			}, tableInfo),
+			},
 		},
 		// update event which doesn't modify handle key
 		{
-			StartTs:   1120,
-			CommitTs:  1220,
-			TableInfo: tableInfo,
-			PreColumns: model.Columns2ColumnDatas([]*model.Column{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1120,
+				CommitTs: 1220,
+				Table:    &common.TableName{},
+				Columns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+				PreColumns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			Columns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: 1,
 				}, {
-					Name:  "b",
+					Value: "3",
+				},
+			},
+			PreColumns: []commonEvent.RedoColumnValue{
+				{
+					Value: 1,
+				}, {
 					Value: "2",
 				},
-			}, tableInfo),
-			Columns: model.Columns2ColumnDatas([]*model.Column{
-				{
-					Name:  "a",
-					Value: 1,
-				}, {
-					Name:  "b",
-					Value: "3",
-				},
-			}, tableInfo),
+			},
 		},
 		{
-			StartTs:   1150,
-			CommitTs:  1250,
-			TableInfo: tableInfo,
-			Columns: model.Columns2ColumnDatas([]*model.Column{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1150,
+				CommitTs: 1250,
+				Table:    &tableInfo.TableName,
+				Columns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			Columns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: 10,
 				}, {
-					Name:  "b",
 					Value: "20",
 				},
-			}, tableInfo),
+			},
 		},
 		{
-			StartTs:   1150,
-			CommitTs:  1250,
-			TableInfo: tableInfo,
-			Columns: model.Columns2ColumnDatas([]*model.Column{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1150,
+				CommitTs: 1250,
+				Table:    &tableInfo.TableName,
+				Columns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			Columns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: 100,
 				}, {
-					Name:  "b",
 					Value: "200",
 				},
-			}, tableInfo),
+			},
 		},
 		{
-			StartTs:   1200,
-			CommitTs:  resolvedTs,
-			TableInfo: tableInfo,
-			PreColumns: model.Columns2ColumnDatas([]*model.Column{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1200,
+				CommitTs: resolvedTs,
+				Table:    &tableInfo.TableName,
+				PreColumns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			PreColumns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: 10,
 				}, {
-					Name:  "b",
 					Value: "20",
 				},
-			}, tableInfo),
+			},
 		},
 		{
-			StartTs:   1200,
-			CommitTs:  resolvedTs,
-			TableInfo: tableInfo,
-			PreColumns: model.Columns2ColumnDatas([]*model.Column{
-				{
-					Name:  "a",
-					Value: 1,
-				}, {
-					Name:  "b",
-					Value: "3",
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1200,
+				CommitTs: resolvedTs,
+				Table:    &tableInfo.TableName,
+				Columns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
 				},
-			}, tableInfo),
-			Columns: model.Columns2ColumnDatas([]*model.Column{
+				PreColumns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			Columns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: 2,
 				}, {
-					Name:  "b",
 					Value: "3",
 				},
-			}, tableInfo),
+			},
+			PreColumns: []commonEvent.RedoColumnValue{
+				{
+					Value: 1,
+				}, {
+					Value: "3",
+				},
+			},
 		},
 		{
-			StartTs:   1200,
-			CommitTs:  resolvedTs,
-			TableInfo: tableInfo,
-			PreColumns: model.Columns2ColumnDatas([]*model.Column{
-				{
-					Name:  "a",
-					Value: 100,
-				}, {
-					Name:  "b",
-					Value: "200",
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1200,
+				CommitTs: resolvedTs,
+				Table:    &tableInfo.TableName,
+				Columns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
 				},
-			}, tableInfo),
-			Columns: model.Columns2ColumnDatas([]*model.Column{
+				PreColumns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			Columns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: 200,
 				}, {
-					Name:  "b",
 					Value: "300",
 				},
-			}, tableInfo),
+			},
+			PreColumns: []commonEvent.RedoColumnValue{
+				{
+					Value: 100,
+				}, {
+					Value: "200",
+				},
+			},
 		},
 	}
 	for _, dml := range dmls {
 		redoLogCh <- dml
 	}
-	ddls := []*model.DDLEvent{
+	ddls := []*commonEvent.RedoDDLEvent{
 		{
-			CommitTs: checkpointTs,
-			TableInfo: &model.TableInfo{
-				TableName: model.TableName{
-					Schema: "test", Table: "checkpoint",
-				},
+			DDL: &commonEvent.DDLEventInRedoLog{
+				CommitTs: checkpointTs,
+				Query:    "create table checkpoint(id int)",
 			},
-			Query: "create table checkpoint(id int)",
-			Type:  timodel.ActionCreateTable,
+			TableName: common.TableName{
+				Schema: "test", Table: "checkpoint",
+			},
+			Type: byte(timodel.ActionCreateTable),
 		},
 		{
-			CommitTs: resolvedTs,
-			TableInfo: &model.TableInfo{
-				TableName: model.TableName{
-					Schema: "test", Table: "resolved",
-				},
+			DDL: &commonEvent.DDLEventInRedoLog{
+				CommitTs: resolvedTs,
+				Query:    "create table resolved(id int not null unique key)",
 			},
-			Query: "create table resolved(id int not null unique key)",
-			Type:  timodel.ActionCreateTable,
+			TableName: common.TableName{
+				Schema: "test", Table: "resolved",
+			},
+			Type: byte(timodel.ActionCreateTable),
 		},
 	}
 	for _, ddl := range ddls {
@@ -308,155 +339,167 @@ func TestApplyBigTxn(t *testing.T) {
 
 	checkpointTs := uint64(1000)
 	resolvedTs := uint64(2000)
-	redoLogCh := make(chan *model.RowChangedEvent, 1024)
-	ddlEventCh := make(chan *model.DDLEvent, 1024)
+	redoLogCh := make(chan *commonEvent.RedoDMLEvent, 1024)
+	ddlEventCh := make(chan *commonEvent.RedoDDLEvent, 1024)
 	createMockReader := func(ctx context.Context, cfg *RedoApplierConfig) (reader.RedoLogReader, error) {
 		return NewMockReader(checkpointTs, resolvedTs, redoLogCh, ddlEventCh), nil
 	}
 
 	// DML sink and DDL sink share the same db
-	db := getMockDBForBigTxn(t)
-	dbConnFactory := pmysql.NewDBConnectionFactoryForTest()
-	dbConnFactory.SetStandardConnectionFactory(func(ctx context.Context, dsnStr string) (*sql.DB, error) {
-		return db, nil
-	})
 
-	getDMLDBConnBak := txn.GetDBConnImpl
-	txn.GetDBConnImpl = dbConnFactory
-	getDDLDBConnBak := mysqlDDL.GetDBConnImpl
-	mysqlDDL.GetDBConnImpl = dbConnFactory
 	createRedoReaderBak := createRedoReader
 	createRedoReader = createMockReader
 	defer func() {
 		createRedoReader = createRedoReaderBak
-		txn.GetDBConnImpl = getDMLDBConnBak
-		mysqlDDL.GetDBConnImpl = getDDLDBConnBak
 	}()
 
-	tableInfo := model.BuildTableInfo("test", "t1", []*model.Column{
-		{
-			Name: "a",
-			Type: mysqlParser.TypeLong,
-			Flag: model.HandleKeyFlag | model.PrimaryKeyFlag,
-		}, {
-			Name: "b",
-			Type: mysqlParser.TypeString,
-			Flag: 0,
+	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+		Name:  ast.NewCIStr("t1"),
+		State: timodel.StatePublic,
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("a"),
+				FieldType: *newFieldType(pmysql.TypeLong, pmysql.PriKeyFlag),
+			}, {
+				Name:      ast.NewCIStr("b"),
+				FieldType: *newFieldType(pmysql.TypeString, 0),
+			},
 		},
-	}, [][]int{{0}})
-	dmls := make([]*model.RowChangedEvent, 0)
+	})
+
+	dmls := make([]*commonEvent.RedoDMLEvent, 0)
 	// insert some rows
 	for i := 1; i <= 100; i++ {
-		dml := &model.RowChangedEvent{
-			StartTs:   1100,
-			CommitTs:  1200,
-			TableInfo: tableInfo,
-			Columns: model.Columns2ColumnDatas([]*model.Column{
+		dml := &commonEvent.RedoDMLEvent{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1100,
+				CommitTs: 1200,
+				Table:    &tableInfo.TableName,
+				Columns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			Columns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: i,
 				}, {
-					Name:  "b",
 					Value: fmt.Sprintf("%d", i+1),
 				},
-			}, tableInfo),
+			},
 		}
 		dmls = append(dmls, dml)
 	}
 	// update
 	for i := 1; i <= 100; i++ {
-		dml := &model.RowChangedEvent{
-			StartTs:   1200,
-			CommitTs:  1300,
-			TableInfo: tableInfo,
-			PreColumns: model.Columns2ColumnDatas([]*model.Column{
-				{
-					Name:  "a",
-					Value: i,
-				}, {
-					Name:  "b",
-					Value: fmt.Sprintf("%d", i+1),
+		dml := &commonEvent.RedoDMLEvent{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1200,
+				CommitTs: 1300,
+				Table:    &tableInfo.TableName,
+				Columns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
 				},
-			}, tableInfo),
-			Columns: model.Columns2ColumnDatas([]*model.Column{
+				PreColumns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			Columns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: i * 10,
 				}, {
-					Name:  "b",
 					Value: fmt.Sprintf("%d", i*10+1),
 				},
-			}, tableInfo),
+			},
+			PreColumns: []commonEvent.RedoColumnValue{
+				{
+					Value: i,
+				}, {
+					Value: fmt.Sprintf("%d", i+1),
+				},
+			},
 		}
 		dmls = append(dmls, dml)
 	}
 	// delete and update
 	for i := 1; i <= 50; i++ {
-		dml := &model.RowChangedEvent{
-			StartTs:   1300,
-			CommitTs:  resolvedTs,
-			TableInfo: tableInfo,
-			PreColumns: model.Columns2ColumnDatas([]*model.Column{
+		dml := &commonEvent.RedoDMLEvent{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1300,
+				CommitTs: resolvedTs,
+				Table:    &tableInfo.TableName,
+				PreColumns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			PreColumns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: i * 10,
 				}, {
-					Name:  "b",
 					Value: fmt.Sprintf("%d", i*10+1),
 				},
-			}, tableInfo),
+			},
 		}
 		dmls = append(dmls, dml)
 	}
 	for i := 51; i <= 100; i++ {
-		dml := &model.RowChangedEvent{
-			StartTs:   1300,
-			CommitTs:  resolvedTs,
-			TableInfo: tableInfo,
-			PreColumns: model.Columns2ColumnDatas([]*model.Column{
-				{
-					Name:  "a",
-					Value: i * 10,
-				}, {
-					Name:  "b",
-					Value: fmt.Sprintf("%d", i*10+1),
+		dml := &commonEvent.RedoDMLEvent{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs:  1300,
+				CommitTs: resolvedTs,
+				Table:    &tableInfo.TableName,
+				Columns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
 				},
-			}, tableInfo),
-			Columns: model.Columns2ColumnDatas([]*model.Column{
+				PreColumns: []*commonEvent.RedoColumn{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			},
+			Columns: []commonEvent.RedoColumnValue{
 				{
-					Name:  "a",
 					Value: i * 100,
 				}, {
-					Name:  "b",
 					Value: fmt.Sprintf("%d", i*100+1),
 				},
-			}, tableInfo),
+			},
+			PreColumns: []commonEvent.RedoColumnValue{
+				{
+					Value: i * 10,
+				}, {
+					Value: fmt.Sprintf("%d", i*10+1),
+				},
+			},
 		}
 		dmls = append(dmls, dml)
 	}
 	for _, dml := range dmls {
 		redoLogCh <- dml
 	}
-	ddls := []*model.DDLEvent{
+	ddls := []*commonEvent.RedoDDLEvent{
 		{
-			CommitTs: checkpointTs,
-			TableInfo: &model.TableInfo{
-				TableName: model.TableName{
-					Schema: "test", Table: "checkpoint",
-				},
+			DDL: &commonEvent.DDLEventInRedoLog{
+				CommitTs: checkpointTs,
+				Query:    "create table checkpoint(id int)",
 			},
-			Query: "create table checkpoint(id int)",
-			Type:  timodel.ActionCreateTable,
+			TableName: common.TableName{
+				Schema: "test", Table: "checkpoint",
+			},
+			Type: byte(timodel.ActionCreateTable),
 		},
 		{
-			CommitTs: resolvedTs,
-			TableInfo: &model.TableInfo{
-				TableName: model.TableName{
-					Schema: "test", Table: "resolved",
-				},
+			DDL: &commonEvent.DDLEventInRedoLog{
+				CommitTs: resolvedTs,
+				Query:    "create table resolved(id int not null unique key)",
 			},
-			Query: "create table resolved(id int not null unique key)",
-			Type:  timodel.ActionCreateTable,
+			TableName: common.TableName{
+				Schema: "test", Table: "resolved",
+			},
+			Type: byte(timodel.ActionCreateTable),
 		},
 	}
 	for _, ddl := range ddls {

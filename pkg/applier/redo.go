@@ -22,7 +22,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -115,7 +114,8 @@ func (ra *RedoApplier) catchError(ctx context.Context) error {
 
 func (ra *RedoApplier) initSink(ctx context.Context) (err error) {
 	replicaConfig := &config.ChangefeedConfig{
-		SinkURI: ra.cfg.SinkURI,
+		SinkURI:    ra.cfg.SinkURI,
+		SinkConfig: &config.SinkConfig{},
 	}
 	sink, err := sink.New(ctx, replicaConfig, ra.changefeedID)
 	if err != nil {
@@ -310,51 +310,33 @@ func createRedoReaderImpl(ctx context.Context, cfg *RedoApplierConfig) (reader.R
 
 // processEvent return (event to emit, pending event)
 func processEvent(
-	dml *commonEvent.RedoDMLEvent,
+	event *commonEvent.RedoDMLEvent,
 	prevTxnStartTs commonType.Ts,
 	tempStorage *tempTxnInsertEventStorage,
 ) (*commonEvent.RedoDMLEvent, *commonEvent.RedoDMLEvent, error) {
-	if dml == nil {
+	if event == nil {
 		log.Panic("event should not be nil")
 	}
 
 	// meet a new transaction
-	if prevTxnStartTs != 0 && prevTxnStartTs != dml.Row.StartTs {
+	if prevTxnStartTs != 0 && prevTxnStartTs != event.Row.StartTs {
 		if tempStorage.hasEvent() {
 			// emit the insert events in the previous transaction
-			return nil, dml, nil
+			return nil, event, nil
 		}
 	}
-	event := dml.ToDMLEvent()
-	row, ok := event.GetNextRow()
-	e := &commonEvent.RowEvent{
-		Event:          row,
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-	}
-	// if row.Row {
-	// 	return dml, nil, nil
-	// } else if commonEvent.IsInsert() {
-	// 	if tempStorage.hasEvent() {
-	// 		// pend current event and emit the insert events in temp storage first to release memory
-	// 		return nil, dml, nil
-	// 	}
-	// 	return dml, nil, nil
-	// } else {
-	// 	return dml, nil, nil
-	// }
-	// nolint
-	if row.IsDelete() {
+	if event.IsDelete() {
 		return event, nil, nil
-	} else if commonEvent.IsInsert() {
+	} else if event.IsInsert() {
 		if tempStorage.hasEvent() {
 			// pend current event and emit the insert events in temp storage first to release memory
 			return nil, event, nil
 		}
 		return event, nil, nil
-	} else if !ShouldSplitUpdateEvent(event) {
+	} else if !shouldSplitUpdateEvent(event) {
 		return event, nil, nil
 	} else {
-		deleteEvent, insertEvent, err := SplitUpdateEvent(event)
+		deleteEvent, insertEvent, err := splitUpdateEvent(event)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -399,65 +381,4 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		return err
 	}
 	return nil
-}
-
-// ShouldSplitUpdateEvent determines if the split event is needed to align the old format based on
-// whether the handle key column or unique key has been modified.
-// If is modified, we need to use splitUpdateEvent to split the update event into a delete and an insert commonEvent.
-func ShouldSplitUpdateEvent(updateEvent *RowChangedEvent) bool {
-	// nil event will never be split.
-	if updateEvent == nil {
-		return false
-	}
-
-	tableInfo := updatecommonEvent.TableInfo
-	for i := range updatecommonEvent.Columns {
-		col := updatecommonEvent.Columns[i]
-		preCol := updatecommonEvent.PreColumns[i]
-		if isNonEmptyUniqueOrHandleCol(col, tableInfo) && isNonEmptyUniqueOrHandleCol(preCol, tableInfo) {
-			colValueString := ColumnValueString(col.Value)
-			preColValueString := ColumnValueString(preCol.Value)
-			// If one unique key columns is updated, we need to split the event row.
-			if colValueString != preColValueString {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// SplitUpdateEvent splits an update event into a delete and an insert commonEvent.
-func SplitUpdateEvent(
-	updateEvent *RowChangedEvent,
-) (*RowChangedEvent, *RowChangedEvent, error) {
-	if updateEvent == nil {
-		return nil, nil, errors.New("nil event cannot be split")
-	}
-
-	// If there is an update to handle key columns,
-	// we need to split the event into two events to be compatible with the old format.
-	// NOTICE: Here we don't need a full deep copy because
-	// our two events need Columns and PreColumns respectively,
-	// so it won't have an impact and no more full deep copy wastes memory.
-	deleteEvent := *updateEvent
-	deletecommonEvent.Columns = nil
-	if deletecommonEvent.Checksum != nil {
-		deletecommonEvent.Checksum.Current = 0
-	}
-
-	insertEvent := *updateEvent
-	// NOTICE: clean up pre cols for insert commonEvent.
-	insertcommonEvent.PreColumns = nil
-	if insertcommonEvent.Checksum != nil {
-		insertcommonEvent.Checksum.Previous = 0
-	}
-
-	log.Debug("split update event", zap.Uint64("startTs", updatecommonEvent.StartTs),
-		zap.Uint64("commitTs", updatecommonEvent.CommitTs),
-		zap.String("schema", updatecommonEvent.TableInfo.TableName.Schema),
-		zap.String("table", updatecommonEvent.TableInfo.GetTableName()),
-		zap.Any("preCols", updatecommonEvent.PreColumns),
-		zap.Any("cols", updatecommonEvent.Columns))
-
-	return &deleteEvent, &insertEvent, nil
 }
