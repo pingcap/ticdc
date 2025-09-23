@@ -106,44 +106,36 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		return
 	}
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
-	if len(resolvedEvents) != 0 {
-		log.Info("schema store begin to apply resolved ddl events",
-			zap.Uint64("resolvedTs", pendingTs),
-			zap.Int("resolvedEventsLen", len(resolvedEvents)))
-
-		for _, event := range resolvedEvents {
-			if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs ||
-				event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
-				log.Info("skip already applied ddl job",
-					zap.Any("type", event.Job.Type),
-					zap.String("job", event.Job.Query),
-					zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
-					zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
-					zap.Uint64("jobCommitTs", event.CommitTs),
-					zap.Any("storeSchemaVersion", s.schemaVersion),
-					zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
-				continue
-			}
-			log.Info("handle a ddl job",
-				zap.Int64("schemaID", event.Job.SchemaID),
-				zap.String("schemaName", event.Job.SchemaName),
-				zap.Int64("tableID", event.Job.TableID),
-				zap.String("tableName", event.Job.TableName),
+	for _, event := range resolvedEvents {
+		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs ||
+			event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
+			log.Info("skip already applied ddl job",
 				zap.Any("type", event.Job.Type),
 				zap.String("job", event.Job.Query),
 				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
 				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 				zap.Uint64("jobCommitTs", event.CommitTs),
 				zap.Any("storeSchemaVersion", s.schemaVersion),
-				zap.Any("tableInfo", event.Job.BinlogInfo.TableInfo),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
-
-			// need to update the following two members for every event to filter out later duplicate events
-			s.schemaVersion = event.Job.BinlogInfo.SchemaVersion
-			s.finishedDDLTs = event.Job.BinlogInfo.FinishedTS
-
-			s.dataStorage.handleDDLJob(event.Job)
+			continue
 		}
+		log.Info("handle a ddl job",
+			zap.Int64("schemaID", event.Job.SchemaID),
+			zap.String("schemaName", event.Job.SchemaName),
+			zap.Int64("tableID", event.Job.TableID),
+			zap.String("tableName", event.Job.TableName),
+			zap.Any("type", event.Job.Type),
+			zap.String("DDL", event.Job.Query),
+			zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
+			zap.Uint64("finishTs", event.Job.BinlogInfo.FinishedTS),
+			zap.Any("storeSchemaVersion", s.schemaVersion),
+			zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
+
+		// need to update the following two members for every event to filter out later duplicate events
+		s.schemaVersion = event.Job.BinlogInfo.SchemaVersion
+		s.finishedDDLTs = event.Job.BinlogInfo.FinishedTS
+
+		s.dataStorage.handleDDLJob(event.Job)
 	}
 	// When register a new table, it will load all ddl jobs from disk for the table,
 	// so we can only update resolved ts after all ddl jobs are written to disk

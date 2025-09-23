@@ -784,25 +784,27 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	case model.ActionCreateTable:
 		// Note: partition table's logical table id is also in tableMap
 		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
-			log.Info("table already exists. ignore DDL",
-				zap.String("DDL", job.Query),
-				zap.Int64("jobID", job.ID),
+			log.Debug("table already exists. ignore DDL",
 				zap.Int64("schemaID", job.SchemaID),
-				zap.Int64("tableID", job.BinlogInfo.TableInfo.ID),
-				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
-				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
+				zap.String("schemaName", job.SchemaName),
+				zap.Int64("tableID", job.TableID),
+				zap.String("tableName", job.TableName),
+				zap.String("DDL", job.Query),
+				zap.Int64("schemaVersion", job.BinlogInfo.SchemaVersion),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS))
 			return true
 		}
 	case model.ActionCreateTables:
 		// For duplicate create tables ddl job, the tables in the job should be same, check the first table is enough
 		if _, ok := tableMap[job.BinlogInfo.MultipleTableInfos[0].ID]; ok {
-			log.Info("table already exists. ignore DDL",
-				zap.String("DDL", job.Query),
-				zap.Int64("jobID", job.ID),
+			log.Debug("table already exists. ignore DDL",
 				zap.Int64("schemaID", job.SchemaID),
-				zap.Int64("tableID", job.BinlogInfo.MultipleTableInfos[0].ID),
-				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
-				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
+				zap.String("schemaName", job.SchemaName),
+				zap.Int64("tableID", job.TableID),
+				zap.String("tableName", job.TableName),
+				zap.String("DDL", job.Query),
+				zap.Int64("schemaVersion", job.BinlogInfo.SchemaVersion),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS))
 			return true
 		}
 	// DDLs ignored
