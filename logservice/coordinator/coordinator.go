@@ -109,7 +109,7 @@ func New() LogCoordinator {
 func (c *logCoordinator) Run(ctx context.Context) error {
 	broadcastTick := time.NewTicker(time.Second)
 	defer broadcastTick.Stop()
-	metricTick := time.NewTicker(5 * time.Second)
+	metricTick := time.NewTicker(1 * time.Second)
 	defer metricTick.Stop()
 
 	for {
