@@ -88,5 +88,4 @@ func InitLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
-
 }
