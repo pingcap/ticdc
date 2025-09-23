@@ -26,7 +26,7 @@ import (
 
 const (
 	checkStaleRequestInterval = time.Second * 10
-	requestGCLifeTime         = time.Minute * 20
+	requestGCLifeTime         = time.Minute * 60
 	addReqRetryInterval       = time.Millisecond * 1
 	addReqRetryLimit          = 3
 )
@@ -205,7 +205,6 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 		if cost > 0 && cost < 7200.0 {
 			log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 			metrics.RegionRequestFinishScanDuration.Observe(cost)
-			metrics.RegionRequestFinishScanDurationSummary.Observe(cost)
 		} else {
 			log.Info("region request duration abnormal, skip metric", zap.Float64("cost", cost), zap.Uint64("regionID", regionID))
 		}
@@ -231,9 +230,18 @@ func (c *requestCache) clearStaleRequest() {
 	reqCount := 0
 	for subID, regionReqs := range c.sentRequests.regionReqs {
 		for regionID, regionReq := range regionReqs {
-			if regionReq.regionInfo.isStopped() || regionReq.isStale() {
+			if regionReq.regionInfo.isStopped() ||
+				regionReq.regionInfo.subscribedSpan.stopped.Load() ||
+				regionReq.regionInfo.lockedRangeState.Initialized.Load() {
 				c.decPendingCount()
-				log.Info("region worker delete stale region request", zap.Uint64("subID", uint64(subID)), zap.Uint64("regionID", regionID), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)), zap.Bool("isStopped", regionReq.regionInfo.isStopped()), zap.Bool("isStale", regionReq.isStale()), zap.Time("createTime", regionReq.createTime))
+				log.Info("region worker delete stale region request",
+					zap.Uint64("subID", uint64(subID)),
+					zap.Uint64("regionID", regionID),
+					zap.Int("pendingCount", int(c.pendingCount.Load())),
+					zap.Int("pendingQueueLen", len(c.pendingQueue)),
+					zap.Bool("isRegionStopped", regionReq.regionInfo.isStopped()),
+					zap.Bool("isSubscribedSpanStopped", regionReq.regionInfo.subscribedSpan.stopped.Load()),
+					zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
 			} else {
 				reqCount += 1
