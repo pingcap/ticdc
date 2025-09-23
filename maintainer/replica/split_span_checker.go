@@ -1006,7 +1006,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
 ) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID) {
-	log.Info("checkBalanceTraffic try to balance traffic",
+	log.Debug("checkBalanceTraffic try to balance traffic",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
 		zap.Any("aliveNodeIDs", aliveNodeIDs),
@@ -1090,7 +1090,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		return
 	} else {
 		s.balanceCondition.updateScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
-		log.Info("should balance, thus update score",
+		log.Debug("should balance, thus update score",
 			zap.Any("minTrafficNodeID", minTrafficNodeID),
 			zap.Any("maxTrafficNodeID", maxTrafficNodeID),
 			zap.Any("balanceCauseByMinNode", balanceCauseByMinNode),
