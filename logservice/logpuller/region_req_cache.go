@@ -26,7 +26,7 @@ import (
 
 const (
 	checkStaleRequestInterval = time.Second * 10
-	requestGCLifeTime         = time.Minute * 60
+	requestGCLifeTime         = time.Minute * 120
 	addReqRetryInterval       = time.Millisecond * 1
 	addReqRetryLimit          = 3
 )
