@@ -528,9 +528,10 @@ func TestChangefeedStatManagement(t *testing.T) {
 	require.True(t, ok)
 	cfStat1 := v.(*changefeedStat)
 	require.NotNil(t, cfStat1)
-	require.Equal(t, 1, cfStat1.heap.Len())
-	require.Len(t, cfStat1.dispatcher, 1)
-	_, ok = cfStat1.dispatcher[dispatcherID1]
+	cfStat1.mutex.Lock()
+	require.Len(t, cfStat1.dispatchers, 1)
+	_, ok = cfStat1.dispatchers[dispatcherID1]
+	cfStat1.mutex.Unlock()
 	require.True(t, ok)
 
 	// 2. Register dispatcher2 for cfID1.
@@ -541,9 +542,10 @@ func TestChangefeedStatManagement(t *testing.T) {
 	v, ok = es.changefeedMeta.Load(cfID1)
 	require.True(t, ok)
 	cfStat1 = v.(*changefeedStat)
-	require.Equal(t, 2, cfStat1.heap.Len())
-	require.Len(t, cfStat1.dispatcher, 2)
-	_, ok = cfStat1.dispatcher[dispatcherID2]
+	cfStat1.mutex.Lock()
+	require.Len(t, cfStat1.dispatchers, 2)
+	_, ok = cfStat1.dispatchers[dispatcherID2]
+	cfStat1.mutex.Unlock()
 	require.True(t, ok)
 
 	// 3. Register dispatcher3 for cfID2.
@@ -555,17 +557,19 @@ func TestChangefeedStatManagement(t *testing.T) {
 	require.True(t, ok)
 	cfStat2 := v.(*changefeedStat)
 	require.NotNil(t, cfStat2)
-	require.Equal(t, 1, cfStat2.heap.Len())
-	require.Len(t, cfStat2.dispatcher, 1)
+	cfStat2.mutex.Lock()
+	require.Len(t, cfStat2.dispatchers, 1)
+	cfStat2.mutex.Unlock()
 
 	// 4. Unregister dispatcher1 from cfID1.
 	es.UnregisterDispatcher(cfID1, dispatcherID1)
 	v, ok = es.changefeedMeta.Load(cfID1)
 	require.True(t, ok)
 	cfStat1 = v.(*changefeedStat)
-	require.Equal(t, 1, cfStat1.heap.Len())
-	require.Len(t, cfStat1.dispatcher, 1)
-	_, ok = cfStat1.dispatcher[dispatcherID1]
+	cfStat1.mutex.Lock()
+	require.Len(t, cfStat1.dispatchers, 1)
+	_, ok = cfStat1.dispatchers[dispatcherID1]
+	cfStat1.mutex.Unlock()
 	require.False(t, ok)
 
 	// 5. Unregister dispatcher2 from cfID1 (the last one).
@@ -578,5 +582,7 @@ func TestChangefeedStatManagement(t *testing.T) {
 	v, ok = es.changefeedMeta.Load(cfID2)
 	require.True(t, ok)
 	cfStat2 = v.(*changefeedStat)
-	require.Equal(t, 1, cfStat2.heap.Len())
+	cfStat2.mutex.Lock()
+	require.Len(t, cfStat2.dispatchers, 1)
+	cfStat2.mutex.Unlock()
 }
