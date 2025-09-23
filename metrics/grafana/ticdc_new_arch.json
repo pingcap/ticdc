@@ -143,6 +143,264 @@
       "id": 19999,
       "panels": [
         {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The status of each changefeed.\n\n0: Normal\n\n1 and 6: Warning\n\n2: Failed\n\n3: Stopped\n\n4: Finished\n\n-1: Unknown",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "stepAfter",
+                "barAlignment": 0,
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "spanNulls": true,
+                "showPoints": "always",
+                "pointSize": 4,
+                "axisPlacement": "auto",
+                "axisLabel": "",
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "hideFrom": {
+                  "tooltip": false,
+                  "graph": false,
+                  "legend": false
+                }
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "#EAB839",
+                    "value": -1
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  },
+                  {
+                    "color": "#E24D42",
+                    "value": 2
+                  },
+                  {
+                    "color": "#EF843C",
+                    "value": 3
+                  },
+                  {
+                    "color": "#6ED0E0",
+                    "value": 4
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "from": "",
+                  "id": 1,
+                  "text": "Normal",
+                  "to": "",
+                  "type": 1,
+                  "value": "0"
+                },
+                {
+                  "from": "",
+                  "id": 2,
+                  "text": "Pending",
+                  "to": "",
+                  "type": 1,
+                  "value": "1"
+                },
+                {
+                  "from": "",
+                  "id": 3,
+                  "text": "Failed",
+                  "to": "",
+                  "type": 1,
+                  "value": "2"
+                },
+                {
+                  "from": "",
+                  "id": 4,
+                  "text": "Stopped",
+                  "to": "",
+                  "type": 1,
+                  "value": "3"
+                },
+                {
+                  "from": "",
+                  "id": 5,
+                  "text": "Finished",
+                  "to": "",
+                  "type": 1,
+                  "value": "4"
+                },
+                {
+                  "from": "",
+                  "id": 6,
+                  "text": "Other",
+                  "to": "",
+                  "type": 1,
+                  "value": "5"
+                },
+                {
+                  "from": "6",
+                  "id": 7,
+                  "text": "-",
+                  "to": "1000",
+                  "type": 2
+                }
+              ],
+              "decimals": 0,
+              "max": 5,
+              "min": 0,
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 1
+          },
+          "id": 22301,
+          "links": [],
+          "options": {
+            "tooltipOptions": {
+              "mode": "single"
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "graph": {}
+          },
+          "pluginVersion": "7.5.17",
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "max(ticdc_owner_status{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
+              "format": "time_series",
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{namespace}}-{{changefeed}}",
+              "refId": "A"
+            }
+          ],
+          "title": "The status of changefeeds",
+          "type": "timeseries",
+          "timeFrom": null,
+          "timeShift": null
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The lag between changefeed coordinator checkpoint ts and the tso of upstream TiDB.",
+          "fieldConfig": {
+            "defaults": {
+              "links": []
+            },
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 1
+          },
+          "hiddenSeries": false,
+          "id": 22302,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "paceLength": 10,
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "max(ticdc_owner_coordinator_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{namespace}}-{{changefeed}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Global Checkpoint Lag",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "logBase": 1,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "logBase": 1,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false
+          }
+        },
+        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -159,7 +417,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 1
+            "y": 7
           },
           "hiddenSeries": false,
           "id": 18999,
@@ -256,7 +514,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 1
+            "y": 7
           },
           "hiddenSeries": false,
           "id": 20198,
@@ -350,7 +608,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 7
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 20003,
@@ -446,7 +704,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 7
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 20000,
@@ -550,7 +808,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 13
+            "y": 19
           },
           "hiddenSeries": false,
           "id": 10049,
@@ -649,7 +907,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 13
+            "y": 19
           },
           "hiddenSeries": false,
           "id": 719,
@@ -806,7 +1064,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Checkpoint Lag",
+          "title": "Maintainer Checkpoint Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
