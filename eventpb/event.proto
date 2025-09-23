@@ -68,8 +68,7 @@ enum ActionType {
     ACTION_TYPE_UNSPECIFIED = 0;
     ACTION_TYPE_REGISTER = 1;
     ACTION_TYPE_REMOVE = 2;
-    ACTION_TYPE_PAUSE = 3;
-    ACTION_TYPE_RESUME = 4;
+    // 3 and 4 are deprecated.
     ACTION_TYPE_RESET = 5;
 }
 
@@ -79,7 +78,7 @@ message IntegrityConfig {
 }
 
 // DispatcherRequest is used to send a dispatcher request to the event service.
-// A request can be a register, remove, pause, resume, reset dispatcher request.
+// A request can be a register, remove, reset dispatcher request.
 message DispatcherRequest {
     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
     uint64 cluster_id = 1;

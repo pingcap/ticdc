@@ -36,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
@@ -81,9 +80,7 @@ type coordinator struct {
 	controller *Controller
 	backend    changefeed.Backend
 
-	mc            messaging.MessageCenter
-	taskScheduler threadpool.ThreadPool
-
+	mc        messaging.MessageCenter
 	gcManager gc.Manager
 	pdClient  pd.Client
 	pdClock   pdutil.Clock
@@ -122,22 +119,16 @@ func New(node *node.Info,
 	}
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
-
-	c.taskScheduler = threadpool.NewThreadPoolDefault()
-
-	controller := NewController(
+	c.controller = NewController(
 		c.version,
 		c.nodeInfo,
 		c.changefeedChangeCh,
 		c.backend,
 		c.eventCh,
-		c.taskScheduler,
 		batchSize,
 		balanceCheckInterval,
 		c.pdClient,
 	)
-
-	c.controller = controller
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.RegisterOwnerChangeHandler(
@@ -190,13 +181,18 @@ func (c *coordinator) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	eg, cctx := errgroup.WithContext(ctx)
+	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
-		return c.run(cctx)
+		return c.run(ctx)
 	})
 	eg.Go(func() error {
-		return c.runHandleEvent(cctx)
+		return c.runHandleEvent(ctx)
 	})
+
+	eg.Go(func() error {
+		return c.controller.collectMetrics(ctx)
+	})
+
 	return eg.Wait()
 }
 
@@ -208,11 +204,9 @@ func (c *coordinator) run(ctx context.Context) error {
 	failpoint.Inject("InjectUpdateGCTickerInterval", func(val failpoint.Value) {
 		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
-	gcTick := time.NewTicker(updateGCTickerInterval)
 
-	defer gcTick.Stop()
-	updateMetricsTicker := time.NewTicker(time.Second * 1)
-	defer updateMetricsTicker.Stop()
+	gcTicker := time.NewTicker(updateGCTickerInterval)
+	defer gcTicker.Stop()
 
 	failpoint.Inject("coordinator-run-with-error", func() error {
 		return errors.New("coordinator run with error")
@@ -221,7 +215,7 @@ func (c *coordinator) run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-gcTick.C:
+		case <-gcTicker.C:
 			if err := c.updateGCSafepoint(ctx); err != nil {
 				log.Warn("update gc safepoint failed",
 					zap.Error(err))
@@ -311,32 +305,37 @@ func (c *coordinator) handleStateChange(
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
 func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.ChangeFeedID, reportedCheckpointTs uint64) {
 	err := c.gcManager.CheckStaleCheckpointTs(ctx, id, reportedCheckpointTs)
+	if err == nil {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err != nil {
-		errCode, _ := errors.RFCCode(err)
-		state := config.StateWarning
-		if errors.IsChangefeedGCFastFailErrorCode(errCode) {
-			state = config.StateFailed
-		}
-		change := &ChangefeedChange{
-			changefeedID: id,
-			state:        state,
-			err: &config.RunningError{
-				Code:    string(errCode),
-				Message: err.Error(),
-			},
-			changeType: ChangeState,
-		}
-		select {
-		case <-ctx.Done():
-			log.Warn("Failed to send state change event to stateChangedCh since context timeout, "+
-				"there may be a lot of state need to be handled. Try next time",
-				zap.String("changefeed", id.String()),
-				zap.Error(ctx.Err()))
-			return
-		case c.changefeedChangeCh <- []*ChangefeedChange{change}:
-		}
+
+	errCode, _ := errors.RFCCode(err)
+	state := config.StateWarning
+	if errors.IsChangefeedGCFastFailErrorCode(errCode) {
+		state = config.StateFailed
+	}
+
+	change := &ChangefeedChange{
+		changefeedID: id,
+		state:        state,
+		err: &config.RunningError{
+			Code:    string(errCode),
+			Message: err.Error(),
+		},
+		changeType: ChangeState,
+	}
+
+	select {
+	case <-ctx.Done():
+		log.Warn("Failed to send state change event to stateChangedCh since context timeout, "+
+			"there may be a lot of state need to be handled. Try next time",
+			zap.String("changefeed", id.String()),
+			zap.Error(ctx.Err()))
+		return
+	case c.changefeedChangeCh <- []*ChangefeedChange{change}:
 	}
 }
 
@@ -412,7 +411,6 @@ func (c *coordinator) Stop() {
 	if c.closed.CompareAndSwap(false, true) {
 		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
 		c.controller.Stop()
-		c.taskScheduler.Stop()
 		c.cancel()
 		// close eventCh after cancel, to avoid send or get event from the channel
 		c.eventCh.CloseAndDrain()

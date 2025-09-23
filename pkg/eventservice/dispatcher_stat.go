@@ -113,10 +113,6 @@ type dispatcherStat struct {
 	// readyInterval is the interval between two ready events in seconds.
 	// it will double the interval for next time, but cap at maxReadyEventInterval.
 	readyInterval atomic.Int64
-	// isReadyReceivingData is used to indicate whether the dispatcher is ready to receive data events.
-	// It will be set to false, after it receives the pause event from the dispatcher.
-	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
-	isReadyReceivingData atomic.Bool
 
 	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
 	lastReceivedHeartbeatTime atomic.Int64
@@ -168,7 +164,6 @@ func newDispatcherStat(
 	dispStat.lastScannedStartTs.Store(0)
 	dispStat.lastReadySendTime.Store(0)
 	dispStat.readyInterval.Store(1)
-	dispStat.isReadyReceivingData.Store(true)
 	dispStat.resetScanLimit()
 
 	now := time.Now()
@@ -200,13 +195,6 @@ func (a *dispatcherStat) setHandshaked() bool {
 	return a.seq.CompareAndSwap(0, 1)
 }
 
-func (a *dispatcherStat) getEventSenderState() pevent.EventSenderState {
-	if a.IsReadyRecevingData() {
-		return pevent.EventSenderStateNormal
-	}
-	return pevent.EventSenderStatePaused
-}
-
 func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 	a.sentResolvedTs.Store(resolvedTs)
 	a.lastSentResolvedTsTime.Store(time.Now())
@@ -214,10 +202,8 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 }
 
 func (a *dispatcherStat) updateScanRange(txnCommitTs, txnStartTs uint64) {
-	if a.IsReadyRecevingData() {
-		a.lastScannedCommitTs.Store(txnCommitTs)
-		a.lastScannedStartTs.Store(txnStartTs)
-	}
+	a.lastScannedCommitTs.Store(txnCommitTs)
+	a.lastScannedStartTs.Store(txnStartTs)
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
@@ -257,10 +243,6 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 		LastScannedTxnStartTs: lastTxnStartTs,
 	}
 	return r, true
-}
-
-func (a *dispatcherStat) IsReadyRecevingData() bool {
-	return a.isReadyReceivingData.Load()
 }
 
 // getCurrentScanLimitInBytes returns the current scan limit in bytes.
@@ -317,10 +299,7 @@ type wrapEvent struct {
 	postSendFunc func()
 }
 
-func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState) *wrapEvent {
-	for _, dml := range e.DMLEvents {
-		dml.State = state
-	}
+func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
@@ -369,8 +348,7 @@ func newWrapNotReusableEvent(serverID node.ID, e pevent.NotReusableEvent) *wrapE
 	return w
 }
 
-func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent, state pevent.EventSenderState) *wrapEvent {
-	e.State = state
+func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.resolvedTsEvent = e
@@ -378,8 +356,7 @@ func newWrapResolvedEvent(serverID node.ID, e pevent.ResolvedEvent, state pevent
 	return w
 }
 
-func newWrapDDLEvent(serverID node.ID, e *pevent.DDLEvent, state pevent.EventSenderState) *wrapEvent {
-	e.State = state
+func newWrapDDLEvent(serverID node.ID, e *pevent.DDLEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
@@ -387,8 +364,7 @@ func newWrapDDLEvent(serverID node.ID, e *pevent.DDLEvent, state pevent.EventSen
 	return w
 }
 
-func newWrapSyncPointEvent(serverID node.ID, e *pevent.SyncPointEvent, state pevent.EventSenderState) *wrapEvent {
-	e.State = state
+func newWrapSyncPointEvent(serverID node.ID, e *pevent.SyncPointEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e

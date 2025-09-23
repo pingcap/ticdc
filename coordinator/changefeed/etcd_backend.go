@@ -344,7 +344,7 @@ func (b *EtcdBackend) UpdateChangefeedCheckpointTs(ctx context.Context, cps map[
 		opsThen = append(opsThen, clientv3.OpPut(jobKey, jobValue))
 		batchSize++
 		if batchSize >= 128 {
-			if err := txnFunc(); err != nil {
+			if err = txnFunc(); err != nil {
 				return errors.Trace(err)
 			}
 			opsThen = opsThen[:0]

@@ -173,7 +173,7 @@ var (
 		})
 )
 
-func InitEventStoreMetrics(registry *prometheus.Registry) {
+func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreSubscriptionGauge)
 	registry.MustRegister(EventStoreReceivedEventCount)
 	registry.MustRegister(EventStoreOutputEventCount)

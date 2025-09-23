@@ -246,7 +246,7 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 		log.Warn("scan exits since context done", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Error(context.Cause(session.ctx)))
 		return true, context.Cause(session.ctx)
 	}
-	return !session.dispatcherStat.IsReadyRecevingData(), nil
+	return session.dispatcherStat.isRemoved.Load(), nil
 }
 
 func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
