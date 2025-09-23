@@ -960,12 +960,15 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 
 func (e *eventStore) updateMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Second)
+	uploadTicker := time.NewTicker(1 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
 			e.updateMetricsOnce()
+		case <-uploadTicker.C:
+			e.uploadChangefeedMetricsOnce()
 		}
 	}
 }
@@ -1036,7 +1039,9 @@ func (e *eventStore) updateMetricsOnce() {
 	minResolvedPhyTs := oracle.ExtractPhysical(minResolvedTs)
 	eventStoreResolvedTsLag := float64(pdPhyTs-minResolvedPhyTs) / 1e3
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLag)
+}
 
+func (e *eventStore) uploadChangefeedMetricsOnce() {
 	// Collect resolved ts for each changefeed and send to log coordinator.
 	cfStates := &logservicepb.ChangefeedStates{
 		States: make([]*logservicepb.ChangefeedStateEntry, 0),
