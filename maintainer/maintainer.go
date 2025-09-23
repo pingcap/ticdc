@@ -398,6 +398,11 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
 
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
+
 	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
 	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
 	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
@@ -1008,11 +1013,6 @@ func (m *Maintainer) collectMetrics() {
 		scheduling := spanController.GetSchedulingSize()
 		working := spanController.GetReplicatingSize()
 		absent := spanController.GetAbsentSize()
-
-		workingTasks := spanController.GetReplicating()
-		for _, task := range workingTasks {
-			log.Info("hyy scheduling task", zap.String("task", task.GetID().String()))
-		}
 
 		if common.IsDefaultMode(mode) {
 			m.spanCountGauge.Set(float64(totalSpanCount))

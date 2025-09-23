@@ -230,7 +230,7 @@ func New(
 	// FIXME: avoid remove
 	err := os.RemoveAll(dbPath)
 	if err != nil {
-		log.Panic("fail to remove path")
+		log.Panic("fail to remove path", zap.Any("err", err))
 	}
 
 	store := &eventStore{
