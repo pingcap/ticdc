@@ -652,12 +652,11 @@ func (e *eventStore) removeDispatcherFromChangefeedStat(changefeedID common.Chan
 	if v, ok := e.changefeedMeta.Load(changefeedID); ok {
 		cfStat := v.(*changefeedStat)
 		cfStat.mutex.Lock()
+		defer cfStat.mutex.Unlock()
 		delete(cfStat.dispatchers, dispatcherID)
-		isEmpty := len(cfStat.dispatchers) == 0
-		cfStat.mutex.Unlock()
 
 		// If the changefeed has no more dispatchers, remove the changefeed stat.
-		if isEmpty {
+		if len(cfStat.dispatchers) == 0 {
 			e.changefeedMeta.Delete(changefeedID)
 			log.Info("changefeed stat is empty, removed it", zap.Stringer("changefeedID", changefeedID))
 		}
