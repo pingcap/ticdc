@@ -369,7 +369,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Global Checkpoint Lag",
+          "title": "Changefeed Checkpoint Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
