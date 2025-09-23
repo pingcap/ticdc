@@ -960,7 +960,7 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 
 func (e *eventStore) runMetricsCollector(ctx context.Context) error {
 	storeMetricsTicker := time.NewTicker(10 * time.Second)
-	changefeedMetricsTicker := time.NewTicker(1 * time.Second)
+	changefeedMetricsTicker := time.NewTicker(200 * time.Millisecond)
 	for {
 		select {
 		case <-ctx.Done():
