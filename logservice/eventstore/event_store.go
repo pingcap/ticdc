@@ -1036,8 +1036,8 @@ func (e *eventStore) updateMetricsOnce() {
 
 		// By taking the lock here, we ensure that the set of dispatchers for this
 		// changefeed does not change while we calculate the minimum resolved ts.
-		// The `advanceResolvedTs` function updates individual dispatcher's resolvedTs
-		// atomically, so it does not conflict with this read lock.
+		// The `advanceResolvedTs` function updates an individual dispatcher's resolvedTs
+		// atomically, so it does not conflict with this lock.
 		cfStat.mutex.Lock()
 		minResolvedTs := uint64(math.MaxUint64)
 		found := false
