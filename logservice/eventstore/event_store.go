@@ -1061,7 +1061,10 @@ func (e *eventStore) updateMetricsOnce() {
 
 	coordinatorID := e.getCoordinatorInfo()
 	if coordinatorID != "" && len(cfStates.States) > 0 {
-		e.messageCenter.SendEvent(messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, cfStates))
+		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, cfStates)
+		if err := e.messageCenter.SendEvent(msg); err != nil {
+			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
+		}
 	}
 }
 
