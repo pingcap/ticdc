@@ -1117,7 +1117,7 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 
 		available, ok := holder[changefeedID.ID()]
 		if !ok {
-			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
+			return true
 		}
 		changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
