@@ -64,7 +64,7 @@ func (s FeedState) ToInt() int {
 	switch s {
 	case StateNormal:
 		return 0
-	case StatePending:
+	case StateWarning:
 		return 1
 	case StateFailed:
 		return 2
@@ -74,7 +74,7 @@ func (s FeedState) ToInt() int {
 		return 4
 	case StateRemoved:
 		return 5
-	case StateWarning:
+	case StatePending:
 		return 6
 	case StateUnInitialized:
 		return 7
