@@ -623,20 +623,13 @@ func TestGenerateBatchSQLWithDifferentTableVersion(t *testing.T) {
 	// This should potentially cause a panic due to different table versions
 	events := []*commonEvent.DMLEvent{dmlInsertEvent1, dmlInsertEvent2, dmlInsertEvent3, dmlInsertEvent4}
 
-	// This should return an error instead of panic since we add table version check
+	// This should panic since events have different table schema
+	require.Panics(t, func() {
+		writer.generateBatchSQL(events)
+	})
+
+	// This should not return an error instead of panic since we grouped the events by table version
 	dmls, err := writer.prepareDMLs(events)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "events in the same group have different table versions")
-	require.Nil(t, dmls)
-
-	events1 := []*commonEvent.DMLEvent{dmlInsertEvent1, dmlInsertEvent2}
-	events2 := []*commonEvent.DMLEvent{dmlInsertEvent3, dmlInsertEvent4}
-	// This call is ok since we have grouped the events by table version
-	dmls, err = writer.prepareDMLs(events1)
-	require.NoError(t, err)
-	require.NotNil(t, dmls)
-
-	dmls, err = writer.prepareDMLs(events2)
 	require.NoError(t, err)
 	require.NotNil(t, dmls)
 }
