@@ -232,7 +232,8 @@ func (c *requestCache) clearStaleRequest() {
 		for regionID, regionReq := range regionReqs {
 			if regionReq.regionInfo.isStopped() ||
 				regionReq.regionInfo.subscribedSpan.stopped.Load() ||
-				regionReq.regionInfo.lockedRangeState.Initialized.Load() {
+				regionReq.regionInfo.lockedRangeState.Initialized.Load() ||
+				regionReq.isStale() {
 				c.decPendingCount()
 				log.Info("region worker delete stale region request",
 					zap.Uint64("subID", uint64(subID)),
@@ -241,6 +242,8 @@ func (c *requestCache) clearStaleRequest() {
 					zap.Int("pendingQueueLen", len(c.pendingQueue)),
 					zap.Bool("isRegionStopped", regionReq.regionInfo.isStopped()),
 					zap.Bool("isSubscribedSpanStopped", regionReq.regionInfo.subscribedSpan.stopped.Load()),
+					zap.Bool("isInitialized", regionReq.regionInfo.lockedRangeState.Initialized.Load()),
+					zap.Bool("isStale", regionReq.isStale()),
 					zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
 			} else {
