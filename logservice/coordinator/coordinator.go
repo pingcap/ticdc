@@ -101,7 +101,7 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 			}
 			c.nodes.Unlock()
 			for _, message := range messages {
-				// just ignore messagees fail to send
+				// just ignore messages fail to send
 				if err := c.messageCenter.SendEvent(message); err != nil {
 					log.Debug("send broadcast message to node failed", zap.Error(err))
 				}

@@ -355,9 +355,6 @@ def set_log_level():
 
 
 def verify_table():
-    # FIXME: Enable this test case after we fully support verify table API
-    print("pass test: verify table")
-    return
     url = BASE_URL0+"/tso"
     # we need to retry since owner resign before this func call
     i = 0

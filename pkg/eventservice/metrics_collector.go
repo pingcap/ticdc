@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -94,14 +95,12 @@ func updateMetricEventServiceSkipResolvedTsCount(mode int64) {
 
 // metricsSnapshot holds all metrics data collected at a point in time
 type metricsSnapshot struct {
-	receivedMinResolvedTs  uint64
-	sentMinResolvedTs      uint64
-	dispatcherCount        int
-	runningDispatcherCount int
-	pausedDispatcherCount  int
-	pendingTaskCount       int
-	slowestDispatcher      *dispatcherStat
-	pdTime                 time.Time
+	receivedMinResolvedTs uint64
+	sentMinResolvedTs     uint64
+	dispatcherCount       int
+	pendingTaskCount      int
+	slowestDispatcher     *dispatcherStat
+	pdTime                time.Time
 }
 
 // metricsCollector is responsible for collecting and reporting metrics for the event broker
@@ -165,22 +164,13 @@ func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 
 // collectDispatcherMetrics collects metrics related to dispatchers
 func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) {
-	mc.broker.dispatchers.Range(func(key, value any) bool {
-		snapshot.dispatcherCount++
-		dispatcher := value.(*dispatcherStat)
-
-		if dispatcher.IsReadyRecevingData() {
-			snapshot.runningDispatcherCount++
-		} else {
-			snapshot.pausedDispatcherCount++
-		}
-
+	collect := func(dispatcher *dispatcherStat) {
 		// Record update time difference
 		updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
 		metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
 
 		// Track min resolved timestamps
-		resolvedTs := dispatcher.eventStoreResolvedTs.Load()
+		resolvedTs := dispatcher.receivedResolvedTs.Load()
 		if resolvedTs < snapshot.receivedMinResolvedTs {
 			snapshot.receivedMinResolvedTs = resolvedTs
 		}
@@ -194,7 +184,18 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		if snapshot.slowestDispatcher == nil || snapshot.slowestDispatcher.sentResolvedTs.Load() < watermark {
 			snapshot.slowestDispatcher = dispatcher
 		}
+	}
 
+	mc.broker.dispatchers.Range(func(key, value any) bool {
+		snapshot.dispatcherCount++
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		collect(dispatcher)
+		return true
+	})
+	mc.broker.tableTriggerDispatchers.Range(func(key, value any) bool {
+		snapshot.dispatcherCount++
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		collect(dispatcher)
 		return true
 	})
 }
@@ -219,8 +220,6 @@ func (mc *metricsCollector) updateMetricsFromSnapshot(snapshot *metricsSnapshot)
 	metricEventBrokerPendingScanTaskCount.Set(float64(snapshot.pendingTaskCount))
 
 	// Update dispatcher status metrics
-	metrics.EventServiceDispatcherStatusCount.WithLabelValues("running").Set(float64(snapshot.runningDispatcherCount))
-	metrics.EventServiceDispatcherStatusCount.WithLabelValues("paused").Set(float64(snapshot.pausedDispatcherCount))
 	metrics.EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(snapshot.dispatcherCount))
 }
 
@@ -238,13 +237,13 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 	log.Warn("slowest dispatcher",
 		zap.Stringer("dispatcherID", snapshot.slowestDispatcher.id),
 		zap.Uint64("sentResolvedTs", snapshot.slowestDispatcher.sentResolvedTs.Load()),
-		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.eventStoreResolvedTs.Load()),
+		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.receivedResolvedTs.Load()),
 		zap.Duration("lag", lag),
 		zap.Duration("updateDiff",
-			time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())-
-				time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())),
-		zap.Bool("isPaused", !snapshot.slowestDispatcher.IsReadyRecevingData()),
-		zap.Bool("isHandshaked", snapshot.slowestDispatcher.isHandshaked.Load()),
+			time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())-
+				time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())),
+		zap.Uint64("epoch", snapshot.slowestDispatcher.epoch),
+		zap.Uint64("seq", snapshot.slowestDispatcher.seq.Load()),
 		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
 	)
 }

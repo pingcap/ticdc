@@ -158,14 +158,14 @@ func buildInsert(
 
 // prepareDelete builds a parametric DELETE statement as following
 // sql: `DELETE FROM `test`.`t` WHERE x = ? AND y >= ? LIMIT 1`
-func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange, forceReplicate bool) (string, []interface{}) {
+func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange) (string, []interface{}) {
 	var builder strings.Builder
 	quoteTable := tableInfo.TableName.QuoteString()
 	builder.WriteString("DELETE FROM ")
 	builder.WriteString(quoteTable)
 	builder.WriteString(" WHERE ")
 
-	colNames, whereArgs := whereSlice(&row.PreRow, tableInfo, forceReplicate)
+	colNames, whereArgs := whereSlice(&row.PreRow, tableInfo)
 	if len(whereArgs) == 0 {
 		return "", nil
 	}
@@ -188,7 +188,7 @@ func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 	return sql, args
 }
 
-func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceReplicate bool) (string, []interface{}) {
+func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string, []interface{}) {
 	var builder strings.Builder
 	if tableInfo.GetPreUpdateSQL() == "" {
 		log.Panic("PreUpdateSQL should not be empty")
@@ -200,7 +200,7 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 		return "", nil
 	}
 
-	whereColNames, whereArgs := whereSlice(&row.PreRow, tableInfo, forceReplicate)
+	whereColNames, whereArgs := whereSlice(&row.PreRow, tableInfo)
 	if len(whereArgs) == 0 {
 		return "", nil
 	}
@@ -250,7 +250,7 @@ func getArgsWithGeneratedColumn(row *chunk.Row, tableInfo *common.TableInfo) []i
 }
 
 // whereSlice returns the column names and values for the WHERE clause
-func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool) ([]string, []interface{}) {
+func whereSlice(row *chunk.Row, tableInfo *common.TableInfo) ([]string, []interface{}) {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	colNames := make([]string, 0, len(tableInfo.GetColumns()))
 	// Try to use unique key values when available
@@ -263,8 +263,8 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool
 		args = append(args, v)
 	}
 
-	// if no explicit row id but force replicate, use all key-values in where condition
-	if len(colNames) == 0 && forceReplicate {
+	// if no explicit row id, use all key-values in where condition
+	if len(colNames) == 0 {
 		for i, col := range tableInfo.GetColumns() {
 			colNames = append(colNames, col.Name.O)
 			v := common.ExtractColVal(row, col, i)

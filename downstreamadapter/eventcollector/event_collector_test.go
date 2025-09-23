@@ -131,7 +131,7 @@ func TestProcessMessage(t *testing.T) {
 	}()
 
 	var seq atomic.Uint64
-	seq.Store(0)
+	seq.Store(1) // handshake event has seq 1
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
@@ -146,10 +146,9 @@ func TestProcessMessage(t *testing.T) {
 	require.NotNil(t, dmls)
 
 	readyEvent := commonEvent.NewReadyEvent(did)
-	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, 1, ddl.TableInfo)
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
-	handshakeEvent.Seq = seq.Add(1)
 	ddl.Seq = seq.Add(1)
 	ddl.Epoch = 1
 	events[ddl.Seq] = ddl

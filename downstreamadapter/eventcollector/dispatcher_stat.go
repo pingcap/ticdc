@@ -202,34 +202,6 @@ func (d *dispatcherStat) removeFrom(serverID node.ID) {
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
-func (d *dispatcherStat) pause() {
-	// Just ignore the request if the dispatcher is not ready.
-	if !d.connState.isReceivingDataEvent() {
-		log.Info("ignore pause dispatcher request because the eventService is not ready",
-			zap.Stringer("dispatcherID", d.getDispatcherID()),
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
-		)
-		return
-	}
-	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherPauseRequest(d.eventCollector.getLocalServerID().String()))
-	d.eventCollector.enqueueMessageForSend(msg)
-}
-
-func (d *dispatcherStat) resume() {
-	// Just ignore the request if the dispatcher is not ready.
-	if !d.connState.isReceivingDataEvent() {
-		log.Info("ignore resume dispatcher request because the eventService is not ready",
-			zap.Stringer("dispatcherID", d.getDispatcherID()),
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
-		)
-		return
-	}
-	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherResumeRequest(d.eventCollector.getLocalServerID().String()))
-	d.eventCollector.enqueueMessageForSend(msg)
-}
-
 func (d *dispatcherStat) wake() {
 	if common.IsRedoMode(d.target.GetMode()) {
 		d.eventCollector.redoDs.Wake(d.getDispatcherID())
@@ -704,34 +676,6 @@ func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.
 			// ServerId is the id of the request sender.
 			ServerId:   serverId,
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-			Mode:       d.target.GetMode(),
-		},
-	}
-}
-
-func (d *dispatcherStat) newDispatcherPauseRequest(serverId string) *messaging.DispatcherRequest {
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			// ServerId is the id of the request sender.
-			ServerId:   serverId,
-			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
-			Mode:       d.target.GetMode(),
-		},
-	}
-}
-
-func (d *dispatcherStat) newDispatcherResumeRequest(serverId string) *messaging.DispatcherRequest {
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			// ServerId is the id of the request sender.
-			ServerId:   serverId,
-			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
 			Mode:       d.target.GetMode(),
 		},
 	}

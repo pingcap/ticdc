@@ -222,6 +222,7 @@ TestLoop:
 				synced = true
 			}
 		}
+		time.Sleep(1 * time.Second)
 	}
 
 	// clean up

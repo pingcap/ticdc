@@ -67,7 +67,7 @@ var (
 )
 
 // InitMetrics registers all metrics used in owner
-func InitMessagingMetrics(registry *prometheus.Registry) {
+func initMessagingMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MessagingSendMsgCounter)
 	registry.MustRegister(MessagingReceiveMsgCounter)
 	registry.MustRegister(MessagingDropMsgCounter)

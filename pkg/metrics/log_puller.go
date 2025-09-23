@@ -78,7 +78,7 @@ var (
 		})
 )
 
-func InitLogPullerMetrics(registry *prometheus.Registry) {
+func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)

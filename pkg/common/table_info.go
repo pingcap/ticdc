@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -84,6 +85,9 @@ type TableInfo struct {
 	Comment   string    `json:"comment"`
 
 	columnSchema *columnSchema `json:"-"`
+	// HasPKOrNotNullUK indicates whether the table has a primary key or a not-null unique key.
+	// If you want to check whether the table is eligible, please use the IsEligible method.
+	HasPKOrNotNullUK bool `json:"has-pk-or-not-null-uk"`
 
 	View *model.ViewInfo `json:"view"`
 
@@ -356,7 +360,56 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 	if ti.IsView() {
 		return true
 	}
-	return len(ti.columnSchema.HandleKeyIDs) != 0
+	return ti.HasPKOrNotNullUK
+}
+
+func originalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
+	// If the table has primary key, it is eligible.
+	// the PKIsHandle can not handle all primary key cases, for example:
+	// CREATE TABLE t (a int, b int, primary key(a, b));
+	// In this case, PKIsHandle is false, but the table has primary key.
+	// So we need to check the primary key index.
+	if tableInfo.PKIsHandle {
+		return tableInfo.GetPkColInfo() != nil
+	}
+
+	// If the table has unique key on not null columns, it is eligible.
+	for _, idx := range tableInfo.Indices {
+		// If the primary key is clustered, it will be stored in the index info.
+		if idx.Primary {
+			return true
+		}
+		if len(idx.Columns) == 0 {
+			continue
+		}
+		if idx.Unique {
+			// ensure all columns in unique key have NOT NULL flag
+			allColNotNull := true
+			skip := false
+			for _, idxCol := range idx.Columns {
+				col := tableInfo.Columns[idxCol.Offset]
+				// This index has a column in DeleteOnly state,
+				// or it is expression index (it defined on a hidden column),
+				// it can not be implicit PK, go to next index iterator
+				if col == nil || col.Hidden {
+					skip = true
+					break
+				}
+				if !mysql.HasNotNullFlag(col.GetFlag()) {
+					allColNotNull = false
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+			if allColNotNull {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // GetIndex return the corresponding index by the given name.
@@ -476,13 +529,14 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 			TableID:     tableID,
 			IsPartition: isPartition,
 		},
-		columnSchema: columnSchema,
-		View:         tableInfo.View,
-		Sequence:     tableInfo.Sequence,
-		Charset:      tableInfo.Charset,
-		Collate:      tableInfo.Collate,
-		Comment:      tableInfo.Comment,
-		UpdateTS:     tableInfo.UpdateTS,
+		columnSchema:     columnSchema,
+		HasPKOrNotNullUK: originalHasPKOrNotNullUK(tableInfo),
+		View:             tableInfo.View,
+		Sequence:         tableInfo.Sequence,
+		Charset:          tableInfo.Charset,
+		Collate:          tableInfo.Collate,
+		Comment:          tableInfo.Comment,
+		UpdateTS:         tableInfo.UpdateTS,
 	}
 }
 

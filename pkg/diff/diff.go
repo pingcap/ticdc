@@ -177,7 +177,7 @@ func (t *TableDiff) CheckTableStruct(ctx context.Context) (bool, error) {
 	for _, sourceTable := range t.SourceTables {
 		eq, msg := equalTableInfo(sourceTable.info, t.TargetTable.info)
 		if !eq {
-			log.Warn("table struct is not equal", zap.String("reason", msg))
+			log.Warn("table struct is not equal", zap.String("reason", msg), zap.Any("source", sourceTable.info), zap.Any("target", t.TargetTable.info))
 			return false, nil
 		}
 		log.Info("table struct is equal", zap.Reflect("source", sourceTable.info), zap.Reflect("target", t.TargetTable.info))

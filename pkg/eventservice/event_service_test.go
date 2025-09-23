@@ -122,6 +122,7 @@ func TestEventServiceBasic(t *testing.T) {
 				// 1. When a Dispatcher is register, it will send a ReadyEvent to the eventCollector.
 				// 2. The eventCollector will send a reset request to the eventService.
 				// 3. We are here to simulate the reset request.
+				dispatcherInfo.epoch = 1
 				esImpl.resetDispatcher(dispatcherInfo)
 				_ = mockStore.AppendEvents(dispatcherInfo.id, resolvedTs+1)
 			case *commonEvent.HandshakeEvent:
@@ -428,6 +429,7 @@ type mockDispatcherInfo struct {
 	integrity         *integrity.Config
 	tz                *time.Location
 	mode              int64
+	epoch             uint64
 	enableSyncPoint   bool
 	nextSyncPoint     uint64
 	syncPointInterval time.Duration
@@ -532,7 +534,7 @@ func (m *mockDispatcherInfo) GetMode() int64 {
 }
 
 func (m *mockDispatcherInfo) GetEpoch() uint64 {
-	return 0
+	return m.epoch
 }
 
 func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {

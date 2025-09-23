@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
@@ -105,6 +106,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()
+	metrics.RecordGoRuntimeSettings()
 	svr, err := server.New(o.serverConfig, o.pdEndpoints)
 	if err != nil {
 		log.Error("create cdc server failed", zap.Error(err))

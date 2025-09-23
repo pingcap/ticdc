@@ -33,8 +33,6 @@ const (
 // If a period of time has no other dml and ddl, commitTsList may contains multiple commit ts in order.
 // Otherwise, the commitTsList only contains one commit ts.
 type SyncPointEvent struct {
-	// State is the state of sender when sending this event.
-	State        EventSenderState
 	DispatcherID common.DispatcherID
 	CommitTsList []uint64
 	// The seq of the event. It is set by event service.
@@ -76,12 +74,12 @@ func (e *SyncPointEvent) GetStartTs() common.Ts {
 }
 
 func (e *SyncPointEvent) GetSize() int64 {
-	// Version(1) + Seq(8) + Epoch(8) + State(1) + DispatcherID(16) + len(CommitTsList) + 8 * len(CommitTsList)
-	return 1 + 8*2 + int64(e.State.GetSize()+e.DispatcherID.GetSize()+4+8*len(e.CommitTsList))
+	// Version(1) + Seq(8) + Epoch(8) + DispatcherID(16) + len(CommitTsList) + 8 * len(CommitTsList)
+	return 1 + 8*2 + int64(e.DispatcherID.GetSize()+4+8*len(e.CommitTsList))
 }
 
 func (e *SyncPointEvent) IsPaused() bool {
-	return e.State.IsPaused()
+	return false
 }
 
 func (e SyncPointEvent) GetSeq() uint64 {
@@ -174,8 +172,6 @@ func (e SyncPointEvent) encodeV0() ([]byte, error) {
 		binary.BigEndian.PutUint64(data[offset:], ts)
 		offset += 8
 	}
-	copy(data[offset:], e.State.encode())
-	offset += e.State.GetSize()
 	copy(data[offset:], e.DispatcherID.Marshal())
 	offset += e.DispatcherID.GetSize()
 	return data, nil
@@ -194,7 +190,5 @@ func (e *SyncPointEvent) decodeV0(data []byte) error {
 		e.CommitTsList[i] = binary.BigEndian.Uint64(data[offset:])
 		offset += 8
 	}
-	e.State.decode(data[offset:])
-	offset += e.State.GetSize()
 	return e.DispatcherID.Unmarshal(data[offset:])
 }

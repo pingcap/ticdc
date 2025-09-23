@@ -20,7 +20,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -29,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -174,9 +174,14 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	scheme := sinkURIParsed.Scheme
-	topic := strings.TrimFunc(sinkURIParsed.Path, func(r rune) bool {
-		return r == '/'
-	})
+	topic := ""
+	if config.IsMQScheme(scheme) {
+		topic, err = helper.GetTopic(sinkURIParsed)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+			return
+		}
+	}
 	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
 
 	kvStorage, err := keyspaceManager.GetStorage(keyspaceName)
@@ -319,9 +324,71 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 }
 
 // VerifyTable verify table, return ineligibleTables and EligibleTables.
-// FIXME: this is a dummy implementation, we need to implement it in the future
 func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
-	tables := &Tables{}
+	ctx := c.Request.Context()
+	cfg := &ChangefeedConfig{ReplicaConfig: GetDefaultReplicaConfig()}
+
+	if err := c.BindJSON(&cfg); err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+		return
+	}
+
+	// fill replicaConfig
+	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+
+	// verify replicaConfig
+	sinkURIParsed, err := url.Parse(cfg.SinkURI)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		return
+	}
+	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
+		return
+	}
+
+	scheme := sinkURIParsed.Scheme
+	topic := ""
+	if config.IsMQScheme(scheme) {
+		topic, err = helper.GetTopic(sinkURIParsed)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+			return
+		}
+	}
+	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
+
+	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceName := GetKeyspaceValueWithDefault(c)
+	kvStorage, err := keyspaceManager.GetStorage(keyspaceName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	ineligibleTables, eligibleTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	log.Info("verify table",
+		zap.Bool("forceReplicate", replicaCfg.ForceReplicate),
+		zap.Bool("ignoreIneligibleTable", cfg.ReplicaConfig.IgnoreIneligibleTable),
+	)
+
+	toAPIModelFunc := func(tbls []string) []TableName {
+		var apiModels []TableName
+		for _, tbl := range tbls {
+			apiModels = append(apiModels, TableName{
+				Table: tbl,
+			})
+		}
+		return apiModels
+	}
+	tables := &Tables{
+		IneligibleTables: toAPIModelFunc(ineligibleTables),
+		EligibleTables:   toAPIModelFunc(eligibleTables),
+	}
 	c.JSON(http.StatusOK, tables)
 }
 
@@ -636,6 +703,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
+	var configUpdated, sinkURIUpdated bool
 	if updateCfConfig.TargetTs != 0 {
 		if updateCfConfig.TargetTs <= oldCfInfo.StartTs {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStack(
@@ -646,51 +714,61 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		oldCfInfo.TargetTs = updateCfConfig.TargetTs
 	}
 	if updateCfConfig.ReplicaConfig != nil {
+		configUpdated = true
 		oldCfInfo.Config = updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
 	}
 	if updateCfConfig.SinkURI != "" {
+		sinkURIUpdated = true
 		oldCfInfo.SinkURI = updateCfConfig.SinkURI
 	}
 	if updateCfConfig.StartTs != 0 {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("start_ts can not be updated"))
 		return
 	}
-	// verify replicaConfig
-	sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
-	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
-		return
-	}
-	err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
-	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
-		return
-	}
 
-	scheme := sinkURIParsed.Scheme
-	topic := strings.TrimFunc(sinkURIParsed.Path, func(r rune) bool {
-		return r == '/'
-	})
-	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(oldCfInfo.Config.Sink.Protocol))
-
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
-
-	kvStorage, err := keyspaceManager.GetStorage(keyspaceName)
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
-
-	// use checkpointTs get snapshot from kv storage
-	ineligibleTables, _, err := getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
-	if err != nil {
-		_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
-		return
-	}
-	if !oldCfInfo.Config.ForceReplicate && !oldCfInfo.Config.IgnoreIneligibleTable {
-		if len(ineligibleTables) != 0 {
-			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+	if configUpdated || sinkURIUpdated {
+		// verify replicaConfig
+		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 			return
+		}
+		err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
+			return
+		}
+
+		scheme := sinkURIParsed.Scheme
+		topic := ""
+		if config.IsMQScheme(scheme) {
+			topic, err = helper.GetTopic(sinkURIParsed)
+			if err != nil {
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+				return
+			}
+		}
+		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(oldCfInfo.Config.Sink.Protocol))
+
+		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+
+		kvStorage, err := keyspaceManager.GetStorage(keyspaceName)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		// use checkpointTs get snapshot from kv storage
+		ineligibleTables, _, err := getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
+		if err != nil {
+			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
+			return
+		}
+		if !oldCfInfo.Config.ForceReplicate && !oldCfInfo.Config.IgnoreIneligibleTable {
+			if len(ineligibleTables) != 0 {
+				_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+				return
+			}
 		}
 	}
 
@@ -1270,6 +1348,9 @@ func getVerifiedTables(
 	if err != nil {
 		return nil, nil, err
 	}
+	log.Info("verifyTables completed",
+		zap.Int("tableCount", len(tableInfos)),
+		zap.Uint64("startTs", startTs))
 
 	err = f.Verify(tableInfos)
 	if err != nil {

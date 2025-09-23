@@ -207,7 +207,7 @@ func TestBuildDelete(t *testing.T) {
 	expectedSQL := "DELETE FROM `test`.`t` WHERE `id` = ? LIMIT 1"
 	expectedArgs := []interface{}{int64(1)}
 
-	sql, args := buildDelete(event.TableInfo, row, true)
+	sql, args := buildDelete(event.TableInfo, row)
 	require.Equal(t, expectedSQL, sql)
 	require.Len(t, args, 1)
 	require.Equal(t, expectedArgs, args)
@@ -228,7 +228,7 @@ func TestBuildDelete(t *testing.T) {
 	expectedSQL = "DELETE FROM `test`.`t2` WHERE `id` = ? LIMIT 1"
 	expectedArgs = []interface{}{int64(1)}
 
-	sql, args = buildDelete(event.TableInfo, row, true)
+	sql, args = buildDelete(event.TableInfo, row)
 	require.Equal(t, expectedSQL, sql)
 	require.Len(t, args, 1)
 	require.Equal(t, expectedArgs, args)
@@ -250,7 +250,7 @@ func TestBuildDelete(t *testing.T) {
 	expectedSQL = "DELETE FROM `test`.`t3` WHERE `id` = ? AND `name` = ? LIMIT 1"
 	expectedArgs = []interface{}{int64(1), "test"}
 
-	sql, args = buildDelete(event.TableInfo, row, true)
+	sql, args = buildDelete(event.TableInfo, row)
 	require.Equal(t, expectedSQL, sql)
 	require.Len(t, args, 2)
 	require.Equal(t, expectedArgs, args)
@@ -272,7 +272,7 @@ func TestBuildDelete(t *testing.T) {
 	expectedSQL = "DELETE FROM `test`.`t4` WHERE `name` = ? AND `age` = ? LIMIT 1"
 	expectedArgs = []interface{}{"test", int64(20)}
 
-	sql, args = buildDelete(event.TableInfo, row, true)
+	sql, args = buildDelete(event.TableInfo, row)
 	require.Equal(t, expectedSQL, sql)
 	require.Len(t, args, 2)
 	require.Equal(t, expectedArgs, args)
@@ -294,7 +294,7 @@ func TestBuildDelete(t *testing.T) {
 	expectedSQL = "DELETE FROM `test`.`t5` WHERE `id` = ? AND `name` = ? AND `age` = ? LIMIT 1"
 	expectedArgs = []interface{}{int64(1), "test", int64(20)}
 
-	sql, args = buildDelete(event.TableInfo, row, true)
+	sql, args = buildDelete(event.TableInfo, row)
 	require.Equal(t, expectedSQL, sql)
 	require.Len(t, args, 3)
 	require.Equal(t, expectedArgs, args)
@@ -329,7 +329,7 @@ func TestBuildUpdate(t *testing.T) {
 
 	expectedSQL := "UPDATE `test`.`t` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1"
 	expectedArgs := []interface{}{int64(1), "test2", int64(1)}
-	sql, args := buildUpdate(event.TableInfo, row, true)
+	sql, args := buildUpdate(event.TableInfo, row)
 	require.Equal(t, expectedSQL, sql)
 	require.Len(t, args, 3)
 	require.Equal(t, expectedArgs, args)
@@ -357,7 +357,7 @@ func TestBuildUpdate(t *testing.T) {
 
 	expectedSQL = "UPDATE `test`.`t2` SET `id` = ?,`name` = ?,`age` = ? WHERE `name` = ? AND `age` = ? LIMIT 1"
 	expectedArgs = []interface{}{int64(1), "test2", int64(20), "test", int64(20)}
-	sql, args = buildUpdate(event.TableInfo, row, true)
+	sql, args = buildUpdate(event.TableInfo, row)
 	require.Equal(t, expectedSQL, sql)
 	require.Len(t, args, 5)
 	require.Equal(t, expectedArgs, args)

@@ -649,7 +649,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 
 			if event.GetNeedAddedTables() != nil {
 				// When the ddl need add tables, we need the maintainer to block the forwarding of checkpointTs
-				// Because the the new add table should join the calculation of checkpointTs
+				// Because the new add table should join the calculation of checkpointTs
 				// So the forwarding of checkpointTs should be blocked until the new dispatcher is created.
 				// While there is a time gap between dispatcher send the block status and
 				// maintainer begin to create dispatcher(and block the forwaring checkpoint)

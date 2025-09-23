@@ -50,6 +50,7 @@ func newMockEvent(id int, path string, sleep time.Duration, work mockWork, start
 }
 
 type mockHandler struct {
+	mu            sync.Mutex
 	droppedEvents []*mockEvent
 }
 
@@ -74,7 +75,6 @@ func (h *mockHandler) Handle(dest any, events ...*mockEvent) (await bool) {
 	if event.done != nil {
 		event.done.Done()
 	}
-
 	return false
 }
 
@@ -84,11 +84,15 @@ func (h *mockHandler) GetTimestamp(event *mockEvent) Timestamp { return 0 }
 func (h *mockHandler) GetType(event *mockEvent) EventType      { return DefaultEventType }
 func (h *mockHandler) IsPaused(event *mockEvent) bool          { return false }
 func (h *mockHandler) OnDrop(event *mockEvent) interface{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.droppedEvents = append(h.droppedEvents, event)
 	return nil
 }
 
 func (h *mockHandler) drainDroppedEvents() []*mockEvent {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	events := h.droppedEvents
 	h.droppedEvents = nil
 	return events
@@ -138,7 +142,7 @@ func TestStreamBasic(t *testing.T) {
 	}
 
 	// Send event to stream
-	stream.in() <- newEvent(1)
+	stream.addEvent(newEvent(1))
 
 	notify.Wait()
 	// Verify event was processed
@@ -146,8 +150,8 @@ func TestStreamBasic(t *testing.T) {
 	require.Equal(t, 0, stream.getPendingSize())
 
 	// Test multiple events
-	stream.in() <- newEvent(2)
-	stream.in() <- newEvent(3)
+	stream.addEvent(newEvent(2))
+	stream.addEvent(newEvent(3))
 
 	notify.Wait()
 	// Verify all events were processed
@@ -177,7 +181,7 @@ func TestStreamBasicWithBuffer(t *testing.T) {
 	}
 
 	// Send event to stream
-	stream.in() <- newEvent(1)
+	stream.addEvent(newEvent(1))
 
 	notify.Wait()
 	// Verify event was processed
@@ -185,8 +189,8 @@ func TestStreamBasicWithBuffer(t *testing.T) {
 	require.Equal(t, 0, stream.getPendingSize())
 
 	// Test multiple events
-	stream.in() <- newEvent(2)
-	stream.in() <- newEvent(3)
+	stream.addEvent(newEvent(2))
+	stream.addEvent(newEvent(3))
 
 	notify.Wait()
 	// Verify all events were processed

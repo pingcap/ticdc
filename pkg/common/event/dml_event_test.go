@@ -87,7 +87,6 @@ func TestBatchDMLEvent(t *testing.T) {
 	require.NotNil(t, ddlJob)
 
 	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
-	dmlEvent.State = EventSenderStatePaused
 	require.NotNil(t, dmlEvent)
 
 	batchDMLEvent := &BatchDMLEvent{
@@ -113,7 +112,7 @@ func TestBatchDMLEvent(t *testing.T) {
 		}
 	}
 
-	require.True(t, reverseEvent.IsPaused())
+	require.False(t, reverseEvent.IsPaused())
 
 	// Compare the remaining content of the two events.
 	require.Equal(t, dmlEvent.TableInfo.GetFieldSlice(), reverseEvent.TableInfo.GetFieldSlice())

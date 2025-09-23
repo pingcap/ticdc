@@ -670,7 +670,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				zap.Any("dispatcherID", dispatcherID),
 				zap.Uint64("subscriptionID", uint64(subStat.subID)),
 				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
+				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
 		}
 	}
 	updateSubStatCheckpoint(dispatcherStat.subStat)
