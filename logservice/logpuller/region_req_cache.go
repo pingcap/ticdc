@@ -25,10 +25,11 @@ import (
 )
 
 const (
-	checkStaleRequestInterval = time.Second * 10
-	requestGCLifeTime         = time.Minute * 120
-	addReqRetryInterval       = time.Millisecond * 1
-	addReqRetryLimit          = 3
+	checkStaleRequestInterval    = time.Second * 10
+	requestGCLifeTime            = time.Minute * 180
+	addReqRetryInterval          = time.Millisecond * 1
+	addReqRetryLimit             = 3
+	abnormalRequestDurationInSec = 60 * 60 * 2 // 2 hours
 )
 
 // regionReq represents a wrapped region request with state
@@ -202,7 +203,7 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 		delete(regionReqs, regionID)
 		c.decPendingCount()
 		cost := time.Since(req.createTime).Seconds()
-		if cost > 0 && cost < 7200.0 {
+		if cost > 0 && cost < abnormalRequestDurationInSec {
 			log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 			metrics.RegionRequestFinishScanDuration.Observe(cost)
 		} else {
