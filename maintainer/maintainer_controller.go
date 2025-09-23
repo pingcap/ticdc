@@ -102,10 +102,10 @@ func NewController(changefeedID common.ChangeFeedID,
 	)
 	if enableRedo {
 		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, keyspaceID, common.RedoMode)
-		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize)
+		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize, common.RedoMode)
 	}
 	// Create operator controller using spanController
-	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
+	oc := operator.NewOperatorController(changefeedID, spanController, batchSize, common.DefaultMode)
 
 	sc := NewScheduleController(
 		changefeedID, batchSize, oc, redoOC, spanController, redoSpanController, balanceInterval, splitter, schedulerCfg,

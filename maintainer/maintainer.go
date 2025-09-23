@@ -394,10 +394,14 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
 	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
 	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.SpanCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.TableCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+
+	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name(), "default")
+	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name(), "redo")
+	metrics.SpanCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name(), "default")
+	metrics.SpanCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name(), "redo")
+	metrics.TableCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name(), "default")
+	metrics.TableCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name(), "redo")
 }
 
 func (m *Maintainer) onInit() bool {
