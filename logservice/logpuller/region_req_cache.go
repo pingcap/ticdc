@@ -243,7 +243,6 @@ func (c *requestCache) clearStaleRequest() {
 					zap.Int("pendingQueueLen", len(c.pendingQueue)),
 					zap.Bool("isRegionStopped", regionReq.regionInfo.isStopped()),
 					zap.Bool("isSubscribedSpanStopped", regionReq.regionInfo.subscribedSpan.stopped.Load()),
-					zap.Bool("isInitialized", regionReq.regionInfo.lockedRangeState.Initialized.Load()),
 					zap.Bool("isStale", regionReq.isStale()),
 					zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
