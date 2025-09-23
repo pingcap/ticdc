@@ -39,7 +39,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -67,6 +66,7 @@ type Subscriber struct {
 type EventStore interface {
 	common.SubModule
 
+	// Note: changefeedID is just a tag for dispatcher, avoid abuse it
 	RegisterDispatcher(
 		changefeedID common.ChangeFeedID,
 		dispatcherID common.DispatcherID,
@@ -172,21 +172,9 @@ type subscriptionStat struct {
 
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
-type dispatcherHeapItem struct {
-	stat      *dispatcherStat
-	heapIndex int
-}
-
-func (d *dispatcherHeapItem) SetHeapIndex(index int) { d.heapIndex = index }
-func (d *dispatcherHeapItem) GetHeapIndex() int      { return d.heapIndex }
-func (d *dispatcherHeapItem) LessThan(other *dispatcherHeapItem) bool {
-	return d.stat.resolvedTs.Load() < other.stat.resolvedTs.Load()
-}
-
 type changefeedStat struct {
-	mutex      sync.Mutex
-	heap       *heap.Heap[*dispatcherHeapItem]
-	dispatcher map[common.DispatcherID]*dispatcherHeapItem
+	mutex       sync.Mutex
+	dispatchers map[common.DispatcherID]*dispatcherStat
 }
 
 type eventWithCallback struct {
@@ -450,33 +438,23 @@ func (e *eventStore) RegisterDispatcher(
 	}
 	stat.resolvedTs.Store(startTs)
 
-	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
-		util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs)
-		notifier(resolvedTs, latestCommitTs)
-	}
-	// Optimized "get or create" pattern for sync.Map to avoid unnecessary allocations.
-	// 1. Fast path: Try to load the existing changefeedStat to avoid allocation.
 	var cfStat *changefeedStat
 	if actual, ok := e.changefeedMeta.Load(changefeedID); ok {
 		cfStat = actual.(*changefeedStat)
 	} else {
-		// 2. Slow path: If it doesn't exist, create a new one and use LoadOrStore
-		// to atomically add it, preventing race conditions.
-		newCfStat := &changefeedStat{
-			heap:       heap.NewHeap[*dispatcherHeapItem](),
-			dispatcher: make(map[common.DispatcherID]*dispatcherHeapItem),
-		}
+		newCfStat := &changefeedStat{dispatchers: make(map[common.DispatcherID]*dispatcherStat)}
 		actual, _ := e.changefeedMeta.LoadOrStore(changefeedID, newCfStat)
 		cfStat = actual.(*changefeedStat)
 	}
 
 	cfStat.mutex.Lock()
-	item := &dispatcherHeapItem{
-		stat: stat,
-	}
-	cfStat.heap.AddOrUpdate(item)
-	cfStat.dispatcher[dispatcherID] = item
+	cfStat.dispatchers[dispatcherID] = stat
 	cfStat.mutex.Unlock()
+
+	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
+		util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs)
+		notifier(resolvedTs, latestCommitTs)
+	}
 
 	e.dispatcherMeta.Lock()
 	var bestMatch *subscriptionStat
@@ -674,14 +652,12 @@ func (e *eventStore) removeDispatcherFromChangefeedStat(changefeedID common.Chan
 	if v, ok := e.changefeedMeta.Load(changefeedID); ok {
 		cfStat := v.(*changefeedStat)
 		cfStat.mutex.Lock()
-		defer cfStat.mutex.Unlock()
-		if itemToRemove, ok := cfStat.dispatcher[dispatcherID]; ok {
-			cfStat.heap.Remove(itemToRemove)
-			delete(cfStat.dispatcher, dispatcherID)
-		}
+		delete(cfStat.dispatchers, dispatcherID)
+		isEmpty := len(cfStat.dispatchers) == 0
+		cfStat.mutex.Unlock()
 
 		// If the changefeed has no more dispatchers, remove the changefeed stat.
-		if cfStat.heap.IsEmpty() {
+		if isEmpty {
 			e.changefeedMeta.Delete(changefeedID)
 			log.Info("changefeed stat is empty, removed it", zap.Stringer("changefeedID", changefeedID))
 		}
@@ -1058,14 +1034,26 @@ func (e *eventStore) updateMetricsOnce() {
 		changefeedID := key.(common.ChangeFeedID)
 		cfStat := value.(*changefeedStat)
 
+		// By taking the lock here, we ensure that the set of dispatchers for this
+		// changefeed does not change while we calculate the minimum resolved ts.
+		// The `advanceResolvedTs` function updates individual dispatcher's resolvedTs
+		// atomically, so it does not conflict with this read lock.
 		cfStat.mutex.Lock()
-		top, ok := cfStat.heap.PeekTop()
+		minResolvedTs := uint64(math.MaxUint64)
+		found := false
+		for _, dStat := range cfStat.dispatchers {
+			ts := dStat.resolvedTs.Load()
+			if ts < minResolvedTs {
+				minResolvedTs = ts
+			}
+			found = true
+		}
 		cfStat.mutex.Unlock()
 
-		if ok {
+		if found {
 			cfStates.States = append(cfStates.States, &logservicepb.ChangefeedStateEntry{
 				ChangefeedID: changefeedID.ToPB(),
-				ResolvedTs:   top.stat.resolvedTs.Load(),
+				ResolvedTs:   minResolvedTs,
 			})
 		}
 		return true
