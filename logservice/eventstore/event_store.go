@@ -362,7 +362,7 @@ func (e *eventStore) Run(ctx context.Context) error {
 	})
 
 	eg.Go(func() error {
-		return e.updateMetrics(ctx)
+		return e.runMetricsCollector(ctx)
 	})
 
 	eg.Go(func() error {
@@ -958,22 +958,22 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 	}
 }
 
-func (e *eventStore) updateMetrics(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Second)
-	uploadTicker := time.NewTicker(1 * time.Second)
+func (e *eventStore) runMetricsCollector(ctx context.Context) error {
+	storeMetricsTicker := time.NewTicker(10 * time.Second)
+	changefeedMetricsTicker := time.NewTicker(1 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
-			e.updateMetricsOnce()
-		case <-uploadTicker.C:
-			e.uploadChangefeedMetricsOnce()
+		case <-storeMetricsTicker.C:
+			e.collectAndReportStoreMetrics()
+		case <-changefeedMetricsTicker.C:
+			e.collectAndReportChangefeedMetrics()
 		}
 	}
 }
 
-func (e *eventStore) updateMetricsOnce() {
+func (e *eventStore) collectAndReportStoreMetrics() {
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)
@@ -985,20 +985,20 @@ func (e *eventStore) updateMetricsOnce() {
 		metrics.EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
 	}
 
-	pdTime := e.pdClock.CurrentTime()
-	pdPhyTs := oracle.GetPhysical(pdTime)
-	minResolvedTs := uint64(0)
+	pdCurrentTime := e.pdClock.CurrentTime()
+	pdPhysicalTime := oracle.GetPhysical(pdCurrentTime)
+	globalMinResolvedTs := uint64(0)
 	uninitializedStatCount := 0
 	e.dispatcherMeta.RLock()
 	for _, subStats := range e.dispatcherMeta.tableStats {
 		for _, subStat := range subStats {
 			// resolved ts lag
-			resolvedTs := subStat.resolvedTs.Load()
-			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
-			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
+			subResolvedTs := subStat.resolvedTs.Load()
+			subResolvedPhysicalTime := oracle.ExtractPhysical(subResolvedTs)
+			subResolvedTsLagInSec := float64(pdPhysicalTime-subResolvedPhysicalTime) / 1e3
 			const largeResolvedTsLagInSecs = 30
 			if subStat.initialized.Load() {
-				if resolvedLag >= largeResolvedTsLagInSecs {
+				if subResolvedTsLagInSec >= largeResolvedTsLagInSecs {
 					lastReceiveDMLTimeRepr := "never"
 					if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
 						lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
@@ -1006,8 +1006,8 @@ func (e *eventStore) updateMetricsOnce() {
 					log.Warn("resolved ts lag is too large for initialized subscription",
 						zap.Uint64("subID", uint64(subStat.subID)),
 						zap.Int64("tableID", subStat.tableSpan.TableID),
-						zap.Uint64("resolvedTs", resolvedTs),
-						zap.Float64("resolvedLag(s)", resolvedLag),
+						zap.Uint64("resolvedTs", subResolvedTs),
+						zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
 						zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
 						zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
 						zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
@@ -1017,33 +1017,33 @@ func (e *eventStore) updateMetricsOnce() {
 			} else {
 				uninitializedStatCount++
 			}
-			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
-			if minResolvedTs == 0 || resolvedTs < minResolvedTs {
-				minResolvedTs = resolvedTs
+			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(subResolvedTsLagInSec)
+			if globalMinResolvedTs == 0 || subResolvedTs < globalMinResolvedTs {
+				globalMinResolvedTs = subResolvedTs
 			}
 			// checkpoint ts lag
-			checkpointTs := subStat.checkpointTs.Load()
-			watermarkPhyTs := oracle.ExtractPhysical(checkpointTs)
-			watermarkLag := float64(pdPhyTs-watermarkPhyTs) / 1e3
-			metrics.EventStoreDispatcherWatermarkLagHist.Observe(float64(watermarkLag))
+			subCheckpointTs := subStat.checkpointTs.Load()
+			subCheckpointPhysicalTime := oracle.ExtractPhysical(subCheckpointTs)
+			subCheckpointTsLagInSec := float64(pdPhysicalTime-subCheckpointPhysicalTime) / 1e3
+			metrics.EventStoreDispatcherWatermarkLagHist.Observe(subCheckpointTsLagInSec)
 		}
 	}
 	e.dispatcherMeta.RUnlock()
 	if uninitializedStatCount > 0 {
 		log.Info("found uninitialized subscriptions", zap.Int("count", uninitializedStatCount))
 	}
-	if minResolvedTs == 0 {
+	if globalMinResolvedTs == 0 {
 		metrics.EventStoreResolvedTsLagGauge.Set(0)
 		return
 	}
-	minResolvedPhyTs := oracle.ExtractPhysical(minResolvedTs)
-	eventStoreResolvedTsLag := float64(pdPhyTs-minResolvedPhyTs) / 1e3
-	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLag)
+	globalMinResolvedPhysicalTime := oracle.ExtractPhysical(globalMinResolvedTs)
+	eventStoreResolvedTsLagInSec := float64(pdPhysicalTime-globalMinResolvedPhysicalTime) / 1e3
+	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
 }
 
-func (e *eventStore) uploadChangefeedMetricsOnce() {
+func (e *eventStore) collectAndReportChangefeedMetrics() {
 	// Collect resolved ts for each changefeed and send to log coordinator.
-	cfStates := &logservicepb.ChangefeedStates{
+	changefeedStates := &logservicepb.ChangefeedStates{
 		States: make([]*logservicepb.ChangefeedStateEntry, 0),
 	}
 	e.changefeedMeta.Range(func(key, value interface{}) bool {
@@ -1055,12 +1055,12 @@ func (e *eventStore) uploadChangefeedMetricsOnce() {
 		// The `advanceResolvedTs` function updates an individual dispatcher's resolvedTs
 		// atomically, so it does not conflict with this lock.
 		cfStat.mutex.Lock()
-		minResolvedTs := uint64(math.MaxUint64)
+		cfMinResolvedTs := uint64(math.MaxUint64)
 		found := false
-		for _, dStat := range cfStat.dispatchers {
-			ts := dStat.resolvedTs.Load()
-			if ts < minResolvedTs {
-				minResolvedTs = ts
+		for _, dispatcherStat := range cfStat.dispatchers {
+			dispatcherResolvedTs := dispatcherStat.resolvedTs.Load()
+			if dispatcherResolvedTs < cfMinResolvedTs {
+				cfMinResolvedTs = dispatcherResolvedTs
 			}
 			found = true
 		}
@@ -1069,18 +1069,18 @@ func (e *eventStore) uploadChangefeedMetricsOnce() {
 		if found {
 			log.Info("report changefeed resolved ts",
 				zap.Stringer("changefeedID", changefeedID),
-				zap.Uint64("resolvedTs", minResolvedTs))
-			cfStates.States = append(cfStates.States, &logservicepb.ChangefeedStateEntry{
+				zap.Uint64("resolvedTs", cfMinResolvedTs))
+			changefeedStates.States = append(changefeedStates.States, &logservicepb.ChangefeedStateEntry{
 				ChangefeedID: changefeedID.ToPB(),
-				ResolvedTs:   minResolvedTs,
+				ResolvedTs:   cfMinResolvedTs,
 			})
 		}
 		return true
 	})
 
 	coordinatorID := e.getCoordinatorInfo()
-	if coordinatorID != "" && len(cfStates.States) > 0 {
-		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, cfStates)
+	if coordinatorID != "" && len(changefeedStates.States) > 0 {
+		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, changefeedStates)
 		if err := e.messageCenter.SendEvent(msg); err != nil {
 			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
 		}
