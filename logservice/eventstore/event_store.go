@@ -438,18 +438,30 @@ func (e *eventStore) RegisterDispatcher(
 	}
 	stat.resolvedTs.Store(startTs)
 
-	var cfStat *changefeedStat
-	if actual, ok := e.changefeedMeta.Load(changefeedID); ok {
-		cfStat = actual.(*changefeedStat)
-	} else {
-		newCfStat := &changefeedStat{dispatchers: make(map[common.DispatcherID]*dispatcherStat)}
-		actual, _ := e.changefeedMeta.LoadOrStore(changefeedID, newCfStat)
-		cfStat = actual.(*changefeedStat)
-	}
+	// Loop to handle the race condition where a cfStat might be deleted
+	// after being loaded but before being locked.
+	for {
+		var cfStat *changefeedStat
+		if actual, ok := e.changefeedMeta.Load(changefeedID); ok {
+			cfStat = actual.(*changefeedStat)
+		} else {
+			newCfStat := &changefeedStat{dispatchers: make(map[common.DispatcherID]*dispatcherStat)}
+			actual, _ := e.changefeedMeta.LoadOrStore(changefeedID, newCfStat)
+			cfStat = actual.(*changefeedStat)
+		}
 
-	cfStat.mutex.Lock()
-	cfStat.dispatchers[dispatcherID] = stat
-	cfStat.mutex.Unlock()
+		cfStat.mutex.Lock()
+		// After acquiring the lock, we must re-check if this cfStat is still the one
+		// in the map. If it has been removed and replaced, we must retry with the new one.
+		if current, ok := e.changefeedMeta.Load(changefeedID); !ok || current != cfStat {
+			cfStat.mutex.Unlock()
+			continue // Retry the loop
+		}
+
+		cfStat.dispatchers[dispatcherID] = stat
+		cfStat.mutex.Unlock()
+		break // Success
+	}
 
 	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
 		util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs)

@@ -16,6 +16,7 @@ package eventstore
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -585,4 +586,44 @@ func TestChangefeedStatManagement(t *testing.T) {
 	cfStat2.mutex.Lock()
 	require.Len(t, cfStat2.dispatchers, 1)
 	cfStat2.mutex.Unlock()
+}
+
+func TestChangefeedStatManagementConcurrent(t *testing.T) {
+	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
+	es := store.(*eventStore)
+
+	cfID1 := common.NewChangefeedID4Test("default", "test-cf-1")
+	cfID2 := common.NewChangefeedID4Test("default", "test-cf-2")
+	cfIDs := []common.ChangeFeedID{cfID1, cfID2}
+
+	concurrency := 100
+	dispatchersPerRoutine := 20
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func(routineID int) {
+			defer wg.Done()
+			for j := 0; j < dispatchersPerRoutine; j++ {
+				dispatcherID := common.NewDispatcherID()
+				cfID := cfIDs[(routineID*dispatchersPerRoutine+j)%len(cfIDs)]
+				span := &heartbeatpb.TableSpan{TableID: int64(j)}
+
+				ok := es.RegisterDispatcher(cfID, dispatcherID, span, 100, func(u uint64, u2 uint64) {}, false, false)
+				require.True(t, ok)
+
+				es.UnregisterDispatcher(cfID, dispatcherID)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// After all operations, the changefeedMeta should be empty because all dispatchers are unregistered.
+	isEmpty := true
+	es.changefeedMeta.Range(func(key, value interface{}) bool {
+		isEmpty = false
+		return false // stop iteration
+	})
+	require.True(t, isEmpty, "changefeedMeta should be empty after all dispatchers are unregistered")
 }
