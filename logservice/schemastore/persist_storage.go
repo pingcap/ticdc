@@ -267,6 +267,7 @@ func (p *persistentStorage) initializeFromDisk() {
 		log.Fatal("load tables in kv snapshot failed")
 	}
 
+	// here
 	if p.tablesDDLHistory, p.tableTriggerDDLHistory, err = loadAndApplyDDLHistory(
 		storageSnap,
 		p.gcTs,

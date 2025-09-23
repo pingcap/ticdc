@@ -373,6 +373,8 @@ func (s *schemaStore) FetchTableDDLEvents(keyspaceID uint32, dispatcherID common
 	if err != nil {
 		return nil, err
 	}
+	log.Error("FetchTableDDLEvents err", zap.Any("e", events), zap.Any("dispatcherID", dispatcherID), zap.Any("tableID", tableID),
+		zap.Any("start", start), zap.Any("end", end))
 	return events, nil
 }
 

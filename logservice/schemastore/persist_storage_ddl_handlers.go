@@ -715,7 +715,7 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 		event.SchemaIDs = append(event.SchemaIDs, info.NewSchemaID)
 		SchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
 		event.SchemaNames = append(event.SchemaNames, SchemaName)
-		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", info.OldSchemaName.O, extraTableName, SchemaName, tableInfo.Name.L))
+		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", info.OldSchemaName.O, info.OldTableName.O, SchemaName, info.NewTableName.O))
 	}
 
 	event.Query = strings.Join(querys, "")
@@ -894,12 +894,19 @@ func updateDDLHistoryForExchangeTablePartition(args updateDDLHistoryFuncArgs) []
 
 func updateDDLHistoryForRenameTables(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	// visitTableIDs used to avoid duplicate table id
+	// For example: rename table a to c, b to a, c to b;
+	// https://github.com/pingcap/ticdc/issues/1734
+	visitTableIDs := make(map[int64]struct{})
 	// it won't be send to table dispatchers, just for build version store
 	for _, info := range args.ddlEvent.MultipleTableInfos {
-		if isPartitionTable(info) {
-			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(info)...)
-		} else {
-			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, info.ID)
+		if _, ok := visitTableIDs[info.ID]; !ok {
+			if isPartitionTable(info) {
+				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(info)...)
+			} else {
+				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, info.ID)
+			}
+			visitTableIDs[info.ID] = struct{}{}
 		}
 	}
 	return args.tableTriggerDDLHistory
@@ -2274,6 +2281,10 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	if len(querys) != len(rawEvent.MultipleTableInfos) {
 		log.Panic("rename tables length is not equal table infos", zap.Any("querys", querys), zap.Any("tableInfos", rawEvent.MultipleTableInfos))
 	}
+	// The duplicate tableIDs in BlockedTables may cause cdc stuck, so we have to filter the tableIDs
+	// For example: rename table a to c, b to a, c to b;
+	// https://github.com/pingcap/ticdc/issues/1734
+	visitTableIDs := make(map[int64]struct{})
 	for i, tableInfo := range rawEvent.MultipleTableInfos {
 		ignorePrevTable, ignoreCurrentTable := false, false
 		notSyncPrevTable := false
@@ -2298,7 +2309,11 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
 				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
-				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
+
+				if _, ok := visitTableIDs[tableInfo.ID]; !ok {
+					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
+					visitTableIDs[tableInfo.ID] = struct{}{}
+				}
 				multipleNotSync = append(multipleNotSync, notSyncPrevTable)
 				if !ignoreCurrentTable {
 					// check whether schema change
@@ -2342,7 +2357,10 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
 				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
-				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
+				if _, ok := visitTableIDs[tableInfo.ID]; !ok {
+					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
+					visitTableIDs[tableInfo.ID] = struct{}{}
+				}
 				multipleNotSync = append(multipleNotSync, notSyncPrevTable)
 				if !ignoreCurrentTable {
 					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
