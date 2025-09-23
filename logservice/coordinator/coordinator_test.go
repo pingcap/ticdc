@@ -323,8 +323,9 @@ func TestUpdateChangefeedMetrics(t *testing.T) {
 
 	// Set PD time
 	pdTime := time.Now()
-	pdPhyTs := oracle.GetPhysical(pdTime)
-	mockPDClock.(*pdutil.Clock4Test).SetTS(uint64(pdPhyTs))
+	pdTs := oracle.GoTimeToTS(pdTime)
+	mockPDClock.(*pdutil.Clock4Test).SetTS(uint64(pdTs))
+	pdPhyTs := oracle.ExtractPhysical(uint64(pdTs))
 
 	// Call update metrics
 	c.updateChangefeedMetrics()

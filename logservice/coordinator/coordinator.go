@@ -237,7 +237,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 }
 
 func (c *logCoordinator) updateChangefeedMetrics() {
-	pdPhyTs := c.pdClock.CurrentTS()
+	pdTime := c.pdClock.CurrentTime()
+	pdPhyTs := oracle.GetPhysical(pdTime)
 
 	c.changefeedStates.Lock()
 	defer c.changefeedStates.Unlock()
@@ -262,12 +263,12 @@ func (c *logCoordinator) updateChangefeedMetrics() {
 
 		phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
 		state.resolvedTsGauge.Set(float64(phyResolvedTs))
-		lag := float64(pdPhyTs-uint64(phyResolvedTs)) / 1e3
+		lag := float64(pdPhyTs-phyResolvedTs) / 1e3
 		state.resolvedTsLagGauge.Set(lag)
 		log.Info("update changefeed metrics",
 			zap.Stringer("changefeedID", state.cfID),
 			zap.Uint64("minResolvedTs", minResolvedTs),
-			zap.Uint64("pdPhyTs", pdPhyTs),
+			zap.Int64("pdPhyTs", pdPhyTs),
 			zap.Float64("lag", lag))
 	}
 }

@@ -152,7 +152,10 @@ func NewClock4Test() Clock {
 }
 
 func (c *Clock4Test) CurrentTime() time.Time {
-	return time.Now()
+	if c.ts == 0 {
+		return time.Now()
+	}
+	return oracle.GetTimeFromTS(c.ts)
 }
 
 func (c *Clock4Test) CurrentTS() uint64 {
