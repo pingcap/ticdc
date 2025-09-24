@@ -72,12 +72,12 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.GetKeyspaceByID(ctx, keyspaceID)
 	if err != nil {
-		return cerror.Trace(err)
+		return err
 	}
 
 	storage, err := keyspaceManager.GetStorage(keyspaceMeta.Name)
 	if err != nil {
-		return cerror.Trace(err)
+		return err
 	}
 	kvStorage := storage.(tikv.Storage)
 
