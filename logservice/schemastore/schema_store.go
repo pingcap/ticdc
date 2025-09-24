@@ -237,12 +237,34 @@ func (s *schemaStore) Name() string {
 
 func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchemaStore, error) {
 	s.keyspaceLocker.RLock()
-	defer s.keyspaceLocker.RUnlock()
 	store, ok := s.keyspaceSchemaStoreMap[keyspaceID]
-	if !ok {
-		return nil, errors.ErrInvalidKeyspace
+	s.keyspaceLocker.RUnlock()
+	if ok {
+		return store, nil
 	}
-	return store, nil
+
+	ctx := context.Background()
+
+	// If the schemastore does not contain the keyspace, it means it is not a maintainer node.
+	// It should register the keyspace when it try to get keyspace schema_store.
+	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.GetKeyspaceByID(ctx, keyspaceID)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	if err := s.RegisterKeyspace(ctx, keyspaceMeta.Name); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	s.keyspaceLocker.RLock()
+	store, ok = s.keyspaceSchemaStoreMap[keyspaceID]
+	s.keyspaceLocker.RUnlock()
+	if ok {
+		return store, nil
+	}
+
+	return nil, errors.ErrKeyspaceNotFound
 }
 
 func (s *schemaStore) initialize(ctx context.Context) {

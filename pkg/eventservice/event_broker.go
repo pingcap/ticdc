@@ -925,6 +925,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	err := c.schemaStore.RegisterTable(span.KeyspaceID, span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
+			zap.Uint32("keyspaceID", span.KeyspaceID),
 			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
 			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err),

@@ -312,6 +312,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 				store := value.(*requestedStore)
 				store.requestWorkers.RLock()
 				for _, worker := range store.requestWorkers.s {
+					worker.requestCache.clearStaleRequest()
 					pendingRegionReqCount += worker.requestCache.getPendingCount()
 				}
 				store.requestWorkers.RUnlock()
