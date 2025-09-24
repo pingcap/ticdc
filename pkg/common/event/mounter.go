@@ -213,7 +213,7 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		}
 
 		if job != nil && job.Type == model.ActionCreateTable {
-			log.Info("ddl from ddlTable", zap.Any("job", job), zap.Any("commitTs", rawKV.CRTs), zap.Any("startTs", rawKV.StartTs))
+			log.Info("fizz ddl from ddlTable", zap.Any("job", job), zap.Any("commitTs", rawKV.CRTs), zap.Any("startTs", rawKV.StartTs), zap.Any("query", job.Query))
 		}
 		return job, nil
 
@@ -228,8 +228,9 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 
 		job, err := parseJob(v, rawKV.StartTs, rawKV.CRTs, true)
 		if job != nil && job.Type == model.ActionCreateTable {
-			log.Info("fizz ddl from ddlHistoryTable, ignore it", zap.Any("job", job), zap.Any("commitTs", rawKV.CRTs), zap.Any("startTs", rawKV.StartTs))
+			log.Info("fizz ddl from ddlHistoryTable, ignore it", zap.Any("job", job), zap.Any("commitTs", rawKV.CRTs), zap.Any("startTs", rawKV.StartTs), zap.Any("query", job.Query))
 		}
+
 		return nil, nil
 	}
 
