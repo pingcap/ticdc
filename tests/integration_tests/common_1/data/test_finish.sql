@@ -4,6 +4,7 @@ USE common_1;
 create database common;
 create table a (a bigint primary key, b int);
 create table b like a;
+-- https://github.com/pingcap/tidb/issues/63710
 rename table a to common.c, b to a, common.c to b;
 
 insert into a values (1, 2);
