@@ -1439,7 +1439,10 @@ func extractTableInfoFuncForTruncateAndReorganizePartition(event *PersistedDDLEv
 }
 
 func extractTableInfoFuncForRenameTables(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	for i, tableInfo := range event.MultipleTableInfos {
+	// we have to reverse MultipleTableInfos to get correct schema name
+	// see https://github.com/pingcap/tidb/issues/63710
+	for i := len(event.MultipleTableInfos) - 1; i >= 0; i-- {
+		tableInfo := event.MultipleTableInfos[i]
 		if isPartitionTable(tableInfo) {
 			for _, partitionID := range getAllPartitionIDs(tableInfo) {
 				if tableID == partitionID {
