@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
@@ -350,14 +351,6 @@ func (s *subscriptionClient) Subscribe(
 		log.Panic("subscription client subscribe with zero TableID")
 		return
 	}
-	log.Info("subscribes span",
-		zap.Uint64("subscriptionID", uint64(subID)),
-		zap.String("span", span.String()))
-	defer func() {
-		log.Info("subscribes span done",
-			zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Uint64("startTs", startTs))
-	}()
 
 	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval)
 	s.totalSpans.Lock()
@@ -368,6 +361,9 @@ func (s *subscriptionClient) Subscribe(
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode, priority: TaskLowPrior}
+	log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
+		zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
+		zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
 }
 
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
