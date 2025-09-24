@@ -217,7 +217,9 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		datum = row[ddlTableInfo.JobMetaColumnIDinHistoryTable]
 		v = datum.GetBytes()
 
-		return parseJob(v, rawKV.StartTs, rawKV.CRTs, true)
+		job, err := parseJob(v, rawKV.StartTs, rawKV.CRTs, true)
+		log.Info("fizz ddl from ddlHistoryTable, ignore it", zap.Any("job", job))
+		return nil, nil
 	}
 
 	return nil, fmt.Errorf("invalid tableID %v in rawKV.Key", tableID)
