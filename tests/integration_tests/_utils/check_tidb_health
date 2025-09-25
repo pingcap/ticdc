@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+if [ $# -lt 3 ]; then
+	echo "Usage: check_tidb_health <tidb_host> <tidb_port> <tidb_other_port> <check_count>"
+	exit 1
+fi
+
+host=$1
+port=$2
+other_port=$3
+check_count=${4:-60}
+i=0
+while ! mysql -uroot -h "$host" -P "$port" --default-character-set utf8mb4 -e 'select * from mysql.tidb;'; do
+	i=$((i + 1))
+	if [ "$i" -gt "$check_count" ]; then
+		echo 'Failed to start TiDB'
+		exit 2
+	fi
+	sleep 2
+done
+
+if [ "$other_port" != "" ]; then
+    i=0
+    while ! mysql -uroot -h "$host" -P "$other_port" --default-character-set utf8mb4 -e 'select * from mysql.tidb;'; do
+        i=$((i + 1))
+        if [ "$i" -gt "$check_count" ]; then
+            echo 'Failed to start TiDB'
+            exit 2
+        fi
+        sleep 2
+    done
+fi

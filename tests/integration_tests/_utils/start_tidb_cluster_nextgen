@@ -1,0 +1,422 @@
+#!/usr/bin/env bash
+# depencencies: minio, mc(minio client)
+
+set -e
+export PS4='+$(basename ${BASH_SOURCE}):${LINENO}:'
+set -x
+
+# Random generate the sockets config.
+# Make sure we dont use the same sock.
+randomGenSocketsConf() {
+	config_file="$1"
+	random_str=$(date '+%s%N')
+	if [ "$(uname)" == "Darwin" ]; then
+		random_str=$(cat /dev/random | LC_ALL=C tr -dc "a-zA-Z0-9" | head -c 10)
+	fi
+
+	echo "socket = \"/tmp/tidb-$random_str.sock\"" >>"$config_file"
+}
+
+check_bin() {
+	if [ ! -f "$1" ]; then
+		echo "Error: $1 is not a file" >&2
+		exit 1
+	fi
+	if [ ! -x "$1" ]; then
+		echo "Error: $1 is not executable" >&2
+		exit 1
+	fi
+}
+
+show_help() {
+	cat <<EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  --keyspace-name NAME          Keyspace name (default: keyspace1)
+  --multiple_upstream_pd        upstream pd count (default: 1, max 3)
+  -h, --help                    Show this help message and exit
+EOF
+}
+
+check_port_available() {
+	local host=${1:-127.0.0.1}
+	local port=$2
+	local prompt=$3
+	while ! nc -z "$host" "$port"; do
+		echo "$prompt"
+		sleep 1
+	done
+}
+
+KEYSPACE_NAME=keyspace1
+# Parse command line arguments manually
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	-h | --help)
+		show_help
+		exit 0
+		;;
+	--keyspace-name)
+		KEYSPACE_NAME="$2"
+		shift 2
+		;;
+	--multiple-upstream-pd)
+		multiple_upstream_pd="$2"
+		shift
+		;;
+	*)
+		echo "Unknown option: $1"
+		exit 1
+		;;
+	esac
+done
+
+if [ -z "$WORK_DIR" ]; then
+	echo "Error: environment variable WORK_DIR is empty" >&2
+	exit 1
+fi
+
+mkdir -p "$WORK_DIR"
+ENV_FILE="$WORK_DIR/env"
+rm -f "$ENV_FILE"
+touch "$ENV_FILE"
+
+# start minio
+echo "Starting MinIO server..."
+minio server --address ":$MINIO_API_PORT" --console-address ":MINIO_CONSOLE_PORT" "$WORK_DIR/minio/data" >"$WORK_DIR/minio/log/minio-stdout.log" 2>"$WORK_DIR/minio/log/minio-stderr.log" &
+echo "MINIO_PID=$!" >>"$ENV_FILE"
+
+check_port_available "" "$MINIO_API_PORT" "Wait for minio to be available"
+# Sleep for 1 second until MinIO becomes available.
+sleep 1
+
+# create bucket
+mc alias set "$MINIO_MC_ALIAS" "http://127.0.0.1:$MINIO_API_PORT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+if ! mc ls "$MINIO_MC_ALIAS/cse-test" &>/dev/null; then
+	mc mb "$MINIO_MC_ALIAS/cse-test"
+else
+	echo "Bucket cse-test already exists, skipping creation"
+fi
+
+################### start pd #####################
+cat >"$WORK_DIR/upstream-pd.toml" <<EOF
+[keyspace]
+pre-alloc = ["KEYSPACE_NAME"]
+EOF
+
+cat >"$WORK_DIR/downstream-pd.toml" <<EOF
+[replication]
+# Set it to 1 to make sure we have enough replicas to run placement-rules.
+max-replicas = 1
+enable-placement-rules = true
+EOF
+
+echo "Starting upstream pd..."
+pd-server-nextgen --version
+if [[ "$multiple_upstream_pd" == "true" ]]; then
+	pd_count=3
+	initial_cluster="pd1=http://${UP_PD_HOST_1}:${UP_PD_PEER_PORT_1},pd2=http://${UP_PD_HOST_2}:${UP_PD_PEER_PORT_2},pd3=http://${UP_PD_HOST_3}:${UP_PD_PEER_PORT_3}"
+else
+	pd_count=1
+	initial_cluster="pd1=http://${UP_PD_HOST_1}:${UP_PD_PEER_PORT_1}"
+fi
+
+for idx in $(seq 1 $pd_count); do
+	host="UP_PD_HOST_$idx"
+	port="UP_PD_PORT_$idx"
+	peer_port="UP_PD_PEER_PORT_$idx"
+	pd-server-nextgen \
+		--advertise-client-urls "http://${!host}:${!port}" \
+		--client-urls "http://0.0.0.0:${!port}" \
+		--advertise-peer-urls "http://${!host}:${!peer_port}" \
+		--peer-urls "http://0.0.0.0:${!peer_port}" \
+		--config "$WORK_DIR/upstream-pd.toml" \
+		--log-file "$WORK_DIR/upstream/log/pd/pd$idx.log" \
+		--data-dir "$WORK_DIR/upstream/data/pd$idx" \
+		--name="pd$idx" \
+		--initial-cluster "${initial_cluster}" >"$WORK_DIR/upstream/log/pd/pd$idx-stdout.log" 2>"$WORK_DIR/upstream/log/pd/pd$idx-stderr.log" &
+	echo "PD_UP_PID_$idx=$!" >>"$ENV_FILE"
+done
+
+echo "Starting downstream PD..."
+pd-server --version
+pd-server \
+	--advertise-client-urls "http://${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
+	--client-urls "http://0.0.0.0:${DOWN_PD_PORT}" \
+	--advertise-peer-urls "http://${DOWN_PD_HOST}:${DOWN_PD_PEER_PORT}" \
+	--peer-urls "http://0.0.0.0:${DOWN_PD_PEER_PORT}" \
+	--config "$WORK_DIR/downstream-pd.toml" \
+	--log-file "$WORK_DIR/downstream/log/pd/pd.log" \
+	--data-dir "$WORK_DIR/downstream/data/pd" >"$WORK_DIR/downstream/log/pd/pd-stdout.log" 2>"$WORK_DIR/downstream/log/pd/pd-stderr.log" &
+echo "PD_DOWN_PID=$!" >>"$ENV_FILE"
+
+# wait for upstream PD to be ready
+echo "Verifying upstream PD is started..."
+for idx in $(seq 1 $pd_count); do
+	host="UP_PD_HOST_$idx"
+	port="UP_PD_PORT_$idx"
+
+	echo "checking upstream pd $idx ${!host}:${!port}"
+	check_pd_health "${!host}" "${!port}" 60
+done
+
+# wait for downstream PD to be ready
+echo "checking downstream pd $DOWN_PD_HOST:$DOWN_PD_PORT"
+check_pd_health "$DOWN_PD_HOST" "$DOWN_PD_PORT" 60
+
+################### start TiKV #####################
+cat >"$WORK_DIR/upstream-tikv.toml" <<EOF
+[storage]
+api-version = 2
+enable-ttl = true
+
+[dfs]
+prefix = "nextgen"
+s3-endpoint = "http://127.0.0.1:$MINIO_API_PORT"
+s3-key-id = "$MINIO_ROOT_USER"
+s3-secret-key = "$MINIO_ROOT_PASSWORD"
+s3-bucket = "cse-test"
+s3-region = "local"
+
+[rfengine]
+wal-sync-dir = "$WORK_DIR/wal-sync/tikv/raft-wal"
+lightweight-backup = true
+target-file-size = "512MB"
+wal-chunk-target-file-size = "128MB"
+EOF
+
+cat >"$WORK_DIR/downstream-tikv.toml" <<EOF
+[storage]
+# Disable creating a large temp file.
+reserve-space = "0MB"
+[rocksdb]
+max-open-files = 4096
+[raftdb]
+max-open-files = 4096
+[raftstore]
+# true (default value) for high reliability, this can prevent data loss when power failure.
+sync-log = false
+[cdc]
+hibernate-regions-compatible = true
+EOF
+
+echo "Starting upstream TiKV..."
+tikv-server-nextgen --version
+for idx in $(seq 1 3); do
+	host="UP_TIKV_HOST_$idx"
+	port="UP_TIKV_PORT_$idx"
+	status_port="UP_TIKV_STATUS_PORT_$idx"
+	tikv-server-nextgen \
+		--pd "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
+		-A "${!host}:${!port}" \
+		--status-addr "${!host}:${!status_port}" \
+		--log-file "$WORK_DIR/upstream/log/tikv/tikv$idx.log" \
+		--log-level info \
+		-C "$WORK_DIR/upstream-tikv.toml" \
+		-s "$WORK_DIR/upstream/data/tikv$idx" >"$WORK_DIR/upstream/log/tikv/tikv$idx-stdout.log" 2>"$WORK_DIR/upstream/log/tikv/tikv$idx-stderr.log" &
+	echo "TIKV_UP_PID_$idx=$!" >>"$ENV_FILE"
+done
+
+echo "Starting downstream TiKV..."
+tikv-server --version
+tikv-server \
+	--pd "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
+	-A "${DOWN_TIKV_HOST}:${DOWN_TIKV_PORT}" \
+	--status-addr "${DOWN_TIKV_HOST}:${DOWN_TIKV_STATUS_PORT}" \
+	--log-file "$WORK_DIR/downstream/log/tikv/tikv.log" \
+	--log-level info \
+	-C "$WORK_DIR/downstream-tikv.toml" \
+	-s "$WORK_DIR/downstream/data/tikv" >"$WORK_DIR/downstream/log/tikv/tikv-stdout.log" 2>"$WORK_DIR/downstream/log/tikv/tikv-stderr.log" &
+echo "TIKV_DOWN_PID=$!" >>"$ENV_FILE"
+
+sleep 2
+
+####################start TiDB####################
+cat "$WORK_DIR/upstream-tidb-system.toml" <<EOF
+keyspace-name = "SYSTEM"
+split-table = false
+enable-telemetry = false
+max-server-connections = 0
+mem-quota-query = 671088640
+new_collations_enabled_on_first_bootstrap = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
+analyze-always-skip-wide-columns = true
+
+[log.file]
+max-backups = 100
+
+[performance]
+tcp-keep-alive = true
+
+[security]
+enable-sem = false
+
+[instance]
+tidb_service_scope = 'dxf_service'
+EOF
+
+cat "$WORK_DIR/upstream-tidb-$KEYSPACE_NAME.toml" <<EOF
+keyspace-name = "$KEYSPACE_NAME"
+split-table = false
+enable-telemetry = false
+max-server-connections = 0
+mem-quota-query = 671088640
+new_collations_enabled_on_first_bootstrap = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
+analyze-always-skip-wide-columns = true
+
+[log.file]
+max-backups = 100
+
+[performance]
+tcp-keep-alive = true
+
+[security]
+enable-sem = false
+EOF
+
+cat "$WORK_DIR/downstream-tidb.toml" <<EOF
+split-table = true
+new_collations_enabled_on_first_bootstrap = true
+EOF
+
+echo "Starting upstream system TiDB"
+tidb-server-nextgen -V
+randomGenSocketsConf "$WORK_DIR/upstream-tidb-system.toml"
+tidb-server-nextgen \
+	-P "${UP_TIDB_SYSTEM_PORT}" \
+	-config "$WORK_DIR/upstream-tidb-system.toml" \
+	--store tikv \
+	--path "${UP_PD_HOST_1}:${UP_PD_HOST_1}" \
+	--status "${UP_TIDB_SYSTEM_STATUS}" \
+	--log-file "$WORK_DIR/upstream/log/tidb-system/tidb.log" >"$WORK_DIR/upstream/log/tidb-system/tidb-stdout.log" 2>"$WORK_DIR/upstream/log/tidb-system/tidb-stderr.log" &
+echo "TIDB_UP_SYSTEM_PID=$!" >>"$ENV_FILE"
+
+echo "Starting upstream $KEYSPACE_NAME TiDB"
+randomGenSocketsConf "$WORK_DIR/upstream-tidb-$KEYSPACE_NAME.toml"
+tidb-server-nextgen \
+	-P "${UP_TIDB_PORT}" \
+	-config "$WORK_DIR/upstream-tidb-$KEYSPACE_NAME.toml" \
+	--store tikv \
+	--path "${UP_TIDB_SYSTEM_HOST}:${UP_TIDB_SYSTEM_PORT}" \
+	--status "${UP_TIDB_STATUS}" \
+	--log-file "$WORK_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb.log" >"$WORK_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb-stdout.log" 2>"$WORK_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
+echo "TIDB_UP_KEYSPACE_PID=$!" >>"$ENV_FILE"
+
+echo "Starting downstream TiDB..."
+tidb-server -V
+randomGenSocketsConf "$WORK_DIR/downstream-tidb.toml"
+tidb-server \
+	-P "${DOWN_TIDB_PORT}" \
+	-config "downstream-tidb.toml" \
+	--store tikv \
+	--path "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
+	--status "${DOWN_TIDB_STATUS}" \
+	--log-file "$OUT_DIR/downstream/log/tidb.log" >"$WORK_DIR/downstream/log/tidb/tidb-stdout.log" 2>"$WORK_DIR/downstream/log/tidb/tidb-stderr.log" &
+echo "TIDB_DOWN_PID=$!" >>"$ENV_FILE"
+
+echo "Verifying Upstream system TiDB is started..."
+check_tidb_health "$UP_TIDB_SYSTEM_HOST" "$UP_TIDB_SYSTEM_PORT" "" 60
+
+echo "Verifying Upstream $KEYSPACE_NAME TiDB is started..."
+check_tidb_health "$UP_TIDB_HOST" "$UP_TIDB_PORT" "$UP_TIDB_OTHER_PORT" 60
+
+echo "Verifying downstream TiDB is started..."
+check_tidb_health "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" "" 60
+
+run_sql "update mysql.tidb set variable_value='60m' where variable_name='tikv_gc_life_time';" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+run_sql "update mysql.tidb set variable_value='60m' where variable_name='tikv_gc_life_time';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+run_sql "CREATE user 'normal'@'%' identified by '123456';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+run_sql "GRANT select,insert,update,delete,index,create,drop,alter,create view,references ON *.* TO 'normal'@'%';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+run_sql "FLUSH privileges" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+
+################### start tiflash #####################
+#cat >"$WORK_DIR/tiflash-config.toml" <<EOF
+#tmp_path = "${WORK_DIR}/tiflash/tmp"
+#display_name = "TiFlash"
+#users_config = "${WORK_DIR}/tiflash/users.toml"
+#path = "${WORK_DIR}/tiflash/db"
+#mark_cache_size = 5368709120
+#listen_host = "127.0.0.1"
+#tcp_port = 5000
+#http_port = 4500
+#interserver_http_port = 5500
+#
+#[flash]
+#tidb_status_addr = "127.0.0.1:8500"
+#service_addr = "127.0.0.1:9500"
+#
+#[flash.proxy]
+#addr = "127.0.0.1:9000"
+#advertise-addr = "127.0.0.1:9000"
+#data-dir = "${WORK_DIR}/tiflash/db/proxy"
+#config = "${WORK_DIR}/tiflash-proxy.toml"
+#log-file = "${WORK_DIR}/tiflash/log/proxy.log"
+#
+#[logger]
+#level = "trace"
+#log = "${WORK_DIR}/tiflash/log/server.log"
+#errorlog = "${WORK_DIR}/tiflash/log/error.log"
+#size = "4000M"
+#count = 10
+#
+#[application]
+#runAsDaemon = true
+#
+#[raft]
+#pd_addr = "${UP_PD_HOST_1}:${UP_PD_PORT_1}"
+#EOF
+#
+#cat >"$WORK_DIR/tiflash-proxy.toml" <<EOF
+#log-level = "info"
+#
+#[server]
+#engine-addr = "127.0.0.1:9500"
+#status-addr = "127.0.0.1:17000"
+#
+#[raftstore]
+#sync-log = true
+#capacity = "100GB"
+#hibernate-regions = false
+#
+#[rocksdb]
+#wal-dir = ""
+#max-open-files = 1000
+#
+#[rocksdb.defaultcf]
+#block-cache-size = "1GB"
+#
+#[rocksdb.lockcf]
+#block-cache-size = "1GB"
+#
+#[rocksdb.writecf]
+#block-cache-size = "1GB"
+#
+#[raftdb]
+#max-open-files = 1000
+#
+#[raftdb.defaultcf]
+#block-cache-size = "1GB"
+#EOF
+#
+#echo "Starting Upstream TiFlash..."
+#mkdir -p ${WORK_DIR}/tiflash/ && cp $CUR/tiflash-users.toml ${WORK_DIR}/tiflash/users.toml
+#tiflash version
+#tiflash server --config-file "$OUT_DIR/tiflash-config.toml" &
+#
+#echo "Verifying Upstream TiFlash is started..."
+## Make sure TiFlash is started.
+#while ! curl -o /dev/null -sf http://127.0.0.1:17000/metrics 1>/dev/null 2>&1; do
+#	i=$((i + 1))
+#	if [ "$i" -gt 10 ]; then
+#		cat ${WORK_DIR}/tiflash/log/proxy.log
+#		cat ${WORK_DIR}/tiflash/log/server.log
+#		cat ${WORK_DIR}/tiflash/log/error.log
+#		echo 'Failed to start TiFlash'
+#		exit 1
+#	fi
+#	sleep 2
+#done
