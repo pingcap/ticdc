@@ -195,7 +195,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				pdPhysicalTime := oracle.GetPhysical(c.pdClock.CurrentTime())
 				phyCkpTs := oracle.ExtractPhysical(cf.GetLastSavedCheckPointTs())
 				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
-				metrics.ChangefeedCoordinatorCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
 			})
 		}
 	}
