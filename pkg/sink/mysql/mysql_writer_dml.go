@@ -37,72 +37,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type eventGroupKey struct {
-	tableID       int64
-	tableUpdateTS uint64
-}
-
-// EventGroupResult holds the result of grouping events
-type EventGroupResult struct {
-	TotalSize   int64
-	EventGroups []EventGroupWithKey
-}
-
-// EventGroupWithKey contains events and their group key
-type EventGroupWithKey struct {
-	Key    eventGroupKey
-	Events []*commonEvent.DMLEvent
-}
-
-// groupEventsByTable groups events by table ID and table update timestamp.
-// It returns total size of all events and grouped events sorted by table update timestamp (ascending order).
-func groupEventsByTable(events []*commonEvent.DMLEvent) *EventGroupResult {
-	if len(events) == 0 {
-		return &EventGroupResult{
-			TotalSize:   0,
-			EventGroups: []EventGroupWithKey{},
-		}
-	}
-
-	eventsGroup := make(map[eventGroupKey][]*commonEvent.DMLEvent)
-	var totalSize int64
-
-	// Group events and collect metrics
-	for _, event := range events {
-		// Calculate total size
-		totalSize += event.GetSize()
-
-		groupKey := eventGroupKey{
-			tableID:       event.GetTableID(),
-			tableUpdateTS: event.TableInfo.GetUpdateTS(),
-		}
-
-		if _, ok := eventsGroup[groupKey]; !ok {
-			eventsGroup[groupKey] = make([]*commonEvent.DMLEvent, 0)
-		}
-		eventsGroup[groupKey] = append(eventsGroup[groupKey], event)
-	}
-
-	// Convert map to slice and sort by table update timestamp
-	eventGroups := make([]EventGroupWithKey, 0, len(eventsGroup))
-	for key, events := range eventsGroup {
-		eventGroups = append(eventGroups, EventGroupWithKey{
-			Key:    key,
-			Events: events,
-		})
-	}
-
-	// Sort event groups by table update timestamp (ascending)
-	sort.Slice(eventGroups, func(i, j int) bool {
-		return eventGroups[i].Key.tableUpdateTS < eventGroups[j].Key.tableUpdateTS
-	})
-
-	return &EventGroupResult{
-		TotalSize:   totalSize,
-		EventGroups: eventGroups,
-	}
-}
-
 // for multiple events, we try to batch the events of the same table into limited update / insert / delete query,
 // to enhance the performance of the sink.
 // While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
@@ -118,48 +52,64 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	dmls.reset()
 
 	// Step 1: group the events by table ID using the extracted function
-	groupResult := groupEventsByTable(events)
+	eventsGroup := make(map[int64]map[uint64][]*commonEvent.DMLEvent) // tableID --> updateTs --> events
 
-	// Calculate metrics from the grouped result
+	// Group events and collect metrics
 	for _, event := range events {
 		dmls.rowCount += int(event.Len())
 		if len(dmls.tsPairs) == 0 || dmls.tsPairs[len(dmls.tsPairs)-1].startTs != event.StartTs {
 			dmls.tsPairs = append(dmls.tsPairs, tsPair{startTs: event.StartTs, commitTs: event.CommitTs})
 		}
-	}
-	dmls.approximateSize = groupResult.TotalSize
+		dmls.approximateSize += event.GetSize()
 
-	// Step 2: prepare the dmls for each group
+		tableID := event.GetTableID()
+		updateTs := event.TableInfo.GetUpdateTS()
+
+		if _, ok := eventsGroup[tableID]; !ok {
+			eventsGroup[tableID] = make(map[uint64][]*commonEvent.DMLEvent)
+		}
+		eventsGroup[tableID][updateTs] = append(eventsGroup[tableID][updateTs], event)
+	}
+
+	// Step 2: Convert eventsGroup to sorted structure and prepare the dmls for each group
+	eventsGroupSortedByUpdateTs := make(map[int64][][]*commonEvent.DMLEvent)
+
+	// Sort events by updateTs for each tableID
+	for tableID, updateTsMap := range eventsGroup {
+		// Collect all updateTs keys and sort them
+		var updateTsKeys []uint64
+		for updateTs := range updateTsMap {
+			updateTsKeys = append(updateTsKeys, updateTs)
+		}
+
+		sort.Slice(updateTsKeys, func(i, j int) bool {
+			return updateTsKeys[i] < updateTsKeys[j]
+		})
+
+		// Create sorted events array for this tableID
+		var sortedEvents [][]*commonEvent.DMLEvent
+		for _, updateTs := range updateTsKeys {
+			sortedEvents = append(sortedEvents, updateTsMap[updateTs])
+		}
+		eventsGroupSortedByUpdateTs[tableID] = sortedEvents
+	}
+
+	// Step 3: prepare the dmls for each group
 	var (
 		queryList []string
 		argsList  [][]interface{}
 	)
-	for _, eventGroup := range groupResult.EventGroups {
-		eventsInGroup := eventGroup.Events
-		tableInfo := eventsInGroup[0].TableInfo
-		// We check if the table versions and update ts here to avoid data loss due to unknown bug.
-		firstTableVersion := eventsInGroup[0].TableInfoVersion
-		firstTableInfoUpdateTs := tableInfo.GetUpdateTS()
-		for _, event := range eventsInGroup {
-			if event.TableInfoVersion != firstTableVersion ||
-				event.TableInfo.GetUpdateTS() != firstTableInfoUpdateTs {
-				log.Error("events in the same group have different table versions",
-					zap.Uint64("firstTableInfoUpdateTs", firstTableInfoUpdateTs),
-					zap.Uint64("firstTableVersion", firstTableVersion),
-					zap.Uint64("currentEventTableVersion", event.TableInfoVersion),
-					zap.Uint64("currentEventTableInfoUpdateTs", event.TableInfo.GetUpdateTS()),
-					zap.Any("events", eventsInGroup))
-				return nil, errors.New(fmt.Sprintf("events in the same group have different table versions, there must be a bug in the code! firstTableVersion: %d, firstUpdateTs: %d, currentEventTableVersion: %d, currentEventTableInfoUpdateTs: %d", firstTableVersion, firstTableInfoUpdateTs, event.TableInfoVersion, event.TableInfo.GetUpdateTS()))
+	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
+		for _, eventsInGroup := range sortedEventGroups {
+			tableInfo := eventsInGroup[0].TableInfo
+			if !w.shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup) {
+				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
+			} else {
+				queryList, argsList = w.generateBatchSQL(eventsInGroup)
 			}
+			dmls.sqls = append(dmls.sqls, queryList...)
+			dmls.values = append(dmls.values, argsList...)
 		}
-
-		if !w.shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup) {
-			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-		} else {
-			queryList, argsList = w.generateBatchSQL(eventsInGroup)
-		}
-		dmls.sqls = append(dmls.sqls, queryList...)
-		dmls.values = append(dmls.values, argsList...)
 	}
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
 	// This method is expensive, so we only log it when the log level is debug.
