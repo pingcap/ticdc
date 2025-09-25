@@ -6,8 +6,10 @@ set -eu
 
 OUT_DIR=/tmp/tidb_cdc_test
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$CUR/_utils/test_prepare"
 export PATH=$PATH:$CUR/_utils:$CUR/../bin:$CUR/../../bin:$CUR/../../scripts/bin
 export TICDC_NEWARCH=true
+export CDC_BINARY=cdc.test
 
 mkdir -p $OUT_DIR || true
 
