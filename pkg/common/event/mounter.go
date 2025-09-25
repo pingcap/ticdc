@@ -207,7 +207,16 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		datum = row[ddlTableInfo.JobMetaColumnIDinJobTable]
 		v = datum.GetBytes()
 
-		return parseJob(v, rawKV.StartTs, rawKV.CRTs, false)
+		job, err := parseJob(v, rawKV.StartTs, rawKV.CRTs, false)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+
+		if job != nil && job.Type == model.ActionCreateTable {
+			log.Info("fizz ddl from ddlTable", zap.Any("job", job), zap.Any("commitTs", rawKV.CRTs), zap.Any("startTs", rawKV.StartTs), zap.Any("query", job.Query))
+		}
+		return job, nil
+
 	} else if tableID == common.JobHistoryID {
 		// parse it with tidb_ddl_history
 		row, err := decodeRow(rawKV.Value, recordID, ddlTableInfo.DDLHistoryTable, time.UTC)
@@ -217,7 +226,12 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		datum = row[ddlTableInfo.JobMetaColumnIDinHistoryTable]
 		v = datum.GetBytes()
 
-		return parseJob(v, rawKV.StartTs, rawKV.CRTs, true)
+		job, err := parseJob(v, rawKV.StartTs, rawKV.CRTs, true)
+		if job != nil && job.Type == model.ActionCreateTable {
+			log.Info("fizz ddl from ddlHistoryTable, ignore it", zap.Any("job", job), zap.Any("commitTs", rawKV.CRTs), zap.Any("startTs", rawKV.StartTs), zap.Any("query", job.Query))
+		}
+
+		return nil, nil
 	}
 
 	return nil, fmt.Errorf("invalid tableID %v in rawKV.Key", tableID)

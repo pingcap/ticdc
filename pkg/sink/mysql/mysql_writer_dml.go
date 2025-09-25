@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,6 +37,72 @@ import (
 	"go.uber.org/zap"
 )
 
+type eventGroupKey struct {
+	tableID       int64
+	tableUpdateTS uint64
+}
+
+// EventGroupResult holds the result of grouping events
+type EventGroupResult struct {
+	TotalSize   int64
+	EventGroups []EventGroupWithKey
+}
+
+// EventGroupWithKey contains events and their group key
+type EventGroupWithKey struct {
+	Key    eventGroupKey
+	Events []*commonEvent.DMLEvent
+}
+
+// groupEventsByTable groups events by table ID and table update timestamp.
+// It returns total size of all events and grouped events sorted by table update timestamp (ascending order).
+func groupEventsByTable(events []*commonEvent.DMLEvent) *EventGroupResult {
+	if len(events) == 0 {
+		return &EventGroupResult{
+			TotalSize:   0,
+			EventGroups: []EventGroupWithKey{},
+		}
+	}
+
+	eventsGroup := make(map[eventGroupKey][]*commonEvent.DMLEvent)
+	var totalSize int64
+
+	// Group events and collect metrics
+	for _, event := range events {
+		// Calculate total size
+		totalSize += event.GetSize()
+
+		groupKey := eventGroupKey{
+			tableID:       event.GetTableID(),
+			tableUpdateTS: event.TableInfo.GetUpdateTS(),
+		}
+
+		if _, ok := eventsGroup[groupKey]; !ok {
+			eventsGroup[groupKey] = make([]*commonEvent.DMLEvent, 0)
+		}
+		eventsGroup[groupKey] = append(eventsGroup[groupKey], event)
+	}
+
+	// Convert map to slice and sort by table update timestamp
+	eventGroups := make([]EventGroupWithKey, 0, len(eventsGroup))
+	for key, events := range eventsGroup {
+		eventGroups = append(eventGroups, EventGroupWithKey{
+			Key:    key,
+			Events: events,
+		})
+	}
+
+	// Sort event groups by table update timestamp (ascending)
+	sort.Slice(eventGroups, func(i, j int) bool {
+		return eventGroups[i].Key.tableUpdateTS < eventGroups[j].Key.tableUpdateTS
+	})
+
+	return &EventGroupResult{
+		TotalSize:   totalSize,
+		EventGroups: eventGroups,
+	}
+}
+
 // for multiple events, we try to batch the events of the same table into limited update / insert / delete query,
 // to enhance the performance of the sink.
 // While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
@@ -49,29 +116,26 @@ import (
 func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
-	// Step 1: group the events by table ID
-	eventsGroup := make(map[int64][]*commonEvent.DMLEvent) // tableID --> events
+
+	// Step 1: group the events by table ID using the extracted function
+	groupResult := groupEventsByTable(events)
+
+	// Calculate metrics from the grouped result
 	for _, event := range events {
-		// calculate for metrics
 		dmls.rowCount += int(event.Len())
 		if len(dmls.tsPairs) == 0 || dmls.tsPairs[len(dmls.tsPairs)-1].startTs != event.StartTs {
 			dmls.tsPairs = append(dmls.tsPairs, tsPair{startTs: event.StartTs, commitTs: event.CommitTs})
 		}
-		dmls.approximateSize += event.GetSize()
-
-		tableID := event.GetTableID()
-		if _, ok := eventsGroup[tableID]; !ok {
-			eventsGroup[tableID] = make([]*commonEvent.DMLEvent, 0)
-		}
-		eventsGroup[tableID] = append(eventsGroup[tableID], event)
 	}
+	dmls.approximateSize = groupResult.TotalSize
 
 	// Step 2: prepare the dmls for each group
 	var (
 		queryList []string
 		argsList  [][]interface{}
 	)
-	for _, eventsInGroup := range eventsGroup {
+	for _, eventGroup := range groupResult.EventGroups {
+		eventsInGroup := eventGroup.Events
 		tableInfo := eventsInGroup[0].TableInfo
 		// We check if the table versions and update ts here to avoid data loss due to unknown bug.
 		firstTableVersion := eventsInGroup[0].TableInfoVersion

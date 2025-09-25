@@ -714,6 +714,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		log.Error("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
 		return nil
 	}
+
 	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
 		job:          job,
 		databaseMap:  p.databaseMap,
@@ -725,6 +726,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// TODO: do we have a better way to do this?
 	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
+		// ExtraTableInfo is the normal table info before exchange
 		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
 	}
 
