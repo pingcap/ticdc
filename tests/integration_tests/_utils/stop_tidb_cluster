@@ -13,11 +13,15 @@ ${PKILL} cdc || true
 ${PKILL} cdc_kafka_consumer || true
 ${PKILL} cdc_storage_consumer || true
 ${PKILL} tidb-server || true
+${PKILL} tidb-server-nextgen || true
 ${PKILL} tikv-server || true
+${PKILL} tikv-server-nextgen || true
 ${PKILL} tiflash || true
 ${PKILL} flash_cluster_manager || true
 ${PKILL} pd-server || true
+${PKILL} pd-server-nextgen || true
 ${PKILL} oauth_server || true
+${PKILL} minio || true
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -25,6 +29,8 @@ source $CUR/../_utils/test_prepare
 kill -9 $(lsof -i tcp:${UP_TIDB_PORT} -t 2>/dev/null) &>/dev/null || true
 kill -9 $(lsof -i tcp:${UP_TIDB_OTHER_PORT} -t 2>/dev/null) &>/dev/null || true
 kill -9 $(lsof -i tcp:${UP_TIDB_STATUS} -t 2>/dev/null) &>/dev/null || true
+kill -9 $(lsof -i tcp:${UP_TIDB_SYSTEM_PORT} -t 2>/dev/null) &>/dev/null || true
+kill -9 $(lsof -i tcp:${UP_TIDB_SYSTEM_STATUS} -t 2>/dev/null) &>/dev/null || true
 kill -9 $(lsof -i tcp:${UP_TIDB_OTHER_STATUS} -t 2>/dev/null) &>/dev/null || true
 kill -9 $(lsof -i tcp:${DOWN_TIDB_PORT} -t 2>/dev/null) &>/dev/null || true
 kill -9 $(lsof -i tcp:${DOWN_TIDB_STATUS} -t 2>/dev/null) &>/dev/null || true
