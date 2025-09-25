@@ -92,7 +92,7 @@ const (
 
 	TypeMessageHandShake
 
-	// used upload changefeed metrics to log coordinator
+	// used to upload changefeed metrics from event store to log coordinator
 	TypeLogCoordinatorChangefeedStates
 )
 

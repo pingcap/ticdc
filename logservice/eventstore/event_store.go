@@ -141,8 +141,8 @@ type subscriptionStat struct {
 	tableSpan *heartbeatpb.TableSpan
 	// dispatchers depend on this subscription
 	dispatchers struct {
-		// Note: avoid holding this lock too much,
-		// otherwise it may have impact on sending resolved ts to dispatchers
+		// Avoid holding this lock during frequent operations,
+		// as it may delay sending resolved timestamps to the dispatchers.
 		sync.Mutex
 		subscribers map[common.DispatcherID]*Subscriber
 	}

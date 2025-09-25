@@ -291,7 +291,7 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestUpdateChangefeedMetrics(t *testing.T) {
+func TestReportMetricsForAffectedChangefeeds(t *testing.T) {
 	c := newLogCoordinatorForTest()
 	mockPDClock := pdutil.NewClock4Test()
 	c.pdClock = mockPDClock
@@ -323,9 +323,8 @@ func TestUpdateChangefeedMetrics(t *testing.T) {
 
 	// Set PD time
 	pdTime := time.Now()
-	pdTs := oracle.GoTimeToTS(pdTime)
-	mockPDClock.(*pdutil.Clock4Test).SetTS(uint64(pdTs))
-	pdPhyTs := oracle.ExtractPhysical(uint64(pdTs))
+	mockPDClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(pdTime))
+	pdPhyTs := oracle.GetPhysical(c.pdClock.CurrentTime())
 
 	// Call update metrics
 	c.updateChangefeedMetrics()
@@ -336,7 +335,7 @@ func TestUpdateChangefeedMetrics(t *testing.T) {
 	phyResolvedTs1 := oracle.ExtractPhysical(minResolvedTs1)
 	lag1 := float64(pdPhyTs-phyResolvedTs1) / 1e3
 	require.Equal(t, float64(phyResolvedTs1), testutil.ToFloat64(cf1State.resolvedTsGauge))
-	require.Equal(t, lag1, testutil.ToFloat64(cf1State.resolvedTsLagGauge))
+	require.InDelta(t, lag1, testutil.ToFloat64(cf1State.resolvedTsLagGauge), 1e-9)
 
 	// Verify metrics for cf2
 	cf2State := c.changefeedStates.m[cfID2.ID()]
@@ -344,7 +343,7 @@ func TestUpdateChangefeedMetrics(t *testing.T) {
 	phyResolvedTs2 := oracle.ExtractPhysical(minResolvedTs2)
 	lag2 := float64(pdPhyTs-phyResolvedTs2) / 1e3
 	require.Equal(t, float64(phyResolvedTs2), testutil.ToFloat64(cf2State.resolvedTsGauge))
-	require.Equal(t, lag2, testutil.ToFloat64(cf2State.resolvedTsLagGauge))
+	require.InDelta(t, lag2, testutil.ToFloat64(cf2State.resolvedTsLagGauge), 1e-9)
 }
 
 func TestHandleNodeChange(t *testing.T) {
