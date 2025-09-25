@@ -127,7 +127,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 			zap.Any("type", event.Job.Type),
 			zap.String("DDL", event.Job.Query),
 			zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
-			zap.Uint64("finishTs", event.Job.BinlogInfo.FinishedTS),
+			zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 			zap.Any("storeSchemaVersion", s.schemaVersion),
 			zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
 

@@ -75,8 +75,8 @@ func transformDDLJobQuery(job *model.Job) (string, error) {
 		}
 	}
 
-	log.Info("transform ddl query to result", zap.String("result", result),
-		zap.String("charset", job.Charset), zap.String("collate", job.Collate))
+	log.Info("transform ddl query to result", zap.String("charset", job.Charset),
+		zap.String("collate", job.Collate), zap.String("result", result))
 	return result, nil
 }
 
