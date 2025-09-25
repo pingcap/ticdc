@@ -301,18 +301,18 @@ func (c *server) Run(ctx context.Context) error {
 	}
 
 	// if it takes too long for all sub modules to exit, then exit directly to avoid hanging.
-	closed := make(chan error, 1)
+	ch := make(chan error, 1)
 	g.Go(func() error {
 		<-gctx.Done()
 		time.Sleep(gracefulShutdownTimeout)
-		closed <- errors.ErrTimeout.FastGenByArgs("takes too long for all sub modules to exit")
+		ch <- errors.ErrTimeout.FastGenByArgs("takes too long for all sub modules to exit")
 		return nil
 	})
 	go func() {
 		err := g.Wait()
-		closed <- err
+		ch <- err
 	}()
-	err = <-closed
+	err = <-ch
 	g2.Wait()
 	return err
 }

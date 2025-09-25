@@ -62,7 +62,17 @@ func (g *GrpcModule) Run(ctx context.Context) error {
 	defer func() {
 		log.Info("grpc server exited")
 	}()
-	return g.grpcServer.Serve(g.lis)
+	ch := make(chan error)
+	go func() {
+		err := g.grpcServer.Serve(g.lis)
+		ch <- err
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-ch:
+		return err
+	}
 }
 
 func (g *GrpcModule) Close(ctx context.Context) error {
