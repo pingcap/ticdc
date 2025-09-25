@@ -144,7 +144,7 @@
       "panels": [
         {
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The status of each changefeed.\n\n0: Normal\n\n1 and 6: Warning\n\n2: Failed\n\n3: Stopped\n\n4: Finished\n\n-1: Unknown",
+          "description": "The status of each changefeed.\n\n0: Normal\n\n1: Pending\n\n2: Failed\n\n3: Stopped\n\n4: Finished\n\n5: Removed\n\n6: Warning\n\n7: Uninitialized\n\n-1: Unknown",
           "fieldConfig": {
             "defaults": {
               "color": {
