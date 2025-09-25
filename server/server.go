@@ -301,7 +301,7 @@ func (c *server) Run(ctx context.Context) error {
 	}
 
 	// if it takes too long for all sub modules to exit, then exit directly to avoid hanging.
-closed := make(chan error, 1)
+	closed := make(chan error, 1)
 	g.Go(func() error {
 		<-gctx.Done()
 		time.Sleep(gracefulShutdownTimeout)
