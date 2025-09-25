@@ -871,12 +871,27 @@ func (e *DispatcherManager) cleanMetrics() {
 		"event-collector",
 		"max",
 		e.changefeedID.String(),
+		common.StringMode(common.DefaultMode),
 	)
 
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
 		"event-collector",
 		"used",
 		e.changefeedID.String(),
+		common.StringMode(common.DefaultMode),
+	)
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"max",
+		e.changefeedID.String(),
+		common.StringMode(common.RedoMode),
+	)
+
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"used",
+		e.changefeedID.String(),
+		common.StringMode(common.RedoMode),
 	)
 
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
