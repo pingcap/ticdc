@@ -2813,5 +2813,4 @@ func TestRenameTable(t *testing.T) {
 		},
 	})
 	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
-
 }
