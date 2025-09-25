@@ -38,7 +38,7 @@ import (
 )
 
 func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEvent.DMLEvent {
-	// Step 1: group the events by table ID and updateTs
+	// group the events by table ID and updateTs
 	eventsGroup := make(map[int64]map[uint64][]*commonEvent.DMLEvent) // tableID --> updateTs --> events
 	for _, event := range events {
 		tableID := event.GetTableID()
@@ -50,10 +50,9 @@ func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEve
 		eventsGroup[tableID][updateTs] = append(eventsGroup[tableID][updateTs], event)
 	}
 
-	// Step 2: sorted by updateTs for each tableID
+	// sorted by updateTs for each tableID
 	eventsGroupSortedByUpdateTs := make(map[int64][][]*commonEvent.DMLEvent)
 
-	// Sort events by updateTs for each tableID
 	for tableID, updateTsMap := range eventsGroup {
 		// Collect all updateTs keys and sort them
 		var updateTsKeys []uint64
