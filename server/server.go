@@ -254,10 +254,11 @@ func (c *server) Run(ctx context.Context) error {
 	}
 
 	g, gctx := errgroup.WithContext(ctx)
+	g2, gctx2 := errgroup.WithContext(ctx)
 	// start tcp server
-	g.Go(func() error {
+	g2.Go(func() error {
 		log.Info("tcp server start to run")
-		err := c.tcpServer.Run(ctx)
+		err := c.tcpServer.Run(gctx2)
 		if err != nil {
 			log.Error("tcp server exited", zap.Error(errors.Trace(err)))
 		}
@@ -298,12 +299,12 @@ func (c *server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	// if it takes too long for all components to exit, then exit directly to avoid hanging.
+	// if it takes too long for all sub modules to exit, then exit directly to avoid hanging.
 	closed := make(chan error)
 	g.Go(func() error {
 		<-gctx.Done()
 		time.Sleep(time.Second * 30)
-		closed <- errors.ErrTimeout
+		closed <- errors.ErrTimeout.FastGenByArgs("takes too long for all sub modules to exit")
 		return nil
 	})
 	go func() {
@@ -311,6 +312,7 @@ func (c *server) Run(ctx context.Context) error {
 		closed <- err
 	}()
 	err = <-closed
+	g2.Wait()
 	return err
 }
 

@@ -188,6 +188,9 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 		case <-sessionDone:
 			return errors.ErrEtcdSessionDone.GenWithStackByArgs()
 		case <-ticker.C:
+			failpoint.Inject("EtcdSessionDone", func() {
+				failpoint.Return(errors.ErrEtcdSessionDone.GenWithStackByArgs())
+			})
 			// There is no new event to handle on timer ticks, so we have nothing here.
 		case response := <-watchCh:
 			// In this select case, we receive new events from Etcd, and call handleEvent if appropriate.
