@@ -51,10 +51,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 
-	// Step 1: group the events by table ID using the extracted function
+	// Step 1: group the events by table ID and updateTs
 	eventsGroup := make(map[int64]map[uint64][]*commonEvent.DMLEvent) // tableID --> updateTs --> events
-
-	// Group events and collect metrics
 	for _, event := range events {
 		dmls.rowCount += int(event.Len())
 		if len(dmls.tsPairs) == 0 || dmls.tsPairs[len(dmls.tsPairs)-1].startTs != event.StartTs {
@@ -71,7 +69,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 		eventsGroup[tableID][updateTs] = append(eventsGroup[tableID][updateTs], event)
 	}
 
-	// Step 2: Convert eventsGroup to sorted structure and prepare the dmls for each group
+	// Step 2: sorted by updateTs for each tableID
 	eventsGroupSortedByUpdateTs := make(map[int64][][]*commonEvent.DMLEvent)
 
 	// Sort events by updateTs for each tableID
