@@ -107,7 +107,10 @@ type persistStorageDDLHandler struct {
 	// extractTableInfoFunc extract (table info, deleted) for the specified `tableID` from ddl event
 	extractTableInfoFunc func(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool)
 	// buildDDLEvent build a DDLEvent from a PersistedDDLEvent
-	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error)
+	// NOTE: the tableID is used in exchange table partition and rename tables DDL only,
+	// see the details in buildDDLEventForExchangeTablePartition and buildDDLEventForRenameTables.
+	// For other DDLs, tableID is not used and can be set to 0.
+	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error)
 }
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
@@ -655,10 +658,12 @@ func buildPersistedDDLEventForNormalPartitionDDL(args buildPersistedDDLEventFunc
 // the TableInfo belongs to the previous table(pt)
 func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
+	// these are the info of the normal table before exchange
 	event.TableName = getTableName(args.tableMap, event.TableID)
 	event.SchemaID = getSchemaID(args.tableMap, event.TableID)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 
+	// these are the info of the partition table after exchange
 	event.ExtraTableID = event.TableInfo.ID
 	event.ExtraTableName = getTableName(args.tableMap, event.ExtraTableID)
 	event.ExtraSchemaID = getSchemaID(args.tableMap, event.ExtraTableID)
@@ -1630,7 +1635,7 @@ func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType m
 	return filtered, notSync, nil
 }
 
-func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -1645,7 +1650,7 @@ func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filte
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -1668,7 +1673,7 @@ func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.
 }
 
 func buildDDLEventForModifySchemaCharsetAndCollate(
-	rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
+	rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64,
 ) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
@@ -1684,7 +1689,7 @@ func buildDDLEventForModifySchemaCharsetAndCollate(
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -1727,7 +1732,7 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -1769,11 +1774,12 @@ func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.F
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
 	}
+	// means it is filtered
 	if !ok {
 		return ddlEvent, false, err
 	}
@@ -1798,7 +1804,7 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForNormalDDLOnSingleTableForTiDB(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForNormalDDLOnSingleTableForTiDB(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -1826,7 +1832,7 @@ func buildDDLEventForNormalDDLOnSingleTableForTiDB(rawEvent *PersistedDDLEvent, 
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -1877,7 +1883,7 @@ func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filt
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2039,7 +2045,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForAddPartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForAddPartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2068,7 +2074,7 @@ func buildDDLEventForAddPartition(rawEvent *PersistedDDLEvent, tableFilter filte
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForDropPartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForDropPartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2092,7 +2098,7 @@ func buildDDLEventForDropPartition(rawEvent *PersistedDDLEvent, tableFilter filt
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForCreateView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForCreateView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2106,7 +2112,7 @@ func buildDDLEventForCreateView(rawEvent *PersistedDDLEvent, tableFilter filter.
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForDropView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForDropView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2121,7 +2127,7 @@ func buildDDLEventForDropView(rawEvent *PersistedDDLEvent, tableFilter filter.Fi
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2154,7 +2160,7 @@ func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent,
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2165,6 +2171,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	ddlEvent.ExtraSchemaName = rawEvent.ExtraSchemaName
 	ddlEvent.ExtraTableName = rawEvent.ExtraTableName
 	// TODO: rawEvent.TableInfo is not correct for ignoreNormalTable
+	// ignoreNormalTable and ignorePartitionTable are the table info before exchange
 	ignoreNormalTable, ignorePartitionTable := false, false
 	notSyncPartitionTable := false
 	if tableFilter != nil {
@@ -2174,7 +2181,8 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			rawEvent.TableName,
 			rawEvent.Query,
 			model.ActionExchangeTablePartition,
-			rawEvent.TableInfo,
+			// rawEvent.ExtraTableInfo is the normal table info before exchange.
+			rawEvent.ExtraTableInfo.ToTiDBTableInfo(),
 			rawEvent.StartTs,
 		)
 		if err != nil {
@@ -2186,6 +2194,11 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			rawEvent.ExtraTableName,
 			rawEvent.Query,
 			model.ActionExchangeTablePartition,
+			// rawEvent.TableInfo is the partition table info after exchange,
+			// typically, we should use the table info before exchange to do filtering,
+			// but we don't have the table info before exchange here,
+			// so we use the partition table info after exchange instead,
+			// because the difference between this two table info is just one partition table id changed.
 			rawEvent.TableInfo,
 			rawEvent.StartTs,
 		)
@@ -2260,10 +2273,39 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 		common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo),
 		rawEvent.ExtraTableInfo,
 	}
+	if tableID != 0 {
+		// Here we set TableInfo to the table info of tableID.
+		// First, check whether the tableID is a normal table after exchange.
+		// If false, set TableInfo to rawEvent.TableInfo, because the rawEvent.TableInfo is the partition table info after exchange.
+		// NOTE: ddlEvent.TableInfo is already the rawEvent.TableInfo in buildDDLEventCommon. So we don't need to set it again if false.
+		// If true, set TableInfo to rawEvent.ExtraTableInfo,
+		// because the rawEvent.ExtraTableInfo is the normal table info before exchange,
+		// but the tableID is the normal table after exchange, so we need to get a new TableInfo for it.
+		// NOTE: We can't just check tableID == rawEvent.ExtraTableInfo.TableName.TableID,
+		// because rawEvent.ExtraTableInfo is the table info before exchange,
+		// and the tableID is the table id after exchange.
+		isNormalTableAfterExchange := true
+		for _, id := range physicalIDs {
+			if id == tableID {
+				isNormalTableAfterExchange = false
+				break
+			}
+		}
+		if isNormalTableAfterExchange {
+			ddlEvent.TableInfo = common.NewTableInfo(
+				rawEvent.ExtraSchemaName,
+				ast.NewCIStr(rawEvent.ExtraTableName).O,
+				tableID,
+				false,
+				rawEvent.ExtraTableInfo.ShadowCopyColumnSchema(),
+				rawEvent.ExtraTableInfo.ToTiDBTableInfo(),
+			)
+		}
+	}
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, _, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2280,7 +2322,6 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	allFiltered := true
 	resultQuerys := make([]string, 0)
 	tableInfos := make([]*common.TableInfo, 0)
-	multipleNotSync := make([]bool, 0)
 	if len(querys) != len(rawEvent.MultipleTableInfos) {
 		log.Panic("rename tables length is not equal table infos", zap.Any("querys", querys), zap.Any("tableInfos", rawEvent.MultipleTableInfos))
 	}
@@ -2310,14 +2351,16 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		if isPartitionTable(rawEvent.TableInfo) {
 			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 			if !ignorePrevTable {
-				resultQuerys = append(resultQuerys, querys[i])
-				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
-
+				if !notSyncPrevTable {
+					// only when the previous table is not filtered and not NotSync, we add the query and table info
+					// to the DDLEvent. otherwise, we just skip it.
+					resultQuerys = append(resultQuerys, querys[i])
+					tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
+				}
 				if _, ok := visitTableIDs[tableInfo.ID]; !ok {
 					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
 					visitTableIDs[tableInfo.ID] = struct{}{}
 				}
-				multipleNotSync = append(multipleNotSync, notSyncPrevTable)
 				if !ignoreCurrentTable {
 					// check whether schema change
 					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
@@ -2356,15 +2399,33 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			} else {
 				// if the table is both filtered out before and after rename table, ignore
 			}
+			if tableID != 0 {
+				// This ddl event is for the dispatcher corresponding to tableID,
+				// so we should set the table info in DDLEvent to the table info of tableID.
+				// Otherwise, the table info in DDLEvent is always the first table info in rename tables.
+				// And dispatcher only checks TableInfo instead of MultipleTableInfos for now, even it's a multi-table DDL.
+				// tableID will be a physical table ID if the table is a partition table.
+				// So here we need to check whether tableID is in allPhysicalIDs.
+				// If we find it, we set the TableInfo in DDLEvent to the table info of tableID.
+				for _, id := range allPhysicalIDs {
+					if id == tableID {
+						ddlEvent.TableInfo = common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo)
+						break
+					}
+				}
+			}
 		} else {
 			if !ignorePrevTable {
-				resultQuerys = append(resultQuerys, querys[i])
-				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
+				if !notSyncPrevTable {
+					// only when the previous table is not filtered and not NotSync, we add the query and table info
+					// to the DDLEvent. otherwise, we just skip it.
+					resultQuerys = append(resultQuerys, querys[i])
+					tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
+				}
 				if _, ok := visitTableIDs[tableInfo.ID]; !ok {
 					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
 					visitTableIDs[tableInfo.ID] = struct{}{}
 				}
-				multipleNotSync = append(multipleNotSync, notSyncPrevTable)
 				if !ignoreCurrentTable {
 					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
 						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
@@ -2400,6 +2461,13 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			} else {
 				// ignore
 			}
+			if tableID != 0 {
+				// Here we set TableInfo to the table info of tableID.
+				// tableID is a normal table ID if the table is not a partition table.
+				if tableInfo.ID == tableID {
+					ddlEvent.TableInfo = common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo)
+				}
+			}
 		}
 	}
 	if allFiltered {
@@ -2413,11 +2481,13 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	}
 	ddlEvent.Query = strings.Join(resultQuerys, "")
 	ddlEvent.MultipleTableInfos = tableInfos
-	ddlEvent.MultipleNotSync = multipleNotSync
+	// For rename tables, we don't set NotSync, because we have already filter out the querys and multiple table infos which are NotSync.
+	// So here we just set NotSync to false.
+	ddlEvent.NotSync = false
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, _, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2459,7 +2529,6 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
 	tableInfos := make([]*common.TableInfo, 0, logicalTableCount)
-	multipleNotSync := make([]bool, 0, logicalTableCount)
 	for i, info := range rawEvent.MultipleTableInfos {
 		filtered, notSync := false, false
 		if tableFilter != nil {
@@ -2495,23 +2564,28 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			SchemaName: rawEvent.SchemaName,
 			TableName:  info.Name.O,
 		})
-		resultQuerys = append(resultQuerys, querys[i])
-		tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaName, info))
-		multipleNotSync = append(multipleNotSync, notSync)
+		if !notSync {
+			// only when the table is not NotSync, we add the query and table info
+			// to the DDLEvent. otherwise, we just skip it.
+			resultQuerys = append(resultQuerys, querys[i])
+			tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaName, info))
+		}
 	}
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
 		AddName: addName,
 	}
 	ddlEvent.Query = strings.Join(resultQuerys, "")
 	ddlEvent.MultipleTableInfos = tableInfos
-	ddlEvent.MultipleNotSync = multipleNotSync
+	// For create tables, we don't set NotSync, because we have already filter out the querys and multiple table infos which are NotSync.
+	// So here we just set NotSync to false.
+	ddlEvent.NotSync = false
 	if len(ddlEvent.NeedAddedTables) == 0 {
 		log.Fatal("should not happen")
 	}
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2547,7 +2621,7 @@ func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFi
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForRemovePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForRemovePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err

@@ -39,6 +39,17 @@ type ChangefeedSchedulerConfig struct {
 	// If false, all tables can be split without checking.
 	// For MySQL downstream, this is always set to true for data consistency.
 	EnableSplittableCheck bool `toml:"enable-splittable-check" json:"enable-splittable-check"`
+
+	// These config is used for adjust the frequency of balancing traffic.
+	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
+	// Default value is 20
+	BalanceScoreThreshold int `toml:"balance-score-threshold" json:"balance-score-threshold"`
+	// MinTrafficPercentage is the minimum traffic percentage for balancing traffic. Larger value means less frequent balancing.
+	// MinTrafficPercentage must be less then 1. Default value is 0.8
+	MinTrafficPercentage float64 `toml:"min-traffic-percentage" json:"min-traffic-percentage"`
+	// MaxTrafficPercentage is the maximum traffic percentage for balancing traffic. Less value means less frequent balancing.
+	// MaxTrafficPercentage must be greater then 1. Default value is 1.25
+	MaxTrafficPercentage float64 `toml:"max-traffic-percentage" json:"max-traffic-percentage"`
 }
 
 // Validate validates the config.
@@ -57,6 +68,18 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	}
 	if c.RegionCountPerSpan <= 0 {
 		return errors.New("region-count-per-span must be larger than 0")
+	}
+
+	if c.BalanceScoreThreshold <= 0 {
+		return errors.New("balance-score-threshold must be larger than 0")
+	}
+
+	if c.MinTrafficPercentage <= 0 || c.MinTrafficPercentage >= 1 {
+		return errors.New("min-traffic-percentage must be between 0 and 1")
+	}
+
+	if c.MaxTrafficPercentage <= 1 {
+		return errors.New("max-traffic-percentage must be greater than 1")
 	}
 
 	if IsMySQLCompatibleScheme(sinkURI.Scheme) {

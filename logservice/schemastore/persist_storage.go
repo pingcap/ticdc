@@ -431,7 +431,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
-		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, tableID)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -501,7 +501,8 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter)
+			// the tableID of buildDDLEvent is not used in this function, set it to 0
+			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -714,6 +715,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		log.Error("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
 		return nil
 	}
+
 	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
 		job:          job,
 		databaseMap:  p.databaseMap,
@@ -725,6 +727,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// TODO: do we have a better way to do this?
 	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
+		// ExtraTableInfo is the normal table info before exchange
 		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
 	}
 
@@ -784,25 +787,27 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	case model.ActionCreateTable:
 		// Note: partition table's logical table id is also in tableMap
 		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
-			log.Info("table already exists. ignore DDL",
-				zap.String("DDL", job.Query),
-				zap.Int64("jobID", job.ID),
+			log.Debug("table already exists. ignore DDL",
 				zap.Int64("schemaID", job.SchemaID),
-				zap.Int64("tableID", job.BinlogInfo.TableInfo.ID),
-				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
-				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
+				zap.String("schemaName", job.SchemaName),
+				zap.Int64("tableID", job.TableID),
+				zap.String("tableName", job.TableName),
+				zap.String("DDL", job.Query),
+				zap.Int64("schemaVersion", job.BinlogInfo.SchemaVersion),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS))
 			return true
 		}
 	case model.ActionCreateTables:
 		// For duplicate create tables ddl job, the tables in the job should be same, check the first table is enough
 		if _, ok := tableMap[job.BinlogInfo.MultipleTableInfos[0].ID]; ok {
-			log.Info("table already exists. ignore DDL",
-				zap.String("DDL", job.Query),
-				zap.Int64("jobID", job.ID),
+			log.Debug("table already exists. ignore DDL",
 				zap.Int64("schemaID", job.SchemaID),
-				zap.Int64("tableID", job.BinlogInfo.MultipleTableInfos[0].ID),
-				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
-				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
+				zap.String("schemaName", job.SchemaName),
+				zap.Int64("tableID", job.TableID),
+				zap.String("tableName", job.TableName),
+				zap.String("DDL", job.Query),
+				zap.Int64("schemaVersion", job.BinlogInfo.SchemaVersion),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS))
 			return true
 		}
 	// DDLs ignored
@@ -844,10 +849,13 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	return false
 }
 
-func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool, error) {
+// NOTE: tableID is only used in fetchTableDDLEvents to fetch exchange table partition and rename tables DDL
+// for the corresponding dispatcher.
+// It's not used in fetchTableTriggerDDLEvents, so it can be 0.
+func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))
 	}
-	return handler.buildDDLEventFunc(rawEvent, tableFilter)
+	return handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
 }

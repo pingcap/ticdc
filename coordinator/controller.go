@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -58,6 +59,7 @@ type Controller struct {
 	version int64
 
 	pdClient           pd.Client
+	pdClock            pdutil.Clock
 	scheduler          *scheduler.Controller
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
@@ -134,6 +136,7 @@ func NewController(
 		backend:            backend,
 		changefeedChangeCh: changefeedChangeCh,
 		pdClient:           pdClient,
+		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 	}
 	c.nodeChanged.changed = false
 
@@ -188,6 +191,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				keyspace := info.ChangefeedID.Keyspace()
 				name := info.ChangefeedID.Name()
 				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
+
+				pdPhysicalTime := oracle.GetPhysical(c.pdClock.CurrentTime())
+				phyCkpTs := oracle.ExtractPhysical(cf.GetLastSavedCheckPointTs())
+				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
+				metrics.ChangefeedCoordinatorCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
 			})
 		}
 	}

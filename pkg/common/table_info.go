@@ -363,7 +363,7 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 	return ti.HasPKOrNotNullUK
 }
 
-func originalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
+func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	// If the table has primary key, it is eligible.
 	// the PKIsHandle can not handle all primary key cases, for example:
 	// CREATE TABLE t (a int, b int, primary key(a, b));
@@ -510,14 +510,16 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 
 func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
 	return &model.TableInfo{
-		ID:       ti.TableName.TableID,
-		Name:     ast.NewCIStr(ti.TableName.Table),
-		Charset:  ti.Charset,
-		Collate:  ti.Collate,
-		Comment:  ti.Comment,
-		View:     ti.View,
-		Sequence: ti.Sequence,
-		Columns:  ti.columnSchema.Cols(), // Get public state columns, that's enough.
+		ID:         ti.TableName.TableID,
+		Name:       ast.NewCIStr(ti.TableName.Table),
+		Charset:    ti.Charset,
+		Collate:    ti.Collate,
+		Comment:    ti.Comment,
+		View:       ti.View,
+		Sequence:   ti.Sequence,
+		Columns:    ti.columnSchema.Columns,
+		Indices:    ti.columnSchema.Indices,
+		PKIsHandle: ti.columnSchema.PKIsHandle,
 	}
 }
 
@@ -530,7 +532,7 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 			IsPartition: isPartition,
 		},
 		columnSchema:     columnSchema,
-		HasPKOrNotNullUK: originalHasPKOrNotNullUK(tableInfo),
+		HasPKOrNotNullUK: OriginalHasPKOrNotNullUK(tableInfo),
 		View:             tableInfo.View,
 		Sequence:         tableInfo.Sequence,
 		Charset:          tableInfo.Charset,

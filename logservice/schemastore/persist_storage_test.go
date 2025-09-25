@@ -67,7 +67,7 @@ func TestApplyDDLJobs(t *testing.T) {
 	}{
 		// test drop schema can clear table info and partition info
 		{
-			"drop schema",
+			"drop_schema",
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
@@ -93,7 +93,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test create table/drop table/truncate table
 		{
-			"create/drop/truncate table",
+			"create_drop_truncate_table",
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
@@ -282,7 +282,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test create table/drop table for partition table
 		{
-			"drop partition table",
+			"drop_partition_table",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -378,7 +378,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test partition table related ddl
 		{
-			"partition table",
+			"partition_table",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -661,7 +661,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test exchange partition
 		{
-			"exchange table partition",
+			"exchange_table_partition",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -811,7 +811,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename table
 		{
-			"rename table",
+			"rename_table",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -983,7 +983,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename partition table
 		{
-			"rename partition table",
+			"rename_partition_table",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1131,7 +1131,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename tables
 		{
-			"rename tables",
+			"rename_tables",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1320,7 +1320,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename tables to swap names
 		{
-			"rename tables to swap names",
+			"rename_tables_to_swap_names",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1510,7 +1510,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		// },
 		// test create tables
 		{
-			"create tables",
+			"create_tables",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1692,7 +1692,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test create tables for partition table
 		{
-			"create partition tables",
+			"create_partition_tables",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1888,7 +1888,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test alter/remove partitioning
 		{
-			"alter remove partitioning",
+			"alter_remove_partitioning",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -2031,7 +2031,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		// test multi schema change
 		// test add/drop column
 		{
-			"trivial ddls",
+			"trivial_ddls",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{

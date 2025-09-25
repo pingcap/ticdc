@@ -44,7 +44,7 @@ func TestOneBlockEvent(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	startTs := uint64(10)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
 	stm := spanController.GetTasksByTableID(1)[0]
@@ -170,7 +170,7 @@ func TestNormalBlock(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
@@ -338,7 +338,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 3; id++ {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
@@ -484,7 +484,7 @@ func TestSchemaBlock(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -655,7 +655,7 @@ func TestSyncPointBlock(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
@@ -817,7 +817,7 @@ func TestNonBlocked(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
@@ -870,7 +870,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -925,7 +925,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	var dispatcherIDs []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
@@ -1086,7 +1086,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
 	for id := 1; id < 1000; id++ {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 1)
@@ -1166,7 +1166,7 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	tableID := int64(1)
 	schemaID := int64(1)
@@ -1373,7 +1373,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	// Setup dispatcher A
 	tableID := int64(1)
@@ -1519,7 +1519,7 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	// Setup two normal dispatchers
 	tableID1 := int64(1)

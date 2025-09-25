@@ -396,10 +396,19 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
 	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
-	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name)
-	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name)
-	metrics.TableCountGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
+
+	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
+	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
+	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
+	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
+	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "default")
+	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
 }
 
 func (m *Maintainer) onInit() bool {
