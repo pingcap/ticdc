@@ -253,7 +253,7 @@ func (c *server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	g, ctx := errgroup.WithContext(ctx)
+	g, gctx := errgroup.WithContext(ctx)
 	// start tcp server
 	g.Go(func() error {
 		log.Info("tcp server start to run")
@@ -271,13 +271,13 @@ func (c *server) Run(ctx context.Context) error {
 			g.Go(func() error {
 				log.Info("starting sub common module", zap.String("module", m.Name()))
 				defer log.Info("sub common module exited", zap.String("module", m.Name()))
-				return m.Run(ctx)
+				return m.Run(gctx)
 			})
 		}(sub)
 	}
 
 	// check the environment is valid to start the server
-	err = c.validCheck(ctx)
+	err = c.validCheck(gctx)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -288,16 +288,30 @@ func (c *server) Run(ctx context.Context) error {
 			g.Go(func() error {
 				log.Info("starting sub module", zap.String("module", m.Name()))
 				defer log.Info("sub module exited", zap.String("module", m.Name()))
-				return m.Run(ctx)
+				return m.Run(gctx)
 			})
 		}(sub)
 	}
 	// register server to etcd after we started all modules
-	err = c.registerNodeToEtcd(ctx)
+	err = c.registerNodeToEtcd(gctx)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	return g.Wait()
+
+	// if it takes too long for all components to exit, then exit directly to avoid hanging.
+	closed := make(chan error)
+	g.Go(func() error {
+		<-gctx.Done()
+		time.Sleep(time.Second * 30)
+		closed <- errors.ErrTimeout
+		return nil
+	})
+	go func() {
+		err := g.Wait()
+		closed <- err
+	}()
+	err = <-closed
+	return err
 }
 
 // validCheck checks whether the environment is valid to start the server
