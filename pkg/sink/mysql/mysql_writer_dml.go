@@ -37,29 +37,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// for multiple events, we try to batch the events of the same table into limited update / insert / delete query,
-// to enhance the performance of the sink.
-// While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
-// the process is as follows:
-//  1. we group the events by tableID, and hold the order for the events of the same table
-//  2. For each group,
-//     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.(TODO: support the case without pk but have uk)
-//     Otherwise,
-//     if there is only one rows of the whole group, we generate the sqls for the row.
-//     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
-func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
-	dmls := dmlsPool.Get().(*preparedDMLs)
-	dmls.reset()
-
+func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEvent.DMLEvent {
 	// Step 1: group the events by table ID and updateTs
 	eventsGroup := make(map[int64]map[uint64][]*commonEvent.DMLEvent) // tableID --> updateTs --> events
 	for _, event := range events {
-		dmls.rowCount += int(event.Len())
-		if len(dmls.tsPairs) == 0 || dmls.tsPairs[len(dmls.tsPairs)-1].startTs != event.StartTs {
-			dmls.tsPairs = append(dmls.tsPairs, tsPair{startTs: event.StartTs, commitTs: event.CommitTs})
-		}
-		dmls.approximateSize += event.GetSize()
-
 		tableID := event.GetTableID()
 		updateTs := event.TableInfo.GetUpdateTS()
 
@@ -91,8 +72,36 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 		}
 		eventsGroupSortedByUpdateTs[tableID] = sortedEvents
 	}
+	return eventsGroupSortedByUpdateTs
+}
 
-	// Step 3: prepare the dmls for each group
+// for multiple events, we try to batch the events of the same table into limited update / insert / delete query,
+// to enhance the performance of the sink.
+// While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
+// the process is as follows:
+//  1. we group the events by tableID, and hold the order for the events of the same table
+//  2. For each group,
+//     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.(TODO: support the case without pk but have uk)
+//     Otherwise,
+//     if there is only one rows of the whole group, we generate the sqls for the row.
+//     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
+func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
+	dmls := dmlsPool.Get().(*preparedDMLs)
+	dmls.reset()
+
+	// calculate metrics
+	for _, event := range events {
+		dmls.rowCount += int(event.Len())
+		if len(dmls.tsPairs) == 0 || dmls.tsPairs[len(dmls.tsPairs)-1].startTs != event.StartTs {
+			dmls.tsPairs = append(dmls.tsPairs, tsPair{startTs: event.StartTs, commitTs: event.CommitTs})
+		}
+		dmls.approximateSize += event.GetSize()
+	}
+
+	// Step 1: group the events by table ID and updateTs
+	eventsGroupSortedByUpdateTs := groupEventsByTable(events)
+
+	// Step 2: prepare the dmls for each group
 	var (
 		queryList []string
 		argsList  [][]interface{}
