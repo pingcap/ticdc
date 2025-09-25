@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+if [ $# -lt 1 ]; then
+	echo "Usage: psutil <process>"
+	exit 1
+fi
+
+os=$(uname -s)
+pid=
+if [[ "$os" == "Darwin" ]]; then
+	pid=$(pgrep "$1" | head -n 1)
+else
+	pid=$(ps -C "$1" -o pid= | tr -d '[:space:]')
+fi
+echo $pid

@@ -70,11 +70,11 @@ function failOverCaseD-1() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	run_sql "drop database fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -83,7 +83,7 @@ function failOverCaseD-1() {
 	sleep 20
 
 	kill_cdc_pid $cdc_pid_1
-	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_2=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -119,11 +119,11 @@ function failOverCaseD-2() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	run_sql "drop table fail_over_ddl_test.test1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -132,7 +132,7 @@ function failOverCaseD-2() {
 	sleep 20
 
 	kill_cdc_pid $cdc_pid_1
-	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_2=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -175,11 +175,11 @@ function failOverCaseD-3() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	run_sql "rename table fail_over_ddl_test.test1 to fail_over_ddl_test.test4;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -188,7 +188,7 @@ function failOverCaseD-3() {
 	sleep 20
 
 	kill_cdc_pid $cdc_pid_1
-	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_2=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -234,11 +234,11 @@ function failOverCaseD-4() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	run_sql "insert into fail_over_ddl_test.test1 values (2, 2);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -250,7 +250,7 @@ function failOverCaseD-4() {
 	sleep 20
 
 	kill_cdc_pid $cdc_pid_1
-	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_2=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''

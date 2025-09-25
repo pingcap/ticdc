@@ -75,7 +75,7 @@ function failOverCaseF-1() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
@@ -127,7 +127,7 @@ function failOverCaseF-2() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
@@ -187,7 +187,7 @@ function failOverCaseF-3() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
@@ -247,7 +247,7 @@ function failOverCaseF-4() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(psutil $CDC_BINARY)
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
