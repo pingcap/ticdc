@@ -833,8 +833,8 @@ github.com/pingcap/tidb-dashboard v0.0.0-20240326110213-9768844ff5d7 h1:eFu98Fbf
 github.com/pingcap/tidb-dashboard v0.0.0-20240326110213-9768844ff5d7/go.mod h1:ucZBRz52icb23T/5Z4CsuUHmarYiin7p2MeiVBe+o8c=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20250901065358-9bcae5eff736 h1:fYnmLwTvk50dfSfvmYorGAt6m4f8qpgS81mpR4bBvw4=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20250901065358-9bcae5eff736/go.mod h1:mpCcwRdMnmvNkBxcT4AqiE0yuvfJTdmCJs7cfznJw1w=
-github.com/pingcap/tiflow v0.0.0-20250917061332-73bb84070d16 h1:ReOJvERP0d/Xlv58Yi5MPYNSizXUb3ZakpG0qNAQ+oQ=
-github.com/pingcap/tiflow v0.0.0-20250917061332-73bb84070d16/go.mod h1:r1OqXzJFW30Dg+Y6KcP3WBgc9Fg9nJ8XwZvnyghKSD0=
+github.com/pingcap/tiflow v0.0.0-20250925094119-978632f62589 h1:dgULZIz8YBT9AbN8l2fwl2qsPXGi/EWlE6YOl7dTEvk=
+github.com/pingcap/tiflow v0.0.0-20250925094119-978632f62589/go.mod h1:Y7ZPFeWur2ctiLzV0Uxg5/2XwK/vWOQFOHBTG+EA4Ds=
 github.com/pingcap/tipb v0.0.0-20250605054300-07d1c2a671ee h1:r+nnSp37qkHtjRIqF65MH5BQ2aCHoeI1ybhaof8dqbw=
 github.com/pingcap/tipb v0.0.0-20250605054300-07d1c2a671ee/go.mod h1:RM8iRcMalzOthG2XJxnNBniM4xFGb/lDwHUwqkaVzt4=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
