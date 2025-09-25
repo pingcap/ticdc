@@ -52,9 +52,10 @@ import (
 )
 
 const (
-	closeServiceTimeout  = 15 * time.Second
-	cleanMetaDuration    = 10 * time.Second
-	oldArchCheckInterval = 100 * time.Millisecond
+	closeServiceTimeout     = 15 * time.Second
+	cleanMetaDuration       = 10 * time.Second
+	oldArchCheckInterval    = 100 * time.Millisecond
+	gracefulShutdownTimeout = 30 * time.Second
 )
 
 type server struct {
@@ -303,7 +304,7 @@ func (c *server) Run(ctx context.Context) error {
 	closed := make(chan error)
 	g.Go(func() error {
 		<-gctx.Done()
-		time.Sleep(time.Second * 30)
+		time.Sleep(gracefulShutdownTimeout)
 		closed <- errors.ErrTimeout.FastGenByArgs("takes too long for all sub modules to exit")
 		return nil
 	})
