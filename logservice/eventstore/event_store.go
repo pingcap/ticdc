@@ -1051,7 +1051,6 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			log.Panic("failed to decompress value", zap.Error(err))
 		}
 
-		rawKV := &common.RawKVEntry{}
 		rawKV.Decode(decompressedValue)
 
 		if err != nil {
