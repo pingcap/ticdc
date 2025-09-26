@@ -98,15 +98,15 @@ type DDLEvent struct {
 	// NotSync is used to indicate whether the event should be synced to downstream.
 	// If it is true, sink should not sync this event to downstream.
 	// It is used for some special DDL events that do not need to be synced,
-	// but only need to be sent to the table trigger.
+	// but only need to be sent to dispatcher to update some metadata.
 	// For example, if a `TRUNCATE TABLE` DDL is filtered by event filter,
 	// we don't need to sync it to downstream, but the DML events of the new truncated table
 	// should be sent to downstream.
-	// So we should send the `TRUNCATE TABLE` DDL event to table trigger,
+	// So we should send the `TRUNCATE TABLE` DDL event to dispatcher,
 	// to ensure the new truncated table can be handled correctly.
+	// If the DDL involves multiple tables, this field is not effective.
+	// The multiple table DDL event will be handled by filtering querys and table infos.
 	NotSync bool `msg:"not_sync"`
-	// MultipleNotSync is used to indicate whether multiple table DDLs should be synced to downstream.
-	MultipleNotSync []bool `msg:"multiple_not_sync"`
 }
 
 func (d *DDLEvent) String() string {
@@ -184,9 +184,6 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		t := model.ActionCreateTable
 		if model.ActionType(d.Type) == model.ActionRenameTables {
 			t = model.ActionRenameTable
-			if len(d.TableNameChange.DropName) != len(d.MultipleTableInfos) {
-				log.Panic("drop name length should be equal to multipleTableInfos length", zap.Any("query", d.TableNameChange.DropName), zap.Any("multipleTableInfos", d.MultipleTableInfos))
-			}
 		}
 		for i, info := range d.MultipleTableInfos {
 			event := &DDLEvent{

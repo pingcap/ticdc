@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/spf13/cobra"
 )
 
@@ -39,7 +38,7 @@ func newPauseChangefeedOptions() *pauseChangefeedOptions {
 // addFlags receives a *cobra.Command reference and binds
 // flags related to template printing to it.
 func (o *pauseChangefeedOptions) addFlags(cmd *cobra.Command) {
-	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", common.DefaultKeyspace, "Replication task (changefeed) Keyspace")
+	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", "", "Replication task (changefeed) Keyspace")
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -67,7 +68,7 @@ func TestApplyDDLJobs(t *testing.T) {
 	}{
 		// test drop schema can clear table info and partition info
 		{
-			"drop schema",
+			"drop_schema",
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
@@ -93,7 +94,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test create table/drop table/truncate table
 		{
-			"create/drop/truncate table",
+			"create_drop_truncate_table",
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
@@ -282,7 +283,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test create table/drop table for partition table
 		{
-			"drop partition table",
+			"drop_partition_table",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -378,7 +379,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test partition table related ddl
 		{
-			"partition table",
+			"partition_table",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -661,7 +662,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test exchange partition
 		{
-			"exchange table partition",
+			"exchange_table_partition",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -811,7 +812,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename table
 		{
-			"rename table",
+			"rename_table",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -983,7 +984,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename partition table
 		{
-			"rename partition table",
+			"rename_partition_table",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1131,7 +1132,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename tables
 		{
-			"rename tables",
+			"rename_tables",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1320,7 +1321,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename tables to swap names
 		{
-			"rename tables to swap names",
+			"rename_tables_to_swap_names",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1510,7 +1511,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		// },
 		// test create tables
 		{
-			"create tables",
+			"create_tables",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1692,7 +1693,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test create tables for partition table
 		{
-			"create partition tables",
+			"create_partition_tables",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1888,7 +1889,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test alter/remove partitioning
 		{
-			"alter remove partitioning",
+			"alter_remove_partitioning",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -2031,7 +2032,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		// test multi schema change
 		// test add/drop column
 		{
-			"trivial ddls",
+			"trivial_ddls",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -2770,4 +2771,46 @@ func TestGCPersistStorage(t *testing.T) {
 	}
 
 	// TODO: test obsolete data can be removed
+}
+
+func TestRenameTable(t *testing.T) {
+	// use t;
+	job := buildRenameTableJobForTest(100, 101, "t1", 101, &model.InvolvingSchemaInfo{
+		Database: "t",
+		Table:    "t3",
+	})
+	job.Query = "RENAME TABLE t3 TO test.t1"
+	ddl := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
+			200: {Name: "t", Tables: map[int64]bool{103: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "t1"},
+			102: {SchemaID: 100, Name: "t2"},
+			103: {SchemaID: 200, Name: "t3"},
+		},
+	})
+	assert.Equal(t, "RENAME TABLE `t`.`t3` TO `test`.`t1`", ddl.Query)
+
+	// use test;
+	job = buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
+		Database: "test",
+		Table:    "t1",
+	})
+	job.Query = "RENAME TABLE t1 TO t2"
+	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
+			200: {Name: "t", Tables: map[int64]bool{103: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "t1"},
+			102: {SchemaID: 100, Name: "t2"},
+			103: {SchemaID: 200, Name: "t3"},
+		},
+	})
+	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
 }

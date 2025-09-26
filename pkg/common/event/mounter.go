@@ -216,7 +216,6 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		}
 		datum = row[ddlTableInfo.JobMetaColumnIDinHistoryTable]
 		v = datum.GetBytes()
-
 		return parseJob(v, rawKV.StartTs, rawKV.CRTs, true)
 	}
 
