@@ -35,6 +35,8 @@ var cmuxReadTimeout = 10 * time.Second
 // TCPServer provides a muxed socket that can
 // serve both plain HTTP and gRPC at the same time.
 type TCPServer interface {
+	// Name returns the Name
+	Name() string
 	// Run runs the TCPServer.
 	// For a given instance of TCPServer, Run is expected
 	// to be called only once.
@@ -51,7 +53,7 @@ type TCPServer interface {
 	// will be closed, which will force the consumers of these
 	// listeners to stop. This provides a reliable mechanism to
 	// cancel all related components.
-	Close() error
+	Close(ctx context.Context) error
 }
 
 type tcpServerImpl struct {
@@ -151,7 +153,7 @@ func (s *tcpServerImpl) IsTLSEnabled() bool {
 	return s.isTLSEnabled
 }
 
-func (s *tcpServerImpl) Close() error {
+func (s *tcpServerImpl) Close(_ context.Context) error {
 	if s.isClosed.Swap(true) {
 		// ignore double closing
 		return nil
@@ -159,6 +161,10 @@ func (s *tcpServerImpl) Close() error {
 	// Closing the rootListener provides a reliable way
 	// for telling downstream components to exit.
 	return errors.Trace(s.rootListener.Close())
+}
+
+func (s *tcpServerImpl) Name() string {
+	return "tcp-server"
 }
 
 // wrapTLSListener takes a plain Listener and security credentials,

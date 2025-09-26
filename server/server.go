@@ -87,6 +87,11 @@ type server struct {
 	// preServices is the preServices will be start before the server is running
 	// And will be closed when the server is closing
 	preServices []common.Closeable
+
+	// subBaseModules contains base modules that start after PreServices.
+	// These modules will be closed at the end when the server shuts down.
+	// These modules are related to network
+	subBaseModules []common.SubModule
 	// subCommonModules contains common modules that start after PreServices.
 	// These modules will be closed when the server shuts down.
 	// These are shared modules across all components that:
@@ -169,11 +174,15 @@ func (c *server) initialize(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	c.subBaseModules = []common.SubModule{
+		c.tcpServer,
+		NewHttpServer(c, c.tcpServer.HTTP1Listener()),
+		NewGrpcServer(c.tcpServer.GrpcListener()),
+	}
 
 	c.subCommonModules = []common.SubModule{
 		nodeManager,
 		NewElector(c),
-		NewGrpcServer(c.tcpServer.GrpcListener()),
 	}
 
 	c.subModules = []common.SubModule{
@@ -184,6 +193,9 @@ func (c *server) initialize(ctx context.Context) error {
 		eventService,
 	}
 	// register it into global var
+	for _, baseModule := range c.subBaseModules {
+		appctx.SetService(baseModule.Name(), baseModule)
+	}
 	for _, subCommonModule := range c.subCommonModules {
 		appctx.SetService(subCommonModule.Name(), subCommonModule)
 	}
@@ -231,10 +243,6 @@ func (c *server) setPreServices(ctx context.Context) error {
 	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
 	c.preServices = append(c.preServices, dispatcherOrchestrator)
 
-	httpServer := NewHttpServer(c, c.tcpServer.HTTP1Listener())
-	httpServer.Run(ctx)
-	c.preServices = append(c.preServices, httpServer)
-
 	keyspaceManager := keyspace.NewKeyspaceManager(c.pdEndpoints)
 	appctx.SetService(appctx.KeyspaceManager, keyspaceManager)
 	c.preServices = append(c.preServices, keyspaceManager)
@@ -255,19 +263,21 @@ func (c *server) Run(ctx context.Context) error {
 	}
 
 	g, gctx := errgroup.WithContext(ctx)
-	g2, gctx2 := errgroup.WithContext(ctx)
-	// start tcp server
-	g2.Go(func() error {
-		log.Info("tcp server start to run")
-		err := c.tcpServer.Run(gctx2)
-		if err != nil {
-			log.Error("tcp server exited", zap.Error(errors.Trace(err)))
-		}
-		return nil
-	})
+	eg, egctx := errgroup.WithContext(ctx)
 
 	log.Info("server initialized", zap.Any("server", c.info))
-	// start all submodules
+	// start all subBaseModules
+	for _, sub := range c.subBaseModules {
+		func(m common.SubModule) {
+			eg.Go(func() error {
+				log.Info("starting sub base module", zap.String("module", m.Name()))
+				defer log.Info("sub base sub module exited", zap.String("module", m.Name()))
+				return m.Run(egctx)
+			})
+		}(sub)
+	}
+
+	// start all subCommonModules
 	for _, sub := range c.subCommonModules {
 		func(m common.SubModule) {
 			g.Go(func() error {
@@ -313,7 +323,7 @@ func (c *server) Run(ctx context.Context) error {
 		ch <- err
 	}()
 	err = <-ch
-	g2.Wait()
+	eg.Wait()
 	return err
 }
 
@@ -413,6 +423,15 @@ func (c *server) Close(ctx context.Context) {
 				zap.Error(err))
 		}
 		log.Info("sub common module closed", zap.String("module", subCommonModule.Name()))
+	}
+
+	for _, subBaseModule := range c.subBaseModules {
+		if err := subBaseModule.Close(ctx); err != nil {
+			log.Warn("failed to close sub base module",
+				zap.String("module", subBaseModule.Name()),
+				zap.Error(err))
+		}
+		log.Info("sub base module closed", zap.String("module", subBaseModule.Name()))
 	}
 
 	// delete server info from etcd
