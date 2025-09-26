@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -eu
+export PS4='+$(basename ${BASH_SOURCE}):${LINENO}:'
+set -x
+
+if [ "$NEXT_GEN" = 1 ]; then
+    cdc cli changefeed -k "$KEYSPACE_NAME" "$@"
+else
+    cdc cli changefeed "$@"
+fi
+
+set +x
