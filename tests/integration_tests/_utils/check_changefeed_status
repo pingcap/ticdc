@@ -14,31 +14,31 @@ expected_state=${3}
 field=${4}
 error_pattern=${5}
 
-info=$(curl $endpoint/api/v2/changefeeds/$changefeed_id/status)
+info=$(curl $endpoint/api/v2/changefeeds/$changefeed_id/status?keyspace=$KEYSPACE_NAME)
 echo "$info"
 
 state=$(echo $info | jq -r '.state')
 if [[ ! "$state" == "$expected_state" ]]; then
-	echo "changefeed state $state does not equal to $expected_state"
-	exit 1
+    echo "changefeed state $state does not equal to $expected_state"
+    exit 1
 fi
 
 if [[ -z $field ]]; then
-	error_msg=$(echo $info | jq -r ".last_error")
-	if [[ ! $error_msg == "null" ]]; then
-		echo "last_error should be empty as expected"
-		exit 1
-	fi
-	error_msg=$(echo $info | jq -r ".last_warning")
-	if [[ ! $error_msg == "null" ]]; then
-		echo "last_warning should be empty as expected"
-		exit 1
-	fi
-	exit 0
+    error_msg=$(echo $info | jq -r ".last_error")
+    if [[ ! $error_msg == "null" ]]; then
+        echo "last_error should be empty as expected"
+        exit 1
+    fi
+    error_msg=$(echo $info | jq -r ".last_warning")
+    if [[ ! $error_msg == "null" ]]; then
+        echo "last_warning should be empty as expected"
+        exit 1
+    fi
+    exit 0
 fi
 
 error_msg=$(echo $info | jq -r ".$field.message")
 if [[ ! "$error_msg" =~ "$error_pattern" ]]; then
-	echo "error message '$error_msg' is not as expected '$error_pattern'"
-	exit 1
+    echo "error message '$error_msg' is not as expected '$error_pattern'"
+    exit 1
 fi
