@@ -725,6 +725,23 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 
 	event.Query = strings.Join(querys, "")
 	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
+	// we have to reverse MultipleTableInfos to get correct schema name
+	// see https://github.com/pingcap/tidb/issues/63710
+	//
+	// If renaming tables creates cycles, some tables may not be created, and their table IDs may coincide with the latest table.
+	// For example: renaming table 'a' to 'common.c', 'b' to 'a', and 'common.c' to 'b' results in table 'c' not being created,
+	// with its table ID equal to that of 'b'. This leads to incorrect table info in the function `extractTableInfoFuncForRenameTables`.
+	// To avoid this situation, we must use the latest table info and disregard previous entries when encountering duplicate table info.
+	// Therefore, we set the table ID of the previous table info to -1 to ensure that each table ID is unique.
+	visitTableIDs := make(map[int64]struct{})
+	for i := len(event.MultipleTableInfos) - 1; i >= 0; i-- {
+		id := event.MultipleTableInfos[i].ID
+		if _, ok := visitTableIDs[id]; ok {
+			event.MultipleTableInfos[i].ID = -1
+		} else {
+			visitTableIDs[id] = struct{}{}
+		}
+	}
 	return event
 }
 
@@ -899,19 +916,15 @@ func updateDDLHistoryForExchangeTablePartition(args updateDDLHistoryFuncArgs) []
 
 func updateDDLHistoryForRenameTables(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
-	// visitTableIDs used to avoid duplicate table id
-	// For example: rename table a to c, b to a, c to b;
-	// https://github.com/pingcap/ticdc/issues/1734
-	visitTableIDs := make(map[int64]struct{})
 	// it won't be send to table dispatchers, just for build version store
 	for _, info := range args.ddlEvent.MultipleTableInfos {
-		if _, ok := visitTableIDs[info.ID]; !ok {
-			if isPartitionTable(info) {
-				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(info)...)
-			} else {
-				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, info.ID)
-			}
-			visitTableIDs[info.ID] = struct{}{}
+		if info.ID == -1 {
+			continue
+		}
+		if isPartitionTable(info) {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(info)...)
+		} else {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, info.ID)
 		}
 	}
 	return args.tableTriggerDDLHistory
@@ -1147,6 +1160,9 @@ func updateSchemaMetadataForRenameTables(args updateSchemaMetadataFuncArgs) {
 		log.Panic("multiple table infos should not be nil")
 	}
 	for i, info := range args.event.MultipleTableInfos {
+		if info.ID == -1 {
+			continue
+		}
 		if args.event.ExtraSchemaIDs[i] != args.event.SchemaIDs[i] {
 			args.tableMap[info.ID].SchemaID = args.event.SchemaIDs[i]
 			args.removeTableFromDB(info.ID, args.event.ExtraSchemaIDs[i])
@@ -1271,6 +1287,9 @@ func iterateEventTablesForExchangeTablePartition(event *PersistedDDLEvent, apply
 
 func iterateEventTablesForRenameTables(event *PersistedDDLEvent, apply func(tableId ...int64)) {
 	for _, info := range event.MultipleTableInfos {
+		if info.ID == -1 {
+			continue
+		}
 		if isPartitionTable(info) {
 			apply(getAllPartitionIDs(info)...)
 		} else {
@@ -1444,10 +1463,10 @@ func extractTableInfoFuncForTruncateAndReorganizePartition(event *PersistedDDLEv
 }
 
 func extractTableInfoFuncForRenameTables(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	// we have to reverse MultipleTableInfos to get correct schema name
-	// see https://github.com/pingcap/tidb/issues/63710
-	for i := len(event.MultipleTableInfos) - 1; i >= 0; i-- {
-		tableInfo := event.MultipleTableInfos[i]
+	for i, tableInfo := range event.MultipleTableInfos {
+		if tableInfo.ID == -1 {
+			continue
+		}
 		if isPartitionTable(tableInfo) {
 			for _, partitionID := range getAllPartitionIDs(tableInfo) {
 				if tableID == partitionID {
@@ -2325,10 +2344,6 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	if len(querys) != len(rawEvent.MultipleTableInfos) {
 		log.Panic("rename tables length is not equal table infos", zap.Any("querys", querys), zap.Any("tableInfos", rawEvent.MultipleTableInfos))
 	}
-	// The duplicate tableIDs in BlockedTables may cause cdc stuck, so we have to filter the tableIDs
-	// For example: rename table a to c, b to a, c to b;
-	// https://github.com/pingcap/ticdc/issues/1734
-	visitTableIDs := make(map[int64]struct{})
 	for i, tableInfo := range rawEvent.MultipleTableInfos {
 		ignorePrevTable, ignoreCurrentTable := false, false
 		notSyncPrevTable := false
@@ -2357,9 +2372,8 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 					resultQuerys = append(resultQuerys, querys[i])
 					tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
 				}
-				if _, ok := visitTableIDs[tableInfo.ID]; !ok {
+				if tableInfo.ID != -1 {
 					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
-					visitTableIDs[tableInfo.ID] = struct{}{}
 				}
 				if !ignoreCurrentTable {
 					// check whether schema change
@@ -2422,12 +2436,11 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 					resultQuerys = append(resultQuerys, querys[i])
 					tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
 				}
-				if _, ok := visitTableIDs[tableInfo.ID]; !ok {
+				if tableInfo.ID != -1 {
 					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
-					visitTableIDs[tableInfo.ID] = struct{}{}
 				}
 				if !ignoreCurrentTable {
-					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
+					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] && tableInfo.ID != -1 {
 						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
 							TableID:     tableInfo.ID,
 							OldSchemaID: rawEvent.ExtraSchemaIDs[i],
@@ -2449,7 +2462,9 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 							InfluenceType: commonEvent.InfluenceTypeNormal,
 						}
 					}
-					ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, tableInfo.ID)
+					if tableInfo.ID != -1 {
+						ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, tableInfo.ID)
+					}
 					dropNames = append(dropNames, commonEvent.SchemaTableName{
 						SchemaName: rawEvent.ExtraSchemaNames[i],
 						TableName:  rawEvent.ExtraTableNames[i],
