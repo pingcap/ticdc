@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -212,6 +213,9 @@ type eventStore struct {
 		// table id -> subscription stats
 		tableStats map[int64]subscriptionStats
 	}
+
+	encoder *zstd.Encoder
+	decoder *zstd.Decoder
 }
 
 const (
@@ -233,6 +237,17 @@ func New(
 		log.Panic("fail to remove path")
 	}
 
+	// Create the zstd encoder
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		log.Panic("Failed to create zstd encoder", zap.Error(err))
+	}
+
+	decoder, err := zstd.NewReader(nil)
+	if err != nil {
+		log.Panic("Failed to create zstd decoder", zap.Error(err))
+	}
+
 	store := &eventStore{
 		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		subClient: subClient,
@@ -242,6 +257,8 @@ func New(
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
 		gcManager: newGCManager(),
+		encoder:   encoder,
+		decoder:   decoder,
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
 	}
@@ -807,6 +824,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:       dataRange.CommitTsStart,
 		endTs:         dataRange.CommitTsEnd,
 		rowCount:      0,
+		decoder:       e.decoder,
 	}
 }
 
@@ -977,8 +995,11 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 				continue
 			}
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
+			// value := kv.Encode()
+
 			value := kv.Encode()
-			if err := batch.Set(key, value, pebble.NoSync); err != nil {
+			compressedValue := e.encoder.EncodeAll(value, nil)
+			if err := batch.Set(key, compressedValue, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
 		}
@@ -1014,6 +1035,7 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
+	decoder  *zstd.Decoder
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1023,7 +1045,15 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			return nil, false
 		}
 		value := iter.innerIter.Value()
-		err := rawKV.Decode(value)
+
+		decompressedValue, err := iter.decoder.DecodeAll(value, nil)
+		if err != nil {
+			log.Panic("failed to decompress value", zap.Error(err))
+		}
+
+		rawKV := &common.RawKVEntry{}
+		rawKV.Decode(decompressedValue)
+
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
