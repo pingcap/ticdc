@@ -13,6 +13,8 @@ error_handler() {
 trap 'error_handler ${LINENO} $?' ERR
 
 set -eu
+export PS4='+$(basename ${BASH_SOURCE}):${LINENO}:'
+set -x
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -72,8 +74,8 @@ function test_kill_capture() {
 
 	# ensure the server become the owner
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"
-	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
+	owner_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
+	owner_id=$($CDC_BINARY cli capture list 2>&1 | jq -r '.[0].id')
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
 
@@ -110,8 +112,8 @@ function test_hang_up_capture() {
 
 	# ensure the server become the owner
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"
-	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
+	owner_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
+	owner_id=$($CDC_BINARY cli capture list 2>&1 | jq -r '.[0].id')
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
 
@@ -139,8 +141,8 @@ function test_expire_capture() {
 
 	# ensure the server become the owner
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"
-	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
+	owner_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
+	owner_id=$($CDC_BINARY cli capture list 2>&1 | jq -r '.[0].id')
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
 
