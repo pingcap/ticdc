@@ -2376,38 +2376,40 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 				}
 				if tableInfo.ID != InvalidTableID {
 					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
-					if !ignoreCurrentTable {
-						// check whether schema change
-						if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
-							for _, id := range allPhysicalIDs {
-								ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
-									TableID:     id,
-									OldSchemaID: rawEvent.ExtraSchemaIDs[i],
-									NewSchemaID: rawEvent.SchemaIDs[i],
-								})
-							}
+				}
+				if !ignoreCurrentTable {
+					// check whether schema change
+					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] && tableInfo.ID != InvalidTableID {
+						for _, id := range allPhysicalIDs {
+							ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
+								TableID:     id,
+								OldSchemaID: rawEvent.ExtraSchemaIDs[i],
+								NewSchemaID: rawEvent.SchemaIDs[i],
+							})
 						}
-						addNames = append(addNames, commonEvent.SchemaTableName{
-							SchemaName: rawEvent.SchemaNames[i],
-							TableName:  tableInfo.Name.O,
-						})
-						dropNames = append(dropNames, commonEvent.SchemaTableName{
-							SchemaName: rawEvent.ExtraSchemaNames[i],
-							TableName:  rawEvent.ExtraTableNames[i],
-						})
-					} else {
-						// the table is filtered out after rename table, we need drop the table
-						if ddlEvent.NeedDroppedTables == nil {
-							ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
-								InfluenceType: commonEvent.InfluenceTypeNormal,
-							}
-						}
-						ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, allPhysicalIDs...)
-						dropNames = append(dropNames, commonEvent.SchemaTableName{
-							SchemaName: rawEvent.ExtraSchemaNames[i],
-							TableName:  rawEvent.ExtraTableNames[i],
-						})
 					}
+					addNames = append(addNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.SchemaNames[i],
+						TableName:  tableInfo.Name.O,
+					})
+					dropNames = append(dropNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.ExtraSchemaNames[i],
+						TableName:  rawEvent.ExtraTableNames[i],
+					})
+				} else {
+					// the table is filtered out after rename table, we need drop the table
+					if ddlEvent.NeedDroppedTables == nil {
+						ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+							InfluenceType: commonEvent.InfluenceTypeNormal,
+						}
+					}
+					if tableInfo.ID != InvalidTableID {
+						ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, allPhysicalIDs...)
+					}
+					dropNames = append(dropNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.ExtraSchemaNames[i],
+						TableName:  rawEvent.ExtraTableNames[i],
+					})
 				}
 			} else if !ignoreCurrentTable {
 				// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
@@ -2440,35 +2442,37 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 				}
 				if tableInfo.ID != InvalidTableID {
 					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
-					if !ignoreCurrentTable {
-						if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
-							ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
-								TableID:     tableInfo.ID,
-								OldSchemaID: rawEvent.ExtraSchemaIDs[i],
-								NewSchemaID: rawEvent.SchemaIDs[i],
-							})
-						}
-						addNames = append(addNames, commonEvent.SchemaTableName{
-							SchemaName: rawEvent.SchemaNames[i],
-							TableName:  tableInfo.Name.O,
-						})
-						dropNames = append(dropNames, commonEvent.SchemaTableName{
-							SchemaName: rawEvent.ExtraSchemaNames[i],
-							TableName:  rawEvent.ExtraTableNames[i],
-						})
-					} else {
-						// the table is filtered out after rename table, we need drop the table
-						if ddlEvent.NeedDroppedTables == nil {
-							ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
-								InfluenceType: commonEvent.InfluenceTypeNormal,
-							}
-						}
-						ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, tableInfo.ID)
-						dropNames = append(dropNames, commonEvent.SchemaTableName{
-							SchemaName: rawEvent.ExtraSchemaNames[i],
-							TableName:  rawEvent.ExtraTableNames[i],
+				}
+				if !ignoreCurrentTable {
+					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] && tableInfo.ID != InvalidTableID {
+						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
+							TableID:     tableInfo.ID,
+							OldSchemaID: rawEvent.ExtraSchemaIDs[i],
+							NewSchemaID: rawEvent.SchemaIDs[i],
 						})
 					}
+					addNames = append(addNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.SchemaNames[i],
+						TableName:  tableInfo.Name.O,
+					})
+					dropNames = append(dropNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.ExtraSchemaNames[i],
+						TableName:  rawEvent.ExtraTableNames[i],
+					})
+				} else {
+					// the table is filtered out after rename table, we need drop the table
+					if ddlEvent.NeedDroppedTables == nil {
+						ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+							InfluenceType: commonEvent.InfluenceTypeNormal,
+						}
+					}
+					if tableInfo.ID != InvalidTableID {
+						ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, tableInfo.ID)
+					}
+					dropNames = append(dropNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.ExtraSchemaNames[i],
+						TableName:  rawEvent.ExtraTableNames[i],
+					})
 				}
 			} else if !ignoreCurrentTable {
 				// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
