@@ -5,9 +5,9 @@ export PS4='+$(basename ${BASH_SOURCE}):${LINENO}:'
 set -x
 
 if [ "$NEXT_GEN" = 1 ]; then
-    cdc cli changefeed -k "$KEYSPACE_NAME" "$@"
+	cdc cli changefeed -k "$KEYSPACE_NAME" "$@"
 else
-    cdc cli changefeed "$@"
+	cdc cli changefeed "$@"
 fi
 
 set +x
