@@ -262,8 +262,8 @@ func (c *server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	g, gctx := errgroup.WithContext(ctx)
 	eg, egctx := errgroup.WithContext(ctx)
+	g, gctx := errgroup.WithContext(egctx)
 
 	log.Info("server initialized", zap.Any("server", c.info))
 	// start all subBaseModules
