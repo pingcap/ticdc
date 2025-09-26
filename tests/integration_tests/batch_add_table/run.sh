@@ -1,6 +1,8 @@
 #!/bin/bash
 
 set -eu
+export PS4='+$(basename ${BASH_SOURCE}):${LINENO}:'
+set -x
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -12,8 +14,6 @@ function run_with_fast_create_table() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
-
-	cd $WORK_DIR
 
 	run_sql "set global tidb_enable_fast_create_table=on" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -67,8 +67,6 @@ function run_without_fast_create_table() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
-
-	cd $WORK_DIR
 
 	run_sql "set global tidb_enable_fast_create_table=off" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
