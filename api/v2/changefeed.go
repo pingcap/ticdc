@@ -108,6 +108,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+
+	ok, err := isBootstrapped(co)
+	if err != nil || !ok {
+		_ = c.Error(err)
+		return
+	}
+
 	_, status, err := co.GetChangefeed(ctx, common.NewChangeFeedDisplayName(cfg.ID, cfg.Keyspace))
 	if err != nil && errors.ErrChangeFeedNotExists.NotEqual(err) {
 		_ = c.Error(err)
@@ -290,6 +297,12 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		return
 	}
 
+	ok, err := isBootstrapped(co)
+	if err != nil || !ok {
+		_ = c.Error(err)
+		return
+	}
+
 	keyspace := GetKeyspaceValueWithDefault(c)
 	changefeeds, statuses, err := co.ListChangefeeds(c, keyspace)
 	if err != nil {
@@ -410,6 +423,13 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+
+	ok, err := isBootstrapped(co)
+	if err != nil || !ok {
+		_ = c.Error(err)
+		return
+	}
+
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
@@ -494,12 +514,19 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 			changefeedDisplayName.Name))
 		return
 	}
-	coordinator, err := h.server.GetCoordinator()
+	co, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+
+	ok, err := isBootstrapped(co)
+	if err != nil || !ok {
+		_ = c.Error(err)
+		return
+	}
+
+	cfInfo, _, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		if errors.ErrChangeFeedNotExists.Equal(err) {
 			c.JSON(getStatus(c), nil)
@@ -508,7 +535,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	_, err = coordinator.RemoveChangefeed(ctx, cfInfo.ChangefeedID)
+	_, err = co.RemoveChangefeed(ctx, cfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -537,17 +564,24 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 		return
 	}
 
-	coordinator, err := h.server.GetCoordinator()
+	co, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+
+	ok, err := isBootstrapped(co)
+	if err != nil || !ok {
+		_ = c.Error(err)
+		return
+	}
+
+	cfInfo, _, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	err = coordinator.PauseChangefeed(ctx, cfInfo.ChangefeedID)
+	err = co.PauseChangefeed(ctx, cfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -595,12 +629,19 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		}
 	}
 
-	coordinator, err := h.server.GetCoordinator()
+	co, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	cfInfo, status, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+
+	ok, err := isBootstrapped(co)
+	if err != nil || !ok {
+		_ = c.Error(err)
+		return
+	}
+
+	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -638,7 +679,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		}
 	}()
 
-	err = coordinator.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
+	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -675,12 +716,19 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 			changefeedDisplayName.Name))
 		return
 	}
-	coordinator, err := h.server.GetCoordinator()
+	co, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	oldCfInfo, status, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+
+	ok, err := isBootstrapped(co)
+	if err != nil || !ok {
+		_ = c.Error(err)
+		return
+	}
+
+	oldCfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -779,7 +827,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	if err = coordinator.UpdateChangefeed(ctx, oldCfInfo); err != nil {
+	if err = co.UpdateChangefeed(ctx, oldCfInfo); err != nil {
 		_ = c.Error(err)
 		return
 	}
@@ -1261,6 +1309,13 @@ func (h *OpenAPIV2) status(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+
+	ok, err := isBootstrapped(co)
+	if err != nil || !ok {
+		_ = c.Error(err)
+		return
+	}
+
 	info, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
@@ -1305,6 +1360,12 @@ func (h *OpenAPIV2) syncState(c *gin.Context) {
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	co, err := h.server.GetCoordinator()
 	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	ok, err := isBootstrapped(co)
+	if err != nil || !ok {
 		_ = c.Error(err)
 		return
 	}
