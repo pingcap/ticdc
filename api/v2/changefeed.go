@@ -142,12 +142,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
 	const ensureTTL = 60 * 60
-	createGcServiceID := h.server.GetEtcdClient().GetGCServiceID()
+	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)
 	if err = gc.EnsureChangefeedStartTsSafety(
 		ctx,
 		h.server.GetPdClient(),
 		createGcServiceID,
-		gc.EnsureGCServiceCreating,
 		changefeedID,
 		ensureTTL, cfg.StartTs); err != nil {
 		if !errors.ErrStartTsBeforeGC.Equal(err) {
@@ -653,10 +652,11 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		newCheckpointTs = cfg.OverwriteCheckpointTs
 	}
 
+	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err := verifyResumeChangefeedConfig(
 		ctx,
 		h.server.GetPdClient(),
-		h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming),
+		resumeGcServiceID,
 		cfInfo.ChangefeedID,
 		newCheckpointTs); err != nil {
 		_ = c.Error(err)
@@ -670,7 +670,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		err := gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			h.server.GetPdClient(),
-			h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming),
+			resumeGcServiceID,
 			cfInfo.ChangefeedID,
 		)
 		if err != nil {
@@ -866,7 +866,6 @@ func verifyResumeChangefeedConfig(
 		ctx,
 		pdClient,
 		gcServiceID,
-		gc.EnsureGCServiceResuming,
 		changefeedID,
 		gcTTL, overrideCheckpointTs)
 	if err != nil {
