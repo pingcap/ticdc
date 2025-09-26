@@ -62,6 +62,7 @@ func (g *GrpcModule) Run(ctx context.Context) error {
 	defer func() {
 		log.Info("grpc server exited")
 	}()
+	// we must to exit if the context is done.
 	ch := make(chan error)
 	go func() {
 		err := g.grpcServer.Serve(g.lis)
