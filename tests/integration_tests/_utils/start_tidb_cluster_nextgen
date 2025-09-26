@@ -33,7 +33,6 @@ show_help() {
 Usage: $0 [OPTIONS]
 
 Options:
-  --keyspace-name NAME          Keyspace name (default: keyspace1)
   --multiple_upstream_pd        upstream pd count (default: 1, max 3)
   -h, --help                    Show this help message and exit
 EOF
@@ -49,43 +48,61 @@ check_port_available() {
 	done
 }
 
-KEYSPACE_NAME=keyspace1
-# Parse command line arguments manually
-while [[ $# -gt 0 ]]; do
-	case "$1" in
-	-h | --help)
-		show_help
-		exit 0
+OUT_DIR=
+tidb_config=
+pd_config=
+tikv_config=
+retry_times=3
+multiple_upstream_pd="false"
+while [[ ${1} ]]; do
+	case "${1}" in
+	--workdir)
+		OUT_DIR=${2}
+		shift
 		;;
-	--keyspace-name)
-		KEYSPACE_NAME="$2"
-		shift 2
+	--tidb-config)
+		tidb_config=${2}
+		shift
+		;;
+	--pd-config)
+		pd_config=${2}
+		shift
+		;;
+	--tikv-config)
+		tikv_config=${2}
+		shift
+		;;
+	--retry)
+		retry_times=${2}
+		shift
 		;;
 	--multiple-upstream-pd)
-		multiple_upstream_pd="$2"
+		multiple_upstream_pd=${2}
 		shift
 		;;
 	*)
-		echo "Unknown option: $1"
+		echo "Unknown parameter: ${1}" >&2
 		exit 1
 		;;
 	esac
+
+	if ! shift; then
+		echo 'Missing parameter argument.' >&2
+		exit 1
+	fi
 done
 
-if [ -z "$WORK_DIR" ]; then
-	echo "Error: environment variable WORK_DIR is empty" >&2
+if [ -z "$OUT_DIR" ]; then
+	echo "Error: environment variable OUT_DIR is empty" >&2
 	exit 1
 fi
 
-mkdir -p "$WORK_DIR"
-ENV_FILE="$WORK_DIR/env"
-rm -f "$ENV_FILE"
-touch "$ENV_FILE"
-
 # start minio
 echo "Starting MinIO server..."
-minio server --address ":$MINIO_API_PORT" --console-address ":MINIO_CONSOLE_PORT" "$WORK_DIR/minio/data" >"$WORK_DIR/minio/log/minio-stdout.log" 2>"$WORK_DIR/minio/log/minio-stderr.log" &
-echo "MINIO_PID=$!" >>"$ENV_FILE"
+mkdir -p "$OUT_DIR/minio/data"
+mkdir -p "$OUT_DIR/minio/log"
+minio server --address ":$MINIO_API_PORT" --console-address ":$MINIO_CONSOLE_PORT" "$OUT_DIR/minio/data" \
+	>"$OUT_DIR/minio/log/minio-stdout.log" 2>"$OUT_DIR/minio/log/minio-stderr.log" &
 
 check_port_available "" "$MINIO_API_PORT" "Wait for minio to be available"
 # Sleep for 1 second until MinIO becomes available.
@@ -100,12 +117,12 @@ else
 fi
 
 ################### start pd #####################
-cat >"$WORK_DIR/upstream-pd.toml" <<EOF
+cat >"$OUT_DIR/upstream-pd.toml" <<EOF
 [keyspace]
-pre-alloc = ["KEYSPACE_NAME"]
+pre-alloc = ["$KEYSPACE_NAME"]
 EOF
 
-cat >"$WORK_DIR/downstream-pd.toml" <<EOF
+cat >"$OUT_DIR/downstream-pd.toml" <<EOF
 [replication]
 # Set it to 1 to make sure we have enough replicas to run placement-rules.
 max-replicas = 1
@@ -122,6 +139,8 @@ else
 	initial_cluster="pd1=http://${UP_PD_HOST_1}:${UP_PD_PEER_PORT_1}"
 fi
 
+mkdir -p "$OUT_DIR/upstream/data"
+mkdir -p "$OUT_DIR/upstream/log/pd"
 for idx in $(seq 1 $pd_count); do
 	host="UP_PD_HOST_$idx"
 	port="UP_PD_PORT_$idx"
@@ -131,14 +150,17 @@ for idx in $(seq 1 $pd_count); do
 		--client-urls "http://0.0.0.0:${!port}" \
 		--advertise-peer-urls "http://${!host}:${!peer_port}" \
 		--peer-urls "http://0.0.0.0:${!peer_port}" \
-		--config "$WORK_DIR/upstream-pd.toml" \
-		--log-file "$WORK_DIR/upstream/log/pd/pd$idx.log" \
-		--data-dir "$WORK_DIR/upstream/data/pd$idx" \
+		--config "$OUT_DIR/upstream-pd.toml" \
+		--log-file "$OUT_DIR/upstream/log/pd/pd$idx.log" \
+		--data-dir "$OUT_DIR/upstream/data/pd$idx" \
 		--name="pd$idx" \
-		--initial-cluster "${initial_cluster}" >"$WORK_DIR/upstream/log/pd/pd$idx-stdout.log" 2>"$WORK_DIR/upstream/log/pd/pd$idx-stderr.log" &
-	echo "PD_UP_PID_$idx=$!" >>"$ENV_FILE"
+		--initial-cluster "${initial_cluster}" \
+		>"$OUT_DIR/upstream/log/pd/pd$idx-stdout.log" \
+		2>"$OUT_DIR/upstream/log/pd/pd$idx-stderr.log" &
 done
 
+mkdir -p "$OUT_DIR/downstream/data"
+mkdir -p "$OUT_DIR/downstream/log/pd"
 echo "Starting downstream PD..."
 pd-server --version
 pd-server \
@@ -146,10 +168,11 @@ pd-server \
 	--client-urls "http://0.0.0.0:${DOWN_PD_PORT}" \
 	--advertise-peer-urls "http://${DOWN_PD_HOST}:${DOWN_PD_PEER_PORT}" \
 	--peer-urls "http://0.0.0.0:${DOWN_PD_PEER_PORT}" \
-	--config "$WORK_DIR/downstream-pd.toml" \
-	--log-file "$WORK_DIR/downstream/log/pd/pd.log" \
-	--data-dir "$WORK_DIR/downstream/data/pd" >"$WORK_DIR/downstream/log/pd/pd-stdout.log" 2>"$WORK_DIR/downstream/log/pd/pd-stderr.log" &
-echo "PD_DOWN_PID=$!" >>"$ENV_FILE"
+	--config "$OUT_DIR/downstream-pd.toml" \
+	--log-file "$OUT_DIR/downstream/log/pd/pd.log" \
+	--data-dir "$OUT_DIR/downstream/data/pd" \
+	>"$OUT_DIR/downstream/log/pd/pd-stdout.log" \
+	2>"$OUT_DIR/downstream/log/pd/pd-stderr.log" &
 
 # wait for upstream PD to be ready
 echo "Verifying upstream PD is started..."
@@ -166,7 +189,7 @@ echo "checking downstream pd $DOWN_PD_HOST:$DOWN_PD_PORT"
 check_pd_health "$DOWN_PD_HOST" "$DOWN_PD_PORT" 60
 
 ################### start TiKV #####################
-cat >"$WORK_DIR/upstream-tikv.toml" <<EOF
+cat >"$OUT_DIR/upstream-tikv.toml" <<EOF
 [storage]
 api-version = 2
 enable-ttl = true
@@ -180,13 +203,13 @@ s3-bucket = "cse-test"
 s3-region = "local"
 
 [rfengine]
-wal-sync-dir = "$WORK_DIR/wal-sync/tikv/raft-wal"
+wal-sync-dir = "$OUT_DIR/wal-sync/tikv/raft-wal"
 lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
 EOF
 
-cat >"$WORK_DIR/downstream-tikv.toml" <<EOF
+cat >"$OUT_DIR/downstream-tikv.toml" <<EOF
 [storage]
 # Disable creating a large temp file.
 reserve-space = "0MB"
@@ -202,6 +225,8 @@ hibernate-regions-compatible = true
 EOF
 
 echo "Starting upstream TiKV..."
+mkdir -p "$OUT_DIR/upstream/data"
+mkdir -p "$OUT_DIR/upstream/log/tikv"
 tikv-server-nextgen --version
 for idx in $(seq 1 3); do
 	host="UP_TIKV_HOST_$idx"
@@ -211,33 +236,36 @@ for idx in $(seq 1 3); do
 		--pd "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 		-A "${!host}:${!port}" \
 		--status-addr "${!host}:${!status_port}" \
-		--log-file "$WORK_DIR/upstream/log/tikv/tikv$idx.log" \
+		--log-file "$OUT_DIR/upstream/log/tikv/tikv$idx.log" \
 		--log-level info \
-		-C "$WORK_DIR/upstream-tikv.toml" \
-		-s "$WORK_DIR/upstream/data/tikv$idx" >"$WORK_DIR/upstream/log/tikv/tikv$idx-stdout.log" 2>"$WORK_DIR/upstream/log/tikv/tikv$idx-stderr.log" &
-	echo "TIKV_UP_PID_$idx=$!" >>"$ENV_FILE"
+		-C "$OUT_DIR/upstream-tikv.toml" \
+		-s "$OUT_DIR/upstream/data/tikv$idx" \
+		>"$OUT_DIR/upstream/log/tikv/tikv$idx-stdout.log" \
+		2>"$OUT_DIR/upstream/log/tikv/tikv$idx-stderr.log" &
 done
 
 echo "Starting downstream TiKV..."
+mkdir -p "$OUT_DIR/downstream/data"
+mkdir -p "$OUT_DIR/downstream/log/tikv"
 tikv-server --version
 tikv-server \
 	--pd "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	-A "${DOWN_TIKV_HOST}:${DOWN_TIKV_PORT}" \
 	--status-addr "${DOWN_TIKV_HOST}:${DOWN_TIKV_STATUS_PORT}" \
-	--log-file "$WORK_DIR/downstream/log/tikv/tikv.log" \
+	--log-file "$OUT_DIR/downstream/log/tikv/tikv.log" \
 	--log-level info \
-	-C "$WORK_DIR/downstream-tikv.toml" \
-	-s "$WORK_DIR/downstream/data/tikv" >"$WORK_DIR/downstream/log/tikv/tikv-stdout.log" 2>"$WORK_DIR/downstream/log/tikv/tikv-stderr.log" &
-echo "TIKV_DOWN_PID=$!" >>"$ENV_FILE"
+	-C "$OUT_DIR/downstream-tikv.toml" \
+	-s "$OUT_DIR/downstream/data/tikv" \
+	>"$OUT_DIR/downstream/log/tikv/tikv-stdout.log" \
+	2>"$OUT_DIR/downstream/log/tikv/tikv-stderr.log" &
 
 sleep 2
 
 ####################start TiDB####################
-cat "$WORK_DIR/upstream-tidb-system.toml" <<EOF
+cat >"$OUT_DIR/upstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
 split-table = false
 enable-telemetry = false
-max-server-connections = 0
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
@@ -255,13 +283,13 @@ enable-sem = false
 
 [instance]
 tidb_service_scope = 'dxf_service'
+max-server-connections = 0
 EOF
 
-cat "$WORK_DIR/upstream-tidb-$KEYSPACE_NAME.toml" <<EOF
+cat >"$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
 split-table = false
 enable-telemetry = false
-max-server-connections = 0
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
@@ -276,50 +304,74 @@ tcp-keep-alive = true
 
 [security]
 enable-sem = false
+
+[instance]
+max-server-connections = 0
 EOF
 
-cat "$WORK_DIR/downstream-tidb.toml" <<EOF
+cp "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml"
+
+cat >"$OUT_DIR/downstream-tidb.toml" <<EOF
 split-table = true
 new_collations_enabled_on_first_bootstrap = true
 EOF
 
 echo "Starting upstream system TiDB"
+mkdir -p "$OUT_DIR/upstream/log/tidb-system"
 tidb-server-nextgen -V
-randomGenSocketsConf "$WORK_DIR/upstream-tidb-system.toml"
+randomGenSocketsConf "$OUT_DIR/upstream-tidb-system.toml"
 tidb-server-nextgen \
 	-P "${UP_TIDB_SYSTEM_PORT}" \
-	-config "$WORK_DIR/upstream-tidb-system.toml" \
+	-config "$OUT_DIR/upstream-tidb-system.toml" \
 	--store tikv \
-	--path "${UP_PD_HOST_1}:${UP_PD_HOST_1}" \
+	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 	--status "${UP_TIDB_SYSTEM_STATUS}" \
-	--log-file "$WORK_DIR/upstream/log/tidb-system/tidb.log" >"$WORK_DIR/upstream/log/tidb-system/tidb-stdout.log" 2>"$WORK_DIR/upstream/log/tidb-system/tidb-stderr.log" &
-echo "TIDB_UP_SYSTEM_PID=$!" >>"$ENV_FILE"
+	--log-file "$OUT_DIR/upstream/log/tidb-system/tidb.log" \
+	>"$OUT_DIR/upstream/log/tidb-system/tidb-stdout.log" \
+	2>"$OUT_DIR/upstream/log/tidb-system/tidb-stderr.log" &
+
+# The upstream system TiDB should be ready before the keyspace tidb starting
+echo "Verifying Upstream system TiDB is started..."
+check_tidb_health "$UP_TIDB_SYSTEM_HOST" "$UP_TIDB_SYSTEM_PORT" "" 60
 
 echo "Starting upstream $KEYSPACE_NAME TiDB"
-randomGenSocketsConf "$WORK_DIR/upstream-tidb-$KEYSPACE_NAME.toml"
+mkdir -p "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME"
+randomGenSocketsConf "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml"
 tidb-server-nextgen \
 	-P "${UP_TIDB_PORT}" \
-	-config "$WORK_DIR/upstream-tidb-$KEYSPACE_NAME.toml" \
+	-config "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" \
 	--store tikv \
-	--path "${UP_TIDB_SYSTEM_HOST}:${UP_TIDB_SYSTEM_PORT}" \
+	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 	--status "${UP_TIDB_STATUS}" \
-	--log-file "$WORK_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb.log" >"$WORK_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb-stdout.log" 2>"$WORK_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
-echo "TIDB_UP_KEYSPACE_PID=$!" >>"$ENV_FILE"
+	--log-file "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb.log" \
+	>"$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb-stdout.log" \
+	2>"$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
+
+mkdir -p "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other"
+randomGenSocketsConf "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml"
+tidb-server-nextgen \
+	-P "${UP_TIDB_OTHER_PORT}" \
+	-config "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" \
+	--store tikv \
+	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
+	--status "${UP_TIDB_OTHER_STATUS}" \
+	--log-file "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other/tidb.log" \
+	>"$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other/tidb-stdout.log" \
+	2>"$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other/tidb-stderr.log" &
 
 echo "Starting downstream TiDB..."
+mkdir -p "$OUT_DIR/downstream/log/tidb"
 tidb-server -V
-randomGenSocketsConf "$WORK_DIR/downstream-tidb.toml"
+randomGenSocketsConf "$OUT_DIR/downstream-tidb.toml"
 tidb-server \
 	-P "${DOWN_TIDB_PORT}" \
-	-config "downstream-tidb.toml" \
+	-config "$OUT_DIR/downstream-tidb.toml" \
 	--store tikv \
 	--path "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	--status "${DOWN_TIDB_STATUS}" \
-	--log-file "$OUT_DIR/downstream/log/tidb.log" >"$WORK_DIR/downstream/log/tidb/tidb-stdout.log" 2>"$WORK_DIR/downstream/log/tidb/tidb-stderr.log" &
-echo "TIDB_DOWN_PID=$!" >>"$ENV_FILE"
-
-echo "Verifying Upstream system TiDB is started..."
-check_tidb_health "$UP_TIDB_SYSTEM_HOST" "$UP_TIDB_SYSTEM_PORT" "" 60
+	--log-file "$OUT_DIR/downstream/log/tidb/tidb.log" \
+	>"$OUT_DIR/downstream/log/tidb/tidb-stdout.log" \
+	2>"$OUT_DIR/downstream/log/tidb/tidb-stderr.log" &
 
 echo "Verifying Upstream $KEYSPACE_NAME TiDB is started..."
 check_tidb_health "$UP_TIDB_HOST" "$UP_TIDB_PORT" "$UP_TIDB_OTHER_PORT" 60
@@ -334,11 +386,11 @@ run_sql "GRANT select,insert,update,delete,index,create,drop,alter,create view,r
 run_sql "FLUSH privileges" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 
 ################### start tiflash #####################
-#cat >"$WORK_DIR/tiflash-config.toml" <<EOF
-#tmp_path = "${WORK_DIR}/tiflash/tmp"
+#cat >"$OUT_DIR/tiflash-config.toml" <<EOF
+#tmp_path = "${OUT_DIR}/tiflash/tmp"
 #display_name = "TiFlash"
-#users_config = "${WORK_DIR}/tiflash/users.toml"
-#path = "${WORK_DIR}/tiflash/db"
+#users_config = "${OUT_DIR}/tiflash/users.toml"
+#path = "${OUT_DIR}/tiflash/db"
 #mark_cache_size = 5368709120
 #listen_host = "127.0.0.1"
 #tcp_port = 5000
@@ -352,14 +404,14 @@ run_sql "FLUSH privileges" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 #[flash.proxy]
 #addr = "127.0.0.1:9000"
 #advertise-addr = "127.0.0.1:9000"
-#data-dir = "${WORK_DIR}/tiflash/db/proxy"
-#config = "${WORK_DIR}/tiflash-proxy.toml"
-#log-file = "${WORK_DIR}/tiflash/log/proxy.log"
+#data-dir = "${OUT_DIR}/tiflash/db/proxy"
+#config = "${OUT_DIR}/tiflash-proxy.toml"
+#log-file = "${OUT_DIR}/tiflash/log/proxy.log"
 #
 #[logger]
 #level = "trace"
-#log = "${WORK_DIR}/tiflash/log/server.log"
-#errorlog = "${WORK_DIR}/tiflash/log/error.log"
+#log = "${OUT_DIR}/tiflash/log/server.log"
+#errorlog = "${OUT_DIR}/tiflash/log/error.log"
 #size = "4000M"
 #count = 10
 #
@@ -370,7 +422,7 @@ run_sql "FLUSH privileges" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 #pd_addr = "${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 #EOF
 #
-#cat >"$WORK_DIR/tiflash-proxy.toml" <<EOF
+#cat >"$OUT_DIR/tiflash-proxy.toml" <<EOF
 #log-level = "info"
 #
 #[server]
@@ -403,7 +455,7 @@ run_sql "FLUSH privileges" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 #EOF
 #
 #echo "Starting Upstream TiFlash..."
-#mkdir -p ${WORK_DIR}/tiflash/ && cp $CUR/tiflash-users.toml ${WORK_DIR}/tiflash/users.toml
+#mkdir -p ${OUT_DIR}/tiflash/ && cp $CUR/tiflash-users.toml ${OUT_DIR}/tiflash/users.toml
 #tiflash version
 #tiflash server --config-file "$OUT_DIR/tiflash-config.toml" &
 #
@@ -412,9 +464,9 @@ run_sql "FLUSH privileges" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 #while ! curl -o /dev/null -sf http://127.0.0.1:17000/metrics 1>/dev/null 2>&1; do
 #	i=$((i + 1))
 #	if [ "$i" -gt 10 ]; then
-#		cat ${WORK_DIR}/tiflash/log/proxy.log
-#		cat ${WORK_DIR}/tiflash/log/server.log
-#		cat ${WORK_DIR}/tiflash/log/error.log
+#		cat ${OUT_DIR}/tiflash/log/proxy.log
+#		cat ${OUT_DIR}/tiflash/log/server.log
+#		cat ${OUT_DIR}/tiflash/log/error.log
 #		echo 'Failed to start TiFlash'
 #		exit 1
 #	fi
