@@ -9,44 +9,44 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 function prepare() {
-    rm -rf $WORK_DIR && mkdir -p $WORK_DIR
-    stop_tidb_cluster
+	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
+	stop_tidb_cluster
 
-    start_tidb_cluster --workdir $WORK_DIR
+	start_tidb_cluster --workdir $WORK_DIR
 
-    cd $WORK_DIR
+	cd $WORK_DIR
 
-    # record tso before we create tables to skip the system table DDLs
-    start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+	# record tso before we create tables to skip the system table DDLs
+	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-    run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
-    TOPIC_NAME="ticdc-default-value-test-$RANDOM"
-    case $SINK_TYPE in
-        kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-        storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
-        pulsar)
-            run_pulsar_cluster $WORK_DIR normal
-            SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
-            ;;
-        *) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
-    esac
-    #cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
-    SINK_PARA="{\"replica_config\":{\"force_replicate\":true}, \"changefeed_id\":\"tidb-mysql-test\", \"sink_uri\":\"$SINK_URI\", \"start_ts\":$start_ts}"
-    curl -X POST -H "'Content-type':'application/json'" http://127.0.0.1:8300/api/v2/changefeeds?keyspace=$KEYSPACE_NAME -d "$SINK_PARA"
-    case $SINK_TYPE in
-        kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-        storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-        pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
-    esac
+	TOPIC_NAME="ticdc-default-value-test-$RANDOM"
+	case $SINK_TYPE in
+	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
+	storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
+	pulsar)
+		run_pulsar_cluster $WORK_DIR normal
+		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
+		;;
+	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
+	esac
+	#cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	SINK_PARA="{\"replica_config\":{\"force_replicate\":true}, \"changefeed_id\":\"tidb-mysql-test\", \"sink_uri\":\"$SINK_URI\", \"start_ts\":$start_ts}"
+	curl -X POST -H "'Content-type':'application/json'" http://127.0.0.1:8300/api/v2/changefeeds?keyspace=$KEYSPACE_NAME -d "$SINK_PARA"
+	case $SINK_TYPE in
+	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	esac
 }
 
 # kafka and storage test is not supported yet.
 # Because:(1) most cases has no pk/uk, consumer will receive more than one same DML
 #         (2) kafka consumer need support force_replicate
 if [ "$SINK_TYPE" != "mysql" ]; then
-    echo "[$(date)] <<<<<< skip test case $TEST_NAME for kafka! >>>>>>"
-    exit 0
+	echo "[$(date)] <<<<<< skip test case $TEST_NAME for kafka! >>>>>>"
+	exit 0
 fi
 
 # mysql test may suffer from duplicate DML for no pk/uk

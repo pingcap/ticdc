@@ -25,67 +25,67 @@ SINK_TYPE=$1
 # In this test, step-2 is achieved by failpoint injection, step-3 is triggered
 # by manual rebalance, step-4 is achieved by revoking the lease of capture key.
 function run() {
-    # test with mysql sink only
-    if [ "$SINK_TYPE" != "mysql" ]; then
-        return
-    fi
+	# test with mysql sink only
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
 
-    rm -rf $WORK_DIR && mkdir -p $WORK_DIR
-    start_tidb_cluster --workdir $WORK_DIR
-    cd $WORK_DIR
+	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
+	start_tidb_cluster --workdir $WORK_DIR
+	cd $WORK_DIR
 
-    pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
-    run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 1 --addr "127.0.0.1:8300"
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/sink/mysql/MySQLSinkHangLongTime=1*return(true)'
-    run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 2 --addr "127.0.0.1:8301"
+	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 1 --addr "127.0.0.1:8300"
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/sink/mysql/MySQLSinkHangLongTime=1*return(true)'
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 2 --addr "127.0.0.1:8301"
 
-    SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"
-    changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" | tail -n2 | head -n1 | awk '{print $2}')
+	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"
+	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" | tail -n2 | head -n1 | awk '{print $2}')
 
-    run_sql "CREATE DATABASE capture_suicide_while_balance_table;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-    for i in $(seq 1 4); do
-        run_sql "CREATE table capture_suicide_while_balance_table.t$i (id int primary key auto_increment)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-    done
+	run_sql "CREATE DATABASE capture_suicide_while_balance_table;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	for i in $(seq 1 4); do
+		run_sql "CREATE table capture_suicide_while_balance_table.t$i (id int primary key auto_increment)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	done
 
-    for i in $(seq 1 4); do
-        check_table_exists "capture_suicide_while_balance_table.t$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-    done
+	for i in $(seq 1 4); do
+		check_table_exists "capture_suicide_while_balance_table.t$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	done
 
-    capture1_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8300")|.id')
-    capture2_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8301")|.id')
+	capture1_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8300")|.id')
+	capture2_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8301")|.id')
 
-    target_capture=$capture1_id
-    # find a table that capture2 is replicating
-    one_table_id=$(curl -X GET "http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" | jq -r --arg cid "$capture2_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
-    if [[ $one_table_id == "null" || $one_table_id == "0" ]]; then
-        # if not found, find a table that capture1 is replicating
-        target_capture=$capture2_id
-        one_table_id=$(curl -X GET "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" | jq -r --arg cid "$capture1_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
-    fi
-    table_query=$(mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "select table_name from information_schema.tables where tidb_table_id = ${one_table_id}\G")
-    table_name=$(echo $table_query | tail -n 1 | awk '{print $(NF)}')
-    run_sql "insert into capture_suicide_while_balance_table.${table_name} values (),(),(),(),()"
+	target_capture=$capture1_id
+	# find a table that capture2 is replicating
+	one_table_id=$(curl -X GET "http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" | jq -r --arg cid "$capture2_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
+	if [[ $one_table_id == "null" || $one_table_id == "0" ]]; then
+		# if not found, find a table that capture1 is replicating
+		target_capture=$capture2_id
+		one_table_id=$(curl -X GET "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" | jq -r --arg cid "$capture1_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
+	fi
+	table_query=$(mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "select table_name from information_schema.tables where tidb_table_id = ${one_table_id}\G")
+	table_name=$(echo $table_query | tail -n 1 | awk '{print $(NF)}')
+	run_sql "insert into capture_suicide_while_balance_table.${table_name} values (),(),(),(),()"
 
-    # sleep some time to wait global resolved ts forwarded
-    sleep 2
-    curl -X POST "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/move_table?tableID=${one_table_id}&targetNodeID=${target_capture}&keyspace=$KEYSPACE_NAME"
-    # sleep some time to wait table balance job is written to etcd
-    sleep 2
+	# sleep some time to wait global resolved ts forwarded
+	sleep 2
+	curl -X POST "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/move_table?tableID=${one_table_id}&targetNodeID=${target_capture}&keyspace=$KEYSPACE_NAME"
+	# sleep some time to wait table balance job is written to etcd
+	sleep 2
 
-    # revoke lease of etcd capture key to simulate etcd session done
-    lease=$(ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/capture/${capture2_id} -w json | grep -o 'lease":[0-9]*' | awk -F: '{print $2}')
-    lease_hex=$(printf '%x\n' $lease)
-    ETCDCTL_API=3 etcdctl lease revoke $lease_hex
+	# revoke lease of etcd capture key to simulate etcd session done
+	lease=$(ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/capture/${capture2_id} -w json | grep -o 'lease":[0-9]*' | awk -F: '{print $2}')
+	lease_hex=$(printf '%x\n' $lease)
+	ETCDCTL_API=3 etcdctl lease revoke $lease_hex
 
-    # sleep some time to wait capture2 suicides
-    sleep 10
+	# sleep some time to wait capture2 suicides
+	sleep 10
 
-    # start capture2 again
-    run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix 2 --addr "127.0.0.1:8301"
+	# start capture2 again
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix 2 --addr "127.0.0.1:8301"
 
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
-    export GO_FAILPOINTS=''
-    cleanup_process $CDC_BINARY
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	export GO_FAILPOINTS=''
+	cleanup_process $CDC_BINARY
 }
 
 trap stop_tidb_cluster EXIT
