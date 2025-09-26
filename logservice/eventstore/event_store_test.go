@@ -188,6 +188,65 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 	}
 }
 
+func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
+	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
+	es := store.(*eventStore)
+
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+	dispatcherID3 := common.NewDispatcherID()
+	tableID := int64(1)
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+
+	// 1. Register a dispatcher to create a large subscription.
+	{
+		span := &heartbeatpb.TableSpan{
+			TableID:  tableID,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+		}
+		ok := es.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		require.True(t, ok)
+	}
+
+	// 2. Register a second dispatcher with onlyReuse=true, whose span is contained
+	//    by the first subscription. This registration should succeed.
+	{
+		span := &heartbeatpb.TableSpan{
+			TableID:  tableID,
+			StartKey: []byte("b"),
+			EndKey:   []byte("y"),
+		}
+		ok := es.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		require.True(t, ok)
+	}
+
+	// 3. Register a third dispatcher with onlyReuse=true, whose span is an exact match
+	//    to the first subscription. This registration should also succeed.
+	{
+		span := &heartbeatpb.TableSpan{
+			TableID:  tableID,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+		}
+		ok := es.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		require.True(t, ok)
+	}
+
+	// 4. Verify that dispatcherID2 and dispatcherID3 are included in the changefeedStat, confirming
+	//    that the defer cleanup logic was not incorrectly triggered.
+	v, ok := es.changefeedMeta.Load(cfID)
+	require.True(t, ok)
+	cfStat := v.(*changefeedStat)
+	cfStat.mutex.Lock()
+	defer cfStat.mutex.Unlock()
+	require.Len(t, cfStat.dispatchers, 3, "dispatcher2 and dispatcher3 should be registered successfully")
+	_, dispatcher2Exists := cfStat.dispatchers[dispatcherID2]
+	require.True(t, dispatcher2Exists, "dispatcher2 should exist in changefeedStat")
+	_, dispatcher3Exists := cfStat.dispatchers[dispatcherID3]
+	require.True(t, dispatcher3Exists, "dispatcher3 should exist in changefeedStat")
+}
+
 func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 

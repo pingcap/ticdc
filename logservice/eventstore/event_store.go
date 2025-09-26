@@ -500,6 +500,7 @@ func (e *eventStore) RegisterDispatcher(
 						zap.Uint64("subscriptionID", uint64(subStat.subID)),
 						zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
+					success = true
 					return true
 				}
 
