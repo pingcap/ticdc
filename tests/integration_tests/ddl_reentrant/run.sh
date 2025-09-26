@@ -37,11 +37,11 @@ SINK_URI="mysql://root@127.0.0.1:3306/"
 
 function check_ts_forward() {
 	changefeedid=$1
-	rts1=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.resolved_ts')
-	checkpoint1=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+	rts1=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} | grep -v "Command to ticdc" | jq '.resolved_ts')
+	checkpoint1=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	sleep 1
-	rts2=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.resolved_ts')
-	checkpoint2=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+	rts2=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} | grep -v "Command to ticdc" | jq '.resolved_ts')
+	checkpoint2=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	if [[ "$rts1" != "null" ]] && [[ "$rts1" != "0" ]]; then
 		if [[ "$rts1" -ne "$rts2" ]] || [[ "$checkpoint1" -ne "$checkpoint2" ]]; then
 			echo "changefeed is working normally rts: ${rts1}->${rts2} checkpoint: ${checkpoint1}->${checkpoint2}"
@@ -111,7 +111,7 @@ function run() {
 	cd $WORK_DIR
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	changefeedid=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
+	changefeedid=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" | tail -n2 | head -n1 | awk '{print $2}')
 
 	OLDIFS=$IFS
 	IFS=""

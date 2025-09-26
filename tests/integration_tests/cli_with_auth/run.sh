@@ -79,7 +79,7 @@ function run() {
 
 	# Make sure changefeed can not be created if the name is already exists.
 	set +e
-	exists=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" 2>&1 | grep -oE 'already exists')
+	exists=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" | grep -oE 'already exists')
 	set -e
 	if [[ -z $exists ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${exists} >>>>>"
@@ -127,7 +127,7 @@ EOF
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $uuid "normal" "null" ""
 
 	# Make sure bad sink url fails at creating changefeed.
-	badsink=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" 2>&1 | grep -oE 'fail')
+	badsink=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" | grep -oE 'fail')
 	if [[ -z $badsink ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${badsink} >>>>>"
 		exit 1

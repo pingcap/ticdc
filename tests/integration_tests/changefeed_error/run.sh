@@ -11,7 +11,7 @@ MAX_RETRIES=20
 
 function check_no_changefeed() {
 	pd=$1
-	count=$(cdc_cli_changefeed list --pd=$pd 2>&1 | grep -v "Command to ticdc" | jq '.|length')
+	count=$(cdc_cli_changefeed list --pd=$pd | grep -v "Command to ticdc" | jq '.|length')
 	if [[ ! "$count" -eq "0" ]]; then
 		exit 1
 	fi

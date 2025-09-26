@@ -20,7 +20,7 @@ function resume_changefeed_in_stopped_state() {
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
-	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
+	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" | tail -n2 | head -n1 | awk '{print $2}')
 
 	checkpointTs1=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	for i in $(seq 1 2); do
@@ -101,14 +101,14 @@ function resume_changefeed_in_failed_state() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config3.toml
 
 	cdc_cli_changefeed pause --changefeed-id=$changefeed_id --pd=$pd_addr
-	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=18446744073709551615 --no-confirm=true 2>&1 || true)
+	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=18446744073709551615 --no-confirm=true || true)
 	if [[ $result != *"ErrCliCheckpointTsIsInFuture"* ]]; then
 		echo "changefeeed resume result is expected to contain 'ErrCliCheckpointTsIsInFuture', \
           but actually got $result"
 		exit 1
 	fi
 
-	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=100 --no-confirm=true 2>&1 || true)
+	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=100 --no-confirm=true || true)
 	if [[ $result != *"ErrStartTsBeforeGC"* ]]; then
 		echo "changefeeed resume result is expected to contain 'ErrStartTsBeforeGC', \
 			    but actually got $result"
@@ -116,7 +116,7 @@ function resume_changefeed_in_failed_state() {
 	fi
 
 	gc_safepoint=$(pd-ctl -u=$pd_addr service-gc-safepoint | grep -oE "\"safe_point\": [0-9]+" | grep -oE "[0-9]+" | sort | head -n1)
-	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=$gc_safepoint --no-confirm=true 2>&1 || true)
+	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=$gc_safepoint --no-confirm=true || true)
 	if [[ $result != *"ErrStartTsBeforeGC"* ]]; then
 		echo "changefeeed resume result is expected to contain 'ErrStartTsBeforeGC', \
 			    but actually got $result"

@@ -93,7 +93,7 @@ function run() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/txnutil/gc/InjectGcSafepointUpdateInterval=return(100)'
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/coordinator/InjectUpdateGCTickerInterval=return(100)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
-	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
+	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" | tail -n2 | head -n1 | awk '{print $2}')
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -126,7 +126,7 @@ function run() {
 	ensure $MAX_RETRIES check_changefeed_state $pd_addr $changefeed_id "stopped" "null" ""
 	# create another changefeed, because there exists a paused changefeed,
 	# the safe_point still does not forward
-	changefeed_id2=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
+	changefeed_id2=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" | tail -n2 | head -n1 | awk '{print $2}')
 	ensure $MAX_RETRIES check_changefeed_state $pd_addr $changefeed_id2 "normal" "null" ""
 	ensure $MAX_RETRIES check_safepoint_equal $pd_addr $pd_cluster_id
 
