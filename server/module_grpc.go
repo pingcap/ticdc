@@ -23,6 +23,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
@@ -66,6 +67,9 @@ func (g *GrpcModule) Run(ctx context.Context) error {
 	ch := make(chan error)
 	go func() {
 		err := g.grpcServer.Serve(g.lis)
+		if err != nil {
+			log.Error("grpc server error", zap.Error(err))
+		}
 		ch <- err
 	}()
 	select {

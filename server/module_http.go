@@ -73,6 +73,9 @@ func NewHttpServer(c *server, lis net.Listener) common.SubModule {
 
 func (s *HttpServer) Run(ctx context.Context) error {
 	log.Info("http server is running", zap.String("addr", s.listener.Addr().String()))
+	defer func() {
+		log.Info("http server exited")
+	}()
 	// we must to exit if the context is done.
 	ch := make(chan error)
 	go func() {

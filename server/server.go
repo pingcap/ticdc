@@ -262,21 +262,21 @@ func (c *server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	eg, egctx := errgroup.WithContext(ctx)
-	g, gctx := errgroup.WithContext(egctx)
-
 	log.Info("server initialized", zap.Any("server", c.info))
+	// base module priority is higher than other sub modules
+	eg, egctx := errgroup.WithContext(ctx)
 	// start all subBaseModules
 	for _, sub := range c.subBaseModules {
 		func(m common.SubModule) {
 			eg.Go(func() error {
 				log.Info("starting sub base module", zap.String("module", m.Name()))
-				defer log.Info("sub base sub module exited", zap.String("module", m.Name()))
+				defer log.Info("sub base module exited", zap.String("module", m.Name()))
 				return m.Run(egctx)
 			})
 		}(sub)
 	}
 
+	g, gctx := errgroup.WithContext(egctx)
 	// start all subCommonModules
 	for _, sub := range c.subCommonModules {
 		func(m common.SubModule) {
@@ -312,18 +312,20 @@ func (c *server) Run(ctx context.Context) error {
 
 	// if it takes too long for all sub modules to exit, then exit directly to avoid hanging.
 	ch := make(chan error, 1)
-	g.Go(func() error {
+	go func() {
 		<-gctx.Done()
 		time.Sleep(gracefulShutdownTimeout)
 		ch <- errors.ErrTimeout.FastGenByArgs("takes too long for all sub modules to exit")
-		return nil
-	})
+	}()
 	go func() {
-		err := g.Wait()
-		ch <- err
+		ch <- g.Wait()
 	}()
 	err = <-ch
-	eg.Wait()
+	// wait base module exit at the end
+	err1 := eg.Wait()
+	if err1 != nil {
+		log.Error("meet error in base module", zap.Error(err1))
+	}
 	return err
 }
 
