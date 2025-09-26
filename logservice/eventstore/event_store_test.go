@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -33,13 +34,12 @@ type mockSubscriptionStat struct {
 }
 
 type mockSubscriptionClient struct {
-	nextID        uint64
+	nextID        atomic.Uint64
 	subscriptions map[logpuller.SubscriptionID]*mockSubscriptionStat
 }
 
 func NewMockSubscriptionClient() logpuller.SubscriptionClient {
 	return &mockSubscriptionClient{
-		nextID:        0,
 		subscriptions: make(map[logpuller.SubscriptionID]*mockSubscriptionStat),
 	}
 }
@@ -57,8 +57,8 @@ func (s *mockSubscriptionClient) Close(ctx context.Context) error {
 }
 
 func (s *mockSubscriptionClient) AllocSubscriptionID() logpuller.SubscriptionID {
-	s.nextID += 1
-	return logpuller.SubscriptionID(s.nextID)
+	nextID := s.nextID.Add(1)
+	return logpuller.SubscriptionID(nextID)
 }
 
 func (s *mockSubscriptionClient) Subscribe(
