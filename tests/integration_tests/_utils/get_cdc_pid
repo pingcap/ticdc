@@ -1,0 +1,13 @@
+#!/bin/bash
+
+set -eu
+
+if [ $# -ne 2 ]; then
+	echo "Usage: get_cdc_pid <host> <port>"
+	exit 1
+fi
+
+host=$1
+port=$2
+
+curl "http://$host:$port/status" 2>/dev/null | jq '.pid'

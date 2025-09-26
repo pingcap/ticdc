@@ -66,7 +66,7 @@ function try_to_run_cdc() {
 
 stop_cdc() {
 	echo "Later, cdc will receive a signal(SIGINT) and exit"
-	cdc_pid=$(ps -a | grep -m 1 "cdc.test" | awk '{print $1}')
+	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	echo "cdc pid is "$cdc_pid
 	sleep 60
 	kill_cdc_pid $cdc_pid

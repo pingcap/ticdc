@@ -25,8 +25,7 @@ function kill_cdc_and_restart() {
 	work_dir=$2
 	cdc_binary=$3
 	MAX_RETRIES=10
-	status=$(curl -s http://127.0.0.1:8300/status)
-	cdc_pid=$(echo "$status" | grep -v "Command to ticdc" | jq '.pid')
+	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	kill_cdc_pid $cdc_pid
 	run_cdc_server --workdir $work_dir --binary $cdc_binary --pd $pd_addr

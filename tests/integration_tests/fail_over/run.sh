@@ -25,7 +25,7 @@ function failOverOnlyOneNode() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/HandleEventsSlowly=return(true)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	cdc_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	TOPIC_NAME="ticdc-failover-test-$RANDOM"
 	case $SINK_TYPE in
