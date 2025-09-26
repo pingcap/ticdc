@@ -185,7 +185,6 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 				defaultSchemaStoreGcServiceID,
 				fakeChangefeedID,
 				defaultGcServiceTTL, gcSafePoint+1)
-			log.Info("fizz EnsureChangefeedStartTsSafety", zap.Error(err))
 			if err == nil {
 				break
 			}
