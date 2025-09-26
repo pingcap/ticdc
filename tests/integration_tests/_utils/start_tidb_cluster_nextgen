@@ -332,7 +332,7 @@ tidb-server-nextgen \
 
 # The upstream system TiDB should be ready before the keyspace tidb starting
 echo "Verifying Upstream system TiDB is started..."
-check_tidb_health "$UP_TIDB_SYSTEM_HOST" "$UP_TIDB_SYSTEM_PORT" "" 60
+check_tidb_health "$UP_TIDB_SYSTEM_HOST" "$UP_TIDB_SYSTEM_PORT" 60
 
 echo "Starting upstream $KEYSPACE_NAME TiDB"
 mkdir -p "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME"
@@ -351,7 +351,7 @@ mkdir -p "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other"
 randomGenSocketsConf "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml"
 tidb-server-nextgen \
 	-P "${UP_TIDB_OTHER_PORT}" \
-	-config "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" \
+	-config "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml" \
 	--store tikv \
 	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 	--status "${UP_TIDB_OTHER_STATUS}" \
@@ -374,10 +374,11 @@ tidb-server \
 	2>"$OUT_DIR/downstream/log/tidb/tidb-stderr.log" &
 
 echo "Verifying Upstream $KEYSPACE_NAME TiDB is started..."
-check_tidb_health "$UP_TIDB_HOST" "$UP_TIDB_PORT" "$UP_TIDB_OTHER_PORT" 60
+check_tidb_health "$UP_TIDB_HOST" "$UP_TIDB_PORT" 60
+check_tidb_health "$UP_TIDB_HOST" "$UP_TIDB_OTHER_PORT" 60
 
 echo "Verifying downstream TiDB is started..."
-check_tidb_health "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" "" 60
+check_tidb_health "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
 
 run_sql "update mysql.tidb set variable_value='60m' where variable_name='tikv_gc_life_time';" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 run_sql "update mysql.tidb set variable_value='60m' where variable_name='tikv_gc_life_time';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
