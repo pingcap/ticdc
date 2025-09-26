@@ -129,7 +129,7 @@ main_with_consistent() {
 	sleep 10
 
 	# restart node2 to disable failpoint
-	cdc_pid_1=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "8301")
 	kill_cdc_pid $cdc_pid_1
 	sleep 5
 	export GO_FAILPOINTS=''

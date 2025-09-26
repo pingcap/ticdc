@@ -26,7 +26,7 @@ function run() {
 	unset TICDC_NEWARCH
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	cdc_pid_old=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_old=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	TOPIC_NAME="ticdc-migration-test-$RANDOM"
 	case $SINK_TYPE in
@@ -74,7 +74,7 @@ function run() {
 
 	# Start new architecture CDC server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "new-arch"
-	cdc_pid_new=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_new=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	# Wait for new server to be ready
 	sleep 5

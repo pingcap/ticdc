@@ -148,7 +148,11 @@ function test_expire_capture() {
 
 	# stop the owner
 	kill -SIGSTOP $owner_pid
-	echo "process status:" $(ps -h -p $owner_pid -o "s")
+	if [[ "$(uname)" == "Darwin" ]]; then
+		echo "process status:" $(ps -p $owner_pid -o state=)
+	else
+		echo "process status:" $(ps -h -p $owner_pid -o "s")
+	fi
 
 	# ensure the session has expired
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep -v '$owner_id'"
