@@ -38,7 +38,7 @@ function test_kill_owner() {
 	# start a capture server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_kill_owner.server1
 	# create changefeed after cdc is started
-	run_cdc_cli changefeed create --start-ts=$start_ts \
+	cdc_cli_changefeed create --start-ts=$start_ts \
 		--sink-uri="mysql://normal:123456@127.0.0.1:3306/"
 	# ensure the server become the owner
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"

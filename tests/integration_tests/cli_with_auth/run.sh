@@ -59,7 +59,7 @@ function run() {
 	esac
 
 	uuid="custom-changefeed-name"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -79,7 +79,7 @@ function run() {
 
 	# Make sure changefeed can not be created if the name is already exists.
 	set +e
-	exists=$(run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" 2>&1 | grep -oE 'already exists')
+	exists=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" 2>&1 | grep -oE 'already exists')
 	set -e
 	if [[ -z $exists ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${exists} >>>>>"
@@ -100,11 +100,11 @@ EOF
 	fi
 
 	# Pause changefeed
-	run_cdc_cli changefeed --changefeed-id $uuid pause && sleep 3
+	cdc_cli_changefeed --changefeed-id $uuid pause && sleep 3
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $uuid "stopped" "null" ""
 
 	# Update changefeed
-	run_cdc_cli changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid
+	cdc_cli_changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid
 	changefeed_info=$(curl -s -X GET "http://127.0.0.1:8300/api/v2/changefeeds/$uuid" 2>&1)
 	if [[ ! $changefeed_info == *"\"case_sensitive\":true"* ]]; then
 		echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
@@ -116,18 +116,18 @@ EOF
 	fi
 
 	# Resume changefeed
-	run_cdc_cli changefeed --changefeed-id $uuid resume && sleep 3
+	cdc_cli_changefeed --changefeed-id $uuid resume && sleep 3
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $uuid "normal" "null" ""
 
 	# Remove changefeed
-	run_cdc_cli changefeed --changefeed-id $uuid remove && sleep 3
+	cdc_cli_changefeed --changefeed-id $uuid remove && sleep 3
 	check_changefeed_count http://${UP_PD_HOST_1}:${UP_PD_PORT_1} 0
 
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid" && sleep 3
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid" && sleep 3
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $uuid "normal" "null" ""
 
 	# Make sure bad sink url fails at creating changefeed.
-	badsink=$(run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" 2>&1 | grep -oE 'fail')
+	badsink=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" 2>&1 | grep -oE 'fail')
 	if [[ -z $badsink ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${badsink} >>>>>"
 		exit 1
@@ -137,7 +137,7 @@ EOF
 	if [ "$SINK_TYPE" == "kafka" ]; then
 		SSL_TOPIC_NAME="ticdc-cli-test-ssl-$RANDOM"
 		SINK_URI="kafka://127.0.0.1:9093/$SSL_TOPIC_NAME?protocol=open-protocol&ca=${TLS_DIR}/ca.pem&cert=${TLS_DIR}/client.pem&key=${TLS_DIR}/client-key.pem&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760&insecure-skip-verify=true"
-		run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai"
+		cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai"
 	fi
 
 	# Test unsafe commands

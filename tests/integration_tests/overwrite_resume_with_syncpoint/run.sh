@@ -41,11 +41,11 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml --changefeed-id="test4"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml --changefeed-id="test4"
 
 	check_ts_forward "test4"
 
-	run_cdc_cli changefeed pause --changefeed-id="test4"
+	cdc_cli_changefeed pause --changefeed-id="test4"
 
 	sleep 15
 
@@ -54,7 +54,7 @@ function run() {
 	checkpoint1=$((checkpoint1 + 1000000))
 
 	# resume a forward checkpointTs
-	run_cdc_cli changefeed resume --changefeed-id="test4" --no-confirm --overwrite-checkpoint-ts=$checkpoint1
+	cdc_cli_changefeed resume --changefeed-id="test4" --no-confirm --overwrite-checkpoint-ts=$checkpoint1
 
 	check_ts_forward "test4"
 

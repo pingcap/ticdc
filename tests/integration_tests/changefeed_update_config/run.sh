@@ -38,7 +38,7 @@ function create_changefeed() {
 	esac
 
 	# create with initial filter config [*.*]
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed_init.toml"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed_init.toml"
 
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -84,9 +84,9 @@ function main() {
 	write_data_round
 
 	# pause, update config (add filter [!test.*] with scheduler), then resume
-	run_cdc_cli changefeed pause -c "test"
-	run_cdc_cli changefeed update -c "test" --config="$CUR/conf/changefeed.toml" --no-confirm
-	run_cdc_cli changefeed resume -c "test"
+	cdc_cli_changefeed pause -c "test"
+	cdc_cli_changefeed update -c "test" --config="$CUR/conf/changefeed.toml" --no-confirm
+	cdc_cli_changefeed resume -c "test"
 
 	# record current tso, then create a new upstream table to be filtered
 	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
