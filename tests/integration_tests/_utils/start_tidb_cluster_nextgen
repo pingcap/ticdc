@@ -101,7 +101,7 @@ fi
 echo "Starting MinIO server..."
 mkdir -p "$OUT_DIR/minio/data"
 mkdir -p "$OUT_DIR/minio/log"
-minio server --address ":$MINIO_API_PORT" --console-address ":$MINIO_CONSOLE_PORT" "$OUT_DIR/minio/data" \
+minio server --address ":$MINIO_API_PORT" "$OUT_DIR/minio/data" \
 	>"$OUT_DIR/minio/log/minio-stdout.log" 2>"$OUT_DIR/minio/log/minio-stderr.log" &
 
 check_port_available "" "$MINIO_API_PORT" "Wait for minio to be available"
