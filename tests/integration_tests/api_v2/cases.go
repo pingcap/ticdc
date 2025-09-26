@@ -311,7 +311,7 @@ func testCreateChangefeed(ctx context.Context, client *CDCRESTClient) error {
 	}
 	resp := client.Post().
 		WithBody(&config).
-		WithURI("/changefeeds").
+		WithURI("/changefeeds?keyspace=" + keyspace).
 		Do(ctx)
 	assertResponseIsOK(resp)
 	ensureChangefeed(ctx, client, config.ID, "normal")
@@ -330,7 +330,8 @@ func testCreateChangefeed(ctx context.Context, client *CDCRESTClient) error {
 }
 
 func testRemoveChangefeed(ctx context.Context, client *CDCRESTClient) error {
-	resp := client.Delete().WithURI("changefeeds/changefeed-not-exist").Do(ctx)
+	keyspace := getKeyspaceName()
+	resp := client.Delete().WithURI("changefeeds/changefeed-not-exist?keyspace=" + keyspace).Do(ctx)
 	assertResponseIsOK(resp)
 	println("pass test: delete changefeed apis")
 	return nil
