@@ -713,11 +713,9 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 
 	var querys []string
 	for _, info := range renameArgs.RenameTableInfos {
-		extraSchemaID := info.OldSchemaID
-		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, extraSchemaID)
+		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, info.OldSchemaID)
 		event.ExtraSchemaNames = append(event.ExtraSchemaNames, info.OldSchemaName.O)
-		extraTableName := info.OldTableName.O
-		event.ExtraTableNames = append(event.ExtraTableNames, extraTableName)
+		event.ExtraTableNames = append(event.ExtraTableNames, info.OldTableName.O)
 		event.SchemaIDs = append(event.SchemaIDs, info.NewSchemaID)
 		SchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
 		event.SchemaNames = append(event.SchemaNames, SchemaName)
