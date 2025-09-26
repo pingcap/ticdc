@@ -179,12 +179,13 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		if err == nil {
 			log.Info("GetGCState success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcState", gcSafePoint))
 			// Ensure the start ts is valid during the gc service ttl
-			err := gc.EnsureChangefeedStartTsSafety(
+			err = gc.EnsureChangefeedStartTsSafety(
 				ctx,
 				p.pdCli,
 				defaultSchemaStoreGcServiceID,
 				fakeChangefeedID,
-				defaultGcServiceTTL, gcSafePoint)
+				defaultGcServiceTTL, gcSafePoint+1)
+			log.Info("fizz EnsureChangefeedStartTsSafety", zap.Error(err))
 			if err == nil {
 				break
 			}
