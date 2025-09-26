@@ -17,8 +17,9 @@ function run() {
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/orchestrator/EtcdSessionDone=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
-	sleep 3
+	sleep 30
 	check_logs_contains $WORK_DIR "the etcd session is done"
+	check_logs_contains $WORK_DIR "server closed"
 	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
 
@@ -76,6 +77,7 @@ function run() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	run_sql "INSERT INTO capture_session_done_during_task.t values (),(),(),(),(),(),()" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
 }
 
