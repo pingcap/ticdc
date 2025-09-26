@@ -99,7 +99,7 @@ function main() {
 	retry=60
 	cnt=0
 	while [[ $cnt -lt $retry ]]; do
-		checkpoint=$(cdc cli changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq -r '.checkpoint_tso')
+		checkpoint=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq -r '.checkpoint_tso')
 		if [[ "$checkpoint" != "null" && "$checkpoint" -gt "$current_tso" ]]; then
 			break
 		fi

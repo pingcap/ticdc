@@ -18,7 +18,7 @@ export TICDC_KEY_PATH=$TLS_DIR/client-key.pem
 function check_changefeed_count() {
 	pd_addr=$1
 	expected=$2
-	feed_count=$(cdc cli changefeed list --pd=$pd_addr | grep -v "Command to ticdc" | jq '.|length')
+	feed_count=$(cdc_cli_changefeed list --pd=$pd_addr | grep -v "Command to ticdc" | jq '.|length')
 	if [[ "$feed_count" != "$expected" ]]; then
 		echo "[$(date)] <<<<< unexpect changefeed count! expect ${expected} got ${feed_count} >>>>>"
 		exit 1
@@ -120,7 +120,7 @@ case-sensitive = true
 enable-table-across-nodes = true
 EOF
 	set +e
-	update_result=$(cdc cli changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid)
+	update_result=$(cdc_cli_changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid)
 	set -e
 	if [[ ! $update_result == *"can only update changefeed config when it is stopped"* ]]; then
 		echo "update changefeed config should fail when changefeed is running, got $update_result"

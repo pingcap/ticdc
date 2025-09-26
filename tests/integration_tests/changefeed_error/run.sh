@@ -11,7 +11,7 @@ MAX_RETRIES=20
 
 function check_no_changefeed() {
 	pd=$1
-	count=$(cdc cli changefeed list --pd=$pd 2>&1 | grep -v "Command to ticdc" | jq '.|length')
+	count=$(cdc_cli_changefeed list --pd=$pd 2>&1 | grep -v "Command to ticdc" | jq '.|length')
 	if [[ ! "$count" -eq "0" ]]; then
 		exit 1
 	fi
@@ -97,7 +97,7 @@ function run() {
 	ensure $MAX_RETRIES check_no_changefeed ${UP_PD_HOST_1}:${UP_PD_PORT_1}
 
 	# test changefeed remove twice, and it should return "Changefeed not found"
-	result=$(cdc cli changefeed remove -c $changefeedid_2)
+	result=$(cdc_cli_changefeed remove -c $changefeedid_2)
 	if [[ $result != *"Changefeed not found"* ]]; then
 		echo "changefeeed remove result is expected to contains 'Changefeed not found', \
             but actually got $result"
