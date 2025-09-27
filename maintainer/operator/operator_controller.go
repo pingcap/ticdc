@@ -59,6 +59,8 @@ type Controller struct {
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	mode         int64
+	// lastWarnTime tracks the last warning time for each operator to avoid spam logs
+	lastWarnTime map[common.DispatcherID]time.Time
 }
 
 // NewOperatorController creates a new operator controller
@@ -78,6 +80,7 @@ func NewOperatorController(
 		nodeManager:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		messageCenter:  appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		mode:           mode,
+		lastWarnTime:   make(map[common.DispatcherID]time.Time),
 	}
 }
 
@@ -98,7 +101,7 @@ func (oc *Controller) Execute() time.Time {
 
 		if msg != nil {
 			_ = oc.messageCenter.SendCommand(msg)
-			log.Info("send command to dispatcher",
+			log.Debug("send command to dispatcher",
 				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
 				zap.String("operator", op.String()),
@@ -243,6 +246,7 @@ func (oc *Controller) pollQueueingOperator() (
 
 		oc.mu.Lock()
 		delete(oc.operators, opID)
+		delete(oc.lastWarnTime, opID)
 		oc.mu.Unlock()
 
 		metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
@@ -254,12 +258,24 @@ func (oc *Controller) pollQueueingOperator() (
 			zap.String("operator", op.String()))
 		return nil, true
 	}
+	// log warn message for stil running operator
 	if time.Since(item.CreatedAt) > time.Second*30 {
-		log.Warn("operator is still in running queue",
-			zap.String("changefeed", oc.changefeedID.Name()),
-			zap.String("operator", opID.String()),
-			zap.String("operator", op.String()),
-			zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
+		now := time.Now()
+		oc.mu.Lock()
+		lastWarn, exists := oc.lastWarnTime[opID]
+		shouldWarn := !exists || now.Sub(lastWarn) >= time.Second*30
+		if shouldWarn {
+			oc.lastWarnTime[opID] = now
+		}
+		oc.mu.Unlock()
+
+		if shouldWarn {
+			log.Warn("operator is still in running queue",
+				zap.String("changefeed", oc.changefeedID.Name()),
+				zap.String("operator", opID.String()),
+				zap.String("operator", op.String()),
+				zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
+		}
 	}
 	now := time.Now()
 	oc.mu.Lock()
@@ -290,6 +306,7 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 
 		oc.mu.Lock()
 		delete(oc.operators, op.ID())
+		delete(oc.lastWarnTime, op.ID())
 		oc.mu.Unlock()
 	}
 	oc.mu.Unlock()
@@ -444,4 +461,5 @@ func (oc *Controller) RemoveOp(id common.DispatcherID) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 	delete(oc.operators, id)
+	delete(oc.lastWarnTime, id)
 }
