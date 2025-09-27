@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -e
-
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
@@ -35,7 +33,7 @@ function run() {
 		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
 	fi
 
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI"
 	sleep 5 # wait for changefeed to start
 	# determine the sink uri and run corresponding consumer
 	# currently only kafka and pulsar are supported

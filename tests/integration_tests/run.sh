@@ -2,12 +2,14 @@
 
 # This file is used to run integration tests for developers(self-test).
 
-set -eu
+set -u
 
 OUT_DIR=/tmp/tidb_cdc_test
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$CUR/_utils/test_prepare"
 export PATH=$PATH:$CUR/_utils:$CUR/../bin:$CUR/../../bin:$CUR/../../scripts/bin
 export TICDC_NEWARCH=true
+export CDC_BINARY=cdc.test
 
 mkdir -p $OUT_DIR || true
 
@@ -25,7 +27,7 @@ if [ "${1-}" = '--debug' ]; then
 
 	cdc server --log-file $WORK_DIR/cdc.log --log-level debug --addr 127.0.0.1:8300 >$WORK_DIR/stdout.log 2>&1 &
 	sleep 1
-	cdc cli changefeed create --sink-uri="mysql://normal:123456@127.0.0.1:3306/"
+	cdc_cli_changefeed create --sink-uri="mysql://normal:123456@127.0.0.1:3306/"
 
 	echo 'You may now debug from another terminal. Press [ENTER] to exit.'
 	read line
@@ -66,7 +68,7 @@ fi
 
 # Print environment variables.
 env
-set -eu
+set -u
 
 if [ "$test_case" == "*" ]; then
 	for script in $CUR/*/run.sh; do

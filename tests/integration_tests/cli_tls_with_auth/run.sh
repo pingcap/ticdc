@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -u
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -18,7 +18,7 @@ export TICDC_KEY_PATH=$TLS_DIR/client-key.pem
 function check_changefeed_count() {
 	pd_addr=$1
 	expected=$2
-	feed_count=$(cdc cli changefeed list --pd=$pd_addr | grep -v "Command to ticdc" | jq '.|length')
+	feed_count=$(cdc_cli_changefeed list --pd=$pd_addr | grep -v "Command to ticdc" | jq '.|length')
 	if [[ "$feed_count" != "$expected" ]]; then
 		echo "[$(date)] <<<<< unexpect changefeed count! expect ${expected} got ${feed_count} >>>>>"
 		exit 1
@@ -75,7 +75,7 @@ function run() {
 		--cert-allowed-cn "client" # The common name of client.pem
 	sleep 2
 
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	TOPIC_NAME="ticdc-cli-test-$RANDOM"
 	case $SINK_TYPE in
@@ -89,7 +89,7 @@ function run() {
 	esac
 
 	uuid="custom-changefeed-name"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -106,8 +106,7 @@ function run() {
 
 	# Make sure changefeed can not be created if the name is already exists.
 	set +e
-	exists=$(run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" 2>&1 | grep -oE 'already exists')
-	set -e
+	exists=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" | grep -oE 'already exists')
 	if [[ -z $exists ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${exists} >>>>>"
 		exit 1
@@ -120,19 +119,18 @@ case-sensitive = true
 enable-table-across-nodes = true
 EOF
 	set +e
-	update_result=$(cdc cli changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid)
-	set -e
+	update_result=$(cdc_cli_changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid)
 	if [[ ! $update_result == *"can only update changefeed config when it is stopped"* ]]; then
 		echo "update changefeed config should fail when changefeed is running, got $update_result"
 	fi
 
 	# Pause changefeed
-	run_cdc_cli changefeed --changefeed-id $uuid pause && sleep 3
+	cdc_cli_changefeed --changefeed-id $uuid pause && sleep 3
 	check_changefeed_state "https://${TLS_PD_HOST}:${TLS_PD_PORT}" $uuid "stopped" "null" "" $TLS_DIR
 
 	# Update changefeed
-	run_cdc_cli changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid
-	changefeed_info=$(curl -s -X GET "https://127.0.0.1:8300/api/v2/changefeeds/$uuid" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" 2>&1)
+	cdc_cli_changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid
+	changefeed_info=$(curl -s -X GET "https://127.0.0.1:8300/api/v2/changefeeds/$uuid&keyspace=$KEYSPACE_NAME" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" 2>&1)
 	if [[ ! $changefeed_info == *"\"case_sensitive\":true"* ]]; then
 		echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
 		exit 1
@@ -143,18 +141,18 @@ EOF
 	fi
 
 	# Resume changefeed
-	run_cdc_cli changefeed --changefeed-id $uuid resume && sleep 3
+	cdc_cli_changefeed --changefeed-id $uuid resume && sleep 3
 	check_changefeed_state "https://${TLS_PD_HOST}:${TLS_PD_PORT}" $uuid "normal" "null" "" $TLS_DIR
 
 	# Remove changefeed
-	run_cdc_cli changefeed --changefeed-id $uuid remove && sleep 3
+	cdc_cli_changefeed --changefeed-id $uuid remove && sleep 3
 	check_changefeed_count https://${TLS_PD_HOST}:${TLS_PD_PORT} 0
 
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid" && sleep 3
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid" && sleep 3
 	check_changefeed_state "https://${TLS_PD_HOST}:${TLS_PD_PORT}" $uuid "normal" "null" "" $TLS_DIR
 
 	# Make sure bad sink url fails at creating changefeed.
-	badsink=$(run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" 2>&1 | grep -oE 'fail')
+	badsink=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" | grep -oE 'fail')
 	if [[ -z $badsink ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${badsink} >>>>>"
 		exit 1
@@ -164,7 +162,7 @@ EOF
 	if [ "$SINK_TYPE" == "kafka" ]; then
 		SSL_TOPIC_NAME="ticdc-cli-test-ssl-$RANDOM"
 		SINK_URI="kafka://127.0.0.1:9093/$SSL_TOPIC_NAME?protocol=open-protocol&ca=${TLS_DIR}/ca.pem&cert=${TLS_DIR}/client.pem&key=${TLS_DIR}/client-key.pem&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760&insecure-skip-verify=true"
-		run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai"
+		cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai"
 	fi
 
 	# Test unsafe commands

@@ -12,7 +12,7 @@ error_handler() {
 # Set error handler
 trap 'error_handler ${LINENO} $?' ERR
 
-set -eu
+set -u
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare

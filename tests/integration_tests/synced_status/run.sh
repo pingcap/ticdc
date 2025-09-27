@@ -60,10 +60,10 @@ function run_normal_case_and_unavailable_pd() {
 	config_path=$1
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
 	# case 1: test in available cluster
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 
 	status=$(echo $synced_status | jq '.synced')
 	sink_checkpoint_ts=$(echo $synced_status | jq -r '.sink_checkpoint_ts')
@@ -98,7 +98,7 @@ function run_normal_case_and_unavailable_pd() {
 	check_table_exists "test.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	sleep 5 # wait data insert
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"
@@ -111,7 +111,7 @@ function run_normal_case_and_unavailable_pd() {
 	fi
 
 	sleep 130 # wait enough time for pass synced-check-interval
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != true ]; then
 		echo "synced status isn't correct"
@@ -124,7 +124,7 @@ function run_normal_case_and_unavailable_pd() {
 
 	sleep 20
 
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	error_code=$(echo $synced_status | jq -r '.error_code')
 	cleanup_process $CDC_BINARY
 	stop_tidb_cluster
@@ -143,7 +143,7 @@ function run_case_with_unavailable_tikv() {
 	config_path=$1
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
 	# case 3: test in unavailable tikv cluster
 	run_sql "USE TEST;Create table t1(a int primary key, b int);insert into t1 values(1,2);insert into t1 values(2,3);"
@@ -153,7 +153,7 @@ function run_case_with_unavailable_tikv() {
 	kill_tikv
 
 	# test the case when pdNow - lastSyncedTs < threshold
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"
@@ -169,7 +169,7 @@ function run_case_with_unavailable_tikv() {
 
 	sleep 130 # wait enough time for pass synced-check-interval
 	# test the case when pdNow - lastSyncedTs > threshold
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"
@@ -205,7 +205,7 @@ function run_case_with_unavailable_tidb() {
 	config_path=$1
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
 	# case 3: test in unavailable tikv cluster
 	run_sql "USE TEST;Create table t1(a int primary key, b int);insert into t1 values(1,2);insert into t1 values(2,3);"
@@ -215,7 +215,7 @@ function run_case_with_unavailable_tidb() {
 	kill_tidb
 
 	# test the case when pdNow - lastSyncedTs < threshold
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"
@@ -231,7 +231,7 @@ function run_case_with_unavailable_tidb() {
 
 	sleep 130 # wait enough time for pass synced-check-interval
 	# test the case when pdNow - lastSyncedTs > threshold
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != true ]; then
 		echo "synced status isn't correct"
@@ -265,10 +265,10 @@ function run_case_with_failpoint() {
 	config_path=$1
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
 	sleep 20 # wait enough time for pass checkpoint-check-interval
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"

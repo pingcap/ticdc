@@ -4,8 +4,6 @@
 # --tidb-config: path to tidb config file
 # --multiple-upstream-pd: whether to deploy multiple pd severs in upstream
 
-set -e
-
 OUT_DIR=
 tidb_config=
 pd_config=

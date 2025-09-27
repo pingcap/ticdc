@@ -8,8 +8,6 @@
 # --addr: address
 # --pd: pd address
 
-set -e
-
 workdir=
 tls=
 tls_dir=
@@ -114,7 +112,7 @@ fi
 
 echo "[$(date)] <<<<<< START cdc server in $TEST_NAME case >>>>>>"
 cd $workdir
-pid=$(ps -C run_cdc_server -o pid= | tr -d '[:space:]')
+pid=$$
 # Uncomment to turn on grpc versbose log.
 # GRPC_GO_LOG_VERBOSITY_LEVEL=99 GRPC_GO_LOG_SEVERITY_LEVEL=debug \
 

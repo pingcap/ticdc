@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -u
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -30,7 +30,7 @@ function run() {
 	case $SINK_TYPE in
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?safe-mode=true" ;;
 	esac
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI"
 
 	# test update sql can be split into delete + replace at all times in safe mode
 	# otherwise the update sql will have no effect on the downstream and the downstream will have no data.

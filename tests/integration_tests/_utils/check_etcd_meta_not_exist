@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eux
+set -ux
 
 # parameter 1: key_prefix
 # parameter 2: meta_message

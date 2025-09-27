@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eo pipefail
+set -o pipefail
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 

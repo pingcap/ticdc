@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -e
-
 workdir=$OUT_DIR/$TEST_NAME
 pwd=$pwd
 

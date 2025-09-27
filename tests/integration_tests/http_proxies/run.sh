@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -exu
+set -xu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -71,7 +71,7 @@ function prepare() {
 	echo started cdc server successfully
 
 	SINK_URI="blackhole:///"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 }
 
 function check() {

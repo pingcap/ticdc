@@ -16,7 +16,7 @@
 #     3 ddl is rename table
 #     4 ddl is truncate table
 
-set -eu
+set -u
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -47,7 +47,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
+	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -72,7 +72,7 @@ function failOverCaseL-1() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
@@ -122,7 +122,7 @@ function failOverCaseL-2() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
@@ -181,7 +181,7 @@ function failOverCaseL-3() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
@@ -243,7 +243,7 @@ function failOverCaseL-4() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'

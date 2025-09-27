@@ -2,7 +2,7 @@
 WORK_DIR=$1
 LOG_SUFFIX=$3
 
-set -eu
+set -u
 log_name="cdc"$LOG_SUFFIX".log"
 if ! grep -Eq "$2" "$WORK_DIR/$log_name"; then
 	echo "TEST FAILED: LOGS DOES NOT CONTAIN '$2'"

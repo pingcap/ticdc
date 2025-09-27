@@ -4,8 +4,6 @@
 # --tlsdir: certificates directory
 # --retry: retry times
 
-set -e
-
 OUT_DIR=
 TLS_DIR=
 retry_times=3

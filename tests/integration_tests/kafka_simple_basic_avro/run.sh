@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -e
-
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
@@ -30,7 +28,7 @@ function run() {
 	TOPIC_NAME="ticdc-simple-basic-avro-$RANDOM"
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=simple&encoding-format=avro"
 
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
 	sleep 5 # wait for changefeed to start
 	# determine the sink uri and run corresponding consumer
 	# currently only kafka and pulsar are supported

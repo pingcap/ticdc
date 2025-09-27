@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -u
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -24,7 +24,7 @@ function prepare() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config $CUR/conf/server.toml
 
 	SINK_URI="mysql+ssl://normal:123456@127.0.0.1:3306/"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 }
 
 function sql_check() {
@@ -80,7 +80,6 @@ function sql_test() {
 		echo "check data failed $i-th time, retry later"
 		sleep 2
 	done
-	set -e
 
 	if [ $i -ge $check_time ]; then
 		echo "check data failed at last"

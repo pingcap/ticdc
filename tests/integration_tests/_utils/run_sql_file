@@ -3,7 +3,7 @@
 # parameter 2: database host
 # parameter 3: database port
 
-set -eu
+set -u
 
 prepare="set global tidb_enable_clustered_index = 'int_only';"
 

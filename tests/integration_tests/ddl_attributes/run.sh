@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -u
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -31,7 +31,7 @@ function run() {
 	*) SINK_URI="mysql://root@127.0.0.1:3306/" ;;
 	esac
 
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;

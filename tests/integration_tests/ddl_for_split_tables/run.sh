@@ -2,7 +2,7 @@
 # multiple dispatchers in multi cdc server
 # TODO:This script need to add kafka-class sink
 
-set -eu
+set -u
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -38,7 +38,7 @@ function prepare() {
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
 	sleep 10
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;

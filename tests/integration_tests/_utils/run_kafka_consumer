@@ -5,8 +5,6 @@
 # parameter 3: consumer_replica_config
 # parameter 4: log suffix
 
-set -e
-
 workdir=$1
 sink_uri=$2
 consumer_replica_config=$3

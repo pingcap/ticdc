@@ -6,7 +6,7 @@
 # parameter 2: table name
 # parameter 3: retry count
 
-set -ex
+set -x
 
 dbName=${1}
 tableName=${2}

@@ -7,7 +7,7 @@
 # we use query_dispatcher_count to check when we query, there is no maintainer is not found error.
 # which means the maintainer and the coordinator exists in the node.
 
-set -ex
+set -x
 
 ipAddr=${1}
 changefeedID=${2}

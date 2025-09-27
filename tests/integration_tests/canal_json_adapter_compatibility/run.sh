@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -e
-
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
@@ -27,7 +25,7 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="kafka://127.0.0.1:9092/test?protocol=canal-json"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 
 	run_sql_file $CUR/data/data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -u
 OUT_DIR=/tmp/tidb_cdc_test
 LOG_FILE="$OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
 

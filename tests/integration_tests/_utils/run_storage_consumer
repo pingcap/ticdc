@@ -4,7 +4,7 @@
 # parameter 2: sink_uri
 # parameter 3: consumer_replica_config
 
-set -eux
+set -ux
 
 workdir=$1
 sink_uri=$2

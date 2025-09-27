@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+set -u
+
+next_gen=${NEXT_GEN:-0}
+if [ "$next_gen" = 1 ]; then
+	run_cdc_cli changefeed -k "$KEYSPACE_NAME" "$@"
+else
+	run_cdc_cli changefeed "$@"
+fi
+
+set +x

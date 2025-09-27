@@ -3,7 +3,7 @@
 # parameter 1: work directory
 # parameter 2: cluster_type,  mtls or oauth, otherwise use default configuration to start pulsar cluster
 
-set -eux
+set -ux
 
 echo "[$(date)] <<<<<< START pulsar cluster in $TEST_NAME case >>>>>>"
 workdir=$1

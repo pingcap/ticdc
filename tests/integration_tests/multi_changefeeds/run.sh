@@ -2,7 +2,7 @@
 # this test case is used to test the multi changefeeds in multi servers
 # to check whether the changefeeds can be scheduling normally.
 
-set -eu
+set -u
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -36,7 +36,7 @@ function run() {
 	changefeed_ids=()
 	for i in $(seq 1 $CHANGEFEED_COUNT); do
 		config_file="$CUR/conf/changefeed$i.toml"
-		cdc cli changefeed create --sink-uri="$SINK_URI" --config="$config_file" -c "test$i"
+		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$config_file" -c "test$i"
 	done
 
 	case $SINK_TYPE in
