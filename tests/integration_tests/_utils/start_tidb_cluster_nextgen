@@ -2,6 +2,8 @@
 # depencencies: minio, mc(minio client)
 
 set -e
+# export PS4='+$(basename ${BASH_SOURCE}):${LINENO}: '
+# set -x
 
 # Random generate the sockets config.
 # Make sure we dont use the same sock.
@@ -121,14 +123,12 @@ pre-alloc = ["$KEYSPACE_NAME"]
 EOF
 
 cat >"$OUT_DIR/downstream-pd.toml" <<EOF
-[replication]
-# Set it to 1 to make sure we have enough replicas to run placement-rules.
-max-replicas = 1
-enable-placement-rules = true
+[keyspace]
+pre-alloc = ["$KEYSPACE_NAME"]
 EOF
 
 echo "Starting upstream pd..."
-pd-server-nextgen --version
+pd-server --version
 if [[ "$multiple_upstream_pd" == "true" ]]; then
 	pd_count=3
 	initial_cluster="pd1=http://${UP_PD_HOST_1}:${UP_PD_PEER_PORT_1},pd2=http://${UP_PD_HOST_2}:${UP_PD_PEER_PORT_2},pd3=http://${UP_PD_HOST_3}:${UP_PD_PEER_PORT_3}"
@@ -143,7 +143,7 @@ for idx in $(seq 1 $pd_count); do
 	host="UP_PD_HOST_$idx"
 	port="UP_PD_PORT_$idx"
 	peer_port="UP_PD_PEER_PORT_$idx"
-	pd-server-nextgen \
+	pd-server \
 		--advertise-client-urls "http://${!host}:${!port}" \
 		--client-urls "http://0.0.0.0:${!port}" \
 		--advertise-peer-urls "http://${!host}:${!peer_port}" \
@@ -193,15 +193,15 @@ api-version = 2
 enable-ttl = true
 
 [dfs]
-prefix = "nextgen"
+prefix = "nextgen-upstream"
 s3-endpoint = "http://127.0.0.1:$MINIO_API_PORT"
 s3-key-id = "$MINIO_ROOT_USER"
 s3-secret-key = "$MINIO_ROOT_PASSWORD"
-s3-bucket = "cse-test"
+s3-bucket = "cse-test-up"
 s3-region = "local"
 
 [rfengine]
-wal-sync-dir = "$OUT_DIR/wal-sync/tikv/raft-wal"
+wal-sync-dir = "$OUT_DIR/upstream/wal-sync/tikv/raft-wal"
 lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
@@ -209,28 +209,33 @@ EOF
 
 cat >"$OUT_DIR/downstream-tikv.toml" <<EOF
 [storage]
-# Disable creating a large temp file.
-reserve-space = "0MB"
-[rocksdb]
-max-open-files = 4096
-[raftdb]
-max-open-files = 4096
-[raftstore]
-# true (default value) for high reliability, this can prevent data loss when power failure.
-sync-log = false
-[cdc]
-hibernate-regions-compatible = true
+api-version = 2
+enable-ttl = true
+
+[dfs]
+prefix = "nextgen-downstream"
+s3-endpoint = "http://127.0.0.1:$MINIO_API_PORT"
+s3-key-id = "$MINIO_ROOT_USER"
+s3-secret-key = "$MINIO_ROOT_PASSWORD"
+s3-bucket = "cse-test-down"
+s3-region = "local"
+
+[rfengine]
+wal-sync-dir = "$OUT_DIR/downstream/wal-sync/tikv/raft-wal"
+lightweight-backup = true
+target-file-size = "512MB"
+wal-chunk-target-file-size = "128MB"
 EOF
 
 echo "Starting upstream TiKV..."
 mkdir -p "$OUT_DIR/upstream/data"
 mkdir -p "$OUT_DIR/upstream/log/tikv"
-tikv-server-nextgen --version
+tikv-server --version
 for idx in $(seq 1 3); do
 	host="UP_TIKV_HOST_$idx"
 	port="UP_TIKV_PORT_$idx"
 	status_port="UP_TIKV_STATUS_PORT_$idx"
-	tikv-server-nextgen \
+	tikv-server \
 		--pd "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 		-A "${!host}:${!port}" \
 		--status-addr "${!host}:${!status_port}" \
@@ -257,7 +262,8 @@ tikv-server \
 	>"$OUT_DIR/downstream/log/tikv/tikv-stdout.log" \
 	2>"$OUT_DIR/downstream/log/tikv/tikv-stderr.log" &
 
-sleep 2
+check_port_available "$UP_TIKV_HOST_1" "$UP_TIKV_PORT_1" "Upstream TiKV is not ready yet"
+check_port_available "$DOWN_TIKV_HOST" "$DOWN_TIKV_PORT" "Downstream TiKV is not ready yet"
 
 ####################start TiDB####################
 cat >"$OUT_DIR/upstream-tidb-system.toml" <<EOF
@@ -309,16 +315,58 @@ EOF
 
 cp "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml"
 
-cat >"$OUT_DIR/downstream-tidb.toml" <<EOF
-split-table = true
+cat >"$OUT_DIR/downstream-tidb-system.toml" <<EOF
+keyspace-name = "SYSTEM"
+split-table = false
+enable-telemetry = false
+mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
+analyze-always-skip-wide-columns = true
+
+[log.file]
+max-backups = 100
+
+[performance]
+tcp-keep-alive = true
+
+[security]
+enable-sem = false
+
+[instance]
+tidb_service_scope = 'dxf_service'
+max-server-connections = 0
+EOF
+
+cat >"$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml" <<EOF
+keyspace-name = "$KEYSPACE_NAME"
+split-table = false
+enable-telemetry = false
+mem-quota-query = 671088640
+new_collations_enabled_on_first_bootstrap = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
+analyze-always-skip-wide-columns = true
+
+[log.file]
+max-backups = 100
+
+[performance]
+tcp-keep-alive = true
+
+[security]
+enable-sem = false
+
+[instance]
+max-server-connections = 0
 EOF
 
 echo "Starting upstream system TiDB"
 mkdir -p "$OUT_DIR/upstream/log/tidb-system"
-tidb-server-nextgen -V
+tidb-server -V
 randomGenSocketsConf "$OUT_DIR/upstream-tidb-system.toml"
-tidb-server-nextgen \
+tidb-server \
 	-P "${UP_TIDB_SYSTEM_PORT}" \
 	-config "$OUT_DIR/upstream-tidb-system.toml" \
 	--store tikv \
@@ -329,13 +377,13 @@ tidb-server-nextgen \
 	2>"$OUT_DIR/upstream/log/tidb-system/tidb-stderr.log" &
 
 # The upstream system TiDB should be ready before the keyspace tidb starting
-echo "Verifying Upstream system TiDB is started..."
+echo "Verifying upstream system TiDB is started..."
 check_tidb_health "$UP_TIDB_SYSTEM_HOST" "$UP_TIDB_SYSTEM_PORT" 60
 
 echo "Starting upstream $KEYSPACE_NAME TiDB"
 mkdir -p "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME"
 randomGenSocketsConf "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml"
-tidb-server-nextgen \
+tidb-server \
 	-P "${UP_TIDB_PORT}" \
 	-config "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" \
 	--store tikv \
@@ -347,7 +395,7 @@ tidb-server-nextgen \
 
 mkdir -p "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other"
 randomGenSocketsConf "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml"
-tidb-server-nextgen \
+tidb-server \
 	-P "${UP_TIDB_OTHER_PORT}" \
 	-config "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml" \
 	--store tikv \
@@ -358,18 +406,35 @@ tidb-server-nextgen \
 	2>"$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other/tidb-stderr.log" &
 
 echo "Starting downstream TiDB..."
-mkdir -p "$OUT_DIR/downstream/log/tidb"
+mkdir -p "$OUT_DIR/downstream/log/tidb-system"
 tidb-server -V
-randomGenSocketsConf "$OUT_DIR/downstream-tidb.toml"
+randomGenSocketsConf "$OUT_DIR/downstream-tidb-system.toml"
+tidb-server \
+	-P "${DOWN_TIDB_SYSTEM_PORT}" \
+	-config "$OUT_DIR/downstream-tidb-system.toml" \
+	--store tikv \
+	--path "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
+	--status "${DOWN_TIDB_SYSTEM_STATUS}" \
+	--log-file "$OUT_DIR/downstream/log/tidb-system/tidb.log" \
+	>"$OUT_DIR/downstream/log/tidb-system/tidb-stdout.log" \
+	2>"$OUT_DIR/downstream/log/tidb-system/tidb-stderr.log" &
+
+# The downstream system TiDB should be ready before the keyspace tidb starting
+echo "Verifying downstream system TiDB is started..."
+check_tidb_health "$DOWN_TIDB_SYSTEM_HOST" "$DOWN_TIDB_SYSTEM_PORT" 60
+
+echo "Starting downstream $KEYSPACE_NAME TiDB"
+mkdir -p "$OUT_DIR/downstream/log/tidb-$KEYSPACE_NAME"
+randomGenSocketsConf "$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml"
 tidb-server \
 	-P "${DOWN_TIDB_PORT}" \
-	-config "$OUT_DIR/downstream-tidb.toml" \
+	-config "$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml" \
 	--store tikv \
 	--path "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	--status "${DOWN_TIDB_STATUS}" \
-	--log-file "$OUT_DIR/downstream/log/tidb/tidb.log" \
-	>"$OUT_DIR/downstream/log/tidb/tidb-stdout.log" \
-	2>"$OUT_DIR/downstream/log/tidb/tidb-stderr.log" &
+	--log-file "$OUT_DIR/downstream/log/tidb-$KEYSPACE_NAME/tidb.log" \
+	>"$OUT_DIR/downstream/log/tidb-$KEYSPACE_NAME/tidb-stdout.log" \
+	2>"$OUT_DIR/downstream/log/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
 
 echo "Verifying Upstream $KEYSPACE_NAME TiDB is started..."
 check_tidb_health "$UP_TIDB_HOST" "$UP_TIDB_PORT" 60
