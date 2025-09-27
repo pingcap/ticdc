@@ -35,6 +35,7 @@ type mockSubscriptionStat struct {
 
 type mockSubscriptionClient struct {
 	nextID        atomic.Uint64
+	mu            sync.Mutex
 	subscriptions map[logpuller.SubscriptionID]*mockSubscriptionStat
 }
 
@@ -70,6 +71,8 @@ func (s *mockSubscriptionClient) Subscribe(
 	advanceInterval int64,
 	bdrMode bool,
 ) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.subscriptions[subID] = &mockSubscriptionStat{
 		span:    span,
 		startTs: startTs,
@@ -77,6 +80,8 @@ func (s *mockSubscriptionClient) Subscribe(
 }
 
 func (s *mockSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.subscriptions, subID)
 }
 
@@ -117,7 +122,10 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 	}
 	// check there is only one subscription in subClient
 	{
-		require.Equal(t, 1, len(subClient.(*mockSubscriptionClient).subscriptions))
+		mockSubClient := subClient.(*mockSubscriptionClient)
+		mockSubClient.mu.Lock()
+		require.Equal(t, 1, len(mockSubClient.subscriptions))
+		mockSubClient.mu.Unlock()
 	}
 	// add a dispatcher with a containing span
 	{
@@ -131,7 +139,10 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 	}
 	// check a new subscription is created in subClient
 	{
-		require.Equal(t, 2, len(subClient.(*mockSubscriptionClient).subscriptions))
+		mockSubClient := subClient.(*mockSubscriptionClient)
+		mockSubClient.mu.Lock()
+		require.Equal(t, 2, len(mockSubClient.subscriptions))
+		mockSubClient.mu.Unlock()
 	}
 }
 
