@@ -110,10 +110,15 @@ sleep 1
 
 # create bucket
 mc alias set "$MINIO_MC_ALIAS" "http://127.0.0.1:$MINIO_API_PORT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-if ! mc ls "$MINIO_MC_ALIAS/cse-test" &>/dev/null; then
-	mc mb "$MINIO_MC_ALIAS/cse-test"
+if ! mc ls "$MINIO_MC_ALIAS/cse-test-up" &>/dev/null; then
+	mc mb "$MINIO_MC_ALIAS/cse-test-up"
 else
-	echo "Bucket cse-test already exists, skipping creation"
+	echo "Bucket cse-test-up already exists, skipping creation"
+fi
+if ! mc ls "$MINIO_MC_ALIAS/cse-test-down" &>/dev/null; then
+	mc mb "$MINIO_MC_ALIAS/cse-test-down"
+else
+	echo "Bucket cse-test-down already exists, skipping creation"
 fi
 
 ################### start pd #####################
@@ -265,6 +270,60 @@ tikv-server \
 check_port_available "$UP_TIKV_HOST_1" "$UP_TIKV_PORT_1" "Upstream TiKV is not ready yet"
 check_port_available "$DOWN_TIKV_HOST" "$DOWN_TIKV_PORT" "Downstream TiKV is not ready yet"
 
+####################start Tikv-Worker####################
+cat >"$OUT_DIR/upstream-tikv-worker.toml" <<EOF
+[dfs]
+prefix = "nextgen-upstream"
+s3-endpoint = "http://127.0.0.1:$MINIO_API_PORT"
+s3-key-id = "$MINIO_ROOT_USER"
+s3-secret-key = "$MINIO_ROOT_PASSWORD"
+s3-bucket = "cse-test-up"
+s3-region = "local"
+
+# ia should be configured when enabled.
+[ia]
+mem-cap = "5GB"  # or "10%"
+disk-cap = "20GB"  # or "20%"
+EOF
+
+cat >"$OUT_DIR/downstream-tikv-worker.toml" <<EOF
+[dfs]
+prefix = "nextgen-downstream"
+s3-endpoint = "http://127.0.0.1:$MINIO_API_PORT"
+s3-key-id = "$MINIO_ROOT_USER"
+s3-secret-key = "$MINIO_ROOT_PASSWORD"
+s3-bucket = "cse-test-down"
+s3-region = "local"
+
+# ia should be configured when enabled.
+[ia]
+mem-cap = "5GB"  # or "10%"
+disk-cap = "20GB"  # or "20%"
+EOF
+
+mkdir -p "$OUT_DIR/upstream/data/tikv-worker"
+mkdir -p "$OUT_DIR/upstream/log/tikv-worker"
+tikv-worker --addr "$UP_TIKV_WORKER_HOST:$UP_TIKV_WORKER_PORT" \
+	--pd-endpoints "http://$UP_PD_HOST_1:$UP_PD_PORT_1" \
+	--config "$OUT_DIR/upstream-tikv-worker.toml" \
+	--data-dir "$OUT_DIR/upstream/data/tikv-worker" \
+	--log-file "$OUT_DIR/upstream/log/tikv-worker/tikv-worker.log" \
+	>"$OUT_DIR/upstream/log/tikv-worker/tikv-worker-stdout.log" \
+	2>"$OUT_DIR/upstream/log/tikv-worker/tikv-worker-stderr.log" &
+
+mkdir -p "$OUT_DIR/downstream/data/tikv-worker"
+mkdir -p "$OUT_DIR/downstream/log/tikv-worker"
+tikv-worker --addr "$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT" \
+	--pd-endpoints "http://$DOWN_PD_HOST:$DOWN_PD_PORT" \
+	--config "$OUT_DIR/downstream-tikv-worker.toml" \
+	--data-dir "$OUT_DIR/downstream/data/tikv-worker" \
+	--log-file "$OUT_DIR/downstream/log/tikv-worker/tikv-worker.log" \
+	>"$OUT_DIR/downstream/log/tikv-worker/tikv-worker-stdout.log" \
+	2>"$OUT_DIR/downstream/log/tikv-worker/tikv-worker-stderr.log" &
+
+check_port_available "$UP_TIKV_WORKER_HOST" "$UP_TIKV_WORKER_PORT" "Upstream TiKV-Worker is not ready yet"
+check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstream TiKV-Worker is not ready yet"
+
 ####################start TiDB####################
 cat >"$OUT_DIR/upstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
@@ -275,6 +334,7 @@ new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
+tikv-worker-url = "http://$UP_TIKV_WORKER_HOST:$UP_TIKV_WORKER_PORT"
 
 [log.file]
 max-backups = 100
@@ -324,6 +384,7 @@ new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
+tikv-worker-url = "http://$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT"
 
 [log.file]
 max-backups = 100
