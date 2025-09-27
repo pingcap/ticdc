@@ -1226,4 +1226,5 @@ func (s *SplitSpanChecker) Name() string {
 func SetEasyThresholdForTest() {
 	minTrafficBalanceThreshold = 1
 	maxLagThreshold = 120
+	regionCheckInterval = time.Second * 10
 }

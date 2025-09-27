@@ -31,7 +31,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
+var (
 	trafficScoreThreshold = 3
 	regionScoreThreshold  = 3
 	regionCheckInterval   = time.Second * 120
