@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"go.uber.org/zap"
 	"golang.org/x/net/netutil"
@@ -41,7 +42,7 @@ type HttpServer struct {
 
 // NewHttpServer create the HTTP server.
 // `lis` is a listener that gives us plain-text HTTP requests.
-func NewHttpServer(c *server, lis net.Listener) *HttpServer {
+func NewHttpServer(c *server, lis net.Listener) common.SubModule {
 	// LimitListener returns a Listener that accepts at most n simultaneous
 	// connections from the provided Listener. Connections that exceed the
 	// limit will wait in a queue and no new goroutines will be created until
@@ -70,24 +71,37 @@ func NewHttpServer(c *server, lis net.Listener) *HttpServer {
 	}
 }
 
-func (s *HttpServer) Run(ctx context.Context) {
+func (s *HttpServer) Run(ctx context.Context) error {
 	log.Info("http server is running", zap.String("addr", s.listener.Addr().String()))
+	defer func() {
+		log.Info("http server exited")
+	}()
+	// we must to exit if the context is done.
+	ch := make(chan error)
 	go func() {
 		err := s.server.Serve(s.listener)
 		if err != nil {
 			log.Error("http server error", zap.Error(err))
 		}
+		ch <- err
 	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-ch:
+		return err
+	}
 }
 
-func (s *HttpServer) Close() {
+func (s *HttpServer) Close(ctx context.Context) error {
 	log.Info("http server is closing")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	err := s.server.Shutdown(ctx)
 	if err != nil {
 		log.Warn("close http server failed", zap.Error(err))
 	}
+	return err
 }
 
 func (s *HttpServer) Name() string {

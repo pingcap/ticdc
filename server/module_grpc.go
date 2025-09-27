@@ -23,6 +23,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
@@ -62,7 +63,21 @@ func (g *GrpcModule) Run(ctx context.Context) error {
 	defer func() {
 		log.Info("grpc server exited")
 	}()
-	return g.grpcServer.Serve(g.lis)
+	// we must to exit if the context is done.
+	ch := make(chan error)
+	go func() {
+		err := g.grpcServer.Serve(g.lis)
+		if err != nil {
+			log.Error("grpc server error", zap.Error(err))
+		}
+		ch <- err
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-ch:
+		return err
+	}
 }
 
 func (g *GrpcModule) Close(ctx context.Context) error {

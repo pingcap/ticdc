@@ -27,7 +27,6 @@ import (
 	"github.com/soheilhy/cmux"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 var cmuxReadTimeout = 10 * time.Second
@@ -35,6 +34,8 @@ var cmuxReadTimeout = 10 * time.Second
 // TCPServer provides a muxed socket that can
 // serve both plain HTTP and gRPC at the same time.
 type TCPServer interface {
+	// Name returns the Name
+	Name() string
 	// Run runs the TCPServer.
 	// For a given instance of TCPServer, Run is expected
 	// to be called only once.
@@ -51,7 +52,7 @@ type TCPServer interface {
 	// will be closed, which will force the consumers of these
 	// listeners to stop. This provides a reliable mechanism to
 	// cancel all related components.
-	Close() error
+	Close(ctx context.Context) error
 }
 
 type tcpServerImpl struct {
@@ -105,21 +106,36 @@ func NewTCPServer(address string, credentials *security.Credential) (TCPServer, 
 }
 
 // Run runs the mux. The mux has to be running to accept connections.
-func (s *tcpServerImpl) Run(ctx context.Context) error {
+func (s *tcpServerImpl) Run(ctx context.Context) (err error) {
 	if s.isClosed.Load() {
 		return cerror.ErrTCPServerClosed.GenWithStackByArgs()
 	}
-
+	log.Info("tcp server start to serve")
+	defer func() {
+		log.Info("tcp server exited")
+	}()
 	defer func() {
 		s.isClosed.Store(true)
 		// Closing the rootListener provides a reliable way
 		// for telling downstream components to exit.
 		_ = s.rootListener.Close()
+		log.Debug("cmux has been canceled", zap.Error(err))
+		s.mux.Close()
 	}()
-	errg, ctx := errgroup.WithContext(ctx)
 
-	errg.Go(func() error {
+	// we must to exit if the context is done.
+	ch := make(chan error)
+	go func() {
 		err := s.mux.Serve()
+		if err != nil {
+			log.Error("tcp server error", zap.Error(err))
+		}
+		ch <- err
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-ch:
 		if err == cmux.ErrServerClosed {
 			return cerror.ErrTCPServerClosed.GenWithStackByArgs()
 		}
@@ -127,16 +143,7 @@ func (s *tcpServerImpl) Run(ctx context.Context) error {
 			return cerror.ErrTCPServerClosed.GenWithStackByArgs()
 		}
 		return errors.Trace(err)
-	})
-
-	errg.Go(func() error {
-		<-ctx.Done()
-		log.Debug("cmux has been canceled", zap.Error(ctx.Err()))
-		s.mux.Close()
-		return nil
-	})
-
-	return errg.Wait()
+	}
 }
 
 func (s *tcpServerImpl) GrpcListener() net.Listener {
@@ -151,7 +158,7 @@ func (s *tcpServerImpl) IsTLSEnabled() bool {
 	return s.isTLSEnabled
 }
 
-func (s *tcpServerImpl) Close() error {
+func (s *tcpServerImpl) Close(_ context.Context) error {
 	if s.isClosed.Swap(true) {
 		// ignore double closing
 		return nil
@@ -159,6 +166,10 @@ func (s *tcpServerImpl) Close() error {
 	// Closing the rootListener provides a reliable way
 	// for telling downstream components to exit.
 	return errors.Trace(s.rootListener.Close())
+}
+
+func (s *tcpServerImpl) Name() string {
+	return "tcp-server"
 }
 
 // wrapTLSListener takes a plain Listener and security credentials,
