@@ -2,7 +2,8 @@
 
 set -eu
 
-if [ "$NEXT_GEN" = 1 ]; then
+next_gen=${NEXT_GEN:-0}
+if [ "$next_gen" = 1 ]; then
 	run_cdc_cli changefeed -k "$KEYSPACE_NAME" "$@"
 else
 	run_cdc_cli changefeed "$@"
