@@ -265,11 +265,6 @@ func (c *logCoordinator) updateChangefeedMetrics() {
 		state.resolvedTsGauge.Set(float64(phyResolvedTs))
 		lag := float64(pdPhyTs-phyResolvedTs) / 1e3
 		state.resolvedTsLagGauge.Set(lag)
-		log.Info("update changefeed metrics",
-			zap.Stringer("changefeedID", state.cfID),
-			zap.Uint64("minResolvedTs", minResolvedTs),
-			zap.Int64("pdPhyTs", pdPhyTs),
-			zap.Float64("lag", lag))
 	}
 }
 
