@@ -28,8 +28,8 @@ function prepare() {
 	fi
 
 	# the cdc server should be classic mode on downstream
-	run_cdc_server --workdir $WORK_DIR --binary $DOWN_CDC --addr "127.0.0.1:8400" --pd "http://${DOWN_PD_HOST}:${DOWN_PD_PORT}" --logsuffix "down"
-	"$DOWN_CDC" cli changefeed create --sink-uri="blackhole://" -c "changefeed-for-find-finished-ts" --server "http://127.0.0.1:8400"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8400" --pd "http://${DOWN_PD_HOST}:${DOWN_PD_PORT}" --logsuffix "down"
+	cdc_cli_changefeed create --sink-uri="blackhole://" -c "changefeed-for-find-finished-ts" --server "http://127.0.0.1:8400"
 }
 
 trap stop_tidb_cluster EXIT
