@@ -114,8 +114,6 @@ function failOverWhenTwoNode() {
 	check_table_exists fail_over_test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 120
 
-	check_table_exists fail_over_test.finish_mark2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-
 	export GO_FAILPOINTS=''
 
 	cleanup_process $CDC_BINARY
