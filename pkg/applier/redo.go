@@ -15,28 +15,20 @@ package applier
 
 import (
 	"context"
-	"fmt"
 	"net/url"
-	"os"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/reader"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/cdc/model/codec"
-	"github.com/pingcap/tiflow/cdc/processor/memquota"
-	"github.com/pingcap/tiflow/cdc/redo/reader"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
-	ddlfactory "github.com/pingcap/tiflow/cdc/sink/ddlsink/factory"
-	dmlfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
-	"github.com/pingcap/tiflow/cdc/sink/tablesink"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
-	"github.com/pingcap/tiflow/pkg/redo"
-	"github.com/pingcap/tiflow/pkg/sink/mysql"
-	"github.com/pingcap/tiflow/pkg/spanz"
-	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -49,7 +41,7 @@ const (
 
 var (
 	// In the boundary case, non-idempotent DDLs will not be executed.
-	// TODO(CharlesCheung96): fix this
+	// TODO: fix this
 	unsupportedDDL = map[timodel.ActionType]struct{}{
 		timodel.ActionExchangeTablePartition: {},
 	}
@@ -69,25 +61,17 @@ type RedoApplier struct {
 	rd             reader.RedoLogReader
 	updateSplitter *updateEventSplitter
 
-	ddlSink         ddlsink.Sink
+	mysqlSink       *mysql.Sink
 	appliedDDLCount uint64
 
-	memQuota     *memquota.MemQuota
-	pendingQuota uint64
-
-	// sinkFactory is used to create table sinks.
-	sinkFactory *dmlfactory.SinkFactory
-	// tableSinks is a map from tableID to table sink.
-	// We create it when we need it, and close it after we finish applying the redo logs.
-	tableSinks         map[model.TableID]tablesink.TableSink
-	tableResolvedTsMap map[model.TableID]*memquota.MemConsumeRecord
-	appliedLogCount    uint64
+	eventsGroup     map[commonType.TableID]*eventsGroup
+	appliedLogCount uint64
 
 	errCh chan error
 
 	// changefeedID is used to identify the changefeed that this applier belongs to.
 	// not used for now.
-	changefeedID model.ChangeFeedID
+	changefeedID commonType.ChangeFeedID
 }
 
 // NewRedoApplier creates a new RedoApplier instance
@@ -128,35 +112,22 @@ func (ra *RedoApplier) catchError(ctx context.Context) error {
 }
 
 func (ra *RedoApplier) initSink(ctx context.Context) (err error) {
-	replicaConfig := config.GetDefaultReplicaConfig()
-	ra.sinkFactory, err = dmlfactory.New(ctx, ra.changefeedID, ra.cfg.SinkURI, replicaConfig, ra.errCh, nil)
+	if ra.mysqlSink != nil || ra.eventsGroup != nil {
+		log.Warn("redo applier has initialized")
+		return nil
+	}
+	replicaConfig := &config.ChangefeedConfig{
+		SinkURI:    ra.cfg.SinkURI,
+		SinkConfig: &config.SinkConfig{},
+	}
+	sink, err := sink.New(ctx, replicaConfig, ra.changefeedID)
 	if err != nil {
 		return err
 	}
-	ra.ddlSink, err = ddlfactory.New(ctx, ra.changefeedID, ra.cfg.SinkURI, replicaConfig)
-	if err != nil {
-		return err
-	}
+	ra.mysqlSink = sink.(*mysql.Sink)
 
-	ra.tableSinks = make(map[model.TableID]tablesink.TableSink)
-	ra.tableResolvedTsMap = make(map[model.TableID]*memquota.MemConsumeRecord)
+	ra.eventsGroup = make(map[commonType.TableID]*eventsGroup)
 	return nil
-}
-
-func (ra *RedoApplier) bgReleaseQuota(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			for tableID, tableSink := range ra.tableSinks {
-				checkpointTs := tableSink.GetCheckpointTs()
-				ra.memQuota.Release(spanz.TableIDToComparableSpan(tableID), checkpointTs)
-			}
-		}
-	}
 }
 
 func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
@@ -170,9 +141,9 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	if err := ra.initSink(ctx); err != nil {
 		return err
 	}
-	defer ra.sinkFactory.Close()
+	defer ra.mysqlSink.Close(true)
 
-	shouldApplyDDL := func(row *model.RowChangedEvent, ddl *model.DDLEvent) bool {
+	shouldApplyDDL := func(row *commonEvent.RedoDMLEvent, ddl *commonEvent.RedoDDLEvent) bool {
 		if ddl == nil {
 			return false
 		} else if row == nil {
@@ -181,26 +152,26 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 		}
 		// If all rows before the DDL (which means row.CommitTs <= ddl.CommitTs)
 		// are applied, we should apply this DDL.
-		return row.CommitTs > ddl.CommitTs
+		return row.Row.CommitTs > ddl.DDL.CommitTs
 	}
 
 	row, err := ra.updateSplitter.readNextRow(ctx)
 	if err != nil {
 		return err
 	}
-	ddl, err := ra.rd.ReadNextDDL(ctx)
-	if err != nil {
+	ddl, ok, err := ra.rd.ReadNextDDL(ctx)
+	if err != nil || !ok {
 		return err
 	}
 	for {
-		if row == nil && ddl == nil {
+		if row == nil {
 			break
 		}
 		if shouldApplyDDL(row, ddl) {
 			if err := ra.applyDDL(ctx, ddl, checkpointTs); err != nil {
 				return err
 			}
-			if ddl, err = ra.rd.ReadNextDDL(ctx); err != nil {
+			if ddl, ok, err = ra.rd.ReadNextDDL(ctx); err != nil {
 				return err
 			}
 		} else {
@@ -213,11 +184,10 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 		}
 	}
 	// wait all tables to flush data
-	for tableID := range ra.tableResolvedTsMap {
+	for tableID := range ra.eventsGroup {
 		if err := ra.waitTableFlush(ctx, tableID, resolvedTs); err != nil {
 			return err
 		}
-		ra.tableSinks[tableID].Close()
 	}
 
 	log.Info("apply redo log finishes",
@@ -227,56 +197,27 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	return errApplyFinished
 }
 
-func (ra *RedoApplier) resetQuota(rowSize uint64) error {
-	if rowSize >= config.DefaultChangefeedMemoryQuota || rowSize < ra.pendingQuota {
-		log.Panic("row size exceeds memory quota",
-			zap.Uint64("rowSize", rowSize),
-			zap.Uint64("memoryQuota", config.DefaultChangefeedMemoryQuota))
-	}
-
-	// flush all tables before acquire new quota
-	for tableID, tableRecord := range ra.tableResolvedTsMap {
-		if !tableRecord.ResolvedTs.IsBatchMode() {
-			log.Panic("table resolved ts should always be in batch mode when apply redo log")
-		}
-
-		if err := ra.tableSinks[tableID].UpdateResolvedTs(tableRecord.ResolvedTs); err != nil {
-			return err
-		}
-		ra.memQuota.Record(spanz.TableIDToComparableSpan(tableID),
-			tableRecord.ResolvedTs, tableRecord.Size)
-
-		// reset new record
-		ra.tableResolvedTsMap[tableID] = &memquota.MemConsumeRecord{
-			ResolvedTs: tableRecord.ResolvedTs.AdvanceBatch(),
-			Size:       0,
-		}
-	}
-
-	oldQuota := ra.pendingQuota
-	ra.pendingQuota = rowSize * mysql.DefaultMaxTxnRow
-	if ra.pendingQuota > config.DefaultChangefeedMemoryQuota {
-		ra.pendingQuota = config.DefaultChangefeedMemoryQuota
-	} else if ra.pendingQuota < 64*1024 {
-		ra.pendingQuota = 64 * 1024
-	}
-	return ra.memQuota.BlockAcquire(ra.pendingQuota - oldQuota)
-}
-
 func (ra *RedoApplier) applyDDL(
-	ctx context.Context, ddl *model.DDLEvent, checkpointTs uint64,
+	ctx context.Context, ddl *commonEvent.RedoDDLEvent, checkpointTs uint64,
 ) error {
 	shouldSkip := func() bool {
-		if ddl.CommitTs == checkpointTs {
-			if _, ok := unsupportedDDL[ddl.Type]; ok {
+		if ddl.DDL == nil {
+			// Note this could only happen when using old version of cdc, and the commit ts
+			// of the DDL should be equal to checkpoint ts or resolved ts.
+			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
+			return true
+		}
+		if ddl.DDL.CommitTs == checkpointTs {
+			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
 				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
 				return true
 			}
 		}
-		if ddl.TableInfo == nil {
-			// Note this could omly happen when using old version of cdc, and the commit ts
-			// of the DDL should be equal to checkpoint ts or resolved ts.
-			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
+		newStartTsList, _, err := ra.mysqlSink.GetStartTsList([]int64{ddl.TableName.TableID}, []int64{0}, false)
+		if err != nil {
+			log.Error("get startTs list failed", zap.Any("ddl", ddl), zap.Error(err))
+		}
+		if len(newStartTsList) > 0 && newStartTsList[0] > int64(checkpointTs) {
 			return true
 		}
 		return false
@@ -287,12 +228,12 @@ func (ra *RedoApplier) applyDDL(
 	log.Warn("apply DDL", zap.Any("ddl", ddl))
 	// Wait all tables to flush data before applying DDL.
 	// TODO: only block tables that are affected by this DDL.
-	for tableID := range ra.tableSinks {
-		if err := ra.waitTableFlush(ctx, tableID, ddl.CommitTs); err != nil {
+	for tableID := range ra.eventsGroup {
+		if err := ra.waitTableFlush(ctx, tableID, ddl.DDL.CommitTs); err != nil {
 			return err
 		}
 	}
-	if err := ra.ddlSink.WriteDDLEvent(ctx, ddl); err != nil {
+	if err := ra.mysqlSink.WriteBlockEvent(ddl.ToDDLEvent()); err != nil {
 		return err
 	}
 	ra.appliedDDLCount++
@@ -300,116 +241,62 @@ func (ra *RedoApplier) applyDDL(
 }
 
 func (ra *RedoApplier) applyRow(
-	row *model.RowChangedEvent, checkpointTs model.Ts,
+	row *commonEvent.RedoDMLEvent, checkpointTs commonType.Ts,
 ) error {
-	rowSize := uint64(row.ApproximateBytes())
-	if rowSize > ra.pendingQuota {
-		if err := ra.resetQuota(uint64(row.ApproximateBytes())); err != nil {
-			return err
-		}
-	}
-	ra.pendingQuota -= rowSize
-
-	tableID := row.GetTableID()
-	if _, ok := ra.tableSinks[tableID]; !ok {
-		tableSink := ra.sinkFactory.CreateTableSink(
-			model.DefaultChangeFeedID(applierChangefeed),
-			spanz.TableIDToComparableSpan(tableID),
-			checkpointTs,
-			pdutil.NewClock4Test(),
-			prometheus.NewCounter(prometheus.CounterOpts{}),
-			prometheus.NewHistogram(prometheus.HistogramOpts{}),
-		)
-		ra.tableSinks[tableID] = tableSink
-	}
-	if _, ok := ra.tableResolvedTsMap[tableID]; !ok {
-		// Initialize table record using checkpointTs.
-		ra.tableResolvedTsMap[tableID] = &memquota.MemConsumeRecord{
-			ResolvedTs: model.ResolvedTs{
-				Mode:    model.BatchResolvedMode,
-				Ts:      checkpointTs,
-				BatchID: 1,
-			},
-			Size: 0,
-		}
+	tableID := row.Row.Table.TableID
+	if _, ok := ra.eventsGroup[tableID]; !ok {
+		ra.eventsGroup[tableID] = NewEventsGroup(0, tableID)
 	}
 
-	ra.tableSinks[tableID].AppendRowChangedEvents(row)
-	record := ra.tableResolvedTsMap[tableID]
-	record.Size += rowSize
-	if row.CommitTs > record.ResolvedTs.Ts {
-		// Use batch resolvedTs to flush data as quickly as possible.
-		ra.tableResolvedTsMap[tableID] = &memquota.MemConsumeRecord{
-			ResolvedTs: model.ResolvedTs{
-				Mode:    model.BatchResolvedMode,
-				Ts:      row.CommitTs,
-				BatchID: 1,
-			},
-			Size: record.Size,
-		}
-	} else if row.CommitTs < ra.tableResolvedTsMap[tableID].ResolvedTs.Ts {
+	if row.Row.CommitTs < ra.eventsGroup[tableID].highWatermark {
 		log.Panic("commit ts of redo log regressed",
 			zap.Int64("tableID", tableID),
-			zap.Uint64("commitTs", row.CommitTs),
-			zap.Any("resolvedTs", ra.tableResolvedTsMap[tableID]))
+			zap.Uint64("commitTs", row.Row.CommitTs),
+			zap.Any("resolvedTs", ra.eventsGroup[tableID].highWatermark))
 	}
+	ra.eventsGroup[tableID].Append(row.ToDMLEvent(), false)
 
 	ra.appliedLogCount++
 	return nil
 }
 
 func (ra *RedoApplier) waitTableFlush(
-	ctx context.Context, tableID model.TableID, rts model.Ts,
+	ctx context.Context, tableID commonType.TableID, rts commonType.Ts,
 ) error {
-	ticker := time.NewTicker(warnDuration)
-	defer ticker.Stop()
-
-	oldTableRecord := ra.tableResolvedTsMap[tableID]
-	if oldTableRecord.ResolvedTs.Ts < rts {
-		// Use new batch resolvedTs to flush data.
-		ra.tableResolvedTsMap[tableID] = &memquota.MemConsumeRecord{
-			ResolvedTs: model.ResolvedTs{
-				Mode:    model.BatchResolvedMode,
-				Ts:      rts,
-				BatchID: 1,
-			},
-			Size: ra.tableResolvedTsMap[tableID].Size,
-		}
-	} else if oldTableRecord.ResolvedTs.Ts > rts {
+	if ra.eventsGroup[tableID].highWatermark > rts {
 		log.Panic("resolved ts of redo log regressed",
-			zap.Any("oldResolvedTs", oldTableRecord),
+			zap.Any("oldResolvedTs", ra.eventsGroup[tableID].highWatermark),
 			zap.Any("newResolvedTs", rts))
 	}
 
-	tableRecord := ra.tableResolvedTsMap[tableID]
-	if err := ra.tableSinks[tableID].UpdateResolvedTs(tableRecord.ResolvedTs); err != nil {
-		return err
-	}
-	ra.memQuota.Record(spanz.TableIDToComparableSpan(tableID),
-		tableRecord.ResolvedTs, tableRecord.Size)
+	var flushed atomic.Int64
 
+	events := ra.eventsGroup[tableID].Resolve(rts)
+	total := len(events)
+	done := make(chan struct{}, 1)
+	for _, e := range events {
+		e.AddPostFlushFunc(func() {
+			if flushed.Inc() == int64(total) {
+				close(done)
+			}
+		})
+		ra.mysqlSink.AddDMLEvent(e)
+	}
 	// Make sure all events are flushed to downstream.
-	for !ra.tableSinks[tableID].GetCheckpointTs().EqualOrGreater(tableRecord.ResolvedTs) {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			log.Warn(
-				"Table sink is not catching up with resolved ts for a long time",
-				zap.Int64("tableID", tableID),
-				zap.Any("resolvedTs", tableRecord.ResolvedTs),
-				zap.Any("checkpointTs", ra.tableSinks[tableID].GetCheckpointTs()),
-			)
-		default:
-			time.Sleep(flushWaitDuration)
-		}
+	start := time.Now()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-done:
+		log.Info("flush DML events done", zap.Uint64("resolvedTs", rts),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+	case <-ticker.C:
+		log.Panic("DML events cannot be flushed in 1 minute", zap.Uint64("resolvedTs", rts),
+			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 	}
 
-	// reset new record
-	ra.tableResolvedTsMap[tableID] = &memquota.MemConsumeRecord{
-		ResolvedTs: tableRecord.ResolvedTs.AdvanceBatch(),
-		Size:       0,
-	}
 	return nil
 }
 
@@ -423,199 +310,23 @@ func createRedoReaderImpl(ctx context.Context, cfg *RedoApplierConfig) (reader.R
 	return reader.NewRedoLogReader(ctx, storageType, readerCfg)
 }
 
-// tempTxnInsertEventStorage is used to store insert events in the same transaction
-// once you begin to read events from storage, you should read all events before you write new events
-type tempTxnInsertEventStorage struct {
-	events []*model.RowChangedEvent
-	// when events num exceed flushThreshold, write all events to file
-	flushThreshold int
-	dir            string
-	txnCommitTs    model.Ts
-
-	useFileStorage bool
-	// eventSizes is used to store the size of each event in file storage
-	eventSizes  []int
-	writingFile *os.File
-	readingFile *os.File
-	// reading is used to indicate whether we are reading events from storage
-	// this is to ensure that we read all events before write new events
-	reading bool
-}
-
-const (
-	tempStorageFileName   = "_insert_storage.tmp"
-	defaultFlushThreshold = 50
-)
-
-func newTempTxnInsertEventStorage(flushThreshold int, dir string) *tempTxnInsertEventStorage {
-	return &tempTxnInsertEventStorage{
-		events:         make([]*model.RowChangedEvent, 0),
-		flushThreshold: flushThreshold,
-		dir:            dir,
-		txnCommitTs:    0,
-
-		useFileStorage: false,
-		eventSizes:     make([]int, 0),
-
-		reading: false,
-	}
-}
-
-func (t *tempTxnInsertEventStorage) initializeAddEvent(ts model.Ts) {
-	t.reading = false
-	t.useFileStorage = false
-	t.txnCommitTs = ts
-	t.writingFile = nil
-	t.readingFile = nil
-}
-
-func (t *tempTxnInsertEventStorage) addEvent(event *model.RowChangedEvent) error {
-	// do some pre check
-	if !event.IsInsert() {
-		log.Panic("event is not insert event", zap.Any("event", event))
-	}
-	if t.reading && t.hasEvent() {
-		log.Panic("should read all events before write new event")
-	}
-	if !t.hasEvent() {
-		t.initializeAddEvent(event.CommitTs)
-	} else {
-		if t.txnCommitTs != event.CommitTs {
-			log.Panic("commit ts of events should be the same",
-				zap.Uint64("commitTs", event.CommitTs),
-				zap.Uint64("txnCommitTs", t.txnCommitTs))
-		}
-	}
-
-	if t.useFileStorage {
-		return t.writeEventsToFile(event)
-	}
-
-	t.events = append(t.events, event)
-	if len(t.events) >= t.flushThreshold {
-		err := t.writeEventsToFile(t.events...)
-		if err != nil {
-			return err
-		}
-		t.events = t.events[:0]
-	}
-	return nil
-}
-
-func (t *tempTxnInsertEventStorage) writeEventsToFile(events ...*model.RowChangedEvent) error {
-	if !t.useFileStorage {
-		t.useFileStorage = true
-		var err error
-		t.writingFile, err = os.Create(fmt.Sprintf("%s/%s", t.dir, tempStorageFileName))
-		if err != nil {
-			return err
-		}
-	}
-	for _, event := range events {
-		redoLog := event.ToRedoLog()
-		data, err := codec.MarshalRedoLog(redoLog, nil)
-		if err != nil {
-			return errors.WrapError(errors.ErrMarshalFailed, err)
-		}
-		t.eventSizes = append(t.eventSizes, len(data))
-		_, err = t.writingFile.Write(data)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (t *tempTxnInsertEventStorage) hasEvent() bool {
-	return len(t.events) > 0 || len(t.eventSizes) > 0
-}
-
-func (t *tempTxnInsertEventStorage) readFromFile() (*model.RowChangedEvent, error) {
-	if len(t.eventSizes) == 0 {
-		return nil, nil
-	}
-	if t.readingFile == nil {
-		var err error
-		t.readingFile, err = os.Open(fmt.Sprintf("%s/%s", t.dir, tempStorageFileName))
-		if err != nil {
-			return nil, err
-		}
-	}
-	size := t.eventSizes[0]
-	data := make([]byte, size)
-	n, err := t.readingFile.Read(data)
-	if err != nil {
-		return nil, err
-	}
-	if n != size {
-		return nil, errors.New("read size not equal to expected size")
-	}
-	t.eventSizes = t.eventSizes[1:]
-	redoLog, _, err := codec.UnmarshalRedoLog(data)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrUnmarshalFailed, err)
-	}
-	return redoLog.RedoRow.Row.ToRowChangedEvent(), nil
-}
-
-func (t *tempTxnInsertEventStorage) readNextEvent() (*model.RowChangedEvent, error) {
-	if !t.hasEvent() {
-		return nil, nil
-	}
-	t.reading = true
-	if t.useFileStorage {
-		return t.readFromFile()
-	}
-
-	event := t.events[0]
-	t.events = t.events[1:]
-	return event, nil
-}
-
-// updateEventSplitter splits an update event to a delete event and a deferred insert event
-// when the update event is an update to the handle key or the non empty unique key.
-// deferred insert event means all delete events and update events in the same transaction are emitted before this insert event
-type updateEventSplitter struct {
-	rd             reader.RedoLogReader
-	rdFinished     bool
-	tempStorage    *tempTxnInsertEventStorage
-	prevTxnStartTs model.Ts
-	// pendingEvent is the event that trigger the process to emit events from tempStorage, it can be
-	// 1) an insert event in the same transaction(because there will be no more update and delete events in the same transaction)
-	// 2) a new event in the next transaction
-	pendingEvent *model.RowChangedEvent
-	// meetInsertInCurTxn is used to indicate whether we meet an insert event in the current transaction
-	// this is to add some check to ensure that insert events are emitted after other kinds of events in the same transaction
-	meetInsertInCurTxn bool
-}
-
-func newUpdateEventSplitter(rd reader.RedoLogReader, dir string) *updateEventSplitter {
-	return &updateEventSplitter{
-		rd:             rd,
-		rdFinished:     false,
-		tempStorage:    newTempTxnInsertEventStorage(defaultFlushThreshold, dir),
-		prevTxnStartTs: 0,
-	}
-}
-
 // processEvent return (event to emit, pending event)
 func processEvent(
-	event *model.RowChangedEvent,
-	prevTxnStartTs model.Ts,
+	event *commonEvent.RedoDMLEvent,
+	prevTxnStartTs commonType.Ts,
 	tempStorage *tempTxnInsertEventStorage,
-) (*model.RowChangedEvent, *model.RowChangedEvent, error) {
+) (*commonEvent.RedoDMLEvent, *commonEvent.RedoDMLEvent, error) {
 	if event == nil {
 		log.Panic("event should not be nil")
 	}
 
 	// meet a new transaction
-	if prevTxnStartTs != 0 && prevTxnStartTs != event.StartTs {
+	if prevTxnStartTs != 0 && prevTxnStartTs != event.Row.StartTs {
 		if tempStorage.hasEvent() {
 			// emit the insert events in the previous transaction
 			return nil, event, nil
 		}
 	}
-	// nolint
 	if event.IsDelete() {
 		return event, nil, nil
 	} else if event.IsInsert() {
@@ -624,10 +335,10 @@ func processEvent(
 			return nil, event, nil
 		}
 		return event, nil, nil
-	} else if !model.ShouldSplitUpdateEvent(event) {
+	} else if !shouldSplitUpdateEvent(event) {
 		return event, nil, nil
 	} else {
-		deleteEvent, insertEvent, err := model.SplitUpdateEvent(event)
+		deleteEvent, insertEvent, err := splitUpdateEvent(event)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -636,78 +347,6 @@ func processEvent(
 			return nil, nil, err
 		}
 		return deleteEvent, nil, nil
-	}
-}
-
-func (u *updateEventSplitter) checkEventOrder(event *model.RowChangedEvent) {
-	if event == nil {
-		return
-	}
-	// meeet a new transaction
-	if event.StartTs != u.prevTxnStartTs {
-		u.meetInsertInCurTxn = false
-		return
-	}
-	if event.IsInsert() {
-		u.meetInsertInCurTxn = true
-	} else {
-		// delete or update events
-		if u.meetInsertInCurTxn {
-			log.Panic("insert events should be emitted after other kinds of events in the same transaction")
-		}
-	}
-}
-
-func (u *updateEventSplitter) readNextRow(ctx context.Context) (*model.RowChangedEvent, error) {
-	for {
-		// case 1: pendingEvent is not nil, emit all events from tempStorage and then process pendingEvent
-		if u.pendingEvent != nil {
-			if u.tempStorage.hasEvent() {
-				return u.tempStorage.readNextEvent()
-			}
-			var event *model.RowChangedEvent
-			var err error
-			event, u.pendingEvent, err = processEvent(u.pendingEvent, u.prevTxnStartTs, u.tempStorage)
-			if err != nil {
-				return nil, err
-			}
-			if event == nil || u.pendingEvent != nil {
-				log.Panic("processEvent return wrong result for pending event",
-					zap.Any("event", event),
-					zap.Any("pendingEvent", u.pendingEvent))
-			}
-			return event, nil
-		}
-		// case 2: no more events from RedoLogReader, emit all events from tempStorage and return nil
-		if u.rdFinished {
-			if u.tempStorage.hasEvent() {
-				return u.tempStorage.readNextEvent()
-			}
-			return nil, nil
-		}
-		// case 3: read and process events from RedoLogReader
-		event, err := u.rd.ReadNextRow(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if event == nil {
-			u.rdFinished = true
-		} else {
-			u.checkEventOrder(event)
-			prevTxnStartTs := u.prevTxnStartTs
-			u.prevTxnStartTs = event.StartTs
-			var err error
-			event, u.pendingEvent, err = processEvent(event, prevTxnStartTs, u.tempStorage)
-			if err != nil {
-				return nil, err
-			}
-			if event != nil {
-				return event, nil
-			}
-			if u.pendingEvent == nil {
-				log.Panic("event to emit and pending event cannot all be nil")
-			}
-		}
 	}
 }
 
@@ -731,13 +370,6 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		return ra.rd.Run(egCtx)
 	})
 	ra.updateSplitter = newUpdateEventSplitter(ra.rd, ra.cfg.Dir)
-
-	ra.memQuota = memquota.NewMemQuota(model.DefaultChangeFeedID(applierChangefeed),
-		config.DefaultChangefeedMemoryQuota, "sink")
-	defer ra.memQuota.Close()
-	eg.Go(func() error {
-		return ra.bgReleaseQuota(egCtx)
-	})
 
 	eg.Go(func() error {
 		return ra.consumeLogs(egCtx)
