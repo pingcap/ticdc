@@ -322,10 +322,10 @@ func (c *server) Run(ctx context.Context) error {
 	}()
 	err = <-ch
 	// wait base module exit at the end
-	err1 := eg.Wait()
-	if err1 != nil {
-		log.Error("meet error in base module", zap.Error(err1))
-	}
+	// err1 := eg.Wait()
+	// if err1 != nil {
+	// 	log.Error("meet error in base module", zap.Error(err1))
+	// }
 	return err
 }
 
