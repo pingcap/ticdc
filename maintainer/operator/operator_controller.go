@@ -208,7 +208,6 @@ func (oc *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 				continue
 			}
 			if spanReplication.GetStatus().CheckpointTs < minCheckpointTs {
-				log.Info("update min checkpoint ts", zap.String("operator", op.String()), zap.Uint64("checkpointTs", spanReplication.GetStatus().CheckpointTs))
 				minCheckpointTs = spanReplication.GetStatus().CheckpointTs
 			}
 		}

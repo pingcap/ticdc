@@ -297,7 +297,6 @@ func (b *Barrier) ShouldBlockCheckpointTs() bool {
 func (b *Barrier) GetMinBlockedCheckpointTsForNewTables(minCheckpointTs uint64) uint64 {
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		if barrierEvent.hasNewTable && minCheckpointTs > barrierEvent.commitTs {
-			log.Info("update min checkpoint ts", zap.Uint64("BarrierEventCommitTs", barrierEvent.commitTs))
 			minCheckpointTs = barrierEvent.commitTs
 		}
 		return true
