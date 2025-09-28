@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math/rand"
 	"strings"
 	"sync"
@@ -247,14 +248,14 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 				if err != nil {
 					// Check if it's a connection-level error that requires reconnection
 					if app.isConnectionError(err) {
-						plog.Info("connection error detected, reconnecting", zap.Error(err))
+						fmt.Println("connection error detected, reconnecting", zap.Error(err))
 						conn.Close()
 						time.Sleep(time.Second * 2)
 
 						// Get new connection
 						conn, err = db.DB.Conn(context.Background())
 						if err != nil {
-							plog.Info("reconnection failed, wait 5 seconds and retry", zap.Error(err))
+							fmt.Println("reconnection failed, wait 5 seconds and retry", zap.Error(err))
 							time.Sleep(time.Second * 5)
 							continue
 						}
@@ -262,7 +263,7 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 
 					app.Stats.ErrorCount.Add(1)
 					retryCount.Add(1)
-					plog.Info("do insert error, retrying", zap.Int("worker", workerID), zap.String("db", db.Name), zap.Uint64("retryCount", retryCount.Load()), zap.Error(err))
+					fmt.Println("do insert error, retrying", zap.Int("worker", workerID), zap.String("db", db.Name), zap.Uint64("retryCount", retryCount.Load()), zap.Error(err))
 					time.Sleep(time.Second * 2)
 					continue
 				}
