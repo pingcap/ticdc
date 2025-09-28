@@ -16,13 +16,15 @@ package main
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
@@ -32,10 +34,6 @@ import (
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
-
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -78,9 +76,9 @@ const (
 )
 
 // stmtCacheKey is used as the key for statement cache
-// Use SQL string as key instead of connection to avoid cache invalidation when connections are recycled
 type stmtCacheKey struct {
-	sql string
+	conn *sql.Conn
+	sql  string
 }
 
 // NewWorkloadApp creates a new workload application
@@ -231,64 +229,26 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 				plog.Info("insert worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
-
-			// Get connection once and reuse it with context timeout
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			conn, err := db.DB.Conn(ctx)
-			cancel()
-			if err != nil {
-				plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
-				time.Sleep(time.Second * 5)
-				return
-			}
-			defer conn.Close()
-
-			plog.Info("start insert worker to write data to db", zap.Int("worker", workerID), zap.String("db", db.Name))
-
 			for {
+				conn, err := db.DB.Conn(context.Background())
+				if err != nil {
+					plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
+					time.Sleep(time.Second * 5)
+				}
+				plog.Info("start insert worker to write data to db", zap.Int("worker", workerID), zap.String("db", db.Name))
 				err = app.doInsert(conn)
 				if err != nil {
-					// Check if it's a connection-level error that requires reconnection
-					if app.isConnectionError(err) {
-						fmt.Println("connection error detected, reconnecting", zap.Error(err))
-						conn.Close()
-						time.Sleep(time.Second * 2)
-
-						// Get new connection with timeout
-						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-						conn, err = db.DB.Conn(ctx)
-						cancel()
-						if err != nil {
-							fmt.Println("reconnection failed, wait 5 seconds and retry", zap.Error(err))
-							time.Sleep(time.Second * 5)
-							continue
-						}
-					}
-
+					plog.Info("do insert error, get another connection and retry", zap.Error(err))
 					app.Stats.ErrorCount.Add(1)
 					retryCount.Add(1)
-					fmt.Println("do insert error, retrying", zap.Int("worker", workerID), zap.String("db", db.Name), zap.Uint64("retryCount", retryCount.Load()), zap.Error(err))
+					conn.Close()
 					time.Sleep(time.Second * 2)
+					plog.Info("retry insert", zap.Int("worker", workerID), zap.String("db", db.Name), zap.Uint64("retryCount", retryCount.Load()))
 					continue
 				}
 			}
 		}(i)
 	}
-}
-
-// isConnectionError checks if the error is a connection-level error that requires reconnection
-func (app *WorkloadApp) isConnectionError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	// Check for common connection-level errors
-	return strings.Contains(errStr, "connection is already closed") ||
-		strings.Contains(errStr, "broken pipe") ||
-		strings.Contains(errStr, "connection reset") ||
-		strings.Contains(errStr, "connection refused") ||
-		strings.Contains(errStr, "timeout") ||
-		strings.Contains(errStr, "invalid connection")
 }
 
 // doInsert performs insert operations
@@ -348,8 +308,8 @@ func (app *WorkloadApp) execute(conn *sql.Conn, sql string, tableIndex int) (sql
 func (app *WorkloadApp) executeWithValues(conn *sql.Conn, sqlStr string, n int, values []interface{}) (sql.Result, error) {
 	app.Stats.QueryCount.Add(1)
 
-	// Try to get prepared statement from cache using SQL string as key
-	key := stmtCacheKey{sql: sqlStr}
+	// Try to get prepared statement from cache
+	key := stmtCacheKey{conn: conn, sql: sqlStr}
 	if stmt, ok := app.DBManager.StmtCache.Load(key); ok {
 		return stmt.(*sql.Stmt).Exec(values...)
 	}
@@ -374,7 +334,7 @@ func (app *WorkloadApp) executeWithValues(conn *sql.Conn, sqlStr string, n int, 
 		}
 	}
 
-	// Cache the prepared statement using SQL string as key
+	// Cache the prepared statement
 	app.DBManager.StmtCache.Store(key, stmt)
 
 	// Execute the prepared statement

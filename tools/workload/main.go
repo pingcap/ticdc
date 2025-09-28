@@ -35,9 +35,6 @@ func main() {
 		plog.Panic("Failed to parse flags", zap.Error(err))
 	}
 
-	// initialize logger with file output
-	initLogger(config)
-
 	// create application object
 	app := NewWorkloadApp(config)
 
@@ -52,22 +49,5 @@ func main() {
 	// execute workload
 	if err := app.Execute(); err != nil {
 		plog.Error("Error executing workload", zap.Error(err))
-	}
-}
-
-// initLogger initializes the logger with file output
-func initLogger(config *WorkloadConfig) {
-	// Create log config for pingcap log
-	logConfig := &plog.Config{
-		Level: config.LogLevel,
-		File: plog.FileLogConfig{
-			Filename: config.LogFile,
-		},
-	}
-
-	// Initialize the logger
-	_, _, err := plog.InitLogger(logConfig)
-	if err != nil {
-		plog.Panic("Failed to initialize logger", zap.Error(err))
 	}
 }
