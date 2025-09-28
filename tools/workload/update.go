@@ -68,8 +68,10 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 				wg.Done()
 			}()
 
-			// Get connection once and reuse it
-			conn, err := db.DB.Conn(context.Background())
+			// Get connection once and reuse it with context timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			conn, err := db.DB.Conn(ctx)
+			cancel()
 			if err != nil {
 				plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
 				time.Sleep(time.Second * 5)
@@ -88,8 +90,10 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 						conn.Close()
 						time.Sleep(time.Second * 2)
 
-						// Get new connection
-						conn, err = db.DB.Conn(context.Background())
+						// Get new connection with timeout
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						conn, err = db.DB.Conn(ctx)
+						cancel()
 						if err != nil {
 							fmt.Println("reconnection failed, wait 5 seconds and retry", zap.Error(err))
 							time.Sleep(time.Second * 5)

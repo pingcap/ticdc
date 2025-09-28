@@ -78,9 +78,9 @@ const (
 )
 
 // stmtCacheKey is used as the key for statement cache
+// Use SQL string as key instead of connection to avoid cache invalidation when connections are recycled
 type stmtCacheKey struct {
-	conn *sql.Conn
-	sql  string
+	sql string
 }
 
 // NewWorkloadApp creates a new workload application
@@ -232,8 +232,10 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 				wg.Done()
 			}()
 
-			// Get connection once and reuse it
-			conn, err := db.DB.Conn(context.Background())
+			// Get connection once and reuse it with context timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			conn, err := db.DB.Conn(ctx)
+			cancel()
 			if err != nil {
 				plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
 				time.Sleep(time.Second * 5)
@@ -252,8 +254,10 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 						conn.Close()
 						time.Sleep(time.Second * 2)
 
-						// Get new connection
-						conn, err = db.DB.Conn(context.Background())
+						// Get new connection with timeout
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						conn, err = db.DB.Conn(ctx)
+						cancel()
 						if err != nil {
 							fmt.Println("reconnection failed, wait 5 seconds and retry", zap.Error(err))
 							time.Sleep(time.Second * 5)
@@ -344,8 +348,8 @@ func (app *WorkloadApp) execute(conn *sql.Conn, sql string, tableIndex int) (sql
 func (app *WorkloadApp) executeWithValues(conn *sql.Conn, sqlStr string, n int, values []interface{}) (sql.Result, error) {
 	app.Stats.QueryCount.Add(1)
 
-	// Try to get prepared statement from cache
-	key := stmtCacheKey{conn: conn, sql: sqlStr}
+	// Try to get prepared statement from cache using SQL string as key
+	key := stmtCacheKey{sql: sqlStr}
 	if stmt, ok := app.DBManager.StmtCache.Load(key); ok {
 		return stmt.(*sql.Stmt).Exec(values...)
 	}
@@ -370,7 +374,7 @@ func (app *WorkloadApp) executeWithValues(conn *sql.Conn, sqlStr string, n int, 
 		}
 	}
 
-	// Cache the prepared statement
+	// Cache the prepared statement using SQL string as key
 	app.DBManager.StmtCache.Store(key, stmt)
 
 	// Execute the prepared statement

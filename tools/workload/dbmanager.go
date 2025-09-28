@@ -113,16 +113,27 @@ func (m *DBManager) GetDB() *DBWrapper {
 // createDBConnection creates a database connection
 func (m *DBManager) createDBConnection(dbName string) (*sql.DB, error) {
 	plog.Info("create db connection", zap.String("dbName", dbName))
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local&maxAllowedPacket=1073741824&multiStatements=true",
+	// Add connection keep-alive parameters to prevent inactive connections
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local&maxAllowedPacket=1073741824&multiStatements=true&timeout=30s&readTimeout=30s&writeTimeout=30s&interpolateParams=true",
 		m.Config.DBUser, m.Config.DBPassword, m.Config.DBHost, m.Config.DBPort, dbName)
 	return sql.Open("mysql", dsn)
 }
 
 // configureDBConnection configures a database connection
 func (m *DBManager) configureDBConnection(db *sql.DB) {
-	db.SetMaxIdleConns(512)
-	db.SetMaxOpenConns(512)
-	db.SetConnMaxLifetime(time.Minute)
+	// Set connection pool size based on thread count
+	maxConns := m.Config.Thread * 2
+	if maxConns < 100 {
+		maxConns = 100
+	}
+	if maxConns > 1000 {
+		maxConns = 1000
+	}
+
+	db.SetMaxIdleConns(maxConns)
+	db.SetMaxOpenConns(maxConns)
+	// Set connection lifetime to 2 hours to prevent frequent disconnections
+	db.SetConnMaxLifetime(2 * time.Hour)
 }
 
 // CloseAll closes all database connections
