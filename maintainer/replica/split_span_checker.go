@@ -47,6 +47,7 @@ var (
 	maxMoveSpansCountForTrafficBalance = 4
 	maxMoveSpansCountForMerge          = 16
 	maxLagThreshold                    = float64(30) // 30s
+	mergeThreshold                     = 5
 )
 
 type BalanceCause string
@@ -150,6 +151,9 @@ type SplitSpanChecker struct {
 
 	balanceCondition BalanceCondition
 
+	mergeThreshold  int
+	mergeCheckCount int
+
 	regionCache split.RegionCache
 	nodeManager *watcher.NodeManager
 	pdClock     pdutil.Clock
@@ -184,6 +188,8 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 		minTrafficPercentage:   schedulerCfg.MinTrafficPercentage,
 		maxTrafficPercentage:   schedulerCfg.MaxTrafficPercentage,
 		regionCache:            regionCache,
+		mergeThreshold:         mergeThreshold,
+		mergeCheckCount:        0,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
@@ -291,7 +297,12 @@ func (s *SplitSpanChecker) checkAllTaskAvailable() bool {
 // return some actions for scheduling the split spans
 func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	start := time.Now()
+	waitMerge := false
 	defer func() {
+		// if we don't wait for merge, we need to reset the merge check count
+		if !waitMerge {
+			s.mergeCheckCount = 0
+		}
 		s.splitSpanCheckDuration.Observe(time.Since(start).Seconds())
 	}()
 	log.Debug("SplitSpanChecker try to check",
@@ -392,6 +403,13 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 			zap.Float32("writeThreshold", float32(s.writeThreshold)),
 			zap.Int("spanCount", len(s.allTasks)),
 		)
+		return results
+	}
+
+	// use merge check count to avoid too frequent merge(when traffic frequent oscillations)
+	waitMerge = true
+	s.mergeCheckCount++
+	if s.mergeCheckCount < s.mergeThreshold {
 		return results
 	}
 

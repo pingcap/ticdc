@@ -14,7 +14,6 @@
 package maintainer
 
 import (
-	"math"
 	"time"
 
 	"github.com/pingcap/log"
@@ -171,15 +170,9 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	}
 }
 
-func (c *Controller) GetMinCheckpointTs() uint64 {
-	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs()
-	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForAbsentSpans()
-	if minCheckpointTsForOperator == math.MaxUint64 {
-		return minCheckpointTsForSpan
-	}
-	if minCheckpointTsForSpan == math.MaxUint64 {
-		return minCheckpointTsForOperator
-	}
+func (c *Controller) GetMinCheckpointTs(checkpointTs uint64) uint64 {
+	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs(checkpointTs)
+	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForAbsentSpans(checkpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
 
@@ -205,14 +198,8 @@ func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
 }
 
-func (c *Controller) GetMinRedoCheckpointTs() uint64 {
-	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs()
-	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForAbsentSpans()
-	if minCheckpointTsForOperator == math.MaxUint64 {
-		return minCheckpointTsForSpan
-	}
-	if minCheckpointTsForSpan == math.MaxUint64 {
-		return minCheckpointTsForOperator
-	}
+func (c *Controller) GetMinRedoCheckpointTs(checkpointTs uint64) uint64 {
+	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs(checkpointTs)
+	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForAbsentSpans(checkpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
