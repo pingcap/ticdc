@@ -21,11 +21,12 @@ import (
 	"sync"
 	"time"
 
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	pbank2 "workload/schema/bank2"
 	psysbench "workload/schema/sysbench"
+
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // updateTask defines a task for updating data
@@ -65,18 +66,37 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 				plog.Info("update worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
+
+			// Get connection once and reuse it
+			conn, err := db.DB.Conn(context.Background())
+			if err != nil {
+				plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
+				time.Sleep(time.Second * 5)
+				return
+			}
+			defer conn.Close()
+
+			plog.Info("start update worker", zap.Int("worker", workerID))
+
 			for {
-				conn, err := db.DB.Conn(context.Background())
-				if err != nil {
-					plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
-					time.Sleep(time.Second * 5)
-					continue
-				}
-				plog.Info("start update worker", zap.Int("worker", workerID))
 				err = app.doUpdate(conn, updateTaskCh)
 				if err != nil {
-					plog.Info("update worker failed, reset the connection and retry", zap.Error(err))
-					conn.Close()
+					// Check if it's a connection-level error that requires reconnection
+					if app.isConnectionError(err) {
+						plog.Info("connection error detected, reconnecting", zap.Error(err))
+						conn.Close()
+						time.Sleep(time.Second * 2)
+
+						// Get new connection
+						conn, err = db.DB.Conn(context.Background())
+						if err != nil {
+							plog.Info("reconnection failed, wait 5 seconds and retry", zap.Error(err))
+							time.Sleep(time.Second * 5)
+							continue
+						}
+					}
+
+					plog.Info("update worker failed, retrying", zap.Int("worker", workerID), zap.Error(err))
 					time.Sleep(time.Second * 2)
 				}
 			}
