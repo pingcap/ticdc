@@ -46,7 +46,7 @@ import (
 func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream(func(subID SubscriptionID) uint64 { return uint64(subID) }, &regionEventHandler{}, option)
+	ds := dynstream.NewParallelDynamicStream(&regionEventHandler{}, option)
 	ds.Start()
 
 	span := heartbeatpb.TableSpan{
@@ -204,7 +204,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 func TestHandleResolvedTs(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream(func(subID SubscriptionID) uint64 { return uint64(subID) }, &regionEventHandler{}, option)
+	ds := dynstream.NewParallelDynamicStream(&regionEventHandler{}, option)
 	ds.Start()
 
 	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool { return false } // not used
