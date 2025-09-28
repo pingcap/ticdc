@@ -17,9 +17,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
@@ -86,7 +88,11 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			continue
 		}
 		if event.entries != nil {
-			handleEventEntries(span, event.state, event.entries)
+			err := handleEventEntries(span, event.state, event.entries)
+			if err != nil {
+				event.state.markStopped(err)
+				h.handleRegionError(event.state, event.worker)
+			}
 		} else if event.resolvedTs != 0 {
 			resolvedTs := handleResolvedTs(span, event.state, event.resolvedTs)
 			if resolvedTs > newResolvedTs {
@@ -193,7 +199,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 	}
 }
 
-func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_) {
+func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_) error {
 	regionID, _, _ := state.getRegionMeta()
 	assembleRowEvent := func(regionID uint64, entry *cdcpb.Event_Row) common.RawKVEntry {
 		var opType common.OpType
@@ -252,6 +258,14 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					state.matcher.cacheCommitRow(entry)
 					continue
 				}
+				if kerneltype.IsNextGen() {
+					// this is a temporary workaround for the case that:
+					// Next-Gen may cannot found prewrite entry during the incremental scan phase
+					// due to it is by design. By report error, trigger the region reconnection, so that
+					// the commit entry convert to the committed entry automatically.
+					// After the Next-Gen fix this issue, this workaround can be removed.
+					return errors.New("prewrite not found")
+				}
 				log.Fatal("prewrite not match",
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", state.getRegionID()),
@@ -259,7 +273,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("startTs", entry.GetStartTs()),
 					zap.Uint64("commitTs", entry.GetCommitTs()),
 					zap.String("key", spanz.HexKey(entry.GetKey())))
-				return
+				return nil
 			}
 
 			// TiKV can send events with StartTs/CommitTs less than startTs.
@@ -279,7 +293,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
 					zap.String("key", spanz.HexKey(entry.GetKey())))
-				return
+				return nil
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:
@@ -290,6 +304,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			state.matcher.rollbackRow(entry)
 		}
 	}
+	return nil
 }
 
 func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) uint64 {
