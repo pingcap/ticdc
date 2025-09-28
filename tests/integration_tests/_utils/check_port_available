@@ -7,11 +7,11 @@ count=${4:-120}
 
 i=0
 while ! nc -z "$host" "$port"; do
-    echo "$prompt"
-    sleep 1
+	echo "$prompt"
+	sleep 1
 
-    i=$((i+1))
-    if [ "$i" -ge "$count" ]; then
-        exit 1
-    fi
+	i=$((i + 1))
+	if [ "$i" -ge "$count" ]; then
+		exit 1
+	fi
 done
