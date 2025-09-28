@@ -38,16 +38,6 @@ Options:
 EOF
 }
 
-check_port_available() {
-	local host=${1:-127.0.0.1}
-	local port=$2
-	local prompt=$3
-	while ! nc -z "$host" "$port"; do
-		echo "$prompt"
-		sleep 1
-	done
-}
-
 OUT_DIR=
 tidb_config=
 pd_config=
