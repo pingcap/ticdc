@@ -594,7 +594,6 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			updateCheckpointTs := true
 			if !m.bootstrapped.Load() {
 				log.Warn("can not advance checkpointTs since not bootstrapped",
 					zap.String("changefeed", m.id.Name()),
@@ -603,6 +602,7 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				break
 			}
 
+			updateCheckpointTsCount := 0
 			newWatermark := heartbeatpb.NewMaxWatermark()
 			// if there is no tables, there must be a table trigger dispatcher
 			for id := range m.bootstrapper.GetAllNodeIDs() {
@@ -613,7 +613,6 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				// node level watermark reported, ignore this round
 				watermark, ok := m.checkpointTsByCapture.Get(id)
 				if !ok {
-					updateCheckpointTs = false
 					log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
 						zap.String("changefeed", m.id.Name()),
 						zap.Any("node", id),
@@ -621,10 +620,11 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 						zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 					continue
 				}
+				updateCheckpointTsCount += 1
 				newWatermark.UpdateMin(watermark)
 			}
 
-			if !updateCheckpointTs {
+			if updateCheckpointTsCount != len(m.bootstrapper.GetAllNodeIDs()) {
 				break
 			}
 
