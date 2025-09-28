@@ -226,12 +226,15 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
-			log.Info("region is initialized",
-				zap.Int64("tableID", span.span.TableID),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("requestID", state.requestID),
-				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
-				zap.String("endKey", spanz.HexKey(span.span.EndKey)))
+			// todo: remove this log after the next-gen is stable
+			if kerneltype.IsNextGen() {
+				log.Info("region is initialized",
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("requestID", state.requestID),
+					zap.String("startKey", spanz.HexKey(span.span.StartKey)),
+					zap.String("endKey", spanz.HexKey(span.span.EndKey)))
+			}
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}
