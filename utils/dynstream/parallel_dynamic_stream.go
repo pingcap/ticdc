@@ -182,6 +182,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	pi.setStream(s.streams[streamID])
 
 	s.pathMap.m[path] = pi
+	s._statAddPathCount.Add(1)
 	s.pathMap.Unlock()
 
 	s.setMemControl(pi, as...)
@@ -191,8 +192,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	}
 
 	pi.stream.addPath(pi)
-
-	s._statAddPathCount.Add(1)
 	return nil
 }
 
