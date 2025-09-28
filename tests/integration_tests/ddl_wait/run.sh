@@ -50,8 +50,8 @@ function run() {
 	# ensure all dml / ddl related to test.t finish
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 
-	check_logs_contains $WORK_DIR "DDL replicate success"
-	check_logs_contains $WORK_DIR "DDL is running downstream"
+	ensure 100 "check_logs_contains $WORK_DIR 'DDL replicate success'"
+	ensure 100 "check_logs_contains $WORK_DIR 'DDL is running downstream'"
 	cleanup_process $CDC_BINARY
 }
 
