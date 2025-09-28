@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math/rand"
 	"strings"
 	"sync"
@@ -83,20 +84,20 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 				if err != nil {
 					// Check if it's a connection-level error that requires reconnection
 					if app.isConnectionError(err) {
-						plog.Info("connection error detected, reconnecting", zap.Error(err))
+						fmt.Println("connection error detected, reconnecting", zap.Error(err))
 						conn.Close()
 						time.Sleep(time.Second * 2)
 
 						// Get new connection
 						conn, err = db.DB.Conn(context.Background())
 						if err != nil {
-							plog.Info("reconnection failed, wait 5 seconds and retry", zap.Error(err))
+							fmt.Println("reconnection failed, wait 5 seconds and retry", zap.Error(err))
 							time.Sleep(time.Second * 5)
 							continue
 						}
 					}
 
-					plog.Info("update worker failed, retrying", zap.Int("worker", workerID), zap.Error(err))
+					fmt.Println("update worker failed, retrying", zap.Int("worker", workerID), zap.Error(err))
 					time.Sleep(time.Second * 2)
 				}
 			}
