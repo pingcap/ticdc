@@ -36,7 +36,7 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 	}
 
 	eventExtraSize int
-	memControl     *memControl[A, P, T, D, H] // TODO: implement memory control
+	memControl     *memControl[A, P, T, D, H]
 
 	feedbackChan chan Feedback[A, P, D]
 
