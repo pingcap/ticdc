@@ -89,8 +89,8 @@ type server struct {
 	preServices []common.Closeable
 
 	// subBaseModules contains base modules that start after PreServices.
-	// These modules will be closed at the end when the server shuts down.
-	// These modules are related to network
+	// These modules must be closed finally when the CDC server is shutting down.
+	// These modules include [TCP, HTTP, gRPC] services.
 	subBaseModules []common.SubModule
 	// subCommonModules contains common modules that start after PreServices.
 	// These modules will be closed when the server shuts down.
@@ -263,7 +263,7 @@ func (c *server) Run(ctx context.Context) error {
 	}
 
 	log.Info("server initialized", zap.Any("server", c.info))
-	// base module priority is higher than other sub modules
+	// Base modules have a longer lifecycle compared to other sub-modules; therefore, their context ought to be set as the parent context for the latter.
 	eg, egctx := errgroup.WithContext(ctx)
 	// start all subBaseModules
 	for _, sub := range c.subBaseModules {
@@ -315,7 +315,7 @@ func (c *server) Run(ctx context.Context) error {
 	go func() {
 		<-gctx.Done()
 		time.Sleep(gracefulShutdownTimeout)
-		ch <- errors.ErrTimeout.FastGenByArgs("takes too long for all sub modules to exit")
+		ch <- errors.ErrTimeout.FastGenByArgs("gracefull shutdown timeout")
 	}()
 	go func() {
 		ch <- g.Wait()
