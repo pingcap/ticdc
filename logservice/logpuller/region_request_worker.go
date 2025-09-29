@@ -353,7 +353,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 	regionReq := newRegionReq(region)
 	var err error
 	for {
-		region := regionReq.regionInfo
+		region = regionReq.regionInfo
 		subID := region.subscribedSpan.subID
 		log.Debug("region request worker gets a singleRegionInfo",
 			zap.Uint64("workerID", s.workerID),
@@ -363,7 +363,18 @@ func (s *regionRequestWorker) processRegionSendTask(
 			zap.Bool("bdrMode", region.filterLoop))
 
 		// It means it's a special task for stopping the table.
-		if region.isStopped() {
+		if region.prewriteNotFound {
+			req := &cdcpb.ChangeDataRequest{
+				Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
+				RequestId: uint64(subID),
+				RegionId:  region.verID.GetID(),
+			}
+			if err = doSend(req); err != nil {
+				return err
+			}
+			log.Info("region is stopped",
+				zap.Uint64("regionID", region.verID.GetID()), zap.Uint64("subscriptionID", uint64(subID)))
+		} else if region.isStopped() {
 			req := &cdcpb.ChangeDataRequest{
 				Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
 				RequestId: uint64(subID),
@@ -383,8 +394,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 				}
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
-			log.Info("region is stopped",
-				zap.Uint64("regionID", region.verID.GetID()), zap.Uint64("subscriptionID", uint64(subID)))
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
@@ -394,7 +403,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			state := newRegionFeedState(region, uint64(subID), s)
 			state.start()
 			s.addRegionState(subID, region.verID.GetID(), state)
-			if err := doSend(s.createRegionRequest(region)); err != nil {
+			if err = doSend(s.createRegionRequest(region)); err != nil {
 				return err
 			}
 			s.requestCache.markSent(regionReq)

@@ -46,6 +46,8 @@ type regionInfo struct {
 	// Whether to filter out the value write by cdc itself.
 	// It should be `true` in BDR mode
 	filterLoop bool
+
+	prewriteNotFound bool
 }
 
 func (s *regionInfo) isStopped() bool {
