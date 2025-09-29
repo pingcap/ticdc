@@ -29,8 +29,6 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
@@ -112,6 +110,7 @@ function failOverCaseE-1() {
 	query_dispatcher_count "127.0.0.1:8301" "test" 3 10
 
 	cleanup_process $CDC_BINARY
+	stop_tidb_cluster
 
 	echo "failOverCaseE-1 passed successfully"
 	export GO_FAILPOINTS=''
@@ -176,6 +175,7 @@ function failOverCaseE-2() {
 	query_dispatcher_count "127.0.0.1:8301" "test" 4 10
 
 	cleanup_process $CDC_BINARY
+	stop_tidb_cluster
 
 	export GO_FAILPOINTS=''
 
@@ -242,6 +242,7 @@ function failOverCaseE-3() {
 	query_dispatcher_count "127.0.0.1:8301" "test" 5 10
 
 	cleanup_process $CDC_BINARY
+	stop_tidb_cluster
 	export GO_FAILPOINTS=''
 
 	echo "failOverCaseE-3 passed successfully"
@@ -310,6 +311,7 @@ function failOverCaseE-4() {
 	query_dispatcher_count "127.0.0.1:8301" "test" 5 10
 
 	cleanup_process $CDC_BINARY
+	stop_tidb_cluster
 	export GO_FAILPOINTS=''
 
 	echo "failOverCaseE-4 passed successfully"
