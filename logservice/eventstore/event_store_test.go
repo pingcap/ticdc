@@ -748,7 +748,11 @@ func TestWriteToEventStore(t *testing.T) {
 			},
 		},
 	}
-	err := store.writeEvents(store.dbs[0], events)
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	err = store.writeEvents(store.dbs[0], events, encoder)
 	require.NoError(t, err)
 
 	// Read events back and verify.

@@ -225,8 +225,7 @@ type eventStore struct {
 		tableStats map[int64]subscriptionStats
 	}
 
-	encoder *zstd.Encoder
-	decoder *zstd.Decoder
+	decoderPool *sync.Pool
 
 	// changefeed id -> changefeedStat
 	changefeedMeta sync.Map
@@ -254,17 +253,6 @@ func New(
 		log.Panic("fail to remove path", zap.String("path", dbPath), zap.Error(err))
 	}
 
-	// Create the zstd encoder
-	encoder, err := zstd.NewWriter(nil)
-	if err != nil {
-		log.Panic("Failed to create zstd encoder", zap.Error(err))
-	}
-
-	decoder, err := zstd.NewReader(nil)
-	if err != nil {
-		log.Panic("Failed to create zstd decoder", zap.Error(err))
-	}
-
 	store := &eventStore{
 		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		subClient: subClient,
@@ -277,8 +265,15 @@ func New(
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
 
-		encoder:              encoder,
-		decoder:              decoder,
+		decoderPool: &sync.Pool{
+			New: func() any {
+				decoder, err := zstd.NewReader(nil)
+				if err != nil {
+					log.Panic("failed to create zstd decoder", zap.Error(err))
+				}
+				return decoder
+			},
+		},
 		compressionThreshold: config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
 	}
 
@@ -314,6 +309,11 @@ func (p *writeTaskPool) run(ctx context.Context) {
 	for i := 0; i < p.workerNum; i++ {
 		go func() {
 			defer p.store.wg.Done()
+			encoder, err := zstd.NewWriter(nil)
+			if err != nil {
+				log.Panic("failed to create zstd encoder", zap.Error(err))
+			}
+			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
 			for {
 				select {
@@ -324,7 +324,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
-					if err := p.store.writeEvents(p.db, events); err != nil {
+					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
 						log.Panic("write events failed")
 					}
 					for i := range events {
@@ -403,11 +403,6 @@ func (e *eventStore) Close(ctx context.Context) error {
 			log.Error("failed to close pebble db", zap.Error(err))
 		}
 	}
-
-	if err := e.encoder.Close(); err != nil {
-		log.Warn("failed to close zstd encoder", zap.Error(err))
-	}
-	e.decoder.Close()
 
 	return nil
 }
@@ -890,6 +885,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		LowerBound: start,
 		UpperBound: end,
 	})
+	decoder := e.decoderPool.Get().(*zstd.Decoder)
 	startTime := time.Now()
 	// todo: what happens if iter.First() returns false?
 	_ = iter.First()
@@ -910,7 +906,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:       dataRange.CommitTsStart,
 		endTs:         dataRange.CommitTsEnd,
 		rowCount:      0,
-		decoder:       e.decoder,
+		decoder:       decoder,
+		decoderPool:   e.decoderPool,
 	}
 }
 
@@ -1111,7 +1108,7 @@ func (e *eventStore) collectAndReportChangefeedMetrics() {
 	}
 }
 
-func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) error {
+func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, encoder *zstd.Encoder) error {
 	metrics.EventStoreWriteRequestsCount.Inc()
 	batch := db.NewBatch()
 	kvCount := 0
@@ -1130,7 +1127,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 			compressionType := CompressionNone
 			value := kv.Encode()
 			if len(value) > e.compressionThreshold {
-				value = e.encoder.EncodeAll(value, nil)
+				value = encoder.EncodeAll(value, nil)
 				compressionType = CompressionZSTD
 				metrics.EventStoreCompressedRowsCount.Inc()
 			}
@@ -1173,7 +1170,8 @@ type eventStoreIter struct {
 	endTs    uint64
 	rowCount int64
 
-	decoder *zstd.Decoder
+	decoder     *zstd.Decoder
+	decoderPool *sync.Pool
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1246,6 +1244,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	}
 	startTime := time.Now()
 	err := iter.innerIter.Close()
+	iter.decoderPool.Put(iter.decoder)
 	iter.innerIter = nil
 	metricEventStoreCloseReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	return iter.rowCount, err
