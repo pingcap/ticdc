@@ -849,11 +849,12 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
 	case *prewriteNotFoundErr:
-		log.Warn("prewrite not found",
+		errInfo.regionInfo.lockedRangeState = nil
+		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, errInfo.regionInfo, s.pdClock.CurrentTS()))
+		log.Warn("prewrite not found, set locked range to nil",
 			zap.Uint64("regionID", errInfo.regionInfo.verID.GetID()),
 			zap.Uint64("subscriptionID", uint64(errInfo.regionInfo.subscribedSpan.subID)),
 			zap.Bool("isStopped", errInfo.regionInfo.isStopped()))
-		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, errInfo.regionInfo, s.pdClock.CurrentTS()))
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
 		return nil
 	default:
