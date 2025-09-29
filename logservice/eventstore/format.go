@@ -43,8 +43,8 @@ const (
 	compressionThreshold = 8096
 
 	// Bitmask for DML order and compression type.
-	dmlOrderMask    = 0xFF00
-	compressionMask = 0x00FF
+	dmlOrderMask    = 0xFF00 // DML order is stored in the high 8 bits for sorting.
+	compressionMask = 0x00FF // Compression type is stored in the low 8 bits.
 	dmlOrderShift   = 8
 )
 
@@ -112,8 +112,7 @@ func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compres
 
 // DecodeKeyMetas decodes compression type and dml order from the key.
 func DecodeKeyMetas(key []byte) (DMLOrder, CompressionType) {
-	combinedOrder := binary.BigEndian.Uint16(key[32:34])
-	// return (combinedOrder & compressionMask) >> compressionShift, combinedOrder & dmlOrderMask
+	combinedOrder := binary.BigEndian.Uint16(key[32:34]) // The combined order is at offset 32 for 2 bytes.
 	return DMLOrder((combinedOrder & dmlOrderMask) >> dmlOrderShift), CompressionType(combinedOrder & compressionMask)
 }
 

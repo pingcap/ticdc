@@ -14,12 +14,15 @@
 package eventstore
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/cockroachdb/pebble"
+	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -696,4 +699,102 @@ func TestChangefeedStatManagementConcurrent(t *testing.T) {
 		return false // stop iteration
 	})
 	require.True(t, isEmpty, "changefeedMeta should be empty after all dispatchers are unregistered")
+}
+
+func TestWriteToEventStore(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	dir := t.TempDir()
+	store := New(ctx, dir, nil).(*eventStore)
+	defer store.Close(ctx)
+
+	smallEntryKey := []byte("small-key")
+	smallEntryValue := []byte("small-value")
+	// A value smaller than the threshold.
+	smallEntry := &common.RawKVEntry{
+		OpType:   common.OpTypePut,
+		StartTs:  200,
+		CRTs:     210,
+		KeyLen:   uint32(len(smallEntryKey)),
+		ValueLen: uint32(len(smallEntryValue)),
+		Key:      smallEntryKey,
+		Value:    smallEntryValue,
+		OldValue: nil,
+	}
+
+	largeEntryKey := []byte("large-key")
+	largeEntryValue := []byte("large-value")
+	// A value larger than the threshold.
+	largeEntry := &common.RawKVEntry{
+		OpType:   common.OpTypePut,
+		StartTs:  200,
+		CRTs:     210,
+		KeyLen:   uint32(len(largeEntryKey)),
+		ValueLen: uint32(len(largeEntryValue)) * (compressionThreshold / 10),
+		Key:      []byte(largeEntryKey),
+		Value:    bytes.Repeat(largeEntryValue, compressionThreshold/10),
+		OldValue: nil,
+	}
+	events := []eventWithCallback{
+		{
+			subID:   1,
+			tableID: 1,
+			kvs:     []common.RawKVEntry{*smallEntry, *largeEntry},
+			callback: func() {
+			},
+		},
+	}
+	err := store.writeEvents(store.dbs[0], events)
+	require.NoError(t, err)
+
+	// Read events back and verify.
+	iter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	defer iter.Close()
+
+	var readEntries []*common.RawKVEntry
+	decoder, err := zstd.NewReader(nil)
+	require.NoError(t, err)
+	defer decoder.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := iter.Key()
+		value := iter.Value()
+
+		_, compressionType := DecodeKeyMetas(key)
+
+		var decodedValue []byte
+		if compressionType == CompressionZSTD {
+			decodedValue, err = decoder.DecodeAll(value, nil)
+			require.NoError(t, err)
+		} else {
+			require.Equal(t, CompressionNone, compressionType)
+			decodedValue = value
+		}
+
+		entry := &common.RawKVEntry{}
+		err = entry.Decode(decodedValue)
+		require.NoError(t, err)
+		readEntries = append(readEntries, entry)
+	}
+
+	require.Len(t, readEntries, 2)
+
+	// The order of keys might be "large-key" then "small-key" due to lexicographical sorting.
+	var foundSmall, foundLarge bool
+	for _, entry := range readEntries {
+		if bytes.Equal(entry.Key, smallEntry.Key) {
+			require.Equal(t, smallEntry, entry)
+			foundSmall = true
+		} else if bytes.Equal(entry.Key, largeEntry.Key) {
+			require.Equal(t, largeEntry, entry)
+			foundLarge = true
+		}
+	}
+	require.True(t, foundSmall, "small value entry not found")
+	require.True(t, foundLarge, "large value entry not found")
 }
