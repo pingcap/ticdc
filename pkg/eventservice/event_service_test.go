@@ -287,7 +287,7 @@ func (m *mockEventStore) Close(ctx context.Context) error {
 func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, gcTS uint64) {
 }
 
-func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
+func (m *mockEventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if ok {
 		m.spansMap.Delete(span)
@@ -323,6 +323,7 @@ func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange
 }
 
 func (m *mockEventStore) RegisterDispatcher(
+	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	span *heartbeatpb.TableSpan,
 	startTS common.Ts,

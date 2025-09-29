@@ -714,8 +714,7 @@ func TestAllRowInSameSafeMode(t *testing.T) {
 func TestGroupEventsByTable(t *testing.T) {
 	t.Run("empty events", func(t *testing.T) {
 		result := groupEventsByTable([]*commonEvent.DMLEvent{})
-		require.Equal(t, int64(0), result.TotalSize)
-		require.Empty(t, result.EventGroups)
+		require.Equal(t, 0, len(result))
 	})
 
 	t.Run("single event", func(t *testing.T) {
@@ -733,50 +732,59 @@ func TestGroupEventsByTable(t *testing.T) {
 
 		result := groupEventsByTable(events)
 
-		require.Len(t, result.EventGroups, 1)
+		// Should have 1 table group
+		require.Equal(t, 1, len(result))
 
-		// Verify the group key
-		expectedKey := eventGroupKey{
-			tableID:       event.GetTableID(),
-			tableUpdateTS: event.TableInfo.GetUpdateTS(),
-		}
-		require.Equal(t, expectedKey, result.EventGroups[0].Key)
-		require.Len(t, result.EventGroups[0].Events, 1)
-		require.Equal(t, event, result.EventGroups[0].Events[0])
+		// Get the table ID and verify the structure
+		tableID := event.GetTableID()
+		tableGroups, exists := result[tableID]
+		require.True(t, exists, "Table ID should exist in result")
+		require.Equal(t, 1, len(tableGroups), "Should have 1 update timestamp group")
+		require.Equal(t, 1, len(tableGroups[0]), "Should have 1 event in the group")
+		require.Equal(t, event, tableGroups[0][0])
 	})
 
-	t.Run("multiple events same table different update timestamps", func(t *testing.T) {
+	t.Run("multiple events different tables", func(t *testing.T) {
 		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
 
 		helper.Tk().MustExec("use test")
 
-		// Create first table version
+		// Create first table
 		createTableSQL1 := "create table t1 (id int primary key, name varchar(32));"
 		job1 := helper.DDL2Job(createTableSQL1)
 		require.NotNil(t, job1)
 
-		// Create second table version (different table)
+		// Create second table
 		createTableSQL2 := "create table t2 (id int primary key, name varchar(32), age int);"
 		job2 := helper.DDL2Job(createTableSQL2)
 		require.NotNil(t, job2)
 
-		// Create events with different table update timestamps
+		// Create events with different tables
 		event1 := helper.DML2Event("test", "t1", "insert into t1 values (1, 'test1')")
 		event2 := helper.DML2Event("test", "t2", "insert into t2 values (2, 'test2', 20)")
 
 		events := []*commonEvent.DMLEvent{event1, event2}
 		result := groupEventsByTable(events)
 
-		// Check start timestamps are collected and sorted
+		// Should have 2 table groups
+		require.Equal(t, 2, len(result))
 
-		// Check that we have 2 groups (different tables/update timestamps)
-		require.Len(t, result.EventGroups, 2)
+		// Check table 1 group
+		tableID1 := event1.GetTableID()
+		tableGroups1, exists1 := result[tableID1]
+		require.True(t, exists1, "Table 1 ID should exist in result")
+		require.Equal(t, 1, len(tableGroups1), "Table 1 should have 1 update timestamp group")
+		require.Equal(t, 1, len(tableGroups1[0]), "Table 1 should have 1 event in the group")
+		require.Equal(t, event1, tableGroups1[0][0])
 
-		// Check that groups are sorted by update timestamp (ascending)
-		updateTS1 := result.EventGroups[0].Key.tableUpdateTS
-		updateTS2 := result.EventGroups[1].Key.tableUpdateTS
-		require.True(t, updateTS1 < updateTS2, "Groups should be sorted by update timestamp")
+		// Check table 2 group
+		tableID2 := event2.GetTableID()
+		tableGroups2, exists2 := result[tableID2]
+		require.True(t, exists2, "Table 2 ID should exist in result")
+		require.Equal(t, 1, len(tableGroups2), "Table 2 should have 1 update timestamp group")
+		require.Equal(t, 1, len(tableGroups2[0]), "Table 2 should have 1 event in the group")
+		require.Equal(t, event2, tableGroups2[0][0])
 	})
 
 	t.Run("multiple events same table same update timestamp", func(t *testing.T) {
@@ -798,14 +806,24 @@ func TestGroupEventsByTable(t *testing.T) {
 		events := []*commonEvent.DMLEvent{event1, event2, event3}
 		result := groupEventsByTable(events)
 
-		// Check that we have 1 group (same table ID and update timestamp)
-		require.Len(t, result.EventGroups, 1)
+		// Should have 1 table group
+		require.Equal(t, 1, len(result))
 
-		// Check the group contains all events
-		require.Len(t, result.EventGroups[0].Events, 3)
-		require.Contains(t, result.EventGroups[0].Events, event1)
-		require.Contains(t, result.EventGroups[0].Events, event2)
-		require.Contains(t, result.EventGroups[0].Events, event3)
+		// Get the table ID and verify the structure
+		tableID := event1.GetTableID()
+		tableGroups, exists := result[tableID]
+		require.True(t, exists, "Table ID should exist in result")
+		require.Equal(t, 1, len(tableGroups), "Should have 1 update timestamp group")
+		require.Equal(t, 3, len(tableGroups[0]), "Should have 3 events in the group")
+
+		// Check that all events are in the group
+		eventSet := make(map[*commonEvent.DMLEvent]bool)
+		for _, event := range tableGroups[0] {
+			eventSet[event] = true
+		}
+		require.True(t, eventSet[event1], "Event1 should be in the group")
+		require.True(t, eventSet[event2], "Event2 should be in the group")
+		require.True(t, eventSet[event3], "Event3 should be in the group")
 	})
 
 	t.Run("events with different table versions should be grouped separately", func(t *testing.T) {
@@ -838,39 +856,23 @@ func TestGroupEventsByTable(t *testing.T) {
 		events := []*commonEvent.DMLEvent{event1, event2, event3, event4}
 		result := groupEventsByTable(events)
 
-		// Should have 2 groups for different table versions
-		require.Len(t, result.EventGroups, 2)
+		// Should have 1 table group (same table ID) but 2 update timestamp groups
+		require.Equal(t, 1, len(result))
 
-		// Groups should be sorted by update timestamp
-		updateTS1 := result.EventGroups[0].Key.tableUpdateTS
-		updateTS2 := result.EventGroups[1].Key.tableUpdateTS
-		require.True(t, updateTS1 < updateTS2, "Groups should be sorted by update timestamp")
+		// Get the table ID and verify the structure
+		tableID := event1.GetTableID()
+		tableGroups, exists := result[tableID]
+		require.True(t, exists, "Table ID should exist in result")
+		require.Equal(t, 2, len(tableGroups), "Should have 2 update timestamp groups")
+
+		// Check that groups are sorted by update timestamp (ascending)
+		updateTS1 := event1.TableInfo.GetUpdateTS()
+		updateTS2 := event3.TableInfo.GetUpdateTS()
+		require.True(t, updateTS1 < updateTS2, "First group should have smaller update timestamp")
 
 		// First group should contain events 1 and 2 (old table version)
-		require.Len(t, result.EventGroups[0].Events, 2)
+		require.Equal(t, 2, len(tableGroups[0]), "First group should have 2 events")
 		// Second group should contain events 3 and 4 (new table version)
-		require.Len(t, result.EventGroups[1].Events, 2)
-	})
-
-	t.Run("total size calculation", func(t *testing.T) {
-		helper := commonEvent.NewEventTestHelper(t)
-		defer helper.Close()
-
-		helper.Tk().MustExec("use test")
-		createTableSQL := "create table t (id int primary key, name varchar(32));"
-		job := helper.DDL2Job(createTableSQL)
-		require.NotNil(t, job)
-
-		// Create events
-		event1 := helper.DML2Event("test", "t", "insert into t values (1, 'test1')")
-		helper.ExecuteDeleteDml("test", "t", "delete from t where id = 1")
-		event2 := helper.DML2Event("test", "t", "insert into t values (2, 'test2')")
-
-		events := []*commonEvent.DMLEvent{event1, event2}
-		result := groupEventsByTable(events)
-
-		// Total size should be sum of all event sizes
-		expectedSize := event1.GetSize() + event2.GetSize()
-		require.Equal(t, expectedSize, result.TotalSize)
+		require.Equal(t, 2, len(tableGroups[1]), "Second group should have 2 events")
 	})
 }

@@ -54,6 +54,16 @@ func NewChangefeedDB(version int64) *ChangefeedDB {
 	return db
 }
 
+func (db *ChangefeedDB) Init(allChangefeeds map[common.ChangeFeedID]*Changefeed) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+	// Only add the changefeed to the changefeedDB and do nothing
+	for _, cf := range allChangefeeds {
+		db.changefeeds[cf.ID] = cf
+		db.changefeedDisplayNames[cf.ID.DisplayName] = cf.ID
+	}
+}
+
 func (db *ChangefeedDB) withRLock(action func()) {
 	db.lock.RLock()
 	defer db.lock.RUnlock()

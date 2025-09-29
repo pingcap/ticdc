@@ -294,7 +294,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 
 	// Set region check time to force update
 	spanStatus := checker.allTasks[replica.ID]
-	spanStatus.regionCheckTime = time.Now().Add(-time.Second * 20) // Force region check
+	spanStatus.regionCheckTime = time.Now().Add(-2 * regionCheckInterval) // Force region check
 
 	status := &heartbeatpb.TableSpanStatus{
 		ID:                 replica.ID.ToPB(),
@@ -322,7 +322,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	}
 	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
 
-	spanStatus.regionCheckTime = time.Now().Add(-time.Second * 20)
+	spanStatus.regionCheckTime = time.Now().Add(-2 * regionCheckInterval)
 
 	checker.UpdateStatus(replica)
 	spanStatus = checker.allTasks[replica.ID]

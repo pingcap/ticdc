@@ -31,10 +31,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
+var (
 	trafficScoreThreshold = 3
 	regionScoreThreshold  = 3
-	regionCheckInterval   = time.Second * 10
+	regionCheckInterval   = time.Second * 120
 )
 
 // defaultSpanSplitChecker is used to check whether spans in the default group need to be split

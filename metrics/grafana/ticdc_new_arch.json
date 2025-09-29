@@ -124,8 +124,8 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
-  "id": 35,
-  "iteration": 1758265145399,
+  "id": 33,
+  "iteration": 1758780574108,
   "links": [],
   "panels": [
     {
@@ -142,167 +142,6 @@
       },
       "id": 19999,
       "panels": [
-        {
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The status of each changefeed.\n\n0: Normal\n\n1 and 6: Warning\n\n2: Failed\n\n3: Stopped\n\n4: Finished\n\n-1: Unknown",
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "stepAfter",
-                "barAlignment": 0,
-                "lineWidth": 1,
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "spanNulls": true,
-                "showPoints": "always",
-                "pointSize": 4,
-                "axisPlacement": "auto",
-                "axisLabel": "",
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "hideFrom": {
-                  "tooltip": false,
-                  "graph": false,
-                  "legend": false
-                }
-              },
-              "color": {
-                "mode": "palette-classic"
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "#EAB839",
-                    "value": -1
-                  },
-                  {
-                    "color": "red",
-                    "value": 1
-                  },
-                  {
-                    "color": "#E24D42",
-                    "value": 2
-                  },
-                  {
-                    "color": "#EF843C",
-                    "value": 3
-                  },
-                  {
-                    "color": "#6ED0E0",
-                    "value": 4
-                  }
-                ]
-              },
-              "mappings": [
-                {
-                  "from": "",
-                  "id": 1,
-                  "text": "Normal",
-                  "to": "",
-                  "type": 1,
-                  "value": "0"
-                },
-                {
-                  "from": "",
-                  "id": 2,
-                  "text": "Pending",
-                  "to": "",
-                  "type": 1,
-                  "value": "1"
-                },
-                {
-                  "from": "",
-                  "id": 3,
-                  "text": "Failed",
-                  "to": "",
-                  "type": 1,
-                  "value": "2"
-                },
-                {
-                  "from": "",
-                  "id": 4,
-                  "text": "Stopped",
-                  "to": "",
-                  "type": 1,
-                  "value": "3"
-                },
-                {
-                  "from": "",
-                  "id": 5,
-                  "text": "Finished",
-                  "to": "",
-                  "type": 1,
-                  "value": "4"
-                },
-                {
-                  "from": "",
-                  "id": 6,
-                  "text": "Other",
-                  "to": "",
-                  "type": 1,
-                  "value": "5"
-                },
-                {
-                  "from": "6",
-                  "id": 7,
-                  "text": "-",
-                  "to": "1000",
-                  "type": 2
-                }
-              ],
-              "decimals": 0,
-              "max": 5,
-              "min": 0,
-              "unit": "short"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 12,
-            "x": 0,
-            "y": 1
-          },
-          "id": 22301,
-          "links": [],
-          "options": {
-            "tooltipOptions": {
-              "mode": "single"
-            },
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "lastNotNull"
-              ]
-            },
-            "graph": {}
-          },
-          "pluginVersion": "7.5.17",
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "max(ticdc_owner_status{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
-              "format": "time_series",
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}",
-              "refId": "A"
-            }
-          ],
-          "title": "The status of changefeeds",
-          "type": "timeseries",
-          "timeFrom": null,
-          "timeShift": null
-        },
         {
           "aliasColors": {},
           "bars": false,
@@ -321,7 +160,7 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 12,
+            "x": 0,
             "y": 1
           },
           "hiddenSeries": false,
@@ -357,7 +196,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_coordinator_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
+              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -406,6 +245,103 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The lag between changefeed coordinator resolved ts and the tso of upstream TiDB.",
+          "fieldConfig": {
+            "defaults": {
+              "links": []
+            },
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 1
+          },
+          "hiddenSeries": false,
+          "id": 22303,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "paceLength": 10,
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{namespace}}-{{changefeed}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Changefeed ResolvedTs Lag",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "logBase": 1,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "logBase": 1,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Represents the total amount of data written by the upstream cluster of TiCDC, not the total amount of data that CDC needs to pull.",
           "fieldConfig": {
             "defaults": {},
@@ -417,7 +353,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 7
+            "y": 8
           },
           "hiddenSeries": false,
           "id": 18999,
@@ -514,7 +450,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 7
+            "y": 8
           },
           "hiddenSeries": false,
           "id": 20198,
@@ -608,7 +544,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 13
+            "y": 14
           },
           "hiddenSeries": false,
           "id": 20003,
@@ -704,7 +640,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 13
+            "y": 14
           },
           "hiddenSeries": false,
           "id": 20000,
@@ -788,6 +724,179 @@
           }
         },
         {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The status of each changefeed.\n\n0: Normal\n\n1: Pending\n\n2: Failed\n\n3: Stopped\n\n4: Finished\n\n5: Removed\n\n6: Warning\n\n7: Uninitialized\n\n-1: Unknown",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "graph": false,
+                  "legend": false,
+                  "tooltip": false
+                },
+                "lineInterpolation": "stepAfter",
+                "lineWidth": 1,
+                "pointSize": 4,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "always",
+                "spanNulls": true
+              },
+              "decimals": 0,
+              "mappings": [
+                {
+                  "from": "",
+                  "id": 1,
+                  "text": "Normal",
+                  "to": "",
+                  "type": 1,
+                  "value": "0"
+                },
+                {
+                  "from": "",
+                  "id": 2,
+                  "text": "Pending",
+                  "to": "",
+                  "type": 1,
+                  "value": "1"
+                },
+                {
+                  "from": "",
+                  "id": 3,
+                  "text": "Failed",
+                  "to": "",
+                  "type": 1,
+                  "value": "2"
+                },
+                {
+                  "from": "",
+                  "id": 4,
+                  "text": "Stopped",
+                  "to": "",
+                  "type": 1,
+                  "value": "3"
+                },
+                {
+                  "from": "",
+                  "id": 5,
+                  "text": "Finished",
+                  "to": "",
+                  "type": 1,
+                  "value": "4"
+                },
+                {
+                  "from": "",
+                  "id": 6,
+                  "text": "Other",
+                  "to": "",
+                  "type": 1,
+                  "value": "5"
+                },
+                {
+                  "from": "",
+                  "id": 8,
+                  "text": "Warning",
+                  "to": "",
+                  "type": 1,
+                  "value": "6"
+                },
+                {
+                  "from": "7",
+                  "id": 9,
+                  "text": "-",
+                  "to": "1000",
+                  "type": 2
+                }
+              ],
+              "max": 6,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "#EAB839",
+                    "value": -1
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  },
+                  {
+                    "color": "#E24D42",
+                    "value": 2
+                  },
+                  {
+                    "color": "#EF843C",
+                    "value": 3
+                  },
+                  {
+                    "color": "#6ED0E0",
+                    "value": 4
+                  },
+                  {
+                    "color": "#1F78C1",
+                    "value": 5
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 12,
+            "x": 0,
+            "y": 20
+          },
+          "id": 22301,
+          "links": [],
+          "options": {
+            "graph": {},
+            "legend": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltipOptions": {
+              "mode": "single"
+            }
+          },
+          "pluginVersion": "7.5.17",
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "max(ticdc_owner_status{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
+              "format": "time_series",
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{namespace}}-{{changefeed}}",
+              "refId": "A"
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "The status of changefeeds",
+          "type": "timeseries"
+        },
+        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -807,8 +916,8 @@
           "gridPos": {
             "h": 6,
             "w": 12,
-            "x": 0,
-            "y": 19
+            "x": 12,
+            "y": 20
           },
           "hiddenSeries": false,
           "id": 10049,
@@ -906,8 +1015,8 @@
           "gridPos": {
             "h": 6,
             "w": 12,
-            "x": 12,
-            "y": 19
+            "x": 0,
+            "y": 26
           },
           "hiddenSeries": false,
           "id": 719,
@@ -1017,7 +1126,7 @@
             "h": 5,
             "w": 12,
             "x": 0,
-            "y": 2
+            "y": 27
           },
           "hiddenSeries": false,
           "id": 12025,
@@ -1052,7 +1161,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1114,7 +1223,7 @@
             "h": 5,
             "w": 12,
             "x": 12,
-            "y": 2
+            "y": 27
           },
           "hiddenSeries": false,
           "id": 12022,
@@ -1149,7 +1258,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1216,7 +1325,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 7
+            "y": 32
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -1295,7 +1404,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 7
+            "y": 32
           },
           "hiddenSeries": false,
           "id": 12029,
@@ -1401,7 +1510,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 13
+            "y": 38
           },
           "hiddenSeries": false,
           "id": 12026,
@@ -1499,7 +1608,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 13
+            "y": 38
           },
           "hiddenSeries": false,
           "id": 12027,
@@ -1602,7 +1711,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 19
+            "y": 44
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -3930,7 +4039,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
+              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -4089,167 +4198,6 @@
             "align": false,
             "alignLevel": null
           }
-        },
-        {
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The status of each changefeed.\n\n0: Normal\n\n1 and 6: Warning\n\n2: Failed\n\n3: Stopped\n\n4: Finished\n\n-1: Unknown",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "graph": false,
-                  "legend": false,
-                  "tooltip": false
-                },
-                "lineInterpolation": "stepAfter",
-                "lineWidth": 1,
-                "pointSize": 4,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "always",
-                "spanNulls": true
-              },
-              "decimals": 0,
-              "mappings": [
-                {
-                  "from": "",
-                  "id": 1,
-                  "text": "Normal",
-                  "to": "",
-                  "type": 1,
-                  "value": "0"
-                },
-                {
-                  "from": "",
-                  "id": 2,
-                  "text": "Warning",
-                  "to": "",
-                  "type": 1,
-                  "value": "1"
-                },
-                {
-                  "from": "",
-                  "id": 3,
-                  "text": "Failed",
-                  "to": "",
-                  "type": 1,
-                  "value": "2"
-                },
-                {
-                  "from": "",
-                  "id": 4,
-                  "text": "Stopped",
-                  "to": "",
-                  "type": 1,
-                  "value": "3"
-                },
-                {
-                  "from": "",
-                  "id": 5,
-                  "text": "Finished",
-                  "to": "",
-                  "type": 1,
-                  "value": "4"
-                },
-                {
-                  "from": "",
-                  "id": 6,
-                  "text": "Other",
-                  "to": "",
-                  "type": 1,
-                  "value": "5"
-                },
-                {
-                  "from": "6",
-                  "id": 7,
-                  "text": "-",
-                  "to": "1000",
-                  "type": 2
-                }
-              ],
-              "max": 5,
-              "min": 0,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "#EAB839",
-                    "value": -1
-                  },
-                  {
-                    "color": "red",
-                    "value": 1
-                  },
-                  {
-                    "color": "#E24D42",
-                    "value": 2
-                  },
-                  {
-                    "color": "#EF843C",
-                    "value": 3
-                  },
-                  {
-                    "color": "#6ED0E0",
-                    "value": 4
-                  }
-                ]
-              },
-              "unit": "short"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 12,
-            "x": 0,
-            "y": 26
-          },
-          "id": 22227,
-          "links": [],
-          "options": {
-            "graph": {},
-            "legend": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "displayMode": "table",
-              "placement": "bottom"
-            },
-            "tooltipOptions": {
-              "mode": "single"
-            }
-          },
-          "pluginVersion": "7.5.17",
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "max(ticdc_owner_status{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
-              "format": "time_series",
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}",
-              "refId": "A"
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "The status of changefeeds",
-          "type": "timeseries"
         },
         {
           "aliasColors": {},
@@ -6218,7 +6166,7 @@
             "h": 5,
             "w": 12,
             "x": 0,
-            "y": 7
+            "y": 32
           },
           "hiddenSeries": false,
           "id": 20145,
@@ -6253,7 +6201,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -6321,7 +6269,7 @@
             "h": 5,
             "w": 12,
             "x": 12,
-            "y": 7
+            "y": 32
           },
           "hiddenSeries": false,
           "id": 20146,
@@ -6356,7 +6304,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -6428,7 +6376,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 12
+            "y": 37
           },
           "hiddenSeries": false,
           "id": 10069,
@@ -6535,7 +6483,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 12
+            "y": 37
           },
           "hiddenSeries": false,
           "id": 10071,
@@ -20867,7 +20815,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 127
       },
       "id": 10000,
       "panels": [
