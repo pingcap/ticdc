@@ -272,7 +272,6 @@ func (c *logCoordinator) updateChangefeedMetrics() {
 		if len(state.nodeStates) == 0 {
 			continue
 		}
-		// find the minimum resolvedTs among all nodes
 
 		minResolvedTs := uint64(math.MaxUint64)
 		for _, resolvedTs := range state.nodeStates {
