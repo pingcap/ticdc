@@ -221,7 +221,11 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 			// ...but is no longer in the incoming message, it means the changefeed was removed from this node.
 			if _, incoming := incomingGIDs[gid]; !incoming {
 				delete(state.nodeStates, from)
-				log.Info("changefeed removed from node", zap.Stringer("changefeedID", state.cfID), zap.String("nodeID", string(from)))
+				log.Info("changefeed removed from node",
+					zap.Stringer("changefeedID", state.cfID),
+					zap.String("nodeID", string(from)),
+					zap.Uint64("changefeedGIDLow", gid.Low),
+					zap.Uint64("changefeedGIDHigh", gid.High))
 				// If the changefeed has no more nodes, remove the changefeed state and its associated metrics.
 				if len(state.nodeStates) == 0 {
 					metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
@@ -238,7 +242,11 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 		cfID := common.NewChangefeedIDFromPB(state.GetChangefeedID())
 		gid := cfID.ID()
 		if _, ok := c.changefeedStates.m[gid]; !ok {
-			log.Info("new changefeed states added", zap.Stringer("changefeedID", cfID))
+			log.Info("new changefeed states added",
+				zap.Stringer("changefeedID", cfID),
+				zap.Uint64("changefeedGIDLow", gid.Low),
+				zap.Uint64("changefeedGIDHigh", gid.High))
+			// Initialize metrics for the new changefeed.
 			c.changefeedStates.m[gid] = &changefeedState{
 				cfID:               cfID,
 				nodeStates:         make(map[node.ID]uint64),
