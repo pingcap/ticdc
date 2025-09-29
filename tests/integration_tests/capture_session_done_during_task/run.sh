@@ -15,15 +15,6 @@ function run() {
 
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/orchestrator/EtcdSessionDone=return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	sleep 120
-	check_logs_contains $WORK_DIR "the etcd session is done"
-	check_logs_contains $WORK_DIR "server closed"
-	# ensure server exit
-	ensure 30 "! ps -p $cdc_pid_1 > /dev/null 2>&1"
-
 	TOPIC_NAME="ticdc-capture-session-done-during-task-$RANDOM"
 	case $SINK_TYPE in
 	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -66,6 +57,8 @@ function run() {
 
 	# ensure server exit
 	ensure 30 "! ps -p $cdc_pid"
+	check_logs_contains $WORK_DIR "the etcd session is done"
+	check_logs_contains $WORK_DIR "server closed"
 	echo "cdc server already exit"
 
 	# start server again

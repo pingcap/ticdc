@@ -181,10 +181,6 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 
 	// limit the number of times EtcdWorker can tick
 	rl := rate.NewLimiter(rate.Every(timerInterval), 2)
-	failpoint.Inject("EtcdSessionDone", func() {
-		time.Sleep(120 * time.Second)
-		failpoint.Return(errors.ErrEtcdSessionDone.GenWithStackByArgs())
-	})
 	for {
 		select {
 		case <-ctx.Done():
