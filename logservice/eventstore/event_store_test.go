@@ -802,3 +802,91 @@ func TestWriteToEventStore(t *testing.T) {
 	require.True(t, foundSmall, "small value entry not found")
 	require.True(t, foundLarge, "large value entry not found")
 }
+
+func TestEventStoreGetIteratorConcurrently(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dir := t.TempDir()
+	_, store := newEventStoreForTest(dir)
+	defer store.Close(ctx)
+
+	// 1. Register a dispatcher.
+	dispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+	startTs := uint64(100)
+	var resolvedTs atomic.Uint64
+	resolvedTs.Store(startTs)
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, startTs, func(watermark, latestCommitTs uint64) {
+		resolvedTs.Store(watermark)
+	}, false, false)
+	require.True(t, ok)
+
+	// 2. Write some data.
+	var events []eventWithCallback
+	var lastCommitTs uint64
+	for i := 0; i < 10; i++ {
+		lastCommitTs = startTs + uint64(i*10) + 5
+		entry := &common.RawKVEntry{
+			OpType:  common.OpTypePut,
+			StartTs: startTs + uint64(i*10),
+			CRTs:    lastCommitTs,
+			Key:     []byte(fmt.Sprintf("key-%d", i)),
+			// Make value large enough to trigger compression.
+			Value: bytes.Repeat([]byte("value"), store.(*eventStore).compressionThreshold),
+		}
+		events = append(events, eventWithCallback{
+			subID:    1,
+			tableID:  1,
+			kvs:      []common.RawKVEntry{*entry},
+			callback: func() {},
+		})
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder)
+	require.NoError(t, err)
+
+	// 3. Advance resolved ts for the subscription.
+	dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID]
+	require.NotNil(t, dispatcherStat)
+	subStat := dispatcherStat.subStat
+	require.NotNil(t, subStat)
+	subStat.resolvedTs.Store(lastCommitTs + 1)
+
+	// 4. Concurrently get iterators and read data.
+	concurrency := 10
+	iterations := 100
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				dataRange := common.DataRange{
+					Span:          span,
+					CommitTsStart: startTs,
+					CommitTsEnd:   lastCommitTs + 1,
+				}
+				iter := store.GetIterator(dispatcherID, dataRange)
+				require.NotNil(t, iter, "iterator should not be nil")
+
+				var receivedEvents []*common.RawKVEntry
+				for {
+					ev, ok := iter.Next()
+					if !ok {
+						break
+					}
+					receivedEvents = append(receivedEvents, ev)
+				}
+				require.Len(t, receivedEvents, 10, "should receive 10 events")
+				_, err := iter.Close()
+				require.NoError(t, err)
+			}
+		}()
+	}
+	wg.Wait()
+}
