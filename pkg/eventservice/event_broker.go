@@ -449,14 +449,19 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 }
 
 func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
+	// Fast path.
 	if task.isHandshaked() {
 		return
 	}
 
-	if !task.setHandshaked() {
-		log.Panic("should not happen: sendHandshakeIfNeed should not be called concurrently")
+	task.handshakeLock.Lock()
+	defer task.handshakeLock.Unlock()
+
+	if task.isHandshaked() {
 		return
 	}
+
+	task.setHandshaked()
 
 	remoteID := node.ID(task.info.GetServerID())
 	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
@@ -467,6 +472,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		zap.Uint64("epoch", event.GetEpoch()),
 		zap.Uint64("seq", event.GetSeq()))
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
+	log.Info("task message worker index", zap.Int("messageWorkerIndex", task.messageWorkerIndex))
 	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 	updateMetricEventServiceSendCommandCount(task.info.GetMode())
 }
@@ -846,10 +852,12 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 	if d.isRemoved.Load() {
 		return
 	}
+
 	// make sure only one scan task can run at the same time.
 	if !d.isTaskScanning.CompareAndSwap(false, true) {
 		return
 	}
+
 	if force {
 		c.taskChan[d.scanWorkerIndex] <- d
 	} else {
