@@ -421,7 +421,10 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 				smallestStartTs = startTs
 			}
 		}
-		e.latestWatermark = NewWatermark(uint64(smallestStartTs))
+		e.latestWatermark.Set(&heartbeatpb.Watermark{
+			CheckpointTs: uint64(smallestStartTs),
+			ResolvedTs:   uint64(smallestStartTs),
+		})
 	}
 
 	for idx, id := range dispatcherIds {
