@@ -594,6 +594,7 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			updateCheckpointTs := true
 			if !m.bootstrapped.Load() {
 				log.Warn("can not advance checkpointTs since not bootstrapped",
 					zap.String("changefeed", m.id.Name()),
@@ -602,7 +603,6 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				break
 			}
 
-			updateCheckpointTs := true
 			newWatermark := heartbeatpb.NewMaxWatermark()
 			// if there is no tables, there must be a table trigger dispatcher
 			for id := range m.bootstrapper.GetAllNodeIDs() {
