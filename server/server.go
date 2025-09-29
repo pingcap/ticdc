@@ -52,9 +52,10 @@ import (
 )
 
 const (
-	closeServiceTimeout     = 15 * time.Second
-	cleanMetaDuration       = 10 * time.Second
-	oldArchCheckInterval    = 100 * time.Millisecond
+	closeServiceTimeout  = 15 * time.Second
+	cleanMetaDuration    = 10 * time.Second
+	oldArchCheckInterval = 100 * time.Millisecond
+	// gracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
 	gracefulShutdownTimeout = 30 * time.Second
 )
 
