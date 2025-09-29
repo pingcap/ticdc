@@ -231,7 +231,10 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 					metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
 					metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
 					delete(c.changefeedStates.m, gid)
-					log.Info("changefeed state removed as it has no active nodes", zap.Stringer("changefeedID", state.cfID))
+					log.Info("changefeed state removed as it has no active nodes",
+						zap.Stringer("changefeedID", state.cfID),
+						zap.Uint64("changefeedGIDLow", gid.Low),
+						zap.Uint64("changefeedGIDHigh", gid.High))
 				}
 			}
 		}

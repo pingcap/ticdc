@@ -1068,9 +1068,6 @@ func (e *eventStore) collectAndReportChangefeedMetrics() {
 		cfStat.mutex.Unlock()
 
 		if found {
-			log.Info("changefeed min resolved ts",
-				zap.Stringer("changefeedID", changefeedID),
-				zap.Uint64("minResolvedTs", cfMinResolvedTs))
 			changefeedStates.States = append(changefeedStates.States, &logservicepb.ChangefeedStateEntry{
 				ChangefeedID: changefeedID.ToPB(),
 				ResolvedTs:   cfMinResolvedTs,
