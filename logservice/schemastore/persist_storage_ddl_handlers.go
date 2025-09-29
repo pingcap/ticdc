@@ -23,6 +23,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
@@ -637,10 +638,23 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		// And because SchemaStore is the source of truth inside cdc,
 		// we can use event.ExtraSchemaID(even it is wrong) to update the internal state of the cdc.
 		// But event.Query will be emit to downstream(out of cdc), we must make it correct.
+		//
+		// InvolvingSchemaInfo returns the schema info involved in the job.
+		// The value should be stored in lower case.
+		oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
+		oldTableName := args.job.InvolvingSchemaInfo[0].Table
+		stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
+		if err != nil {
+			log.Warn("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
+		} else {
+			oldTableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
+			if schemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O; schemaName != "" {
+				oldSchemaName = schemaName
+			}
+		}
 		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
-			args.job.InvolvingSchemaInfo[0].Database, args.job.InvolvingSchemaInfo[0].Table,
+			oldSchemaName, oldTableName,
 			event.SchemaName, event.TableName)
-
 	}
 	return event
 }

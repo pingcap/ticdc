@@ -44,4 +44,6 @@ type Coordinator interface {
 	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, overwriteCheckpointTs bool) error
 	// UpdateChangefeed updates a changefeed
 	UpdateChangefeed(ctx context.Context, change *config.ChangeFeedInfo) error
+
+	Bootstrapped() bool
 }

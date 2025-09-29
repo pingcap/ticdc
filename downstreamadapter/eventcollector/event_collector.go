@@ -197,11 +197,25 @@ func (c *EventCollector) Close() {
 			"event-collector",
 			"max",
 			cfID.String(),
+			common.StringMode(common.DefaultMode),
 		)
 		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
 			"event-collector",
 			"used",
 			cfID.String(),
+			common.StringMode(common.DefaultMode),
+		)
+		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+			"event-collector",
+			"max",
+			cfID.String(),
+			common.StringMode(common.RedoMode),
+		)
+		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+			"event-collector",
+			"used",
+			cfID.String(),
+			common.StringMode(common.RedoMode),
 		)
 		return true
 	})

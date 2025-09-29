@@ -15,17 +15,24 @@ package logcoordinator
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 func newLogCoordinatorForTest() *logCoordinator {
 	c := &logCoordinator{}
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
 	c.nodes.m = make(map[node.ID]*node.Info)
+	c.changefeedStates.m = make(map[common.GID]*changefeedState)
 	return c
 }
 
@@ -193,4 +200,169 @@ func TestGetCandidateNodes(t *testing.T) {
 		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
+}
+
+func TestUpdateChangefeedStates(t *testing.T) {
+	c := newLogCoordinatorForTest()
+
+	cfID1 := common.NewChangefeedID4Test("default", "test1")
+	cfID2 := common.NewChangefeedID4Test("default", "test2")
+
+	nodeID1 := node.ID("node-1")
+	nodeID2 := node.ID("node-2")
+
+	// 1. First update from node-1 for cf1 and cf2
+	states1 := &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{
+			{ChangefeedID: cfID1.ToPB(), ResolvedTs: 100},
+			{ChangefeedID: cfID2.ToPB(), ResolvedTs: 110},
+		},
+	}
+	c.updateChangefeedStates(nodeID1, states1)
+
+	// Check state for cf1
+	cf1State, ok := c.changefeedStates.m[cfID1.ID()]
+	require.True(t, ok)
+	require.Equal(t, cfID1, cf1State.cfID)
+	require.Len(t, cf1State.nodeStates, 1)
+	require.Equal(t, uint64(100), cf1State.nodeStates[nodeID1])
+	require.NotNil(t, cf1State.resolvedTsGauge)
+	require.NotNil(t, cf1State.resolvedTsLagGauge)
+
+	// Check state for cf2
+	cf2State, ok := c.changefeedStates.m[cfID2.ID()]
+	require.True(t, ok)
+	require.Equal(t, cfID2, cf2State.cfID)
+	require.Len(t, cf2State.nodeStates, 1)
+	require.Equal(t, uint64(110), cf2State.nodeStates[nodeID1])
+
+	// 2. Update from node-2 for cf1
+	states2 := &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{
+			{ChangefeedID: cfID1.ToPB(), ResolvedTs: 105},
+		},
+	}
+	c.updateChangefeedStates(nodeID2, states2)
+
+	// Check state for cf1 from node-2
+	cf1State, ok = c.changefeedStates.m[cfID1.ID()]
+	require.True(t, ok)
+	require.Len(t, cf1State.nodeStates, 2)
+	require.Equal(t, uint64(100), cf1State.nodeStates[nodeID1])
+	require.Equal(t, uint64(105), cf1State.nodeStates[nodeID2])
+
+	// cf2 state should not change
+	cf2State, ok = c.changefeedStates.m[cfID2.ID()]
+	require.True(t, ok)
+	require.Len(t, cf2State.nodeStates, 1)
+	require.Equal(t, uint64(110), cf2State.nodeStates[nodeID1])
+
+	// 3. Update from node-1 again, but this time cf2 is removed from node-1
+	states3 := &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{
+			{ChangefeedID: cfID1.ToPB(), ResolvedTs: 120}, // cf1 resolved ts updated
+		},
+	}
+	c.updateChangefeedStates(nodeID1, states3)
+
+	// Check cf1 state updated
+	cf1State, ok = c.changefeedStates.m[cfID1.ID()]
+	require.True(t, ok)
+	require.Len(t, cf1State.nodeStates, 2)
+	require.Equal(t, uint64(120), cf1State.nodeStates[nodeID1])
+	require.Equal(t, uint64(105), cf1State.nodeStates[nodeID2])
+
+	// Check cf2 is removed from node-1, and since it's the only node for cf2, cf2 should be removed entirely.
+	_, ok = c.changefeedStates.m[cfID2.ID()]
+	require.False(t, ok, "cf2 should be removed as it has no nodes")
+
+	// 4. Update from node-2 again, removing cf1 from node-2
+	states4 := &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{}, // empty states
+	}
+	c.updateChangefeedStates(nodeID2, states4)
+
+	// Check cf1 state from node-2 is removed
+	cf1State, ok = c.changefeedStates.m[cfID1.ID()]
+	require.True(t, ok)
+	require.Len(t, cf1State.nodeStates, 1)
+	require.Equal(t, uint64(120), cf1State.nodeStates[nodeID1])
+	_, ok = cf1State.nodeStates[nodeID2]
+	require.False(t, ok)
+}
+
+func TestReportMetricsForAffectedChangefeeds(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	mockPDClock := pdutil.NewClock4Test()
+	c.pdClock = mockPDClock
+
+	cfID1 := common.NewChangefeedID4Test("default", "test1")
+	cfID2 := common.NewChangefeedID4Test("default", "test2")
+
+	nodeID1 := node.ID("node-1")
+	nodeID2 := node.ID("node-2")
+
+	// Setup initial state
+	c.changefeedStates.m[cfID1.ID()] = &changefeedState{
+		cfID: cfID1,
+		nodeStates: map[node.ID]uint64{
+			nodeID1: 100,
+			nodeID2: 120,
+		},
+		resolvedTsGauge:    prometheus.NewGauge(prometheus.GaugeOpts{}),
+		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{}),
+	}
+	c.changefeedStates.m[cfID2.ID()] = &changefeedState{
+		cfID: cfID2,
+		nodeStates: map[node.ID]uint64{
+			nodeID1: 150,
+		},
+		resolvedTsGauge:    prometheus.NewGauge(prometheus.GaugeOpts{}),
+		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{}),
+	}
+
+	// Set PD time
+	pdTime := time.Now()
+	mockPDClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(pdTime))
+	pdPhyTs := oracle.GetPhysical(c.pdClock.CurrentTime())
+
+	// Call update metrics
+	c.updateChangefeedMetrics()
+
+	// Verify metrics for cf1
+	cf1State := c.changefeedStates.m[cfID1.ID()]
+	minResolvedTs1 := uint64(100)
+	phyResolvedTs1 := oracle.ExtractPhysical(minResolvedTs1)
+	lag1 := float64(pdPhyTs-phyResolvedTs1) / 1e3
+	require.Equal(t, float64(phyResolvedTs1), testutil.ToFloat64(cf1State.resolvedTsGauge))
+	require.InDelta(t, lag1, testutil.ToFloat64(cf1State.resolvedTsLagGauge), 1e-9)
+
+	// Verify metrics for cf2
+	cf2State := c.changefeedStates.m[cfID2.ID()]
+	minResolvedTs2 := uint64(150)
+	phyResolvedTs2 := oracle.ExtractPhysical(minResolvedTs2)
+	lag2 := float64(pdPhyTs-phyResolvedTs2) / 1e3
+	require.Equal(t, float64(phyResolvedTs2), testutil.ToFloat64(cf2State.resolvedTsGauge))
+	require.InDelta(t, lag2, testutil.ToFloat64(cf2State.resolvedTsLagGauge), 1e-9)
+}
+
+func TestHandleNodeChange(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	c.nodes.m["node-1"] = &node.Info{ID: "node-1"}
+	c.nodes.m["node-2"] = &node.Info{ID: "node-2"}
+
+	// Node-1 is removed, node-3 is added
+	allNodes := map[node.ID]*node.Info{
+		"node-2": {ID: "node-2"},
+		"node-3": {ID: "node-3"},
+	}
+	c.handleNodeChange(allNodes)
+
+	require.Len(t, c.nodes.m, 2)
+	_, ok := c.nodes.m["node-1"]
+	require.False(t, ok)
+	_, ok = c.nodes.m["node-2"]
+	require.True(t, ok)
+	_, ok = c.nodes.m["node-3"]
+	require.True(t, ok)
 }

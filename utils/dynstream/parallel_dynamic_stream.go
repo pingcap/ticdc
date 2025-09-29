@@ -28,16 +28,15 @@ import (
 // Use a hasher to select target stream for the path.
 // It implements the DynamicStream interface.
 type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	handler    H
-	pathHasher PathHasher[P]
-	streams    []*stream[A, P, T, D, H]
-	pathMap    struct {
+	handler H
+	streams []*stream[A, P, T, D, H]
+	pathMap struct {
 		sync.RWMutex
 		m map[P]*pathInfo[A, P, T, D, H]
 	}
 
 	eventExtraSize int
-	memControl     *memControl[A, P, T, D, H] // TODO: implement memory control
+	memControl     *memControl[A, P, T, D, H]
 
 	feedbackChan chan Feedback[A, P, D]
 
@@ -46,7 +45,7 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 	closed               atomic.Bool
 }
 
-func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](hasher PathHasher[P], handler H, option Option) *parallelDynamicStream[A, P, T, D, H] {
+func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option Option) *parallelDynamicStream[A, P, T, D, H] {
 	option.fix()
 	var (
 		eventExtraSize int
@@ -62,7 +61,6 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 
 	s := &parallelDynamicStream[A, P, T, D, H]{
 		handler:        handler,
-		pathHasher:     hasher,
 		eventExtraSize: eventExtraSize,
 	}
 
@@ -179,8 +177,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 
 	area := s.handler.GetArea(path, dest)
 	pi := newPathInfo[A, P, T, D, H](area, path, dest)
-	pi.setStream(s.streams[s.hash(path)])
+
+	streamID := s._statAddPathCount.Load() % int64(len(s.streams))
+	pi.setStream(s.streams[streamID])
+
 	s.pathMap.m[path] = pi
+	s._statAddPathCount.Add(1)
 	s.pathMap.Unlock()
 
 	s.setMemControl(pi, as...)
@@ -190,8 +192,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	}
 
 	pi.stream.addPath(pi)
-
-	s._statAddPathCount.Add(1)
 	return nil
 }
 
@@ -235,11 +235,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A] {
 	}
 
 	return metrics
-}
-
-func (s *parallelDynamicStream[A, P, T, D, H]) hash(path P) int {
-	hash := s.pathHasher(path)
-	return int(hash % uint64(len(s.streams)))
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) setMemControl(

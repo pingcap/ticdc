@@ -61,8 +61,8 @@ func run(host string, port string) {
 	);`
 	insertDML := `insert into test.t values (?, ?)`
 
-	concurrency := 200
-	maxRowCnt := 1000000
+	concurrency := 12
+	maxRowCnt := 500000
 	num := maxRowCnt / concurrency
 	db.SetMaxOpenConns(concurrency)
 

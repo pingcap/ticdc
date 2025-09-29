@@ -421,7 +421,10 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 				smallestStartTs = startTs
 			}
 		}
-		e.latestWatermark = NewWatermark(uint64(smallestStartTs))
+		e.latestWatermark.Set(&heartbeatpb.Watermark{
+			CheckpointTs: uint64(smallestStartTs),
+			ResolvedTs:   uint64(smallestStartTs),
+		})
 	}
 
 	for idx, id := range dispatcherIds {
@@ -871,12 +874,27 @@ func (e *DispatcherManager) cleanMetrics() {
 		"event-collector",
 		"max",
 		e.changefeedID.String(),
+		common.StringMode(common.DefaultMode),
 	)
 
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
 		"event-collector",
 		"used",
 		e.changefeedID.String(),
+		common.StringMode(common.DefaultMode),
+	)
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"max",
+		e.changefeedID.String(),
+		common.StringMode(common.RedoMode),
+	)
+
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"used",
+		e.changefeedID.String(),
+		common.StringMode(common.RedoMode),
 	)
 
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")

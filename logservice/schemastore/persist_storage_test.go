@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -2770,4 +2771,46 @@ func TestGCPersistStorage(t *testing.T) {
 	}
 
 	// TODO: test obsolete data can be removed
+}
+
+func TestRenameTable(t *testing.T) {
+	// use t;
+	job := buildRenameTableJobForTest(100, 101, "t1", 101, &model.InvolvingSchemaInfo{
+		Database: "t",
+		Table:    "t3",
+	})
+	job.Query = "RENAME TABLE t3 TO test.t1"
+	ddl := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
+			200: {Name: "t", Tables: map[int64]bool{103: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "t1"},
+			102: {SchemaID: 100, Name: "t2"},
+			103: {SchemaID: 200, Name: "t3"},
+		},
+	})
+	assert.Equal(t, "RENAME TABLE `t`.`t3` TO `test`.`t1`", ddl.Query)
+
+	// use test;
+	job = buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
+		Database: "test",
+		Table:    "t1",
+	})
+	job.Query = "RENAME TABLE t1 TO t2"
+	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
+			200: {Name: "t", Tables: map[int64]bool{103: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "t1"},
+			102: {SchemaID: 100, Name: "t2"},
+			103: {SchemaID: 200, Name: "t3"},
+		},
+	})
+	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
 }

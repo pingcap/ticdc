@@ -457,14 +457,17 @@ func (s *schemaStore) RegisterKeyspace(
 	if err != nil {
 		return errors.Trace(err)
 	}
+
 	dataStorage := newPersistentStorage(s.root, keyspaceID, s.pdCli, kvStorage)
 	dataStorage.initialize(ctx)
+
 	schemaStore := &keyspaceSchemaStore{
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
 		dataStorage:   dataStorage,
 		notifyCh:      make(chan any, 4),
 	}
+
 	upperBound := schemaStore.dataStorage.getUpperBound()
 	schemaStore.finishedDDLTs = upperBound.FinishedDDLTs
 	schemaStore.schemaVersion = upperBound.SchemaVersion

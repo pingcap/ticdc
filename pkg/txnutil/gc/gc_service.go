@@ -40,13 +40,11 @@ const (
 // service GC safepoint and this function will update the service GC to startTs
 func EnsureChangefeedStartTsSafety(
 	ctx context.Context, pdCli pd.Client,
-	ticdcServiceID string,
-	tag string,
+	gcServiceIDPrefix string,
 	changefeedID common.ChangeFeedID,
 	TTL int64, startTs uint64,
 ) error {
-	gcServiceID := ticdcServiceID + tag + changefeedID.Keyspace() + "_" + changefeedID.Name()
-
+	gcServiceID := gcServiceIDPrefix + changefeedID.Keyspace() + "_" + changefeedID.Name()
 	// set gc safepoint for the changefeed gc service
 	minServiceGCTs, err := SetServiceGCSafepoint(
 		ctx, pdCli,
@@ -77,10 +75,12 @@ func UndoEnsureChangefeedStartTsSafety(
 	gcServiceIDPrefix string,
 	changefeedID common.ChangeFeedID,
 ) error {
+	gcServiceID := gcServiceIDPrefix + changefeedID.Keyspace() + "_" + changefeedID.Name()
+	log.Info("undo ensure changefeed start ts safety", zap.String("gcServiceID", gcServiceID))
 	err := RemoveServiceGCSafepoint(
 		ctx,
 		pdCli,
-		gcServiceIDPrefix+changefeedID.Keyspace()+"_"+changefeedID.Name())
+		gcServiceID)
 	if err != nil {
 		return errors.Trace(err)
 	}
