@@ -238,6 +238,7 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 		cfID := common.NewChangefeedIDFromPB(state.GetChangefeedID())
 		gid := cfID.ID()
 		if _, ok := c.changefeedStates.m[gid]; !ok {
+			log.Info("new changefeed states added", zap.Stringer("changefeedID", cfID))
 			c.changefeedStates.m[gid] = &changefeedState{
 				cfID:               cfID,
 				nodeStates:         make(map[node.ID]uint64),
