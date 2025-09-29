@@ -472,7 +472,8 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 	updateMetricEventServiceSendCommandCount(task.info.GetMode())
-
+// Send handshake event to channel before calling `setHandshaked`
+// This ensures the handshake event precedes any subsequent data events.
 	task.setHandshaked()
 }
 
