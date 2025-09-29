@@ -409,3 +409,118 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 		require.Fail(t, "Expected to receive a dispatcher heartbeat response")
 	}
 }
+
+// TestSendHandshakeIfNeedConcurrency tests the concurrent safety of sendHandshakeIfNeed method
+func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
+	broker, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	// Create a mock dispatcher info
+	dispInfo := newMockDispatcherInfoForTest(t)
+	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo.GetChangefeedID())
+
+	// Test 1: Sequential calls should only send one handshake
+	t.Run("Sequential calls", func(t *testing.T) {
+		info := newMockDispatcherInfoForTest(t)
+		info.startTs = 100
+		disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+		disp.epoch = 1
+
+		// Clear all message channels
+		for i := range broker.messageCh {
+			for len(broker.messageCh[i]) > 0 {
+				<-broker.messageCh[i]
+			}
+		}
+
+		// Call sendHandshakeIfNeed multiple times sequentially
+		broker.sendHandshakeIfNeed(disp)
+		broker.sendHandshakeIfNeed(disp)
+		broker.sendHandshakeIfNeed(disp)
+
+		// Give a small delay for messages to be processed
+		time.Sleep(10 * time.Millisecond)
+
+		// Should only receive one handshake event
+		handshakeCount := 0
+		mc := broker.msgSender.(*mockMessageCenter)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+	LOOP:
+		for {
+			select {
+			case e := <-mc.messageCh:
+				if e.Type == messaging.TypeHandshakeEvent {
+					handshakeCount++
+				}
+			case <-ctx.Done():
+				break LOOP
+			}
+		}
+
+		require.Equal(t, 1, handshakeCount, "Should only send one handshake event")
+		require.True(t, disp.isHandshaked(), "Dispatcher should be marked as handshaked")
+	})
+
+	// Test 2: Concurrent calls - this is the critical test
+	t.Run("Concurrent calls", func(t *testing.T) {
+		// Create a new dispatcher
+		info := newMockDispatcherInfoForTest(t)
+		info.startTs = 100
+		disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+		disp.epoch = 1
+
+		// Clear all message channels
+		for i := range broker.messageCh {
+			for len(broker.messageCh[i]) > 0 {
+				<-broker.messageCh[i]
+			}
+		}
+
+		const numGoroutines = 100
+		var wg sync.WaitGroup
+		var startBarrier sync.WaitGroup
+		startBarrier.Add(1)
+
+		// Launch multiple goroutines to call sendHandshakeIfNeed concurrently
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// Wait for all goroutines to be ready
+				startBarrier.Wait()
+				// Call the method
+				broker.sendHandshakeIfNeed(disp)
+			}()
+		}
+
+		// Start all goroutines at the same time
+		startBarrier.Done()
+
+		// Wait for all goroutines to complete
+		wg.Wait()
+
+		// Give a small delay for messages to be processed
+		time.Sleep(10 * time.Millisecond)
+
+		// Count handshake events
+		handshakeCount := 0
+		mc := broker.msgSender.(*mockMessageCenter)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+	LOOP:
+		for {
+			select {
+			case e := <-mc.messageCh:
+				if e.Type == messaging.TypeHandshakeEvent {
+					handshakeCount++
+				}
+			case <-ctx.Done():
+				break LOOP
+			}
+		}
+		// The handshake should only be sent once, even with concurrent calls
+		require.Equal(t, 1, handshakeCount, "Expected exactly 1 handshake event")
+		require.True(t, disp.isHandshaked(), "Dispatcher should be marked as handshaked")
+	})
+}
