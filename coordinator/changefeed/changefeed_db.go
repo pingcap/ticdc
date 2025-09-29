@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"go.uber.org/zap"
@@ -136,6 +137,9 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 		log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
 		db.stopped[cfID] = cf
 	}
+
+	metrics.ChangefeedStatusGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
 
 	return nodeID
 }
