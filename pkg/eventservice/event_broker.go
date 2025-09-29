@@ -461,8 +461,6 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		return
 	}
 
-	task.setHandshaked()
-
 	remoteID := node.ID(task.info.GetServerID())
 	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
 	log.Info("send handshake event to dispatcher",
@@ -474,6 +472,8 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 	updateMetricEventServiceSendCommandCount(task.info.GetMode())
+
+	task.setHandshaked()
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
