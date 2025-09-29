@@ -15,7 +15,6 @@ package operator
 
 import (
 	"container/heap"
-	"math"
 	"sync"
 	"time"
 
@@ -201,8 +200,7 @@ func (oc *Controller) OperatorSize() int {
 	return len(oc.operators)
 }
 
-func (oc *Controller) GetMinCheckpointTs() uint64 {
-	minCheckpointTs := uint64(math.MaxUint64)
+func (oc *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 	ops := oc.GetAllOperators()
 
 	for _, op := range ops {
