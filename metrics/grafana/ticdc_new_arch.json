@@ -3807,14 +3807,6 @@
               "intervalFactor": 1,
               "legendFormat": "{{namespace}}-{{changefeed}}",
               "refId": "B"
-            },
-            {
-              "exemplar": true,
-              "expr": "max(ticdc_owner_barrier_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "{{namespace}}-{{changefeed}}-barrierTs",
-              "refId": "D"
             }
           ],
           "thresholds": [],
