@@ -38,15 +38,15 @@ const (
 )
 
 const (
-	// compressionThreshold is the size in bytes above which a value will be compressed.
-	// 8KB is a reasonable default.
-	compressionThreshold = 8096
-
 	// Bitmask for DML order and compression type.
 	dmlOrderMask    = 0xFF00 // DML order is stored in the high 8 bits for sorting.
 	compressionMask = 0x00FF // Compression type is stored in the low 8 bits.
 	dmlOrderShift   = 8
 )
+
+// compressionThreshold is the size in bytes above which a value will be compressed.
+// 8KB is a reasonable default.
+var compressionThreshold = 8096
 
 // EncodeKeyPrefix encodes uniqueID, tableID, CRTs and StartTs.
 // StartTs is optional.

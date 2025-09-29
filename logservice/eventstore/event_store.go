@@ -227,6 +227,8 @@ type eventStore struct {
 
 	encoder *zstd.Encoder
 	decoder *zstd.Decoder
+	// when the value length is larger than this threshold, it will be compressed
+	compressionThreshold int
 
 	// changefeed id -> changefeedStat
 	changefeedMeta sync.Map
@@ -243,6 +245,7 @@ func New(
 	root string,
 	subClient logpuller.SubscriptionClient,
 ) EventStore {
+
 	dbPath := fmt.Sprintf("%s/%s", root, dataDir)
 
 	// FIXME: avoid remove
@@ -251,6 +254,8 @@ func New(
 		log.Panic("fail to remove path", zap.String("path", dbPath), zap.Error(err))
 	}
 
+	serverConfig := config.GetGlobalServerConfig()
+	compressionThreshold = serverConfig.Debug.EventStore.CompressionThreshold
 	// Create the zstd encoder
 	encoder, err := zstd.NewWriter(nil)
 	if err != nil {
@@ -274,8 +279,9 @@ func New(
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
 
-		encoder: encoder,
-		decoder: decoder,
+		encoder:              encoder,
+		decoder:              decoder,
+		compressionThreshold: compressionThreshold,
 	}
 
 	// create a write task pool per db instance
@@ -1125,7 +1131,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 
 			compressionType := CompressionNone
 			value := kv.Encode()
-			if len(value) > compressionThreshold {
+			if len(value) >= e.compressionThreshold {
 				value = e.encoder.EncodeAll(value, nil)
 				compressionType = CompressionZSTD
 			}
