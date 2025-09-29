@@ -394,13 +394,16 @@ func (e *eventStore) Close(ctx context.Context) error {
 	log.Info("event store start to close")
 	defer log.Info("event store closed")
 
-	log.Info("closing pebble db")
 	for _, db := range e.dbs {
 		if err := db.Close(); err != nil {
 			log.Error("failed to close pebble db", zap.Error(err))
 		}
 	}
-	log.Info("pebble db closed")
+
+	if err := e.encoder.Close(); err != nil {
+		log.Warn("failed to close zstd encoder", zap.Error(err))
+	}
+	e.decoder.Close()
 
 	return nil
 }
