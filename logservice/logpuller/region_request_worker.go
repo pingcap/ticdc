@@ -372,7 +372,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				},
 				FilterLoop: region.filterLoop,
 			}
-			if err := doSend(req); err != nil {
+			if err = doSend(req); err != nil {
 				return err
 			}
 			for _, state := range s.takeRegionStates(subID) {
@@ -383,7 +383,8 @@ func (s *regionRequestWorker) processRegionSendTask(
 				}
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
-
+			log.Info("region is stopped",
+				zap.Uint64("regionID", region.verID.GetID()), zap.Uint64("subscriptionID", uint64(subID)))
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping

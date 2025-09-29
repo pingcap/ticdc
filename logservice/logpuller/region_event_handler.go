@@ -91,6 +91,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			if err != nil {
 				event.state.markStopped(err)
 				h.handleRegionError(event.state, event.worker)
+				continue
 			}
 		} else if event.resolvedTs != 0 {
 			resolvedTs := handleResolvedTs(span, event.state, event.resolvedTs)
