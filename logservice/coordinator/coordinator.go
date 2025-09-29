@@ -173,6 +173,19 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 		if _, ok := allNodes[id]; !ok {
 			delete(c.nodes.m, id)
 			log.Info("log coordinator detect node removed", zap.String("nodeId", id.String()))
+
+			// Clean up states for the removed node.
+			c.eventStoreStates.Lock()
+			delete(c.eventStoreStates.m, id)
+			c.eventStoreStates.Unlock()
+
+			c.changefeedStates.Lock()
+			for _, state := range c.changefeedStates.m {
+				if _, exists := state.nodeStates[id]; exists {
+					delete(state.nodeStates, id)
+				}
+			}
+			c.changefeedStates.Unlock()
 		}
 	}
 	for id, node := range allNodes {
