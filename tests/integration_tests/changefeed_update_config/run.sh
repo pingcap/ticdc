@@ -63,10 +63,7 @@ function check_dispatcher_gt_two() {
 	local retry=60
 	local count=0
 	while [[ $count -lt $retry ]]; do
-		ans=$(
-			curl -s -X GET http://"${ipAddr}"/api/v2/changefeeds/"${changefeedID}"/get_dispatcher_count?mode=0 &
-			keyspace=$KEYSPACE_NAME || true
-		)
+		ans=$(curl -s -X GET http://"${ipAddr}"/api/v2/changefeeds/"${changefeedID}"/get_dispatcher_count?mode=0\&keyspace=$KEYSPACE_NAME || true)
 		echo $ans
 		value=$(echo $ans | jq -r '.count')
 		if [[ "$value" != "null" && "$value" -gt 2 ]]; then
