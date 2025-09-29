@@ -44,10 +44,6 @@ const (
 	dmlOrderShift   = 8
 )
 
-// compressionThreshold is the size in bytes above which a value will be compressed.
-// 8KB is a reasonable default.
-var compressionThreshold = 8096
-
 // EncodeKeyPrefix encodes uniqueID, tableID, CRTs and StartTs.
 // StartTs is optional.
 // The result should be a prefix of normal key. (TODO: add a unit test)

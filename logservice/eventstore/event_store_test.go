@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
@@ -706,9 +705,6 @@ func TestWriteToEventStore(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	nConfig := config.GetDefaultServerConfig().Clone()
-	config.StoreGlobalServerConfig(nConfig)
-
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
@@ -736,7 +732,7 @@ func TestWriteToEventStore(t *testing.T) {
 	largeEntry := &common.RawKVEntry{
 		OpType:   common.OpTypePut,
 		StartTs:  200,
-		CRTs:     210, // Note: must be different from smallEntry's CRTs to avoid key collision if key is same
+		CRTs:     211, // Note: must be different from smallEntry's CRTs to avoid key collision if key is same
 		KeyLen:   uint32(len(largeEntryKey)),
 		ValueLen: uint32(len(largeEntryValue)) * uint32(store.compressionThreshold/10),
 		Key:      []byte(largeEntryKey),
