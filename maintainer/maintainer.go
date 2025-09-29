@@ -694,13 +694,13 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	m.controller.HandleStatus(msg.From, req.Statuses)
 	if req.Watermark != nil {
 		old, ok := m.checkpointTsByCapture.Get(msg.From)
-		if !ok || req.Watermark.Seq >= old.Seq {
+		if !ok || (req.Watermark.Seq >= old.Seq && req.Watermark.CheckpointTs >= old.CheckpointTs) {
 			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
 		}
 	}
 	if req.RedoWatermark != nil {
 		old, ok := m.redoTsByCapture.Get(msg.From)
-		if !ok || req.RedoWatermark.Seq >= old.Seq {
+		if !ok || (req.RedoWatermark.Seq >= old.Seq && req.RedoWatermark.CheckpointTs >= old.CheckpointTs) {
 			m.redoTsByCapture.Set(msg.From, *req.RedoWatermark)
 		}
 	}
