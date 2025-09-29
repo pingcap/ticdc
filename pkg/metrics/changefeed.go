@@ -37,7 +37,7 @@ var (
 	MaintainerCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
-			Subsystem: "maintainer",
+			Subsystem: "owner",
 			Name:      "checkpoint_ts_lag",
 			Help:      "checkpoint ts lag of maintainer in seconds",
 		}, []string{"namespace", "changefeed"})
@@ -100,7 +100,7 @@ var (
 	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
-			Subsystem: "owner",
+			Subsystem: "owner2",
 			Name:      "checkpoint_ts_lag",
 			Help:      "changefeed checkpoint ts lag in changefeeds in seconds",
 		}, []string{"namespace", "changefeed"})
