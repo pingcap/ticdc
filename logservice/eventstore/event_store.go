@@ -1077,7 +1077,7 @@ func (e *eventStore) collectAndReportChangefeedMetrics() {
 	})
 
 	coordinatorID := e.getCoordinatorInfo()
-	if coordinatorID != "" && len(changefeedStates.States) > 0 {
+	if coordinatorID != "" {
 		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, changefeedStates)
 		if err := e.messageCenter.SendEvent(msg); err != nil {
 			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
