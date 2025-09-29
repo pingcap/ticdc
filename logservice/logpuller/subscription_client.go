@@ -796,6 +796,10 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
+			log.Info("region not found",
+				zap.Uint64("regionID", errInfo.regionInfo.verID.GetID()),
+				zap.Uint64("subscriptionID", uint64(errInfo.regionInfo.subscribedSpan.subID)),
+				zap.Bool("isStopped", errInfo.regionInfo.isStopped()))
 			metricFeedRegionNotFoundCounter.Inc()
 			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
@@ -855,7 +859,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			zap.Uint64("regionID", errInfo.regionInfo.verID.GetID()),
 			zap.Uint64("subscriptionID", uint64(errInfo.regionInfo.subscribedSpan.subID)),
 			zap.Bool("isStopped", errInfo.regionInfo.isStopped()))
-		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
+		//s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.
