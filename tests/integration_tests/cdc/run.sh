@@ -39,7 +39,7 @@ EOF
 	else
 		echo "" >$WORK_DIR/pulsar_test.toml
 	fi
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;

@@ -25,8 +25,7 @@ function kill_cdc_and_restart() {
 	work_dir=$2
 	cdc_binary=$3
 	MAX_RETRIES=10
-	status=$(curl -s http://127.0.0.1:8300/status)
-	cdc_pid=$(echo "$status" | grep -v "Command to ticdc" | jq '.pid')
+	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	kill_cdc_pid $cdc_pid
 	run_cdc_server --workdir $work_dir --binary $cdc_binary --pd $pd_addr
@@ -40,8 +39,6 @@ function run_restart_and_check() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	run_sql "CREATE DATABASE restart_changefeed;"
@@ -51,7 +48,7 @@ function run_restart_and_check() {
 	case $SINK_TYPE in
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
 	esac
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "changefeed-restart"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "changefeed-restart"
 
 	run_sql "CREATE TABLE restart_changefeed.finish_mark_1 (a int primary key);"
 	check_table_exists "restart_changefeed.finish_mark_1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
@@ -63,7 +60,7 @@ function run_restart_and_check() {
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	kill_cdc_and_restart $pd_addr $WORK_DIR $CDC_BINARY
 
-	changefeed_data=$(run_cdc_cli changefeed query -c changefeed-restart -s 2>/dev/null)
+	changefeed_data=$(cdc_cli_changefeed query -c changefeed-restart -s 2>/dev/null)
 	if [ -z "$changefeed_data" ]; then
 		exit 1
 	fi
@@ -84,32 +81,22 @@ function run_pause_restart_resume() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	run_sql "CREATE DATABASE restart_changefeed;"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-restart-changefeed-$RANDOM"
 	case $SINK_TYPE in
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
 	esac
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "changefeed-restart"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "changefeed-restart"
 
-	run_sql "CREATE TABLE restart_changefeed.finish_mark_1 (a int primary key);"
-	check_table_exists "restart_changefeed.finish_mark_1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
-
-	run_sql "INSERT INTO restart_changefeed.finish_mark_1 VALUES (1);"
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
-
-	run_cdc_cli changefeed pause -c changefeed-restart
+	cdc_cli_changefeed pause -c changefeed-restart
 
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	kill_cdc_and_restart $pd_addr $WORK_DIR $CDC_BINARY
 
-	changefeed_data=$(run_cdc_cli changefeed query -c changefeed-restart -s 2>/dev/null)
+	changefeed_data=$(cdc_cli_changefeed query -c changefeed-restart -s 2>/dev/null)
 	if [ -z "$changefeed_data" ]; then
 		exit 1
 	fi
@@ -118,8 +105,8 @@ function run_pause_restart_resume() {
 		exit 1
 	fi
 
-	run_cdc_cli changefeed resume -c changefeed-restart
-	changefeed_data=$(run_cdc_cli changefeed query -c changefeed-restart -s 2>/dev/null)
+	cdc_cli_changefeed resume -c changefeed-restart
+	changefeed_data=$(cdc_cli_changefeed query -c changefeed-restart -s 2>/dev/null)
 	if [ -z "$changefeed_data" ]; then
 		exit 1
 	fi

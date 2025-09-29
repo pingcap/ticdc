@@ -14,7 +14,7 @@ expected_state=${3}
 field=${4}
 error_pattern=${5}
 
-info=$(curl $endpoint/api/v2/changefeeds/$changefeed_id/status)
+info=$(curl $endpoint/api/v2/changefeeds/$changefeed_id/status?keyspace=$KEYSPACE_NAME)
 echo "$info"
 
 state=$(echo $info | jq -r '.state')

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+host=${1:-127.0.0.1}
+port=$2
+prompt=$3
+count=${4:-120}
+
+i=0
+while ! nc -z "$host" "$port"; do
+	echo "$prompt"
+	sleep 1
+
+	i=$((i + 1))
+	if [ "$i" -ge "$count" ]; then
+		exit 1
+	fi
+done

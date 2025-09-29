@@ -71,7 +71,7 @@ function prepare() {
 	echo started cdc server successfully
 
 	SINK_URI="blackhole:///"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 }
 
 function check() {

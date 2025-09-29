@@ -14,7 +14,7 @@ echo "merge table with retry"
 count=0
 
 while [[ $count -lt $retryCount ]]; do
-	result=$(run_cdc_cli changefeed merge-table -c "$changefeedID" -t $tableID --mode $mode)
+	result=$(cdc_cli_changefeed merge-table -c "$changefeedID" -t $tableID --mode $mode)
 	echo $result
 	success=$(echo $result | sed 's/ PASS.*//' | sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
 
