@@ -850,6 +850,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		return nil
 	case *prewriteNotFoundErr:
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
+		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.
 		log.Warn("subscription client meets an internal error, fail the changefeed",
