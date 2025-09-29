@@ -52,3 +52,7 @@ func (e *sendRequestToStoreErr) Error() string { return "send request to store e
 type requestCancelledErr struct{}
 
 func (e *requestCancelledErr) Error() string { return "region request is cancelled" }
+
+type prewriteNotFoundErr struct{}
+
+func (e *prewriteNotFoundErr) Error() string { return "prewrite not found" }

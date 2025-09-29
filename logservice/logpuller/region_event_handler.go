@@ -17,7 +17,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -274,7 +273,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					// due to it is by design. By report error, trigger the region reconnection, so that
 					// the commit entry convert to the committed entry automatically.
 					// After the Next-Gen fix this issue, this workaround can be removed.
-					return errors.New("prewrite not found")
+					return &prewriteNotFoundErr{}
 				}
 				log.Fatal("prewrite not match",
 					zap.Int64("tableID", span.span.TableID),

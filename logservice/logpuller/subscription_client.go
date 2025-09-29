@@ -848,6 +848,8 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 	case *requestCancelledErr:
 		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
+	case *prewriteNotFoundErr:
+		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.
 		log.Warn("subscription client meets an internal error, fail the changefeed",
