@@ -382,7 +382,7 @@ type columnSchema struct {
 	// Table has 4 columns: a (physical), b (physical), c (virtual), d (virtual)
 	// TableInfo.Columns order: a, b, c, d
 	// VirtualColumnsOffset will be [2, 3] (indices of virtual columns c and d)
-	VirtualColumnsOffset []int
+	VirtualColumnsOffset []int `json:"virtual_columns_offset"`
 	// RowColInfosWithoutVirtualCols is the same as rowColInfos, but without virtual columns
 	RowColInfosWithoutVirtualCols *[]rowcodec.ColInfo `json:"row_col_infos_without_virtual_cols"`
 	// PreSQL is used to restore pre-calculated sqls for insert/update/delete.
