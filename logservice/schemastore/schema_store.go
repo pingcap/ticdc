@@ -215,7 +215,6 @@ type schemaStore struct {
 }
 
 func New(
-	ctx context.Context,
 	root string,
 	pdCli pd.Client,
 	pdEndpoints []string,

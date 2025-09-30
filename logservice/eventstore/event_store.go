@@ -241,7 +241,6 @@ const (
 )
 
 func New(
-	ctx context.Context,
 	root string,
 	subClient logpuller.SubscriptionClient,
 ) EventStore {
@@ -394,7 +393,7 @@ func (e *eventStore) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (e *eventStore) Close(ctx context.Context) error {
+func (e *eventStore) Close(_ context.Context) error {
 	log.Info("event store start to close")
 	defer log.Info("event store closed")
 
