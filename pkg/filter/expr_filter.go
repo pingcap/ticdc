@@ -35,6 +35,12 @@ import (
 	"go.uber.org/zap"
 )
 
+type virtualColumnInfo struct {
+	columns     []*expression.Column
+	vColOffsets []int
+	vColFts     []*types.FieldType
+}
+
 // dmlExprFilterRule only be used by dmlExprFilter.
 // This struct is mostly a duplicate of `ExprFilterGroup` in dm/pkg/syncer,
 // but have slightly changed to fit the usage of cdc.
@@ -48,6 +54,8 @@ type dmlExprFilterRule struct {
 	updateOldExprs map[string]expression.Expression // tableName -> expr
 	updateNewExprs map[string]expression.Expression // tableName -> expr
 	deleteExprs    map[string]expression.Expression // tableName -> expr
+
+	virtualColumnInfos map[string]virtualColumnInfo // tableName -> virtualColumnInfo
 
 	tableMatcher tfilter.Filter
 	// All tables in this rule share the same config.
@@ -153,6 +161,7 @@ func (r *dmlExprFilterRule) resetExpr(tableName string) {
 	delete(r.updateOldExprs, tableName)
 	delete(r.updateNewExprs, tableName)
 	delete(r.deleteExprs, tableName)
+	delete(r.virtualColumnInfos, tableName)
 }
 
 // getInsertExprs returns the expression filter to filter INSERT events.
@@ -326,22 +335,34 @@ func (r *dmlExprFilterRule) buildRowWithVirtualColumns(
 	tableInfo *common.TableInfo,
 ) (chunk.Row, error) {
 	if !tableInfo.HasVirtualColumns() {
-		// If there is no virtual column, we can return the row directly.
 		return row, nil
 	}
 
-	columns, _, err := expression.ColumnInfos2ColumnsAndNames(
-		r.sessCtx.GetExprCtx(),
-		ast.CIStr{}, /* unused */
-		tableInfo.GetTableNameCIStr(),
-		tableInfo.GetColumns(),
-		tableInfo.ToTiDBTableInfo())
-	if err != nil {
-		return chunk.Row{}, err
+	tableName := tableInfo.TableName.String()
+	vcInfo, ok := r.virtualColumnInfos[tableName]
+	if !ok {
+		var err error
+		var columns []*expression.Column
+		columns, _, err = expression.ColumnInfos2ColumnsAndNames(
+			r.sessCtx.GetExprCtx(),
+			ast.CIStr{}, /* unused */
+			tableInfo.GetTableNameCIStr(),
+			tableInfo.GetColumns(),
+			tableInfo.ToTiDBTableInfo())
+		if err != nil {
+			return chunk.Row{}, err
+		}
+
+		vColOffsets, vColFts := collectVirtualColumnOffsetsAndTypes(r.sessCtx.GetExprCtx().GetEvalCtx(), columns)
+		vcInfo = virtualColumnInfo{
+			columns:     columns,
+			vColOffsets: vColOffsets,
+			vColFts:     vColFts,
+		}
+		r.virtualColumnInfos[tableName] = vcInfo
 	}
 
-	vColOffsets, vColFts := collectVirtualColumnOffsetsAndTypes(r.sessCtx.GetExprCtx().GetEvalCtx(), columns)
-	err = table.FillVirtualColumnValue(vColFts, vColOffsets, columns, tableInfo.GetColumns(), r.sessCtx.GetExprCtx(), row.Chunk())
+	err := table.FillVirtualColumnValue(vcInfo.vColFts, vcInfo.vColOffsets, vcInfo.columns, tableInfo.GetColumns(), r.sessCtx.GetExprCtx(), row.Chunk())
 	if err != nil {
 		return chunk.Row{}, err
 	}
