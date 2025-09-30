@@ -101,7 +101,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 
 	co, err := h.server.GetCoordinator()
 	if err != nil {
@@ -371,7 +371,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	}
 	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceName := GetKeyspaceValueWithDefault(c)
 	kvStorage, err := keyspaceManager.GetStorage(keyspaceName)
 	if err != nil {
@@ -798,7 +798,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(oldCfInfo.Config.Sink.Protocol))
 
-		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 
 		kvStorage, err := keyspaceManager.GetStorage(keyspaceName)
 		if err != nil {

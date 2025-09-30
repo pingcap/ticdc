@@ -32,15 +32,15 @@ import (
 	"go.uber.org/zap"
 )
 
-type KeyspaceManager interface {
+type Manager interface {
 	LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error)
 	GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error)
 	GetStorage(keyspace string) (kv.Storage, error)
 	Close()
 }
 
-func NewKeyspaceManager(pdEndpoints []string) KeyspaceManager {
-	return &keyspaceManager{
+func NewManager(pdEndpoints []string) Manager {
+	return &manager{
 		pdEndpoints:   pdEndpoints,
 		keyspaceMap:   make(map[string]*keyspacepb.KeyspaceMeta),
 		keyspaceIDMap: make(map[uint32]*keyspacepb.KeyspaceMeta),
@@ -48,7 +48,7 @@ func NewKeyspaceManager(pdEndpoints []string) KeyspaceManager {
 	}
 }
 
-type keyspaceManager struct {
+type manager struct {
 	pdEndpoints []string
 
 	// TODO tenfyzhong 2025-09-16 23:46:01 update keyspaceMeta periodicity
@@ -60,10 +60,11 @@ type keyspaceManager struct {
 	storageMu  sync.Mutex
 }
 
-func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
+func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
 		return &keyspacepb.KeyspaceMeta{
 			Name: common.DefaultKeyspace,
+			Id:   common.DefaultKeyspaceID,
 		}, nil
 	}
 
@@ -101,7 +102,7 @@ func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*k
 	return meta, nil
 }
 
-func (k *keyspaceManager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
+func (k *manager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
 		return &keyspacepb.KeyspaceMeta{
 			Name: common.DefaultKeyspace,
@@ -142,7 +143,7 @@ func (k *keyspaceManager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32
 	return meta, nil
 }
 
-func (k *keyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {
+func (k *manager) GetStorage(keyspace string) (kv.Storage, error) {
 	k.storageMu.Lock()
 	defer k.storageMu.Unlock()
 
@@ -161,7 +162,7 @@ func (k *keyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {
 	return kvStorage, nil
 }
 
-func (k *keyspaceManager) Close() {
+func (k *manager) Close() {
 	k.storageMu.Lock()
 	defer k.storageMu.Unlock()
 

@@ -61,7 +61,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	}
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-	keyspaceManager := keyspace.NewKeyspaceManager([]string{"127.0.0.1:2379"})
+	keyspaceManager := keyspace.NewManager([]string{"127.0.0.1:2379"})
 	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
 
 	appcontext.SetService(appcontext.SchemaStore, store)

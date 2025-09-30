@@ -177,7 +177,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		var err error
 		gcSafePoint, err = p.getGcSafePoint(ctx)
 		if err == nil {
-			log.Info("GetGCState success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcState", gcSafePoint))
+			log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
 			// Ensure the start ts is valid during the gc service ttl
 			err = gc.EnsureChangefeedStartTsSafety(
 				ctx,

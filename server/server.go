@@ -234,7 +234,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 	httpServer.Run(ctx)
 	c.preServices = append(c.preServices, httpServer)
 
-	keyspaceManager := keyspace.NewKeyspaceManager(c.pdEndpoints)
+	keyspaceManager := keyspace.NewManager(c.pdEndpoints)
 	appctx.SetService(appctx.KeyspaceManager, keyspaceManager)
 	c.preServices = append(c.preServices, keyspaceManager)
 

@@ -51,7 +51,7 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 
 	keyspaceName := GetKeyspaceValueWithDefault(c)
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), keyspaceName)
 	if err != nil {
 		_ = c.Error(err)

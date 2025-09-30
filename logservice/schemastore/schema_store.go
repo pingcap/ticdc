@@ -246,7 +246,7 @@ func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchema
 
 	// If the schemastore does not contain the keyspace, it means it is not a maintainer node.
 	// It should register the keyspace when it try to get keyspace schema_store.
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.GetKeyspaceByID(ctx, keyspaceID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -266,7 +266,8 @@ func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchema
 	return nil, errors.ErrKeyspaceNotFound
 }
 
-func (s *schemaStore) initialize(ctx context.Context) {
+func (s *schemaStore) Run(ctx context.Context) error {
+	log.Info("schema store begin to run")
 	// we should fetch ddl at startup for classic mode
 	if kerneltype.IsClassic() {
 		err := s.RegisterKeyspace(ctx, common.DefaultKeyspace)
@@ -277,18 +278,10 @@ func (s *schemaStore) initialize(ctx context.Context) {
 			log.Panic("RegisterKeyspace failed", zap.Error(err))
 		}
 	}
-}
-
-func (s *schemaStore) Run(ctx context.Context) error {
-	log.Info("schema store begin to run")
-	s.initialize(ctx)
 	return nil
 }
 
-func (s *schemaStore) Close(ctx context.Context) error {
-	log.Info("schema store start to close")
-	defer log.Info("schema store closed")
-
+func (s *schemaStore) Close(_ context.Context) error {
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
@@ -298,6 +291,7 @@ func (s *schemaStore) Close(ctx context.Context) error {
 			log.Error("dataStorage close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		}
 	}
+	log.Info("schema store closed")
 	return nil
 }
 
@@ -438,10 +432,10 @@ func (s *schemaStore) RegisterKeyspace(
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	keyspaceID := keyspaceMeta.Id
@@ -454,43 +448,43 @@ func (s *schemaStore) RegisterKeyspace(
 
 	kvStorage, err := keyspaceManager.GetStorage(keyspaceName)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	dataStorage := newPersistentStorage(s.root, keyspaceID, s.pdCli, kvStorage)
 	dataStorage.initialize(ctx)
 
-	schemaStore := &keyspaceSchemaStore{
+	store := &keyspaceSchemaStore{
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
 		dataStorage:   dataStorage,
 		notifyCh:      make(chan any, 4),
 	}
 
-	upperBound := schemaStore.dataStorage.getUpperBound()
-	schemaStore.finishedDDLTs = upperBound.FinishedDDLTs
-	schemaStore.schemaVersion = upperBound.SchemaVersion
-	schemaStore.pendingResolvedTs.Store(upperBound.ResolvedTs)
-	schemaStore.resolvedTs.Store(upperBound.ResolvedTs)
+	upperBound := store.dataStorage.getUpperBound()
+	store.finishedDDLTs = upperBound.FinishedDDLTs
+	store.schemaVersion = upperBound.SchemaVersion
+	store.pendingResolvedTs.Store(upperBound.ResolvedTs)
+	store.resolvedTs.Store(upperBound.ResolvedTs)
 	log.Info("schema store initialized",
 		zap.String("keyspaceName", keyspaceName),
 		zap.Uint32("keyspaceID", keyspaceID),
-		zap.Uint64("resolvedTs", schemaStore.resolvedTs.Load()),
-		zap.Uint64("finishedDDLTS", schemaStore.finishedDDLTs),
-		zap.Int64("schemaVersion", schemaStore.schemaVersion))
+		zap.Uint64("resolvedTs", store.resolvedTs.Load()),
+		zap.Uint64("finishedDDLTS", store.finishedDDLTs),
+		zap.Int64("schemaVersion", store.schemaVersion))
 
 	subClient := appcontext.GetService[logpuller.SubscriptionClient](appcontext.SubscriptionClient)
-	ddlJobFetcher := newDDLJobFetcher(
+	fetcher := newDDLJobFetcher(
 		ctx,
 		subClient,
 		kvStorage,
 		keyspaceID,
-		schemaStore.writeDDLEvent,
-		schemaStore.advancePendingResolvedTs,
+		store.writeDDLEvent,
+		store.advancePendingResolvedTs,
 	)
-	schemaStore.ddlJobFetcher = ddlJobFetcher
+	store.ddlJobFetcher = fetcher
 
-	err = ddlJobFetcher.run(upperBound.ResolvedTs)
+	err = fetcher.run(upperBound.ResolvedTs)
 	if err != nil {
 		return err
 	}
@@ -507,9 +501,9 @@ func (s *schemaStore) RegisterKeyspace(
 				schemaStore.tryUpdateResolvedTs()
 			}
 		}
-	}(ctx, schemaStore)
+	}(ctx, store)
 
-	s.keyspaceSchemaStoreMap[keyspaceID] = schemaStore
+	s.keyspaceSchemaStoreMap[keyspaceID] = store
 
 	return nil
 }
