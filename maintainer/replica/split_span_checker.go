@@ -1245,4 +1245,5 @@ func SetEasyThresholdForTest() {
 	minTrafficBalanceThreshold = 1
 	maxLagThreshold = 120
 	regionCheckInterval = time.Second * 10
+	mergeThreshold = 1
 }
