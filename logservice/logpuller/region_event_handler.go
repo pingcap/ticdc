@@ -259,7 +259,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("startTs", entry.GetStartTs()),
 					zap.Uint64("commitTs", entry.GetCommitTs()),
 					zap.String("key", spanz.HexKey(entry.GetKey())))
-				return
 			}
 
 			// TiKV can send events with StartTs/CommitTs less than startTs.
