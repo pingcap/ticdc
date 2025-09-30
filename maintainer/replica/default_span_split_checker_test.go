@@ -170,7 +170,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 	checker.AddReplica(replica)
 
 	spanStatus := checker.allTasks[replica.ID]
-	spanStatus.regionCheckTime = time.Now().Add(-time.Second * 20)
+	spanStatus.regionCheckTime = time.Now().Add(-2 * regionCheckInterval)
 
 	status := &heartbeatpb.TableSpanStatus{
 		ID:                 replica.ID.ToPB(),

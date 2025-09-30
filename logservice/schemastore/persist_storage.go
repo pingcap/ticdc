@@ -40,7 +40,11 @@ import (
 )
 
 // The parent folder to store schema data
-const dataDir = "schema_store"
+const (
+	dataDir                       = "schema_store"
+	defaultSchemaStoreGcServiceID = "cdc_schema_store"
+	defaultGcServiceTTL           = 60 * 60 * 2 // 2 hours
+)
 
 // persistentStorage stores the following kinds of data on disk:
 //  1. table info and database info from upstream snapshot
@@ -154,7 +158,7 @@ func newPersistentStorage(
 
 func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) {
 	if kerneltype.IsClassic() {
-		return gc.SetServiceGCSafepoint(ctx, p.pdCli, "cdc-new-store", 0, 0)
+		return gc.SetServiceGCSafepoint(ctx, p.pdCli, defaultSchemaStoreGcServiceID, 0, 0)
 	}
 
 	gcClient := p.pdCli.GetGCStatesClient(p.keyspaceID)
@@ -168,12 +172,22 @@ func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) 
 
 func (p *persistentStorage) initialize(ctx context.Context) {
 	var gcSafePoint uint64
+	fakeChangefeedID := common.NewChangefeedID(defaultSchemaStoreGcServiceID)
 	for {
 		var err error
 		gcSafePoint, err = p.getGcSafePoint(ctx)
 		if err == nil {
 			log.Info("GetGCState success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcState", gcSafePoint))
-			break
+			// Ensure the start ts is valid during the gc service ttl
+			err = gc.EnsureChangefeedStartTsSafety(
+				ctx,
+				p.pdCli,
+				defaultSchemaStoreGcServiceID,
+				fakeChangefeedID,
+				defaultGcServiceTTL, gcSafePoint+1)
+			if err == nil {
+				break
+			}
 		}
 
 		log.Warn("get ts failed, will retry in 1s", zap.Error(err))
@@ -183,6 +197,8 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		case <-time.After(time.Second):
 		}
 	}
+
+	defer gc.UndoEnsureChangefeedStartTsSafety(ctx, p.pdCli, defaultSchemaStoreGcServiceID, fakeChangefeedID)
 
 	dbPath := fmt.Sprintf("%s/%s/%d", p.rootDir, dataDir, p.keyspaceID)
 
@@ -238,8 +254,9 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 	var err error
 	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshot(p.db, p.kvStorage, gcTs, true); err != nil {
 		// TODO: retry
-		log.Fatal("fail to initialize from kv snapshot")
+		log.Fatal("fail to initialize from kv snapshot", zap.Error(err))
 	}
+
 	p.gcTs = gcTs
 	p.upperBound = UpperBoundMeta{
 		FinishedDDLTs: 0,
@@ -247,6 +264,7 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 	}
 	writeUpperBoundMeta(p.db, p.upperBound)
 	log.Info("schema store initialize from kv storage done",
+		zap.Uint64("gcTs", gcTs),
 		zap.Int("databaseMapLen", len(p.databaseMap)),
 		zap.Int("tableMapLen", len(p.tableMap)),
 		zap.Any("duration(s)", time.Since(now).Seconds()))
@@ -598,7 +616,7 @@ func (p *persistentStorage) doGc(gcTs uint64) error {
 	_, _, _, err := persistSchemaSnapshot(p.db, p.kvStorage, gcTs, false)
 	if err != nil {
 		log.Warn("fail to write kv snapshot during gc",
-			zap.Uint64("gcTs", gcTs))
+			zap.Uint64("gcTs", gcTs), zap.Error(err))
 		// TODO: return err and retry?
 		return nil
 	}
