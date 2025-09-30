@@ -173,6 +173,19 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 		if _, ok := allNodes[id]; !ok {
 			delete(c.nodes.m, id)
 			log.Info("log coordinator detect node removed", zap.String("nodeId", id.String()))
+
+			// Clean up states for the removed node.
+			c.eventStoreStates.Lock()
+			delete(c.eventStoreStates.m, id)
+			c.eventStoreStates.Unlock()
+
+			c.changefeedStates.Lock()
+			for _, state := range c.changefeedStates.m {
+				if _, exists := state.nodeStates[id]; exists {
+					delete(state.nodeStates, id)
+				}
+			}
+			c.changefeedStates.Unlock()
 		}
 	}
 	for id, node := range allNodes {
@@ -208,13 +221,20 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 			// ...but is no longer in the incoming message, it means the changefeed was removed from this node.
 			if _, incoming := incomingGIDs[gid]; !incoming {
 				delete(state.nodeStates, from)
-				log.Info("changefeed removed from node", zap.Stringer("changefeedID", state.cfID), zap.String("nodeID", string(from)))
+				log.Info("changefeed removed from node",
+					zap.Stringer("changefeedID", state.cfID),
+					zap.String("nodeID", string(from)),
+					zap.Uint64("changefeedGIDLow", gid.Low),
+					zap.Uint64("changefeedGIDHigh", gid.High))
 				// If the changefeed has no more nodes, remove the changefeed state and its associated metrics.
 				if len(state.nodeStates) == 0 {
 					metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
 					metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
 					delete(c.changefeedStates.m, gid)
-					log.Info("changefeed state removed as it has no active nodes", zap.Stringer("changefeedID", state.cfID))
+					log.Info("changefeed state removed as it has no active nodes",
+						zap.Stringer("changefeedID", state.cfID),
+						zap.Uint64("changefeedGIDLow", gid.Low),
+						zap.Uint64("changefeedGIDHigh", gid.High))
 				}
 			}
 		}
@@ -225,6 +245,11 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 		cfID := common.NewChangefeedIDFromPB(state.GetChangefeedID())
 		gid := cfID.ID()
 		if _, ok := c.changefeedStates.m[gid]; !ok {
+			log.Info("new changefeed states added",
+				zap.Stringer("changefeedID", cfID),
+				zap.Uint64("changefeedGIDLow", gid.Low),
+				zap.Uint64("changefeedGIDHigh", gid.High))
+			// Initialize metrics for the new changefeed.
 			c.changefeedStates.m[gid] = &changefeedState{
 				cfID:               cfID,
 				nodeStates:         make(map[node.ID]uint64),

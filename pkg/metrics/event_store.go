@@ -34,6 +34,14 @@ var (
 			Help:      "The number of events received by event store.",
 		}, []string{"type"}) // types : kv, resolved.
 
+	// EventStoreCompressedRowsCount is the counter of compressed rows.
+	EventStoreCompressedRowsCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "compressed_rows_count",
+			Help:      "The total number of rows compressed by event store.",
+		})
 	// EventStoreOutputEventCount is the metric that counts events output by the sorter.
 	EventStoreOutputEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
@@ -175,6 +183,7 @@ var (
 
 func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreSubscriptionGauge)
+	registry.MustRegister(EventStoreCompressedRowsCount)
 	registry.MustRegister(EventStoreReceivedEventCount)
 	registry.MustRegister(EventStoreOutputEventCount)
 	registry.MustRegister(EventStoreWriteDurationHistogram)

@@ -366,3 +366,52 @@ func TestHandleNodeChange(t *testing.T) {
 	_, ok = c.nodes.m["node-3"]
 	require.True(t, ok)
 }
+
+func TestHandleNodeChange_CleanState(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	nodeID1 := node.ID("node-1")
+	nodeID2 := node.ID("node-2")
+	cfID1 := common.NewChangefeedID4Test("default", "test1")
+
+	// 1. Initial state with two nodes
+	c.nodes.m[nodeID1] = &node.Info{ID: nodeID1}
+	c.nodes.m[nodeID2] = &node.Info{ID: nodeID2}
+
+	// 2. Populate eventStoreStates for both nodes
+	c.eventStoreStates.m[nodeID1] = &logservicepb.EventStoreState{}
+	c.eventStoreStates.m[nodeID2] = &logservicepb.EventStoreState{}
+
+	// 3. Populate changefeedStates for a changefeed running on both nodes
+	c.changefeedStates.m[cfID1.ID()] = &changefeedState{
+		cfID: cfID1,
+		nodeStates: map[node.ID]uint64{
+			nodeID1: 100,
+			nodeID2: 110,
+		},
+	}
+
+	// Verify initial state
+	require.Len(t, c.nodes.m, 2)
+	require.Len(t, c.eventStoreStates.m, 2)
+	require.Len(t, c.changefeedStates.m[cfID1.ID()].nodeStates, 2)
+
+	// 4. Simulate node-1 is removed
+	allNodes := map[node.ID]*node.Info{
+		nodeID2: {ID: nodeID2},
+	}
+	c.handleNodeChange(allNodes)
+
+	// 5. Assertions
+	// Node map should be updated
+	require.Len(t, c.nodes.m, 1, "node-1 should be removed from nodes map")
+	require.Nil(t, c.nodes.m[nodeID1])
+
+	// eventStoreStates for node-1 should be cleaned up
+	require.Len(t, c.eventStoreStates.m, 1, "eventStoreStates for node-1 should be cleaned up")
+	require.Nil(t, c.eventStoreStates.m[nodeID1])
+
+	// changefeedStates for node-1 should be cleaned up
+	require.Len(t, c.changefeedStates.m[cfID1.ID()].nodeStates, 1, "changefeedStates for node-1 should be cleaned up")
+	_, exists := c.changefeedStates.m[cfID1.ID()].nodeStates[nodeID1]
+	require.False(t, exists)
+}

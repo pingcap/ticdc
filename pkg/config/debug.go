@@ -31,6 +31,8 @@ type DebugConfig struct {
 	// Puller is the configuration of the puller.
 	Puller *PullerConfig `toml:"puller" json:"puller"`
 
+	EventStore *EventStoreConfig `toml:"event-store" json:"event-store"`
+
 	SchemaStore *SchemaStoreConfig `toml:"schema-store" json:"schema-store"`
 
 	EventService *EventServiceConfig `toml:"event-service" json:"event-service"`
@@ -46,6 +48,9 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	}
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
+	}
+	if c.EventStore == nil {
+		c.EventStore = NewDefaultEventStoreConfig()
 	}
 
 	return nil
@@ -70,6 +75,17 @@ func NewDefaultPullerConfig() *PullerConfig {
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,
 		PendingRegionRequestQueueSize:  64, // Base on test result
+	}
+}
+
+type EventStoreConfig struct {
+	CompressionThreshold int `toml:"compression-threshold" json:"compression-threshold"`
+}
+
+// NewDefaultEventStoreConfig returns the default event store configuration.
+func NewDefaultEventStoreConfig() *EventStoreConfig {
+	return &EventStoreConfig{
+		CompressionThreshold: 4096, // 4KB
 	}
 }
 

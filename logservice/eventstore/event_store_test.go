@@ -14,12 +14,15 @@
 package eventstore
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/cockroachdb/pebble"
+	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -696,4 +699,194 @@ func TestChangefeedStatManagementConcurrent(t *testing.T) {
 		return false // stop iteration
 	})
 	require.True(t, isEmpty, "changefeedMeta should be empty after all dispatchers are unregistered")
+}
+
+func TestWriteToEventStore(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	dir := t.TempDir()
+	store := New(ctx, dir, nil).(*eventStore)
+	defer store.Close(ctx)
+
+	smallEntryKey := []byte("small-key")
+	smallEntryValue := []byte("small-value")
+	// A value smaller than the threshold.
+	smallEntry := &common.RawKVEntry{
+		OpType:   common.OpTypePut,
+		StartTs:  200,
+		CRTs:     210,
+		KeyLen:   uint32(len(smallEntryKey)),
+		ValueLen: uint32(len(smallEntryValue)),
+		Key:      smallEntryKey,
+		Value:    smallEntryValue,
+		OldValue: nil,
+	}
+
+	largeEntryKey := []byte("large-key")
+	largeEntryValue := []byte("large-value")
+	// A value larger than the threshold.
+	largeEntry := &common.RawKVEntry{
+		OpType:   common.OpTypePut,
+		StartTs:  200,
+		CRTs:     211, // Note: must be different from smallEntry's CRTs to avoid key collision if key is same
+		KeyLen:   uint32(len(largeEntryKey)),
+		ValueLen: uint32(len(largeEntryValue)) * uint32(store.compressionThreshold/10),
+		Key:      []byte(largeEntryKey),
+		Value:    bytes.Repeat(largeEntryValue, store.compressionThreshold/10),
+		OldValue: nil,
+	}
+	events := []eventWithCallback{
+		{
+			subID:   1,
+			tableID: 1,
+			kvs:     []common.RawKVEntry{*smallEntry, *largeEntry},
+			callback: func() {
+			},
+		},
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	err = store.writeEvents(store.dbs[0], events, encoder)
+	require.NoError(t, err)
+
+	// Read events back and verify.
+	iter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	defer iter.Close()
+
+	var readEntries []*common.RawKVEntry
+	decoder, err := zstd.NewReader(nil)
+	require.NoError(t, err)
+	defer decoder.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := iter.Key()
+		value := iter.Value()
+
+		_, compressionType := DecodeKeyMetas(key)
+
+		var decodedValue []byte
+		if compressionType == CompressionZSTD {
+			decodedValue, err = decoder.DecodeAll(value, nil)
+			require.NoError(t, err)
+		} else {
+			require.Equal(t, CompressionNone, compressionType)
+			decodedValue = value
+		}
+
+		entry := &common.RawKVEntry{}
+		err = entry.Decode(decodedValue)
+		require.NoError(t, err)
+		readEntries = append(readEntries, entry)
+	}
+
+	require.Len(t, readEntries, 2)
+
+	// The order of keys might be "large-key" then "small-key" due to lexicographical sorting.
+	var foundSmall, foundLarge bool
+	for _, entry := range readEntries {
+		if bytes.Equal(entry.Key, smallEntry.Key) {
+			require.Equal(t, smallEntry, entry)
+			foundSmall = true
+		} else if bytes.Equal(entry.Key, largeEntry.Key) {
+			require.Equal(t, largeEntry, entry)
+			foundLarge = true
+		}
+	}
+	require.True(t, foundSmall, "small value entry not found")
+	require.True(t, foundLarge, "large value entry not found")
+}
+
+func TestEventStoreGetIteratorConcurrently(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dir := t.TempDir()
+	_, store := newEventStoreForTest(dir)
+	defer store.Close(ctx)
+
+	// 1. Register a dispatcher.
+	dispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+	startTs := uint64(100)
+	var resolvedTs atomic.Uint64
+	resolvedTs.Store(startTs)
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, startTs, func(watermark, latestCommitTs uint64) {
+		resolvedTs.Store(watermark)
+	}, false, false)
+	require.True(t, ok)
+
+	// 2. Write some data.
+	var events []eventWithCallback
+	var lastCommitTs uint64
+	for i := 0; i < 10; i++ {
+		lastCommitTs = startTs + uint64(i*10) + 5
+		entry := &common.RawKVEntry{
+			OpType:  common.OpTypePut,
+			StartTs: startTs + uint64(i*10),
+			CRTs:    lastCommitTs,
+			Key:     []byte(fmt.Sprintf("key-%d", i)),
+			// Make value large enough to trigger compression.
+			Value: bytes.Repeat([]byte("value"), store.(*eventStore).compressionThreshold),
+		}
+		events = append(events, eventWithCallback{
+			subID:    1,
+			tableID:  1,
+			kvs:      []common.RawKVEntry{*entry},
+			callback: func() {},
+		})
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder)
+	require.NoError(t, err)
+
+	// 3. Advance resolved ts for the subscription.
+	dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID]
+	require.NotNil(t, dispatcherStat)
+	subStat := dispatcherStat.subStat
+	require.NotNil(t, subStat)
+	subStat.resolvedTs.Store(lastCommitTs + 1)
+
+	// 4. Concurrently get iterators and read data.
+	concurrency := 10
+	iterations := 100
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				dataRange := common.DataRange{
+					Span:          span,
+					CommitTsStart: startTs,
+					CommitTsEnd:   lastCommitTs + 1,
+				}
+				iter := store.GetIterator(dispatcherID, dataRange)
+				require.NotNil(t, iter, "iterator should not be nil")
+
+				var receivedEvents []*common.RawKVEntry
+				for {
+					ev, ok := iter.Next()
+					if !ok {
+						break
+					}
+					receivedEvents = append(receivedEvents, ev)
+				}
+				require.Len(t, receivedEvents, 10, "should receive 10 events")
+				_, err := iter.Close()
+				require.NoError(t, err)
+			}
+		}()
+	}
+	wg.Wait()
 }
