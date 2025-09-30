@@ -488,6 +488,11 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 		// if the dispatcher has received ready signal from local event service,
 		// ignore all types of signal events.
 		if d.connState.isCurrentEventService(localServerID) {
+			// Note: we need unregister when receive ready event from remote event service,
+			// because event service cannot remove stale dispatcher if it is not reset.
+			if event.From != nil && *event.From != localServerID {
+				d.removeFrom(*event.From)
+			}
 			return
 		}
 
@@ -498,6 +503,9 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 
 		if *event.From == localServerID {
 			if d.readyCallback != nil {
+				// note: if d.readyCallback is not nil,
+				// this dispatcher just register to local event service.
+				// so no need to do any deregister.
 				d.connState.setEventServiceID(localServerID)
 				d.connState.readyEventReceived.Store(true)
 				d.readyCallback()
