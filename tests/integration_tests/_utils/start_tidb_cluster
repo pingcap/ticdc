@@ -77,3 +77,8 @@ while [ $i -le $retry_times ]; do
 	let i++
 	echo "start tidb cluster failed"
 done
+
+sleep 3
+
+resp=$(curl -X POST http://127.0.0.1:20181/debug/dup-key/enable)
+echo "$resp"
