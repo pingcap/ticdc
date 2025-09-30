@@ -503,9 +503,9 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 
 		if *event.From == localServerID {
 			if d.readyCallback != nil {
-				// note: if d.readyCallback is not nil,
-				// this dispatcher just register to local event service.
-				// so no need to do any deregister.
+// If readyCallback is set, this dispatcher is performing its initial
+// registration with the local event service. Therefore, no deregistration
+// from a previous service is necessary.
 				d.connState.setEventServiceID(localServerID)
 				d.connState.readyEventReceived.Store(true)
 				d.readyCallback()
