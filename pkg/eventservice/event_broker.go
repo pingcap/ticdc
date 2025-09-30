@@ -242,7 +242,9 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
 	log.Info("send ddl event to dispatcher",
-		zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", e.TableID),
+		zap.Stringer("dispatcherID", d.id),
+		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
+		zap.Int64("EventTableID", e.TableID),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
@@ -449,12 +451,15 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 }
 
 func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
+	// Fast path.
 	if task.isHandshaked() {
 		return
 	}
 
-	if !task.setHandshaked() {
-		log.Panic("should not happen: sendHandshakeIfNeed should not be called concurrently")
+	task.handshakeLock.Lock()
+	defer task.handshakeLock.Unlock()
+
+	if task.isHandshaked() {
 		return
 	}
 
@@ -469,6 +474,9 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 	updateMetricEventServiceSendCommandCount(task.info.GetMode())
+	// Send handshake event to channel before calling `setHandshaked`
+	// This ensures the handshake event precedes any subsequent data events.
+	task.setHandshaked()
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
@@ -846,10 +854,12 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 	if d.isRemoved.Load() {
 		return
 	}
+
 	// make sure only one scan task can run at the same time.
 	if !d.isTaskScanning.CompareAndSwap(false, true) {
 		return
 	}
+
 	if force {
 		c.taskChan[d.scanWorkerIndex] <- d
 	} else {

@@ -28,9 +28,11 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
+const (
 	WithoutTiDBOnly = false
 	WithTiDBOnly    = true
+	// InvalidTableID used in rename tables ddl to avoid duplicate table id
+	InvalidTableID = -1
 )
 
 type buildPersistedDDLEventFuncArgs struct {
@@ -724,21 +726,35 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 	}
 
 	var querys []string
-	for i, tableInfo := range args.job.BinlogInfo.MultipleTableInfos {
-		info := renameArgs.RenameTableInfos[i]
-		extraSchemaID := getSchemaID(args.tableMap, tableInfo.ID)
-		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, extraSchemaID)
-		event.ExtraSchemaNames = append(event.ExtraSchemaNames, getSchemaName(args.databaseMap, extraSchemaID))
-		extraTableName := getTableName(args.tableMap, tableInfo.ID)
-		event.ExtraTableNames = append(event.ExtraTableNames, extraTableName)
+	for _, info := range renameArgs.RenameTableInfos {
+		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, info.OldSchemaID)
+		event.ExtraSchemaNames = append(event.ExtraSchemaNames, info.OldSchemaName.O)
+		event.ExtraTableNames = append(event.ExtraTableNames, info.OldTableName.O)
 		event.SchemaIDs = append(event.SchemaIDs, info.NewSchemaID)
 		SchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
 		event.SchemaNames = append(event.SchemaNames, SchemaName)
-		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", info.OldSchemaName.O, extraTableName, SchemaName, tableInfo.Name.L))
+		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", info.OldSchemaName.O, info.OldTableName.O, SchemaName, info.NewTableName.O))
 	}
 
 	event.Query = strings.Join(querys, "")
 	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
+	// we have to reverse MultipleTableInfos to get correct schema name
+	// see https://github.com/pingcap/tidb/issues/63710
+	//
+	// If renaming tables creates cycles, some tables may not be created, and their table IDs may coincide with the latest table.
+	// For example: renaming table 'a' to 'common.c', 'b' to 'a', and 'common.c' to 'b' results in table 'c' not being created,
+	// with its table ID equal to that of 'b'. This leads to incorrect table info in the function `extractTableInfoFuncForRenameTables`.
+	// To avoid this situation, we must use the latest table info and disregard previous entries when encountering duplicate table info.
+	// Therefore, we set the table ID of the previous table info to `InvalidTableID` to ensure that each table ID is unique.
+	visitTableIDs := make(map[int64]struct{})
+	for i := len(event.MultipleTableInfos) - 1; i >= 0; i-- {
+		id := event.MultipleTableInfos[i].ID
+		if _, ok := visitTableIDs[id]; ok {
+			event.MultipleTableInfos[i].ID = InvalidTableID
+		} else {
+			visitTableIDs[id] = struct{}{}
+		}
+	}
 	return event
 }
 
@@ -915,6 +931,9 @@ func updateDDLHistoryForRenameTables(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	// it won't be send to table dispatchers, just for build version store
 	for _, info := range args.ddlEvent.MultipleTableInfos {
+		if info.ID == InvalidTableID {
+			continue
+		}
 		if isPartitionTable(info) {
 			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(info)...)
 		} else {
@@ -1154,6 +1173,9 @@ func updateSchemaMetadataForRenameTables(args updateSchemaMetadataFuncArgs) {
 		log.Panic("multiple table infos should not be nil")
 	}
 	for i, info := range args.event.MultipleTableInfos {
+		if info.ID == InvalidTableID {
+			continue
+		}
 		if args.event.ExtraSchemaIDs[i] != args.event.SchemaIDs[i] {
 			args.tableMap[info.ID].SchemaID = args.event.SchemaIDs[i]
 			args.removeTableFromDB(info.ID, args.event.ExtraSchemaIDs[i])
@@ -1278,6 +1300,9 @@ func iterateEventTablesForExchangeTablePartition(event *PersistedDDLEvent, apply
 
 func iterateEventTablesForRenameTables(event *PersistedDDLEvent, apply func(tableId ...int64)) {
 	for _, info := range event.MultipleTableInfos {
+		if info.ID == InvalidTableID {
+			continue
+		}
 		if isPartitionTable(info) {
 			apply(getAllPartitionIDs(info)...)
 		} else {
@@ -1452,6 +1477,9 @@ func extractTableInfoFuncForTruncateAndReorganizePartition(event *PersistedDDLEv
 
 func extractTableInfoFuncForRenameTables(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
 	for i, tableInfo := range event.MultipleTableInfos {
+		if tableInfo.ID == InvalidTableID {
+			continue
+		}
 		if isPartitionTable(tableInfo) {
 			for _, partitionID := range getAllPartitionIDs(tableInfo) {
 				if tableID == partitionID {
@@ -2357,10 +2385,12 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 					resultQuerys = append(resultQuerys, querys[i])
 					tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
 				}
-				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
+				if tableInfo.ID != InvalidTableID {
+					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
+				}
 				if !ignoreCurrentTable {
 					// check whether schema change
-					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
+					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] && tableInfo.ID != InvalidTableID {
 						for _, id := range allPhysicalIDs {
 							ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
 								TableID:     id,
@@ -2384,7 +2414,9 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 							InfluenceType: commonEvent.InfluenceTypeNormal,
 						}
 					}
-					ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, allPhysicalIDs...)
+					if tableInfo.ID != InvalidTableID {
+						ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, allPhysicalIDs...)
+					}
 					dropNames = append(dropNames, commonEvent.SchemaTableName{
 						SchemaName: rawEvent.ExtraSchemaNames[i],
 						TableName:  rawEvent.ExtraTableNames[i],
@@ -2419,9 +2451,11 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 					resultQuerys = append(resultQuerys, querys[i])
 					tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
 				}
-				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
+				if tableInfo.ID != InvalidTableID {
+					ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
+				}
 				if !ignoreCurrentTable {
-					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
+					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] && tableInfo.ID != InvalidTableID {
 						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
 							TableID:     tableInfo.ID,
 							OldSchemaID: rawEvent.ExtraSchemaIDs[i],
@@ -2443,7 +2477,9 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 							InfluenceType: commonEvent.InfluenceTypeNormal,
 						}
 					}
-					ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, tableInfo.ID)
+					if tableInfo.ID != InvalidTableID {
+						ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, tableInfo.ID)
+					}
 					dropNames = append(dropNames, commonEvent.SchemaTableName{
 						SchemaName: rawEvent.ExtraSchemaNames[i],
 						TableName:  rawEvent.ExtraTableNames[i],

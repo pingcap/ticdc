@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -30,10 +31,10 @@ import (
 	"go.uber.org/zap"
 )
 
-func getChangeFeed(host, cfName string) (ChangeFeedInfo, error) {
+func getChangeFeed(host, keyspaceName, cfName string) (ChangeFeedInfo, error) {
 	security := config.GetGlobalServerConfig().Security
 
-	uri := fmt.Sprintf("/api/v2/changefeeds/%s", cfName)
+	uri := fmt.Sprintf("/api/v2/changefeeds/%s?keyspace=%s", cfName, url.QueryEscape(keyspaceName))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

@@ -123,6 +123,7 @@ var defaultServerConfig = &ServerConfig{
 
 		Scheduler:    NewDefaultSchedulerConfig(),
 		Puller:       NewDefaultPullerConfig(),
+		EventStore:   NewDefaultEventStoreConfig(),
 		SchemaStore:  NewDefaultSchemaStoreConfig(),
 		EventService: NewDefaultEventServiceConfig(),
 	},
