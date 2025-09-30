@@ -225,12 +225,7 @@ type eventStore struct {
 		tableStats map[int64]subscriptionStats
 	}
 
-<<<<<<< HEAD
-	encoder *zstd.Encoder
-	decoder *zstd.Decoder
-=======
 	decoderPool *sync.Pool
->>>>>>> 7d30800d663a1cecfc1063a9dd5ec4d0bf6c1c8d
 
 	// changefeed id -> changefeedStat
 	changefeedMeta sync.Map
@@ -258,17 +253,6 @@ func New(
 		log.Panic("fail to remove path", zap.String("path", dbPath), zap.Error(err))
 	}
 
-	// Create the zstd encoder
-	encoder, err := zstd.NewWriter(nil)
-	if err != nil {
-		log.Panic("Failed to create zstd encoder", zap.Error(err))
-	}
-
-	decoder, err := zstd.NewReader(nil)
-	if err != nil {
-		log.Panic("Failed to create zstd decoder", zap.Error(err))
-	}
-
 	store := &eventStore{
 		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		subClient: subClient,
@@ -278,8 +262,6 @@ func New(
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
 		gcManager: newGCManager(),
-		encoder:   encoder,
-		decoder:   decoder,
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
 
@@ -924,12 +906,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:       dataRange.CommitTsStart,
 		endTs:         dataRange.CommitTsEnd,
 		rowCount:      0,
-<<<<<<< HEAD
-		decoder:       e.decoder,
-=======
 		decoder:       decoder,
 		decoderPool:   e.decoderPool,
->>>>>>> 7d30800d663a1cecfc1063a9dd5ec4d0bf6c1c8d
 	}
 }
 
@@ -1145,14 +1123,6 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 					zap.Int64("tableID", event.tableID))
 				continue
 			}
-<<<<<<< HEAD
-			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
-			// value := kv.Encode()
-
-			value := kv.Encode()
-			compressedValue := e.encoder.EncodeAll(value, nil)
-			if err := batch.Set(key, compressedValue, pebble.NoSync); err != nil {
-=======
 
 			compressionType := CompressionNone
 			value := kv.Encode()
@@ -1164,7 +1134,6 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv, compressionType)
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
->>>>>>> 7d30800d663a1cecfc1063a9dd5ec4d0bf6c1c8d
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
 		}
@@ -1200,13 +1169,9 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
-<<<<<<< HEAD
-	decoder  *zstd.Decoder
-=======
 
 	decoder     *zstd.Decoder
 	decoderPool *sync.Pool
->>>>>>> 7d30800d663a1cecfc1063a9dd5ec4d0bf6c1c8d
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1218,15 +1183,6 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
 
-<<<<<<< HEAD
-		decompressedValue, err := iter.decoder.DecodeAll(value, nil)
-		if err != nil {
-			log.Panic("failed to decompress value", zap.Error(err))
-		}
-
-		rawKV.Decode(decompressedValue)
-
-=======
 		_, compressionType := DecodeKeyMetas(key)
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
@@ -1240,7 +1196,6 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 
 		err := rawKV.Decode(decodedValue)
->>>>>>> 7d30800d663a1cecfc1063a9dd5ec4d0bf6c1c8d
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
