@@ -1055,7 +1055,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 			} else {
 				return string(aliveNodeIDs[i]) > string(aliveNodeIDs[j])
 			}
-
 		}
 		return leftTraffic < rightTraffic
 	})
