@@ -1047,7 +1047,15 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		leftTraffic := lastThreeTrafficPerNode[aliveNodeIDs[i]][latestTrafficIndex]
 		rightTraffic := lastThreeTrafficPerNode[aliveNodeIDs[j]][latestTrafficIndex]
 		if leftTraffic == rightTraffic {
-			return string(aliveNodeIDs[i]) < string(aliveNodeIDs[j])
+			// We only need to keep the order of nodes with the same traffic fixed for a group.
+			// We can have more randomness between different groups to avoid
+			// a single node being assigned too much traffic every time in a multi-table scenario.
+			if s.groupID%2 == 1 {
+				return string(aliveNodeIDs[i]) < string(aliveNodeIDs[j])
+			} else {
+				return string(aliveNodeIDs[i]) > string(aliveNodeIDs[j])
+			}
+
 		}
 		return leftTraffic < rightTraffic
 	})
