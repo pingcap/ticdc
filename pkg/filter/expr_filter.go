@@ -55,8 +55,6 @@ type dmlExprFilterRule struct {
 	updateNewExprs map[string]expression.Expression // tableName -> expr
 	deleteExprs    map[string]expression.Expression // tableName -> expr
 
-	virtualColumnInfos map[string]virtualColumnInfo // tableName -> virtualColumnInfo
-
 	tableMatcher tfilter.Filter
 	// All tables in this rule share the same config.
 	config *config.EventFilterRule
@@ -161,7 +159,6 @@ func (r *dmlExprFilterRule) resetExpr(tableName string) {
 	delete(r.updateOldExprs, tableName)
 	delete(r.updateNewExprs, tableName)
 	delete(r.deleteExprs, tableName)
-	delete(r.virtualColumnInfos, tableName)
 }
 
 // getInsertExprs returns the expression filter to filter INSERT events.
@@ -338,31 +335,20 @@ func (r *dmlExprFilterRule) buildRowWithVirtualColumns(
 		return row, nil
 	}
 
-	tableName := tableInfo.TableName.String()
-	vcInfo, ok := r.virtualColumnInfos[tableName]
-	if !ok {
-		var err error
-		var columns []*expression.Column
-		columns, _, err = expression.ColumnInfos2ColumnsAndNames(
-			r.sessCtx.GetExprCtx(),
-			ast.CIStr{}, /* unused */
-			tableInfo.GetTableNameCIStr(),
-			tableInfo.GetColumns(),
-			tableInfo.ToTiDBTableInfo())
-		if err != nil {
-			return chunk.Row{}, err
-		}
-
-		vColOffsets, vColFts := collectVirtualColumnOffsetsAndTypes(r.sessCtx.GetExprCtx().GetEvalCtx(), columns)
-		vcInfo = virtualColumnInfo{
-			columns:     columns,
-			vColOffsets: vColOffsets,
-			vColFts:     vColFts,
-		}
-		r.virtualColumnInfos[tableName] = vcInfo
+	columns, _, err := expression.ColumnInfos2ColumnsAndNames(
+		r.sessCtx.GetExprCtx(),
+		ast.CIStr{}, /* unused */
+		tableInfo.GetTableNameCIStr(),
+		tableInfo.GetColumns(),
+		tableInfo.ToTiDBTableInfo())
+	if err != nil {
+		return chunk.Row{}, err
 	}
 
-	err := table.FillVirtualColumnValue(vcInfo.vColFts, vcInfo.vColOffsets, vcInfo.columns, tableInfo.GetColumns(), r.sessCtx.GetExprCtx(), row.Chunk())
+	vColOffsets, vColFts := collectVirtualColumnOffsetsAndTypes(r.sessCtx.GetExprCtx().GetEvalCtx(), columns)
+	err = table.FillVirtualColumnValue(vColFts, vColOffsets, columns, tableInfo.GetColumns(), r.sessCtx.GetExprCtx(), row.Chunk())
+
+	err = table.FillVirtualColumnValue(vColFts, vColOffsets, columns, tableInfo.GetColumns(), r.sessCtx.GetExprCtx(), row.Chunk())
 	if err != nil {
 		return chunk.Row{}, err
 	}
