@@ -160,6 +160,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 	for _, span := range s.spanController.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
 			_, ok := op.(*operator.MoveDispatcherOperator)
+			op.Start()
 			require.True(t, ok)
 		}
 	}
@@ -172,6 +173,10 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 	s.operatorController.OnNodeRemoved("node2")
 	for _, span := range s.spanController.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
+			op.Check("node1", &heartbeatpb.TableSpanStatus{
+				ID:              span.ID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			})
 			msg := op.Schedule()
 			require.NotNil(t, msg)
 			require.Equal(t, "node1", msg.To.String())
@@ -1059,6 +1064,11 @@ func TestBalance(t *testing.T) {
 	s.operatorController.OnNodeRemoved("node2")
 	for _, span := range s.spanController.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
+			op.Check("node1", &heartbeatpb.TableSpanStatus{
+				ID:              span.ID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			})
+			op.Start()
 			msg := op.Schedule()
 			require.NotNil(t, msg)
 			require.Equal(t, "node1", msg.To.String())
@@ -1265,6 +1275,14 @@ func TestStoppedWhenMoving(t *testing.T) {
 	require.Equal(t, 2, s.spanController.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 0, s.spanController.GetTaskSizeByNodeID("node2"))
 
+	operatorItem := s.operatorController.GetAllOperators()[0]
+	operatorItem.Check("node1", &heartbeatpb.TableSpanStatus{
+		ID:              operatorItem.ID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+	})
+	operatorItem.Start()
+	operatorItem.PostFinish()
+	s.operatorController.RemoveOp(operatorItem.ID())
 	s.operatorController.OnNodeRemoved("node2")
 	s.operatorController.OnNodeRemoved("node1")
 	require.Equal(t, 0, s.spanController.GetSchedulingSize())
