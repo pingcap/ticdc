@@ -1042,8 +1042,21 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	// check whether we should balance the traffic for each node
+	// sort by traffic first, if traffic is same, we sort by node id
 	sort.Slice(aliveNodeIDs, func(i, j int) bool {
-		return lastThreeTrafficPerNode[aliveNodeIDs[i]][0] < lastThreeTrafficPerNode[aliveNodeIDs[j]][0]
+		leftTraffic := lastThreeTrafficPerNode[aliveNodeIDs[i]][latestTrafficIndex]
+		rightTraffic := lastThreeTrafficPerNode[aliveNodeIDs[j]][latestTrafficIndex]
+		if leftTraffic == rightTraffic {
+			// We only need to keep the order of nodes with the same traffic fixed for a group.
+			// We can have more randomness between different groups to avoid
+			// a single node being assigned too much traffic every time in a multi-table scenario.
+			if s.groupID%2 == 1 {
+				return string(aliveNodeIDs[i]) < string(aliveNodeIDs[j])
+			} else {
+				return string(aliveNodeIDs[i]) > string(aliveNodeIDs[j])
+			}
+		}
+		return leftTraffic < rightTraffic
 	})
 
 	minTrafficNodeID = aliveNodeIDs[0]
