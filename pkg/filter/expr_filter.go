@@ -35,12 +35,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type virtualColumnInfo struct {
-	columns     []*expression.Column
-	vColOffsets []int
-	vColFts     []*types.FieldType
-}
-
 // dmlExprFilterRule only be used by dmlExprFilter.
 // This struct is mostly a duplicate of `ExprFilterGroup` in dm/pkg/syncer,
 // but have slightly changed to fit the usage of cdc.
