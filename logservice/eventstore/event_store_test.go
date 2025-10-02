@@ -194,10 +194,14 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 		// because there is only one subStat, we know its subID is 1
 		subStat := subStats[logpuller.SubscriptionID(1)]
 		require.NotNil(t, subStat)
-		require.Equal(t, 1, len(subStat.dispatchers.subscribers))
+		subscribers := subStat.subscribers.Load()
+		require.NotNil(t, subscribers)
+		require.Equal(t, 1, len(*subscribers))
 		require.Equal(t, int64(0), subStat.idleTime.Load())
 		store.UnregisterDispatcher(cfID, dispatcherID3)
-		require.Equal(t, 0, len(subStat.dispatchers.subscribers))
+		subscribers = subStat.subscribers.Load()
+		require.NotNil(t, subscribers)
+		require.Equal(t, 0, len(*subscribers))
 		require.NotEqual(t, int64(0), subStat.idleTime.Load())
 	}
 }
@@ -330,7 +334,9 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		// subStat with subID 1 should have three dispatchers
 		subStat := subStats[logpuller.SubscriptionID(1)]
 		require.NotNil(t, subStat)
-		require.Equal(t, 3, len(subStat.dispatchers.subscribers))
+		subscribers := subStat.subscribers.Load()
+		require.NotNil(t, subscribers)
+		require.Equal(t, 3, len(*subscribers))
 	}
 	// test unregister dispatcherID3 can remove its dependency on two subscriptions
 	{
@@ -340,12 +346,16 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			require.Equal(t, 2, len(subStat.dispatchers.subscribers))
+			subscribers := subStat.subscribers.Load()
+			require.NotNil(t, subscribers)
+			require.Equal(t, 2, len(*subscribers))
 		}
 		{
 			subStat := subStats[logpuller.SubscriptionID(3)]
 			require.NotNil(t, subStat)
-			require.Equal(t, 0, len(subStat.dispatchers.subscribers))
+			subscribers := subStat.subscribers.Load()
+			require.NotNil(t, subscribers)
+			require.Equal(t, 0, len(*subscribers))
 		}
 	}
 }
@@ -510,8 +520,10 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			require.Equal(t, 2, len(subStat.dispatchers.subscribers))
-			require.Equal(t, true, subStat.dispatchers.subscribers[dispatcherID2].isStopped.Load())
+			subscribers := subStat.subscribers.Load()
+			require.NotNil(t, subscribers)
+			require.Equal(t, 2, len(*subscribers))
+			require.Equal(t, true, (*subscribers)[dispatcherID2].isStopped)
 		}
 	}
 
@@ -535,8 +547,10 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			require.Equal(t, 2, len(subStat.dispatchers.subscribers))
-			require.Equal(t, true, subStat.dispatchers.subscribers[dispatcherID2].isStopped.Load())
+			subscribers := subStat.subscribers.Load()
+			require.NotNil(t, subscribers)
+			require.Equal(t, 2, len(*subscribers))
+			require.Equal(t, true, (*subscribers)[dispatcherID2].isStopped)
 		}
 	}
 	{
@@ -567,7 +581,9 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			require.Equal(t, 1, len(subStat.dispatchers.subscribers))
+			subscribers := subStat.subscribers.Load()
+			require.NotNil(t, subscribers)
+			require.Equal(t, 1, len(*subscribers))
 		}
 	}
 	{

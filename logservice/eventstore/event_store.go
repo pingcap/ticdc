@@ -61,7 +61,7 @@ type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 // Subscriber represents the dispatcher which depends on the subscription.
 type Subscriber struct {
 	notifyFunc ResolvedTsNotifier
-	isStopped  atomic.Bool
+	isStopped  bool
 }
 
 type EventStore interface {
@@ -140,13 +140,9 @@ type subscriptionStat struct {
 	subID logpuller.SubscriptionID
 	// data span of the subscription, it can support dispatchers with smaller span
 	tableSpan *heartbeatpb.TableSpan
-	// dispatchers depend on this subscription
-	dispatchers struct {
-		// Avoid holding this lock during frequent operations,
-		// as it may delay sending resolved timestamps to the dispatchers.
-		sync.Mutex
-		subscribers map[common.DispatcherID]*Subscriber
-	}
+	// subscribers stores subscribers that depend on this subscription.
+	// It stores a map[common.DispatcherID]*Subscriber.
+	subscribers atomic.Pointer[map[common.DispatcherID]*Subscriber]
 	// the index of the db which stores the data of the subscription
 	// used to clean obselete data of the subscription
 	dbIndex int
@@ -506,12 +502,7 @@ func (e *eventStore) RegisterDispatcher(
 					stat.subStat = subStat
 					e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 					subStat.idleTime.Store(0)
-					subStat.dispatchers.Lock()
-					subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-						notifyFunc: wrappedNotifier,
-						isStopped:  atomic.Bool{},
-					}
-					subStat.dispatchers.Unlock()
+					e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 					e.dispatcherMeta.Unlock()
 					log.Info("reuse existing subscription with exact span match",
 						zap.Stringer("dispatcherID", dispatcherID),
@@ -540,12 +531,7 @@ func (e *eventStore) RegisterDispatcher(
 		stat.subStat = bestMatch
 		e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 		bestMatch.idleTime.Store(0)
-		bestMatch.dispatchers.Lock()
-		bestMatch.dispatchers.subscribers[dispatcherID] = &Subscriber{
-			notifyFunc: wrappedNotifier,
-			isStopped:  atomic.Bool{},
-		}
-		bestMatch.dispatchers.Unlock()
+		e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 		e.dispatcherMeta.Unlock()
 		log.Info("reuse existing subscription with smallest containing span",
 			zap.Stringer("dispatcherID", dispatcherID),
@@ -577,11 +563,8 @@ func (e *eventStore) RegisterDispatcher(
 		dbIndex:   chIndex,
 		eventCh:   e.chs[chIndex],
 	}
-	subStat.dispatchers.subscribers = make(map[common.DispatcherID]*Subscriber)
-	subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-		notifyFunc: wrappedNotifier,
-		isStopped:  atomic.Bool{},
-	}
+	newMap := map[common.DispatcherID]*Subscriber{dispatcherID: {notifyFunc: wrappedNotifier}}
+	subStat.subscribers.Store(&newMap)
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
 	subStat.maxEventCommitTs.Store(startTs)
@@ -629,10 +612,12 @@ func (e *eventStore) RegisterDispatcher(
 		subStat.initialized.Store(true)
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
-			subStat.dispatchers.Lock()
-			defer subStat.dispatchers.Unlock()
-			for _, subscriber := range subStat.dispatchers.subscribers {
-				if !subscriber.isStopped.Load() {
+			subscribersMap := subStat.subscribers.Load()
+			if subscribersMap == nil {
+				return
+			}
+			for _, subscriber := range *subscribersMap {
+				if !subscriber.isStopped {
 					subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
 				}
 			}
@@ -716,8 +701,11 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		// calculate the new checkpoint ts of the subscription
 		var newCheckpointTs uint64
 
-		subStat.dispatchers.Lock()
-		for id := range subStat.dispatchers.subscribers {
+		subscribersMap := subStat.subscribers.Load()
+		if subscribersMap == nil {
+			return
+		}
+		for id := range *subscribersMap {
 			dispatcherStat, ok := e.dispatcherMeta.dispatcherStats[id]
 			if !ok {
 				log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", id))
@@ -728,7 +716,6 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				newCheckpointTs = dispatcherStat.checkpointTs
 			}
 		}
-		subStat.dispatchers.Unlock()
 
 		resolvedTs := subStat.resolvedTs.Load()
 		// newCheckpointTs maybe larger than subStat's resolvedTs,
@@ -915,15 +902,32 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	if subStat == nil {
 		return
 	}
-	subStat.dispatchers.Lock()
-	defer subStat.dispatchers.Unlock()
-	delete(subStat.dispatchers.subscribers, dispatcherID)
-	if len(subStat.dispatchers.subscribers) == 0 {
-		subStat.idleTime.Store(time.Now().UnixMilli())
-		log.Info("subscription is idle, set idle time",
-			zap.Uint64("subscriptionID", uint64(subStat.subID)),
-			zap.Int("dbIndex", subStat.dbIndex),
-			zap.Int64("tableID", subStat.tableSpan.TableID))
+	// Remove from subscribers map
+	for {
+		oldMapPtr := subStat.subscribers.Load()
+		if oldMapPtr == nil {
+			return
+		}
+		oldMap := *oldMapPtr
+		if _, ok := oldMap[dispatcherID]; !ok {
+			return // Not found, nothing to do.
+		}
+		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)-1)
+		for id, sub := range oldMap {
+			if id != dispatcherID {
+				newMap[id] = sub
+			}
+		}
+		if subStat.subscribers.CompareAndSwap(oldMapPtr, &newMap) {
+			if len(newMap) == 0 {
+				subStat.idleTime.Store(time.Now().UnixMilli())
+				log.Info("subscription is idle, set idle time",
+					zap.Uint64("subscriptionID", uint64(subStat.subID)),
+					zap.Int("dbIndex", subStat.dbIndex),
+					zap.Int64("tableID", subStat.tableSpan.TableID))
+			}
+			return
+		}
 	}
 }
 
@@ -931,10 +935,49 @@ func (e *eventStore) stopReceiveEventFromSubStat(dispatcherID common.DispatcherI
 	if subStat == nil {
 		return
 	}
-	subStat.dispatchers.Lock()
-	defer subStat.dispatchers.Unlock()
-	if subscriber, ok := subStat.dispatchers.subscribers[dispatcherID]; ok {
-		subscriber.isStopped.Store(true)
+	for {
+		oldMapPtr := subStat.subscribers.Load()
+		if oldMapPtr == nil {
+			return
+		}
+		oldMap := *oldMapPtr
+		oldSub, ok := oldMap[dispatcherID]
+		if !ok {
+			return // Not found, nothing to do.
+		}
+
+		// If already stopped, no need to update.
+		if oldSub.isStopped {
+			return
+		}
+
+		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap))
+		for id, sub := range oldMap {
+			newMap[id] = sub
+		}
+
+		// Create a new subscriber instance with isStopped set to true.
+		newSub := &Subscriber{notifyFunc: oldSub.notifyFunc, isStopped: true}
+		newMap[dispatcherID] = newSub
+
+		if subStat.subscribers.CompareAndSwap(oldMapPtr, &newMap) {
+			return
+		}
+	}
+}
+
+func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatcherID common.DispatcherID, subscriber *Subscriber) {
+	for {
+		oldMapPtr := subStat.subscribers.Load()
+		oldMap := *oldMapPtr
+		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)+1)
+		for id, sub := range oldMap {
+			newMap[id] = sub
+		}
+		newMap[dispatcherID] = subscriber
+		if subStat.subscribers.CompareAndSwap(oldMapPtr, &newMap) {
+			return
+		}
 	}
 }
 
