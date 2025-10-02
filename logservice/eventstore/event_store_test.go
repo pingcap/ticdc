@@ -318,7 +318,9 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		// subStat with subID 1 should have two dispatchers
 		subStat := subStats[logpuller.SubscriptionID(1)]
 		require.NotNil(t, subStat)
-		require.Equal(t, 2, len(subStat.dispatchers.subscribers))
+		subscribers := subStat.subscribers.Load()
+		require.NotNil(t, subscribers)
+		require.Equal(t, 2, len(*subscribers))
 	}
 	// add a dispatcher(onlyReuse=false) with the same span
 	{
