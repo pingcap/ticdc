@@ -431,13 +431,11 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 	}
 
 	if msg.Type != int32(TypeMessageHandShake) {
-		log.Warn("Received unexpected message type, should be handshake",
+		log.Panic("Received unexpected message type, should be handshake",
 			zap.Stringer("localID", s.messageCenter.id),
 			zap.String("localAddr", s.messageCenter.addr),
 			zap.String("remoteID", msg.From),
-			zap.Any("msg", msg),
 			zap.Int32("type", msg.Type))
-		return fmt.Errorf("Received unexpected message type, should be handshake")
 	}
 
 	handshake := &HandshakeMessage{}

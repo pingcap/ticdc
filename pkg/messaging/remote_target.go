@@ -537,7 +537,6 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 			return ctx.Err()
 		case msg := <-sendCh:
 			failpoint.Inject("InjectDropRemoteMessage", func() {
-				log.Info("hyy into failpoint")
 				failpoint.Continue()
 			})
 

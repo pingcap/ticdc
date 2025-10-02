@@ -3,8 +3,8 @@
 # Test procedure:
 # 1. Start 3 CDC nodes with failpoint enabled to randomly drop 10% of remote messages
 # 2. Create a changefeed and continuously execute mixed DML operations on 10 tables
-# 3. After 100 seconds, kill one CDC node and restart it after 20 seconds
-# 4. Continue running for another 200 seconds (total 320 seconds)
+# 3. Periodically kill one random CDC node and restart it after a delay
+# 4. Run for 5 minutes total
 # 5. Check data consistency between upstream and downstream
 
 set -eu
@@ -18,9 +18,9 @@ SINK_TYPE=$1
 
 CDC_COUNT=3
 TABLE_COUNT=10
-KILL_DELAY=100     # Kill node after 100 seconds
-RESTART_DELAY=20   # Restart node after 20 seconds
-TEST_DURATION=320  # Total duration: 100 + 20 + 200 = 320 seconds
+KILL_INTERVAL=60   # Interval between each kill cycle (in seconds)
+RESTART_DELAY=20   # Wait time before restarting the killed node (in seconds)
+TEST_DURATION=300  # Total test duration: 5 minutes
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
@@ -67,29 +67,38 @@ function execute_dml() {
 	execute_mixed_dml "test_table_${table_id}" "${UP_TIDB_HOST}" "${UP_TIDB_PORT}"
 }
 
-function kill_and_restart_node() {
-	# Wait for KILL_DELAY seconds before killing a node
-	echo "[$(date)] Waiting $KILL_DELAY seconds before killing CDC node..."
-	sleep $KILL_DELAY
+function kill_and_restart_nodes() {
+	local restart_count=0
 
-	# Kill the second CDC node (127.0.0.1:8302)
-	echo "[$(date)] Killing CDC node at 127.0.0.1:8302..."
-	cdc_pid=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8302")
-	if [ -n "$cdc_pid" ]; then
-		kill_cdc_pid $cdc_pid
-		echo "[$(date)] CDC node killed, PID: $cdc_pid"
-	else
-		echo "[$(date)] CDC node not found, skipping kill"
-	fi
+	while true; do
+		# Wait for KILL_INTERVAL seconds before next kill
+		echo "[$(date)] Waiting $KILL_INTERVAL seconds before next kill cycle..."
+		sleep $KILL_INTERVAL
 
-	# Wait for RESTART_DELAY seconds before restarting
-	echo "[$(date)] Waiting $RESTART_DELAY seconds before restarting CDC node..."
-	sleep $RESTART_DELAY
+		# Randomly select one CDC node to kill (1, 2, or 3)
+		local node_to_kill=$((RANDOM % CDC_COUNT + 1))
+		local node_addr="127.0.0.1:830${node_to_kill}"
 
-	# Restart the CDC node
-	echo "[$(date)] Restarting CDC node at 127.0.0.1:8302..."
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2-restart" --addr "127.0.0.1:8302"
-	echo "[$(date)] CDC node restarted"
+		echo "[$(date)] Randomly selected CDC node $node_to_kill to kill (addr: $node_addr)..."
+		cdc_pid=$(pgrep -f "$CDC_BINARY.*--addr $node_addr")
+		if [ -n "$cdc_pid" ]; then
+			kill_cdc_pid $cdc_pid
+			echo "[$(date)] CDC node $node_to_kill killed, PID: $cdc_pid"
+		else
+			echo "[$(date)] CDC node $node_to_kill not found, skipping kill"
+			continue
+		fi
+
+		# Wait for RESTART_DELAY seconds before restarting
+		echo "[$(date)] Waiting $RESTART_DELAY seconds before restarting CDC node $node_to_kill..."
+		sleep $RESTART_DELAY
+
+		# Restart the CDC node
+		restart_count=$((restart_count + 1))
+		echo "[$(date)] Restarting CDC node $node_to_kill (restart #$restart_count)..."
+		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "${node_to_kill}-restart-${restart_count}" --addr "$node_addr"
+		echo "[$(date)] CDC node $node_to_kill restarted"
+	done
 }
 
 main() {
@@ -103,8 +112,8 @@ main() {
 		echo "[$(date)] Started DML operations for test_table_$i, PID: $!"
 	done
 
-	# Kill and restart one CDC node in background
-	kill_and_restart_node &
+	# Periodically kill and restart random CDC nodes in background
+	kill_and_restart_nodes &
 	KILL_RESTART_PID=$!
 
 	# Run test for the specified duration
