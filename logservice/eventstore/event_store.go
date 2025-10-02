@@ -968,7 +968,10 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 	subStat.idleTime.Store(0)
 	for {
 		oldMapPtr := subStat.subscribers.Load()
-		oldMap := *oldMapPtr
+		var oldMap map[common.DispatcherID]*Subscriber
+		if oldMapPtr != nil {
+			oldMap = *oldMapPtr
+		}
 		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)+1)
 		for id, sub := range oldMap {
 			newMap[id] = sub
