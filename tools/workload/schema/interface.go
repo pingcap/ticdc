@@ -22,6 +22,8 @@ type Workload interface {
 	BuildInsertSql(tableN int, batchSize int) string
 	// BuildUpdateSql return the update sql statement based on the update option
 	BuildUpdateSql(opt UpdateOption) string
+	// BuildDeleteSql return the delete sql statement based on the delete option
+	BuildDeleteSql(opt DeleteOption) string
 }
 
 type UpdateOption struct {
@@ -29,6 +31,12 @@ type UpdateOption struct {
 	Batch           int
 	IsSpecialUpdate bool
 	RangeNum        int
+}
+
+type DeleteOption struct {
+	TableIndex int
+	Batch      int
+	RangeNum   int
 }
 
 type TableUpdateRange struct {

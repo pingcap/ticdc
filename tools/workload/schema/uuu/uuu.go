@@ -128,3 +128,69 @@ func generateStringForIndex() string {
 	})
 	return preGeneratedStringForIndex
 }
+
+func (c *UUUWorkload) BuildDeleteSql(opts schema.DeleteOption) string {
+	deleteType := mrand.Intn(3)
+
+	if opts.TableIndex%2 == 0 {
+		// Data table
+		tableName := fmt.Sprintf("Data%d", opts.TableIndex)
+		switch deleteType {
+		case 0:
+			// Strategy 1: Random single/multiple row delete by object_id
+			var buf strings.Builder
+			for i := 0; i < opts.Batch; i++ {
+				objectID := mrand.Int63()
+				if i > 0 {
+					buf.WriteString(";")
+				}
+				buf.WriteString(fmt.Sprintf("DELETE FROM %s WHERE object_id = %d", tableName, objectID))
+			}
+			return buf.String()
+
+		case 1:
+			// Strategy 2: Range delete by object_id
+			startID := mrand.Int63()
+			endID := startID + int64(opts.Batch*100)
+			return fmt.Sprintf("DELETE FROM %s WHERE object_id BETWEEN %d AND %d LIMIT %d",
+				tableName, startID, endID, opts.Batch)
+
+		case 2:
+			// Strategy 3: Delete by model_id
+			modelID := mrand.Int63()
+			return fmt.Sprintf("DELETE FROM %s WHERE model_id = %d LIMIT %d",
+				tableName, modelID, opts.Batch)
+		}
+	} else {
+		// Index table
+		tableName := fmt.Sprintf("index_Data%d", opts.TableIndex)
+		switch deleteType {
+		case 0:
+			// Strategy 1: Random single/multiple row delete by object_id
+			var buf strings.Builder
+			for i := 0; i < opts.Batch; i++ {
+				objectID := mrand.Int63()
+				if i > 0 {
+					buf.WriteString(";")
+				}
+				buf.WriteString(fmt.Sprintf("DELETE FROM %s WHERE object_id = %d", tableName, objectID))
+			}
+			return buf.String()
+
+		case 1:
+			// Strategy 2: Range delete by object_id
+			startID := mrand.Int63()
+			endID := startID + int64(opts.Batch*100)
+			return fmt.Sprintf("DELETE FROM %s WHERE object_id BETWEEN %d AND %d LIMIT %d",
+				tableName, startID, endID, opts.Batch)
+
+		case 2:
+			// Strategy 3: Delete by reference_id
+			referenceID := mrand.Int63()
+			return fmt.Sprintf("DELETE FROM %s WHERE reference_id = %d LIMIT %d",
+				tableName, referenceID, opts.Batch)
+		}
+	}
+
+	return ""
+}

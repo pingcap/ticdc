@@ -23,9 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
@@ -35,6 +32,10 @@ import (
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
+
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -149,8 +150,9 @@ func (app *WorkloadApp) Execute() error {
 
 // executeWorkload executes the workload
 func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
+	deleteConcurrency := int(float64(app.Config.Thread) * app.Config.PercentageForDelete)
 	updateConcurrency := int(float64(app.Config.Thread) * app.Config.PercentageForUpdate)
-	insertConcurrency := app.Config.Thread - updateConcurrency
+	insertConcurrency := app.Config.Thread - deleteConcurrency - updateConcurrency
 
 	plog.Info("database info",
 		zap.Int("dbCount", len(app.DBManager.GetDBs())),
@@ -165,7 +167,7 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 		return nil
 	}
 
-	app.handleWorkloadExecution(insertConcurrency, updateConcurrency, wg)
+	app.handleWorkloadExecution(insertConcurrency, updateConcurrency, deleteConcurrency, wg)
 	return nil
 }
 
@@ -188,11 +190,14 @@ func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.
 }
 
 // handleWorkloadExecution handles the workload execution
-func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurrency int, wg *sync.WaitGroup) {
+func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurrency, deleteConcurrency int, wg *sync.WaitGroup) {
 	plog.Info("start running workload",
 		zap.String("workloadType", app.Config.WorkloadType),
 		zap.Float64("largeRatio", app.Config.LargeRowRatio),
 		zap.Int("totalThread", app.Config.Thread),
+		zap.Int("insertConcurrency", insertConcurrency),
+		zap.Int("updateConcurrency", updateConcurrency),
+		zap.Int("deleteConcurrency", deleteConcurrency),
 		zap.Int("batchSize", app.Config.BatchSize),
 		zap.String("action", app.Config.Action),
 	)
@@ -203,6 +208,10 @@ func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurr
 
 	if app.Config.Action == "write" || app.Config.Action == "update" {
 		app.executeUpdateWorkers(updateConcurrency, wg)
+	}
+
+	if app.Config.Action == "write" || app.Config.Action == "delete" {
+		app.executeDeleteWorkers(deleteConcurrency, wg)
 	}
 }
 
