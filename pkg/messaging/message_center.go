@@ -435,6 +435,7 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 			zap.Stringer("localID", s.messageCenter.id),
 			zap.String("localAddr", s.messageCenter.addr),
 			zap.String("remoteID", msg.From),
+			zap.Any("msg", msg),
 			zap.Int32("type", msg.Type))
 	}
 
