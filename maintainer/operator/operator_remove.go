@@ -63,7 +63,7 @@ func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
 	return m.replicaSet.NewRemoveDispatcherMessage(m.replicaSet.GetNodeID())
 }
 
-// OnNodeRemove is called when node offline, and the replicaset has be removed from spanController, so it's ok.
+// OnNodeRemove is called when node offline, and the replicaset has been removed from spanController, so it's ok.
 func (m *removeDispatcherOperator) OnNodeRemove(n node.ID) {
 	if n == m.replicaSet.GetNodeID() {
 		m.finished.Store(true)
