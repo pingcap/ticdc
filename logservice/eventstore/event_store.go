@@ -501,7 +501,6 @@ func (e *eventStore) RegisterDispatcher(
 				if subStat.tableSpan.Equal(dispatcherSpan) {
 					stat.subStat = subStat
 					e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-					subStat.idleTime.Store(0)
 					e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 					e.dispatcherMeta.Unlock()
 					log.Info("reuse existing subscription with exact span match",
@@ -530,7 +529,6 @@ func (e *eventStore) RegisterDispatcher(
 	if bestMatch != nil {
 		stat.subStat = bestMatch
 		e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-		bestMatch.idleTime.Store(0)
 		e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 		e.dispatcherMeta.Unlock()
 		log.Info("reuse existing subscription with smallest containing span",
@@ -967,6 +965,7 @@ func (e *eventStore) stopReceiveEventFromSubStat(dispatcherID common.DispatcherI
 }
 
 func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatcherID common.DispatcherID, subscriber *Subscriber) {
+	subStat.idleTime.Store(0)
 	for {
 		oldMapPtr := subStat.subscribers.Load()
 		oldMap := *oldMapPtr
