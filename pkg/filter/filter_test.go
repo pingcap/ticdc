@@ -286,34 +286,31 @@ func TestShouldDiscardDDL(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.FilterConfig{
-		Rules:            []string{"test.*"},
-		IgnoreTxnStartTs: []uint64{100},
+		Rules: []string{"test.*"},
 	}
 
 	f, err := NewFilter(cfg, "UTC", false, false)
 	require.NoError(t, err)
 
 	// DDL not in whitelist, should discard.
-	require.True(t, f.ShouldDiscardDDL("test", "t", model.ActionAlterCacheTable, nil, 0))
+	require.True(t, f.ShouldDiscardDDL("test", "t", model.ActionAlterCacheTable, nil))
 
 	// DDL for a table that doesn't match the rule, should discard.
-	require.True(t, f.ShouldDiscardDDL("otherdb", "t1", model.ActionCreateTable, nil, 0))
-
-	// DDL (create table) matches IgnoreTxnStartTs, should discard.
-	require.True(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateTable, nil, 100))
+	require.True(t, f.ShouldDiscardDDL("otherdb", "t1", model.ActionCreateTable, nil))
 
 	// DDL (create table) does not match any discard rule, should not discard.
-	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateTable, nil, 0))
+	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateTable, nil))
 
 	// DDL on system schema, should discard.
-	require.True(t, f.ShouldDiscardDDL("mysql", "t1", model.ActionCreateTable, nil, 0))
+	require.True(t, f.ShouldDiscardDDL("mysql", "t1", model.ActionCreateTable, nil))
 }
 
 func TestShouldIgnoreDDL(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.FilterConfig{
-		Rules: []string{"test.*"},
+		Rules:            []string{"test.*"},
+		IgnoreTxnStartTs: []uint64{100},
 		EventFilters: []*config.EventFilterRule{
 			{
 				Matcher:     []string{"test.t1"},
@@ -330,22 +327,27 @@ func TestShouldIgnoreDDL(t *testing.T) {
 	require.NoError(t, err)
 
 	// DDL matches an event filter rule (drop table), should ignore.
-	ignore, err := f.ShouldIgnoreDDL("test", "t1", "DROP TABLE t1", model.ActionDropTable, nil)
+	ignore, err := f.ShouldIgnoreDDL("test", "t1", "DROP TABLE t1", model.ActionDropTable, nil, 0)
 	require.NoError(t, err)
 	require.True(t, ignore)
 
 	// DDL (create table) does not match event filter, should not ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, nil)
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, nil, 0)
 	require.NoError(t, err)
 	require.False(t, ignore)
 
+	// DDL (create table) matches IgnoreTxnStartTs, should ignore.
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, nil, 100)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
 	// DDL matches an SQL regex rule, should ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t2", "DROP TABLE t2", model.ActionDropTable, nil)
+	ignore, err = f.ShouldIgnoreDDL("test", "t2", "DROP TABLE t2", model.ActionDropTable, nil, 0)
 	require.NoError(t, err)
 	require.True(t, ignore)
 
 	// DDL does not match any rule, should not ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t3", "CREATE TABLE t3(id int)", model.ActionCreateTable, nil)
+	ignore, err = f.ShouldIgnoreDDL("test", "t3", "CREATE TABLE t3(id int)", model.ActionCreateTable, nil, 0)
 	require.NoError(t, err)
 	require.False(t, ignore)
 }
@@ -483,7 +485,7 @@ func TestShouldIgnoreDDLCaseSensitivity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, err := NewFilter(cfg, "UTC", tc.caseSensitive, false)
 			require.NoError(t, err)
-			ignore, err := f.ShouldIgnoreDDL(tc.schema, tc.table, tc.query, model.ActionDropTable, nil)
+			ignore, err := f.ShouldIgnoreDDL(tc.schema, tc.table, tc.query, model.ActionDropTable, nil, 0)
 			require.NoError(t, err)
 			require.Equal(t, tc.shouldIgnore, ignore, tc.msg)
 		})

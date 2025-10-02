@@ -554,6 +554,11 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 	}()
 
 	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		// Use blocking Pop to wait for tasks
 		regionTask, err := s.regionTaskQueue.Pop(ctx)
 		if err != nil {
@@ -764,7 +769,7 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("subscription client handle errors exit")
+			log.Info("subscription client handle errors and exit")
 			return ctx.Err()
 		case errInfo := <-s.errCache.errCh:
 			if err := s.doHandleError(ctx, errInfo); err != nil {

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -224,8 +225,13 @@ type eventStore struct {
 		tableStats map[int64]subscriptionStats
 	}
 
+	decoderPool *sync.Pool
+
 	// changefeed id -> changefeedStat
 	changefeedMeta sync.Map
+
+	// compressionThreshold is the size in bytes above which a value will be compressed.
+	compressionThreshold int
 }
 
 const (
@@ -244,7 +250,7 @@ func New(
 	// FIXME: avoid remove
 	err := os.RemoveAll(dbPath)
 	if err != nil {
-		log.Panic("fail to remove path")
+		log.Panic("fail to remove path", zap.String("path", dbPath), zap.Error(err))
 	}
 
 	store := &eventStore{
@@ -258,6 +264,17 @@ func New(
 		gcManager: newGCManager(),
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
+
+		decoderPool: &sync.Pool{
+			New: func() any {
+				decoder, err := zstd.NewReader(nil)
+				if err != nil {
+					log.Panic("failed to create zstd decoder", zap.Error(err))
+				}
+				return decoder
+			},
+		},
+		compressionThreshold: config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
 	}
 
 	// create a write task pool per db instance
@@ -292,6 +309,11 @@ func (p *writeTaskPool) run(ctx context.Context) {
 	for i := 0; i < p.workerNum; i++ {
 		go func() {
 			defer p.store.wg.Done()
+			encoder, err := zstd.NewWriter(nil)
+			if err != nil {
+				log.Panic("failed to create zstd encoder", zap.Error(err))
+			}
+			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
 			for {
 				select {
@@ -302,7 +324,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
-					if err := p.store.writeEvents(p.db, events); err != nil {
+					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
 						log.Panic("write events failed")
 					}
 					for i := range events {
@@ -376,13 +398,11 @@ func (e *eventStore) Close(ctx context.Context) error {
 	log.Info("event store start to close")
 	defer log.Info("event store closed")
 
-	log.Info("closing pebble db")
 	for _, db := range e.dbs {
 		if err := db.Close(); err != nil {
 			log.Error("failed to close pebble db", zap.Error(err))
 		}
 	}
-	log.Info("pebble db closed")
 
 	return nil
 }
@@ -865,6 +885,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		LowerBound: start,
 		UpperBound: end,
 	})
+	decoder := e.decoderPool.Get().(*zstd.Decoder)
 	startTime := time.Now()
 	// todo: what happens if iter.First() returns false?
 	_ = iter.First()
@@ -885,6 +906,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:       dataRange.CommitTsStart,
 		endTs:         dataRange.CommitTsEnd,
 		rowCount:      0,
+		decoder:       decoder,
+		decoderPool:   e.decoderPool,
 	}
 }
 
@@ -1085,7 +1108,7 @@ func (e *eventStore) collectAndReportChangefeedMetrics() {
 	}
 }
 
-func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) error {
+func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, encoder *zstd.Encoder) error {
 	metrics.EventStoreWriteRequestsCount.Inc()
 	batch := db.NewBatch()
 	kvCount := 0
@@ -1100,8 +1123,16 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 					zap.Int64("tableID", event.tableID))
 				continue
 			}
-			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
+
+			compressionType := CompressionNone
 			value := kv.Encode()
+			if len(value) > e.compressionThreshold {
+				value = encoder.EncodeAll(value, nil)
+				compressionType = CompressionZSTD
+				metrics.EventStoreCompressedRowsCount.Inc()
+			}
+
+			key := EncodeKey(uint64(event.subID), event.tableID, &kv, compressionType)
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
@@ -1138,6 +1169,9 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
+
+	decoder     *zstd.Decoder
+	decoderPool *sync.Pool
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1146,8 +1180,22 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		if !iter.innerIter.Valid() {
 			return nil, false
 		}
+		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
-		err := rawKV.Decode(value)
+
+		_, compressionType := DecodeKeyMetas(key)
+		var decodedValue []byte
+		if compressionType == CompressionZSTD {
+			var err error
+			decodedValue, err = iter.decoder.DecodeAll(value, nil)
+			if err != nil {
+				log.Panic("failed to decompress value", zap.Error(err))
+			}
+		} else {
+			decodedValue = value
+		}
+
+		err := rawKV.Decode(decodedValue)
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
@@ -1196,6 +1244,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	}
 	startTime := time.Now()
 	err := iter.innerIter.Close()
+	iter.decoderPool.Put(iter.decoder)
 	iter.innerIter = nil
 	metricEventStoreCloseReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	return iter.rowCount, err

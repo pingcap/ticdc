@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math/rand"
 	"strings"
 	"sync"
@@ -229,26 +230,64 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 				plog.Info("insert worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
+
+			// Get connection once and reuse it with context timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			conn, err := db.DB.Conn(ctx)
+			cancel()
+			if err != nil {
+				plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
+				time.Sleep(time.Second * 5)
+				return
+			}
+			defer conn.Close()
+
+			plog.Info("start insert worker to write data to db", zap.Int("worker", workerID), zap.String("db", db.Name))
+
 			for {
-				conn, err := db.DB.Conn(context.Background())
-				if err != nil {
-					plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
-					time.Sleep(time.Second * 5)
-				}
-				plog.Info("start insert worker to write data to db", zap.Int("worker", workerID), zap.String("db", db.Name))
 				err = app.doInsert(conn)
 				if err != nil {
-					plog.Info("do insert error, get another connection and retry", zap.Error(err))
+					// Check if it's a connection-level error that requires reconnection
+					if app.isConnectionError(err) {
+						fmt.Println("connection error detected, reconnecting", zap.Error(err))
+						conn.Close()
+						time.Sleep(time.Second * 2)
+
+						// Get new connection with timeout
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						conn, err = db.DB.Conn(ctx)
+						cancel()
+						if err != nil {
+							fmt.Println("reconnection failed, wait 5 seconds and retry", zap.Error(err))
+							time.Sleep(time.Second * 5)
+							continue
+						}
+					}
+
 					app.Stats.ErrorCount.Add(1)
 					retryCount.Add(1)
-					conn.Close()
+					plog.Info("do insert error, retrying", zap.Int("worker", workerID), zap.String("db", db.Name), zap.Uint64("retryCount", retryCount.Load()), zap.Error(err))
 					time.Sleep(time.Second * 2)
-					plog.Info("retry insert", zap.Int("worker", workerID), zap.String("db", db.Name), zap.Uint64("retryCount", retryCount.Load()))
 					continue
 				}
 			}
 		}(i)
 	}
+}
+
+// isConnectionError checks if the error is a connection-level error that requires reconnection
+func (app *WorkloadApp) isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// Check for common connection-level errors
+	return strings.Contains(errStr, "connection is already closed") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "invalid connection")
 }
 
 // doInsert performs insert operations

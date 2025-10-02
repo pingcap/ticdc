@@ -296,6 +296,10 @@ func (ti *TableInfo) GetTableName() string {
 	return ti.TableName.Table
 }
 
+func (ti *TableInfo) GetTableNameCIStr() ast.CIStr {
+	return ast.NewCIStr(ti.TableName.Table)
+}
+
 // GetSchemaNamePtr returns the pointer to the schema name of the table
 func (ti *TableInfo) GetSchemaNamePtr() *string {
 	return &ti.TableName.Schema
@@ -344,7 +348,7 @@ func IsColCDCVisible(col *model.ColumnInfo) bool {
 
 // HasVirtualColumns returns whether the table has virtual columns
 func (ti *TableInfo) HasVirtualColumns() bool {
-	return ti.columnSchema.VirtualColumnCount > 0
+	return len(ti.columnSchema.VirtualColumnsOffset) > 0
 }
 
 // IsEligible returns whether the table is a eligible table

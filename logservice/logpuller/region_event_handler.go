@@ -17,11 +17,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
@@ -88,11 +86,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			continue
 		}
 		if event.entries != nil {
-			err := handleEventEntries(span, event.state, event.entries)
-			if err != nil {
-				event.state.markStopped(err)
-				h.handleRegionError(event.state, event.worker)
-			}
+			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
 			resolvedTs := handleResolvedTs(span, event.state, event.resolvedTs)
 			if resolvedTs > newResolvedTs {
@@ -199,7 +193,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 	}
 }
 
-func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_) error {
+func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_) {
 	regionID, _, _ := state.getRegionMeta()
 	assembleRowEvent := func(regionID uint64, entry *cdcpb.Event_Row) common.RawKVEntry {
 		var opType common.OpType
@@ -226,22 +220,12 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
-			// todo: remove this log after the next-gen is stable
-			if kerneltype.IsNextGen() {
-				log.Info("region is initialized",
-					zap.Int64("tableID", span.span.TableID),
-					zap.Uint64("regionID", regionID),
-					zap.Uint64("requestID", state.requestID),
-					zap.String("startKey", spanz.HexKey(span.span.StartKey)),
-					zap.String("endKey", spanz.HexKey(span.span.EndKey)))
-			} else {
-				log.Debug("region is initialized",
-					zap.Int64("tableID", span.span.TableID),
-					zap.Uint64("regionID", regionID),
-					zap.Uint64("requestID", state.requestID),
-					zap.String("startKey", spanz.HexKey(span.span.StartKey)),
-					zap.String("endKey", spanz.HexKey(span.span.EndKey)))
-			}
+			log.Debug("region is initialized",
+				zap.Int64("tableID", span.span.TableID),
+				zap.Uint64("regionID", regionID),
+				zap.Uint64("requestID", state.requestID),
+				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
+				zap.String("endKey", spanz.HexKey(span.span.EndKey)))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}
@@ -268,14 +252,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					state.matcher.cacheCommitRow(entry)
 					continue
 				}
-				if kerneltype.IsNextGen() {
-					// this is a temporary workaround for the case that:
-					// Next-Gen may cannot found prewrite entry during the incremental scan phase
-					// due to it is by design. By report error, trigger the region reconnection, so that
-					// the commit entry convert to the committed entry automatically.
-					// After the Next-Gen fix this issue, this workaround can be removed.
-					return errors.New("prewrite not found")
-				}
 				log.Fatal("prewrite not match",
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", state.getRegionID()),
@@ -283,7 +259,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("startTs", entry.GetStartTs()),
 					zap.Uint64("commitTs", entry.GetCommitTs()),
 					zap.String("key", spanz.HexKey(entry.GetKey())))
-				return nil
 			}
 
 			// TiKV can send events with StartTs/CommitTs less than startTs.
@@ -303,7 +278,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
 					zap.String("key", spanz.HexKey(entry.GetKey())))
-				return nil
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:
@@ -314,7 +288,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			state.matcher.rollbackRow(entry)
 		}
 	}
-	return nil
 }
 
 func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) uint64 {
