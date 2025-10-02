@@ -2,7 +2,7 @@
 # This test is designed to verify system stability when randomly dropping remote messages.
 # Test procedure:
 # 1. Start 3 CDC nodes with failpoint enabled to randomly drop 10% of remote messages
-# 2. Create a changefeed and continuously execute mixed DML operations on 10 tables
+# 2. Create a changefeed and continuously execute mixed DML operations on 50 tables
 # 3. Periodically kill one random CDC node and restart it after a delay
 # 4. Run for 5 minutes total
 # 5. Check data consistency between upstream and downstream
@@ -17,7 +17,7 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 CDC_COUNT=3
-TABLE_COUNT=10
+TABLE_COUNT=50
 KILL_INTERVAL=60   # Interval between each kill cycle (in seconds)
 RESTART_DELAY=20   # Wait time before restarting the killed node (in seconds)
 TEST_DURATION=300  # Total test duration: 5 minutes
