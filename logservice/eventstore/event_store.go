@@ -905,89 +905,82 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	if subStat == nil {
 		return
 	}
-	for {
-		oldData := subStat.subscribers.Load()
-		if oldData == nil || oldData.subscribers == nil {
-			return
-		}
-		if _, ok := oldData.subscribers[dispatcherID]; !ok {
-			return // Not found, nothing to do.
-		}
-		newMap := make(map[common.DispatcherID]*Subscriber, len(oldData.subscribers)-1)
-		for id, sub := range oldData.subscribers {
-			if id != dispatcherID {
-				newMap[id] = sub
-			}
-		}
-		idleTime := int64(0)
-		if len(newMap) == 0 {
-			idleTime = time.Now().UnixMilli()
-		}
-		newData := &subscribersWithIdleTime{subscribers: newMap, idleTime: idleTime}
-		if subStat.subscribers.CompareAndSwap(oldData, newData) {
-			return
+	oldData := subStat.subscribers.Load()
+	if oldData == nil || oldData.subscribers == nil {
+		return
+	}
+	if _, ok := oldData.subscribers[dispatcherID]; !ok {
+		return // Not found, nothing to do.
+	}
+	newMap := make(map[common.DispatcherID]*Subscriber, len(oldData.subscribers)-1)
+	for id, sub := range oldData.subscribers {
+		if id != dispatcherID {
+			newMap[id] = sub
 		}
 	}
+	idleTime := int64(0)
+	if len(newMap) == 0 {
+		idleTime = time.Now().UnixMilli()
+	}
+	newData := &subscribersWithIdleTime{subscribers: newMap, idleTime: idleTime}
+	// It is safe to call Store without checking oldData here,
+	// as all modifications to subStat are guarded by the dispatcherMeta lock.
+	subStat.subscribers.Store(newData)
 }
 
 func (e *eventStore) stopReceiveEventFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {
 	if subStat == nil {
 		return
 	}
-	for {
-		oldData := subStat.subscribers.Load()
-		if oldData == nil || oldData.subscribers == nil {
-			return
-		}
-		oldSub, ok := oldData.subscribers[dispatcherID]
-		if !ok {
-			return // Not found, nothing to do.
-		}
-		if oldSub.isStopped {
-			return // Already stopped.
-		}
-
-		newMap := make(map[common.DispatcherID]*Subscriber, len(oldData.subscribers))
-		for id, sub := range oldData.subscribers {
-			newMap[id] = sub
-		}
-
-		newSub := &Subscriber{notifyFunc: oldSub.notifyFunc, isStopped: true}
-		newMap[dispatcherID] = newSub
-
-		newData := &subscribersWithIdleTime{
-			subscribers: newMap,
-			idleTime:    oldData.idleTime,
-		}
-		if subStat.subscribers.CompareAndSwap(oldData, newData) {
-			return
-		}
+	oldData := subStat.subscribers.Load()
+	if oldData == nil || oldData.subscribers == nil {
+		return
 	}
+	oldSub, ok := oldData.subscribers[dispatcherID]
+	if !ok {
+		return // Not found, nothing to do.
+	}
+	if oldSub.isStopped {
+		return // Already stopped.
+	}
+
+	newMap := make(map[common.DispatcherID]*Subscriber, len(oldData.subscribers))
+	for id, sub := range oldData.subscribers {
+		newMap[id] = sub
+	}
+
+	newSub := &Subscriber{notifyFunc: oldSub.notifyFunc, isStopped: true}
+	newMap[dispatcherID] = newSub
+
+	newData := &subscribersWithIdleTime{
+		subscribers: newMap,
+		idleTime:    oldData.idleTime,
+	}
+	// It is safe to call Store without checking oldData here,
+	// as all modifications to subStat are guarded by the dispatcherMeta lock.
+	subStat.subscribers.Store(newData)
 }
 
 func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatcherID common.DispatcherID, subscriber *Subscriber) {
-	for {
-		oldData := subStat.subscribers.Load()
-		var oldMap map[common.DispatcherID]*Subscriber
-		if oldData != nil {
-			oldMap = oldData.subscribers
-		}
-
-		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)+1)
-		for id, sub := range oldMap {
-			newMap[id] = sub
-		}
-		newMap[dispatcherID] = subscriber
-
-		newData := &subscribersWithIdleTime{
-			subscribers: newMap,
-			idleTime:    0, // Not idle anymore.
-		}
-
-		if subStat.subscribers.CompareAndSwap(oldData, newData) {
-			return
-		}
+	oldData := subStat.subscribers.Load()
+	var oldMap map[common.DispatcherID]*Subscriber
+	if oldData != nil {
+		oldMap = oldData.subscribers
 	}
+
+	newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)+1)
+	for id, sub := range oldMap {
+		newMap[id] = sub
+	}
+	newMap[dispatcherID] = subscriber
+
+	newData := &subscribersWithIdleTime{
+		subscribers: newMap,
+		idleTime:    0, // Not idle anymore.
+	}
+	// It is safe to call Store without checking oldData here,
+	// as all modifications to subStat are guarded by the dispatcherMeta lock.
+	subStat.subscribers.Store(newData)
 }
 
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
