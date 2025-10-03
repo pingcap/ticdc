@@ -213,5 +213,4 @@ func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreReadDurationHistogram)
 	registry.MustRegister(EventStoreNotifyDispatcherDurationHist)
 	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
-
 }
