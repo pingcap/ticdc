@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -117,6 +118,10 @@ type DispatcherManager struct {
 	closed  atomic.Bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
+
+	// removeTaskHandles stores the task handles for async dispatcher removal
+	// map[common.DispatcherID]*threadpool.TaskHandle
+	removeTaskHandles sync.Map
 
 	sinkQuota uint64
 	redoQuota uint64
@@ -836,6 +841,12 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	e.cancel()
 	e.wg.Wait()
 
+	e.removeTaskHandles.Range(func(key, value interface{}) bool {
+		handle := value.(*threadpool.TaskHandle)
+		handle.Cancel()
+		return true
+	})
+
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
 	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
@@ -855,6 +866,13 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
+	// Cancel the corresponding remove task if exists
+	if handle, ok := e.removeTaskHandles.LoadAndDelete(id); ok {
+		handle.(*threadpool.TaskHandle).Cancel()
+		log.Debug("cancelled remove task for dispatcher",
+			zap.Stringer("dispatcherID", id))
+	}
+
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
 	if e.tableTriggerEventDispatcher != nil && e.tableTriggerEventDispatcher.GetId() == id {
