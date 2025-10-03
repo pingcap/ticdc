@@ -999,6 +999,17 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 					if idleTime == 0 {
 						continue
 					}
+					// check substat has dispatchers depend on it
+					if subStat.subscribers.Load() != nil && len(*subStat.subscribers.Load()) != 0 {
+						log.Warn("subscription has dispatchers depend on it, but idleTime is set, reset it to 0",
+							zap.Uint64("subscriptionID", uint64(subID)),
+							zap.Int("dbIndex", subStat.dbIndex),
+							zap.Int64("tableID", subStat.tableSpan.TableID),
+							zap.Int("subscriberCount", len(*subStat.subscribers.Load())))
+						// reset idleTime to 0
+						subStat.idleTime.Store(0)
+						continue
+					}
 					if now-idleTime > ttlInMs {
 						log.Info("clean obsolete subscription",
 							zap.Uint64("subscriptionID", uint64(subID)),
