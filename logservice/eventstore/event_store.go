@@ -146,8 +146,6 @@ type subscriptionStat struct {
 	// data span of the subscription, it can support dispatchers with smaller span
 	tableSpan   *heartbeatpb.TableSpan
 	subscribers atomic.Pointer[subscribersWithIdleTime]
-	// deleting is true if the subscription is marked for deletion.
-	deleting atomic.Bool
 	// markedDeleteTime is the time when the subscription is marked for deletion.
 	markedDeleteTime atomic.Int64
 	// the index of the db which stores the data of the subscription
@@ -495,11 +493,6 @@ func (e *eventStore) RegisterDispatcher(
 			// Check if this subStat's span contains the dispatcherSpan
 			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
 				bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
-
-				// Skip subscriptions that are marked for deletion.
-				if subStat.deleting.Load() {
-					continue
-				}
 
 				// Check whether the subStat ts range contains startTs
 				if subStat.checkpointTs.Load() > startTs || startTs > subStat.resolvedTs.Load() {
@@ -980,11 +973,6 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 			oldMap = oldData.subscribers
 		}
 
-		// A subscription is not idle if a new subscriber is added.
-		// So, clear the deleting mark.
-		subStat.deleting.Store(false)
-		subStat.markedDeleteTime.Store(0)
-
 		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)+1)
 		for id, sub := range oldMap {
 			newMap[id] = sub
@@ -1005,9 +993,6 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
 	ttlInMsForMarkDeletion := int64(60 * 1000) // 1min
-	// ttlInMsBeforeDeletion defines a grace period before deletion
-	// to ensure no new dispatchers start depending on this subscription while it is being removed.
-	ttlInMsBeforeDeletion := int64(10 * 1000) // 10s
 	for {
 		select {
 		case <-ctx.Done():
@@ -1017,36 +1002,25 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 			e.dispatcherMeta.Lock()
 			for tableID, subStats := range e.dispatcherMeta.tableStats {
 				for subID, subStat := range subStats {
-					if subStat.deleting.Load() {
-						// This subscription is already marked for deletion.
-						// If it has been marked for a while, proceed with physical deletion.
-						if now-subStat.markedDeleteTime.Load() > ttlInMsBeforeDeletion {
-							log.Info("clean obsolete subscription",
-								zap.Uint64("subscriptionID", uint64(subID)),
-								zap.Int("dbIndex", subStat.dbIndex),
-								zap.Int64("tableID", subStat.tableSpan.TableID))
-							e.subClient.Unsubscribe(subID)
-							if err := e.deleteEvents(subStat.dbIndex, uint64(subID), subStat.tableSpan.TableID, 0, math.MaxUint64); err != nil {
-								log.Warn("fail to delete events", zap.Error(err))
-							}
-							delete(subStats, subID)
-							e.subscriptionChangeCh.In() <- SubscriptionChange{
-								ChangeType: SubscriptionChangeTypeRemove,
-								SubID:      uint64(subStat.subID),
-								Span:       subStat.tableSpan,
-							}
-							metrics.EventStoreSubscriptionGauge.Dec()
-							if len(subStats) == 0 {
-								delete(e.dispatcherMeta.tableStats, tableID)
-							}
+					subData := subStat.subscribers.Load()
+					if subData != nil && len(subData.subscribers) == 0 && subData.idleTime > 0 && now-subData.idleTime > ttlInMsForMarkDeletion {
+						log.Info("clean obsolete subscription",
+							zap.Uint64("subscriptionID", uint64(subID)),
+							zap.Int("dbIndex", subStat.dbIndex),
+							zap.Int64("tableID", subStat.tableSpan.TableID))
+						e.subClient.Unsubscribe(subID)
+						if err := e.deleteEvents(subStat.dbIndex, uint64(subID), subStat.tableSpan.TableID, 0, math.MaxUint64); err != nil {
+							log.Warn("fail to delete events", zap.Error(err))
 						}
-					} else {
-						// This subscription is not marked for deletion yet. Check if it's idle.
-						subData := subStat.subscribers.Load()
-						if subData != nil && len(subData.subscribers) == 0 && subData.idleTime > 0 && now-subData.idleTime > ttlInMsForMarkDeletion {
-							log.Info("mark subscription as deleting", zap.Uint64("subscriptionID", uint64(subID)))
-							subStat.deleting.Store(true)
-							subStat.markedDeleteTime.Store(now)
+						delete(subStats, subID)
+						e.subscriptionChangeCh.In() <- SubscriptionChange{
+							ChangeType: SubscriptionChangeTypeRemove,
+							SubID:      uint64(subStat.subID),
+							Span:       subStat.tableSpan,
+						}
+						metrics.EventStoreSubscriptionGauge.Dec()
+						if len(subStats) == 0 {
+							delete(e.dispatcherMeta.tableStats, tableID)
 						}
 					}
 				}
