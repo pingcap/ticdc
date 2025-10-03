@@ -1,0 +1,13 @@
+# Configuration for complex transaction test
+
+[source-db]
+host = "127.0.0.1"
+port = 4000
+user = "root"
+password = ""
+
+[target-db]
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = ""
