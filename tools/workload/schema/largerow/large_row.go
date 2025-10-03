@@ -165,4 +165,42 @@ func (l *LargeRowWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	return upsertSQL.String()
 }
 
+func (l *LargeRowWorkload) BuildDeleteSql(opts schema.DeleteOption) string {
+	deleteType := rand.Intn(3)
+	tableName := getTableName(opts.TableIndex)
+
+	switch deleteType {
+	case 0:
+		// Strategy 1: Random single/multiple row delete by ID
+		var buf strings.Builder
+		for i := 0; i < opts.Batch; i++ {
+			id := rand.Int63() % maxValue
+			if i > 0 {
+				buf.WriteString(";")
+			}
+			buf.WriteString(fmt.Sprintf("DELETE FROM %s WHERE id = %d", tableName, id))
+		}
+		return buf.String()
+
+	case 1:
+		// Strategy 2: Range delete by ID
+		startID := rand.Int63() % maxValue
+		endID := startID + int64(opts.Batch*100)
+		if endID > maxValue {
+			endID = maxValue
+		}
+		return fmt.Sprintf("DELETE FROM %s WHERE id BETWEEN %d AND %d LIMIT %d",
+			tableName, startID, endID, opts.Batch)
+
+	case 2:
+		// Strategy 3: Conditional delete by random ID modulo
+		modValue := rand.Intn(1000)
+		return fmt.Sprintf("DELETE FROM %s WHERE id %% 1000 = %d LIMIT %d",
+			tableName, modValue, opts.Batch)
+
+	default:
+		return ""
+	}
+}
+
 var letters = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
