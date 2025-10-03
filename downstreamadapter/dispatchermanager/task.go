@@ -264,10 +264,6 @@ func GetRemoveDispatcherTaskScheduler() threadpool.ThreadPool {
 	return removeDispatcherTaskScheduler
 }
 
-func SetRemoveDispatcherTaskScheduler(scheduler threadpool.ThreadPool) {
-	removeDispatcherTaskScheduler = scheduler
-}
-
 // RemoveDispatcherTask is a task to asynchronously remove a dispatcher until the dispatcher can be closed
 type RemoveDispatcherTask struct {
 	manager        *DispatcherManager

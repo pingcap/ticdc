@@ -704,6 +704,12 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
 			dispatcherCount--
+			// Cancel the corresponding remove task if exists
+			if handle, ok := e.removeTaskHandles.LoadAndDelete(m.id); ok {
+				handle.(*threadpool.TaskHandle).Cancel()
+				log.Debug("cancelled remove task for dispatcher",
+					zap.Stringer("dispatcherID", m.id))
+			}
 			if common.IsRedoMode(m.mode) {
 				e.cleanRedoDispatcher(m.id, m.schemaID)
 			} else {
@@ -866,12 +872,6 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
-	// Cancel the corresponding remove task if exists
-	if handle, ok := e.removeTaskHandles.LoadAndDelete(id); ok {
-		handle.(*threadpool.TaskHandle).Cancel()
-		log.Debug("cancelled remove task for dispatcher",
-			zap.Stringer("dispatcherID", id))
-	}
 
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
