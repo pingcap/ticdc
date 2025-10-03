@@ -268,7 +268,6 @@ func GetRemoveDispatcherTaskScheduler() threadpool.ThreadPool {
 type RemoveDispatcherTask struct {
 	manager        *DispatcherManager
 	dispatcherItem dispatcher.Dispatcher
-	sinkType       common.SinkType
 	retryCount     int
 }
 

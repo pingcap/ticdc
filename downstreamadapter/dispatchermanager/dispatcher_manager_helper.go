@@ -252,7 +252,6 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 		task := &RemoveDispatcherTask{
 			manager:        e,
 			dispatcherItem: dispatcherItem,
-			sinkType:       sinkType,
 			retryCount:     0,
 		}
 		scheduler := GetRemoveDispatcherTaskScheduler()
