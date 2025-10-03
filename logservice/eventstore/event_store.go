@@ -427,6 +427,7 @@ func (e *eventStore) RegisterDispatcher(
 	}()
 
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
+	metrics.EventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
