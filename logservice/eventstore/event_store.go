@@ -1005,7 +1005,9 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
 	ttlInMsForMarkDeletion := int64(60 * 1000) // 1min
-	ttlInMsBeforeDeletion := int64(10 * 1000)  // 10s
+	// ttlInMsBeforeDeletion defines a grace period before deletion
+	// to ensure no new dispatchers start depending on this subscription while it is being removed.
+	ttlInMsBeforeDeletion := int64(10 * 1000) // 10s
 	for {
 		select {
 		case <-ctx.Done():
