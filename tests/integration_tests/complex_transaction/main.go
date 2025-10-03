@@ -123,7 +123,7 @@ func runWorkload(ctx context.Context, db *sql.DB) {
 				err := executor.ExecuteTransaction(ctx, txType)
 				if err != nil {
 					atomic.AddInt64(&failCount, 1)
-					log.Warn("Transaction failed",
+					log.Info("Transaction failed",
 						zap.Int("worker", workerID),
 						zap.String("type", txType),
 						zap.Error(err))
@@ -163,15 +163,15 @@ var transactionTypes = []struct {
 	name   string
 	weight int
 }{
-	{"create_order", 25},        // 25% E-commerce: create order
-	{"cancel_order", 10},        // 10% E-commerce: cancel order
-	{"bank_transfer", 22},       // 22% Banking: transfer money
-	{"bank_multi_transfer", 5},  // 5%  Banking: complex multi-transfer
-	{"social_create_post", 15},  // 15% Social: create post
-	{"social_interact", 12},     // 12% Social: like/comment
-	{"inventory_adjust", 5},     // 5%  E-commerce: inventory adjustment
-	{"user_activity", 4},        // 4%  Mixed: user activity update
-	{"complex_mixed", 2},        // 2%  Complex mixed operations (reduced to minimize deadlocks)
+	{"create_order", 25},       // 25% E-commerce: create order
+	{"cancel_order", 10},       // 10% E-commerce: cancel order
+	{"bank_transfer", 22},      // 22% Banking: transfer money
+	{"bank_multi_transfer", 5}, // 5%  Banking: complex multi-transfer
+	{"social_create_post", 15}, // 15% Social: create post
+	{"social_interact", 12},    // 12% Social: like/comment
+	{"inventory_adjust", 5},    // 5%  E-commerce: inventory adjustment
+	{"user_activity", 4},       // 4%  Mixed: user activity update
+	{"complex_mixed", 2},       // 2%  Complex mixed operations (reduced to minimize deadlocks)
 }
 
 func selectTransactionType() string {

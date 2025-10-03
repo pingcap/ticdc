@@ -241,8 +241,8 @@ func initAccounts(ctx context.Context, db *sql.DB) {
 			placeholders += "(?, ?, ?, 0, 0, 0, ?)"
 			userID := int64(i + j + 1)
 			values = append(values,
-				userID,   // account_id
-				userID,   // user_id
+				userID, // account_id
+				userID, // user_id
 				float64(initialBalance),
 				time.Now().Unix())
 		}
