@@ -136,13 +136,16 @@ type dispatcherStat struct {
 	removingSubStat *subscriptionStat
 }
 
+type subscribersWithIdleTime struct {
+	subscribers map[common.DispatcherID]*Subscriber
+	idleTime    int64
+}
+
 type subscriptionStat struct {
 	subID logpuller.SubscriptionID
 	// data span of the subscription, it can support dispatchers with smaller span
-	tableSpan *heartbeatpb.TableSpan
-	// subscribers stores subscribers that depend on this subscription.
-	// It stores a map[common.DispatcherID]*Subscriber.
-	subscribers atomic.Pointer[map[common.DispatcherID]*Subscriber]
+	tableSpan   *heartbeatpb.TableSpan
+	subscribers atomic.Pointer[subscribersWithIdleTime]
 	// the index of the db which stores the data of the subscription
 	// used to clean obselete data of the subscription
 	dbIndex int
@@ -162,9 +165,6 @@ type subscriptionStat struct {
 	resolvedTs atomic.Uint64
 	// the max commit ts of dml event in the store
 	maxEventCommitTs atomic.Uint64
-	// the time when the subscription is not used by any dispatchers
-	// 0 means the subscription is not idle
-	idleTime atomic.Int64
 }
 
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
@@ -561,8 +561,10 @@ func (e *eventStore) RegisterDispatcher(
 		dbIndex:   chIndex,
 		eventCh:   e.chs[chIndex],
 	}
-	newMap := map[common.DispatcherID]*Subscriber{dispatcherID: {notifyFunc: wrappedNotifier}}
-	subStat.subscribers.Store(&newMap)
+	subStat.subscribers.Store(&subscribersWithIdleTime{
+		subscribers: map[common.DispatcherID]*Subscriber{dispatcherID: {notifyFunc: wrappedNotifier}},
+		idleTime:    0,
+	})
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
 	subStat.maxEventCommitTs.Store(startTs)
@@ -610,11 +612,11 @@ func (e *eventStore) RegisterDispatcher(
 		subStat.initialized.Store(true)
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
-			subscribersMap := subStat.subscribers.Load()
-			if subscribersMap == nil {
+			subscribersData := subStat.subscribers.Load()
+			if subscribersData == nil {
 				return
 			}
-			for _, subscriber := range *subscribersMap {
+			for _, subscriber := range subscribersData.subscribers {
 				if !subscriber.isStopped {
 					subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
 				}
@@ -699,11 +701,11 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		// calculate the new checkpoint ts of the subscription
 		var newCheckpointTs uint64
 
-		subscribersMap := subStat.subscribers.Load()
-		if subscribersMap == nil {
+		subscribersData := subStat.subscribers.Load()
+		if subscribersData == nil {
 			return
 		}
-		for id := range *subscribersMap {
+		for id := range subscribersData.subscribers {
 			dispatcherStat, ok := e.dispatcherMeta.dispatcherStats[id]
 			if !ok {
 				log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", id))
@@ -758,6 +760,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	}
 	updateSubStatCheckpoint(dispatcherStat.subStat)
 	updateSubStatCheckpoint(dispatcherStat.pendingSubStat)
+	updateSubStatCheckpoint(dispatcherStat.removingSubStat)
 }
 
 func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
@@ -900,30 +903,25 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	if subStat == nil {
 		return
 	}
-	// Remove from subscribers map
 	for {
-		oldMapPtr := subStat.subscribers.Load()
-		if oldMapPtr == nil {
+		oldData := subStat.subscribers.Load()
+		if oldData == nil || oldData.subscribers == nil {
 			return
 		}
-		oldMap := *oldMapPtr
-		if _, ok := oldMap[dispatcherID]; !ok {
+		if _, ok := oldData.subscribers[dispatcherID]; !ok {
 			return // Not found, nothing to do.
 		}
-		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)-1)
-		for id, sub := range oldMap {
+		newMap := make(map[common.DispatcherID]*Subscriber, len(oldData.subscribers)-1)
+		for id, sub := range oldData.subscribers {
 			if id != dispatcherID {
 				newMap[id] = sub
 			}
 		}
-		if subStat.subscribers.CompareAndSwap(oldMapPtr, &newMap) {
-			if len(newMap) == 0 {
-				subStat.idleTime.Store(time.Now().UnixMilli())
-				log.Info("subscription is idle, set idle time",
-					zap.Uint64("subscriptionID", uint64(subStat.subID)),
-					zap.Int("dbIndex", subStat.dbIndex),
-					zap.Int64("tableID", subStat.tableSpan.TableID))
-			}
+		newData := &subscribersWithIdleTime{subscribers: newMap, idleTime: oldData.idleTime}
+		if len(newMap) == 0 {
+			newData.idleTime = time.Now().UnixMilli()
+		}
+		if subStat.subscribers.CompareAndSwap(oldData, newData) {
 			return
 		}
 	}
@@ -934,50 +932,56 @@ func (e *eventStore) stopReceiveEventFromSubStat(dispatcherID common.DispatcherI
 		return
 	}
 	for {
-		oldMapPtr := subStat.subscribers.Load()
-		if oldMapPtr == nil {
+		oldData := subStat.subscribers.Load()
+		if oldData == nil || oldData.subscribers == nil {
 			return
 		}
-		oldMap := *oldMapPtr
-		oldSub, ok := oldMap[dispatcherID]
+		oldSub, ok := oldData.subscribers[dispatcherID]
 		if !ok {
 			return // Not found, nothing to do.
 		}
-
-		// If already stopped, no need to update.
 		if oldSub.isStopped {
-			return
+			return // Already stopped.
 		}
 
-		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap))
-		for id, sub := range oldMap {
+		newMap := make(map[common.DispatcherID]*Subscriber, len(oldData.subscribers))
+		for id, sub := range oldData.subscribers {
 			newMap[id] = sub
 		}
 
-		// Create a new subscriber instance with isStopped set to true.
 		newSub := &Subscriber{notifyFunc: oldSub.notifyFunc, isStopped: true}
 		newMap[dispatcherID] = newSub
 
-		if subStat.subscribers.CompareAndSwap(oldMapPtr, &newMap) {
+		newData := &subscribersWithIdleTime{
+			subscribers: newMap,
+			idleTime:    oldData.idleTime,
+		}
+		if subStat.subscribers.CompareAndSwap(oldData, newData) {
 			return
 		}
 	}
 }
 
 func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatcherID common.DispatcherID, subscriber *Subscriber) {
-	subStat.idleTime.Store(0)
 	for {
-		oldMapPtr := subStat.subscribers.Load()
+		oldData := subStat.subscribers.Load()
 		var oldMap map[common.DispatcherID]*Subscriber
-		if oldMapPtr != nil {
-			oldMap = *oldMapPtr
+		if oldData != nil {
+			oldMap = oldData.subscribers
 		}
+
 		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)+1)
 		for id, sub := range oldMap {
 			newMap[id] = sub
 		}
 		newMap[dispatcherID] = subscriber
-		if subStat.subscribers.CompareAndSwap(oldMapPtr, &newMap) {
+
+		newData := &subscribersWithIdleTime{
+			subscribers: newMap,
+			idleTime:    0, // Not idle anymore.
+		}
+
+		if subStat.subscribers.CompareAndSwap(oldData, newData) {
 			return
 		}
 	}
@@ -995,22 +999,16 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 			e.dispatcherMeta.Lock()
 			for tableID, subStats := range e.dispatcherMeta.tableStats {
 				for subID, subStat := range subStats {
-					idleTime := subStat.idleTime.Load()
-					if idleTime == 0 {
+					subData := subStat.subscribers.Load()
+					if subData == nil || subData.idleTime == 0 {
 						continue
 					}
-					// check substat has dispatchers depend on it
-					if subStat.subscribers.Load() != nil && len(*subStat.subscribers.Load()) != 0 {
-						log.Warn("subscription has dispatchers depend on it, but idleTime is set, reset it to 0",
-							zap.Uint64("subscriptionID", uint64(subID)),
-							zap.Int("dbIndex", subStat.dbIndex),
-							zap.Int64("tableID", subStat.tableSpan.TableID),
-							zap.Int("subscriberCount", len(*subStat.subscribers.Load())))
-						// reset idleTime to 0
-						subStat.idleTime.Store(0)
+					if len(subData.subscribers) != 0 {
+						log.Warn("subscription has dispatchers depend on it, but idleTime is set",
+							zap.Uint64("subscriptionID", uint64(subID)))
 						continue
 					}
-					if now-idleTime > ttlInMs {
+					if now-subData.idleTime > ttlInMs {
 						log.Info("clean obsolete subscription",
 							zap.Uint64("subscriptionID", uint64(subID)),
 							zap.Int("dbIndex", subStat.dbIndex),

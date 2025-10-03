@@ -194,15 +194,15 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 		// because there is only one subStat, we know its subID is 1
 		subStat := subStats[logpuller.SubscriptionID(1)]
 		require.NotNil(t, subStat)
-		subscribers := subStat.subscribers.Load()
-		require.NotNil(t, subscribers)
-		require.Equal(t, 1, len(*subscribers))
-		require.Equal(t, int64(0), subStat.idleTime.Load())
+		subData := subStat.subscribers.Load()
+		require.NotNil(t, subData)
+		require.Equal(t, 1, len(subData.subscribers))
+		require.Equal(t, int64(0), subData.idleTime)
 		store.UnregisterDispatcher(cfID, dispatcherID3)
-		subscribers = subStat.subscribers.Load()
-		require.NotNil(t, subscribers)
-		require.Equal(t, 0, len(*subscribers))
-		require.NotEqual(t, int64(0), subStat.idleTime.Load())
+		subData = subStat.subscribers.Load()
+		require.NotNil(t, subData)
+		require.Equal(t, 0, len(subData.subscribers))
+		require.NotEqual(t, int64(0), subData.idleTime)
 	}
 }
 
@@ -318,9 +318,9 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		// subStat with subID 1 should have two dispatchers
 		subStat := subStats[logpuller.SubscriptionID(1)]
 		require.NotNil(t, subStat)
-		subscribers := subStat.subscribers.Load()
-		require.NotNil(t, subscribers)
-		require.Equal(t, 2, len(*subscribers))
+		subData := subStat.subscribers.Load()
+		require.NotNil(t, subData)
+		require.Equal(t, 2, len(subData.subscribers))
 	}
 	// add a dispatcher(onlyReuse=false) with the same span
 	{
@@ -336,9 +336,9 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		// subStat with subID 1 should have three dispatchers
 		subStat := subStats[logpuller.SubscriptionID(1)]
 		require.NotNil(t, subStat)
-		subscribers := subStat.subscribers.Load()
-		require.NotNil(t, subscribers)
-		require.Equal(t, 3, len(*subscribers))
+		subData := subStat.subscribers.Load()
+		require.NotNil(t, subData)
+		require.Equal(t, 3, len(subData.subscribers))
 	}
 	// test unregister dispatcherID3 can remove its dependency on two subscriptions
 	{
@@ -348,16 +348,16 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			subscribers := subStat.subscribers.Load()
-			require.NotNil(t, subscribers)
-			require.Equal(t, 2, len(*subscribers))
+			subData := subStat.subscribers.Load()
+			require.NotNil(t, subData)
+			require.Equal(t, 2, len(subData.subscribers))
 		}
 		{
 			subStat := subStats[logpuller.SubscriptionID(3)]
 			require.NotNil(t, subStat)
-			subscribers := subStat.subscribers.Load()
-			require.NotNil(t, subscribers)
-			require.Equal(t, 0, len(*subscribers))
+			subData := subStat.subscribers.Load()
+			require.NotNil(t, subData)
+			require.Equal(t, 0, len(subData.subscribers))
 		}
 	}
 }
@@ -522,10 +522,10 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			subscribers := subStat.subscribers.Load()
-			require.NotNil(t, subscribers)
-			require.Equal(t, 2, len(*subscribers))
-			require.Equal(t, true, (*subscribers)[dispatcherID2].isStopped)
+			subData := subStat.subscribers.Load()
+			require.NotNil(t, subData)
+			require.Equal(t, 2, len(subData.subscribers))
+			require.Equal(t, true, subData.subscribers[dispatcherID2].isStopped)
 		}
 	}
 
@@ -549,10 +549,10 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			subscribers := subStat.subscribers.Load()
-			require.NotNil(t, subscribers)
-			require.Equal(t, 2, len(*subscribers))
-			require.Equal(t, true, (*subscribers)[dispatcherID2].isStopped)
+			subData := subStat.subscribers.Load()
+			require.NotNil(t, subData)
+			require.Equal(t, 2, len(subData.subscribers))
+			require.Equal(t, true, subData.subscribers[dispatcherID2].isStopped)
 		}
 	}
 	{
@@ -583,9 +583,9 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
-			subscribers := subStat.subscribers.Load()
-			require.NotNil(t, subscribers)
-			require.Equal(t, 1, len(*subscribers))
+			subData := subStat.subscribers.Load()
+			require.NotNil(t, subData)
+			require.Equal(t, 1, len(subData.subscribers))
 		}
 	}
 	{
