@@ -107,6 +107,10 @@ type CDCEtcdClient interface {
 
 	GetAllCDCInfo(ctx context.Context) ([]*mvccpb.KeyValue, error)
 
+	// GetChangefeedInfoAndStatus returns kv revision and a map mapping from changefeedID to changefeed info and status
+	GetChangefeedInfoAndStatus(ctx context.Context) (revision int64, statusMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, infoMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, err error)
+
+	// GetAllChangeFeedInfo queries all changefeed information
 	GetChangeFeedInfo(ctx context.Context,
 		id common.ChangeFeedDisplayName,
 	) (*config.ChangeFeedInfo, error)
@@ -225,28 +229,38 @@ func (c *CDCEtcdClientImpl) CheckMultipleCDCClusterExist(ctx context.Context) er
 	return nil
 }
 
+// GetChangefeedInfoAndStatus returns kv revision and a map mapping from changefeedID to changefeed info and status
+func (c *CDCEtcdClientImpl) GetChangefeedInfoAndStatus(ctx context.Context) (revision int64, statusMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, infoMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, err error) {
+	allDataPrefix := BaseKey(c.ClusterID)
+	// TODO tenfyzhong 2025-09-30 17:00:57 We should obtain data by page
+	resp, err := c.Client.Get(ctx, allDataPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return 0, nil, nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
+	}
+	revision = resp.Header.Revision
+	statusMap = make(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, 0)
+	infoMap = make(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, 0)
+	for _, kv := range resp.Kvs {
+		ks, cf, isStatus, isChangefeed := extractChangefeedKeySuffix(string(kv.Key))
+		if !isChangefeed {
+			continue
+		}
+		if isStatus {
+			statusMap[common.NewChangeFeedDisplayName(cf, ks)] = kv
+		} else {
+			infoMap[common.NewChangeFeedDisplayName(cf, ks)] = kv
+		}
+	}
+	return revision, statusMap, infoMap, nil
+}
+
 // GetChangeFeeds returns kv revision and a map mapping from changefeedID to changefeed detail mvccpb.KeyValue
 func (c *CDCEtcdClientImpl) GetChangeFeeds(ctx context.Context) (
 	int64,
 	map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, error,
 ) {
-	// todo: support keyspace
-	key := GetEtcdKeyChangeFeedList(c.ClusterID, common.DefaultKeyspace)
-
-	resp, err := c.Client.Get(ctx, key, clientv3.WithPrefix())
-	if err != nil {
-		return 0, nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
-	}
-	revision := resp.Header.Revision
-	details := make(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, resp.Count)
-	for _, kv := range resp.Kvs {
-		id, err := extractKeySuffix(string(kv.Key))
-		if err != nil {
-			return 0, nil, err
-		}
-		details[common.NewChangeFeedDisplayName(id, common.DefaultKeyspace)] = kv
-	}
-	return revision, details, nil
+	revision, _, detail, err := c.GetChangefeedInfoAndStatus(ctx)
+	return revision, detail, err
 }
 
 // GetAllChangeFeedInfo queries all changefeed information
@@ -355,7 +369,7 @@ func (c *CDCEtcdClientImpl) GetCaptureInfo(
 		return nil, errors.Trace(err)
 	}
 
-	return
+	return info, err
 }
 
 // GetCaptureLeases returns a map mapping from capture ID to its lease
@@ -626,12 +640,12 @@ func getFreeListenURLs(n int) (urls []*url.URL, retErr error) {
 		u, err := url.Parse(tempurl.Alloc())
 		if err != nil {
 			retErr = errors.Trace(err)
-			return
+			return urls, retErr
 		}
 		urls = append(urls, u)
 	}
 
-	return
+	return urls, retErr
 }
 
 // SetupEmbedEtcd starts an embed etcd server
@@ -641,7 +655,7 @@ func SetupEmbedEtcd(dir string) (clientURL *url.URL, e *embed.Etcd, err error) {
 
 	urls, err := getFreeListenURLs(2)
 	if err != nil {
-		return
+		return clientURL, e, err
 	}
 	cfg.ListenPeerUrls = []url.URL{*urls[0]}
 	cfg.ListenClientUrls = []url.URL{*urls[1]}
@@ -651,7 +665,7 @@ func SetupEmbedEtcd(dir string) (clientURL *url.URL, e *embed.Etcd, err error) {
 
 	e, err = embed.StartEtcd(cfg)
 	if err != nil {
-		return
+		return clientURL, e, err
 	}
 
 	select {
@@ -661,7 +675,33 @@ func SetupEmbedEtcd(dir string) (clientURL *url.URL, e *embed.Etcd, err error) {
 		err = errors.New("server took too long to start")
 	}
 
-	return
+	return clientURL, e, err
+}
+
+// extractChangefeedKeySuffix extracts the suffix of an changefeed key, such as extracting
+// "6a6c6dd290bc8732" from /tidb/cdc/cluster/keyspace/changefeed/info/6a6c6dd290bc8732
+// or from /tidb/cdc/cluster/keyspace/changefeed/status/6a6c6dd290bc8732
+func extractChangefeedKeySuffix(key string) (ks string, cf string, isStatus bool, isChangefeed bool) {
+	const keyspaceIndex = 4
+	const changefeedItemIndex = 5
+	const statusIndex = 6
+	const changefeedIDIndex = 7
+
+	subs := strings.Split(key, "/")
+	if len(subs) <= changefeedItemIndex || subs[changefeedItemIndex] != "changefeed" {
+		isChangefeed = false
+		return ks, cf, isStatus, isChangefeed
+	}
+	if len(subs) <= changefeedIDIndex {
+		isChangefeed = false
+		return ks, cf, isStatus, isChangefeed
+	}
+
+	ks = subs[keyspaceIndex]
+	cf = subs[changefeedIDIndex]
+	isStatus = subs[statusIndex] == "status"
+	isChangefeed = true
+	return ks, cf, isStatus, isChangefeed
 }
 
 // extractKeySuffix extracts the suffix of an etcd key, such as extracting

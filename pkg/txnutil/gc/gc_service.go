@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	pd "github.com/tikv/pd/client"
@@ -72,15 +73,13 @@ func EnsureChangefeedStartTsSafety(
 // if something goes wrong after successfully calling EnsureChangefeedStartTsSafety().
 func UndoEnsureChangefeedStartTsSafety(
 	ctx context.Context, pdCli pd.Client,
+	keyspaceID uint32,
 	gcServiceIDPrefix string,
 	changefeedID common.ChangeFeedID,
 ) error {
 	gcServiceID := gcServiceIDPrefix + changefeedID.Keyspace() + "_" + changefeedID.Name()
 	log.Info("undo ensure changefeed start ts safety", zap.String("gcServiceID", gcServiceID))
-	err := RemoveServiceGCSafepoint(
-		ctx,
-		pdCli,
-		gcServiceID)
+	err := UnifyDeleteGcSafepoint(ctx, pdCli, keyspaceID, gcServiceID)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -149,4 +148,32 @@ func SetGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string
 
 func GetGCState(ctx context.Context, gcCli gc.GCStatesClient) (gc.GCState, error) {
 	return gcCli.GetGCState(ctx)
+}
+
+// DeleteGCBarrier Delete a GC barrier of a keyspace
+func DeleteGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string) (barrierInfo *gc.GCBarrierInfo, err error) {
+	err = retry.Do(ctx, func() error {
+		info, err1 := gcCli.DeleteGCBarrier(ctx, serviceID)
+		if err1 != nil {
+			log.Warn("Delete GC barrier failed, retry later", zap.String("serviceID", serviceID))
+			return err1
+		}
+		barrierInfo = info
+		return nil
+	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
+		retry.WithMaxTries(gcServiceMaxRetries),
+		retry.WithIsRetryableErr(errors.IsRetryableError))
+	return barrierInfo, err
+}
+
+// UnifyDeleteGcSafepoint delete a gc safepoint on classic mode or delte a gc
+// barrier on next-gen mode
+func UnifyDeleteGcSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) error {
+	if kerneltype.IsClassic() {
+		return RemoveServiceGCSafepoint(ctx, pdCli, serviceID)
+	}
+
+	gcClient := pdCli.GetGCStatesClient(keyspaceID)
+	_, err := DeleteGCBarrier(ctx, gcClient, serviceID)
+	return err
 }

@@ -198,7 +198,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		}
 	}
 
-	defer gc.UndoEnsureChangefeedStartTsSafety(ctx, p.pdCli, defaultSchemaStoreGcServiceID, fakeChangefeedID)
+	defer gc.UndoEnsureChangefeedStartTsSafety(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID, fakeChangefeedID)
 
 	dbPath := fmt.Sprintf("%s/%s/%d", p.rootDir, dataDir, p.keyspaceID)
 

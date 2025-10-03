@@ -245,9 +245,17 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		if !needRemoveGCSafePoint {
 			return
 		}
+
+		keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
+			return
+		}
+
 		err = gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			pdClient,
+			keyspaceMeta.Id,
 			createGcServiceID,
 			changefeedID,
 		)
@@ -603,7 +611,8 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 // @Router	/api/v2/changefeeds/{changefeed_id}/resume [post]
 func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
+	keyspaceName := GetKeyspaceValueWithDefault(c)
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -662,14 +671,24 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+
 	needRemoveGCSafePoint := false
 	defer func() {
 		if !needRemoveGCSafePoint {
 			return
 		}
-		err := gc.UndoEnsureChangefeedStartTsSafety(
+
+		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+		keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
+			return
+		}
+
+		err = gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			h.server.GetPdClient(),
+			keyspaceMeta.Id,
 			resumeGcServiceID,
 			cfInfo.ChangefeedID,
 		)

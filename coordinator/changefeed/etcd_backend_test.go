@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	mock_etcd "github.com/pingcap/ticdc/pkg/etcd/mock"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -30,27 +30,29 @@ import (
 
 func TestGetAllChangefeeds(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	cdcClient := mock_etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient := mock_etcd.NewMockClient(ctrl)
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 
 	// get changefeeds failed
 	backend := NewEtcdBackend(cdcClient)
-	etcdClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, errors.New("get key failed")).
-		Times(1)
+	cdcClient.EXPECT().GetChangefeedInfoAndStatus(gomock.Any()).Return(int64(0), nil, nil, errors.New("get key failed")).Times(1)
 	resp, err := backend.GetAllChangefeeds(context.Background())
 	require.Nil(t, resp)
 	require.NotNil(t, err)
 
 	// info unmarshal failed, changefeed will be ignored
-	etcdClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&clientv3.GetResponse{Kvs: []*mvccpb.KeyValue{
-			{Key: []byte("/tidb/cdc/default/default/changefeed/info/test"), Value: []byte("invalid json")},
-			{Key: []byte("/tidb/cdc/default/default/changefeed/status/test"), Value: []byte("{}")},
-		}}, nil).
-		Times(1)
+	cdcClient.EXPECT().GetChangefeedInfoAndStatus(gomock.Any()).Return(
+		int64(0),
+		map[common.ChangeFeedDisplayName]*mvccpb.KeyValue{
+			{Name: "test", Keyspace: "default"}: {Key: []byte("/tidb/cdc/default/default/changefeed/info/test"), Value: []byte("{}")},
+		},
+		map[common.ChangeFeedDisplayName]*mvccpb.KeyValue{
+			{Name: "test", Keyspace: "default"}: {Key: []byte("/tidb/cdc/default/default/changefeed/info/test"), Value: []byte("invalid json")},
+		},
+		nil,
+	).Times(1)
 	resp, err = backend.GetAllChangefeeds(context.Background())
 	require.NotNil(t, resp)
 	require.Nil(t, err)
@@ -58,12 +60,16 @@ func TestGetAllChangefeeds(t *testing.T) {
 
 	// status unmarshal failed, changefeed will not be ignored, and the checkpiont ts will be the start ts
 	// the old version of changefeed without gid
-	etcdClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&clientv3.GetResponse{Kvs: []*mvccpb.KeyValue{
-			{Key: []byte("/tidb/cdc/default/default/changefeed/info/test"), Value: []byte("{\"changefeed-id\":\"test\", \"start-ts\": 1}")},
-			{Key: []byte("/tidb/cdc/default/default/changefeed/status/test"), Value: []byte("}{")},
-		}}, nil).
-		Times(1)
+	cdcClient.EXPECT().GetChangefeedInfoAndStatus(gomock.Any()).Return(
+		int64(0),
+		map[common.ChangeFeedDisplayName]*mvccpb.KeyValue{
+			{Name: "test", Keyspace: "default"}: {Key: []byte("/tidb/cdc/default/default/changefeed/info/test"), Value: []byte("}{")},
+		},
+		map[common.ChangeFeedDisplayName]*mvccpb.KeyValue{
+			{Name: "test", Keyspace: "default"}: {Key: []byte("/tidb/cdc/default/default/changefeed/info/test"), Value: []byte(`{"changefeed-id":"test", "start-ts": 1}`)},
+		},
+		nil,
+	).Times(1)
 	// put the gid and status
 	etcdClient.EXPECT().Put(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).Times(2)
 	resp, err = backend.GetAllChangefeeds(context.Background())
@@ -76,11 +82,14 @@ func TestGetAllChangefeeds(t *testing.T) {
 	}
 
 	// has no info, changefeed will be ignored
-	etcdClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&clientv3.GetResponse{Kvs: []*mvccpb.KeyValue{
-			{Key: []byte("/tidb/cdc/default/default/changefeed/status/test"), Value: []byte("{}")},
-		}}, nil).
-		Times(1)
+	cdcClient.EXPECT().GetChangefeedInfoAndStatus(gomock.Any()).Return(
+		int64(0),
+		map[common.ChangeFeedDisplayName]*mvccpb.KeyValue{
+			{Name: "test", Keyspace: "default"}: {Key: []byte("/tidb/cdc/default/default/changefeed/info/test"), Value: []byte("{}")},
+		},
+		nil,
+		nil,
+	).Times(1)
 	resp, err = backend.GetAllChangefeeds(context.Background())
 	require.NotNil(t, resp)
 	require.Nil(t, err)
@@ -89,8 +98,8 @@ func TestGetAllChangefeeds(t *testing.T) {
 
 func TestCreateChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	cdcClient := mock_etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient := mock_etcd.NewMockClient(ctrl)
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
@@ -113,8 +122,8 @@ func TestCreateChangefeed(t *testing.T) {
 
 func TestUpdateChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	cdcClient := mock_etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient := mock_etcd.NewMockClient(ctrl)
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
@@ -141,8 +150,8 @@ func TestPauseChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	cdcClient := mock_etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient := mock_etcd.NewMockClient(ctrl)
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
@@ -163,8 +172,8 @@ func TestDeleteChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	cdcClient := mock_etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient := mock_etcd.NewMockClient(ctrl)
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
@@ -187,8 +196,8 @@ func TestResumeChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	cdcClient := mock_etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient := mock_etcd.NewMockClient(ctrl)
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
@@ -209,8 +218,8 @@ func TestSetChangefeedProgress(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	cdcClient := mock_etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient := mock_etcd.NewMockClient(ctrl)
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
@@ -229,8 +238,8 @@ func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	cdcClient := mock_etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient := mock_etcd.NewMockClient(ctrl)
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
@@ -267,97 +276,4 @@ func (f *FuncMarcher) Matches(x interface{}) bool {
 
 func (f *FuncMarcher) String() string {
 	return "func"
-}
-
-func TestExtractKeySuffix(t *testing.T) {
-	type args struct {
-		key string
-	}
-	tests := []struct {
-		name             string
-		args             args
-		wantKs           string
-		wantCf           string
-		wantIsStatus     bool
-		wantIsChangefeed bool
-	}{
-		{
-			name: "an empty key",
-			args: args{
-				key: "",
-			},
-			wantIsChangefeed: false,
-		},
-		{
-			name: "an invalid key",
-			args: args{
-				key: "foobar",
-			},
-			wantIsChangefeed: false,
-		},
-		{
-			name: "an slash key",
-			args: args{
-				key: "/",
-			},
-			wantIsChangefeed: false,
-		},
-		{
-			name: "3 parts",
-			args: args{
-				key: "/tidb/cdc/default",
-			},
-			wantIsChangefeed: false,
-		},
-		{
-			name: "not a changefeed",
-			args: args{
-				key: "/tidb/cdc/default/keyspace1/foobar/info/hello",
-			},
-			wantIsChangefeed: false,
-		},
-		{
-			name: "a changefeed info",
-			args: args{
-				key: "/tidb/cdc/default/keyspace1/changefeed/info/hello",
-			},
-			wantKs:           "keyspace1",
-			wantCf:           "hello",
-			wantIsStatus:     false,
-			wantIsChangefeed: true,
-		},
-		{
-			name: "a changefeed status",
-			args: args{
-				key: "/tidb/cdc/default/keyspace1/changefeed/status/hello",
-			},
-			wantKs:           "keyspace1",
-			wantCf:           "hello",
-			wantIsStatus:     true,
-			wantIsChangefeed: true,
-		},
-		{
-			name: "an invalid changefeed status",
-			args: args{
-				key: "/tidb/cdc/default/keyspace1/changefeed/status",
-			},
-			wantIsChangefeed: false,
-		},
-		{
-			name: "capture info",
-			args: args{
-				key: "/tidb/cdc/default/__cdc_meta__/capture/786afb7b-c780-48df-8fb6-567d4647c007",
-			},
-			wantIsChangefeed: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotKs, gotCf, gotIsStatus, gotIsChangefeed := extractKeySuffix(tt.args.key)
-			require.Equal(t, tt.wantKs, gotKs)
-			require.Equal(t, tt.wantCf, gotCf)
-			require.Equal(t, tt.wantIsStatus, gotIsStatus)
-			require.Equal(t, tt.wantIsChangefeed, gotIsChangefeed)
-		})
-	}
 }
