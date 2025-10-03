@@ -500,7 +500,6 @@ func (e *eventStore) RegisterDispatcher(
 				if subStat.deleting.Load() {
 					continue
 				}
-				bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
 
 				// Check whether the subStat ts range contains startTs
 				if subStat.checkpointTs.Load() > startTs || startTs > subStat.resolvedTs.Load() {
@@ -981,10 +980,10 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 			oldMap = oldData.subscribers
 		}
 
-	// A subscription is not idle if a new subscriber is added.
-	// So, clear the deleting mark.
-	subStat.deleting.Store(false)
-	subStat.markedDeleteTime.Store(0)
+		// A subscription is not idle if a new subscriber is added.
+		// So, clear the deleting mark.
+		subStat.deleting.Store(false)
+		subStat.markedDeleteTime.Store(0)
 
 		newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)+1)
 		for id, sub := range oldMap {
@@ -1005,7 +1004,8 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
-	ttlInMs := int64(60 * 1000) // 1min
+	ttlInMsForMarkDeletion := int64(60 * 1000) // 1min
+	ttlInMsBeforeDeletion := int64(10 * 1000)  // 10s
 	for {
 		select {
 		case <-ctx.Done():
@@ -1018,7 +1018,7 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 					if subStat.deleting.Load() {
 						// This subscription is already marked for deletion.
 						// If it has been marked for a while, proceed with physical deletion.
-						if now-subStat.markedDeleteTime.Load() > ttlInMs {
+						if now-subStat.markedDeleteTime.Load() > ttlInMsBeforeDeletion {
 							log.Info("clean obsolete subscription",
 								zap.Uint64("subscriptionID", uint64(subID)),
 								zap.Int("dbIndex", subStat.dbIndex),
@@ -1041,7 +1041,7 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 					} else {
 						// This subscription is not marked for deletion yet. Check if it's idle.
 						subData := subStat.subscribers.Load()
-						if subData != nil && len(subData.subscribers) == 0 && subData.idleTime > 0 && now-subData.idleTime > ttlInMs {
+						if subData != nil && len(subData.subscribers) == 0 && subData.idleTime > 0 && now-subData.idleTime > ttlInMsForMarkDeletion {
 							log.Info("mark subscription as deleting", zap.Uint64("subscriptionID", uint64(subID)))
 							subStat.deleting.Store(true)
 							subStat.markedDeleteTime.Store(now)
