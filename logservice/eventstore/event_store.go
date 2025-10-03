@@ -917,10 +917,11 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 				newMap[id] = sub
 			}
 		}
-		newData := &subscribersWithIdleTime{subscribers: newMap, idleTime: oldData.idleTime}
+		idleTime := int64(0)
 		if len(newMap) == 0 {
-			newData.idleTime = time.Now().UnixMilli()
+			idleTime = time.Now().UnixMilli()
 		}
+		newData := &subscribersWithIdleTime{subscribers: newMap, idleTime: idleTime}
 		if subStat.subscribers.CompareAndSwap(oldData, newData) {
 			return
 		}
