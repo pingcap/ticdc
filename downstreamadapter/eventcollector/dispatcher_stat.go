@@ -45,6 +45,13 @@ type dispatcherConnState struct {
 	remoteCandidates []string
 }
 
+func (d *dispatcherConnState) clear() {
+	d.Lock()
+	defer d.Unlock()
+	d.eventServiceID = ""
+	d.readyEventReceived.Store(false)
+}
+
 func (d *dispatcherConnState) setEventServiceID(serverID node.ID) {
 	d.Lock()
 	defer d.Unlock()
@@ -144,6 +151,13 @@ func newDispatcherStat(
 
 func (d *dispatcherStat) run() {
 	d.registerTo(d.eventCollector.getLocalServerID())
+}
+
+func (d *dispatcherStat) clear() {
+	// TODO: this design is bad because we may receive stale heartbeat response,
+	// which make us call clear and register again. But the register may be ignore,
+	// so we will not receive any ready event.
+	d.connState.clear()
 }
 
 // registerTo register the dispatcher to the specified event service.
@@ -513,9 +527,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			}
 			// note: this must be the first ready event from local event service
 			oldEventServiceID := d.connState.getEventServiceID()
-			// note: event service may clean in-active dispatchers,
-			// so it is possible to register to the event service multiple times
-			if oldEventServiceID != localServerID && oldEventServiceID != "" {
+			if oldEventServiceID != "" {
 				d.removeFrom(oldEventServiceID)
 			}
 			log.Info("received ready signal from local event service, prepare to reset the dispatcher",
