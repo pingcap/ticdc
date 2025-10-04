@@ -570,7 +570,7 @@ func (e *eventStore) RegisterDispatcher(
 	})
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
-	subStat.maxEventCommitTs.Store(startTs)
+	subStat.maxEventCommitTs.Store(0)
 	if stat.subStat == nil {
 		stat.subStat = subStat
 	} else {
