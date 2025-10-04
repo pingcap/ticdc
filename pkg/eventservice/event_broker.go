@@ -389,6 +389,17 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// so we take the risk to do a useless scan.
 	noDMLEvent := dataRange.CommitTsStart > task.eventStoreCommitTs.Load()
 	noDDLEvent := dataRange.CommitTsStart >= ddlState.MaxEventCommitTs
+	log.Info("get scan task data range",
+		zap.Stringer("dispatcherID", task.id),
+		zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
+		zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()),
+		zap.Uint64("ddlStateMaxEventCommitTs", ddlState.MaxEventCommitTs),
+		zap.Uint64("ddlStateResolvedTs", ddlState.ResolvedTs),
+		zap.Uint64("dataRangeStart", dataRange.CommitTsStart),
+		zap.Uint64("dataRangeEnd", dataRange.CommitTsEnd),
+		zap.Bool("noDMLEvent", noDMLEvent),
+		zap.Bool("noDDLEvent", noDDLEvent),
+	)
 	if noDMLEvent && noDDLEvent {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
