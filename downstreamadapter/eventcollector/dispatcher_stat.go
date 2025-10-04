@@ -513,7 +513,9 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			}
 			// note: this must be the first ready event from local event service
 			oldEventServiceID := d.connState.getEventServiceID()
-			if oldEventServiceID != "" {
+			// note: event service may clean in-active dispatchers,
+			// so it is possible to register to the event service multiple times
+			if oldEventServiceID != localServerID && oldEventServiceID != "" {
 				d.removeFrom(oldEventServiceID)
 			}
 			log.Info("received ready signal from local event service, prepare to reset the dispatcher",
