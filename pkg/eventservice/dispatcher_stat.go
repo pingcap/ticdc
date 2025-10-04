@@ -31,7 +31,7 @@ import (
 const (
 	// If the dispatcher doesn't send heartbeat to the event service for a long time,
 	// we consider it is in-active and remove it.
-	heartbeatTimeout = time.Second * 180
+	heartbeatTimeout = time.Second * 3600
 
 	minScanLimitInBytes     = 1024 * 128  // 128KB
 	maxScanLimitInBytes     = 1024 * 1024 // 1MB

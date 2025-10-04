@@ -435,7 +435,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
 			if stat.connState.isCurrentEventService(targetMessage.From) {
 				// register the dispatcher again
-				stat.reset(targetMessage.From)
+				stat.registerTo(targetMessage.From)
 			}
 		}
 	}
