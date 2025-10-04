@@ -110,6 +110,14 @@ func BaseKey(clusterID string) string {
 	return fmt.Sprintf("/tidb/cdc/%s", clusterID)
 }
 
+// NewCDCBaseKey is used for keys added by New Arch TiCDC
+// We support rollback from the new architecture to the old architecture,
+// we need to prevent the old architecture from panicking when checking etcd and discovering unknown keys.
+// Therefore, the etcd keys added to the new architecture need to be placed under the new base.
+func NewCDCBaseKey(clusterID string) string {
+	return fmt.Sprintf("/tidb/cdc_new/%s", clusterID)
+}
+
 // KeyspacePrefix returns the etcd prefix of changefeed data
 func KeyspacePrefix(clusterID, keyspace string) string {
 	return BaseKey(clusterID) + "/" + keyspace
