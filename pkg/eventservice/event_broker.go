@@ -528,8 +528,8 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
 	return scanLimit{
-		maxDMLBytes: task.getCurrentScanLimitInBytes(),
-		timeout:     time.Second,
+		maxDMLBytes: 10000000000,
+		timeout:     10000 * time.Second,
 	}
 }
 
@@ -597,15 +597,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	sl := c.calculateScanLimit(task)
-	ok = allocQuota(available, uint64(sl.maxDMLBytes))
-	if !ok {
-		log.Debug("not enough memory quota, skip scan",
-			zap.String("changefeed", changefeedID.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Uint64("available", available.Load()),
-			zap.Uint64("required", uint64(sl.maxDMLBytes)))
-		return
-	}
+	// ok = allocQuota(available, uint64(sl.maxDMLBytes))
+	// if !ok {
+	// 	log.Debug("not enough memory quota, skip scan",
+	// 		zap.String("changefeed", changefeedID.String()),
+	// 		zap.String("remote", remoteID.String()),
+	// 		zap.Uint64("available", available.Load()),
+	// 		zap.Uint64("required", uint64(sl.maxDMLBytes)))
+	// 	return
+	// }
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
