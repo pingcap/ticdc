@@ -45,8 +45,6 @@ type schemaGetter interface {
 type scanLimit struct {
 	// maxDMLBytes is the maximum number of bytes to scan
 	maxDMLBytes int64
-	// timeout is the maximum time to spend scanning
-	timeout time.Duration
 
 	// Only used in unit test, please do not set it in other places.
 	// When it is set to true, the scan will count DMLEvent as 1 byte,
@@ -473,7 +471,7 @@ func (s *session) exceedLimit(nBytes int64, batchDML ...*event.BatchDMLEvent) bo
 		return (s.eventBytes + int64(eventCount)) >= s.limit.maxDMLBytes
 	}
 
-	return (s.eventBytes+nBytes) >= s.limit.maxDMLBytes || time.Since(s.startTime) > s.limit.timeout
+	return (s.eventBytes + nBytes) >= s.limit.maxDMLBytes
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
