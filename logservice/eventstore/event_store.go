@@ -775,6 +775,14 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		return nil
 	}
 
+	log.Info("get iterator",
+		zap.Stringer("dispatcherID", dispatcherID),
+		zap.Int64("tableID", dataRange.Span.GetTableID()),
+		zap.Uint64("commitTsStart", dataRange.CommitTsStart),
+		zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
+		zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
+		zap.Uint64("dispatcherCheckpointTs", stat.checkpointTs))
+
 	tryGetDB := func(subStat *subscriptionStat, force bool) *pebble.DB {
 		if subStat == nil {
 			if force {
