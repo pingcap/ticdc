@@ -389,15 +389,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// so we take the risk to do a useless scan.
 	noDMLEvent := dataRange.CommitTsStart > task.eventStoreCommitTs.Load()
 	noDDLEvent := dataRange.CommitTsStart >= ddlState.MaxEventCommitTs
-	// log.Info("get scan task data range",
-	// 	zap.Stringer("dispatcherID", task.id),
-	// 	zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-	// 	zap.Uint64("dataRangeStart", dataRange.CommitTsStart),
-	// 	zap.Uint64("dataRangeEnd", dataRange.CommitTsEnd),
-	// 	zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
-	// 	zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()),
-	// 	zap.Bool("noDMLEvent", noDMLEvent),
-	// 	zap.Bool("noDDLEvent", noDDLEvent))
 
 	if noDMLEvent && noDDLEvent {
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
@@ -528,8 +519,8 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
 	return scanLimit{
-		maxDMLBytes: 10000000000,
-		timeout:     10000 * time.Second,
+		maxDMLBytes: task.getCurrentScanLimitInBytes(),
+		timeout:     time.Second,
 	}
 }
 
@@ -597,15 +588,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	sl := c.calculateScanLimit(task)
-	// ok = allocQuota(available, uint64(sl.maxDMLBytes))
-	// if !ok {
-	// 	log.Debug("not enough memory quota, skip scan",
-	// 		zap.String("changefeed", changefeedID.String()),
-	// 		zap.String("remote", remoteID.String()),
-	// 		zap.Uint64("available", available.Load()),
-	// 		zap.Uint64("required", uint64(sl.maxDMLBytes)))
-	// 	return
-	// }
+	ok = allocQuota(available, uint64(sl.maxDMLBytes))
+	if !ok {
+		log.Debug("not enough memory quota, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available.Load()),
+			zap.Uint64("required", uint64(sl.maxDMLBytes)))
+		return
+	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
