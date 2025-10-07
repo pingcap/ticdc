@@ -17,11 +17,13 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
+	"go.uber.org/zap"
 )
 
 // balanceScheduler is used to check the balance status of all spans among all nodes
@@ -80,8 +82,16 @@ func (s *balanceScheduler) Execute() time.Time {
 		return now.Add(s.checkBalanceInterval)
 	}
 	// balance changefeeds among the active nodes
-	movedSize := pkgScheduler.Balance(s.batchSize, s.random, s.nodeManager.GetAliveNodes(), s.changefeedDB.GetReplicating(),
+	aliveNodes := s.nodeManager.GetAliveNodes()
+	movedSize := pkgScheduler.Balance(s.batchSize, s.random, aliveNodes, s.changefeedDB.GetReplicating(),
 		func(cf *changefeed.Changefeed, nodeID node.ID) bool {
+			// Double-check that the target node is still alive before creating the operator
+			if _, isAlive := aliveNodes[nodeID]; !isAlive {
+				log.Warn("scheduler: skip creating move operator for offline node",
+					zap.String("changefeed", cf.ID.String()),
+					zap.String("nodeID", nodeID.String()))
+				return false
+			}
 			return s.operatorController.AddOperator(operator.NewMoveMaintainerOperator(s.changefeedDB, cf, cf.GetNodeID(), nodeID))
 		})
 	s.forceBalance = movedSize >= s.batchSize

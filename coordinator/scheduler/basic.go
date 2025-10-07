@@ -16,12 +16,14 @@ package scheduler
 import (
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
+	"go.uber.org/zap"
 )
 
 // basicScheduler generates operators for the spans, and push them to the operator controller
@@ -73,14 +75,31 @@ func (s *basicScheduler) doBasicSchedule(availableSize int) {
 
 	absentChangefeeds := s.changefeedDB.GetAbsentByGroup(id, availableSize)
 	nodeSize := s.changefeedDB.GetTaskSizePerNodeByGroup(id)
-	// add the absent node to the node size map
-	for id := range s.nodeManager.GetAliveNodes() {
-		if _, ok := nodeSize[id]; !ok {
-			nodeSize[id] = 0
+	aliveNodes := s.nodeManager.GetAliveNodes()
+
+	// Clean up nodeSize to only include alive nodes
+	cleanNodeSize := make(map[node.ID]int)
+	for nodeID, size := range nodeSize {
+		if _, isAlive := aliveNodes[nodeID]; isAlive {
+			cleanNodeSize[nodeID] = size
 		}
 	}
 
-	pkgScheduler.BasicSchedule(availableSize, absentChangefeeds, nodeSize, func(cf *changefeed.Changefeed, nodeID node.ID) bool {
+	// Add alive nodes that are not in nodeSize
+	for nodeID := range aliveNodes {
+		if _, ok := cleanNodeSize[nodeID]; !ok {
+			cleanNodeSize[nodeID] = 0
+		}
+	}
+
+	pkgScheduler.BasicSchedule(availableSize, absentChangefeeds, cleanNodeSize, func(cf *changefeed.Changefeed, nodeID node.ID) bool {
+		// Double-check that the target node is still alive before creating the operator
+		if _, isAlive := aliveNodes[nodeID]; !isAlive {
+			log.Warn("scheduler: skip creating operator for offline node",
+				zap.String("changefeed", cf.ID.String()),
+				zap.String("nodeID", nodeID.String()))
+			return false
+		}
 		return s.operatorController.AddOperator(operator.NewAddMaintainerOperator(s.changefeedDB, cf, nodeID))
 	})
 }
