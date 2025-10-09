@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -e
 
 if [ $# -ne 2 ]; then
 	echo "Usage: get_cdc_pid <host> <port>"

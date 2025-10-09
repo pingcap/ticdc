@@ -79,7 +79,7 @@ function run() {
 
 	# Make sure changefeed can not be created if the name is already exists.
 	set +e
-	exists=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" | grep -oE 'already exists')
+	exists=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" 2>&1 | grep -oE 'already exists')
 	set -e
 	if [[ -z $exists ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${exists} >>>>>"
@@ -127,7 +127,7 @@ EOF
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $uuid "normal" "null" ""
 
 	# Make sure bad sink url fails at creating changefeed.
-	badsink=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" | grep -oE 'fail')
+	badsink=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" 2>&1 | grep -oE 'fail')
 	if [[ -z $badsink ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${badsink} >>>>>"
 		exit 1
@@ -142,7 +142,7 @@ EOF
 
 	# Test unsafe commands
 	echo "Start delete service gc safepoint"
-	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
+	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint -k "$KEYSPACE_NAME"
 	echo "Pass delete service gc safepoint"
 
 	echo "Start reset"
@@ -150,7 +150,8 @@ EOF
 	echo "Pass reset"
 
 	# ensure server exit
-	ensure 30 "! ps -p $cdc_pid_1 > /dev/null 2>&1"
+	# ensure 30 "! ps -p $cdc_pid > /dev/null 2>&1"
+	ensure 30 "! kill -0 $cdc_pid > /dev/null 2>&1"
 
 	# restart server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300" --config "$WORK_DIR/server.toml"
@@ -170,10 +171,17 @@ EOF
 		exit 1
 	fi
 
-	REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
 	TS=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-	run_cdc_cli unsafe resolve-lock --region=$REGION_ID
-	run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
+	if [ -z "$NEXT_GEN" ]; then
+		REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
+	else
+		KEYSPACE_ID=$(pd-ctl -u=$pd_addr keyspace show name "$KEYSPACE_NAME" | jq -r '.id')
+		REGION_ID=$(pd-ctl region keyspace id $KEYSPACE_ID | jq '.regions[] | select(.start_key | startswith("78")) | .id' | head -n 1)
+		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID
+		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID --ts=$TS
+	fi
 
 	sleep 3
 	# make sure TiCDC does not panic
