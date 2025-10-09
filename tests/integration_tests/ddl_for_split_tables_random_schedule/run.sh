@@ -75,7 +75,7 @@ main() {
 
 	query_dispatcher_count "127.0.0.1:8300" "test" 36 100 le # 6 * 5 + 5 + 1
 
-	cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+	cdc_pid_1=$(get_cdc_pid 127.0.0.1 8300)
 	if [ -z "$cdc_pid_1" ]; then
 		echo "ERROR: cdc server 1 is not running"
 		exit 1
@@ -112,7 +112,7 @@ main_with_consistent() {
 
 	query_dispatcher_count "127.0.0.1:8300" "test" 36 100 le 1 # 6 * 5 + 5 + 1
 
-	cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+	cdc_pid_1=$(get_cdc_pid 127.0.0.1 8300)
 	if [ -z "$cdc_pid_1" ]; then
 		echo "ERROR: cdc server 1 is not running"
 		exit 1
