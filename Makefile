@@ -72,9 +72,9 @@ ifeq ("${NEXT_GEN}", "1")
 endif
 
 RELEASE_VERSION =
-ifeq ($(RELEASE_VERSION),)
-	RELEASE_VERSION := $(shell git describe --tags --dirty)
-endif
+# ifeq ($(RELEASE_VERSION),)
+# 	RELEASE_VERSION := $(shell git describe --tags --dirty)
+# endif
 ifeq ($(RELEASE_VERSION),)
 	RELEASE_VERSION := v9.0.0-alpha
 endif

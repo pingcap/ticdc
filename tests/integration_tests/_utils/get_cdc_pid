@@ -10,4 +10,8 @@ fi
 host=$1
 port=$2
 
-curl "http://$host:$port/status" 2>/dev/null | jq '.pid'
+if [ -z "$TICDC_CA_PATH" ]; then
+	curl "http://$host:$port/status" 2>/dev/null | jq '.pid'
+else
+	curl "https://$host:$port/status" --cacert $TICDC_CA_PATH --cert $TICDC_CERT_PATH --key $TICDC_KEY_PATH 2>/dev/null | jq '.pid'
+fi

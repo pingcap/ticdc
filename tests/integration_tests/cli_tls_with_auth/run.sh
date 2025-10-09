@@ -1,6 +1,8 @@
 #!/bin/bash
 
-set -u
+set -eu
+export PS4='+$(basename ${BASH_SOURCE}):${LINENO}:'
+set -x
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -76,6 +78,7 @@ function run() {
 	sleep 2
 
 	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
+	echo "cdc server 1 pid: $cdc_pid_1"
 
 	TOPIC_NAME="ticdc-cli-test-$RANDOM"
 	case $SINK_TYPE in
@@ -106,7 +109,8 @@ function run() {
 
 	# Make sure changefeed can not be created if the name is already exists.
 	set +e
-	exists=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" | grep -oE 'already exists')
+	create_result=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid")
+	exists=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" 2>&1 | grep -oE 'already exists')
 	set -e
 	if [[ -z $exists ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${exists} >>>>>"
@@ -132,7 +136,7 @@ EOF
 
 	# Update changefeed
 	cdc_cli_changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid
-	changefeed_info=$(curl -s -X GET "https://127.0.0.1:8300/api/v2/changefeeds/$uuid&keyspace=$KEYSPACE_NAME" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" 2>&1)
+	changefeed_info=$(curl -s -X GET "https://127.0.0.1:8300/api/v2/changefeeds/$uuid?keyspace=$KEYSPACE_NAME" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" 2>&1)
 	if [[ ! $changefeed_info == *"\"case_sensitive\":true"* ]]; then
 		echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
 		exit 1
@@ -154,7 +158,7 @@ EOF
 	check_changefeed_state "https://${TLS_PD_HOST}:${TLS_PD_PORT}" $uuid "normal" "null" "" $TLS_DIR
 
 	# Make sure bad sink url fails at creating changefeed.
-	badsink=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" | grep -oE 'fail')
+	badsink=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" 2>&1 | grep -oE 'fail')
 	if [[ -z $badsink ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${badsink} >>>>>"
 		exit 1
@@ -168,11 +172,12 @@ EOF
 	fi
 
 	# Test unsafe commands
-	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
+	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint -k "$KEYSPACE_NAME"
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
 
 	# ensure server exit
-	ensure 30 "! ps -p $cdc_pid_1 > /dev/null 2>&1"
+	# ensure 30 "! ps -p $cdc_pid_1 > /dev/null 2>&1"
+	ensure 30 "! kill -0 $cdc_pid_1 > /dev/null 2>&1"
 
 	# restart server
 	run_cdc_server \
@@ -200,10 +205,22 @@ EOF
 		exit 1
 	fi
 
-	REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region | jq '.regions[0].id')
+	if [ -z "$NEXT_GEN" ]; then
+		REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region | jq '.regions[0].id')
+	else
+		KEYSPACE_ID=$(pd-ctl --cacert ${TLS_DIR}/ca.pem --cert ${TLS_DIR}/client.pem --key ${TLS_DIR}/client-key.pem -u=$pd_addr keyspace show name "$KEYSPACE_NAME" | jq -r '.id')
+		REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region keyspace id $KEYSPACE_ID | jq '.regions[] | select(.start_key | startswith("78")) | .id' | head -n 1)
+	fi
+	echo "region id $REGION_ID"
 	TS=$(run_cdc_cli_tso_query $TLS_PD_HOST $TLS_PD_PORT true)
-	run_cdc_cli unsafe resolve-lock --region=$REGION_ID
-	run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
+
+	if [ "$NEXT_GEN" = 1 ]; then
+		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID
+		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID --ts=$TS
+	else
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
+	fi
 
 	sleep 3
 	# make sure TiCDC does not panic

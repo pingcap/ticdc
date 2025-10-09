@@ -74,17 +74,17 @@ func (m *MockUnsafeInterface) EXPECT() *MockUnsafeInterfaceMockRecorder {
 }
 
 // DeleteServiceGcSafePoint mocks base method.
-func (m *MockUnsafeInterface) DeleteServiceGcSafePoint(ctx context.Context, config *v2.UpstreamConfig) error {
+func (m *MockUnsafeInterface) DeleteServiceGcSafePoint(ctx context.Context, config *v2.UpstreamConfig, keyspace string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteServiceGcSafePoint", ctx, config)
+	ret := m.ctrl.Call(m, "DeleteServiceGcSafePoint", ctx, config, keyspace)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteServiceGcSafePoint indicates an expected call of DeleteServiceGcSafePoint.
-func (mr *MockUnsafeInterfaceMockRecorder) DeleteServiceGcSafePoint(ctx, config interface{}) *gomock.Call {
+func (mr *MockUnsafeInterfaceMockRecorder) DeleteServiceGcSafePoint(ctx, config, keyspace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteServiceGcSafePoint", reflect.TypeOf((*MockUnsafeInterface)(nil).DeleteServiceGcSafePoint), ctx, config)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteServiceGcSafePoint", reflect.TypeOf((*MockUnsafeInterface)(nil).DeleteServiceGcSafePoint), ctx, config, keyspace)
 }
 
 // Metadata mocks base method.
@@ -103,15 +103,15 @@ func (mr *MockUnsafeInterfaceMockRecorder) Metadata(ctx interface{}) *gomock.Cal
 }
 
 // ResolveLock mocks base method.
-func (m *MockUnsafeInterface) ResolveLock(ctx context.Context, req *v2.ResolveLockReq) error {
+func (m *MockUnsafeInterface) ResolveLock(ctx context.Context, req *v2.ResolveLockReq, keyspace string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ResolveLock", ctx, req)
+	ret := m.ctrl.Call(m, "ResolveLock", ctx, req, keyspace)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // ResolveLock indicates an expected call of ResolveLock.
-func (mr *MockUnsafeInterfaceMockRecorder) ResolveLock(ctx, req interface{}) *gomock.Call {
+func (mr *MockUnsafeInterfaceMockRecorder) ResolveLock(ctx, req, keyspace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveLock", reflect.TypeOf((*MockUnsafeInterface)(nil).ResolveLock), ctx, req)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveLock", reflect.TypeOf((*MockUnsafeInterface)(nil).ResolveLock), ctx, req, keyspace)
 }
