@@ -945,16 +945,21 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 	totalRegionCount := 0
 	results := make([]SplitSpanCheckResult, 0)
 	for _, status := range s.allTasks {
+		nodeID := status.GetNodeID()
+		if nodeID == "" {
+			log.Panic("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
+		}
+
+		if _, ok := lastThreeTrafficPerNode[nodeID]; !ok {
+			// node is not alive, just skip.
+			continue
+		}
+
 		// Accumulate statistics for traffic balancing and node distribution
 		totalRegionCount += status.regionCount
 		lastThreeTrafficSum[0] += status.lastThreeTraffic[0]
 		lastThreeTrafficSum[1] += status.lastThreeTraffic[1]
 		lastThreeTrafficSum[2] += status.lastThreeTraffic[2]
-
-		nodeID := status.GetNodeID()
-		if nodeID == "" {
-			log.Panic("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
-		}
 
 		lastThreeTrafficPerNode[nodeID][0] += status.lastThreeTraffic[0]
 		lastThreeTrafficPerNode[nodeID][1] += status.lastThreeTraffic[1]
