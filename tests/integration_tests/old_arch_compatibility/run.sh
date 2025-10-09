@@ -12,6 +12,10 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 function run() {
+	if [ "$NEXT_GEN" = 1 ]; then
+		exit 0
+	fi
+
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
