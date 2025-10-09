@@ -18,9 +18,9 @@ SINK_TYPE=$1
 
 CDC_COUNT=3
 TABLE_COUNT=50
-KILL_INTERVAL=60   # Interval between each kill cycle (in seconds)
-RESTART_DELAY=20   # Wait time before restarting the killed node (in seconds)
-TEST_DURATION=300  # Total test duration: 5 minutes
+KILL_INTERVAL=60  # Interval between each kill cycle (in seconds)
+RESTART_DELAY=20  # Wait time before restarting the killed node (in seconds)
+TEST_DURATION=300 # Total test duration: 5 minutes
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
