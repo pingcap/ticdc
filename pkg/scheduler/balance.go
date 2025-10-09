@@ -33,6 +33,14 @@ func CheckBalanceStatus(nodeTaskSize map[node.ID]int, allNodes map[node.ID]*node
 			nodeTaskSize[nodeID] = 0
 		}
 	}
+
+	// remove the nodes that are not alive
+	for id, _ := range nodeTaskSize {
+		if _, ok := allNodes[id]; !ok {
+			delete(nodeTaskSize, id)
+		}
+	}
+
 	totalSize := 0
 	for _, ts := range nodeTaskSize {
 		totalSize += ts

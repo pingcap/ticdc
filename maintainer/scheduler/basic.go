@@ -124,7 +124,8 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	// for the split table spans, each time each node can at most have s.schedulingTaskCountPerNode scheduling tasks.
 	// for the normal spans, we don't have the upper limit.
 	size := 0
-	for id := range s.nodeManager.GetAliveNodes() {
+	nodes := s.nodeManager.GetAliveNodes()
+	for id, _ := range nodes {
 		if _, ok := scheduleNodeSize[id]; !ok {
 			scheduleNodeSize[id] = 0
 		}
@@ -135,6 +136,13 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 			} else {
 				log.Warn("available size for scheduler on node is negative", zap.String("node", id.String()), zap.Any("scheduleNodeSize", scheduleNodeSize[id]), zap.Int("schedulingTaskCountPerNode", s.schedulingTaskCountPerNode))
 			}
+		}
+	}
+
+	// remove the nodes that are not alive
+	for id, _ := range scheduleNodeSize {
+		if _, ok := nodes[id]; !ok {
+			delete(scheduleNodeSize, id)
 		}
 	}
 
