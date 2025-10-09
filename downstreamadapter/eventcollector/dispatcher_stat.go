@@ -253,7 +253,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 			expectedSeq = lastEventSeq
 		} else {
 			// Other events' seq is the next sequence number.
-			expectedSeq = lastEventSeq + 1
+			expectedSeq = d.lastEventSeq.Add(1)
 		}
 
 		if event.GetSeq() != expectedSeq {
