@@ -235,7 +235,8 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent,
-		commonEvent.TypeSyncPointEvent:
+		commonEvent.TypeSyncPointEvent,
+		commonEvent.TypeResolvedEvent:
 		log.Debug("check event sequence",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -245,7 +246,16 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 			zap.Uint64("commitTs", event.GetCommitTs()))
 
 		lastEventSeq := d.lastEventSeq.Load()
-		expectedSeq := d.lastEventSeq.Add(1)
+		expectedSeq := uint64(0)
+
+		// Resolved event's seq is the last concrete data event's seq.
+		if event.GetType() == commonEvent.TypeResolvedEvent {
+			expectedSeq = lastEventSeq
+		} else {
+			// Other events' seq is the next sequence number.
+			expectedSeq = lastEventSeq + 1
+		}
+
 		if event.GetSeq() != expectedSeq {
 			log.Warn("Received an out-of-order event, reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
