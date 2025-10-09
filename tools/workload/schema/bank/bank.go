@@ -307,3 +307,37 @@ values(%d,
 func (c *BankWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	panic("unimplemented")
 }
+
+func (c *BankWorkload) BuildDeleteSql(opts schema.DeleteOption) string {
+	deleteType := rand.Intn(3)
+
+	switch deleteType {
+	case 0:
+		// Strategy 1: Random single/multiple row delete by ID
+		var buf bytes.Buffer
+		for i := 0; i < opts.Batch; i++ {
+			id := rand.Int63()
+			if i > 0 {
+				buf.WriteString(";")
+			}
+			buf.WriteString(fmt.Sprintf("DELETE FROM bank%d WHERE id = %d", opts.TableIndex, id))
+		}
+		return buf.String()
+
+	case 1:
+		// Strategy 2: Range delete by ID
+		startID := rand.Int63()
+		endID := startID + int64(opts.Batch*100)
+		return fmt.Sprintf("DELETE FROM bank%d WHERE id BETWEEN %d AND %d LIMIT %d",
+			opts.TableIndex, startID, endID, opts.Batch)
+
+	case 2:
+		// Strategy 3: Conditional delete by other columns
+		col4Value := rand.Intn(200)
+		return fmt.Sprintf("DELETE FROM bank%d WHERE col4 = %d LIMIT %d",
+			opts.TableIndex, col4Value, opts.Batch)
+
+	default:
+		return ""
+	}
+}

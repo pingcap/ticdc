@@ -140,7 +140,6 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 		m.dest = m.origin
 		m.spanController.BindSpanToNode(m.dest, m.origin, m.replicaSet)
 		m.bind = true
-		m.originNodeStopped.Store(true)
 	}
 	if n == m.origin {
 		log.Info("origin node is stopped",

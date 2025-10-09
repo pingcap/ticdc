@@ -1641,7 +1641,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType model.ActionType, tableInfo *model.TableInfo, startTs uint64) (bool, bool, error) {
 	filtered, notSync := false, false
 	if tableFilter != nil && schema != "" && table != "" {
-		filtered = tableFilter.ShouldDiscardDDL(schema, table, ddlType, common.WrapTableInfo(schema, tableInfo), startTs)
+		filtered = tableFilter.ShouldDiscardDDL(schema, table, ddlType, common.WrapTableInfo(schema, tableInfo))
 	}
 	if !filtered {
 		// If the DDL is not filtered, we need to check whether the DDL should be synced to downstream.
@@ -1658,7 +1658,7 @@ func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType m
 			// Thus, we set `NotSync` to true.
 			// If the table is not filtered, we should send the DML events to downstream.
 			// So we set `NotSync` to false, and this corresponding DDL can be applied to log service.
-			notSync, err = tableFilter.ShouldIgnoreDDL(schema, table, query, ddlType, common.WrapTableInfo(schema, tableInfo))
+			notSync, err = tableFilter.ShouldIgnoreDDL(schema, table, query, ddlType, common.WrapTableInfo(schema, tableInfo), startTs)
 			if err != nil {
 				return false, false, err
 			}
@@ -2531,7 +2531,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	allFiltered := true
 	for _, info := range rawEvent.MultipleTableInfos {
 		if tableFilter != nil && tableFilter.ShouldDiscardDDL(
-			rawEvent.SchemaName, info.Name.O, model.ActionType(rawEvent.Type), common.WrapTableInfo(rawEvent.SchemaName, info), rawEvent.StartTs) {
+			rawEvent.SchemaName, info.Name.O, model.ActionType(rawEvent.Type), common.WrapTableInfo(rawEvent.SchemaName, info)) {
 			continue
 		}
 		allFiltered = false

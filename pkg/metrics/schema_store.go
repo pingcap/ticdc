@@ -47,6 +47,15 @@ var (
 			Help:      "The duration of GetTableInfo requests",
 			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 28), // 10us to 1.5h
 		})
+	// SchemaStoreWaitResolvedTsDurationHist is the histogram of waiting duration for resolved ts in schema store.
+	SchemaStoreWaitResolvedTsDurationHist = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "schema_store",
+			Name:      "wait_resolved_ts_duration",
+			Help:      "The duration of waiting for resolved ts in schema store.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms ~ 524s
+		})
 )
 
 func initSchemaStoreMetrics(registry *prometheus.Registry) {
@@ -54,4 +63,5 @@ func initSchemaStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(SchemaStoreResolvedRegisterTableGauge)
 	registry.MustRegister(SchemaStoreGetTableInfoCounter)
 	registry.MustRegister(SchemaStoreGetTableInfoLagHist)
+	registry.MustRegister(SchemaStoreWaitResolvedTsDurationHist)
 }

@@ -233,6 +233,8 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 		if dispatcherItem.GetRemovingStatus() {
 			return
 		}
+
+		// Perform fast synchronous cleanup operations
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
 		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
@@ -246,27 +248,21 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			}
 		}
 
-		count := 0
-		ok := false
-		// We don't want to block the ds handle function, so we just try 10 times.
-		// If the dispatcher is not closed, we can wait for the next message to check it again
-		for !ok && count < 10 {
-			_, ok = dispatcherItem.TryClose()
-			time.Sleep(10 * time.Millisecond)
-			count += 1
-			if count%5 == 0 {
-				log.Info("waiting for dispatcher to close",
-					zap.Stringer("changefeedID", changefeedID),
-					zap.Stringer("dispatcherID", dispatcherItem.GetId()),
-					zap.Int64("mode", dispatcherItem.GetMode()),
-					zap.Any("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
-					zap.Int("count", count),
-				)
-			}
+		// Submit async remove task to thread pool
+		task := &RemoveDispatcherTask{
+			manager:        e,
+			dispatcherItem: dispatcherItem,
+			retryCount:     0,
 		}
-		if ok {
-			dispatcherItem.Remove()
-		}
+		scheduler := GetRemoveDispatcherTaskScheduler()
+		taskHandle := scheduler.Submit(task, time.Now())
+
+		// Save taskHandle for later cancellation
+		e.removeTaskHandles.Store(id, taskHandle)
+
+		log.Info("submitted async remove task",
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Stringer("dispatcherID", id))
 	} else {
 		statusesChan <- dispatcher.TableSpanStatusWithSeq{
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{

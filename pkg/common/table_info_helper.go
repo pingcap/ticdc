@@ -377,8 +377,12 @@ type columnSchema struct {
 	// RowColFieldTpsSlice is used to decode chunk ∂ raw value bytes
 	RowColFieldTpsSlice []*datumTypes.FieldType `json:"row_col_field_tps_slice"`
 
-	// number of virtual columns
-	VirtualColumnCount int `json:"virtual_column_count"`
+	// offset of virtual columns in Columns
+	// for example:
+	// Table has 4 columns: a (physical), b (physical), c (virtual), d (virtual)
+	// TableInfo.Columns order: a, b, c, d
+	// VirtualColumnsOffset will be [2, 3] (indices of virtual columns c and d)
+	VirtualColumnsOffset []int `json:"virtual_columns_offset"`
 	// RowColInfosWithoutVirtualCols is the same as rowColInfos, but without virtual columns
 	RowColInfosWithoutVirtualCols *[]rowcodec.ColInfo `json:"row_col_infos_without_virtual_cols"`
 	// PreSQL is used to restore pre-calculated sqls for insert/update/delete.
@@ -435,7 +439,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 	}
 
 	rowColumnsCurrentOffset := 0
-	colSchema.VirtualColumnCount = 0
 	for i, col := range colSchema.Columns {
 		colSchema.ColumnsOffset[col.ID] = i
 		pkIsHandle := false
@@ -463,7 +466,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 
 			}
 		} else {
-			colSchema.VirtualColumnCount += 1
+			colSchema.VirtualColumnsOffset = append(colSchema.VirtualColumnsOffset, i)
 		}
 		colSchema.RowColInfos[i] = rowcodec.ColInfo{
 			ID:            col.ID,
@@ -557,21 +560,21 @@ func (s *columnSchema) GetPrimaryKey() *model.IndexInfo {
 }
 
 func (s *columnSchema) initRowColInfosWithoutVirtualCols() {
-	if s.VirtualColumnCount == 0 {
+	if len(s.VirtualColumnsOffset) == 0 {
 		s.RowColInfosWithoutVirtualCols = &s.RowColInfos
 		return
 	}
-	colInfos := make([]rowcodec.ColInfo, 0, len(s.RowColInfos)-s.VirtualColumnCount)
+	colInfos := make([]rowcodec.ColInfo, 0, len(s.RowColInfos)-len(s.VirtualColumnsOffset))
 	for i, col := range s.Columns {
 		if IsColCDCVisible(col) {
 			colInfos = append(colInfos, s.RowColInfos[i])
 		}
 	}
-	if len(colInfos) != len(s.RowColInfos)-s.VirtualColumnCount {
+	if len(colInfos) != len(s.RowColInfos)-len(s.VirtualColumnsOffset) {
 		log.Panic("invalid rowColInfosWithoutVirtualCols",
 			zap.Int("len(colInfos)", len(colInfos)),
 			zap.Int("len(ti.rowColInfos)", len(s.RowColInfos)),
-			zap.Int("ti.virtualColumnCount", s.VirtualColumnCount))
+			zap.Ints("ti.VirtualColumnsOffset", s.VirtualColumnsOffset))
 	}
 	s.RowColInfosWithoutVirtualCols = &colInfos
 }

@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -117,6 +118,10 @@ type DispatcherManager struct {
 	closed  atomic.Bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
+
+	// removeTaskHandles stores the task handles for async dispatcher removal
+	// map[common.DispatcherID]*threadpool.TaskHandle
+	removeTaskHandles sync.Map
 
 	sinkQuota uint64
 	redoQuota uint64
@@ -699,6 +704,12 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
 			dispatcherCount--
+			// Cancel the corresponding remove task if exists
+			if handle, ok := e.removeTaskHandles.LoadAndDelete(m.id); ok {
+				handle.(*threadpool.TaskHandle).Cancel()
+				log.Debug("cancelled remove task for dispatcher",
+					zap.Stringer("dispatcherID", m.id))
+			}
 			if common.IsRedoMode(m.mode) {
 				e.cleanRedoDispatcher(m.id, m.schemaID)
 			} else {
@@ -835,6 +846,12 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	e.sink.Close(removeChangefeed)
 	e.cancel()
 	e.wg.Wait()
+
+	e.removeTaskHandles.Range(func(key, value interface{}) bool {
+		handle := value.(*threadpool.TaskHandle)
+		handle.Cancel()
+		return true
+	})
 
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")

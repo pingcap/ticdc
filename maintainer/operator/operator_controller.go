@@ -252,7 +252,7 @@ func (oc *Controller) pollQueueingOperator() (
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
-			zap.String("operator", opID.String()),
+			zap.String("operatorID", opID.String()),
 			zap.String("operator", op.String()))
 		return nil, true
 	}

@@ -38,6 +38,7 @@ type WorkloadConfig struct {
 	BatchSize           int
 	TotalRowCount       uint64
 	PercentageForUpdate float64
+	PercentageForDelete float64
 
 	// Action control
 	Action          string
@@ -78,6 +79,7 @@ func NewWorkloadConfig() *WorkloadConfig {
 		BatchSize:           10,
 		TotalRowCount:       1000000000,
 		PercentageForUpdate: 0,
+		PercentageForDelete: 0,
 
 		// Action control
 		Action:          "prepare",
@@ -111,6 +113,7 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.BatchSize, "batch-size", c.BatchSize, "batch size of each insert/update/delete")
 	flag.Uint64Var(&c.TotalRowCount, "total-row-count", c.TotalRowCount, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
+	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
 	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, cleanup]")
 	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler]")
@@ -135,6 +138,12 @@ func (c *WorkloadConfig) ParseFlags() error {
 	// Validate command line arguments
 	if flags := flag.Args(); len(flags) > 0 {
 		return fmt.Errorf("unparsed flags: %v", flags)
+	}
+
+	// Validate percentage constraints
+	if c.PercentageForUpdate+c.PercentageForDelete > 1.0 {
+		return fmt.Errorf("PercentageForUpdate (%.2f) + PercentageForDelete (%.2f) must be <= 1.0",
+			c.PercentageForUpdate, c.PercentageForDelete)
 	}
 
 	return nil

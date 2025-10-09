@@ -45,7 +45,7 @@ mysql_groups=(
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G07
 	# 'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
-	''
+	'complex_transaction'
 	# G08
 	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
 	# G09

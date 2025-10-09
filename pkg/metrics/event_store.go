@@ -179,6 +179,16 @@ var (
 			Help:      "The duration of notifying dispatchers with resolved ts.",
 			Buckets:   prometheus.ExponentialBuckets(0.00001, 2, 20), // 10us ~ 5.2s,
 		})
+
+	// EventStoreRegisterDispatcherStartTsLagHist is the histogram of startTs lag when registering a dispatcher.
+	EventStoreRegisterDispatcherStartTsLagHist = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "register_dispatcher_start_ts_lag",
+			Help:      "The lag of startTs when registering a dispatcher.",
+			Buckets:   LagBucket(),
+		})
 )
 
 func initEventStoreMetrics(registry *prometheus.Registry) {
@@ -202,4 +212,5 @@ func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreWriteRequestsCount)
 	registry.MustRegister(EventStoreReadDurationHistogram)
 	registry.MustRegister(EventStoreNotifyDispatcherDurationHist)
+	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
 }
