@@ -6794,23 +6794,19 @@
         },
         {
           "aliasColors": {},
-          "bars": false,
           "dashLength": 10,
-          "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
           "fill": 1,
-          "fillGradient": 0,
           "gridPos": {
             "h": 6,
             "w": 12,
             "x": 12,
             "y": 37
           },
-          "hiddenSeries": false,
           "id": 10071,
           "legend": {
             "alignAsTable": true,
@@ -6828,31 +6824,42 @@
           "options": {
             "alertThreshold": true
           },
-          "percentage": false,
           "pluginVersion": "7.5.17",
           "pointradius": 2,
-          "points": false,
           "renderer": "flot",
           "seriesOverrides": [],
           "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
           "targets": [
             {
-              "exemplar": true,
-              "expr": "sum(rate(ticdc_changefeed_handle_maintainer_request{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, changefeed, instance, type)",
-              "hide": false,
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_maintainer_handle_event_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,namespace,changefeed))",
+              "legendFormat": "99.9-{{namespace}}-{{changefeed}}",
               "interval": "",
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{type}}",
+              "exemplar": true,
+              "hide": false,
               "queryType": "randomWalk",
               "refId": "A"
+            },
+            {
+              "expr": "sum(rate(ticdc_maintainer_handle_event_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed) / \nsum(rate(ticdc_maintainer_handle_event_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed)",
+              "legendFormat": "avg-{{namespace}}-{{changefeed}}",
+              "interval": "",
+              "exemplar": true,
+              "refId": "B",
+              "hide": false
             }
           ],
-          "thresholds": [],
-          "timeFrom": null,
+          "thresholds": [
+            {
+              "colorMode": "critical",
+              "op": "gt",
+              "fill": true,
+              "line": true,
+              "yaxis": "left",
+              "$$hashKey": "object:411"
+            }
+          ],
           "timeRegions": [],
-          "timeShift": null,
-          "title": "Maintainer Request Handle Result",
+          "title": "Maintainer Handle Event Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -6869,12 +6876,13 @@
           "yaxes": [
             {
               "decimals": 0,
-              "format": "none",
+              "format": "s",
               "label": null,
-              "logBase": 1,
+              "logBase": 2,
               "max": null,
               "min": "0",
-              "show": true
+              "show": true,
+              "$$hashKey": "object:283"
             },
             {
               "format": "short",
@@ -6882,13 +6890,24 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": false
+              "show": false,
+              "$$hashKey": "object:284"
             }
           ],
           "yaxis": {
             "align": false,
             "alignLevel": null
-          }
+          },
+          "bars": false,
+          "dashes": false,
+          "fillGradient": 0,
+          "hiddenSeries": false,
+          "percentage": false,
+          "points": false,
+          "stack": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null
         }
       ],
       "title": "Maintainer",
