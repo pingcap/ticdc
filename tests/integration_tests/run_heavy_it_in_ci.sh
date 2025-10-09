@@ -68,7 +68,7 @@ mysql_groups=(
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'generate_column many_pk_or_uk'
 	# G01
 	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
 	# G02
@@ -76,7 +76,7 @@ kafka_groups=(
 	# G03
 	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
-	'open_protocol_claim_check open_protocol_handle_key_only'
+	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
 	# G05
 	'move_table drop_many_tables'
 	# G06
@@ -86,7 +86,7 @@ kafka_groups=(
 	# G08
 	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
 	# G09
-	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume'
+	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume multi_source'
 	# G10
 	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
@@ -143,7 +143,7 @@ storage_groups=(
 	# G01
 	csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered
 	# G02
-	'canal_json_storage_basic canal_json_storage_partition_table'
+	'canal_json_storage_basic canal_json_storage_partition_table random_drop_message'
 	# G03
 	'csv_storage_basic storage_csv_update'
 	# G04
