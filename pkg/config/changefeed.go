@@ -356,15 +356,23 @@ func (info *ChangeFeedInfo) GetTargetTs() uint64 {
 
 // Marshal returns the json marshal format of a ChangeFeedInfo
 func (info *ChangeFeedInfo) Marshal() (string, error) {
-	// Create a shallow copy to avoid modifying the original object
-	infoToMarshal := *info
-	if infoToMarshal.Error != nil && len(infoToMarshal.Error.Message) > 100 {
-		// Create a copy of the error to avoid modifying the original
+	return info.MarshalWithTruncation(true)
+}
+
+// MarshalWithTruncation allows controlling whether to truncate error messages
+func (info *ChangeFeedInfo) MarshalWithTruncation(truncateError bool) (string, error) {
+	var dataToMarshal interface{} = info
+
+	if truncateError && info.Error != nil && len(info.Error.Message) > 100 {
+		infoToMarshal := *info
+		// Create a complete deep copy error message to avoid any data races
 		errorCopy := *infoToMarshal.Error
 		errorCopy.Message = errorCopy.Message[:100] + "..."
 		infoToMarshal.Error = &errorCopy
+		dataToMarshal = &infoToMarshal
 	}
-	data, err := json.Marshal(&infoToMarshal)
+
+	data, err := json.Marshal(dataToMarshal)
 	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
 }
 
@@ -380,7 +388,8 @@ func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 
 // Clone returns a cloned ChangeFeedInfo
 func (info *ChangeFeedInfo) Clone() (*ChangeFeedInfo, error) {
-	s, err := info.Marshal()
+	// Use MarshalWithTruncation(false) to preserve original data in clones
+	s, err := info.MarshalWithTruncation(false)
 	if err != nil {
 		return nil, err
 	}
