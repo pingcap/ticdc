@@ -865,7 +865,7 @@ func TestHandleDataEvents(t *testing.T) {
 					From: &remoteServerID,
 					Event: &mockEvent{
 						eventType: commonEvent.TypeResolvedEvent,
-						seq:       2,
+						seq:       1,
 						epoch:     10,
 						commitTs:  100,
 					},
