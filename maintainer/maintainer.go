@@ -296,7 +296,6 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration))
 			}
-
 		}
 		m.handleEventDuration.Observe(duration.Seconds())
 	}()
