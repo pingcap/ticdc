@@ -16,6 +16,7 @@ package logcoordinator
 import (
 	"bytes"
 	"context"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -27,8 +28,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -48,8 +52,17 @@ type requestAndTarget struct {
 	target node.ID
 }
 
+type changefeedState struct {
+	cfID       common.ChangeFeedID
+	nodeStates map[node.ID]uint64
+
+	resolvedTsGauge    prometheus.Gauge
+	resolvedTsLagGauge prometheus.Gauge
+}
+
 type logCoordinator struct {
 	messageCenter messaging.MessageCenter
+	pdClock       pdutil.Clock
 
 	nodes struct {
 		sync.Mutex
@@ -61,6 +74,12 @@ type logCoordinator struct {
 		m map[node.ID]*logservicepb.EventStoreState
 	}
 
+	changefeedStates struct {
+		sync.Mutex
+		// GID -> changefeedState
+		m map[common.GID]*changefeedState
+	}
+
 	requestChan *chann.DrainableChann[requestAndTarget]
 }
 
@@ -68,10 +87,12 @@ func New() LogCoordinator {
 	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	c := &logCoordinator{
 		messageCenter: messageCenter,
+		pdClock:       appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		requestChan:   chann.NewAutoDrainChann[requestAndTarget](),
 	}
 	c.nodes.m = make(map[node.ID]*node.Info)
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
+	c.changefeedStates.m = make(map[common.GID]*changefeedState)
 
 	// recv and handle messages
 	messageCenter.RegisterHandler(logCoordinatorTopic, c.handleMessage)
@@ -86,12 +107,16 @@ func New() LogCoordinator {
 }
 
 func (c *logCoordinator) Run(ctx context.Context) error {
-	tick := time.NewTicker(time.Second)
+	broadcastTick := time.NewTicker(time.Second)
+	defer broadcastTick.Stop()
+	metricTick := time.NewTicker(1 * time.Second)
+	defer metricTick.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-tick.C:
+		case <-broadcastTick.C:
 			// send broadcast message to all nodes
 			c.nodes.Lock()
 			messages := make([]*messaging.TargetMessage, 0, 2*len(c.nodes.m))
@@ -116,6 +141,8 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 			if err != nil {
 				log.Warn("send reusable event service response failed", zap.Error(err))
 			}
+		case <-metricTick.C:
+			c.updateChangefeedMetrics()
 		}
 	}
 }
@@ -125,6 +152,8 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 		switch msg := msg.(type) {
 		case *logservicepb.EventStoreState:
 			c.updateEventStoreState(targetMessage.From, msg)
+		case *logservicepb.ChangefeedStates:
+			c.updateChangefeedStates(targetMessage.From, msg)
 		case *logservicepb.ReusableEventServiceRequest:
 			c.requestChan.In() <- requestAndTarget{
 				req:    msg,
@@ -159,6 +188,84 @@ func (c *logCoordinator) updateEventStoreState(nodeID node.ID, newState *logserv
 	defer c.eventStoreStates.Unlock()
 
 	c.eventStoreStates.m[nodeID] = newState
+}
+
+func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservicepb.ChangefeedStates) {
+	c.changefeedStates.Lock()
+	defer c.changefeedStates.Unlock()
+
+	// Create a set of incoming changefeed GIDs for efficient lookup.
+	incomingGIDs := make(map[common.GID]struct{})
+	for _, state := range states.States {
+		cfID := common.NewChangefeedIDFromPB(state.GetChangefeedID())
+		incomingGIDs[cfID.ID()] = struct{}{}
+	}
+
+	// First, handle changefeeds that might have been removed from the reporting node.
+	for gid, state := range c.changefeedStates.m {
+		// If the node was previously reporting for this changefeed...
+		if _, exists := state.nodeStates[from]; exists {
+			// ...but is no longer in the incoming message, it means the changefeed was removed from this node.
+			if _, incoming := incomingGIDs[gid]; !incoming {
+				delete(state.nodeStates, from)
+				log.Info("changefeed removed from node", zap.Stringer("changefeedID", state.cfID), zap.String("nodeID", string(from)))
+				// If the changefeed has no more nodes, remove the changefeed state and its associated metrics.
+				if len(state.nodeStates) == 0 {
+					metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					delete(c.changefeedStates.m, gid)
+					log.Info("changefeed state removed as it has no active nodes", zap.Stringer("changefeedID", state.cfID))
+				}
+			}
+		}
+	}
+
+	// Then, update with the new states from the message.
+	for _, state := range states.States {
+		cfID := common.NewChangefeedIDFromPB(state.GetChangefeedID())
+		gid := cfID.ID()
+		if _, ok := c.changefeedStates.m[gid]; !ok {
+			c.changefeedStates.m[gid] = &changefeedState{
+				cfID:               cfID,
+				nodeStates:         make(map[node.ID]uint64),
+				resolvedTsGauge:    metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				resolvedTsLagGauge: metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+			}
+		}
+		c.changefeedStates.m[gid].nodeStates[from] = state.GetResolvedTs()
+	}
+}
+
+func (c *logCoordinator) updateChangefeedMetrics() {
+	pdTime := c.pdClock.CurrentTime()
+	pdPhyTs := oracle.GetPhysical(pdTime)
+
+	c.changefeedStates.Lock()
+	defer c.changefeedStates.Unlock()
+
+	for _, state := range c.changefeedStates.m {
+		if len(state.nodeStates) == 0 {
+			continue
+		}
+
+		minResolvedTs := uint64(math.MaxUint64)
+		for _, resolvedTs := range state.nodeStates {
+			if resolvedTs < minResolvedTs {
+				minResolvedTs = resolvedTs
+			}
+		}
+
+		if minResolvedTs == math.MaxUint64 {
+			log.Warn("minResolvedTs is MaxUint64, this should not happen",
+				zap.Stringer("changefeedID", state.cfID))
+			continue
+		}
+
+		phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
+		state.resolvedTsGauge.Set(float64(phyResolvedTs))
+		lag := float64(pdPhyTs-phyResolvedTs) / 1e3
+		state.resolvedTsLagGauge.Set(lag)
+	}
 }
 
 // getCandidateNode return all nodes(exclude the request node) which may contain data for `span` from `startTs`,

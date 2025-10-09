@@ -44,7 +44,7 @@ mysql_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
-	'http_api http_api_tls ddl_wait fail_over_ddl_G'
+	'http_api http_api_tls fail_over_ddl_G'
 	# G07
 	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config'
 	# G08

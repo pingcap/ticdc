@@ -37,6 +37,8 @@ function run() {
 	run_sql "alter table test.t add index (col);"
 	# make sure all tables are equal in upstream and downstream
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 180
+
+	echo "start to truncate table"
 	# use `truncate table` ddl as a barrier to ensure the slow `add index` operation
 	# completes before the test finishes.
 	# because `truncate table` and `create table` are processed sequentially by table trigger dispatcher.
@@ -48,8 +50,8 @@ function run() {
 	# ensure all dml / ddl related to test.t finish
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 
-	check_logs_contains $WORK_DIR "DDL replicate success"
-	check_logs_contains $WORK_DIR "DDL is running downstream"
+	ensure 100 "check_logs_contains $WORK_DIR 'DDL replicate success'"
+	ensure 100 "check_logs_contains $WORK_DIR 'DDL is running downstream'"
 	cleanup_process $CDC_BINARY
 }
 

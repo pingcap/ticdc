@@ -583,6 +583,7 @@ func addTableInfoToBatch(
 }
 
 // persistSchemaSnapshot write database/table/partition info to disks.
+// Notes: The GC may happens during the snapshotMeta is using, so the caller must be careful.
 func persistSchemaSnapshot(
 	db *pebble.DB,
 	tiStore kv.Storage,
@@ -658,6 +659,13 @@ func persistSchemaSnapshot(
 					}
 					break
 				}
+
+				// If this error is caused by the GC life time is shorter than transaction duration,
+				// it means the snapshot is lost forever, so we should return the error to the caller.
+				if isGCLifeTimeError(err) {
+					return nil, nil, nil, err
+				}
+
 				time.Sleep(100 * time.Millisecond)
 				log.Warn("get tables failed", zap.Error(err))
 			}
@@ -669,6 +677,10 @@ func persistSchemaSnapshot(
 			zap.Any("duration", time.Since(start).Seconds()))
 		return databaseMap, tableMap, partitionMap, nil
 	}
+}
+
+func isGCLifeTimeError(err error) bool {
+	return strings.Contains(err.Error(), "GC life time is shorter than transaction duration")
 }
 
 func cleanObsoleteData(db *pebble.DB, oldGcTs uint64, gcTs uint64) {

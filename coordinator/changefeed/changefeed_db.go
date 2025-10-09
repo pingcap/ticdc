@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"go.uber.org/zap"
@@ -52,6 +53,16 @@ func NewChangefeedDB(version int64) *ChangefeedDB {
 	db.ReplicationDB = replica.NewReplicationDB[common.ChangeFeedID, *Changefeed](db.id,
 		db.withRLock, replica.NewEmptyChecker)
 	return db
+}
+
+func (db *ChangefeedDB) Init(allChangefeeds map[common.ChangeFeedID]*Changefeed) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+	// Only add the changefeed to the changefeedDB and do nothing
+	for _, cf := range allChangefeeds {
+		db.changefeeds[cf.ID] = cf
+		db.changefeedDisplayNames[cf.ID.DisplayName] = cf.ID
+	}
 }
 
 func (db *ChangefeedDB) withRLock(action func()) {
@@ -126,6 +137,9 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 		log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
 		db.stopped[cfID] = cf
 	}
+
+	metrics.ChangefeedStatusGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
 
 	return nodeID
 }

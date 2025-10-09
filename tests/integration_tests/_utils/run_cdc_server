@@ -156,15 +156,15 @@ fi
 # it is acceptable and will retry, so you cannot quit.
 set +e
 
-get_info_fail_msg="failed to get info:"
-etcd_info_msg="etcd info"
-# If tls is set, then we need to pass the certificate and use https.
-# Note that the certificate name may be specified.
-if [ -z "$tls_dir" ]; then
-	curl_status_cmd="curl -vsL --max-time 20 http://$addr_url/debug/info --user ticdc:ticdc_secret -vsL"
-else
-	curl_status_cmd="curl --cacert $tls_dir/ca.pem --cert $tls_dir/$certcn_name.pem --key $tls_dir/$certcn_name-key.pem --user ticdc:ticdc_secret -vsL --max-time 20 https://$addr_url/debug/info"
-fi
+# get_info_fail_msg="failed to get info:"
+# etcd_info_msg="etcd info"
+# # If tls is set, then we need to pass the certificate and use https.
+# # Note that the certificate name may be specified.
+# if [ -z "$tls_dir" ]; then
+# 	curl_status_cmd="curl -vsL --max-time 20 http://$addr_url/api/v2/changefeeds --user ticdc:ticdc_secret -vsL"
+# else
+# 	curl_status_cmd="curl --cacert $tls_dir/ca.pem --cert $tls_dir/$certcn_name.pem --key $tls_dir/$certcn_name-key.pem --user ticdc:ticdc_secret -vsL --max-time 20 https://$addr_url/api/v2/changefeeds"
+# fi
 
 # If the command is supposed to fail (in check usage tips test), just exit without retry
 if [[ "$supposed_to_fail" != "no" ]]; then
@@ -173,9 +173,13 @@ if [[ "$supposed_to_fail" != "no" ]]; then
 fi
 
 for ((i = 0; i <= 50; i++)); do
-	res=$($curl_status_cmd)
-	# Make sure we get the capture info(etcd_info_msg) and that there are no errors(get_info_fail_msg).
-	if (! echo "$res" | grep -q "$get_info_fail_msg") && (echo "$res" | grep -q "$etcd_info_msg"); then
+	# Check if curl returns HTTP 200 OK status code
+	if [ -z "$tls_dir" ]; then
+		http_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 20 http://$addr_url/api/v2/changefeeds --user ticdc:ticdc_secret)
+	else
+		http_code=$(curl -o /dev/null -s -w "%{http_code}" --cacert $tls_dir/ca.pem --cert $tls_dir/$certcn_name.pem --key $tls_dir/$certcn_name-key.pem --user ticdc:ticdc_secret --max-time 20 https://$addr_url/api/v2/changefeeds)
+	fi
+	if [ "$http_code" = "200" ]; then
 		break
 	fi
 	if [ "$i" -eq 50 ]; then

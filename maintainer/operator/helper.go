@@ -17,7 +17,7 @@ import "time"
 
 const (
 	// minSendMessageInterval is the minimum interval to send same message to the dispatcher.
-	minSendMessageInterval = 5 * time.Second
+	minSendMessageInterval = 10 * time.Second
 )
 
 // sendThrottler helps to throttle message sending.

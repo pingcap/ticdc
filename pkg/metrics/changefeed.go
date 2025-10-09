@@ -18,14 +18,6 @@ import (
 )
 
 var (
-	ChangefeedBarrierTsGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "barrier_ts",
-			Help:      "barrier ts of changefeeds",
-		}, []string{"namespace", "changefeed"})
-
 	MaintainerCheckpointTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -40,14 +32,6 @@ var (
 			Subsystem: "maintainer",
 			Name:      "checkpoint_ts_lag",
 			Help:      "checkpoint ts lag of maintainer in seconds",
-		}, []string{"namespace", "changefeed"})
-
-	CurrentPDTsGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "current_pd_ts",
-			Help:      "The current PD ts",
 		}, []string{"namespace", "changefeed"})
 
 	MaintainerResolvedTsGauge = prometheus.NewGaugeVec(
@@ -104,28 +88,16 @@ var (
 			Name:      "checkpoint_ts_lag",
 			Help:      "changefeed checkpoint ts lag in changefeeds in seconds",
 		}, []string{"namespace", "changefeed"})
-
-	ChangefeedTickDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "changefeed_tick_duration",
-			Help:      "Bucketed histogram of owner tick changefeed reactor time (s).",
-			Buckets:   prometheus.ExponentialBuckets(0.01 /* 10 ms */, 2, 18),
-		}, []string{"namespace", "changefeed"})
 )
 
 func initChangefeedMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(ChangefeedBarrierTsGauge)
 	registry.MustRegister(MaintainerCheckpointTsGauge)
 	registry.MustRegister(MaintainerCheckpointTsLagGauge)
 	registry.MustRegister(MaintainerResolvedTsGauge)
 	registry.MustRegister(MaintainerResolvedTsLagGauge)
-	registry.MustRegister(CurrentPDTsGauge)
 	registry.MustRegister(CoordinatorCounter)
 	registry.MustRegister(MaintainerGauge)
 	registry.MustRegister(HandleMaintainerRequsetCounter)
 	registry.MustRegister(ChangefeedStatusGauge)
-	registry.MustRegister(ChangefeedTickDuration)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 }

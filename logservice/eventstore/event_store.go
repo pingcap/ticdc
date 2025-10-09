@@ -66,7 +66,9 @@ type Subscriber struct {
 type EventStore interface {
 	common.SubModule
 
+	// Note: changefeedID is just a tag for dispatcher, avoid abuse it
 	RegisterDispatcher(
+		changefeedID common.ChangeFeedID,
 		dispatcherID common.DispatcherID,
 		span *heartbeatpb.TableSpan,
 		startTS uint64,
@@ -75,7 +77,7 @@ type EventStore interface {
 		bdrMode bool,
 	) bool
 
-	UnregisterDispatcher(dispatcherID common.DispatcherID)
+	UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID)
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
@@ -102,6 +104,8 @@ type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	// data span of this dispatcher
 	tableSpan *heartbeatpb.TableSpan
+
+	resolvedTs atomic.Uint64
 	// the max ts of events which is not needed by this dispatcher
 	checkpointTs uint64
 	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
@@ -137,6 +141,8 @@ type subscriptionStat struct {
 	tableSpan *heartbeatpb.TableSpan
 	// dispatchers depend on this subscription
 	dispatchers struct {
+		// Avoid holding this lock during frequent operations,
+		// as it may delay sending resolved timestamps to the dispatchers.
 		sync.Mutex
 		subscribers map[common.DispatcherID]*Subscriber
 	}
@@ -165,6 +171,11 @@ type subscriptionStat struct {
 }
 
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
+
+type changefeedStat struct {
+	mutex       sync.Mutex
+	dispatchers map[common.DispatcherID]*dispatcherStat
+}
 
 type eventWithCallback struct {
 	subID   logpuller.SubscriptionID
@@ -212,6 +223,9 @@ type eventStore struct {
 		// table id -> subscription stats
 		tableStats map[int64]subscriptionStats
 	}
+
+	// changefeed id -> changefeedStat
+	changefeedMeta sync.Map
 }
 
 const (
@@ -348,7 +362,7 @@ func (e *eventStore) Run(ctx context.Context) error {
 	})
 
 	eg.Go(func() error {
-		return e.updateMetrics(ctx)
+		return e.runMetricsCollector(ctx)
 	})
 
 	eg.Go(func() error {
@@ -374,6 +388,7 @@ func (e *eventStore) Close(ctx context.Context) error {
 }
 
 func (e *eventStore) RegisterDispatcher(
+	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	dispatcherSpan *heartbeatpb.TableSpan,
 	startTs uint64,
@@ -381,6 +396,18 @@ func (e *eventStore) RegisterDispatcher(
 	onlyReuse bool,
 	bdrMode bool,
 ) bool {
+	// Defer a cleanup function that will run if registration fails.
+	// The success flag is set to true only at the end of successful registration paths.
+	success := false
+	defer func() {
+		if !success {
+			log.Info("register dispatcher failed, cleaning up from changefeed stat",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID))
+			e.removeDispatcherFromChangefeedStat(changefeedID, dispatcherID)
+		}
+	}()
+
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
@@ -409,6 +436,37 @@ func (e *eventStore) RegisterDispatcher(
 		tableSpan:    dispatcherSpan,
 		checkpointTs: startTs,
 	}
+	stat.resolvedTs.Store(startTs)
+
+	// Loop to handle the race condition where a cfStat might be deleted
+	// after being loaded but before being locked.
+	for {
+		var cfStat *changefeedStat
+		if actual, ok := e.changefeedMeta.Load(changefeedID); ok {
+			cfStat = actual.(*changefeedStat)
+		} else {
+			newCfStat := &changefeedStat{dispatchers: make(map[common.DispatcherID]*dispatcherStat)}
+			actual, _ := e.changefeedMeta.LoadOrStore(changefeedID, newCfStat)
+			cfStat = actual.(*changefeedStat)
+		}
+
+		cfStat.mutex.Lock()
+		// After acquiring the lock, we must re-check if this cfStat is still the one
+		// in the map. If it has been removed and replaced, we must retry with the new one.
+		if current, ok := e.changefeedMeta.Load(changefeedID); !ok || current != cfStat {
+			cfStat.mutex.Unlock()
+			continue // Retry the loop
+		}
+
+		cfStat.dispatchers[dispatcherID] = stat
+		cfStat.mutex.Unlock()
+		break // Success
+	}
+
+	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
+		util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs)
+		notifier(resolvedTs, latestCommitTs)
+	}
 
 	e.dispatcherMeta.Lock()
 	var bestMatch *subscriptionStat
@@ -430,7 +488,7 @@ func (e *eventStore) RegisterDispatcher(
 					subStat.idleTime.Store(0)
 					subStat.dispatchers.Lock()
 					subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-						notifyFunc: notifier,
+						notifyFunc: wrappedNotifier,
 						isStopped:  atomic.Bool{},
 					}
 					subStat.dispatchers.Unlock()
@@ -442,6 +500,7 @@ func (e *eventStore) RegisterDispatcher(
 						zap.Uint64("subscriptionID", uint64(subStat.subID)),
 						zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
+					success = true
 					return true
 				}
 
@@ -463,7 +522,7 @@ func (e *eventStore) RegisterDispatcher(
 		bestMatch.idleTime.Store(0)
 		bestMatch.dispatchers.Lock()
 		bestMatch.dispatchers.subscribers[dispatcherID] = &Subscriber{
-			notifyFunc: notifier,
+			notifyFunc: wrappedNotifier,
 			isStopped:  atomic.Bool{},
 		}
 		bestMatch.dispatchers.Unlock()
@@ -479,6 +538,7 @@ func (e *eventStore) RegisterDispatcher(
 			zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
 		// when onlyReuse is true, we don't need a exact span match
 		if onlyReuse {
+			success = true
 			return true
 		}
 	} else {
@@ -499,7 +559,7 @@ func (e *eventStore) RegisterDispatcher(
 	}
 	subStat.dispatchers.subscribers = make(map[common.DispatcherID]*Subscriber)
 	subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-		notifyFunc: notifier,
+		notifyFunc: wrappedNotifier,
 		isStopped:  atomic.Bool{},
 	}
 	subStat.checkpointTs.Store(startTs)
@@ -578,24 +638,42 @@ func (e *eventStore) RegisterDispatcher(
 		ResolvedTs:   startTs,
 	}
 	metrics.EventStoreSubscriptionGauge.Inc()
+	success = true
 	return true
 }
 
-func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) {
-	log.Info("unregister dispatcher", zap.Stringer("dispatcherID", dispatcherID))
+func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
+	log.Info("unregister dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
 	defer func() {
-		log.Info("unregister dispatcher done", zap.Stringer("dispatcherID", dispatcherID))
+		log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
 	}()
 	e.dispatcherMeta.Lock()
-	defer e.dispatcherMeta.Unlock()
-	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
-	if !ok {
-		return
+	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
+		e.detachFromSubStat(dispatcherID, stat.subStat)
+		e.detachFromSubStat(dispatcherID, stat.pendingSubStat)
+		e.detachFromSubStat(dispatcherID, stat.removingSubStat)
+		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
+	e.dispatcherMeta.Unlock()
 
-	e.detachFromSubStat(dispatcherID, stat.subStat)
-	e.detachFromSubStat(dispatcherID, stat.pendingSubStat)
-	delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
+	e.removeDispatcherFromChangefeedStat(changefeedID, dispatcherID)
+}
+
+// removeDispatcherFromChangefeedStat removes a dispatcher from its changefeed's statistics.
+// If the changefeed becomes empty after the removal, the changefeed statistic itself is deleted.
+func (e *eventStore) removeDispatcherFromChangefeedStat(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
+	if v, ok := e.changefeedMeta.Load(changefeedID); ok {
+		cfStat := v.(*changefeedStat)
+		cfStat.mutex.Lock()
+		defer cfStat.mutex.Unlock()
+		delete(cfStat.dispatchers, dispatcherID)
+
+		// If the changefeed has no more dispatchers, remove the changefeed stat.
+		if len(cfStat.dispatchers) == 0 {
+			e.changefeedMeta.Delete(changefeedID)
+			log.Info("changefeed stat is empty, removed it", zap.Stringer("changefeedID", changefeedID))
+		}
+	}
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(
@@ -881,19 +959,22 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 	}
 }
 
-func (e *eventStore) updateMetrics(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Second)
+func (e *eventStore) runMetricsCollector(ctx context.Context) error {
+	storeMetricsTicker := time.NewTicker(10 * time.Second)
+	changefeedMetricsTicker := time.NewTicker(1 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
-			e.updateMetricsOnce()
+		case <-storeMetricsTicker.C:
+			e.collectAndReportStoreMetrics()
+		case <-changefeedMetricsTicker.C:
+			e.collectAndReportChangefeedMetrics()
 		}
 	}
 }
 
-func (e *eventStore) updateMetricsOnce() {
+func (e *eventStore) collectAndReportStoreMetrics() {
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)
@@ -905,20 +986,20 @@ func (e *eventStore) updateMetricsOnce() {
 		metrics.EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
 	}
 
-	pdTime := e.pdClock.CurrentTime()
-	pdPhyTs := oracle.GetPhysical(pdTime)
-	minResolvedTs := uint64(0)
+	pdCurrentTime := e.pdClock.CurrentTime()
+	pdPhysicalTime := oracle.GetPhysical(pdCurrentTime)
+	globalMinResolvedTs := uint64(0)
 	uninitializedStatCount := 0
 	e.dispatcherMeta.RLock()
 	for _, subStats := range e.dispatcherMeta.tableStats {
 		for _, subStat := range subStats {
 			// resolved ts lag
-			resolvedTs := subStat.resolvedTs.Load()
-			resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
-			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
+			subResolvedTs := subStat.resolvedTs.Load()
+			subResolvedPhysicalTime := oracle.ExtractPhysical(subResolvedTs)
+			subResolvedTsLagInSec := float64(pdPhysicalTime-subResolvedPhysicalTime) / 1e3
 			const largeResolvedTsLagInSecs = 30
 			if subStat.initialized.Load() {
-				if resolvedLag >= largeResolvedTsLagInSecs {
+				if subResolvedTsLagInSec >= largeResolvedTsLagInSecs {
 					lastReceiveDMLTimeRepr := "never"
 					if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
 						lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
@@ -926,8 +1007,8 @@ func (e *eventStore) updateMetricsOnce() {
 					log.Warn("resolved ts lag is too large for initialized subscription",
 						zap.Uint64("subID", uint64(subStat.subID)),
 						zap.Int64("tableID", subStat.tableSpan.TableID),
-						zap.Uint64("resolvedTs", resolvedTs),
-						zap.Float64("resolvedLag(s)", resolvedLag),
+						zap.Uint64("resolvedTs", subResolvedTs),
+						zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
 						zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
 						zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
 						zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
@@ -937,28 +1018,71 @@ func (e *eventStore) updateMetricsOnce() {
 			} else {
 				uninitializedStatCount++
 			}
-			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
-			if minResolvedTs == 0 || resolvedTs < minResolvedTs {
-				minResolvedTs = resolvedTs
+			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(subResolvedTsLagInSec)
+			if globalMinResolvedTs == 0 || subResolvedTs < globalMinResolvedTs {
+				globalMinResolvedTs = subResolvedTs
 			}
 			// checkpoint ts lag
-			checkpointTs := subStat.checkpointTs.Load()
-			watermarkPhyTs := oracle.ExtractPhysical(checkpointTs)
-			watermarkLag := float64(pdPhyTs-watermarkPhyTs) / 1e3
-			metrics.EventStoreDispatcherWatermarkLagHist.Observe(float64(watermarkLag))
+			subCheckpointTs := subStat.checkpointTs.Load()
+			subCheckpointPhysicalTime := oracle.ExtractPhysical(subCheckpointTs)
+			subCheckpointTsLagInSec := float64(pdPhysicalTime-subCheckpointPhysicalTime) / 1e3
+			metrics.EventStoreDispatcherWatermarkLagHist.Observe(subCheckpointTsLagInSec)
 		}
 	}
 	e.dispatcherMeta.RUnlock()
 	if uninitializedStatCount > 0 {
 		log.Info("found uninitialized subscriptions", zap.Int("count", uninitializedStatCount))
 	}
-	if minResolvedTs == 0 {
+	if globalMinResolvedTs == 0 {
 		metrics.EventStoreResolvedTsLagGauge.Set(0)
 		return
 	}
-	minResolvedPhyTs := oracle.ExtractPhysical(minResolvedTs)
-	eventStoreResolvedTsLag := float64(pdPhyTs-minResolvedPhyTs) / 1e3
-	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLag)
+	globalMinResolvedPhysicalTime := oracle.ExtractPhysical(globalMinResolvedTs)
+	eventStoreResolvedTsLagInSec := float64(pdPhysicalTime-globalMinResolvedPhysicalTime) / 1e3
+	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
+}
+
+func (e *eventStore) collectAndReportChangefeedMetrics() {
+	// Collect resolved ts for each changefeed and send to log coordinator.
+	changefeedStates := &logservicepb.ChangefeedStates{
+		States: make([]*logservicepb.ChangefeedStateEntry, 0),
+	}
+	e.changefeedMeta.Range(func(key, value interface{}) bool {
+		changefeedID := key.(common.ChangeFeedID)
+		cfStat := value.(*changefeedStat)
+
+		// By taking the lock here, we ensure that the set of dispatchers for this
+		// changefeed does not change while we calculate the minimum resolved ts.
+		// The `advanceResolvedTs` function updates an individual dispatcher's resolvedTs
+		// atomically, so it does not conflict with this lock.
+		cfStat.mutex.Lock()
+		cfMinResolvedTs := uint64(math.MaxUint64)
+		found := false
+		for _, dispatcherStat := range cfStat.dispatchers {
+			dispatcherResolvedTs := dispatcherStat.resolvedTs.Load()
+			if dispatcherResolvedTs < cfMinResolvedTs {
+				cfMinResolvedTs = dispatcherResolvedTs
+			}
+			found = true
+		}
+		cfStat.mutex.Unlock()
+
+		if found {
+			changefeedStates.States = append(changefeedStates.States, &logservicepb.ChangefeedStateEntry{
+				ChangefeedID: changefeedID.ToPB(),
+				ResolvedTs:   cfMinResolvedTs,
+			})
+		}
+		return true
+	})
+
+	coordinatorID := e.getCoordinatorInfo()
+	if coordinatorID != "" && len(changefeedStates.States) > 0 {
+		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, changefeedStates)
+		if err := e.messageCenter.SendEvent(msg); err != nil {
+			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
+		}
+	}
 }
 
 func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) error {

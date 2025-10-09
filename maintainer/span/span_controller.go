@@ -15,7 +15,6 @@ package span
 
 import (
 	"context"
-	"math"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -184,8 +183,7 @@ func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 	}
 }
 
-func (c *Controller) GetMinCheckpointTsForAbsentSpans() uint64 {
-	minCheckpointTs := uint64(math.MaxUint64)
+func (c *Controller) GetMinCheckpointTsForAbsentSpans(minCheckpointTs uint64) uint64 {
 	for _, span := range c.GetAbsent() {
 		if span.GetStatus().CheckpointTs < minCheckpointTs {
 			minCheckpointTs = span.GetStatus().CheckpointTs

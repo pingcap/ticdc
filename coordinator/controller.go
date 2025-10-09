@@ -144,6 +144,7 @@ func NewController(
 		bootstrapperID,
 		c.newBootstrapMessage,
 	)
+
 	// init bootstrapper nodes
 	nodes := c.nodeManager.GetAliveNodes()
 	// detect the capture changes
@@ -553,6 +554,7 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if !c.bootstrapped.Load() {
 		return errors.New("not initialized, wait a moment")
 	}
+
 	old := c.changefeedDB.GetByChangefeedDisplayName(info.ChangefeedID.DisplayName)
 	if old != nil {
 		return errors.New("changefeed already exists")
