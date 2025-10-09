@@ -947,7 +947,8 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 	for _, status := range s.allTasks {
 		nodeID := status.GetNodeID()
 		if nodeID == "" {
-			log.Panic("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
+			log.Error("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
+			continue
 		}
 
 		if _, ok := lastThreeTrafficPerNode[nodeID]; !ok {
