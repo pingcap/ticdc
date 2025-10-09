@@ -72,20 +72,12 @@ func (s *basicScheduler) doBasicSchedule(availableSize int) {
 	id := replica.DefaultGroupID
 
 	absentChangefeeds := s.changefeedDB.GetAbsentByGroup(id, availableSize)
-	nodeSize := s.changefeedDB.GetTaskSizePerNodeByGroup(id)
+	nodeTaskSize := s.changefeedDB.GetTaskSizePerNodeByGroup(id)
 	// add the absent node to the node size map
-	nodes := s.nodeManager.GetAliveNodes()
-	for id, _ := range nodes {
-		if _, ok := nodeSize[id]; !ok {
-			nodeSize[id] = 0
-		}
-	}
-
-	// remove the nodes that are not alive
-	for id, _ := range nodeSize {
-		if _, ok := nodes[id]; !ok {
-			delete(nodeSize, id)
-		}
+	nodeIDs := s.nodeManager.GetAliveNodeIDs()
+	nodeSize := make(map[node.ID]int)
+	for _, id := range nodeIDs {
+		nodeSize[id] = nodeTaskSize[id]
 	}
 
 	pkgScheduler.BasicSchedule(availableSize, absentChangefeeds, nodeSize, func(cf *changefeed.Changefeed, nodeID node.ID) bool {
