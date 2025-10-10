@@ -12,7 +12,6 @@ MAX_RETRIES=20
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 }
 
 function resume_changefeed_in_stopped_state() {
@@ -101,26 +100,30 @@ function resume_changefeed_in_failed_state() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config3.toml
 
 	cdc_cli_changefeed pause --changefeed-id=$changefeed_id --pd=$pd_addr
-	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=18446744073709551615 --no-confirm=true || true)
+	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=18446744073709551615 --no-confirm=true 2>&1 || true)
 	if [[ $result != *"ErrCliCheckpointTsIsInFuture"* ]]; then
 		echo "changefeeed resume result is expected to contain 'ErrCliCheckpointTsIsInFuture', \
           but actually got $result"
 		exit 1
 	fi
 
-	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=100 --no-confirm=true || true)
+	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=100 --no-confirm=true 2>&1 || true)
 	if [[ $result != *"ErrStartTsBeforeGC"* ]]; then
 		echo "changefeeed resume result is expected to contain 'ErrStartTsBeforeGC', \
 			    but actually got $result"
 		exit 1
 	fi
 
-	gc_safepoint=$(pd-ctl -u=$pd_addr service-gc-safepoint | grep -oE "\"safe_point\": [0-9]+" | grep -oE "[0-9]+" | sort | head -n1)
-	result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=$gc_safepoint --no-confirm=true || true)
-	if [[ $result != *"ErrStartTsBeforeGC"* ]]; then
-		echo "changefeeed resume result is expected to contain 'ErrStartTsBeforeGC', \
-			    but actually got $result"
-		exit 1
+	if [ -z "$NEXT_GEN" ]; then
+		# TODO tenfyzhong 2025-10-10 19:15:57 compitable with next gen
+		# the gc_safepoint is always 0
+		gc_safepoint=$(pd-ctl -u=$pd_addr service-gc-safepoint | grep -oE "\"safe_point\": [0-9]+" | grep -oE "[0-9]+" | sort | head -n1)
+		result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=$gc_safepoint --no-confirm=true 2>&1 || true)
+		if [[ $result != *"ErrStartTsBeforeGC"* ]]; then
+			echo "changefeeed resume result is expected to contain 'ErrStartTsBeforeGC', \
+			    but actually got $resulservice-gc-safepointt"
+			exit 1
+		fi
 	fi
 
 	cleanup_process $CDC_BINARY
