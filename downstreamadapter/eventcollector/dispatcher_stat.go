@@ -45,6 +45,13 @@ type dispatcherConnState struct {
 	remoteCandidates []string
 }
 
+func (d *dispatcherConnState) clear() {
+	d.Lock()
+	defer d.Unlock()
+	d.eventServiceID = ""
+	d.readyEventReceived.Store(false)
+}
+
 func (d *dispatcherConnState) setEventServiceID(serverID node.ID) {
 	d.Lock()
 	defer d.Unlock()
@@ -146,6 +153,13 @@ func (d *dispatcherStat) run() {
 	d.registerTo(d.eventCollector.getLocalServerID())
 }
 
+func (d *dispatcherStat) clear() {
+	// TODO: this design is bad because we may receive stale heartbeat response,
+	// which make us call clear and register again. But the register may be ignore,
+	// so we will not receive any ready event.
+	d.connState.clear()
+}
+
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), false))
@@ -199,34 +213,6 @@ func (d *dispatcherStat) removeFrom(serverID node.ID) {
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID))
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRemoveRequest(d.eventCollector.getLocalServerID().String()))
-	d.eventCollector.enqueueMessageForSend(msg)
-}
-
-func (d *dispatcherStat) pause() {
-	// Just ignore the request if the dispatcher is not ready.
-	if !d.connState.isReceivingDataEvent() {
-		log.Info("ignore pause dispatcher request because the eventService is not ready",
-			zap.Stringer("dispatcherID", d.getDispatcherID()),
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
-		)
-		return
-	}
-	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherPauseRequest(d.eventCollector.getLocalServerID().String()))
-	d.eventCollector.enqueueMessageForSend(msg)
-}
-
-func (d *dispatcherStat) resume() {
-	// Just ignore the request if the dispatcher is not ready.
-	if !d.connState.isReceivingDataEvent() {
-		log.Info("ignore resume dispatcher request because the eventService is not ready",
-			zap.Stringer("dispatcherID", d.getDispatcherID()),
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
-		)
-		return
-	}
-	eventServiceID := d.connState.getEventServiceID()
-	msg := messaging.NewSingleTargetMessage(eventServiceID, messaging.EventServiceTopic, d.newDispatcherResumeRequest(d.eventCollector.getLocalServerID().String()))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -516,6 +502,11 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 		// if the dispatcher has received ready signal from local event service,
 		// ignore all types of signal events.
 		if d.connState.isCurrentEventService(localServerID) {
+			// If we receive a ready event from a remote service while connected to the local
+			// service, it implies a stale registration. Send a remove request to clean it up.
+			if event.From != nil && *event.From != localServerID {
+				d.removeFrom(*event.From)
+			}
 			return
 		}
 
@@ -526,6 +517,9 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 
 		if *event.From == localServerID {
 			if d.readyCallback != nil {
+				// If readyCallback is set, this dispatcher is performing its initial
+				// registration with the local event service. Therefore, no deregistration
+				// from a previous service is necessary.
 				d.connState.setEventServiceID(localServerID)
 				d.connState.readyEventReceived.Store(true)
 				d.readyCallback()
@@ -704,34 +698,6 @@ func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.
 			// ServerId is the id of the request sender.
 			ServerId:   serverId,
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-			Mode:       d.target.GetMode(),
-		},
-	}
-}
-
-func (d *dispatcherStat) newDispatcherPauseRequest(serverId string) *messaging.DispatcherRequest {
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			// ServerId is the id of the request sender.
-			ServerId:   serverId,
-			ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
-			Mode:       d.target.GetMode(),
-		},
-	}
-}
-
-func (d *dispatcherStat) newDispatcherResumeRequest(serverId string) *messaging.DispatcherRequest {
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			// ServerId is the id of the request sender.
-			ServerId:   serverId,
-			ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
 			Mode:       d.target.GetMode(),
 		},
 	}

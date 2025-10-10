@@ -153,7 +153,7 @@ func (oc *Controller) pushStopChangefeedOperator(cfID common.ChangeFeedID, nodeI
 				return
 			}
 		}
-		log.Info("changefeed is stopped , replace the old one",
+		log.Info("changefeed is stopped, replace the old one",
 			zap.String("role", oc.role),
 			zap.String("changefeed", cfID.Name()),
 			zap.String("operator", old.OP.String()))

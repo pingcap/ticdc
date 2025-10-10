@@ -45,11 +45,9 @@ const latestTrafficIndex = 0
 var (
 	minTrafficBalanceThreshold         = float64(1024 * 1024) // 1MB
 	maxMoveSpansCountForTrafficBalance = 4
-	balanceScoreThreshold              = 10
 	maxMoveSpansCountForMerge          = 16
-	minTrafficPercentage               = 0.9
-	maxTrafficPercentage               = 1.1
 	maxLagThreshold                    = float64(30) // 30s
+	mergeThreshold                     = 5
 )
 
 type BalanceCause string
@@ -147,7 +145,14 @@ type SplitSpanChecker struct {
 	// when regionThreshold is 0, we don't check the region count
 	regionThreshold int
 
+	balanceScoreThreshold int
+	minTrafficPercentage  float64
+	maxTrafficPercentage  float64
+
 	balanceCondition BalanceCondition
+
+	mergeThreshold  int
+	mergeCheckCount int
 
 	regionCache split.RegionCache
 	nodeManager *watcher.NodeManager
@@ -179,7 +184,12 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 		allTasks:               make(map[common.DispatcherID]*splitSpanStatus),
 		writeThreshold:         schedulerCfg.WriteKeyThreshold,
 		regionThreshold:        schedulerCfg.RegionThreshold,
+		balanceScoreThreshold:  schedulerCfg.BalanceScoreThreshold,
+		minTrafficPercentage:   schedulerCfg.MinTrafficPercentage,
+		maxTrafficPercentage:   schedulerCfg.MaxTrafficPercentage,
 		regionCache:            regionCache,
+		mergeThreshold:         mergeThreshold,
+		mergeCheckCount:        0,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
@@ -287,7 +297,12 @@ func (s *SplitSpanChecker) checkAllTaskAvailable() bool {
 // return some actions for scheduling the split spans
 func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	start := time.Now()
+	waitMerge := false
 	defer func() {
+		// if we don't wait for merge, we need to reset the merge check count
+		if !waitMerge {
+			s.mergeCheckCount = 0
+		}
 		s.splitSpanCheckDuration.Observe(time.Since(start).Seconds())
 	}()
 	log.Debug("SplitSpanChecker try to check",
@@ -388,6 +403,13 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 			zap.Float32("writeThreshold", float32(s.writeThreshold)),
 			zap.Int("spanCount", len(s.allTasks)),
 		)
+		return results
+	}
+
+	// use merge check count to avoid too frequent merge(when traffic frequent oscillations)
+	waitMerge = true
+	s.mergeCheckCount++
+	if s.mergeCheckCount < s.mergeThreshold {
 		return results
 	}
 
@@ -923,16 +945,22 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 	totalRegionCount := 0
 	results := make([]SplitSpanCheckResult, 0)
 	for _, status := range s.allTasks {
+		nodeID := status.GetNodeID()
+		if nodeID == "" {
+			log.Info("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
+			continue
+		}
+
+		if _, ok := lastThreeTrafficPerNode[nodeID]; !ok {
+			// node is not alive, just skip.
+			continue
+		}
+
 		// Accumulate statistics for traffic balancing and node distribution
 		totalRegionCount += status.regionCount
 		lastThreeTrafficSum[0] += status.lastThreeTraffic[0]
 		lastThreeTrafficSum[1] += status.lastThreeTraffic[1]
 		lastThreeTrafficSum[2] += status.lastThreeTraffic[2]
-
-		nodeID := status.GetNodeID()
-		if nodeID == "" {
-			log.Panic("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
-		}
 
 		lastThreeTrafficPerNode[nodeID][0] += status.lastThreeTraffic[0]
 		lastThreeTrafficPerNode[nodeID][1] += status.lastThreeTraffic[1]
@@ -1020,8 +1048,21 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	// check whether we should balance the traffic for each node
+	// sort by traffic first, if traffic is same, we sort by node id
 	sort.Slice(aliveNodeIDs, func(i, j int) bool {
-		return lastThreeTrafficPerNode[aliveNodeIDs[i]][0] < lastThreeTrafficPerNode[aliveNodeIDs[j]][0]
+		leftTraffic := lastThreeTrafficPerNode[aliveNodeIDs[i]][latestTrafficIndex]
+		rightTraffic := lastThreeTrafficPerNode[aliveNodeIDs[j]][latestTrafficIndex]
+		if leftTraffic == rightTraffic {
+			// We only need to keep the order of nodes with the same traffic fixed for a group.
+			// We can have more randomness between different groups to avoid
+			// a single node being assigned too much traffic every time in a multi-table scenario.
+			if s.groupID%2 == 1 {
+				return string(aliveNodeIDs[i]) < string(aliveNodeIDs[j])
+			} else {
+				return string(aliveNodeIDs[i]) > string(aliveNodeIDs[j])
+			}
+		}
+		return leftTraffic < rightTraffic
 	})
 
 	minTrafficNodeID = aliveNodeIDs[0]
@@ -1062,7 +1103,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	balanceCauseByMaxNode := true
 	balanceCauseByMinNode := true
 	for idx, traffic := range lastThreeTrafficPerNode[minTrafficNodeID] {
-		if traffic > avgLastThreeTraffic[idx]*minTrafficPercentage {
+		if traffic > avgLastThreeTraffic[idx]*s.minTrafficPercentage {
 			shouldBalance = false
 			balanceCauseByMinNode = false
 			break
@@ -1072,7 +1113,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	if !shouldBalance {
 		shouldBalance = true
 		for idx, traffic := range lastThreeTrafficPerNode[maxTrafficNodeID] {
-			if traffic < avgLastThreeTraffic[idx]*maxTrafficPercentage || traffic < minTrafficBalanceThreshold {
+			if traffic < avgLastThreeTraffic[idx]*s.maxTrafficPercentage || traffic < minTrafficBalanceThreshold {
 				shouldBalance = false
 				balanceCauseByMaxNode = false
 				break
@@ -1085,13 +1126,17 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		s.balanceCondition.reset()
 		return
 	} else {
+		s.balanceCondition.updateScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 		log.Debug("should balance, thus update score",
 			zap.Any("minTrafficNodeID", minTrafficNodeID),
 			zap.Any("maxTrafficNodeID", maxTrafficNodeID),
 			zap.Any("balanceCauseByMinNode", balanceCauseByMinNode),
-			zap.Any("balanceCauseByMaxNode", balanceCauseByMaxNode))
-		s.balanceCondition.updateScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
-		if s.balanceCondition.balanceScore < balanceScoreThreshold {
+			zap.Any("balanceCauseByMaxNode", balanceCauseByMaxNode),
+			zap.Any("balanceScore", s.balanceCondition.balanceScore),
+			zap.Any("groupID", s.groupID),
+			zap.Any("changefeedID", s.changefeedID),
+		)
+		if s.balanceCondition.balanceScore < s.balanceScoreThreshold {
 			// now is unbalanced, but we want to check more times to avoid balance too frequently
 			return
 		}
@@ -1217,8 +1262,7 @@ func (s *SplitSpanChecker) Name() string {
 // for test only
 func SetEasyThresholdForTest() {
 	minTrafficBalanceThreshold = 1
-	balanceScoreThreshold = 1
-	minTrafficPercentage = 0.8
-	maxTrafficPercentage = 1.2
 	maxLagThreshold = 120
+	regionCheckInterval = time.Second * 10
+	mergeThreshold = 1
 }

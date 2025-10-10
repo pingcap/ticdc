@@ -57,7 +57,7 @@ var (
 		}, []string{"component", "type"})
 )
 
-func InitDynamicStreamMetrics(registry *prometheus.Registry) {
+func initDynamicStreamMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DynamicStreamMemoryUsage)
 	registry.MustRegister(DynamicStreamEventChanSize)
 	registry.MustRegister(DynamicStreamPendingQueueLen)

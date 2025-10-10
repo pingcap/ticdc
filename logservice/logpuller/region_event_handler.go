@@ -14,7 +14,6 @@
 package logpuller
 
 import (
-	"encoding/hex"
 	"time"
 	"unsafe"
 
@@ -22,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -224,7 +224,8 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),
-				zap.Stringer("span", &state.region.span))
+				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
+				zap.String("endKey", spanz.HexKey(span.span.EndKey)))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}
@@ -233,10 +234,13 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			resolvedTs := state.getLastResolvedTs()
 			if entry.CommitTs <= resolvedTs {
 				log.Fatal("The CommitTs must be greater than the resolvedTs",
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("requestID", state.requestID),
 					zap.String("EventType", "COMMITTED"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.Uint64("regionID", regionID))
+					zap.String("key", spanz.HexKey(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_PREWRITE:
@@ -249,13 +253,12 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					continue
 				}
 				log.Fatal("prewrite not match",
-					zap.String("key", hex.EncodeToString(entry.GetKey())),
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", state.getRegionID()),
+					zap.Uint64("requestID", state.requestID),
 					zap.Uint64("startTs", entry.GetStartTs()),
 					zap.Uint64("commitTs", entry.GetCommitTs()),
-					zap.Any("type", entry.GetType()),
-					zap.Uint64("regionID", state.getRegionID()),
-					zap.Any("opType", entry.GetOpType()))
-				return
+					zap.String("key", spanz.HexKey(entry.GetKey())))
 			}
 
 			// TiKV can send events with StartTs/CommitTs less than startTs.
@@ -268,11 +271,13 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			resolvedTs := state.getLastResolvedTs()
 			if entry.CommitTs <= resolvedTs {
 				log.Fatal("The CommitTs must be greater than the resolvedTs",
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("requestID", state.requestID),
 					zap.String("EventType", "COMMIT"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.Uint64("regionID", regionID))
-				return
+					zap.String("key", spanz.HexKey(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:

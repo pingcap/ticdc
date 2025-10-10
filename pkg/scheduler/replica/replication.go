@@ -370,14 +370,16 @@ func (db *replicationDB[T, R]) GetCheckerStat() string {
 func (db *replicationDB[T, R]) getOrCreateGroup(task R) *replicationGroup[T, R] {
 	groupID := task.GetGroupID()
 	g, ok := db.taskGroups[groupID]
-	if !ok {
-		checker := db.newChecker(groupID)
-		g = newReplicationGroup(db.id, groupID, checker)
-		db.taskGroups[groupID] = g
-		log.Info("scheduler: add new task group", zap.String("schedulerID", db.id),
-			zap.String("group", GetGroupName(groupID)),
-			zap.Int64("groupID", int64(groupID)))
+	if ok {
+		return g
 	}
+
+	checker := db.newChecker(groupID)
+	g = newReplicationGroup(db.id, groupID, checker)
+	db.taskGroups[groupID] = g
+	log.Info("scheduler: add new task group", zap.String("schedulerID", db.id),
+		zap.String("group", GetGroupName(groupID)),
+		zap.Int64("groupID", groupID))
 	return g
 }
 

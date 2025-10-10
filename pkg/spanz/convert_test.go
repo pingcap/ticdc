@@ -68,7 +68,7 @@ func TestUnsafeStringByte(t *testing.T) {
 }
 
 func TestHexKey(t *testing.T) {
-	span := common.TableIDToComparableSpan(8616)
+	span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 8616)
 	require.Equal(t, "7480000000000021FFA85F720000000000FA", HexKey(span.StartKey))
 	require.Equal(t, "7480000000000021FFA85F730000000000FA", HexKey(span.EndKey))
 }

@@ -55,7 +55,7 @@ type SchemaStore interface {
 	// TODO: add a parameter limit
 	FetchTableDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error)
 
-	FetchTableTriggerDDLEvents(keyspaceID uint32, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
+	FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
 
 	// RegisterKeyspace register a keyspace to fetch table ddl
 	RegisterKeyspace(ctx context.Context, keyspaceName string) error
@@ -106,44 +106,36 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		return
 	}
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
-	if len(resolvedEvents) != 0 {
-		log.Info("schema store begin to apply resolved ddl events",
-			zap.Uint64("resolvedTs", pendingTs),
-			zap.Int("resolvedEventsLen", len(resolvedEvents)))
-
-		for _, event := range resolvedEvents {
-			if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs ||
-				event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
-				log.Info("skip already applied ddl job",
-					zap.Any("type", event.Job.Type),
-					zap.String("job", event.Job.Query),
-					zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
-					zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
-					zap.Uint64("jobCommitTs", event.CommitTs),
-					zap.Any("storeSchemaVersion", s.schemaVersion),
-					zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
-				continue
-			}
-			log.Info("handle a ddl job",
-				zap.Int64("schemaID", event.Job.SchemaID),
-				zap.String("schemaName", event.Job.SchemaName),
-				zap.Int64("tableID", event.Job.TableID),
-				zap.String("tableName", event.Job.TableName),
+	for _, event := range resolvedEvents {
+		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs ||
+			event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
+			log.Info("skip already applied ddl job",
 				zap.Any("type", event.Job.Type),
 				zap.String("job", event.Job.Query),
 				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
 				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 				zap.Uint64("jobCommitTs", event.CommitTs),
 				zap.Any("storeSchemaVersion", s.schemaVersion),
-				zap.Any("tableInfo", event.Job.BinlogInfo.TableInfo),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
-
-			// need to update the following two members for every event to filter out later duplicate events
-			s.schemaVersion = event.Job.BinlogInfo.SchemaVersion
-			s.finishedDDLTs = event.Job.BinlogInfo.FinishedTS
-
-			s.dataStorage.handleDDLJob(event.Job)
+			continue
 		}
+		log.Info("handle a ddl job",
+			zap.Int64("schemaID", event.Job.SchemaID),
+			zap.String("schemaName", event.Job.SchemaName),
+			zap.Int64("tableID", event.Job.TableID),
+			zap.String("tableName", event.Job.TableName),
+			zap.Any("type", event.Job.Type),
+			zap.String("DDL", event.Job.Query),
+			zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
+			zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
+			zap.Any("storeSchemaVersion", s.schemaVersion),
+			zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
+
+		// need to update the following two members for every event to filter out later duplicate events
+		s.schemaVersion = event.Job.BinlogInfo.SchemaVersion
+		s.finishedDDLTs = event.Job.BinlogInfo.FinishedTS
+
+		s.dataStorage.handleDDLJob(event.Job)
 	}
 	// When register a new table, it will load all ddl jobs from disk for the table,
 	// so we can only update resolved ts after all ddl jobs are written to disk
@@ -193,6 +185,9 @@ func (s *keyspaceSchemaStore) advancePendingResolvedTs(resolvedTs uint64) {
 func (s *keyspaceSchemaStore) waitResolvedTs(tableID int64, ts uint64, logInterval time.Duration) {
 	start := time.Now()
 	lastLogTime := time.Now()
+	defer func() {
+		metrics.SchemaStoreWaitResolvedTsDurationHist.Observe(time.Since(start).Seconds())
+	}()
 	for {
 		if s.resolvedTs.Load() >= ts {
 			return
@@ -245,12 +240,34 @@ func (s *schemaStore) Name() string {
 
 func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchemaStore, error) {
 	s.keyspaceLocker.RLock()
-	defer s.keyspaceLocker.RUnlock()
 	store, ok := s.keyspaceSchemaStoreMap[keyspaceID]
-	if !ok {
-		return nil, errors.ErrInvalidKeyspace
+	s.keyspaceLocker.RUnlock()
+	if ok {
+		return store, nil
 	}
-	return store, nil
+
+	ctx := context.Background()
+
+	// If the schemastore does not contain the keyspace, it means it is not a maintainer node.
+	// It should register the keyspace when it try to get keyspace schema_store.
+	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.GetKeyspaceByID(ctx, keyspaceID)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	if err := s.RegisterKeyspace(ctx, keyspaceMeta.Name); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	s.keyspaceLocker.RLock()
+	store, ok = s.keyspaceSchemaStoreMap[keyspaceID]
+	s.keyspaceLocker.RUnlock()
+	if ok {
+		return store, nil
+	}
+
+	return nil, errors.ErrKeyspaceNotFound
 }
 
 func (s *schemaStore) initialize(ctx context.Context) {
@@ -377,7 +394,7 @@ func (s *schemaStore) FetchTableDDLEvents(keyspaceID uint32, dispatcherID common
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
-func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	if limit == 0 {
 		log.Panic("limit cannot be 0")
 	}
@@ -401,10 +418,13 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, tableFilter 
 		return events, events[limit-1].FinishedTs, nil
 	}
 	end := currentResolvedTs
+	// after we get currentResolvedTs, there may be new ddl events with FinishedTs > currentResolvedTs
+	// so we need to extend the end to include these new ddl events
 	if len(events) > 0 && events[len(events)-1].FinishedTs > currentResolvedTs {
 		end = events[len(events)-1].FinishedTs
 	}
 	log.Debug("FetchTableTriggerDDLEvents end",
+		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("start", start),
 		zap.Int("limit", limit),
 		zap.Uint64("end", end),
@@ -440,14 +460,17 @@ func (s *schemaStore) RegisterKeyspace(
 	if err != nil {
 		return errors.Trace(err)
 	}
+
 	dataStorage := newPersistentStorage(s.root, keyspaceID, s.pdCli, kvStorage)
 	dataStorage.initialize(ctx)
+
 	schemaStore := &keyspaceSchemaStore{
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
 		dataStorage:   dataStorage,
 		notifyCh:      make(chan any, 4),
 	}
+
 	upperBound := schemaStore.dataStorage.getUpperBound()
 	schemaStore.finishedDDLTs = upperBound.FinishedDDLTs
 	schemaStore.schemaVersion = upperBound.SchemaVersion

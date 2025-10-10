@@ -62,12 +62,12 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	changefeedGroup.GET("/:changefeed_id/synced", coordinatorMiddleware, authenticateMiddleware, keyspaceCheckerMiddleware, api.syncState)
 
 	// internal APIs
-	changefeedGroup.POST("/:changefeed_id/move_table", authenticateMiddleware, api.MoveTable)
-	changefeedGroup.POST("/:changefeed_id/move_split_table", authenticateMiddleware, api.MoveSplitTable)
-	changefeedGroup.POST("/:changefeed_id/split_table_by_region_count", authenticateMiddleware, api.SplitTableByRegionCount)
-	changefeedGroup.POST("/:changefeed_id/merge_table", authenticateMiddleware, api.MergeTable)
-	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", api.getDispatcherCount)
-	changefeedGroup.GET("/:changefeed_id/tables", api.ListTables)
+	changefeedGroup.POST("/:changefeed_id/move_table", authenticateMiddleware, keyspaceCheckerMiddleware, api.MoveTable)
+	changefeedGroup.POST("/:changefeed_id/move_split_table", authenticateMiddleware, keyspaceCheckerMiddleware, api.MoveSplitTable)
+	changefeedGroup.POST("/:changefeed_id/split_table_by_region_count", authenticateMiddleware, keyspaceCheckerMiddleware, api.SplitTableByRegionCount)
+	changefeedGroup.POST("/:changefeed_id/merge_table", authenticateMiddleware, keyspaceCheckerMiddleware, api.MergeTable)
+	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", keyspaceCheckerMiddleware, api.getDispatcherCount)
+	changefeedGroup.GET("/:changefeed_id/tables", keyspaceCheckerMiddleware, api.ListTables)
 
 	// capture apis
 	captureGroup := v2.Group("/captures")
@@ -96,6 +96,6 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	unsafeGroup := v2.Group("/unsafe")
 	unsafeGroup.Use(coordinatorMiddleware, authenticateMiddleware)
 	unsafeGroup.GET("/metadata", api.CDCMetaData)
-	unsafeGroup.POST("/resolve_lock", api.ResolveLock)
-	unsafeGroup.DELETE("/service_gc_safepoint", api.DeleteServiceGcSafePoint)
+	unsafeGroup.POST("/resolve_lock", keyspaceCheckerMiddleware, api.ResolveLock)
+	unsafeGroup.DELETE("/service_gc_safepoint", keyspaceCheckerMiddleware, api.DeleteServiceGcSafePoint)
 }

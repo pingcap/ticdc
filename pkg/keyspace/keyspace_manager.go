@@ -34,7 +34,7 @@ import (
 
 type KeyspaceManager interface {
 	LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error)
-	GetKeyspaceByID(keyspaceID uint32) *keyspacepb.KeyspaceMeta
+	GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error)
 	GetStorage(keyspace string) (kv.Storage, error)
 	Close()
 }
@@ -68,8 +68,8 @@ func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*k
 	}
 
 	k.keyspaceMu.Lock()
-	defer k.keyspaceMu.Unlock()
 	meta := k.keyspaceMap[keyspace]
+	k.keyspaceMu.Unlock()
 	if meta != nil {
 		return meta, nil
 	}
@@ -88,22 +88,58 @@ func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*k
 		return nil, errors.Trace(err)
 	}
 
+	k.keyspaceMu.Lock()
+	defer k.keyspaceMu.Unlock()
+	// Double check, another goroutine might have fetched and stored it.
+	if meta, ok := k.keyspaceMap[keyspace]; ok {
+		return meta, nil
+	}
+
 	k.keyspaceMap[keyspace] = meta
 	k.keyspaceIDMap[meta.Id] = meta
 
 	return meta, nil
 }
 
-func (k *keyspaceManager) GetKeyspaceByID(keyspaceID uint32) *keyspacepb.KeyspaceMeta {
+func (k *keyspaceManager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
 		return &keyspacepb.KeyspaceMeta{
 			Name: common.DefaultKeyspace,
+		}, nil
+	}
+
+	k.keyspaceMu.Lock()
+	meta := k.keyspaceIDMap[keyspaceID]
+	k.keyspaceMu.Unlock()
+	if meta != nil {
+		return meta, nil
+	}
+
+	var err error
+	pdAPIClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
+	err = retry.Do(ctx, func() error {
+		meta, err = pdAPIClient.GetKeyspaceMetaByID(ctx, keyspaceID)
+		if err != nil {
+			return err
 		}
+		return nil
+	}, retry.WithBackoffBaseDelay(500), retry.WithBackoffMaxDelay(1000), retry.WithMaxTries(6))
+	if err != nil {
+		log.Error("retry to load keyspace from pd", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+		return nil, errors.Trace(err)
 	}
 
 	k.keyspaceMu.Lock()
 	defer k.keyspaceMu.Unlock()
-	return k.keyspaceIDMap[keyspaceID]
+	// Double check, another goroutine might have fetched and stored it.
+	if meta, ok := k.keyspaceIDMap[keyspaceID]; ok {
+		return meta, nil
+	}
+
+	k.keyspaceMap[meta.Name] = meta
+	k.keyspaceIDMap[keyspaceID] = meta
+
+	return meta, nil
 }
 
 func (k *keyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {

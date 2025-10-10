@@ -64,5 +64,8 @@ func (c *ddlCache) fetchSortedDDLEventBeforeTS(ts uint64) []DDLJobWithCommitTs {
 	for _, event := range events {
 		c.ddlEvents.Delete(event)
 	}
+	if len(events) > 0 {
+		log.Info("schema store resolved ddl events", zap.Uint64("resolvedTs", ts), zap.Int("count", len(events)))
+	}
 	return events
 }

@@ -21,12 +21,14 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -155,16 +157,59 @@ func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
 
 func newEligibleTableInfoForTest(tableID int64, tableName string) *model.TableInfo {
 	// add a mock pk column
-	columnInfo := &model.ColumnInfo{
-		ID: 100,
-	}
-	columnInfo.SetFlag(mysql.PriKeyFlag)
-	return &model.TableInfo{
-		ID:         tableID,
-		Name:       ast.NewCIStr(tableName),
-		Columns:    []*model.ColumnInfo{columnInfo},
+	tableInfo := &model.TableInfo{
+		ID:   tableID,
+		Name: ast.NewCIStr(tableName),
+		Columns: []*model.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("a"),
+				Offset:    0,
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+			},
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("b"),
+				Offset:    1,
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+			},
+		},
+		Indices: []*model.IndexInfo{
+			{
+				Name:    ast.NewCIStr("PRIMARY"),
+				Primary: true,
+				Unique:  true,
+				Columns: []*model.IndexColumn{
+					{Name: ast.NewCIStr("a"), Offset: 0},
+				},
+			},
+		},
 		PKIsHandle: true,
 	}
+	tableInfo.Columns[0].AddFlag(mysql.PriKeyFlag)
+	// safety check, it's necessary
+	if tableInfo.GetPkColInfo() == nil {
+		log.Panic("table should have pk column")
+	}
+	tableInfoAfterWrap := common.WrapTableInfo("test", tableInfo)
+	if len(tableInfoAfterWrap.GetColumns()) == 0 {
+		log.Panic("table should have at least one column after wrap")
+	}
+	if !tableInfoAfterWrap.IsEligible(false) {
+		log.Panic("table should be eligible after wrap")
+	}
+	tidbTableInfo := tableInfoAfterWrap.ToTiDBTableInfo()
+	if !common.OriginalHasPKOrNotNullUK(tidbTableInfo) {
+		log.Panic("table should be eligible after wrap and convert to TiDB TableInfo")
+	}
+	tidbTableInfoWrap := common.WrapTableInfo("test", tidbTableInfo)
+	if len(tidbTableInfoWrap.GetColumns()) == 0 {
+		log.Panic("table should have at least one column after convert to TiDB TableInfo")
+	}
+	if !tidbTableInfoWrap.IsEligible(false) {
+		log.Panic("table should be eligible after wrap and convert to TiDB TableInfo and wrap again")
+	}
+	return tableInfo
 }
 
 func newEligiblePartitionTableInfoForTest(tableID int64, tableName string, partitions []model.PartitionDefinition) *model.TableInfo {

@@ -45,14 +45,14 @@ mysql_groups=(
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G07
 	# 'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
-	''
+	'complex_transaction'
 	# G08
 	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
 	# G09
 	'resolve_lock merge_table drop_many_tables'
 	# G10
 	# 'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
-	'multi_changefeeds'
+	'multi_changefeeds' 'ddl_wait'
 	# G11
 	'ddl_reentrant force_replicate_table'
 	# G12

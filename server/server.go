@@ -55,8 +55,30 @@ const (
 	closeServiceTimeout  = 15 * time.Second
 	cleanMetaDuration    = 10 * time.Second
 	oldArchCheckInterval = 100 * time.Millisecond
+	// gracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
+	gracefulShutdownTimeout = 30 * time.Second
 )
 
+// server represents the main TiCDC server with carefully orchestrated module lifecycle management.
+//
+// Module Startup Order (dependencies flow from top to bottom):
+// 1. preServices    - Foundation services (PDClock, MessageCenter, etc.)
+// 2. networkModules - Network infrastructure (TCP, HTTP, gRPC servers)
+// 3. nodeModules    - Node management (NodeManager, Elector)
+// 4. subModules     - Business logic (SchemaStore, MaintainerManager, etc.)
+//
+// Module Shutdown Order (reverse of startup to ensure clean teardown, except for preServices):
+// 1. preServices    - in parallel, cuz it's not depended on other modules
+// 2. subModules     - Business logic modules stop first
+// 3. nodeModules    - Node management stops second
+// 4. networkModules - Network services stop third
+//
+// Rationale for this ordering:
+// - preServices provide foundational capabilities (time, messaging) needed by all other modules
+// - networkModules must start early to accept external connections and API requests
+// - nodeModules handle cluster membership and leadership, required before business logic
+// - subModules contain the core CDC business logic and depend on all above layers
+// - Shutdown reverses this order to prevent dependency violations and ensure graceful cleanup
 type server struct {
 	// mu is used to protect the server's Run method
 	mu sync.Mutex
@@ -84,19 +106,30 @@ type server struct {
 	tcpServer tcpserver.TCPServer
 
 	// preServices is the preServices will be start before the server is running
-	// And will be closed when the server is closing
+	// And will be closed when the server is closing.
+	// These modules include [PDClock, MessageCenter, EventCollector, HeartbeatCollector, DispatcherOrchestrator, KeyspaceManager].
 	preServices []common.Closeable
-	// subCommonModules contains common modules that start after PreServices.
-	// These modules will be closed when the server shuts down.
+
+	// networkModules contains network related modules that start after PreServices.
+	// These modules must be closed finally when the CDC server is shutting down.
+	// These modules include [TCP, HTTP, gRPC] services.
+	networkModules []common.SubModule
+
+	// nodeModules contains node-level management modules that start after networkModules.
+	// Named "nodeModules" because they manage this node's participation in the cluster:
+	// - NodeManager: tracks all nodes in the cluster and handles node join/leave events
+	// - Elector: handles coordinator/leader election for this node
 	// These are shared modules across all components that:
 	// 1. Can coexist with old architecture components
 	// 2. Can guide the old architecture components offline
-	// 3. Must start before subModules
-	subCommonModules []common.SubModule
+	// These modules include [NodeManager, Elector].
+	nodeModules []common.SubModule
+
 	// subModules contains modules that will be started after PreServices are started
 	// and will be closed when the server is closing.
 	// These modules must not start while old-architecture servers are still online
 	// to avoid compatibility issues and unexpected behavior.
+	// These modules include [SubscriptionClient, SchemaStore, MaintainerManager, EventStore, EventService].
 	subModules []common.SubModule
 
 	closed atomic.Bool
@@ -169,10 +202,15 @@ func (c *server) initialize(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	c.subCommonModules = []common.SubModule{
+	c.networkModules = []common.SubModule{
+		c.tcpServer,
+		NewHttpServer(c, c.tcpServer.HTTP1Listener()),
+		NewGrpcServer(c.tcpServer.GrpcListener()),
+	}
+
+	c.nodeModules = []common.SubModule{
 		nodeManager,
 		NewElector(c),
-		NewGrpcServer(c.tcpServer.GrpcListener()),
 	}
 
 	c.subModules = []common.SubModule{
@@ -183,7 +221,10 @@ func (c *server) initialize(ctx context.Context) error {
 		eventService,
 	}
 	// register it into global var
-	for _, subCommonModule := range c.subCommonModules {
+	for _, baseModule := range c.networkModules {
+		appctx.SetService(baseModule.Name(), baseModule)
+	}
+	for _, subCommonModule := range c.nodeModules {
 		appctx.SetService(subCommonModule.Name(), subCommonModule)
 	}
 	for _, subModule := range c.subModules {
@@ -230,10 +271,6 @@ func (c *server) setPreServices(ctx context.Context) error {
 	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
 	c.preServices = append(c.preServices, dispatcherOrchestrator)
 
-	httpServer := NewHttpServer(c, c.tcpServer.HTTP1Listener())
-	httpServer.Run(ctx)
-	c.preServices = append(c.preServices, httpServer)
-
 	keyspaceManager := keyspace.NewKeyspaceManager(c.pdEndpoints)
 	appctx.SetService(appctx.KeyspaceManager, keyspaceManager)
 	c.preServices = append(c.preServices, keyspaceManager)
@@ -253,31 +290,34 @@ func (c *server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	g, ctx := errgroup.WithContext(ctx)
-	// start tcp server
-	g.Go(func() error {
-		log.Info("tcp server start to run")
-		err := c.tcpServer.Run(ctx)
-		if err != nil {
-			log.Error("tcp server exited", zap.Error(errors.Trace(err)))
-		}
-		return nil
-	})
-
 	log.Info("server initialized", zap.Any("server", c.info))
-	// start all submodules
-	for _, sub := range c.subCommonModules {
+	// Base modules have a longer lifecycle compared to other sub-modules; therefore, their context ought to be set as the parent context for the latter.
+	eg, egctx := errgroup.WithContext(ctx)
+	// start all subBaseModules
+	for _, sub := range c.networkModules {
+		func(m common.SubModule) {
+			eg.Go(func() error {
+				log.Info("starting sub base module", zap.String("module", m.Name()))
+				defer log.Info("sub base module exited", zap.String("module", m.Name()))
+				return m.Run(egctx)
+			})
+		}(sub)
+	}
+
+	g, gctx := errgroup.WithContext(egctx)
+	// start all subCommonModules
+	for _, sub := range c.nodeModules {
 		func(m common.SubModule) {
 			g.Go(func() error {
 				log.Info("starting sub common module", zap.String("module", m.Name()))
 				defer log.Info("sub common module exited", zap.String("module", m.Name()))
-				return m.Run(ctx)
+				return m.Run(gctx)
 			})
 		}(sub)
 	}
 
 	// check the environment is valid to start the server
-	err = c.validCheck(ctx)
+	err = c.validCheck(gctx)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -288,16 +328,28 @@ func (c *server) Run(ctx context.Context) error {
 			g.Go(func() error {
 				log.Info("starting sub module", zap.String("module", m.Name()))
 				defer log.Info("sub module exited", zap.String("module", m.Name()))
-				return m.Run(ctx)
+				return m.Run(gctx)
 			})
 		}(sub)
 	}
 	// register server to etcd after we started all modules
-	err = c.registerNodeToEtcd(ctx)
+	err = c.registerNodeToEtcd(gctx)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	return g.Wait()
+
+	// if it takes too long for all sub modules to exit, then exit directly to avoid hanging.
+	ch := make(chan error, 1)
+	go func() {
+		<-gctx.Done()
+		time.Sleep(gracefulShutdownTimeout)
+		ch <- errors.ErrTimeout.FastGenByArgs("gracefull shutdown timeout")
+	}()
+	go func() {
+		ch <- g.Wait()
+	}()
+	err = <-ch
+	return err
 }
 
 // validCheck checks whether the environment is valid to start the server
@@ -389,13 +441,22 @@ func (c *server) Close(ctx context.Context) {
 		log.Info("sub module closed", zap.String("module", subModule.Name()))
 	}
 
-	for _, subCommonModule := range c.subCommonModules {
-		if err := subCommonModule.Close(ctx); err != nil {
+	for _, m := range c.nodeModules {
+		if err := m.Close(ctx); err != nil {
 			log.Warn("failed to close sub common module",
-				zap.String("module", subCommonModule.Name()),
+				zap.String("module", m.Name()),
 				zap.Error(err))
 		}
-		log.Info("sub common module closed", zap.String("module", subCommonModule.Name()))
+		log.Info("sub common module closed", zap.String("module", m.Name()))
+	}
+
+	for _, nm := range c.networkModules {
+		if err := nm.Close(ctx); err != nil {
+			log.Warn("failed to close sub base module",
+				zap.String("module", nm.Name()),
+				zap.Error(err))
+		}
+		log.Info("sub base module closed", zap.String("module", nm.Name()))
 	}
 
 	// delete server info from etcd

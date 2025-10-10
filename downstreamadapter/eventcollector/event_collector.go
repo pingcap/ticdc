@@ -197,11 +197,25 @@ func (c *EventCollector) Close() {
 			"event-collector",
 			"max",
 			cfID.String(),
+			common.StringMode(common.DefaultMode),
 		)
 		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
 			"event-collector",
 			"used",
 			cfID.String(),
+			common.StringMode(common.DefaultMode),
+		)
+		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+			"event-collector",
+			"max",
+			cfID.String(),
+			common.StringMode(common.RedoMode),
+		)
+		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+			"event-collector",
+			"used",
+			cfID.String(),
+			common.StringMode(common.RedoMode),
 		)
 		return true
 	})
@@ -365,24 +379,9 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case feedback := <-c.ds.Feedback():
-			switch feedback.FeedbackType {
-			case dynstream.PauseArea, dynstream.ResumeArea:
-				// Ignore it, because it is no need to pause and resume an area in event collector.
-			case dynstream.PausePath:
-				feedback.Dest.pause()
-			case dynstream.ResumePath:
-				feedback.Dest.resume()
-			}
-		case feedback := <-c.redoDs.Feedback():
-			switch feedback.FeedbackType {
-			case dynstream.PauseArea, dynstream.ResumeArea:
-				// Ignore it, because it is no need to pause and resume an area in event collector.
-			case dynstream.PausePath:
-				feedback.Dest.pause()
-			case dynstream.ResumePath:
-				feedback.Dest.resume()
-			}
+		case <-c.ds.Feedback():
+			// ignore feedback
+		case <-c.redoDs.Feedback():
 		}
 	}
 }
@@ -436,7 +435,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
 			if stat.connState.isCurrentEventService(targetMessage.From) {
 				// register the dispatcher again
-				stat.reset(targetMessage.From)
+				stat.registerTo(targetMessage.From)
 			}
 		}
 	}

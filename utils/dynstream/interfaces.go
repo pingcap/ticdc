@@ -188,9 +188,6 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	GetMetrics() Metrics[A]
 }
 
-// PathHasher is used to select target stream for the path.
-type PathHasher[P Path] func(path P) uint64
-
 const (
 	DefaultInputBufferSize   = 1024
 	DefaultSchedulerInterval = 16 * time.Second
@@ -301,12 +298,12 @@ func (f *Feedback[A, P, D]) String() string {
 	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, FeedbackType: %s}", f.Area, f.Path, f.FeedbackType.String())
 }
 
-func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](hasher PathHasher[P], handler H, option ...Option) DynamicStream[A, P, T, D, H] {
+func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option ...Option) DynamicStream[A, P, T, D, H] {
 	opt := NewOption()
 	if len(option) > 0 {
 		opt = option[0]
 	}
-	return newParallelDynamicStream(hasher, handler, opt)
+	return newParallelDynamicStream(handler, opt)
 }
 
 type Metrics[A Area] struct {

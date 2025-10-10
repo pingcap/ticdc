@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	GoGC = prometheus.NewGauge(
+	goGC = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "server",
@@ -31,7 +31,7 @@ var (
 			Help:      "The value of GOGC",
 		})
 
-	GoMaxProcs = prometheus.NewGauge(
+	goMaxProcs = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "server",
@@ -47,17 +47,16 @@ func RecordGoRuntimeSettings() {
 	if val, err := strconv.Atoi(os.Getenv("GOGC")); err == nil {
 		gogcValue = val
 	}
-	GoGC.Set(float64(gogcValue))
+	goGC.Set(float64(gogcValue))
 
 	maxProcs := runtime.GOMAXPROCS(0)
-	GoMaxProcs.Set(float64(maxProcs))
+	goMaxProcs.Set(float64(maxProcs))
 }
 
-// InitServerMetrics registers all metrics used in processor
-func InitServerMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-	registry.MustRegister(prometheus.NewGoCollector(
+func initServerMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	registry.MustRegister(collectors.NewGoCollector(
 		collectors.WithGoCollections(collectors.GoRuntimeMemStatsCollection | collectors.GoRuntimeMetricsCollection)))
-	registry.MustRegister(GoGC)
-	registry.MustRegister(GoMaxProcs)
+	registry.MustRegister(goGC)
+	registry.MustRegister(goMaxProcs)
 }

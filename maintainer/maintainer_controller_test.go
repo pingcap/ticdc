@@ -42,6 +42,14 @@ import (
 	"go.uber.org/zap"
 )
 
+var replicaConfig = &config.ReplicaConfig{
+	Scheduler: &config.ChangefeedSchedulerConfig{
+		BalanceScoreThreshold: 1,
+		MinTrafficPercentage:  0.8,
+		MaxTrafficPercentage:  1.2,
+	},
+}
+
 func init() {
 	log.SetLevel(zap.DebugLevel)
 	replica.SetEasyThresholdForTest()
@@ -62,7 +70,7 @@ func TestSchedule(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, nil, ddlSpan, nil, 9, time.Minute, common.DefaultKeyspaceID, false)
+	controller := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 9, time.Minute, common.DefaultKeyspaceID, false)
 	for i := 0; i < 10; i++ {
 		controller.spanController.AddNewTable(commonEvent.Table{
 			SchemaID: 1,
@@ -103,6 +111,9 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes: true,
 			WriteKeyThreshold:      500,
+			BalanceScoreThreshold:  1,
+			MinTrafficPercentage:   0.8,
+			MaxTrafficPercentage:   1.2,
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
 
@@ -149,6 +160,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 	for _, span := range s.spanController.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
 			_, ok := op.(*operator.MoveDispatcherOperator)
+			op.Start()
 			require.True(t, ok)
 		}
 	}
@@ -161,6 +173,10 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 	s.operatorController.OnNodeRemoved("node2")
 	for _, span := range s.spanController.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
+			op.Check("node1", &heartbeatpb.TableSpanStatus{
+				ID:              span.ID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			})
 			msg := op.Schedule()
 			require.NotNil(t, msg)
 			require.Equal(t, "node1", msg.To.String())
@@ -203,6 +219,9 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes: true,
 			WriteKeyThreshold:      500,
+			BalanceScoreThreshold:  1,
+			MinTrafficPercentage:   0.8,
+			MaxTrafficPercentage:   1.2,
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
 
@@ -321,6 +340,9 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes: true,
 			WriteKeyThreshold:      500,
+			BalanceScoreThreshold:  1,
+			MinTrafficPercentage:   0.8,
+			MaxTrafficPercentage:   1.2,
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
 
@@ -418,6 +440,9 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			EnableTableAcrossNodes: true,
 			WriteKeyThreshold:      1000,
 			RegionThreshold:        20,
+			BalanceScoreThreshold:  1,
+			MinTrafficPercentage:   0.8,
+			MaxTrafficPercentage:   1.2,
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
 
@@ -1004,7 +1029,7 @@ func TestBalance(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
+	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
 	for i := 0; i < 100; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -1039,6 +1064,11 @@ func TestBalance(t *testing.T) {
 	s.operatorController.OnNodeRemoved("node2")
 	for _, span := range s.spanController.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
+			op.Check("node1", &heartbeatpb.TableSpanStatus{
+				ID:              span.ID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			})
+			op.Start()
 			msg := op.Schedule()
 			require.NotNil(t, msg)
 			require.Equal(t, "node1", msg.To.String())
@@ -1079,6 +1109,9 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 			WriteKeyThreshold:          1000,
 			RegionThreshold:            8,
 			SchedulingTaskCountPerNode: 10,
+			BalanceScoreThreshold:      1,
+			MinTrafficPercentage:       0.8,
+			MaxTrafficPercentage:       1.2,
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
@@ -1221,7 +1254,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	s := NewController(cfID, 1, nil, nil, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
+	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
 	for i := 0; i < 2; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -1242,6 +1275,14 @@ func TestStoppedWhenMoving(t *testing.T) {
 	require.Equal(t, 2, s.spanController.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 0, s.spanController.GetTaskSizeByNodeID("node2"))
 
+	operatorItem := s.operatorController.GetAllOperators()[0]
+	operatorItem.Check("node1", &heartbeatpb.TableSpanStatus{
+		ID:              operatorItem.ID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+	})
+	operatorItem.Start()
+	operatorItem.PostFinish()
+	s.operatorController.RemoveOp(operatorItem.ID())
 	s.operatorController.OnNodeRemoved("node2")
 	s.operatorController.OnNodeRemoved("node1")
 	require.Equal(t, 0, s.spanController.GetSchedulingSize())
@@ -1339,6 +1380,9 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 		EnableTableAcrossNodes: true,
 		RegionThreshold:        1,
 		RegionCountPerSpan:     1,
+		BalanceScoreThreshold:  1,
+		MinTrafficPercentage:   0.8,
+		MaxTrafficPercentage:   1.2,
 	}
 	s := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
 	s.taskPool = &mockThreadPool{}
@@ -1512,6 +1556,9 @@ func TestLargeTableInitialization(t *testing.T) {
 			RegionThreshold:            50,
 			RegionCountPerSpan:         10,
 			SchedulingTaskCountPerNode: 2,
+			BalanceScoreThreshold:      1,
+			MinTrafficPercentage:       0.8,
+			MaxTrafficPercentage:       1.2,
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspaceID, false)
 

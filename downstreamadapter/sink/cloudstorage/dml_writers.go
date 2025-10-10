@@ -102,13 +102,6 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 }
 
 func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
-	if event.State != commonEvent.EventSenderStateNormal {
-		// The table where the event comes from is in stopping, so it's safe
-		// to drop the event directly.
-		event.PostFlush()
-		return
-	}
-
 	tbl := cloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
 			Schema:      event.TableInfo.GetSchemaName(),

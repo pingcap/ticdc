@@ -279,8 +279,44 @@ func (c *BankUpdateWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	newValue := util.GenerateRandomInt()
 
 	return fmt.Sprintf(`
-UPDATE update_bank%d 
-SET small_col = %d 
+UPDATE update_bank%d
+SET small_col = %d
 WHERE id >= %d AND id <= %d
 `, opts.TableIndex, newValue, startID, endID)
+}
+
+func (c *BankUpdateWorkload) BuildDeleteSql(opts schema.DeleteOption) string {
+	deleteType := rand.Intn(3)
+	tableName := fmt.Sprintf("update_bank%d", opts.TableIndex)
+
+	switch deleteType {
+	case 0:
+		// Strategy 1: Random single/multiple row delete by ID
+		var buf bytes.Buffer
+		for i := 0; i < opts.Batch; i++ {
+			id := rand.Int63n(int64(c.totalRowCount))
+			if i > 0 {
+				buf.WriteString(";")
+			}
+			buf.WriteString(fmt.Sprintf("DELETE FROM %s WHERE id = %d", tableName, id))
+		}
+		return buf.String()
+
+	case 1:
+		// Strategy 2: Range delete by ID
+		rangeSize := int64(opts.Batch)
+		startID := rand.Int63n(int64(c.totalRowCount) - rangeSize)
+		endID := startID + rangeSize - 1
+		return fmt.Sprintf("DELETE FROM %s WHERE id BETWEEN %d AND %d LIMIT %d",
+			tableName, startID, endID, opts.Batch)
+
+	case 2:
+		// Strategy 3: Delete by small_col value
+		smallColValue := util.GenerateRandomInt()
+		return fmt.Sprintf("DELETE FROM %s WHERE small_col = %d LIMIT %d",
+			tableName, smallColValue, opts.Batch)
+
+	default:
+		return ""
+	}
 }

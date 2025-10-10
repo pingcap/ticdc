@@ -35,7 +35,7 @@ func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[co
 	}
 
 	eventsHandler := &EventsHandler{}
-	stream := dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return (common.GID)(id).FastHash() }, eventsHandler, option)
+	stream := dynstream.NewParallelDynamicStream(eventsHandler, option)
 	stream.Start()
 	return stream
 }

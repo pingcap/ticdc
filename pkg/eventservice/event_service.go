@@ -120,14 +120,10 @@ func (s *eventService) Run(ctx context.Context) error {
 				s.registerDispatcher(ctx, info)
 			case eventpb.ActionType_ACTION_TYPE_REMOVE:
 				s.deregisterDispatcher(info)
-			case eventpb.ActionType_ACTION_TYPE_PAUSE:
-				s.pauseDispatcher(info)
-			case eventpb.ActionType_ACTION_TYPE_RESUME:
-				s.resumeDispatcher(info)
 			case eventpb.ActionType_ACTION_TYPE_RESET:
 				s.resetDispatcher(info)
 			default:
-				log.Panic("invalid action type", zap.Any("info", info))
+				log.Warn("invalid action type, ingore it", zap.Any("info", info))
 			}
 		case heartbeat := <-s.dispatcherHeartbeat:
 			s.handleDispatcherHeartbeat(heartbeat)
@@ -202,24 +198,6 @@ func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
 		return
 	}
 	c.removeDispatcher(dispatcherInfo)
-}
-
-func (s *eventService) pauseDispatcher(dispatcherInfo DispatcherInfo) {
-	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers[clusterID]
-	if !ok {
-		return
-	}
-	c.pauseDispatcher(dispatcherInfo)
-}
-
-func (s *eventService) resumeDispatcher(dispatcherInfo DispatcherInfo) {
-	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers[clusterID]
-	if !ok {
-		return
-	}
-	c.resumeDispatcher(dispatcherInfo)
 }
 
 func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {

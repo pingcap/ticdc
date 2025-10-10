@@ -157,3 +157,7 @@ func (m *MockPDAPIClient) Healthy(ctx context.Context, endpoint string) error {
 func (m *MockPDAPIClient) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
 	return nil, nil
 }
+
+func (m *MockPDAPIClient) GetKeyspaceMetaByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
