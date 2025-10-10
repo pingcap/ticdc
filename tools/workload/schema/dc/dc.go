@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+
 	"workload/schema"
 )
 
@@ -260,8 +261,7 @@ PARTITION BY RANGE COLUMNS(col3)
  PARTITION p20251231 VALUES LESS THAN ('2026-01-01'))
 `
 
-type DCWorkload struct {
-}
+type DCWorkload struct{}
 
 func NewDCWorkload() schema.Workload {
 	return &DCWorkload{}
