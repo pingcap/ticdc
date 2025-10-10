@@ -98,8 +98,7 @@ func (m *gcManager) TryUpdateGCSafePoint(
 	}
 	m.lastUpdatedTime.Store(time.Now())
 
-	actual, err := SetServiceGCSafepoint(
-		ctx, m.pdClient, m.gcServiceID, m.gcTTL, checkpointTs)
+	actual, err := UnifySetServiceGCSafepoint(ctx, m.pdClient, 0, m.gcServiceID, m.gcTTL, checkpointTs)
 	if err != nil {
 		log.Warn("updateGCSafePoint failed",
 			zap.Uint64("safePointTs", checkpointTs),
@@ -175,9 +174,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	}
 	m.keyspaceLastUpdatedTimeMap.Store(keyspaceID, time.Now())
 
-	gcClient := m.pdClient.GetGCStatesClient(keyspaceID)
-	ttl := time.Duration(m.gcTTL) * time.Second
-	actual, err := SetGCBarrier(ctx, gcClient, m.gcServiceID, checkpointTs, ttl)
+	actual, err := UnifySetServiceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID, m.gcTTL, checkpointTs)
 	if err != nil {
 		log.Warn("updateKeyspaceGCBarrier failed",
 			zap.Uint32("keyspaceID", keyspaceID),
@@ -188,7 +185,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 			barrierInfo := barrierInfoObj.(*keyspaceGCBarrierInfo)
 			lastSucceededTime = barrierInfo.lastSucceededTime
 		}
-		if time.Since(lastSucceededTime) >= ttl {
+		if time.Since(lastSucceededTime) >= time.Duration(m.gcTTL)*time.Second {
 			return cerror.ErrUpdateGCBarrierFailed.Wrap(err)
 		}
 		return nil

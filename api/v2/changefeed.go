@@ -102,6 +102,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
+		return
+	}
 
 	co, err := h.server.GetCoordinator()
 	if err != nil {
@@ -147,6 +152,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		ctx,
 		h.server.GetPdClient(),
 		createGcServiceID,
+		keyspaceMeta.Id,
 		changefeedID,
 		ensureTTL, cfg.StartTs); err != nil {
 		if !errors.ErrStartTsBeforeGC.Equal(err) {
@@ -243,12 +249,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	needRemoveGCSafePoint := false
 	defer func() {
 		if !needRemoveGCSafePoint {
-			return
-		}
-
-		keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
-		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
 			return
 		}
 
@@ -661,11 +661,19 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		newCheckpointTs = cfg.OverwriteCheckpointTs
 	}
 
+	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
+		return
+	}
+
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err := verifyResumeChangefeedConfig(
 		ctx,
 		h.server.GetPdClient(),
 		resumeGcServiceID,
+		keyspaceMeta.Id,
 		cfInfo.ChangefeedID,
 		newCheckpointTs); err != nil {
 		_ = c.Error(err)
@@ -675,13 +683,6 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	needRemoveGCSafePoint := false
 	defer func() {
 		if !needRemoveGCSafePoint {
-			return
-		}
-
-		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
-		keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
-		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
 			return
 		}
 
@@ -862,6 +863,7 @@ func verifyResumeChangefeedConfig(
 	ctx context.Context,
 	pdClient pd.Client,
 	gcServiceID string,
+	keyspaceID uint32,
 	changefeedID common.ChangeFeedID,
 	overrideCheckpointTs uint64,
 ) error {
@@ -885,6 +887,7 @@ func verifyResumeChangefeedConfig(
 		ctx,
 		pdClient,
 		gcServiceID,
+		keyspaceID,
 		changefeedID,
 		gcTTL, overrideCheckpointTs)
 	if err != nil {

@@ -185,6 +185,9 @@ func (s *keyspaceSchemaStore) advancePendingResolvedTs(resolvedTs uint64) {
 func (s *keyspaceSchemaStore) waitResolvedTs(tableID int64, ts uint64, logInterval time.Duration) {
 	start := time.Now()
 	lastLogTime := time.Now()
+	defer func() {
+		metrics.SchemaStoreWaitResolvedTsDurationHist.Observe(time.Since(start).Seconds())
+	}()
 	for {
 		if s.resolvedTs.Load() >= ts {
 			return

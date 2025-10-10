@@ -27,6 +27,8 @@ import (
 
 const varcharColumnMaxLen = 16383
 
+var maxValue int64 = 9223372036854775807
+
 func newColumnValues(r *rand.Rand, size, count int) [][]byte {
 	result := make([][]byte, 0, count)
 	for i := 0; i < count; i++ {
@@ -122,15 +124,15 @@ func (l *LargeRowWorkload) BuildCreateTableStatement(n int) string {
 
 func (l *LargeRowWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	tableName := getTableName(tableN)
-	insertSQL := fmt.Sprintf("INSERT INTO %s VALUES (%d,%s)", tableName, rand.Int63(), l.getSmallRow())
+	insertSQL := fmt.Sprintf("INSERT INTO %s VALUES (%d,%s)", tableName, rand.Int63()%maxValue, l.getSmallRow())
 
 	var largeRowCount int
 	for i := 1; i < batchSize; i++ {
 		if l.r.Float64() < l.largeRatio {
-			insertSQL = fmt.Sprintf("%s,(%d,%s)", insertSQL, rand.Int63(), l.getLargeRow())
+			insertSQL = fmt.Sprintf("%s,(%d,%s)", insertSQL, rand.Int63()%maxValue, l.getLargeRow())
 			largeRowCount++
 		} else {
-			insertSQL = fmt.Sprintf("%s,(%d,%s)", insertSQL, rand.Int63(), l.getSmallRow())
+			insertSQL = fmt.Sprintf("%s,(%d,%s)", insertSQL, rand.Int63()%maxValue, l.getSmallRow())
 		}
 	}
 
@@ -144,15 +146,15 @@ func (l *LargeRowWorkload) BuildInsertSql(tableN int, batchSize int) string {
 func (l *LargeRowWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	tableName := getTableName(opts.TableIndex)
 	upsertSQL := strings.Builder{}
-	upsertSQL.WriteString(fmt.Sprintf("INSERT INTO %s VALUES (%d,%s)", tableName, rand.Int63()%100000, l.getSmallRow()))
+	upsertSQL.WriteString(fmt.Sprintf("INSERT INTO %s VALUES (%d,%s)", tableName, rand.Int63()%maxValue, l.getSmallRow()))
 
 	var largeRowCount int
 	for i := 1; i < opts.Batch; i++ {
 		if l.r.Float64() < l.largeRatio {
-			upsertSQL.WriteString(fmt.Sprintf(",(%d,%s)", rand.Int63()%100000, l.getLargeRow()))
+			upsertSQL.WriteString(fmt.Sprintf(",(%d,%s)", rand.Int63()%maxValue, l.getLargeRow()))
 			largeRowCount++
 		} else {
-			upsertSQL.WriteString(fmt.Sprintf(",(%d,%s)", rand.Int63()%100000, l.getSmallRow()))
+			upsertSQL.WriteString(fmt.Sprintf(",(%d,%s)", rand.Int63()%maxValue, l.getSmallRow()))
 		}
 	}
 	upsertSQL.WriteString(" ON DUPLICATE KEY UPDATE col_0=VALUES(col_0)")
@@ -161,6 +163,44 @@ func (l *LargeRowWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 		zap.Int("table", opts.TableIndex), zap.Int("batchSize", opts.Batch),
 		zap.Int("largeRowCount", largeRowCount))
 	return upsertSQL.String()
+}
+
+func (l *LargeRowWorkload) BuildDeleteSql(opts schema.DeleteOption) string {
+	deleteType := rand.Intn(3)
+	tableName := getTableName(opts.TableIndex)
+
+	switch deleteType {
+	case 0:
+		// Strategy 1: Random single/multiple row delete by ID
+		var buf strings.Builder
+		for i := 0; i < opts.Batch; i++ {
+			id := rand.Int63() % maxValue
+			if i > 0 {
+				buf.WriteString(";")
+			}
+			buf.WriteString(fmt.Sprintf("DELETE FROM %s WHERE id = %d", tableName, id))
+		}
+		return buf.String()
+
+	case 1:
+		// Strategy 2: Range delete by ID
+		startID := rand.Int63() % maxValue
+		endID := startID + int64(opts.Batch*100)
+		if endID > maxValue {
+			endID = maxValue
+		}
+		return fmt.Sprintf("DELETE FROM %s WHERE id BETWEEN %d AND %d LIMIT %d",
+			tableName, startID, endID, opts.Batch)
+
+	case 2:
+		// Strategy 3: Conditional delete by random ID modulo
+		modValue := rand.Intn(1000)
+		return fmt.Sprintf("DELETE FROM %s WHERE id %% 1000 = %d LIMIT %d",
+			tableName, modValue, opts.Batch)
+
+	default:
+		return ""
+	}
 }
 
 var letters = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")

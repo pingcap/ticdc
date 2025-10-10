@@ -27,20 +27,20 @@ import (
 // CheckBalanceStatus checks the dispatcher scheduling balance status
 // returns the table size need to be moved
 func CheckBalanceStatus(nodeTaskSize map[node.ID]int, allNodes map[node.ID]*node.Info) int {
+	nodeSize := make(map[node.ID]int)
 	// add the absent node to the node size map
 	for nodeID := range allNodes {
-		if _, ok := nodeTaskSize[nodeID]; !ok {
-			nodeTaskSize[nodeID] = 0
-		}
+		nodeSize[nodeID] = nodeTaskSize[nodeID]
 	}
+
 	totalSize := 0
-	for _, ts := range nodeTaskSize {
+	for _, ts := range nodeSize {
 		totalSize += ts
 	}
-	lowerLimitPerCapture := int(math.Floor(float64(totalSize) / float64(len(nodeTaskSize))))
+	lowerLimitPerCapture := int(math.Floor(float64(totalSize) / float64(len(nodeSize))))
 	// tables need to be moved
 	moveSize := 0
-	for _, ts := range nodeTaskSize {
+	for _, ts := range nodeSize {
 		tableNum2Add := lowerLimitPerCapture - ts
 		if tableNum2Add > 0 {
 			moveSize += tableNum2Add

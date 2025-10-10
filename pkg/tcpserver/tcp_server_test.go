@@ -41,7 +41,7 @@ func TestTCPServerInsecureHTTP1(t *testing.T) {
 	server, err := NewTCPServer(addr, &security.Credential{})
 	require.NoError(t, err)
 	defer func() {
-		err := server.Close()
+		err := server.Close(nil)
 		require.NoError(t, err)
 	}()
 
@@ -78,7 +78,7 @@ func TestTCPServerTLSHTTP1(t *testing.T) {
 	require.True(t, server.IsTLSEnabled())
 
 	defer func() {
-		err := server.Close()
+		err := server.Close(nil)
 		require.NoError(t, err)
 	}()
 
@@ -114,7 +114,7 @@ func TestTCPServerInsecureGrpc(t *testing.T) {
 	require.NoError(t, err)
 
 	defer func() {
-		err := server.Close()
+		err := server.Close(nil)
 		require.NoError(t, err)
 	}()
 
@@ -151,7 +151,7 @@ func TestTCPServerTLSGrpc(t *testing.T) {
 	require.True(t, server.IsTLSEnabled())
 
 	defer func() {
-		err := server.Close()
+		err := server.Close(nil)
 		require.NoError(t, err)
 	}()
 
@@ -355,7 +355,7 @@ func TestTcpServerClose(t *testing.T) {
 
 	// Close should be idempotent.
 	for i := 0; i < 3; i++ {
-		err := server.Close()
+		err := server.Close(nil)
 		require.NoError(t, err)
 	}
 

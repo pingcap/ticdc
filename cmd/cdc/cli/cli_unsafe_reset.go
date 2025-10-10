@@ -90,23 +90,23 @@ func (o *unsafeResetOptions) run(cmd *cobra.Command) error {
 	}
 
 	if kerneltype.IsClassic() {
-		err = gc.RemoveServiceGCSafepoint(ctx, o.pdClient, o.etcdClient.GetGCServiceID())
+		err := gc.UnifyDeleteGcSafepoint(ctx, o.pdClient, 0, o.etcdClient.GetGCServiceID())
 		if err != nil {
 			return errors.Trace(err)
 		}
-	}
+	} else {
+		// Next gen mode, remove gc barriers
+		_, infoMap, err := o.etcdClient.GetChangeFeeds(ctx)
+		if err != nil {
+			return errors.Trace(err)
+		}
 
-	// Next gen mode, remove gc barriers
-	_, infoMap, err := o.etcdClient.GetChangeFeeds(ctx)
-	if err != nil {
-		return errors.Trace(err)
+		keyspaceNameMap := make(map[string]struct{})
+		for key := range infoMap {
+			keyspaceNameMap[key.Keyspace] = struct{}{}
+		}
+		removeKeyspaceGCBarrier(ctx, o.pdClient, o.etcdClient.GetGCServiceID(), keyspaceNameMap)
 	}
-
-	keyspaceNameMap := make(map[string]struct{})
-	for key := range infoMap {
-		keyspaceNameMap[key.Keyspace] = struct{}{}
-	}
-	removeKeyspaceGCBarrier(ctx, o.pdClient, o.etcdClient.GetGCServiceID(), keyspaceNameMap)
 
 	cmd.Println("reset and all metadata truncated in PD!")
 

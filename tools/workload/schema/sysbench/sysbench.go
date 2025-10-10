@@ -235,3 +235,38 @@ func genRandomPadString(length int) string {
 	}
 	return string(buf)
 }
+
+func (c *SysbenchWorkload) BuildDeleteSql(opts schema.DeleteOption) string {
+	deleteType := rand.Intn(3)
+
+	switch deleteType {
+	case 0:
+		// Strategy 1: Random single/multiple row delete by ID
+		var buf bytes.Buffer
+		for i := 0; i < opts.Batch; i++ {
+			id := rand.Int63()
+			if i > 0 {
+				buf.WriteString(";")
+			}
+			buf.WriteString(fmt.Sprintf("DELETE FROM sbtest%d WHERE id = %d", opts.TableIndex, id))
+		}
+		return buf.String()
+
+	case 1:
+		// Strategy 2: Range delete by ID
+		startID := rand.Int63()
+		endID := startID + int64(opts.Batch*100)
+		return fmt.Sprintf("DELETE FROM sbtest%d WHERE id BETWEEN %d AND %d LIMIT %d",
+			opts.TableIndex, startID, endID, opts.Batch)
+
+	case 2:
+		// Strategy 3: Conditional delete by k column
+		kValue := rand.Int63()
+		kEnd := kValue + int64(opts.Batch*10)
+		return fmt.Sprintf("DELETE FROM sbtest%d WHERE k BETWEEN %d AND %d LIMIT %d",
+			opts.TableIndex, kValue, kEnd, opts.Batch)
+
+	default:
+		return ""
+	}
+}

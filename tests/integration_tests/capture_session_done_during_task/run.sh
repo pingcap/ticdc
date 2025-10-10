@@ -14,6 +14,7 @@ function run() {
 	cd $WORK_DIR
 
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
+
 	TOPIC_NAME="ticdc-capture-session-done-during-task-$RANDOM"
 	case $SINK_TYPE in
 	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -56,6 +57,8 @@ function run() {
 
 	# ensure server exit
 	ensure 30 "! ps -p $cdc_pid"
+	check_logs_contains $WORK_DIR "the etcd session is done"
+	check_logs_contains $WORK_DIR "server closed"
 	echo "cdc server already exit"
 
 	# start server again
@@ -68,7 +71,6 @@ function run() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	run_sql "INSERT INTO capture_session_done_during_task.t values (),(),(),(),(),(),()" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
-
 	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
 }

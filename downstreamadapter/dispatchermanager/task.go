@@ -251,3 +251,58 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		dispatcher.Remove()
 	}
 }
+
+var (
+	removeDispatcherTaskSchedulerOnce sync.Once
+	removeDispatcherTaskScheduler     threadpool.ThreadPool
+)
+
+func GetRemoveDispatcherTaskScheduler() threadpool.ThreadPool {
+	removeDispatcherTaskSchedulerOnce.Do(func() {
+		removeDispatcherTaskScheduler = threadpool.NewThreadPoolDefault()
+	})
+	return removeDispatcherTaskScheduler
+}
+
+// RemoveDispatcherTask is a task to asynchronously remove a dispatcher until the dispatcher can be closed
+type RemoveDispatcherTask struct {
+	manager        *DispatcherManager
+	dispatcherItem dispatcher.Dispatcher
+	retryCount     int
+}
+
+func (t *RemoveDispatcherTask) Execute() time.Time {
+	// Check if manager is closed
+	if t.manager.closed.Load() {
+		return time.Time{}
+	}
+	// If the dispatcher is removing, we don't need to remove it again
+	if t.dispatcherItem.GetRemovingStatus() {
+		return time.Time{}
+	}
+
+	// Try to close the dispatcher
+	_, ok := t.dispatcherItem.TryClose()
+
+	if ok {
+		// Successfully closed, execute Remove
+		t.dispatcherItem.Remove()
+		log.Info("dispatcher removed successfully",
+			zap.Stringer("dispatcherID", t.dispatcherItem.GetId()),
+			zap.Int("retryCount", t.retryCount))
+		return time.Time{} // Task completed
+	}
+
+	// Not successfully closed, retry
+	t.retryCount++
+
+	// Log periodically
+	if t.retryCount%50 == 0 {
+		log.Info("still retrying dispatcher close",
+			zap.Stringer("dispatcherID", t.dispatcherItem.GetId()),
+			zap.Int("retryCount", t.retryCount))
+	}
+
+	// Retry after 10ms, never give up
+	return time.Now().Add(10 * time.Millisecond)
+}

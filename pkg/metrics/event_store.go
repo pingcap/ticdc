@@ -34,6 +34,14 @@ var (
 			Help:      "The number of events received by event store.",
 		}, []string{"type"}) // types : kv, resolved.
 
+	// EventStoreCompressedRowsCount is the counter of compressed rows.
+	EventStoreCompressedRowsCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "compressed_rows_count",
+			Help:      "The total number of rows compressed by event store.",
+		})
 	// EventStoreOutputEventCount is the metric that counts events output by the sorter.
 	EventStoreOutputEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
@@ -171,10 +179,21 @@ var (
 			Help:      "The duration of notifying dispatchers with resolved ts.",
 			Buckets:   prometheus.ExponentialBuckets(0.00001, 2, 20), // 10us ~ 5.2s,
 		})
+
+	// EventStoreRegisterDispatcherStartTsLagHist is the histogram of startTs lag when registering a dispatcher.
+	EventStoreRegisterDispatcherStartTsLagHist = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "register_dispatcher_start_ts_lag",
+			Help:      "The lag of startTs when registering a dispatcher.",
+			Buckets:   LagBucket(),
+		})
 )
 
 func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreSubscriptionGauge)
+	registry.MustRegister(EventStoreCompressedRowsCount)
 	registry.MustRegister(EventStoreReceivedEventCount)
 	registry.MustRegister(EventStoreOutputEventCount)
 	registry.MustRegister(EventStoreWriteDurationHistogram)
@@ -193,4 +212,5 @@ func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreWriteRequestsCount)
 	registry.MustRegister(EventStoreReadDurationHistogram)
 	registry.MustRegister(EventStoreNotifyDispatcherDurationHist)
+	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
 }

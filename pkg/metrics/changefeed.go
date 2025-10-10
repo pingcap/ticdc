@@ -65,14 +65,6 @@ var (
 			Help:      "The counter of changefeed maintainer",
 		}, []string{"namespace", "changefeed"})
 
-	HandleMaintainerRequsetCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "changefeed",
-			Name:      "handle_maintainer_request",
-			Help:      "Total count of dispatcher request.",
-		}, []string{"namespace", "changefeed", "type"})
-
 	ChangefeedStatusGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -97,7 +89,6 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerResolvedTsLagGauge)
 	registry.MustRegister(CoordinatorCounter)
 	registry.MustRegister(MaintainerGauge)
-	registry.MustRegister(HandleMaintainerRequsetCounter)
 	registry.MustRegister(ChangefeedStatusGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 }

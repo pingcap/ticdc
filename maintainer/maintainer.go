@@ -282,10 +282,20 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 	defer func() {
 		duration := time.Since(start)
 		if duration > time.Second {
-			log.Info("maintainer is too slow",
-				zap.String("changefeed", m.id.String()),
-				zap.Int("eventType", event.eventType),
-				zap.Duration("duration", duration))
+			// add a log for debug an occasional slow bootstrap problem
+			if event.eventType == EventMessage {
+				log.Info("maintainer is too slow",
+					zap.String("changefeed", m.id.String()),
+					zap.Int("eventType", event.eventType),
+					zap.Duration("duration", duration),
+					zap.Any("Message", event.message),
+				)
+			} else {
+				log.Info("maintainer is too slow",
+					zap.String("changefeed", m.id.String()),
+					zap.Int("eventType", event.eventType),
+					zap.Duration("duration", duration))
+			}
 		}
 		m.handleEventDuration.Observe(duration.Seconds())
 	}()

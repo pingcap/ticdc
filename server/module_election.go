@@ -314,5 +314,5 @@ func (e *elector) resignLogCoordinator() error {
 var metaPrefix = "/__cdc_meta__"
 
 func LogCoordinatorKey(clusterID string) string {
-	return etcd.BaseKey(clusterID) + metaPrefix + "/log_coordinator"
+	return etcd.NewCDCBaseKey(clusterID) + metaPrefix + "/log_coordinator"
 }

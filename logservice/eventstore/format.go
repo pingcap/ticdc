@@ -21,10 +21,27 @@ import (
 	"go.uber.org/zap"
 )
 
+type DMLOrder uint16
+
 const (
-	typeDelete = iota + 1
-	typeUpdate
-	typeInsert
+	// DML type order, used for sorting.
+	DMLOrderDelete DMLOrder = iota + 1
+	DMLOrderUpdate
+	DMLOrderInsert
+)
+
+type CompressionType uint16
+
+const (
+	CompressionNone CompressionType = iota
+	CompressionZSTD
+)
+
+const (
+	// Bitmask for DML order and compression type.
+	dmlOrderMask    = 0xFF00 // DML order is stored in the high 8 bits for sorting.
+	compressionMask = 0x00FF // Compression type is stored in the low 8 bits.
+	dmlOrderShift   = 8
 )
 
 // EncodeKeyPrefix encodes uniqueID, tableID, CRTs and StartTs.
@@ -60,12 +77,12 @@ func EncodeKeyPrefix(uniqueID uint64, tableID int64, CRTs uint64, startTs ...uin
 
 // EncodeKey encodes a key according to event.
 // Format: uniqueID, tableID, CRTs, startTs, delete/update/insert, Key.
-func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry) []byte {
+func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compressionType CompressionType) []byte {
 	if event == nil {
 		log.Panic("rawkv must not be nil", zap.Any("event", event))
 	}
-	// uniqueID, tableID, CRTs, startTs, Put/Delete, Key
-	length := 8 + 8 + 8 + 8 + 2 + len(event.Key)
+	// uniqueID, tableID, CRTs, startTs, Put/Delete, CompressionType, Key
+	length := 8 + 8 + 8 + 8 + 1 + 1 + len(event.Key)
 	buf := make([]byte, 0, length)
 	uint64Buf := [8]byte{}
 	// unique ID
@@ -81,18 +98,26 @@ func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry) []byte 
 	binary.BigEndian.PutUint64(uint64Buf[:], event.StartTs)
 	buf = append(buf, uint64Buf[:]...)
 	// Let Delete < Update < Insert
-	binary.BigEndian.PutUint16(uint64Buf[:], getDMLOrder(event))
+	dmlOrder := getDMLOrder(event)
+	combinedOrder := uint16(compressionType) | (uint16(dmlOrder) << dmlOrderShift)
+	binary.BigEndian.PutUint16(uint64Buf[:], combinedOrder)
 	buf = append(buf, uint64Buf[:2]...)
 	// key
 	return append(buf, event.Key...)
 }
 
+// DecodeKeyMetas decodes compression type and dml order from the key.
+func DecodeKeyMetas(key []byte) (DMLOrder, CompressionType) {
+	combinedOrder := binary.BigEndian.Uint16(key[32:34]) // The combined order is at offset 32 for 2 bytes.
+	return DMLOrder((combinedOrder & dmlOrderMask) >> dmlOrderShift), CompressionType(combinedOrder & compressionMask)
+}
+
 // getDMLOrder returns the order of the dml types: delete<update<insert
-func getDMLOrder(rowKV *common.RawKVEntry) uint16 {
+func getDMLOrder(rowKV *common.RawKVEntry) DMLOrder {
 	if rowKV.OpType == common.OpTypeDelete {
-		return typeDelete
+		return DMLOrderDelete
 	} else if rowKV.OldValue != nil {
-		return typeUpdate
+		return DMLOrderUpdate
 	}
-	return typeInsert
+	return DMLOrderInsert
 }

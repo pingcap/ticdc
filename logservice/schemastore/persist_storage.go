@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
@@ -157,17 +156,7 @@ func newPersistentStorage(
 }
 
 func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) {
-	if kerneltype.IsClassic() {
-		return gc.SetServiceGCSafepoint(ctx, p.pdCli, defaultSchemaStoreGcServiceID, 0, 0)
-	}
-
-	gcClient := p.pdCli.GetGCStatesClient(p.keyspaceID)
-	gcState, err := gc.GetGCState(ctx, gcClient)
-	if err != nil {
-		return 0, err
-	}
-
-	return gcState.TxnSafePoint, nil
+	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID)
 }
 
 func (p *persistentStorage) initialize(ctx context.Context) {
@@ -183,6 +172,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 				ctx,
 				p.pdCli,
 				defaultSchemaStoreGcServiceID,
+				p.keyspaceID,
 				fakeChangefeedID,
 				defaultGcServiceTTL, gcSafePoint+1)
 			if err == nil {

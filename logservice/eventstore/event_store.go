@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -60,7 +61,7 @@ type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 // Subscriber represents the dispatcher which depends on the subscription.
 type Subscriber struct {
 	notifyFunc ResolvedTsNotifier
-	isStopped  atomic.Bool
+	isStopped  bool
 }
 
 type EventStore interface {
@@ -135,17 +136,18 @@ type dispatcherStat struct {
 	removingSubStat *subscriptionStat
 }
 
+type subscribersWithIdleTime struct {
+	subscribers map[common.DispatcherID]*Subscriber
+	idleTime    int64
+}
+
 type subscriptionStat struct {
 	subID logpuller.SubscriptionID
 	// data span of the subscription, it can support dispatchers with smaller span
-	tableSpan *heartbeatpb.TableSpan
-	// dispatchers depend on this subscription
-	dispatchers struct {
-		// Avoid holding this lock during frequent operations,
-		// as it may delay sending resolved timestamps to the dispatchers.
-		sync.Mutex
-		subscribers map[common.DispatcherID]*Subscriber
-	}
+	tableSpan   *heartbeatpb.TableSpan
+	subscribers atomic.Pointer[subscribersWithIdleTime]
+	// markedDeleteTime is the time when the subscription is marked for deletion.
+	markedDeleteTime atomic.Int64
 	// the index of the db which stores the data of the subscription
 	// used to clean obselete data of the subscription
 	dbIndex int
@@ -165,9 +167,6 @@ type subscriptionStat struct {
 	resolvedTs atomic.Uint64
 	// the max commit ts of dml event in the store
 	maxEventCommitTs atomic.Uint64
-	// the time when the subscription is not used by any dispatchers
-	// 0 means the subscription is not idle
-	idleTime atomic.Int64
 }
 
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
@@ -224,8 +223,13 @@ type eventStore struct {
 		tableStats map[int64]subscriptionStats
 	}
 
+	decoderPool *sync.Pool
+
 	// changefeed id -> changefeedStat
 	changefeedMeta sync.Map
+
+	// compressionThreshold is the size in bytes above which a value will be compressed.
+	compressionThreshold int
 }
 
 const (
@@ -244,7 +248,7 @@ func New(
 	// FIXME: avoid remove
 	err := os.RemoveAll(dbPath)
 	if err != nil {
-		log.Panic("fail to remove path")
+		log.Panic("fail to remove path", zap.String("path", dbPath), zap.Error(err))
 	}
 
 	store := &eventStore{
@@ -258,6 +262,17 @@ func New(
 		gcManager: newGCManager(),
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
+
+		decoderPool: &sync.Pool{
+			New: func() any {
+				decoder, err := zstd.NewReader(nil)
+				if err != nil {
+					log.Panic("failed to create zstd decoder", zap.Error(err))
+				}
+				return decoder
+			},
+		},
+		compressionThreshold: config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
 	}
 
 	// create a write task pool per db instance
@@ -292,6 +307,11 @@ func (p *writeTaskPool) run(ctx context.Context) {
 	for i := 0; i < p.workerNum; i++ {
 		go func() {
 			defer p.store.wg.Done()
+			encoder, err := zstd.NewWriter(nil)
+			if err != nil {
+				log.Panic("failed to create zstd encoder", zap.Error(err))
+			}
+			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
 			for {
 				select {
@@ -302,7 +322,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
-					if err := p.store.writeEvents(p.db, events); err != nil {
+					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
 						log.Panic("write events failed")
 					}
 					for i := range events {
@@ -376,13 +396,11 @@ func (e *eventStore) Close(ctx context.Context) error {
 	log.Info("event store start to close")
 	defer log.Info("event store closed")
 
-	log.Info("closing pebble db")
 	for _, db := range e.dbs {
 		if err := db.Close(); err != nil {
 			log.Error("failed to close pebble db", zap.Error(err))
 		}
 	}
-	log.Info("pebble db closed")
 
 	return nil
 }
@@ -409,6 +427,7 @@ func (e *eventStore) RegisterDispatcher(
 	}()
 
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
+	metrics.EventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
@@ -485,13 +504,7 @@ func (e *eventStore) RegisterDispatcher(
 				if subStat.tableSpan.Equal(dispatcherSpan) {
 					stat.subStat = subStat
 					e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-					subStat.idleTime.Store(0)
-					subStat.dispatchers.Lock()
-					subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-						notifyFunc: wrappedNotifier,
-						isStopped:  atomic.Bool{},
-					}
-					subStat.dispatchers.Unlock()
+					e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 					e.dispatcherMeta.Unlock()
 					log.Info("reuse existing subscription with exact span match",
 						zap.Stringer("dispatcherID", dispatcherID),
@@ -519,13 +532,7 @@ func (e *eventStore) RegisterDispatcher(
 	if bestMatch != nil {
 		stat.subStat = bestMatch
 		e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-		bestMatch.idleTime.Store(0)
-		bestMatch.dispatchers.Lock()
-		bestMatch.dispatchers.subscribers[dispatcherID] = &Subscriber{
-			notifyFunc: wrappedNotifier,
-			isStopped:  atomic.Bool{},
-		}
-		bestMatch.dispatchers.Unlock()
+		e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 		e.dispatcherMeta.Unlock()
 		log.Info("reuse existing subscription with smallest containing span",
 			zap.Stringer("dispatcherID", dispatcherID),
@@ -557,14 +564,13 @@ func (e *eventStore) RegisterDispatcher(
 		dbIndex:   chIndex,
 		eventCh:   e.chs[chIndex],
 	}
-	subStat.dispatchers.subscribers = make(map[common.DispatcherID]*Subscriber)
-	subStat.dispatchers.subscribers[dispatcherID] = &Subscriber{
-		notifyFunc: wrappedNotifier,
-		isStopped:  atomic.Bool{},
-	}
+	subStat.subscribers.Store(&subscribersWithIdleTime{
+		subscribers: map[common.DispatcherID]*Subscriber{dispatcherID: {notifyFunc: wrappedNotifier}},
+		idleTime:    0,
+	})
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
-	subStat.maxEventCommitTs.Store(startTs)
+	subStat.maxEventCommitTs.Store(0)
 	if stat.subStat == nil {
 		stat.subStat = subStat
 	} else {
@@ -609,10 +615,12 @@ func (e *eventStore) RegisterDispatcher(
 		subStat.initialized.Store(true)
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
-			subStat.dispatchers.Lock()
-			defer subStat.dispatchers.Unlock()
-			for _, subscriber := range subStat.dispatchers.subscribers {
-				if !subscriber.isStopped.Load() {
+			subscribersData := subStat.subscribers.Load()
+			if subscribersData == nil {
+				return
+			}
+			for _, subscriber := range subscribersData.subscribers {
+				if !subscriber.isStopped {
 					subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
 				}
 			}
@@ -696,8 +704,11 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		// calculate the new checkpoint ts of the subscription
 		var newCheckpointTs uint64
 
-		subStat.dispatchers.Lock()
-		for id := range subStat.dispatchers.subscribers {
+		subscribersData := subStat.subscribers.Load()
+		if subscribersData == nil {
+			return
+		}
+		for id := range subscribersData.subscribers {
 			dispatcherStat, ok := e.dispatcherMeta.dispatcherStats[id]
 			if !ok {
 				log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", id))
@@ -708,7 +719,6 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				newCheckpointTs = dispatcherStat.checkpointTs
 			}
 		}
-		subStat.dispatchers.Unlock()
 
 		resolvedTs := subStat.resolvedTs.Load()
 		// newCheckpointTs maybe larger than subStat's resolvedTs,
@@ -753,6 +763,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	}
 	updateSubStatCheckpoint(dispatcherStat.subStat)
 	updateSubStatCheckpoint(dispatcherStat.pendingSubStat)
+	updateSubStatCheckpoint(dispatcherStat.removingSubStat)
 }
 
 func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
@@ -865,6 +876,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		LowerBound: start,
 		UpperBound: end,
 	})
+	decoder := e.decoderPool.Get().(*zstd.Decoder)
 	startTime := time.Now()
 	// todo: what happens if iter.First() returns false?
 	_ = iter.First()
@@ -885,6 +897,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:       dataRange.CommitTsStart,
 		endTs:         dataRange.CommitTsEnd,
 		rowCount:      0,
+		decoder:       decoder,
+		decoderPool:   e.decoderPool,
 	}
 }
 
@@ -892,32 +906,87 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	if subStat == nil {
 		return
 	}
-	subStat.dispatchers.Lock()
-	defer subStat.dispatchers.Unlock()
-	delete(subStat.dispatchers.subscribers, dispatcherID)
-	if len(subStat.dispatchers.subscribers) == 0 {
-		subStat.idleTime.Store(time.Now().UnixMilli())
-		log.Info("subscription is idle, set idle time",
-			zap.Uint64("subscriptionID", uint64(subStat.subID)),
-			zap.Int("dbIndex", subStat.dbIndex),
-			zap.Int64("tableID", subStat.tableSpan.TableID))
+	oldData := subStat.subscribers.Load()
+	if oldData == nil || oldData.subscribers == nil {
+		return
 	}
+	if _, ok := oldData.subscribers[dispatcherID]; !ok {
+		return // Not found, nothing to do.
+	}
+	newMap := make(map[common.DispatcherID]*Subscriber, len(oldData.subscribers)-1)
+	for id, sub := range oldData.subscribers {
+		if id != dispatcherID {
+			newMap[id] = sub
+		}
+	}
+	idleTime := int64(0)
+	if len(newMap) == 0 {
+		idleTime = time.Now().UnixMilli()
+	}
+	newData := &subscribersWithIdleTime{subscribers: newMap, idleTime: idleTime}
+	// It is safe to call Store without checking oldData here,
+	// as all modifications to subStat are guarded by the dispatcherMeta lock.
+	subStat.subscribers.Store(newData)
 }
 
 func (e *eventStore) stopReceiveEventFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {
 	if subStat == nil {
 		return
 	}
-	subStat.dispatchers.Lock()
-	defer subStat.dispatchers.Unlock()
-	if subscriber, ok := subStat.dispatchers.subscribers[dispatcherID]; ok {
-		subscriber.isStopped.Store(true)
+	oldData := subStat.subscribers.Load()
+	if oldData == nil || oldData.subscribers == nil {
+		return
 	}
+	oldSub, ok := oldData.subscribers[dispatcherID]
+	if !ok {
+		return // Not found, nothing to do.
+	}
+	if oldSub.isStopped {
+		return // Already stopped.
+	}
+
+	newMap := make(map[common.DispatcherID]*Subscriber, len(oldData.subscribers))
+	for id, sub := range oldData.subscribers {
+		newMap[id] = sub
+	}
+
+	newSub := &Subscriber{notifyFunc: oldSub.notifyFunc, isStopped: true}
+	newMap[dispatcherID] = newSub
+
+	newData := &subscribersWithIdleTime{
+		subscribers: newMap,
+		idleTime:    oldData.idleTime,
+	}
+	// It is safe to call Store without checking oldData here,
+	// as all modifications to subStat are guarded by the dispatcherMeta lock.
+	subStat.subscribers.Store(newData)
+}
+
+func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatcherID common.DispatcherID, subscriber *Subscriber) {
+	oldData := subStat.subscribers.Load()
+	var oldMap map[common.DispatcherID]*Subscriber
+	if oldData != nil {
+		oldMap = oldData.subscribers
+	}
+
+	newMap := make(map[common.DispatcherID]*Subscriber, len(oldMap)+1)
+	for id, sub := range oldMap {
+		newMap[id] = sub
+	}
+	newMap[dispatcherID] = subscriber
+
+	newData := &subscribersWithIdleTime{
+		subscribers: newMap,
+		idleTime:    0, // Not idle anymore.
+	}
+	// It is safe to call Store without checking oldData here,
+	// as all modifications to subStat are guarded by the dispatcherMeta lock.
+	subStat.subscribers.Store(newData)
 }
 
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
-	ttlInMs := int64(60 * 1000) // 1min
+	ttlInMsForMarkDeletion := int64(60 * 1000) // 1min
 	for {
 		select {
 		case <-ctx.Done():
@@ -927,11 +996,8 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 			e.dispatcherMeta.Lock()
 			for tableID, subStats := range e.dispatcherMeta.tableStats {
 				for subID, subStat := range subStats {
-					idleTime := subStat.idleTime.Load()
-					if idleTime == 0 {
-						continue
-					}
-					if now-idleTime > ttlInMs {
+					subData := subStat.subscribers.Load()
+					if subData != nil && len(subData.subscribers) == 0 && subData.idleTime > 0 && now-subData.idleTime > ttlInMsForMarkDeletion {
 						log.Info("clean obsolete subscription",
 							zap.Uint64("subscriptionID", uint64(subID)),
 							zap.Int("dbIndex", subStat.dbIndex),
@@ -947,7 +1013,6 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 							Span:       subStat.tableSpan,
 						}
 						metrics.EventStoreSubscriptionGauge.Dec()
-						// If subStats becomes empty, remove it from tableStats
 						if len(subStats) == 0 {
 							delete(e.dispatcherMeta.tableStats, tableID)
 						}
@@ -1077,7 +1142,7 @@ func (e *eventStore) collectAndReportChangefeedMetrics() {
 	})
 
 	coordinatorID := e.getCoordinatorInfo()
-	if coordinatorID != "" && len(changefeedStates.States) > 0 {
+	if coordinatorID != "" {
 		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, changefeedStates)
 		if err := e.messageCenter.SendEvent(msg); err != nil {
 			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
@@ -1085,7 +1150,7 @@ func (e *eventStore) collectAndReportChangefeedMetrics() {
 	}
 }
 
-func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) error {
+func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, encoder *zstd.Encoder) error {
 	metrics.EventStoreWriteRequestsCount.Inc()
 	batch := db.NewBatch()
 	kvCount := 0
@@ -1100,8 +1165,16 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 					zap.Int64("tableID", event.tableID))
 				continue
 			}
-			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
+
+			compressionType := CompressionNone
 			value := kv.Encode()
+			if len(value) > e.compressionThreshold {
+				value = encoder.EncodeAll(value, nil)
+				compressionType = CompressionZSTD
+				metrics.EventStoreCompressedRowsCount.Inc()
+			}
+
+			key := EncodeKey(uint64(event.subID), event.tableID, &kv, compressionType)
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
@@ -1138,6 +1211,9 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
+
+	decoder     *zstd.Decoder
+	decoderPool *sync.Pool
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1146,8 +1222,22 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		if !iter.innerIter.Valid() {
 			return nil, false
 		}
+		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
-		err := rawKV.Decode(value)
+
+		_, compressionType := DecodeKeyMetas(key)
+		var decodedValue []byte
+		if compressionType == CompressionZSTD {
+			var err error
+			decodedValue, err = iter.decoder.DecodeAll(value, nil)
+			if err != nil {
+				log.Panic("failed to decompress value", zap.Error(err))
+			}
+		} else {
+			decodedValue = value
+		}
+
+		err := rawKV.Decode(decodedValue)
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
@@ -1196,6 +1286,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	}
 	startTime := time.Now()
 	err := iter.innerIter.Close()
+	iter.decoderPool.Put(iter.decoder)
 	iter.innerIter = nil
 	metricEventStoreCloseReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	return iter.rowCount, err

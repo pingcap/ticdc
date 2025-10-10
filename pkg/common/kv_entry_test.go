@@ -30,12 +30,10 @@ func TestRawKVEntryEncodeDecode_PutOperation(t *testing.T) {
 		RegionID: 42,                   // 8 bytes
 		Key:      []byte("12345678"),   // 8 bytes
 		Value:    []byte("123456789A"), // 10 bytes
-		OldValue: make([]byte, 0),      // 10 bytes
 	}
 
-	original.KeyLen = uint32(len(original.Key))           // 4 bytes
-	original.ValueLen = uint32(len(original.Value))       // 4 bytes
-	original.OldValueLen = uint32(len(original.OldValue)) // 4 bytes
+	original.KeyLen = uint32(len(original.Key))     // 4 bytes
+	original.ValueLen = uint32(len(original.Value)) // 4 bytes
 
 	encoded := original.Encode()
 
@@ -74,7 +72,6 @@ func TestRawKVEntryEncodeDecode_ResolvedOperation(t *testing.T) {
 		RegionID: 100,
 		Key:      make([]byte, 0),
 		Value:    make([]byte, 0),
-		OldValue: make([]byte, 0),
 	}
 
 	encoded := original.Encode()

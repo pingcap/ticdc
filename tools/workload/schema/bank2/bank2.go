@@ -610,3 +610,74 @@ func randomTime() string {
 	randomDuration := time.Duration(rand.Int63n(int64(delta)))
 	return start.Add(randomDuration).Format("15:04:05")
 }
+
+func (c *Bank2Workload) BuildDeleteSql(opts schema.DeleteOption) string {
+	deleteType := rand.Intn(3)
+
+	switch opts.TableIndex % 2 {
+	case 0: // info table
+		tableName := fmt.Sprintf("info_%d", opts.TableIndex)
+		switch deleteType {
+		case 0:
+			// Strategy 1: Random single/multiple row delete by primary key (col5, col3, col6, col2)
+			var buf strings.Builder
+			for i := 0; i < opts.Batch; i++ {
+				col5 := randomString(16)
+				col3 := randomDate()
+				col6 := randomString(3)
+				col2 := randomBigInt()
+				if i > 0 {
+					buf.WriteString(";")
+				}
+				buf.WriteString(fmt.Sprintf("DELETE FROM %s WHERE col5 = '%s' AND col3 = '%s' AND col6 = '%s' AND col2 = %d",
+					tableName, col5, col3, col6, col2))
+			}
+			return buf.String()
+
+		case 1:
+			// Strategy 2: Delete by col91 (indexed column)
+			col91Value := randomString(10)
+			return fmt.Sprintf("DELETE FROM %s WHERE col91 = '%s' LIMIT %d",
+				tableName, col91Value, opts.Batch)
+
+		case 2:
+			// Strategy 3: Delete by col4
+			col4Value := rand.Int31n(100)
+			return fmt.Sprintf("DELETE FROM %s WHERE col4 = %d LIMIT %d",
+				tableName, col4Value, opts.Batch)
+		}
+
+	case 1: // log table
+		tableName := fmt.Sprintf("log_%d", opts.TableIndex)
+		switch deleteType {
+		case 0:
+			// Strategy 1: Random single/multiple row delete by primary key (col5, col111, col110)
+			var buf strings.Builder
+			for i := 0; i < opts.Batch; i++ {
+				col5 := randomString(16)
+				col111 := randomDate()
+				col110 := randomBigInt()
+				if i > 0 {
+					buf.WriteString(";")
+				}
+				buf.WriteString(fmt.Sprintf("DELETE FROM %s WHERE col5 = '%s' AND col111 = '%s' AND col110 = %d",
+					tableName, col5, col111, col110))
+			}
+			return buf.String()
+
+		case 1:
+			// Strategy 2: Delete by col91 (indexed column)
+			col91Value := randomString(10)
+			return fmt.Sprintf("DELETE FROM %s WHERE col91 = '%s' LIMIT %d",
+				tableName, col91Value, opts.Batch)
+
+		case 2:
+			// Strategy 3: Delete by col4
+			col4Value := rand.Int31n(100)
+			return fmt.Sprintf("DELETE FROM %s WHERE col4 = %d LIMIT %d",
+				tableName, col4Value, opts.Batch)
+		}
+	}
+
+	return ""
+}

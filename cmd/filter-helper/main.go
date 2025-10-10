@@ -73,12 +73,12 @@ func runFilter(cmd *cobra.Command, args []string) {
 		fmt.Printf("Table: %s, Not matched filter rule\n", table)
 	case "ddl":
 		ddlType := timodel.ActionCreateTable
-		discard := ft.ShouldDiscardDDL(tableAndSchema[0], tableAndSchema[1], ddlType, nil, 0)
+		discard := ft.ShouldDiscardDDL(tableAndSchema[0], tableAndSchema[1], ddlType, nil)
 		if discard {
 			fmt.Printf("DDL: %s, should be discard by event filter rule\n", ddl)
 			return
 		}
-		ignored, err := ft.ShouldIgnoreDDL(tableAndSchema[0], tableAndSchema[1], ddl, ddlType, nil)
+		ignored, err := ft.ShouldIgnoreDDL(tableAndSchema[0], tableAndSchema[1], ddl, ddlType, nil, 0)
 		if err != nil {
 			fmt.Printf("filter ddl error: %s, error: %v\n", ddl, err)
 			return

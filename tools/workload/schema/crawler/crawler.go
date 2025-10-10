@@ -18,6 +18,7 @@ import (
 	"container/list"
 	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"sync"
 
 	"workload/schema"
@@ -131,4 +132,42 @@ func randomKeyForCrawler() string {
 	util.RandomBytes(nil, buffer)
 	randomString := hex.EncodeToString(buffer)
 	return randomString
+}
+
+func (c *CrawlerWorkload) BuildDeleteSql(opts schema.DeleteOption) string {
+	deleteType := rand.Intn(3)
+	tableName := fmt.Sprintf("contents_%d", opts.TableIndex)
+
+	switch deleteType {
+	case 0:
+		// Strategy 1: Random single/multiple row delete by id (using existing keys)
+		var buf bytes.Buffer
+		for i := 0; i < opts.Batch; i++ {
+			key, ok := c.getExistingRowKey()
+			if !ok {
+				break
+			}
+			if i > 0 {
+				buf.WriteString(";")
+			}
+			buf.WriteString(fmt.Sprintf("DELETE FROM %s WHERE id = '%s'", tableName, key))
+		}
+		return buf.String()
+
+	case 1:
+		// Strategy 2: Delete by code column
+		code := []int{200, 404, 500, 301, 302}
+		selectedCode := code[rand.Intn(len(code))]
+		return fmt.Sprintf("DELETE FROM %s WHERE code = %d LIMIT %d",
+			tableName, selectedCode, opts.Batch)
+
+	case 2:
+		// Strategy 3: Delete by config column
+		config := rand.Intn(10)
+		return fmt.Sprintf("DELETE FROM %s WHERE config = %d LIMIT %d",
+			tableName, config, opts.Batch)
+
+	default:
+		return ""
+	}
 }
