@@ -56,14 +56,23 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	_ context.Context,
 	msg *messaging.TargetMessage,
 ) error {
+	start := time.Now()
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
-		return m.handleBootstrapRequest(msg.From, req)
+		err := m.handleBootstrapRequest(msg.From, req)
+		log.Error("handle bootstrap request", zap.Duration("duration", time.Since(start)), zap.Error(err))
+		return err
 	case *heartbeatpb.MaintainerPostBootstrapRequest:
 		// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request
-		return m.handlePostBootstrapRequest(msg.From, req)
+		err := m.handlePostBootstrapRequest(msg.From, req)
+		log.Error("handle post bootstrap request",
+			zap.Duration("duration", time.Since(start)), zap.Error(err))
+		return err
 	case *heartbeatpb.MaintainerCloseRequest:
-		return m.handleCloseRequest(msg.From, req)
+		err := m.handleCloseRequest(msg.From, req)
+		log.Error("handle close request",
+			zap.Duration("duration", time.Since(start)), zap.Error(err))
+		return err
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))
 	}
@@ -90,6 +99,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	var err error
 	var startTs uint64
 	if !exists {
+		start := time.Now()
 		manager, startTs, err = dispatchermanager.
 			NewDispatcherManager(
 				cfId,
@@ -103,7 +113,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			// Fast return the error to maintainer.
 		if err != nil {
 			log.Error("failed to create new dispatcher manager",
-				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
 
 			appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(cfId)
 
@@ -116,6 +126,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					Message: err.Error(),
 				},
 			}
+			log.Error("create new dispatcher manager failed",
+				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
+
 			return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 		}
 		m.mutex.Lock()
