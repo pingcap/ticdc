@@ -47,8 +47,15 @@ func EnsureChangefeedStartTsSafety(
 	TTL int64, startTs uint64,
 ) error {
 	gcServiceID := gcServiceIDPrefix + changefeedID.Keyspace() + "_" + changefeedID.Name()
+	if kerneltype.IsClassic() {
+		return ensureChangefeedStartTsSafetyClassic(ctx, pdCli, gcServiceID, TTL, startTs)
+	}
+	return ensureChangefeedStartTsSafetyNextGen(ctx, pdCli, gcServiceID, keyspaceID, TTL, startTs)
+}
+
+func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, gcServiceID string, ttl int64, startTs uint64) error {
 	// set gc safepoint for the changefeed gc service
-	minServiceGCTs, err := UnifySetServiceGCSafepoint(ctx, pdCli, keyspaceID, gcServiceID, TTL, startTs)
+	minServiceGCTs, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -56,13 +63,22 @@ func EnsureChangefeedStartTsSafety(
 		zap.String("gcServiceID", gcServiceID),
 		zap.Uint64("expectedGCSafepoint", startTs),
 		zap.Uint64("actualGCSafepoint", minServiceGCTs),
-		zap.Int64("ttl", TTL))
+		zap.Int64("ttl", ttl))
 
 	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
 	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
 	// created/resumed. See issue #6350 for more detail.
 	if startTs > 0 && startTs < minServiceGCTs+1 {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
+	}
+	return nil
+}
+
+func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
+	gcCli := pdCli.GetGCStatesClient(keyspaceID)
+	_, err := SetGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
+	if err != nil {
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
 	}
 	return nil
 }
@@ -93,8 +109,8 @@ const (
 	gcServiceMaxRetries   = 9
 )
 
-// setServiceGCSafepoint set a service safepoint to PD.
-func setServiceGCSafepoint(
+// SetServiceGCSafepoint set a service safepoint to PD.
+func SetServiceGCSafepoint(
 	ctx context.Context, pdCli pd.Client, serviceID string, TTL int64, safePoint uint64,
 ) (minServiceGCTs uint64, err error) {
 	err = retry.Do(ctx,
@@ -112,21 +128,11 @@ func setServiceGCSafepoint(
 	return minServiceGCTs, err
 }
 
-// UnifySetServiceGCSafepoint set a service gc safepoint on classic mode or set
-// a gc barrier on next-gen mode
-func UnifySetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	if kerneltype.IsClassic() {
-		return setServiceGCSafepoint(ctx, pdCli, serviceID, ttl, safePoint)
-	}
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	return setGCBarrier(ctx, gcCli, serviceID, safePoint, time.Duration(ttl)*time.Second)
-}
-
 // UnifyGetServiceGCSafepoint returns a service gc safepoint on classic mode or
 // a gc barrier on next-gen mode
 func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
 	if kerneltype.IsClassic() {
-		return setServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
+		return SetServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
 	}
 
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
@@ -154,8 +160,8 @@ func removeServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID st
 		retry.WithIsRetryableErr(errors.IsRetryableError))
 }
 
-// setGCBarrier Set a GC Barrier of a keyspace
-func setGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string, ts uint64, ttl time.Duration) (barrierTS uint64, err error) {
+// SetGCBarrier Set a GC Barrier of a keyspace
+func SetGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string, ts uint64, ttl time.Duration) (barrierTS uint64, err error) {
 	err = retry.Do(ctx, func() error {
 		barrierInfo, err1 := gcCli.SetGCBarrier(ctx, serviceID, ts, ttl)
 		if err1 != nil {

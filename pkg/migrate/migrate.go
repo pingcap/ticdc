@@ -398,8 +398,7 @@ func (m *migrator) migrateGcServiceSafePoint(ctx context.Context,
 		}
 	}
 	if cdcGcSafePoint != nil {
-		// This functionality only works in classic mode
-		_, err := gc.UnifySetServiceGCSafepoint(ctx, pdClient, 0, newGcServiceID, ttl, cdcGcSafePoint.SafePoint)
+		_, err := gc.SetServiceGCSafepoint(ctx, pdClient, newGcServiceID, ttl, cdcGcSafePoint.SafePoint)
 		if err != nil {
 			log.Error("set gc service safepoint failed",
 				zap.Error(err))
