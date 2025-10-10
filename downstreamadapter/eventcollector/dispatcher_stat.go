@@ -184,6 +184,7 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch))
 	d.eventCollector.enqueueMessageForSend(msg)
 	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("epoch", epoch),
@@ -210,6 +211,7 @@ func (d *dispatcherStat) remove() {
 // removeFrom is used to remove the dispatcher from the specified event service.
 func (d *dispatcherStat) removeFrom(serverID node.ID) {
 	log.Info("Send remove dispatcher request to event service",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID))
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRemoveRequest(d.eventCollector.getLocalServerID().String()))
@@ -237,7 +239,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 		commonEvent.TypeHandshakeEvent,
 		commonEvent.TypeSyncPointEvent:
 		log.Debug("check event sequence",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Int("eventType", event.GetType()),
 			zap.Uint64("receivedSeq", event.GetSeq()),
@@ -248,7 +250,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 		expectedSeq := d.lastEventSeq.Add(1)
 		if event.GetSeq() != expectedSeq {
 			log.Warn("Received an out-of-order event, reset the dispatcher",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 				zap.Uint64("lastEventSeq", lastEventSeq),
@@ -261,7 +263,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 	case commonEvent.TypeBatchDMLEvent:
 		for _, e := range event.Event.(*commonEvent.BatchDMLEvent).DMLEvents {
 			log.Debug("check batch DML event sequence",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.Uint64("receivedSeq", e.Seq),
 				zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
@@ -270,7 +272,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 			expectedSeq := d.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
 				log.Warn("Received an out-of-order batch DML event, reset the dispatcher",
-					zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
 					zap.Int("eventType", event.GetType()),
 					zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
@@ -305,7 +307,7 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 	}
 	if shouldIgnore {
 		log.Warn("Receive a event older than sendCommitTs, ignore it",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event.Event),
@@ -353,7 +355,7 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 	// check the invariant that handshake event is the first event of every epoch
 	if event.GetType() != commonEvent.TypeHandshakeEvent && d.lastEventSeq.Load() == 0 {
 		log.Warn("receive non-handshake event before handshake event, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event.Event))
 		return false
@@ -376,7 +378,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event) {
 			log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.Any("event", event.Event))
 			continue
@@ -395,7 +397,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			tableInfo := d.tableInfo.Load().(*common.TableInfo)
 			if tableInfo == nil {
 				log.Panic("should not happen: table info should be set before batch DML event",
-					zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()))
 			}
 			// The cloudstorage sink replicate different file according the table version.
@@ -418,7 +420,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			}
 		} else {
 			log.Panic("should not happen: unknown event type in batch data events",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcherID", d.getDispatcherID()),
 				zap.Int("eventType", event.GetType()))
 		}
@@ -446,7 +448,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	from := events[0].From
 	if !d.isFromCurrentEpoch(events[0]) {
 		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", events[0].Event),
 			zap.Uint64("eventEpoch", events[0].GetEpoch()),
@@ -531,7 +533,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 				d.removeFrom(oldEventServiceID)
 			}
 			log.Info("received ready signal from local event service, prepare to reset the dispatcher",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()))
 
 			d.connState.setEventServiceID(localServerID)
@@ -543,13 +545,13 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			// TODO: if receive too much redudant ready events from remote service, we may need reset again?
 			if d.connState.readyEventReceived.Load() {
 				log.Info("received ready signal from the same server again, ignore it",
-					zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
 					zap.Stringer("eventServiceID", *event.From))
 				return
 			}
 			log.Info("received ready signal from remote event service, prepare to reset the dispatcher",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.Stringer("eventServiceID", *event.From))
 			d.connState.readyEventReceived.Store(true)
@@ -572,19 +574,19 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 	dropEvent, ok := event.Event.(*commonEvent.DropEvent)
 	if !ok {
 		log.Panic("drop event is not a drop event",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event))
 	}
 	if !d.isFromCurrentEpoch(event) {
 		log.Info("receive a drop event from a stale epoch, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event.Event))
 		return
 	}
 	log.Info("received a dropEvent, need to reset the dispatcher",
-		zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Uint64("commitTs", dropEvent.GetCommitTs()),
 		zap.Uint64("sequence", dropEvent.GetSeq()),
@@ -595,7 +597,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 
 func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) {
 	log.Info("handle handshake event",
-		zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Any("event", event))
 
@@ -605,7 +607,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	if !d.isFromCurrentEpoch(event) {
 		log.Info("receive a handshake event from a stale epoch, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID().ID()),
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event.Event))
 		return
@@ -622,7 +624,9 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 		return
 	}
 	if d.connState.trySetRemoteCandidates(nodes) {
-		log.Info("set remote candidates", zap.Stringer("dispatcherID", d.getDispatcherID()),
+		log.Info("set remote candidates",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID), zap.Strings("nodes", nodes))
 		candidate := d.connState.getNextRemoteCandidate()
 		d.registerTo(candidate)
