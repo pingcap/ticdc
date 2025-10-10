@@ -285,6 +285,10 @@ func (c *DCWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	panic("unimplemented")
 }
 
+func (c *DCWorkload) BuildDeleteSql(opts schema.DeleteOption) string {
+	panic("unimplemented")
+}
+
 // BuildUpdateSqlWithConn generates update SQL with connection for range updates
 func (c *DCWorkload) BuildUpdateSqlWithConn(conn *sql.Conn, opts schema.UpdateOption) string {
 	panic("unimplemented")
