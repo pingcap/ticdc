@@ -1083,7 +1083,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			} else {
 				uninitializedStatCount++
 			}
-			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(subResolvedTsLagInSec)
+			metrics.EventStoreSubscriptionResolvedTsLagHist.Observe(subResolvedTsLagInSec)
 			if globalMinResolvedTs == 0 || subResolvedTs < globalMinResolvedTs {
 				globalMinResolvedTs = subResolvedTs
 			}
@@ -1091,7 +1091,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			subCheckpointTs := subStat.checkpointTs.Load()
 			subCheckpointPhysicalTime := oracle.ExtractPhysical(subCheckpointTs)
 			subCheckpointTsLagInSec := float64(pdPhysicalTime-subCheckpointPhysicalTime) / 1e3
-			metrics.EventStoreDispatcherWatermarkLagHist.Observe(subCheckpointTsLagInSec)
+			metrics.EventStoreSubscriptionDataGCLagHist.Observe(subCheckpointTsLagInSec)
 		}
 	}
 	e.dispatcherMeta.RUnlock()
