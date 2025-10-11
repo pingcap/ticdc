@@ -411,7 +411,6 @@ func (c *consumer) waitTableFlushComplete(ctx context.Context, tableID model.Tab
 			return nil
 		}
 	}
-
 }
 
 func (c *consumer) syncExecDMLEvents(
