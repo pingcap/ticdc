@@ -80,7 +80,7 @@ export KAFKA_VERSION=$(cat /tmp/tidb_cdc_test/KAFKA_VERSION 2>/dev/null || echo 
 export MINIO_API_PORT=${MINIO_API_PORT:-9000}
 export MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT:-9001}
 export MINIO_MC_ALIAS=${MINIO_MC_ALIAS:-localminio}
-export MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
-export MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+export MINIO_ROOT_USER=${MINIO_ROOT_USER:-cdcs3accesskey}
+export MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-cdcs3secretkey}
 
 export KEYSPACE_NAME=${KEYSPACE_NAME:-keyspace1}
