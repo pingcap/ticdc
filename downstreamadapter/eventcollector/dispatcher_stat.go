@@ -356,10 +356,6 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 		log.Warn("receive non-handshake event before handshake event, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-			zap.Uint64("seq", event.GetSeq()),
-			zap.Uint64("epoch", event.GetEpoch()),
-			zap.Uint64("commitTs", event.GetCommitTs()),
 			zap.Any("event", event.Event))
 		return false
 	}
@@ -494,8 +490,7 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 		commonEvent.TypeSyncPointEvent:
 		return d.handleSingleDataEvents(events)
 	default:
-		log.Panic("should not happen: unknown event type",
-			zap.String("eventType", commonEvent.TypeToString(events[0].GetType())))
+		log.Panic("should not happen: unknown event type", zap.Int("eventType", events[0].GetType()))
 	}
 	return false
 }
@@ -572,8 +567,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			d.registerTo(candidate)
 		}
 	default:
-		log.Panic("should not happen: unknown signal event type",
-			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
+		log.Panic("should not happen: unknown signal event type", zap.Int("eventType", event.GetType()))
 	}
 }
 
