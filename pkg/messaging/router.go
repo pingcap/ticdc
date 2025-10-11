@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )
 
@@ -63,8 +64,16 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 			}
 			start := time.Now()
 			err := handler(ctx, msg)
-			if time.Since(start) > 100*time.Millisecond {
-				log.Info("hyy router runDispatch", zap.Any("msg", msg), zap.Any("time", time.Since(start)))
+			duration := time.Since(start)
+			if duration > 100*time.Millisecond {
+				// Log slow message handling
+				log.Warn("slow message handling detected",
+					zap.String("topic", msg.Topic),
+					zap.String("type", msg.Type.String()),
+					zap.Duration("duration", duration),
+					zap.String("from", msg.From.String()))
+				// Increment metrics counter for slow message handling
+				metrics.MessagingSlowHandleCounter.WithLabelValues(msg.Type.String()).Inc()
 			}
 			if err != nil {
 				log.Error("Handle message failed", zap.Error(err), zap.Any("msg", msg))

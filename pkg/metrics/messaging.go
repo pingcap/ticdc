@@ -64,6 +64,14 @@ var (
 			Name:      "receive_channel_length",
 			Help:      "The length of the receive channel in a message center",
 		}, []string{"type"}) // type: event, command
+
+	MessagingSlowHandleCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "messaging",
+			Name:      "slow_handle_counter",
+			Help:      "The counter of messages that took more than 100ms to handle",
+		}, []string{"type"}) // type: message type
 )
 
 // InitMetrics registers all metrics used in owner
@@ -74,4 +82,5 @@ func initMessagingMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MessagingErrorCounter)
 	registry.MustRegister(MessagingStreamGauge)
 	registry.Register(MessagingReceiveChannelLength)
+	registry.MustRegister(MessagingSlowHandleCounter)
 }
