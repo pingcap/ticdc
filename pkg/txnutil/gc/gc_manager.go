@@ -217,7 +217,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	ttl := time.Duration(m.gcTTL) * time.Second
 	_, err := SetGCBarrier(ctx, gcCli, m.gcServiceID, checkpointTs, ttl)
 	// align to classic mode, if the checkpointTs is less than TxnSafePoint,
-	// we can also use the TxnSafePoint as the lastGcBarrierTs
+	// we can also use the TxnSafePoint as the lastSafePointTs
 	if err != nil && !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
 		log.Warn("updateKeyspaceGCBarrier failed",
 			zap.Uint32("keyspaceID", keyspaceID),
