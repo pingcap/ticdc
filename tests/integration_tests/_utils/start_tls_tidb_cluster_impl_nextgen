@@ -46,16 +46,16 @@ cert-path = "$TLS_DIR/server.pem"
 key-path = "$TLS_DIR/server-key.pem"
 EOF
 
-mkdir -p "$OUT_DIR/tls/log/pd"
-mkdir -p "$OUT_DIR/tls/data"
+mkdir -p "$OUT_DIR/log/tls/pd"
+mkdir -p "$OUT_DIR/data/tls"
 echo "Starting TLS PD..."
 pd-server --version
 pd-server \
 	--client-urls https://${TLS_PD_HOST}:${TLS_PD_PORT} \
 	--peer-urls https://${TLS_PD_HOST}:${TLS_PD_PEER_PORT} \
 	--config "$OUT_DIR/pd-config-tls.toml" \
-	--log-file "$OUT_DIR/tls/log/pd/pd_tls.log" \
-	--data-dir "$OUT_DIR/tls/data/pd_tls" &
+	--log-file "$OUT_DIR/log/tls/pd/pd_tls.log" \
+	--data-dir "$OUT_DIR/data/tls/pd_tls" &
 
 check_pd_health --cacert $TLS_DIR/ca.pem \
 	--cert $TLS_DIR/client.pem \
@@ -182,33 +182,33 @@ tikv-server --version
 # Uncomment to turn on grpc versbose log.
 # GRPC_VERBOSITY=debug \
 # GRPC_TRACE=server_channel,call_error,handshaker,tsi \
-mkdir -p "$OUT_DIR/tls/log/tikv"
-mkdir -p "$OUT_DIR/tls/data"
+mkdir -p "$OUT_DIR/log/tls/tikv"
+mkdir -p "$OUT_DIR/data/tls"
 tikv-server \
 	--pd "${TLS_PD_HOST}:${TLS_PD_PORT}" \
 	-A "${TLS_TIKV_HOST}:${TLS_TIKV_PORT}" \
 	--status-addr "${TLS_TIKV_HOST}:${TLS_TIKV_STATUS_PORT}" \
-	--log-file "$OUT_DIR/tls/log/tikv/tikv_tls.log" \
+	--log-file "$OUT_DIR/log/tls/tikv/tikv_tls.log" \
 	-C "$OUT_DIR/tikv-config-tls.toml" \
-	-s "$OUT_DIR/tls/data/tikv_tls" \
-	>"$OUT_DIR/tls/log/tikv/tikv_tls.stdout" \
-	2>"$OUT_DIR/tls/log/tikv/tikv_tls.stderr" &
+	-s "$OUT_DIR/data/tls/tikv_tls" \
+	>"$OUT_DIR/log/tls/tikv/tikv_tls.stdout" \
+	2>"$OUT_DIR/log/tls/tikv/tikv_tls.stderr" &
 
 check_port_available "$TLS_TIKV_HOST" "$TLS_TIKV_PORT" "Waiting for TLS TiKV to be ready"
 
 echo "Starting TLS TiKV-Worker..."
-mkdir -p "$OUT_DIR/tls/data"
-mkdir -p "$OUT_DIR/tls/log/tikv-worker"
+mkdir -p "$OUT_DIR/data/tls"
+mkdir -p "$OUT_DIR/log/tls/tikv-worker"
 tikv-worker --addr "$TLS_TIKV_WORKER_HOST:$TLS_TIKV_WORKER_PORT" \
 	--pd-endpoints "http://$TLS_PD_HOST:$TLS_PD_PORT" \
 	--config "$OUT_DIR/tikv-worker-tls.toml" \
-	--data-dir "$OUT_DIR/tls/data/tikv-worker" \
-	--log-file "$OUT_DIR/tls/log/tikv-worker/tikv-worker.log" \
-	>"$OUT_DIR/tls/log/tikv-worker/tikv-worker-stdout.log" \
-	2>"$OUT_DIR/tls/log/tikv-worker/tikv-worker-stderr.log" &
+	--data-dir "$OUT_DIR/data/tls/tikv-worker" \
+	--log-file "$OUT_DIR/log/tls/tikv-worker/tikv-worker.log" \
+	>"$OUT_DIR/log/tls/tikv-worker/tikv-worker-stdout.log" \
+	2>"$OUT_DIR/log/tls/tikv-worker/tikv-worker-stderr.log" &
 
 echo "Starting System TLS TiDB..."
-mkdir -p "$OUT_DIR/tls/log/tidb-system"
+mkdir -p "$OUT_DIR/log/tls/tidb-system"
 tidb-server -V
 tidb-server \
 	-P ${SYSTEM_TLS_TIDB_PORT} \
@@ -216,15 +216,15 @@ tidb-server \
 	--store tikv \
 	--path ${TLS_PD_HOST}:${TLS_PD_PORT} \
 	--status=${SYSTEM_TLS_TIDB_STATUS} \
-	--log-file "$OUT_DIR/tls/log/tidb-system/tidb_tls.log" \
-	>"$OUT_DIR/tls/log/tidb-system/tidb_tls_stdout.log" \
-	2>"$OUT_DIR/tls/log/tidb-system/tidb_tls_stderr.log" &
+	--log-file "$OUT_DIR/log/tls/tidb-system/tidb_tls.log" \
+	>"$OUT_DIR/log/tls/tidb-system/tidb_tls_stdout.log" \
+	2>"$OUT_DIR/log/tls/tidb-system/tidb_tls_stderr.log" &
 
 echo "Verifying System TLS TiDB is started..."
 check_tidb_health "$SYSTEM_TLS_TIDB_HOST" "$SYSTEM_TLS_TIDB_PORT" 60
 
 echo "Starting $KEYSPACE_NAME TLS TiDB..."
-mkdir -p "$OUT_DIR/tls/log/tidb-$KEYSPACE_NAME"
+mkdir -p "$OUT_DIR/log/tls/tidb-$KEYSPACE_NAME"
 tidb-server -V
 tidb-server \
 	-P ${TLS_TIDB_PORT} \
@@ -232,9 +232,9 @@ tidb-server \
 	--store tikv \
 	--path ${TLS_PD_HOST}:${TLS_PD_PORT} \
 	--status=${TLS_TIDB_STATUS} \
-	--log-file "$OUT_DIR/tls/log/tidb-$KEYSPACE_NAME/tidb_tls.log" \
-	>"$OUT_DIR/tls/log/tidb-$KEYSPACE_NAME/tidb_tls_stdout.log" \
-	2>"$OUT_DIR/tls/log/tidb-$KEYSPACE_NAME/tidb_tls_stderr.log" &
+	--log-file "$OUT_DIR/log/tls/tidb-$KEYSPACE_NAME/tidb_tls.log" \
+	>"$OUT_DIR/log/tls/tidb-$KEYSPACE_NAME/tidb_tls_stdout.log" \
+	2>"$OUT_DIR/log/tls/tidb-$KEYSPACE_NAME/tidb_tls_stderr.log" &
 
 echo "Verifying $KEYSPACE_NAME TLS TiDB is started..."
 check_tidb_health "$TLS_TIDB_HOST" "$TLS_TIDB_PORT" 60

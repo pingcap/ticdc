@@ -89,10 +89,10 @@ fi
 
 # start minio
 echo "Starting MinIO server..."
-mkdir -p "$OUT_DIR/minio/data"
-mkdir -p "$OUT_DIR/minio/log"
-minio server --address ":$MINIO_API_PORT" "$OUT_DIR/minio/data" \
-	>"$OUT_DIR/minio/log/minio-stdout.log" 2>"$OUT_DIR/minio/log/minio-stderr.log" &
+mkdir -p "$OUT_DIR/data/data"
+mkdir -p "$OUT_DIR/log/minio"
+minio server --address ":$MINIO_API_PORT" "$OUT_DIR/data/data" \
+	>"$OUT_DIR/log/minio/minio-stdout.log" 2>"$OUT_DIR/log/minio/minio-stderr.log" &
 
 check_port_available "" "$MINIO_API_PORT" "Wait for minio to be available"
 # Sleep for 1 second until MinIO becomes available.
@@ -132,8 +132,8 @@ else
 	initial_cluster="pd1=http://${UP_PD_HOST_1}:${UP_PD_PEER_PORT_1}"
 fi
 
-mkdir -p "$OUT_DIR/upstream/data"
-mkdir -p "$OUT_DIR/upstream/log/pd"
+mkdir -p "$OUT_DIR/data/upstream"
+mkdir -p "$OUT_DIR/log/upstream/pd"
 for idx in $(seq 1 $pd_count); do
 	host="UP_PD_HOST_$idx"
 	port="UP_PD_PORT_$idx"
@@ -144,16 +144,16 @@ for idx in $(seq 1 $pd_count); do
 		--advertise-peer-urls "http://${!host}:${!peer_port}" \
 		--peer-urls "http://0.0.0.0:${!peer_port}" \
 		--config "$OUT_DIR/upstream-pd.toml" \
-		--log-file "$OUT_DIR/upstream/log/pd/pd$idx.log" \
-		--data-dir "$OUT_DIR/upstream/data/pd$idx" \
+		--log-file "$OUT_DIR/log/upstream/pd/pd$idx.log" \
+		--data-dir "$OUT_DIR/data/upstream/pd$idx" \
 		--name="pd$idx" \
 		--initial-cluster "${initial_cluster}" \
-		>"$OUT_DIR/upstream/log/pd/pd$idx-stdout.log" \
-		2>"$OUT_DIR/upstream/log/pd/pd$idx-stderr.log" &
+		>"$OUT_DIR/log/upstream/pd/pd$idx-stdout.log" \
+		2>"$OUT_DIR/log/upstream/pd/pd$idx-stderr.log" &
 done
 
-mkdir -p "$OUT_DIR/downstream/data"
-mkdir -p "$OUT_DIR/downstream/log/pd"
+mkdir -p "$OUT_DIR/data/downstream"
+mkdir -p "$OUT_DIR/log/downstream/pd"
 echo "Starting downstream PD..."
 pd-server --version
 pd-server \
@@ -162,10 +162,10 @@ pd-server \
 	--advertise-peer-urls "http://${DOWN_PD_HOST}:${DOWN_PD_PEER_PORT}" \
 	--peer-urls "http://0.0.0.0:${DOWN_PD_PEER_PORT}" \
 	--config "$OUT_DIR/downstream-pd.toml" \
-	--log-file "$OUT_DIR/downstream/log/pd/pd.log" \
-	--data-dir "$OUT_DIR/downstream/data/pd" \
-	>"$OUT_DIR/downstream/log/pd/pd-stdout.log" \
-	2>"$OUT_DIR/downstream/log/pd/pd-stderr.log" &
+	--log-file "$OUT_DIR/log/downstream/pd/pd.log" \
+	--data-dir "$OUT_DIR/data/downstream/pd" \
+	>"$OUT_DIR/log/downstream/pd/pd-stdout.log" \
+	2>"$OUT_DIR/log/downstream/pd/pd-stderr.log" &
 
 # wait for upstream PD to be ready
 echo "Verifying upstream PD is started..."
@@ -196,7 +196,7 @@ s3-bucket = "cse-test-up"
 s3-region = "local"
 
 [rfengine]
-wal-sync-dir = "$OUT_DIR/upstream/wal-sync/tikv/raft-wal"
+wal-sync-dir = "$OUT_DIR/wal-sync/upstream/tikv/raft-wal"
 lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
@@ -216,15 +216,15 @@ s3-bucket = "cse-test-down"
 s3-region = "local"
 
 [rfengine]
-wal-sync-dir = "$OUT_DIR/downstream/wal-sync/tikv/raft-wal"
+wal-sync-dir = "$OUT_DIR/wal-sync/downstream/tikv/raft-wal"
 lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
 EOF
 
 echo "Starting upstream TiKV..."
-mkdir -p "$OUT_DIR/upstream/data"
-mkdir -p "$OUT_DIR/upstream/log/tikv"
+mkdir -p "$OUT_DIR/data/upstream"
+mkdir -p "$OUT_DIR/log/upstream/tikv"
 tikv-server --version
 for idx in $(seq 1 3); do
 	host="UP_TIKV_HOST_$idx"
@@ -234,28 +234,28 @@ for idx in $(seq 1 3); do
 		--pd "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 		-A "${!host}:${!port}" \
 		--status-addr "${!host}:${!status_port}" \
-		--log-file "$OUT_DIR/upstream/log/tikv/tikv$idx.log" \
+		--log-file "$OUT_DIR/log/upstream/tikv/tikv$idx.log" \
 		--log-level info \
 		-C "$OUT_DIR/upstream-tikv.toml" \
-		-s "$OUT_DIR/upstream/data/tikv$idx" \
-		>"$OUT_DIR/upstream/log/tikv/tikv$idx-stdout.log" \
-		2>"$OUT_DIR/upstream/log/tikv/tikv$idx-stderr.log" &
+		-s "$OUT_DIR/data/upstream/tikv$idx" \
+		>"$OUT_DIR/log/upstream/tikv/tikv$idx-stdout.log" \
+		2>"$OUT_DIR/log/upstream/tikv/tikv$idx-stderr.log" &
 done
 
 echo "Starting downstream TiKV..."
-mkdir -p "$OUT_DIR/downstream/data"
-mkdir -p "$OUT_DIR/downstream/log/tikv"
+mkdir -p "$OUT_DIR/data/downstream"
+mkdir -p "$OUT_DIR/log/downstream/tikv"
 tikv-server --version
 tikv-server \
 	--pd "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	-A "${DOWN_TIKV_HOST}:${DOWN_TIKV_PORT}" \
 	--status-addr "${DOWN_TIKV_HOST}:${DOWN_TIKV_STATUS_PORT}" \
-	--log-file "$OUT_DIR/downstream/log/tikv/tikv.log" \
+	--log-file "$OUT_DIR/log/downstream/tikv/tikv.log" \
 	--log-level info \
 	-C "$OUT_DIR/downstream-tikv.toml" \
-	-s "$OUT_DIR/downstream/data/tikv" \
-	>"$OUT_DIR/downstream/log/tikv/tikv-stdout.log" \
-	2>"$OUT_DIR/downstream/log/tikv/tikv-stderr.log" &
+	-s "$OUT_DIR/data/downstream/tikv" \
+	>"$OUT_DIR/log/downstream/tikv/tikv-stdout.log" \
+	2>"$OUT_DIR/log/downstream/tikv/tikv-stderr.log" &
 
 check_port_available "$UP_TIKV_HOST_1" "$UP_TIKV_PORT_1" "Upstream TiKV is not ready yet"
 check_port_available "$DOWN_TIKV_HOST" "$DOWN_TIKV_PORT" "Downstream TiKV is not ready yet"
@@ -291,25 +291,25 @@ mem-cap = "5GB"  # or "10%"
 disk-cap = "20GB"  # or "20%"
 EOF
 
-mkdir -p "$OUT_DIR/upstream/data/tikv-worker"
-mkdir -p "$OUT_DIR/upstream/log/tikv-worker"
+mkdir -p "$OUT_DIR/data/upstream/tikv-worker"
+mkdir -p "$OUT_DIR/log/upstream/tikv-worker"
 tikv-worker --addr "$UP_TIKV_WORKER_HOST:$UP_TIKV_WORKER_PORT" \
 	--pd-endpoints "http://$UP_PD_HOST_1:$UP_PD_PORT_1" \
 	--config "$OUT_DIR/upstream-tikv-worker.toml" \
-	--data-dir "$OUT_DIR/upstream/data/tikv-worker" \
-	--log-file "$OUT_DIR/upstream/log/tikv-worker/tikv-worker.log" \
-	>"$OUT_DIR/upstream/log/tikv-worker/tikv-worker-stdout.log" \
-	2>"$OUT_DIR/upstream/log/tikv-worker/tikv-worker-stderr.log" &
+	--data-dir "$OUT_DIR/data/upstream/tikv-worker" \
+	--log-file "$OUT_DIR/log/upstream/tikv-worker/tikv-worker.log" \
+	>"$OUT_DIR/log/upstream/tikv-worker/tikv-worker-stdout.log" \
+	2>"$OUT_DIR/log/upstream/tikv-worker/tikv-worker-stderr.log" &
 
-mkdir -p "$OUT_DIR/downstream/data/tikv-worker"
-mkdir -p "$OUT_DIR/downstream/log/tikv-worker"
+mkdir -p "$OUT_DIR/data/downstream/tikv-worker"
+mkdir -p "$OUT_DIR/log/downstream/tikv-worker"
 tikv-worker --addr "$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT" \
 	--pd-endpoints "http://$DOWN_PD_HOST:$DOWN_PD_PORT" \
 	--config "$OUT_DIR/downstream-tikv-worker.toml" \
-	--data-dir "$OUT_DIR/downstream/data/tikv-worker" \
-	--log-file "$OUT_DIR/downstream/log/tikv-worker/tikv-worker.log" \
-	>"$OUT_DIR/downstream/log/tikv-worker/tikv-worker-stdout.log" \
-	2>"$OUT_DIR/downstream/log/tikv-worker/tikv-worker-stderr.log" &
+	--data-dir "$OUT_DIR/data/downstream/tikv-worker" \
+	--log-file "$OUT_DIR/log/downstream/tikv-worker/tikv-worker.log" \
+	>"$OUT_DIR/log/downstream/tikv-worker/tikv-worker-stdout.log" \
+	2>"$OUT_DIR/log/downstream/tikv-worker/tikv-worker-stderr.log" &
 
 check_port_available "$UP_TIKV_WORKER_HOST" "$UP_TIKV_WORKER_PORT" "Upstream TiKV-Worker is not ready yet"
 check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstream TiKV-Worker is not ready yet"
@@ -414,7 +414,7 @@ max-server-connections = 0
 EOF
 
 echo "Starting upstream system TiDB"
-mkdir -p "$OUT_DIR/upstream/log/tidb-system"
+mkdir -p "$OUT_DIR/log/upstream/tidb-system"
 tidb-server -V
 randomGenSocketsConf "$OUT_DIR/upstream-tidb-system.toml"
 tidb-server \
@@ -423,16 +423,16 @@ tidb-server \
 	--store tikv \
 	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 	--status "${UP_TIDB_SYSTEM_STATUS}" \
-	--log-file "$OUT_DIR/upstream/log/tidb-system/tidb.log" \
-	>"$OUT_DIR/upstream/log/tidb-system/tidb-stdout.log" \
-	2>"$OUT_DIR/upstream/log/tidb-system/tidb-stderr.log" &
+	--log-file "$OUT_DIR/log/upstream/tidb-system/tidb.log" \
+	>"$OUT_DIR/log/upstream/tidb-system/tidb-stdout.log" \
+	2>"$OUT_DIR/log/upstream/tidb-system/tidb-stderr.log" &
 
 # The upstream system TiDB should be ready before the keyspace tidb starting
 echo "Verifying upstream system TiDB is started..."
 check_tidb_health "$UP_TIDB_SYSTEM_HOST" "$UP_TIDB_SYSTEM_PORT" 60
 
 echo "Starting upstream $KEYSPACE_NAME TiDB"
-mkdir -p "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME"
+mkdir -p "$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME"
 randomGenSocketsConf "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml"
 tidb-server \
 	-P "${UP_TIDB_PORT}" \
@@ -440,11 +440,11 @@ tidb-server \
 	--store tikv \
 	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 	--status "${UP_TIDB_STATUS}" \
-	--log-file "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb.log" \
-	>"$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb-stdout.log" \
-	2>"$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
+	--log-file "$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME/tidb.log" \
+	>"$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME/tidb-stdout.log" \
+	2>"$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
 
-mkdir -p "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other"
+mkdir -p "$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME-other"
 randomGenSocketsConf "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml"
 tidb-server \
 	-P "${UP_TIDB_OTHER_PORT}" \
@@ -452,12 +452,12 @@ tidb-server \
 	--store tikv \
 	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 	--status "${UP_TIDB_OTHER_STATUS}" \
-	--log-file "$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other/tidb.log" \
-	>"$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other/tidb-stdout.log" \
-	2>"$OUT_DIR/upstream/log/tidb-$KEYSPACE_NAME-other/tidb-stderr.log" &
+	--log-file "$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME-other/tidb.log" \
+	>"$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME-other/tidb-stdout.log" \
+	2>"$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME-other/tidb-stderr.log" &
 
 echo "Starting downstream TiDB..."
-mkdir -p "$OUT_DIR/downstream/log/tidb-system"
+mkdir -p "$OUT_DIR/log/downstream/tidb-system"
 tidb-server -V
 randomGenSocketsConf "$OUT_DIR/downstream-tidb-system.toml"
 tidb-server \
@@ -466,16 +466,16 @@ tidb-server \
 	--store tikv \
 	--path "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	--status "${DOWN_TIDB_SYSTEM_STATUS}" \
-	--log-file "$OUT_DIR/downstream/log/tidb-system/tidb.log" \
-	>"$OUT_DIR/downstream/log/tidb-system/tidb-stdout.log" \
-	2>"$OUT_DIR/downstream/log/tidb-system/tidb-stderr.log" &
+	--log-file "$OUT_DIR/log/downstream/tidb-system/tidb.log" \
+	>"$OUT_DIR/log/downstream/tidb-system/tidb-stdout.log" \
+	2>"$OUT_DIR/log/downstream/tidb-system/tidb-stderr.log" &
 
 # The downstream system TiDB should be ready before the keyspace tidb starting
 echo "Verifying downstream system TiDB is started..."
 check_tidb_health "$DOWN_TIDB_SYSTEM_HOST" "$DOWN_TIDB_SYSTEM_PORT" 60
 
 echo "Starting downstream $KEYSPACE_NAME TiDB"
-mkdir -p "$OUT_DIR/downstream/log/tidb-$KEYSPACE_NAME"
+mkdir -p "$OUT_DIR/log/downstream/tidb-$KEYSPACE_NAME"
 randomGenSocketsConf "$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml"
 tidb-server \
 	-P "${DOWN_TIDB_PORT}" \
@@ -483,9 +483,9 @@ tidb-server \
 	--store tikv \
 	--path "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	--status "${DOWN_TIDB_STATUS}" \
-	--log-file "$OUT_DIR/downstream/log/tidb-$KEYSPACE_NAME/tidb.log" \
-	>"$OUT_DIR/downstream/log/tidb-$KEYSPACE_NAME/tidb-stdout.log" \
-	2>"$OUT_DIR/downstream/log/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
+	--log-file "$OUT_DIR/log/downstream/tidb-$KEYSPACE_NAME/tidb.log" \
+	>"$OUT_DIR/log/downstream/tidb-$KEYSPACE_NAME/tidb-stdout.log" \
+	2>"$OUT_DIR/log/downstream/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
 
 echo "Verifying Upstream $KEYSPACE_NAME TiDB is started..."
 check_tidb_health "$UP_TIDB_HOST" "$UP_TIDB_PORT" 60
