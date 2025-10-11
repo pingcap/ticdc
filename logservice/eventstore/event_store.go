@@ -743,18 +743,16 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
 		if lastReceiveDMLTime > 0 {
 			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
-			if lastReceiveDMLTime < oldCheckpointPhysicalTime.UnixMilli() {
-				subStat.checkpointTs.Store(newCheckpointTs)
-				return
+			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
+				e.gcManager.addGCItem(
+					subStat.dbIndex,
+					uint64(subStat.subID),
+					subStat.tableSpan.TableID,
+					oldCheckpointTs,
+					newCheckpointTs,
+				)
 			}
 		}
-		e.gcManager.addGCItem(
-			subStat.dbIndex,
-			uint64(subStat.subID),
-			subStat.tableSpan.TableID,
-			oldCheckpointTs,
-			newCheckpointTs,
-		)
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
 			ChangeType:   SubscriptionChangeTypeUpdate,
 			SubID:        uint64(subStat.subID),
@@ -1201,12 +1199,11 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 }
 
 func (e *eventStore) deleteEvents(dbIndex int, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-	return nil
-	// db := e.dbs[dbIndex]
-	// start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
-	// end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+	db := e.dbs[dbIndex]
+	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
+	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
 
-	// return db.DeleteRange(start, end, pebble.NoSync)
+	return db.DeleteRange(start, end, pebble.NoSync)
 }
 
 type eventStoreIter struct {
