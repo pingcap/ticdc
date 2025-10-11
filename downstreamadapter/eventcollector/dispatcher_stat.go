@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -241,7 +240,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 		log.Debug("check event sequence",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Int("eventType", event.GetType()),
+			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 			zap.Uint64("receivedSeq", event.GetSeq()),
 			zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
 			zap.Uint64("commitTs", event.GetCommitTs()))
@@ -274,7 +273,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 				log.Warn("Received an out-of-order batch DML event, reset the dispatcher",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
-					zap.Int("eventType", event.GetType()),
+					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 					zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
 					zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
 					zap.Uint64("receivedSeq", e.Seq),
@@ -357,6 +356,10 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 		log.Warn("receive non-handshake event before handshake event, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+			zap.Uint64("seq", event.GetSeq()),
+			zap.Uint64("epoch", event.GetEpoch()),
+			zap.Uint64("commitTs", event.GetCommitTs()),
 			zap.Any("event", event.Event))
 		return false
 	}
@@ -380,6 +383,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 				zap.Any("event", event.Event))
 			continue
 		}
@@ -422,7 +426,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			log.Panic("should not happen: unknown event type in batch data events",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcherID", d.getDispatcherID()),
-				zap.Int("eventType", event.GetType()))
+				zap.String("eventType", commonEvent.TypeToString(event.GetType())))
 		}
 	}
 	if len(validEvents) == 0 {
@@ -450,6 +454,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.String("eventType", commonEvent.TypeToString(events[0].GetType())),
 			zap.Any("event", events[0].Event),
 			zap.Uint64("eventEpoch", events[0].GetEpoch()),
 			zap.Uint64("dispatcherEpoch", d.epoch.Load()),
@@ -465,7 +470,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		if !d.filterAndUpdateEventByCommitTs(events[0]) {
 			return false
 		}
-		ddl := events[0].Event.(*event.DDLEvent)
+		ddl := events[0].Event.(*commonEvent.DDLEvent)
 		d.tableInfoVersion.Store(ddl.FinishedTs)
 		if ddl.TableInfo != nil {
 			d.tableInfo.Store(ddl.TableInfo)
@@ -489,7 +494,8 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 		commonEvent.TypeSyncPointEvent:
 		return d.handleSingleDataEvents(events)
 	default:
-		log.Panic("should not happen: unknown event type", zap.Int("eventType", events[0].GetType()))
+		log.Panic("should not happen: unknown event type",
+			zap.String("eventType", commonEvent.TypeToString(events[0].GetType())))
 	}
 	return false
 }
@@ -566,7 +572,8 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			d.registerTo(candidate)
 		}
 	default:
-		log.Panic("should not happen: unknown signal event type", zap.Int("eventType", event.GetType()))
+		log.Panic("should not happen: unknown signal event type",
+			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
 	}
 }
 
