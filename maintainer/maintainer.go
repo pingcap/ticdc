@@ -278,7 +278,11 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 // note: the EventPeriod is a special event that submitted when initializing maintainer
 // , and it will be re-submitted at the end of onPeriodTask
 func (m *Maintainer) HandleEvent(event *Event) bool {
-	log.Info("hyy maintainer handleEvent", zap.Any("changefeed", m.id), zap.Any("event", event))
+	log.Info("hyy maintainer handleEvent", zap.Any("changefeed", m.id), zap.Any("eventType", event.eventType))
+	if event.eventType == EventMessage {
+		log.Info("hyy maintainer handleEvent", zap.Any("message", event.message))
+	}
+
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
