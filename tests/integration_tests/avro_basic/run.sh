@@ -47,7 +47,7 @@ function run() {
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=avro&enable-tidb-extension=true&avro-enable-watermark=true&avro-decimal-handling-mode=string&avro-bigint-unsigned-handling-mode=string"
 
 	schema_registry_uri="http://127.0.0.1:8088"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri=$SINK_URI --config=$CUR/conf/changefeed.toml --schema-registry=$schema_registry_uri
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri=$SINK_URI --config=$CUR/conf/changefeed.toml --schema-registry=$schema_registry_uri
 
 	run_kafka_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml $schema_registry_uri
 

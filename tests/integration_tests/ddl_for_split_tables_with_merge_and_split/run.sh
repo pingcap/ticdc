@@ -45,7 +45,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
+	do_retry 5 3 cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -129,7 +129,7 @@ main_with_consistent() {
 	sleep 10
 
 	# restart node2 to disable failpoint
-	cdc_pid_1=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "8301")
 	kill_cdc_pid $cdc_pid_1
 	sleep 5
 	export GO_FAILPOINTS=''

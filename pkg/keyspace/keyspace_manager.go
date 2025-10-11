@@ -97,6 +97,7 @@ func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*k
 
 	k.keyspaceMap[keyspace] = meta
 	k.keyspaceIDMap[meta.Id] = meta
+	log.Info("load keyspace", zap.String("keyspaceName", keyspace), zap.Any("keyspace", meta))
 
 	return meta, nil
 }

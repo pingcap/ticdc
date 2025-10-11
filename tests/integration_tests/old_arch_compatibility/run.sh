@@ -12,6 +12,10 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 function run() {
+	if [ "$NEXT_GEN" = 1 ]; then
+		exit 0
+	fi
+
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
@@ -26,7 +30,7 @@ function run() {
 	unset TICDC_NEWARCH
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	cdc_pid_old=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_old=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	TOPIC_NAME="ticdc-migration-test-$RANDOM"
 	case $SINK_TYPE in
@@ -40,7 +44,7 @@ function run() {
 	esac
 
 	# Create changefeed with old architecture
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -74,7 +78,7 @@ function run() {
 
 	# Start new architecture CDC server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "new-arch"
-	cdc_pid_new=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_new=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	# Wait for new server to be ready
 	sleep 5

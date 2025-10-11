@@ -31,7 +31,7 @@ function run() {
 	SINK_URI="mysql://root@127.0.0.1:3306/?read-timeout=300ms"
 
 	changefeed_id="ddl-wait"
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c=${changefeed_id}
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c=${changefeed_id}
 
 	run_sql "alter table test.t modify column col decimal(30,10);"
 	run_sql "alter table test.t add index (col);"

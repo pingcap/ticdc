@@ -72,9 +72,9 @@ ifeq ("${NEXT_GEN}", "1")
 endif
 
 RELEASE_VERSION =
-ifeq ($(RELEASE_VERSION),)
-	RELEASE_VERSION := $(shell git describe --tags --dirty)
-endif
+# ifeq ($(RELEASE_VERSION),)
+# 	RELEASE_VERSION := $(shell git describe --tags --dirty)
+# endif
 ifeq ($(RELEASE_VERSION),)
 	RELEASE_VERSION := v9.0.0-alpha
 endif
@@ -148,6 +148,7 @@ build-cdc-with-failpoint: ## Build cdc with failpoint enabled.
 	$(FAILPOINT_ENABLE)
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go
 	$(FAILPOINT_DISABLE)
+	cp bin/cdc bin/cdc.test
 
 cdc:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc

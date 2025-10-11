@@ -13,7 +13,7 @@ function run_changefeed() {
 	local start_ts=$2
 	local expected_split_count=$3
 	SINK_URI="file://$WORK_DIR/storage_test/$changefeed_id?flush-interval=5s"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config=$CUR/conf/$changefeed_id.toml -c "$changefeed_id"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config=$CUR/conf/$changefeed_id.toml -c "$changefeed_id"
 
 	run_storage_consumer $WORK_DIR $SINK_URI $CUR/conf/$changefeed_id.toml $changefeed_id
 	sleep 8

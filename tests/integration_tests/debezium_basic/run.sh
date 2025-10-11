@@ -28,7 +28,7 @@ function run() {
 
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=debezium&enable-tidb-extension=true"
 
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 	sleep 5 # wait for changefeed to start
 	# determine the sink uri and run corresponding consumer
 	run_kafka_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml

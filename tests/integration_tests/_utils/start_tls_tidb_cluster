@@ -44,7 +44,11 @@ i=1
 while [ $i -le $retry_times ]; do
 	echo "The ${i} times to try to start tls tidb cluster..."
 
-	start_tls_tidb_cluster_impl --workdir ${OUT_DIR} --tlsdir ${TLS_DIR}
+	if [ "$NEXT_GEN" = 1 ]; then
+		start_tls_tidb_cluster_impl_nextgen --workdir ${OUT_DIR} --tlsdir ${TLS_DIR}
+	else
+		start_tls_tidb_cluster_impl_classic --workdir ${OUT_DIR} --tlsdir ${TLS_DIR}
+	fi
 
 	if [ $? -eq 0 ]; then
 		break

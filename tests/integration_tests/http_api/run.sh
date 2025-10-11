@@ -31,7 +31,7 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix 1
 	# wait for cdc run
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"
-	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	owner_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/id/{print $4}')
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id

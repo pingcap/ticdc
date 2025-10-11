@@ -32,7 +32,7 @@ function run() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --server="127.0.0.1:8301"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --server="127.0.0.1:8301"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -42,10 +42,11 @@ function run() {
 	run_sql "CREATE database owner_resign;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE table owner_resign.t1(id int not null primary key, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	# wait table t1 is processed by cdc server
-	cdc cli processor list --server http://127.0.0.1:8301
-	ensure 10 "cdc cli processor list --server http://127.0.0.1:8301 |jq '.|length'|grep -E '^1$'"
+	# `processor` is not a subcommand
+	# cdc cli processor list --server http://127.0.0.1:8301
+	# ensure 10 "cdc cli processor list --server http://127.0.0.1:8301 |jq '.|length'|grep -E '^1$'"
 	# check the t1 is replicated to downstream to make sure the t1 is dispatched to cdc1
-	check_table_exists "owner_resign.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists "owner_resign.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 100
 
 	run_sql "INSERT INTO owner_resign.t1 (id, val) values (1, 1);"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml

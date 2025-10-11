@@ -424,6 +424,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID
 		end = events[len(events)-1].FinishedTs
 	}
 	log.Debug("FetchTableTriggerDDLEvents end",
+		zap.Uint32("keyspaceID", keyspaceID),
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("start", start),
 		zap.Int("limit", limit),

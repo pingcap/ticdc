@@ -15,8 +15,10 @@ package v2
 
 import (
 	"context"
+	"fmt"
 
 	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/api/internal/rest"
 )
 
@@ -28,8 +30,8 @@ type UnsafeGetter interface {
 // UnsafeInterface has methods to work with unsafe api
 type UnsafeInterface interface {
 	Metadata(ctx context.Context) (*[]v2.EtcdData, error)
-	ResolveLock(ctx context.Context, req *v2.ResolveLockReq) error
-	DeleteServiceGcSafePoint(ctx context.Context, config *v2.UpstreamConfig) error
+	ResolveLock(ctx context.Context, req *v2.ResolveLockReq, keyspace string) error
+	DeleteServiceGcSafePoint(ctx context.Context, config *v2.UpstreamConfig, keyspace string) error
 }
 
 // unsafe implements UnsafeInterface
@@ -57,9 +59,11 @@ func (c *unsafe) Metadata(ctx context.Context) (*[]v2.EtcdData, error) {
 // ResolveLock resolves lock in region
 func (c *unsafe) ResolveLock(ctx context.Context,
 	req *v2.ResolveLockReq,
+	keyspace string,
 ) error {
+	u := fmt.Sprintf("unsafe/resolve_lock?%s=%s", api.APIOpVarKeyspace, keyspace)
 	return c.client.Post().
-		WithURI("unsafe/resolve_lock").
+		WithURI(u).
 		WithBody(req).
 		Do(ctx).Error()
 }
@@ -67,9 +71,11 @@ func (c *unsafe) ResolveLock(ctx context.Context,
 // DeleteServiceGcSafePoint delete service gc safe point in pd
 func (c *unsafe) DeleteServiceGcSafePoint(ctx context.Context,
 	config *v2.UpstreamConfig,
+	keyspace string,
 ) error {
+	u := fmt.Sprintf("unsafe/service_gc_safepoint?%s=%s", api.APIOpVarKeyspace, keyspace)
 	return c.client.Delete().
-		WithURI("unsafe/service_gc_safepoint").
+		WithURI(u).
 		WithBody(config).
 		Do(ctx).Error()
 }

@@ -98,12 +98,12 @@ function run() {
 	generate_historic_files
 
 	SINK_URI_DEFAULT="file://$WORK_DIR/storage_test_default?flush-interval=5s"
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI_DEFAULT" -c "default-config-test" --config=$CUR/conf/changefeed-default.toml
+	cdc_cli_changefeed create --sink-uri="$SINK_URI_DEFAULT" -c "default-config-test" --config=$CUR/conf/changefeed-default.toml
 	sleep 20
 	check_file_exists true
 
 	SINK_URI="file://$WORK_DIR/storage_test?flush-interval=5s"
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 	sleep 20
 	check_file_exists false
 

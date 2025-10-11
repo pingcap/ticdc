@@ -131,6 +131,7 @@ function run() {
 	)
 
 	for case in ${sequential_cases[@]}; do
+		echo "testing $case..."
 		python3 $CUR/util/test_case.py "$case" $TLS_DIR
 		sleep 1
 	done

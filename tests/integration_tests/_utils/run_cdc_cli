@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -eux
+set -eu
 
 cdc.test -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.cli.$$.out" cli "$@"
-
-set +x
