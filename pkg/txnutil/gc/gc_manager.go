@@ -188,11 +188,9 @@ func (m *gcManager) checkStaleCheckpointTsKeyspace(ctx context.Context, changefe
 		return err
 	}
 
-	var barrierInfo *keyspaceGCBarrierInfo
+	barrierInfo := new(keyspaceGCBarrierInfo)
 	o, ok := m.keyspaceGCBarrierInfoMap.Load(keyspaceMeta.Id)
-	if !ok {
-		barrierInfo = &keyspaceGCBarrierInfo{}
-	} else {
+	if ok {
 		barrierInfo = o.(*keyspaceGCBarrierInfo)
 	}
 

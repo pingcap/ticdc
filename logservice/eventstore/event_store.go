@@ -738,13 +738,21 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				zap.Uint64("newCheckpointTs", newCheckpointTs),
 				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
 		}
-		e.gcManager.addGCItem(
-			subStat.dbIndex,
-			uint64(subStat.subID),
-			subStat.tableSpan.TableID,
-			subStat.checkpointTs.Load(),
-			newCheckpointTs,
-		)
+		// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
+		// So we can skip adding gc item.
+		lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
+		if lastReceiveDMLTime > 0 {
+			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
+			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
+				e.gcManager.addGCItem(
+					subStat.dbIndex,
+					uint64(subStat.subID),
+					subStat.tableSpan.TableID,
+					oldCheckpointTs,
+					newCheckpointTs,
+				)
+			}
+		}
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
 			ChangeType:   SubscriptionChangeTypeUpdate,
 			SubID:        uint64(subStat.subID),
@@ -752,7 +760,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			CheckpointTs: newCheckpointTs,
 			ResolvedTs:   subStat.resolvedTs.Load(),
 		}
-		subStat.checkpointTs.CompareAndSwap(subStat.checkpointTs.Load(), newCheckpointTs)
+		subStat.checkpointTs.Store(newCheckpointTs)
 		if log.GetLevel() <= zap.DebugLevel {
 			log.Debug("update checkpoint ts",
 				zap.Any("dispatcherID", dispatcherID),
@@ -1083,7 +1091,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			} else {
 				uninitializedStatCount++
 			}
-			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(subResolvedTsLagInSec)
+			metrics.EventStoreSubscriptionResolvedTsLagHist.Observe(subResolvedTsLagInSec)
 			if globalMinResolvedTs == 0 || subResolvedTs < globalMinResolvedTs {
 				globalMinResolvedTs = subResolvedTs
 			}
@@ -1091,7 +1099,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			subCheckpointTs := subStat.checkpointTs.Load()
 			subCheckpointPhysicalTime := oracle.ExtractPhysical(subCheckpointTs)
 			subCheckpointTsLagInSec := float64(pdPhysicalTime-subCheckpointPhysicalTime) / 1e3
-			metrics.EventStoreDispatcherWatermarkLagHist.Observe(subCheckpointTsLagInSec)
+			metrics.EventStoreSubscriptionDataGCLagHist.Observe(subCheckpointTsLagInSec)
 		}
 	}
 	e.dispatcherMeta.RUnlock()
