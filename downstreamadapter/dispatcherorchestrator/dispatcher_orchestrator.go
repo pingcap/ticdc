@@ -82,7 +82,6 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	// Put message into channel for asynchronous processing by another goroutine
 	select {
 	case m.msgChan <- msg:
-		time.Sleep(2 * time.Second)
 		return nil
 	default:
 		// Channel is full, log warning and drop the message

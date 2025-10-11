@@ -81,7 +81,6 @@ func NewMaintainerManager(
 
 // recvMessages is the message handler for maintainer manager
 func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
-	log.Info("hyy manager recv message", zap.Any("message", msg))
 	switch msg.Type {
 	// Coordinator related messages
 	case messaging.TypeAddMaintainerRequest,
@@ -350,10 +349,6 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 func (m *Manager) dispatcherMaintainerMessage(
 	ctx context.Context, changefeed common.ChangeFeedID, msg *messaging.TargetMessage,
 ) error {
-	start := time.Now()
-	defer func() {
-		log.Info("hyy dispatcherMaintainerMessage", zap.Any("changefeed", changefeed), zap.Any("message", msg), zap.Any("time", time.Since(start)))
-	}()
 	c, ok := m.maintainers.Load(changefeed)
 	if !ok {
 		log.Warn("maintainer is not found",
