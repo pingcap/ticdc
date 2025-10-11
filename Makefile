@@ -148,6 +148,7 @@ build-cdc-with-failpoint: ## Build cdc with failpoint enabled.
 	$(FAILPOINT_ENABLE)
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go
 	$(FAILPOINT_DISABLE)
+	cp bin/cdc bin/cdc.test
 
 cdc:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
