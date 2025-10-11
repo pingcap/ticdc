@@ -1,5 +1,5 @@
-## this case is used to verify the new changefeed config afer update changefeed take effect. Such as filter or split table
 #!/bin/bash
+## this case is used to verify the new changefeed config afer update changefeed take effect. Such as filter or split table
 
 set -eu
 
