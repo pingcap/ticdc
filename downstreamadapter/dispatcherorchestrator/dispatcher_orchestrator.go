@@ -56,23 +56,14 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	_ context.Context,
 	msg *messaging.TargetMessage,
 ) error {
-	start := time.Now()
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
-		err := m.handleBootstrapRequest(msg.From, req)
-		log.Error("handle bootstrap request", zap.Duration("duration", time.Since(start)), zap.Error(err))
-		return err
+		return m.handleBootstrapRequest(msg.From, req)
 	case *heartbeatpb.MaintainerPostBootstrapRequest:
 		// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request
-		err := m.handlePostBootstrapRequest(msg.From, req)
-		log.Error("handle post bootstrap request",
-			zap.Duration("duration", time.Since(start)), zap.Error(err))
-		return err
+		return m.handlePostBootstrapRequest(msg.From, req)
 	case *heartbeatpb.MaintainerCloseRequest:
-		err := m.handleCloseRequest(msg.From, req)
-		log.Error("handle close request",
-			zap.Duration("duration", time.Since(start)), zap.Error(err))
-		return err
+		return m.handleCloseRequest(msg.From, req)
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))
 	}
