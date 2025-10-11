@@ -278,6 +278,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 // note: the EventPeriod is a special event that submitted when initializing maintainer
 // , and it will be re-submitted at the end of onPeriodTask
 func (m *Maintainer) HandleEvent(event *Event) bool {
+	log.Info("hyy maintainer handleEvent", zap.Any("changefeed", m.id), zap.Any("event", event))
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
@@ -687,6 +688,11 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 }
 
 func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
+	log.Info("hyy onHeartBeatRequest",
+		zap.Stringer("changefeed", m.id),
+		zap.Stringer("sourceNode", msg.From),
+		zap.Any("req", msg.Message),
+	)
 	// ignore the heartbeat if the maintainer not bootstrapped
 	if !m.bootstrapped.Load() {
 		return
