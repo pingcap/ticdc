@@ -85,7 +85,7 @@ type EventStoreConfig struct {
 // NewDefaultEventStoreConfig returns the default event store configuration.
 func NewDefaultEventStoreConfig() *EventStoreConfig {
 	return &EventStoreConfig{
-		CompressionThreshold: 4096, // 4KB
+		CompressionThreshold: 10 * 1024, // 10KB
 	}
 }
 
