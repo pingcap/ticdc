@@ -144,7 +144,7 @@ func (m *gcManager) CheckStaleCheckpointTs(
 	if kerneltype.IsClassic() {
 		return m.checkStaleCheckPointTsGlobal(changefeedID, checkpointTs)
 	}
-	return m.checkStaleCheckPointTsGlobalKeyspace(ctx, changefeedID, checkpointTs)
+	return m.checkStaleCheckpointTsKeyspace(ctx, changefeedID, checkpointTs)
 }
 
 func checkStaleCheckpointTs(
@@ -181,7 +181,7 @@ func checkStaleCheckpointTs(
 	return nil
 }
 
-func (m *gcManager) checkStaleCheckPointTsGlobalKeyspace(ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
+func (m *gcManager) checkStaleCheckpointTsKeyspace(ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
 	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, changefeedID.Keyspace())
 	if err != nil {
