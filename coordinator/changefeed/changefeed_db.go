@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -357,4 +358,16 @@ func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 	newCf := NewChangefeed(cf.ChangefeedID, cf, oldCf.GetStatus().CheckpointTs, false)
 	db.stopped[cf.ChangefeedID] = newCf
 	db.changefeeds[cf.ChangefeedID] = newCf
+}
+
+func (db *ChangefeedDB) UpdatePullerResolvedTs(entries []*heartbeatpb.ChangefeedPullerResolvedTsEntry) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+
+	for _, entry := range entries {
+		cf := db.changefeeds[common.NewChangefeedIDFromPB(entry.ChangefeedID)]
+		if cf != nil {
+			cf.SetPullerResolvedTs(entry.ResolvedTs)
+		}
+	}
 }

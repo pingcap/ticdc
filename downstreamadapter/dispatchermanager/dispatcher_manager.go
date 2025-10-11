@@ -695,6 +695,9 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		}
 		if watermark != nil {
 			message.Watermark.UpdateMin(*watermark)
+			if message.Watermark.LastSyncedTs < watermark.LastSyncedTs {
+				message.Watermark.LastSyncedTs = watermark.LastSyncedTs
+			}
 		}
 	})
 	message.Watermark.Seq = seq

@@ -254,10 +254,18 @@ func (c *Controller) onMessage(msg *messaging.TargetMessage) {
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
+	case messaging.TypeLogCoordinatorReportResolvedTs:
+		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
 		log.Panic("unexpected message type",
 			zap.String("type", msg.Type.String()))
 	}
+}
+
+func (c *Controller) onLogCoordinatorReportResolvedTs(msg *messaging.TargetMessage) {
+	log.Info("received log coordinator report resolved ts",
+		zap.Stringer("node", msg.From))
+	c.changefeedDB.UpdatePullerResolvedTs(msg.Message[0].(*heartbeatpb.AllChangefeedPullerResolvedTs).Entries)
 }
 
 func (c *Controller) onNodeChanged() {
@@ -712,7 +720,7 @@ func (c *Controller) GetChangefeed(
 	if nodeInfo != nil {
 		maintainerAddr = nodeInfo.AdvertiseAddr
 	}
-	status := &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs}
+	status := &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs, LastSyncedTs: cf.GetStatus().LastSyncedTs, PullerResolvedTs: cf.GetPullerResolvedTs()}
 	status.SetMaintainerAddr(maintainerAddr)
 	return cf.GetInfo(), status, nil
 }

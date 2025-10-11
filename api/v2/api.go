@@ -59,7 +59,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, keyspaceCheckerMiddleware, api.PauseChangefeed)
 	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, keyspaceCheckerMiddleware, api.DeleteChangefeed)
 	changefeedGroup.GET("/:changefeed_id/status", coordinatorMiddleware, authenticateMiddleware, keyspaceCheckerMiddleware, api.status)
-	changefeedGroup.GET("/:changefeed_id/synced", coordinatorMiddleware, authenticateMiddleware, keyspaceCheckerMiddleware, api.syncState)
+	changefeedGroup.GET("/:changefeed_id/synced", coordinatorMiddleware, authenticateMiddleware, keyspaceCheckerMiddleware, api.synced)
 
 	// internal APIs
 	changefeedGroup.POST("/:changefeed_id/move_table", authenticateMiddleware, keyspaceCheckerMiddleware, api.MoveTable)

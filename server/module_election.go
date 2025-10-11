@@ -46,7 +46,7 @@ func NewElector(server *server) common.SubModule {
 	election := concurrency.NewElection(server.session,
 		etcd.CaptureOwnerKey(server.EtcdClient.GetClusterID()))
 	logElection := concurrency.NewElection(server.session,
-		LogCoordinatorKey(server.EtcdClient.GetClusterID()))
+		etcd.LogCoordinatorKey(server.EtcdClient.GetClusterID()))
 	return &elector{
 		election:    election,
 		logElection: logElection,
@@ -308,11 +308,4 @@ func (e *elector) resignLogCoordinator() error {
 	}
 	cancel()
 	return nil
-}
-
-// FIXME: move the following code to the right package
-var metaPrefix = "/__cdc_meta__"
-
-func LogCoordinatorKey(clusterID string) string {
-	return etcd.NewCDCBaseKey(clusterID) + metaPrefix + "/log_coordinator"
 }
