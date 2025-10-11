@@ -87,11 +87,13 @@ type server struct {
 
 	liveness api.Liveness
 
-	pdClient        pd.Client
-	pdAPIClient     pdutil.PDAPIClient
-	pdEndpoints     []string
-	coordinatorMu   sync.Mutex
-	coordinator     tiserver.Coordinator
+	pdClient      pd.Client
+	pdAPIClient   pdutil.PDAPIClient
+	pdEndpoints   []string
+	coordinatorMu sync.Mutex
+
+	coordinator tiserver.Coordinator
+
 	upstreamManager *upstream.Manager
 
 	// session keeps alive between the server and etcd

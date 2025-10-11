@@ -139,37 +139,37 @@ pulsar_groups=(
 
 storage_groups=(
 	# G00
-	'random_drop_message random_drop_message'
+	'generate_column many_pk_or_uk multi_source'
 	# G01
-	'random_drop_message random_drop_message'
+	'csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered'
 	# G02
-	'random_drop_message random_drop_message'
+	'canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
-	'random_drop_message random_drop_message'
+	'csv_storage_basic storage_csv_update'
 	# G04
-	'random_drop_message random_drop_message'
+	'ddl_for_split_tables_with_random_move_table'
 	# G05
-	'random_drop_message random_drop_message'
+	'move_table drop_many_tables'
 	# G06
-	'random_drop_message random_drop_message'
+	'cdc default_value'
 	# G07
-	'random_drop_message random_drop_message'
+	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'random_drop_message random_drop_message'
+	'tidb_mysql_test'
 	# G09
-	'random_drop_message random_drop_message'
+	'ddl_for_split_tables_with_merge_and_split'
 	# G10
-	'random_drop_message random_drop_message'
+	'ddl_for_split_tables_with_random_merge_and_split'
 	# G11
-	'random_drop_message random_drop_message'
+	'ddl_for_split_tables_random_schedule'
 	# G12
-	'random_drop_message random_drop_message'
+	'ddl_with_random_move_table'
 	# G13
-	'random_drop_message random_drop_message'
+	'fail_over region_merge multi_changefeeds'
 	# G14
-	'random_drop_message random_drop_message'
+	'fail_over_ddl_mix'
 	# G15
-	'random_drop_message random_drop_message'
+	'random_drop_message'
 )
 
 # Source shared functions and check test coverage

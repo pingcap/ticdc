@@ -131,7 +131,7 @@ main() {
 	# Check data consistency
 	echo "[$(date)] Checking data consistency..."
 	# storage sink consumer performance is not good, so we need to wait for a longer time
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300 
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 
 	cleanup_process $CDC_BINARY
 }
