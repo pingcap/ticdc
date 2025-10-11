@@ -124,8 +124,8 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
-  "id": 39,
-  "iteration": 1760151079658,
+  "id": 33,
+  "iteration": 1758780574108,
   "links": [],
   "panels": [
     {
@@ -23682,7 +23682,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "Test-Cluster-TiCDC-New-Arch100",
-  "uid": "YiGL8hBZ0aam",
-  "version": 3
+  "title": "Test-Cluster-TiCDC-New-Arch",
+  "uid": "YiGL8hBZ0aac",
+  "version": 11
 }
