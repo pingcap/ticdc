@@ -51,7 +51,7 @@ type Manager interface {
 // keyspaceGCBarrierInfo is the gc info for a keyspace
 type keyspaceGCBarrierInfo struct {
 	lastSucceededTime time.Time
-	lastGcBarrierTs   uint64
+	lastSafePointTs   uint64
 	isTiCDCBlockGC    bool
 }
 
@@ -147,54 +147,20 @@ func (m *gcManager) CheckStaleCheckpointTs(
 	return m.checkStaleCheckPointTsGlobalKeyspace(ctx, changefeedID, checkpointTs)
 }
 
-func (m *gcManager) checkStaleCheckPointTsGlobalKeyspace(ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
-	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, changefeedID.Keyspace())
-	if err != nil {
-		return err
-	}
-
+func checkStaleCheckpointTs(
+	changefeedID common.ChangeFeedID,
+	checkpointTs common.Ts,
+	pdClock pdutil.Clock,
+	isTiCDCBlockGC bool,
+	lastSafePointTs uint64,
+	gcTTL int64,
+) error {
 	gcSafepointUpperBound := checkpointTs - 1
-
-	var barrierInfo *keyspaceGCBarrierInfo
-	o, ok := m.keyspaceGCBarrierInfoMap.Load(keyspaceMeta.Id)
-	if !ok {
-		barrierInfo = &keyspaceGCBarrierInfo{}
-	} else {
-		barrierInfo = o.(*keyspaceGCBarrierInfo)
-	}
-
-	if barrierInfo.isTiCDCBlockGC {
-		pdTime := m.pdClock.CurrentTime()
+	if isTiCDCBlockGC {
+		pdTime := pdClock.CurrentTime()
 		if pdTime.Sub(
 			oracle.GetTimeFromTS(gcSafepointUpperBound),
-		) > time.Duration(m.gcTTL)*time.Second {
-			return cerror.ErrGCTTLExceeded.
-				GenWithStackByArgs(
-					checkpointTs,
-					changefeedID,
-				)
-		}
-	} else {
-		if gcSafepointUpperBound < barrierInfo.lastGcBarrierTs {
-			return cerror.ErrSnapshotLostByGC.
-				GenWithStackByArgs(
-					checkpointTs,
-					m.lastSafePointTs.Load(),
-				)
-		}
-	}
-
-	return nil
-}
-
-func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	gcSafepointUpperBound := checkpointTs - 1
-	if m.isTiCDCBlockGC.Load() {
-		pdTime := m.pdClock.CurrentTime()
-		if pdTime.Sub(
-			oracle.GetTimeFromTS(gcSafepointUpperBound),
-		) > time.Duration(m.gcTTL)*time.Second {
+		) > time.Duration(gcTTL)*time.Second {
 			return cerror.ErrGCTTLExceeded.
 				GenWithStackByArgs(
 					checkpointTs,
@@ -204,15 +170,37 @@ func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedI
 	} else {
 		// if `isTiCDCBlockGC` is false, it means there is another service gc
 		// point less than the min checkpoint ts.
-		if gcSafepointUpperBound < m.lastSafePointTs.Load() {
+		if gcSafepointUpperBound < lastSafePointTs {
 			return cerror.ErrSnapshotLostByGC.
 				GenWithStackByArgs(
 					checkpointTs,
-					m.lastSafePointTs.Load(),
+					lastSafePointTs,
 				)
 		}
 	}
 	return nil
+}
+
+func (m *gcManager) checkStaleCheckPointTsGlobalKeyspace(ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
+	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, changefeedID.Keyspace())
+	if err != nil {
+		return err
+	}
+
+	var barrierInfo *keyspaceGCBarrierInfo
+	o, ok := m.keyspaceGCBarrierInfoMap.Load(keyspaceMeta.Id)
+	if !ok {
+		barrierInfo = &keyspaceGCBarrierInfo{}
+	} else {
+		barrierInfo = o.(*keyspaceGCBarrierInfo)
+	}
+
+	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, barrierInfo.isTiCDCBlockGC, barrierInfo.lastSafePointTs, m.gcTTL)
+}
+
+func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
+	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
 }
 
 func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts, forceUpdate bool) error {
@@ -264,7 +252,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	// that the service gc barrier ts set by TiCDC is the min service gc barrier ts
 	newBarrierInfo := &keyspaceGCBarrierInfo{
 		lastSucceededTime: time.Now(),
-		lastGcBarrierTs:   actual,
+		lastSafePointTs:   actual,
 		isTiCDCBlockGC:    actual == checkpointTs,
 	}
 	m.keyspaceGCBarrierInfoMap.Store(keyspaceID, newBarrierInfo)
