@@ -11363,7 +11363,7 @@
           "spaceLength": 10,
           "targets": [
             {
-              "expr": "sum(ticdc_messaging_slow_handle_counter{instance=~\"$ticdc_instance\"}) by (instance, type)",
+              "expr": "sum(ticdc_messaging_slow_handle_counter{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", instance=~\"$ticdc_instance\"}) by (instance, type)",
               "legendFormat": "{{instance}}-{{type}}",
               "interval": "",
               "exemplar": true,
