@@ -112,12 +112,20 @@ else
 fi
 
 ################### start pd #####################
-cat >"$OUT_DIR/upstream-pd.toml" <<EOF
+touch "$OUT_DIR/upstream-pd.toml"
+if [ -f "$pd_config" ]; then
+	cat "$pd_config" >"$OUT_DIR/upstream-pd.toml"
+fi
+cat >>"$OUT_DIR/upstream-pd.toml" <<EOF
 [keyspace]
 pre-alloc = ["$KEYSPACE_NAME"]
 EOF
 
-cat >"$OUT_DIR/downstream-pd.toml" <<EOF
+touch "$OUT_DIR/downstream-pd.toml"
+if [ -f "$pd_config" ]; then
+	cat "$pd_config" >"$OUT_DIR/downstream-pd.toml"
+fi
+cat >>"$OUT_DIR/downstream-pd.toml" <<EOF
 [keyspace]
 pre-alloc = ["$KEYSPACE_NAME"]
 EOF
@@ -182,7 +190,11 @@ echo "checking downstream pd $DOWN_PD_HOST:$DOWN_PD_PORT"
 check_pd_health "$DOWN_PD_HOST" "$DOWN_PD_PORT" 60
 
 ################### start TiKV #####################
-cat >"$OUT_DIR/upstream-tikv.toml" <<EOF
+touch "$OUT_DIR/upstream-tikv.toml"
+if [ -f "$tikv_config" ]; then
+	cat "$tikv_config" >"$OUT_DIR/upstream-tikv.toml"
+fi
+cat >>"$OUT_DIR/upstream-tikv.toml" <<EOF
 [storage]
 api-version = 2
 enable-ttl = true
@@ -202,7 +214,11 @@ target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
 EOF
 
-cat >"$OUT_DIR/downstream-tikv.toml" <<EOF
+touch "$OUT_DIR/downstream-tikv.toml"
+if [ -f "$tikv_config" ]; then
+	cat "$tikv_config" >"$OUT_DIR/downstream-tikv.toml"
+fi
+cat >>"$OUT_DIR/downstream-tikv.toml" <<EOF
 [storage]
 api-version = 2
 enable-ttl = true
@@ -315,7 +331,11 @@ check_port_available "$UP_TIKV_WORKER_HOST" "$UP_TIKV_WORKER_PORT" "Upstream TiK
 check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstream TiKV-Worker is not ready yet"
 
 ####################start TiDB####################
-cat >"$OUT_DIR/upstream-tidb-system.toml" <<EOF
+touch "$OUT_DIR/upstream-tidb-system.toml"
+if [ -f "$tidb_config" ]; then
+	cat "$tidb_config" >>"$OUT_DIR/upstream-tidb-system.toml"
+fi
+cat >>"$OUT_DIR/upstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
 split-table = false
 enable-telemetry = false
@@ -340,7 +360,11 @@ tidb_service_scope = 'dxf_service'
 max-server-connections = 0
 EOF
 
-cat >"$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" <<EOF
+touch "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml"
+if [ -f "$tidb_config" ]; then
+	cat "$tidb_config" >>"$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml"
+fi
+cat >>"$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
 split-table = false
 enable-telemetry = false
@@ -365,7 +389,11 @@ EOF
 
 cp "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml"
 
-cat >"$OUT_DIR/downstream-tidb-system.toml" <<EOF
+touch "$OUT_DIR/downstream-tidb-system.toml"
+if [ -f "$tidb_config" ]; then
+	cat "$tidb_config" >>"$OUT_DIR/downstream-tidb-system.toml"
+fi
+cat >>"$OUT_DIR/downstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
 split-table = false
 enable-telemetry = false
@@ -390,7 +418,11 @@ tidb_service_scope = 'dxf_service'
 max-server-connections = 0
 EOF
 
-cat >"$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml" <<EOF
+touch "$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml"
+if [ -f "$tidb_config" ]; then
+	cat "$tidb_config" >>"$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml"
+fi
+cat >>"$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
 split-table = false
 enable-telemetry = false
