@@ -110,9 +110,10 @@ func (m *regionCountSplitter) split(
 			return []*heartbeatpb.TableSpan{span}
 		}
 		spans = append(spans, &heartbeatpb.TableSpan{
-			TableID:  span.TableID,
-			StartKey: startKey,
-			EndKey:   endKey,
+			TableID:    span.TableID,
+			StartKey:   startKey,
+			EndKey:     endKey,
+			KeyspaceID: span.KeyspaceID,
 		},
 		)
 
@@ -132,6 +133,7 @@ func (m *regionCountSplitter) split(
 	spans[0].StartKey = span.StartKey
 	spans[len(spans)-1].EndKey = span.EndKey
 	log.Info("split span by region count",
+		zap.Uint32("keyspaceID", span.KeyspaceID),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("span", span.String()),
 		zap.Int("spans", len(spans)),
