@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	. "github.com/pingcap/ticdc/pkg/errors"
@@ -535,6 +536,11 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-sendCh:
+			failpoint.Inject("InjectDropRemoteMessage", func() {
+				log.Info("Inject Drop Remote Message", zap.Stringer("localID", s.messageCenterID), zap.String("localAddr", s.localAddr), zap.Stringer("remoteID", s.targetId), zap.String("remoteAddr", s.targetAddr), zap.String("streamType", streamType), zap.Any("message", msg))
+				failpoint.Continue()
+			})
+
 			if err := gs.Send(msg); err != nil {
 				log.Error("Error sending message",
 					zap.Error(err),

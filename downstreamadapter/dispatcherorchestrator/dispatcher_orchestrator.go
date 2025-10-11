@@ -143,6 +143,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	var err error
 	var startTs uint64
 	if !exists {
+		start := time.Now()
 		manager, startTs, err = dispatchermanager.
 			NewDispatcherManager(
 				cfId,
@@ -156,7 +157,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			// Fast return the error to maintainer.
 		if err != nil {
 			log.Error("failed to create new dispatcher manager",
-				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
 
 			appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(cfId)
 
@@ -169,6 +170,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					Message: err.Error(),
 				},
 			}
+			log.Error("create new dispatcher manager failed",
+				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
+
 			return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 		}
 		m.mutex.Lock()
