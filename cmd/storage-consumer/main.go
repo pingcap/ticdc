@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -68,7 +69,8 @@ var (
 
 const (
 	defaultChangefeedName         = "storage-consumer"
-	defaultFlushWaitDuration      = 200 * time.Millisecond
+	defaultFlushWaitDuration      = 10 * time.Millisecond
+	defaultLogInterval            = 5 * time.Second
 	fakePartitionNumForSchemaFile = -1
 )
 
@@ -79,7 +81,7 @@ func init() {
 	flag.StringVar(&configFile, "config", "", "changefeed configuration file")
 	flag.StringVar(&logFile, "log-file", "", "log file path")
 	flag.StringVar(&logLevel, "log-level", "info", "log level")
-	flag.DurationVar(&flushInterval, "flush-interval", 10*time.Second, "flush interval")
+	flag.DurationVar(&flushInterval, "flush-interval", 2*time.Second, "flush interval")
 	flag.IntVar(&fileIndexWidth, "file-index-width",
 		config.DefaultFileIndexWidth, "file index width")
 	flag.BoolVar(&enableProfiling, "enable-profiling", false, "whether to enable profiling")
@@ -131,6 +133,8 @@ type consumer struct {
 	tableSinkMap     map[model.TableID]tablesink.TableSink
 	tableIDGenerator *fakeTableIDGenerator
 	errCh            chan error
+
+	dmlCount atomic.Int64
 }
 
 func newConsumer(ctx context.Context) (*consumer, error) {
@@ -335,6 +339,8 @@ func (c *consumer) emitDMLEvents(
 		cnt++
 
 		if tp == model.MessageTypeRow {
+			c.dmlCount.Add(1)
+
 			row, err := decoder.NextRowChangedEvent()
 			if err != nil {
 				log.Error("failed to get next row changed event", zap.Error(err))
@@ -596,12 +602,22 @@ func (c *consumer) handleNewFiles(
 
 func (c *consumer) run(ctx context.Context) error {
 	ticker := time.NewTicker(flushInterval)
+	logTicker := time.NewTicker(defaultLogInterval)
+	lastDMLCount := int64(0)
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case err := <-c.errCh:
 			return err
+		case <-logTicker.C:
+
+			dmlDelta := c.dmlCount.Load() - lastDMLCount
+			flushSpeed := dmlDelta / int64(defaultLogInterval.Seconds())
+			lastDMLCount = c.dmlCount.Load()
+			logString := fmt.Sprintf("total flush dml count: %d, flush row per second: %d", c.dmlCount.Load(), flushSpeed)
+			log.Info(logString)
+
 		case <-ticker.C:
 		}
 
