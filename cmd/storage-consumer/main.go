@@ -69,7 +69,7 @@ var (
 
 const (
 	defaultChangefeedName         = "storage-consumer"
-	defaultFlushWaitDuration      = 10 * time.Millisecond
+	defaultFlushWaitDuration      = 1 * time.Millisecond
 	defaultLogInterval            = 5 * time.Second
 	fakePartitionNumForSchemaFile = -1
 )
@@ -388,13 +388,15 @@ func (c *consumer) emitDMLEvents(
 }
 
 func (c *consumer) waitTableFlushComplete(ctx context.Context, tableID model.TableID) error {
+	ticker := time.NewTicker(defaultFlushWaitDuration)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case err := <-c.errCh:
 			return err
-		default:
+		case <-ticker.C:
 		}
 
 		resolvedTs := c.tableTsMap[tableID]
@@ -402,13 +404,14 @@ func (c *consumer) waitTableFlushComplete(ctx context.Context, tableID model.Tab
 		if err != nil {
 			return errors.Trace(err)
 		}
+		// wait until the checkpoint ts is equal to the resolved ts
 		checkpoint := c.tableSinkMap[tableID].GetCheckpointTs()
 		if checkpoint.Equal(resolvedTs) {
 			c.tableTsMap[tableID] = resolvedTs.AdvanceBatch()
 			return nil
 		}
-		time.Sleep(defaultFlushWaitDuration)
 	}
+
 }
 
 func (c *consumer) syncExecDMLEvents(
