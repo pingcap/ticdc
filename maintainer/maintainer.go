@@ -649,6 +649,8 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				zap.String("changefeed", m.id.Name()),
 				zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
+				zap.Any("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
+				zap.Any("minCheckpointTsForBarrier", minCheckpointTsForBarrier),
 			)
 			m.setWatermark(*newWatermark)
 			m.updateMetrics()
