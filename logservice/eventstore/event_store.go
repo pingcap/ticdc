@@ -1191,11 +1191,12 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 }
 
 func (e *eventStore) deleteEvents(dbIndex int, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-	db := e.dbs[dbIndex]
-	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
-	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+	return nil
+	// db := e.dbs[dbIndex]
+	// start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
+	// end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
 
-	return db.DeleteRange(start, end, pebble.NoSync)
+	// return db.DeleteRange(start, end, pebble.NoSync)
 }
 
 type eventStoreIter struct {
