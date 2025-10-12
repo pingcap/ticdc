@@ -793,7 +793,6 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 
 func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
 	if e.closed.Load() {
-		log.Warn("event store is closed, can not get iterator", zap.Stringer("dispatcherID", dispatcherID))
 		return nil
 	}
 
