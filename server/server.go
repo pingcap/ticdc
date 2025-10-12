@@ -435,7 +435,8 @@ func (c *server) Close(ctx context.Context) {
 		c.closePreServices()
 	}()
 
-	// Close subModules in reverse order of their startup.
+	// There are also some dependencies inside subModules,
+	// so we close subModules in reverse order of their startup.
 	for i := len(c.subModules) - 1; i >= 0; i-- {
 		m := c.subModules[i]
 		if err := m.Close(ctx); err != nil {
