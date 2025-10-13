@@ -21463,7 +21463,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Pulsar Client Producer Latency ",
+          "title": "Pulsar Client Producer Latency",
           "type": "timeseries"
         },
         {
