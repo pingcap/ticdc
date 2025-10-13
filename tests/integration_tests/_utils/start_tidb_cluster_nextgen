@@ -347,7 +347,7 @@ run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
 tikv-worker-url = "http://$UP_TIKV_WORKER_HOST:$UP_TIKV_WORKER_PORT"
-temp-dir = $OUT_DIR/data/upstream/tidb-system
+temp-dir = "$OUT_DIR/data/upstream/tidb-system"
 
 [log.file]
 max-backups = 100
@@ -377,7 +377,7 @@ new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
-temp-dir = $OUT_DIR/data/upstream/tidb-$KEYSPACE_NAME
+temp-dir = "$OUT_DIR/data/upstream/tidb-$KEYSPACE_NAME"
 
 [log.file]
 max-backups = 100
@@ -409,7 +409,7 @@ run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
 tikv-worker-url = "http://$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT"
-temp-dir = $OUT_DIR/data/downstream/tidb-system
+temp-dir = "$OUT_DIR/data/downstream/tidb-system"
 
 [log.file]
 max-backups = 100
@@ -439,7 +439,7 @@ new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
-temp-dir = $OUT_DIR/data/downstream/tidb-$KEYSPACE_NAME
+temp-dir = "$OUT_DIR/data/downstream/tidb-$KEYSPACE_NAME"
 
 [log.file]
 max-backups = 100
