@@ -6439,7 +6439,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Maintainer checkpoint lag",
+          "title": "Maintainer Checkpoint Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -6899,7 +6899,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV client dispatch events / s",
+          "title": "Receive Events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -7098,7 +7098,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Region request finish scan duration",
+          "title": "Region Request Finish Scan Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -7194,7 +7194,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Subscribed region count",
+          "title": "Subscribed Region Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -7372,7 +7372,7 @@
               "refId": "A"
             }
           ],
-          "title": "KV client batch resolved region count",
+          "title": "Resolved TS Batch Size (Regions)",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -16504,7 +16504,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "gRPC message count",
+          "title": "gRPC Message Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16616,7 +16616,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "CDC network traffic",
+          "title": "CDC Network Traffic",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -16855,7 +16855,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "CDC memory quota",
+          "title": "CDC Memory Quota",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -16973,7 +16973,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Captured region count",
+          "title": "Captured Region Count",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -17093,7 +17093,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Initial scan tasks status",
+          "title": "Initial Scan Tasks Status",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17208,7 +17208,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Incremental scan duration percentile",
+          "title": "Incremental Scan Duration Percentile",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17303,7 +17303,7 @@
               "refId": "A"
             }
           ],
-          "title": "Initial scan duration",
+          "title": "Initial Scan Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -17406,7 +17406,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Incremental scan sink duration percentile",
+          "title": "Incremental Scan Sink Duration Percentile",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17516,7 +17516,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "CDC total scan bytes",
+          "title": "CDC Total Scan Bytes",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -17627,7 +17627,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Incremental scan speed",
+          "title": "Incremental Scan Speed",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -17740,7 +17740,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Incremental scan disk speed",
+          "title": "Incremental Scan Disk Speed",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -17881,7 +17881,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Min resolved ts",
+          "title": "Min Resolved Ts",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -17987,7 +17987,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Resolved ts lag duration percentile",
+          "title": "Resolved Ts Lag Duration Percentile",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18109,7 +18109,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Old value cache hit",
+          "title": "Old Value Cache Hit",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18219,7 +18219,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Min resolved Region",
+          "title": "Min Resolved Region",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -18314,7 +18314,7 @@
               "refId": "A"
             }
           ],
-          "title": "Old value seek duration",
+          "title": "Old Value Seek Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -18439,7 +18439,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Old value cache size",
+          "title": "Old Value Cache Size",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18554,7 +18554,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Old value seek duration",
+          "title": "Old Value Seek Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18664,7 +18664,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Old value seek operation",
+          "title": "Old Value Seek Operation",
           "tooltip": {
             "msResolution": false,
             "shared": true,
