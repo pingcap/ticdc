@@ -21140,7 +21140,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar Client Bytes Published ",
+          "title": "Pulsar Client Bytes Published",
           "tooltip": {
             "shared": true,
             "sort": 0,
