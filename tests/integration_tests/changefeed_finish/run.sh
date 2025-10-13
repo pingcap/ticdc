@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -eu
+set -x
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -47,7 +48,7 @@ function run() {
 
 	sleep 90
 
-	ensure $MAX_RETRIES check_changefeed_state $pd_addr $changefeed_id "finished" "null" ""
+	ensure $MAX_RETRIES check_changefeed_state "$pd_addr" "$changefeed_id" "finished" "null" ""
 
 	cleanup_process $CDC_BINARY
 }
