@@ -19086,7 +19086,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Redo Write Rows / s ",
+          "title": "Redo Write Rows / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
