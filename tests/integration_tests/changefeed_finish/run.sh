@@ -32,7 +32,7 @@ function run() {
 	# 90s after now
 	target_ts=$(($now + 90 * 10 ** 3 * 2 ** 18))
 	result=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" --target-ts=$target_ts 2>&1)
-	for a in $result; do
+	echo "$result" | while IFS= read -r a; do
 		echo "'$a'"
 	done
 	changefeed_id=$(echo "$result" | head -n2 | tail -n1 | awk -F ' ' '{print $2}')
