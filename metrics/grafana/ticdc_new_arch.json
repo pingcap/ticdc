@@ -305,7 +305,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed ResolvedTs Lag",
+          "title": "Changefeed Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1270,7 +1270,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Maintainer ResolvedTs lag",
+          "title": "Maintainer Resolved Ts lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1460,7 +1460,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller and EventService ResolvedTs Lag ",
+          "title": "Puller and EventService Resolved Ts Lag ",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1656,7 +1656,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "DispatcherManager ResolvedTs Lag",
+          "title": "DispatcherManager Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1746,7 +1746,7 @@
               "refId": "A"
             }
           ],
-          "title": "EventCollector ResolvedTs Lag",
+          "title": "EventCollector Resolved Ts Lag",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -3939,7 +3939,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed ResolvedTs",
+          "title": "Changefeed Resolved Ts",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4154,7 +4154,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed ResolvedTs Lag",
+          "title": "Changefeed Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4369,7 +4369,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed ResolvedTs Lag",
+          "title": "Changefeed Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -6045,7 +6045,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "downstream",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The number of changefeed in different status\n\n0: ReplicationSetStateUnknown means the replication state is unknown, it should not happen.\n\n1: ReplicationSetStateAbsent means there is no one replicates or prepares it.\n\n2: ReplicationSetStatePrepare means it needs to add a secondary.\n\n3: ReplicationSetStateCommit means it needs to promote secondary to primary.\n\n4: ReplicationSetStateReplicating means there is exactly one capture that is replicating the table.\n\n5: ReplicationSetStateRemoving means all captures need to stop replication eventually.\n\n",
           "editable": true,
@@ -6156,7 +6156,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "downstream",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "duration for each operator for changefeed",
           "fieldConfig": {
             "defaults": {},
@@ -6262,7 +6262,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "downstream",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The history of TiCDC cluster coordinator, owner node has a value that is great than 0",
           "fieldConfig": {
             "defaults": {},
@@ -9802,7 +9802,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Wait ResolvedTs Duration",
+          "title": "Wait Resolved Ts Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -12054,7 +12054,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event Collector Received ResolvedTs / s",
+          "title": "Event Collector Received Resolved Ts / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
