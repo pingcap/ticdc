@@ -172,15 +172,15 @@ EOF
 	fi
 
 	TS=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-	if [ -z "$NEXT_GEN" ]; then
-		REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
-		run_cdc_cli unsafe resolve-lock --region=$REGION_ID
-		run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
-	else
+	if [ "$NEXT_GEN" = 1 ]; then
 		KEYSPACE_ID=$(pd-ctl -u=$pd_addr keyspace show name "$KEYSPACE_NAME" | jq -r '.id')
 		REGION_ID=$(pd-ctl region keyspace id $KEYSPACE_ID | jq '.regions[] | select(.start_key | startswith("78")) | .id' | head -n 1)
 		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID
 		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID --ts=$TS
+	else
+		REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
 	fi
 
 	sleep 3

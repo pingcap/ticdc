@@ -204,15 +204,15 @@ EOF
 	fi
 
 	TS=$(run_cdc_cli_tso_query $TLS_PD_HOST $TLS_PD_PORT true)
-	if [ -z "$NEXT_GEN" ]; then
-		REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region | jq '.regions[0].id')
-		run_cdc_cli unsafe resolve-lock --region=$REGION_ID
-		run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
-	else
+	if [ "$NEXT_GEN" = 1 ]; then
 		KEYSPACE_ID=$(pd-ctl --cacert ${TLS_DIR}/ca.pem --cert ${TLS_DIR}/client.pem --key ${TLS_DIR}/client-key.pem -u=$pd_addr keyspace show name "$KEYSPACE_NAME" | jq -r '.id')
 		REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region keyspace id $KEYSPACE_ID | jq '.regions[] | select(.start_key | startswith("78")) | .id' | head -n 1)
 		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID
 		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID --ts=$TS
+	else
+		REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region | jq '.regions[0].id')
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
 	fi
 	echo "region id $REGION_ID"
 

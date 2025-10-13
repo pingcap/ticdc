@@ -114,7 +114,7 @@ function resume_changefeed_in_failed_state() {
 		exit 1
 	fi
 
-	if [ -z "$NEXT_GEN" ]; then
+	if [ "$NEXT_GEN" != 1 ]; then
 		# TODO tenfyzhong 2025-10-10 19:15:57 compitable with next gen
 		# the gc_safepoint is always 0
 		gc_safepoint=$(pd-ctl -u=$pd_addr service-gc-safepoint | grep -oE "\"safe_point\": [0-9]+" | grep -oE "[0-9]+" | sort | head -n1)
