@@ -893,7 +893,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "The status of changefeeds",
+          "title": "The Status of Changefeeds",
           "type": "timeseries"
         },
         {
@@ -1460,7 +1460,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller and EventService Resolved ts lag ",
+          "title": "Puller and EventService Resolved Ts Lag ",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1558,7 +1558,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Dispatcher manager checkpoint ts lag",
+          "title": "Dispatcher Manager Checkpoint Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1656,7 +1656,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Dispatcher manager resolved ts lag",
+          "title": "Dispatcher Manager Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1746,7 +1746,7 @@
               "refId": "A"
             }
           ],
-          "title": "Event collector receive event Lag",
+          "title": "Event Collector Receive Event Lag",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -1852,7 +1852,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller output events / s",
+          "title": "Puller Output Events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1956,7 +1956,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller output event rows",
+          "title": "Puller Output Event Rows",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -2059,7 +2059,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "EventService output event row / s",
+          "title": "EventService Output Event Row / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -2165,7 +2165,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "EventService output event rows",
+          "title": "EventService Output Event Rows",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -2269,7 +2269,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event Collector received event rows / s",
+          "title": "Event Collector Received Event Rows / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -2373,7 +2373,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event collector Received event rows",
+          "title": "Event Collector Received Event Rows",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -2477,7 +2477,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink flush rows / s",
+          "title": "Sink Flush Rows / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -2582,7 +2582,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink flush rows",
+          "title": "Sink Flush Rows",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -2822,7 +2822,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Goroutine count",
+          "title": "Goroutine Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -2923,7 +2923,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Open FD count",
+          "title": "Open FD Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -3039,7 +3039,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "CPU usage",
+          "title": "CPU Usage",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -3148,7 +3148,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Memory usage",
+          "title": "Memory Usage",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -3248,7 +3248,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Ownership history",
+          "title": "Ownership History",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -3349,7 +3349,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "PD leader history",
+          "title": "PD Leader History",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -3475,7 +3475,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "node table count",
+          "title": "Node Table Count",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -3587,7 +3587,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "changefeed table count",
+          "title": "Changefeed Table Count",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -3813,7 +3813,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed checkpoint",
+          "title": "Changefeed Checkpoint",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -3939,7 +3939,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed resolved ts",
+          "title": "Changefeed Resolved Ts",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4043,7 +4043,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed checkpoint lag",
+          "title": "Changefeed Checkpoint Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4154,7 +4154,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed resolved ts lag",
+          "title": "Changefeed Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4253,7 +4253,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Exit error count/m",
+          "title": "Exit Error Count/m",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4371,7 +4371,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed checkpoint lag",
+          "title": "Changefeed Checkpoint Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4468,7 +4468,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed resolved ts lag",
+          "title": "Changefeed Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4567,7 +4567,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Eventfeed error / m",
+          "title": "Eventfeed Error / m",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4666,7 +4666,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "PD operator / m",
+          "title": "PD Operator / m",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4760,7 +4760,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiDB query duration",
+          "title": "TiDB Query Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4882,7 +4882,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV min resolved ts lag",
+          "title": "TiKV Min Resolved Ts Lag",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -4985,7 +4985,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink write rows / s",
+          "title": "Sink Write Rows / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -5088,7 +5088,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink write duration",
+          "title": "Sink Write Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -5187,7 +5187,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV scan tasks / m",
+          "title": "TiKV Scan Tasks / m",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -5286,7 +5286,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV scan region time / m",
+          "title": "TiKV Scan Region Time / m",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -5389,7 +5389,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV leader change",
+          "title": "TiKV Leader Change",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -5489,7 +5489,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV admin apply / s",
+          "title": "TiKV Admin Apply / s",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -5589,7 +5589,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV advance resolved ts / s",
+          "title": "TiKV Advance Resolved Ts / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -5688,7 +5688,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV unresolved region count",
+          "title": "TiKV Unresolved Region Count",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -5787,7 +5787,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV check leader region count percentile",
+          "title": "TiKV Check Leader Region Count Percentile",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -5886,7 +5886,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV advance resolved ts fail / m",
+          "title": "TiKV Advance Resolved Ts Fail / m",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -5991,7 +5991,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV check leader duration percentile",
+          "title": "TiKV Check Leader Duration Percentile",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -6212,7 +6212,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Changefeed  Status",
+          "title": "Changefeed Status",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -6641,7 +6641,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Maintainer resolved ts lag",
+          "title": "Maintainer Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -8107,7 +8107,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Input  Bytes / s",
+          "title": "Input Bytes / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -8323,7 +8323,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Write duration",
+          "title": "Write Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -9156,7 +9156,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Read duration - Next",
+          "title": "Read Duration - Next",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -9240,7 +9240,7 @@
               "refId": "A"
             }
           ],
-          "title": "Read duration - Close",
+          "title": "Read Duration - Close",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -9324,7 +9324,7 @@
               "refId": "A"
             }
           ],
-          "title": "Read duration - First",
+          "title": "Read Duration - First",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -10006,7 +10006,7 @@
               "refId": "A"
             }
           ],
-          "title": "Event service scan duration",
+          "title": "Event Service Scan Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -10102,7 +10102,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event service scan duration",
+          "title": "Event Service Scan Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -10199,7 +10199,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event service scanned entry count",
+          "title": "Event Service Scanned Entry Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -10290,7 +10290,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event service scanned transaction count",
+          "title": "Event Service Scanned Transaction Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -10389,7 +10389,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event service scanned entry bytes / s",
+          "title": "Event Service Scanned Entry Bytes / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -10480,7 +10480,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event service scanned transaction bytes / s",
+          "title": "Event Service Scanned Transaction Bytes / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -10669,7 +10669,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event service resolved ts lag",
+          "title": "Event Service Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -11041,7 +11041,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event service channel size ",
+          "title": "Event Service Channel Size ",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -11140,7 +11140,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scanned entry count / s",
+          "title": "Scanned Entry Count / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -12249,7 +12249,7 @@
               "refId": "A"
             }
           ],
-          "title": "Event collector handle message duration",
+          "title": "Event Collector Handle Message Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -12333,7 +12333,7 @@
               "refId": "A"
             }
           ],
-          "title": "Event collector receive event Lag",
+          "title": "Event Collector Receive Event Lag",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -12940,7 +12940,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink Error Count  / m",
+          "title": "Sink Error Count / m",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -14409,7 +14409,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "encoder group input channel size",
+          "title": "Encoder Group Input Channel Size",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -14507,7 +14507,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "encoder group output channel size",
+          "title": "Encoder Group Output Channel Size",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -15253,7 +15253,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Table replication state",
+          "title": "Table Replication State",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -15366,7 +15366,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Schedule tasks",
+          "title": "Schedule Tasks",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -15470,7 +15470,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Span count",
+          "title": "Span Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -15573,7 +15573,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Table count",
+          "title": "Table Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16126,7 +16126,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Slowest table ID",
+          "title": "Slowest Table ID",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -16248,7 +16248,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Slowest table checkpoint",
+          "title": "Slowest Table Checkpoint",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16367,7 +16367,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Slowest table resolved ts",
+          "title": "Slowest Table Resolved Ts",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16480,7 +16480,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Slowest table replication state",
+          "title": "Slowest Table Replication State",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -16630,7 +16630,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Eventfeed count",
+          "title": "Eventfeed Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16736,7 +16736,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV client receive events / s",
+          "title": "KV Client Receive Events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16858,7 +16858,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Eventfeed error/m",
+          "title": "Eventfeed Error/m",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16980,7 +16980,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV client dispatch events / s",
+          "title": "KV Client Dispatch Events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17083,7 +17083,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV client gRPC stream count",
+          "title": "KV Client gRPC Stream Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17192,7 +17192,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event size percentile",
+          "title": "Event Size Percentile",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17297,7 +17297,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV client scanning regions",
+          "title": "KV Client Scanning Regions",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17403,7 +17403,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "RegionCache operation / s",
+          "title": "RegionCache Operation / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17497,7 +17497,7 @@
               "refId": "A"
             }
           ],
-          "title": "KV client batch resolved region count",
+          "title": "KV Client Batch Resolved Region Count",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -17590,7 +17590,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV client cached regions",
+          "title": "KV Client Cached Regions",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17696,7 +17696,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "ResolveLock count/m",
+          "title": "ResolveLock Count/m",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17804,7 +17804,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Backoff percentiles",
+          "title": "Backoff Percentiles",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17907,7 +17907,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller output event rows / s",
+          "title": "Puller Output Event Rows / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18012,7 +18012,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Estimate remaining time for initialization",
+          "title": "Estimate Remaining Time for Initialization",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -20395,7 +20395,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Redo fsync duration",
+          "title": "Redo Fsync Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -20469,7 +20469,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Redo flushall duration",
+          "title": "Redo Flushall Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -20543,7 +20543,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Redo write log duration",
+          "title": "Redo Write Log Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -20617,7 +20617,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Redo flush log duration",
+          "title": "Redo Flush Log Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -20715,7 +20715,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Redo Write rows / s ",
+          "title": "Redo Write Rows / s ",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -20811,7 +20811,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Redo Write bytes / s ",
+          "title": "Redo Write Bytes / s ",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -22174,7 +22174,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar published DDL schema count",
+          "title": "Pulsar Published DDL Schema Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -22279,7 +22279,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar published DDL schema success",
+          "title": "Pulsar Published DDL Schema Success",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -22384,7 +22384,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar published DDL schema fail",
+          "title": "Pulsar Published DDL Schema Fail",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -22480,7 +22480,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar published DML schema count",
+          "title": "Pulsar Published DML Schema Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -22576,7 +22576,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar published DML schema success",
+          "title": "Pulsar Published DML Schema Success",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -22672,7 +22672,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar published DML schema fail",
+          "title": "Pulsar Published DML Schema Fail",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -22769,7 +22769,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar client bytes published ",
+          "title": "Pulsar Client Bytes Published ",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -22868,7 +22868,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar client connections opened",
+          "title": "Pulsar Client Connections Opened",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -22967,7 +22967,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar client rpc count",
+          "title": "Pulsar Client RPC Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -23092,7 +23092,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Pulsar client producer latency ",
+          "title": "Pulsar Client Producer Latency ",
           "type": "timeseries"
         },
         {
@@ -23158,7 +23158,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar client producer rpc latency",
+          "title": "Pulsar Client Producer RPC Latency",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -23259,7 +23259,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar client producer pending messages",
+          "title": "Pulsar Client Producer Pending Messages",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -23360,7 +23360,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Pulsar client producer pending messages",
+          "title": "Pulsar Client Producer Pending Messages",
           "tooltip": {
             "shared": true,
             "sort": 0,
