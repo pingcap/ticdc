@@ -70,7 +70,7 @@ func initRedoComponet(
 
 	// RedoMessageDs need register on every node
 	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoMessageDs(manager)
-	manager.wg.Add(2)
+	manager.wg.Add(1)
 	go func() {
 		defer manager.wg.Done()
 		err := manager.redoSink.Run(ctx)

@@ -167,7 +167,6 @@ func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, c
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
 	ds := dynstream.NewParallelDynamicStream(
-		func(id common.GID) uint64 { return id.FastHash() },
 		&SchedulerDispatcherRequestHandler{}, option)
 	ds.Start()
 	return ds
@@ -270,7 +269,6 @@ func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequ
 
 func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler] {
 	ds := dynstream.NewParallelDynamicStream(
-		func(id common.GID) uint64 { return id.FastHash() },
 		newHeartBeatResponseHandler(dds))
 	ds.Start()
 	return ds
@@ -368,7 +366,6 @@ func (h *HeartBeatResponseHandler) OnDrop(event HeartBeatResponse) interface{} {
 // checkpointTsMessageDynamicStream is responsible for push checkpointTsMessage to the corresponding table trigger event dispatcher.
 func newCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *DispatcherManager, *CheckpointTsMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
-		func(id common.GID) uint64 { return id.FastHash() },
 		&CheckpointTsMessageHandler{})
 	ds.Start()
 	return ds
@@ -421,7 +418,6 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 // redoMessageDynamicStream is responsible for push RedoMessage to the corresponding table trigger event dispatcher.
 func newRedoMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMessage, *DispatcherManager, *RedoMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
-		func(id common.GID) uint64 { return id.FastHash() },
 		&RedoMessageHandler{})
 	ds.Start()
 	return ds
@@ -480,7 +476,6 @@ func (h *RedoMessageHandler) OnDrop(event RedoMessage) interface{} {
 
 func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler] {
 	ds := dynstream.NewParallelDynamicStream(
-		func(id common.GID) uint64 { return id.FastHash() },
 		&MergeDispatcherRequestHandler{})
 	ds.Start()
 	return ds

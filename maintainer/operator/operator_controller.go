@@ -15,7 +15,6 @@ package operator
 
 import (
 	"container/heap"
-	"math"
 	"sync"
 	"time"
 
@@ -58,6 +57,9 @@ type Controller struct {
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+	mode         int64
+	// lastWarnTime tracks the last warning time for each operator to avoid spam logs
+	lastWarnTime map[common.DispatcherID]time.Time
 }
 
 // NewOperatorController creates a new operator controller
@@ -65,6 +67,7 @@ func NewOperatorController(
 	changefeedID common.ChangeFeedID,
 	spanController *span.Controller,
 	batchSize int,
+	mode int64,
 ) *Controller {
 	return &Controller{
 		changefeedID:   changefeedID,
@@ -75,6 +78,8 @@ func NewOperatorController(
 		spanController: spanController,
 		nodeManager:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		messageCenter:  appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		mode:           mode,
+		lastWarnTime:   make(map[common.DispatcherID]time.Time),
 	}
 }
 
@@ -95,7 +100,7 @@ func (oc *Controller) Execute() time.Time {
 
 		if msg != nil {
 			_ = oc.messageCenter.SendCommand(msg)
-			log.Info("send command to dispatcher",
+			log.Debug("send command to dispatcher",
 				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
 				zap.String("operator", op.String()),
@@ -195,8 +200,7 @@ func (oc *Controller) OperatorSize() int {
 	return len(oc.operators)
 }
 
-func (oc *Controller) GetMinCheckpointTs() uint64 {
-	minCheckpointTs := uint64(math.MaxUint64)
+func (oc *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 	ops := oc.GetAllOperators()
 
 	for _, op := range ops {
@@ -240,23 +244,36 @@ func (oc *Controller) pollQueueingOperator() (
 
 		oc.mu.Lock()
 		delete(oc.operators, opID)
+		delete(oc.lastWarnTime, opID)
 		oc.mu.Unlock()
 
-		metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Dec()
-		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
+		metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
+		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
-			zap.String("operator", opID.String()),
+			zap.String("operatorID", opID.String()),
 			zap.String("operator", op.String()))
 		return nil, true
 	}
+	// log warn message for stil running operator
 	if time.Since(item.CreatedAt) > time.Second*30 {
-		log.Warn("operator is still in running queue",
-			zap.String("changefeed", oc.changefeedID.Name()),
-			zap.String("operator", opID.String()),
-			zap.String("operator", op.String()),
-			zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
+		now := time.Now()
+		oc.mu.Lock()
+		lastWarn, exists := oc.lastWarnTime[opID]
+		shouldWarn := !exists || now.Sub(lastWarn) >= time.Second*30
+		if shouldWarn {
+			oc.lastWarnTime[opID] = now
+		}
+		oc.mu.Unlock()
+
+		if shouldWarn {
+			log.Warn("operator is still in running queue",
+				zap.String("changefeed", oc.changefeedID.Name()),
+				zap.String("operator", opID.String()),
+				zap.String("operator", op.String()),
+				zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
+		}
 	}
 	now := time.Now()
 	oc.mu.Lock()
@@ -287,9 +304,11 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 
 		oc.mu.Lock()
 		delete(oc.operators, op.ID())
+		delete(oc.lastWarnTime, op.ID())
+		oc.mu.Unlock()
+	} else {
 		oc.mu.Unlock()
 	}
-	oc.mu.Unlock()
 	oc.pushOperator(op)
 }
 
@@ -312,8 +331,8 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 	heap.Push(&oc.runningQueue, withTime)
 	oc.mu.Unlock()
 
-	metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
-	metrics.TotalOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
+	metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	metrics.TotalOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
 }
 
 func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
@@ -426,9 +445,20 @@ func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID,
 	return operators
 }
 
+func (oc *Controller) Close() {
+	opTypes := []string{"occupy", "merge", "add", "remove", "move", "split", "merge"}
+
+	for _, opType := range opTypes {
+		metrics.OperatorCount.DeleteLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		metrics.TotalOperatorCount.DeleteLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		metrics.OperatorDuration.DeleteLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+	}
+}
+
 // =========== following func only for test ===========
 func (oc *Controller) RemoveOp(id common.DispatcherID) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 	delete(oc.operators, id)
+	delete(oc.lastWarnTime, id)
 }

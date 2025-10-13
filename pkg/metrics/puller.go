@@ -103,7 +103,7 @@ func GetGlobalGrpcMetrics() *grpc_prometheus.ClientMetrics {
 	return grpcMetrics
 }
 
-func InitPullerMetrics(registry *prometheus.Registry) {
+func initPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(grpcMetrics)
 	registry.MustRegister(RegionWorkerProcessDuration)
 	registry.MustRegister(RegionWorkerTotalDuration)

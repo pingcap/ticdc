@@ -63,6 +63,7 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 		Mode:         mode,
 	})
 	log.Info("new span replication created",
+		zap.Uint32("keyspaceID", span.KeyspaceID),
 		zap.String("changefeedID", cfID.Name()),
 		zap.String("id", id.String()),
 		zap.Int64("schemaID", SchemaID),
@@ -87,6 +88,7 @@ func NewWorkingSpanReplication(
 	r.SetNodeID(nodeID)
 	r.initStatus(status)
 	log.Info("new working span replication created",
+		zap.Uint32("keyspaceID", span.KeyspaceID),
 		zap.String("changefeedID", cfID.Name()),
 		zap.String("id", id.String()),
 		zap.String("nodeID", nodeID.String()),
@@ -134,9 +136,9 @@ func (r *SpanReplication) initGroupID() {
 		KeyspaceID: r.Span.KeyspaceID,
 	}
 	// check if the table is split
-	totalSpan := common.TableIDToComparableSpan(r.Span.KeyspaceID, span.TableID)
+	totalSpan := common.TableIDToComparableSpan(span.KeyspaceID, span.TableID)
 	if !common.IsSubSpan(span, totalSpan) {
-		log.Warn("invalid span range", zap.String("changefeedID", r.ChangefeedID.Name()),
+		log.Warn("invalid span range", zap.Uint32("keyspaceID", span.KeyspaceID), zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("id", r.ID.String()), zap.Int64("tableID", span.TableID),
 			zap.String("totalSpan", totalSpan.String()),
 			zap.String("start", hex.EncodeToString(span.StartKey)),

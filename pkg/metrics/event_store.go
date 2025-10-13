@@ -34,6 +34,14 @@ var (
 			Help:      "The number of events received by event store.",
 		}, []string{"type"}) // types : kv, resolved.
 
+	// EventStoreCompressedRowsCount is the counter of compressed rows.
+	EventStoreCompressedRowsCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "compressed_rows_count",
+			Help:      "The total number of rows compressed by event store.",
+		})
 	// EventStoreOutputEventCount is the metric that counts events output by the sorter.
 	EventStoreOutputEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
@@ -73,12 +81,21 @@ var (
 			Help:      "The number of delete range received by event store.",
 		})
 
-	EventStoreDispatcherResolvedTsLagHist = prometheus.NewHistogram(
+	EventStoreSubscriptionResolvedTsLagHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
-			Name:      "dispatcher_resolved_ts_lag",
-			Help:      "Resolved Ts lag histogram of registered dispatchers for event store.",
+			Name:      "subscription_resolved_ts_lag",
+			Help:      "The Resolved Ts lag of subscriptions for event store.",
+			Buckets:   LagBucket(),
+		})
+
+	EventStoreSubscriptionDataGCLagHist = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "subscription_data_gc_lag",
+			Help:      "The data gc lag of subscriptions for event store.",
 			Buckets:   LagBucket(),
 		})
 
@@ -102,23 +119,6 @@ var (
 			Subsystem: "event_store",
 			Name:      "resolved_ts_lag",
 			Help:      "The resolved ts lag of event store.",
-		})
-
-	EventStoreDispatcherWatermarkLagHist = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "event_store",
-			Name:      "dispatcher_watermark_lag",
-			Help:      "Watermark lag histogram of registered dispatchers for event store.",
-			Buckets:   LagBucket(),
-		})
-
-	EventStoreCompressRatio = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "event_store",
-			Name:      "compress_ratio",
-			Help:      "The compression ratio of the event data.",
 		})
 
 	EventStoreWriteBatchEventsCountHist = prometheus.NewHistogram(
@@ -171,26 +171,37 @@ var (
 			Help:      "The duration of notifying dispatchers with resolved ts.",
 			Buckets:   prometheus.ExponentialBuckets(0.00001, 2, 20), // 10us ~ 5.2s,
 		})
+
+	// EventStoreRegisterDispatcherStartTsLagHist is the histogram of startTs lag when registering a dispatcher.
+	EventStoreRegisterDispatcherStartTsLagHist = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "register_dispatcher_start_ts_lag",
+			Help:      "The lag of startTs when registering a dispatcher.",
+			Buckets:   LagBucket(),
+		})
 )
 
-func InitEventStoreMetrics(registry *prometheus.Registry) {
+func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreSubscriptionGauge)
+	registry.MustRegister(EventStoreCompressedRowsCount)
 	registry.MustRegister(EventStoreReceivedEventCount)
 	registry.MustRegister(EventStoreOutputEventCount)
 	registry.MustRegister(EventStoreWriteDurationHistogram)
 	registry.MustRegister(EventStoreScanRequestsCount)
 	registry.MustRegister(EventStoreScanBytes)
 	registry.MustRegister(EventStoreDeleteRangeCount)
-	registry.MustRegister(EventStoreDispatcherResolvedTsLagHist)
+	registry.MustRegister(EventStoreSubscriptionResolvedTsLagHist)
 	registry.MustRegister(EventStoreOnDiskDataSizeGauge)
 	registry.MustRegister(EventStoreInMemoryDataSizeGauge)
 	registry.MustRegister(EventStoreResolvedTsLagGauge)
 	registry.MustRegister(EventStoreWriteBytes)
-	registry.MustRegister(EventStoreDispatcherWatermarkLagHist)
-	registry.MustRegister(EventStoreCompressRatio)
+	registry.MustRegister(EventStoreSubscriptionDataGCLagHist)
 	registry.MustRegister(EventStoreWriteBatchEventsCountHist)
 	registry.MustRegister(EventStoreWriteBatchSizeHist)
 	registry.MustRegister(EventStoreWriteRequestsCount)
 	registry.MustRegister(EventStoreReadDurationHistogram)
 	registry.MustRegister(EventStoreNotifyDispatcherDurationHist)
+	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
 }

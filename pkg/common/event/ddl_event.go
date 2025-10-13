@@ -58,8 +58,6 @@ type DDLEvent struct {
 	Seq uint64 `json:"seq"`
 	// The epoch of the event. It is set by event service.
 	Epoch uint64 `json:"epoch"`
-	// State is the state of sender when sending this event.
-	State EventSenderState `json:"state"`
 	// MultipleTableInfos holds information for multiple versions of a table.
 	// The first entry always represents the current table information.
 	MultipleTableInfos []*common.TableInfo `json:"-"`
@@ -100,20 +98,20 @@ type DDLEvent struct {
 	// NotSync is used to indicate whether the event should be synced to downstream.
 	// If it is true, sink should not sync this event to downstream.
 	// It is used for some special DDL events that do not need to be synced,
-	// but only need to be sent to the table trigger.
+	// but only need to be sent to dispatcher to update some metadata.
 	// For example, if a `TRUNCATE TABLE` DDL is filtered by event filter,
 	// we don't need to sync it to downstream, but the DML events of the new truncated table
 	// should be sent to downstream.
-	// So we should send the `TRUNCATE TABLE` DDL event to table trigger,
+	// So we should send the `TRUNCATE TABLE` DDL event to dispatcher,
 	// to ensure the new truncated table can be handled correctly.
+	// If the DDL involves multiple tables, this field is not effective.
+	// The multiple table DDL event will be handled by filtering querys and table infos.
 	NotSync bool `msg:"not_sync"`
-	// MultipleNotSync is used to indicate whether multiple table DDLs should be synced to downstream.
-	MultipleNotSync []bool `msg:"multiple_not_sync"`
 }
 
 func (d *DDLEvent) String() string {
-	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, TableID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, FinishedTs: %d, Seq: %d, State: %s, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TableNameInDDLJob: %s, DBNameInDDLJob: %s, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
-		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.TableID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.State, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TableNameInDDLJob, d.DBNameInDDLJob, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
+	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, TableID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, FinishedTs: %d, Seq: %d, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TableNameInDDLJob: %s, DBNameInDDLJob: %s, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
+		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.TableID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TableNameInDDLJob, d.DBNameInDDLJob, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
 }
 
 func (d *DDLEvent) GetType() int {
@@ -186,9 +184,6 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		t := model.ActionCreateTable
 		if model.ActionType(d.Type) == model.ActionRenameTables {
 			t = model.ActionRenameTable
-			if len(d.TableNameChange.DropName) != len(d.MultipleTableInfos) {
-				log.Panic("drop name length should be equal to multipleTableInfos length", zap.Any("query", d.TableNameChange.DropName), zap.Any("multipleTableInfos", d.MultipleTableInfos))
-			}
 		}
 		for i, info := range d.MultipleTableInfos {
 			event := &DDLEvent{
@@ -363,7 +358,7 @@ func (t *DDLEvent) GetSize() int64 {
 }
 
 func (t *DDLEvent) IsPaused() bool {
-	return t.State.IsPaused()
+	return false
 }
 
 func (t *DDLEvent) Len() int32 {

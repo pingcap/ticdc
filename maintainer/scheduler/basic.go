@@ -124,16 +124,17 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	// for the split table spans, each time each node can at most have s.schedulingTaskCountPerNode scheduling tasks.
 	// for the normal spans, we don't have the upper limit.
 	size := 0
-	for id := range s.nodeManager.GetAliveNodes() {
-		if _, ok := scheduleNodeSize[id]; !ok {
-			scheduleNodeSize[id] = 0
-		}
+	nodeIDs := s.nodeManager.GetAliveNodeIDs()
+	nodeSize := make(map[node.ID]int)
+	for _, id := range nodeIDs {
+		nodeSize[id] = scheduleNodeSize[id]
+
 		if groupID != pkgreplica.DefaultGroupID {
-			num := s.schedulingTaskCountPerNode - scheduleNodeSize[id]
+			num := s.schedulingTaskCountPerNode - nodeSize[id]
 			if num >= 0 {
 				size += num
 			} else {
-				log.Warn("available size for scheduler on node is negative", zap.String("node", id.String()), zap.Any("scheduleNodeSize", scheduleNodeSize[id]), zap.Int("schedulingTaskCountPerNode", s.schedulingTaskCountPerNode))
+				log.Warn("available size for scheduler on node is negative", zap.String("node", id.String()), zap.Any("nodeSize", nodeSize[id]), zap.Int("schedulingTaskCountPerNode", s.schedulingTaskCountPerNode))
 			}
 		}
 	}
@@ -152,7 +153,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
 
-	pkgScheduler.BasicSchedule(availableSize, absentReplications, scheduleNodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
+	pkgScheduler.BasicSchedule(availableSize, absentReplications, nodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
 		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id))
 	})
 	return len(absentReplications)

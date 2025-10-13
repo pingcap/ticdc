@@ -174,3 +174,38 @@ func randomJSONString(size int) string {
 	sb.WriteString("}")
 	return sb.String()
 }
+
+func (s *ShopItemWorkload) BuildDeleteSql(opts schema.DeleteOption) string {
+	deleteType := rand.Intn(3)
+	tableName := fmt.Sprintf("shop_item_%d", opts.TableIndex)
+
+	switch deleteType {
+	case 0:
+		// Strategy 1: Random single/multiple row delete by primary key
+		var sb strings.Builder
+		for i := 0; i < opts.Batch; i++ {
+			primaryKey := fmt.Sprintf("0x%x", uint64(rand.Int63())%s.totalRow)
+			if i > 0 {
+				sb.WriteString(";")
+			}
+			sb.WriteString(fmt.Sprintf("DELETE FROM %s WHERE item_primary_key = '%s-0'", tableName, primaryKey))
+		}
+		return sb.String()
+
+	case 1:
+		// Strategy 2: Delete by merchant_id
+		merchantID := rand.Int63n(200000)
+		return fmt.Sprintf("DELETE FROM %s WHERE merchant_id = %d LIMIT %d",
+			tableName, merchantID, opts.Batch)
+
+	case 2:
+		// Strategy 3: Delete by point_of_sale_country
+		countries := []string{"US", "CN", "UK", "JP", "DE"}
+		country := countries[rand.Intn(len(countries))]
+		return fmt.Sprintf("DELETE FROM %s WHERE point_of_sale_country = '%s' LIMIT %d",
+			tableName, country, opts.Batch)
+
+	default:
+		return ""
+	}
+}

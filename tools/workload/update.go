@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math/rand"
 	"strings"
 	"sync"
@@ -65,18 +66,41 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 				plog.Info("update worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
+
+			// Get connection once and reuse it with context timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			conn, err := db.DB.Conn(ctx)
+			cancel()
+			if err != nil {
+				plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
+				time.Sleep(time.Second * 5)
+				return
+			}
+			defer conn.Close()
+
+			plog.Info("start update worker", zap.Int("worker", workerID))
+
 			for {
-				conn, err := db.DB.Conn(context.Background())
-				if err != nil {
-					plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
-					time.Sleep(time.Second * 5)
-					continue
-				}
-				plog.Info("start update worker", zap.Int("worker", workerID))
 				err = app.doUpdate(conn, updateTaskCh)
 				if err != nil {
-					plog.Info("update worker failed, reset the connection and retry", zap.Error(err))
-					conn.Close()
+					// Check if it's a connection-level error that requires reconnection
+					if app.isConnectionError(err) {
+						fmt.Println("connection error detected, reconnecting", zap.Error(err))
+						conn.Close()
+						time.Sleep(time.Second * 2)
+
+						// Get new connection with timeout
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						conn, err = db.DB.Conn(ctx)
+						cancel()
+						if err != nil {
+							fmt.Println("reconnection failed, wait 5 seconds and retry", zap.Error(err))
+							time.Sleep(time.Second * 5)
+							continue
+						}
+					}
+
+					plog.Info("update worker failed, retrying", zap.Int("worker", workerID), zap.Error(err))
 					time.Sleep(time.Second * 2)
 				}
 			}

@@ -13,7 +13,9 @@
 
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	LogPullerPrewriteCacheRowNum = prometheus.NewGauge(
@@ -78,7 +80,7 @@ var (
 		})
 )
 
-func InitLogPullerMetrics(registry *prometheus.Registry) {
+func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)

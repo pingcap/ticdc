@@ -391,7 +391,7 @@ var (
 
 func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, Dispatcher, *DispatcherStatusHandler] {
 	dispatcherStatusDSOnce.Do(func() {
-		dispatcherStatusDS = dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
+		dispatcherStatusDS = dynstream.NewParallelDynamicStream(&DispatcherStatusHandler{})
 		dispatcherStatusDS.Start()
 	})
 	return dispatcherStatusDS

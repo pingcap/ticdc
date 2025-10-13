@@ -19,19 +19,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
+	"github.com/pingcap/ticdc/pkg/server"
 	"go.uber.org/zap"
 )
 
-func getChangeFeed(host, cfName string) (ChangeFeedInfo, error) {
+func getChangeFeed(host, keyspaceName, cfName string) (ChangeFeedInfo, error) {
 	security := config.GetGlobalServerConfig().Security
 
-	uri := fmt.Sprintf("/api/v2/changefeeds/%s", cfName)
+	uri := fmt.Sprintf("/api/v2/changefeeds/%s?keyspace=%s", cfName, url.QueryEscape(keyspaceName))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -101,4 +104,11 @@ func toListResponse[T any](c *gin.Context, data []T) interface{} {
 		Items: data,
 		Total: len(data),
 	}
+}
+
+func isBootstrapped(co server.Coordinator) (bool, error) {
+	if co == nil || !co.Bootstrapped() {
+		return false, errors.New("coordinator is not bootstrapped, wait a moment")
+	}
+	return true, nil
 }

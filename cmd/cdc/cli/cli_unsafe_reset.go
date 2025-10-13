@@ -17,12 +17,15 @@ import (
 	"context"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/spf13/cobra"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/zap"
 )
 
 // unsafeResetOptions defines flags for the `cli unsafe reset` command.
@@ -86,9 +89,23 @@ func (o *unsafeResetOptions) run(cmd *cobra.Command) error {
 		return errors.Trace(err)
 	}
 
-	err = gc.RemoveServiceGCSafepoint(ctx, o.pdClient, o.etcdClient.GetGCServiceID())
-	if err != nil {
-		return errors.Trace(err)
+	if kerneltype.IsClassic() {
+		err := gc.UnifyDeleteGcSafepoint(ctx, o.pdClient, 0, o.etcdClient.GetGCServiceID())
+		if err != nil {
+			return errors.Trace(err)
+		}
+	} else {
+		// Next gen mode, remove gc barriers
+		_, infoMap, err := o.etcdClient.GetChangeFeeds(ctx)
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		keyspaceNameMap := make(map[string]struct{})
+		for key := range infoMap {
+			keyspaceNameMap[key.Keyspace] = struct{}{}
+		}
+		removeKeyspaceGCBarrier(ctx, o.pdClient, o.etcdClient.GetGCServiceID(), keyspaceNameMap)
 	}
 
 	cmd.Println("reset and all metadata truncated in PD!")
@@ -113,4 +130,19 @@ func newCmdReset(f factory.Factory, commonOptions *unsafeCommonOptions) *cobra.C
 	o.addFlags(command)
 
 	return command
+}
+
+func removeKeyspaceGCBarrier(ctx context.Context, pdCli pd.Client, serviceID string, keyspaceNameMap map[string]struct{}) {
+	for keyspace := range keyspaceNameMap {
+		keyspaceMeta, err := pdCli.LoadKeyspace(ctx, keyspace)
+		if err != nil {
+			log.Warn("load keyspace error", zap.String("keyspace", keyspace), zap.Error(err))
+			continue
+		}
+		err = gc.UnifyDeleteGcSafepoint(ctx, pdCli, keyspaceMeta.Id, serviceID)
+		if err != nil {
+			log.Warn("DeleteGcSafepoint error", zap.Uint32("keyspaceID", keyspaceMeta.Id), zap.String("keyspace", keyspace), zap.String("serviceID", serviceID), zap.Error(err))
+			continue
+		}
+	}
 }

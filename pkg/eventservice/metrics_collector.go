@@ -95,14 +95,12 @@ func updateMetricEventServiceSkipResolvedTsCount(mode int64) {
 
 // metricsSnapshot holds all metrics data collected at a point in time
 type metricsSnapshot struct {
-	receivedMinResolvedTs  uint64
-	sentMinResolvedTs      uint64
-	dispatcherCount        int
-	runningDispatcherCount int
-	pausedDispatcherCount  int
-	pendingTaskCount       int
-	slowestDispatcher      *dispatcherStat
-	pdTime                 time.Time
+	receivedMinResolvedTs uint64
+	sentMinResolvedTs     uint64
+	dispatcherCount       int
+	pendingTaskCount      int
+	slowestDispatcher     *dispatcherStat
+	pdTime                time.Time
 }
 
 // metricsCollector is responsible for collecting and reporting metrics for the event broker
@@ -167,12 +165,6 @@ func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 // collectDispatcherMetrics collects metrics related to dispatchers
 func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) {
 	collect := func(dispatcher *dispatcherStat) {
-		if dispatcher.IsReadyRecevingData() {
-			snapshot.runningDispatcherCount++
-		} else {
-			snapshot.pausedDispatcherCount++
-		}
-
 		// Record update time difference
 		updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
 		metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
@@ -228,8 +220,6 @@ func (mc *metricsCollector) updateMetricsFromSnapshot(snapshot *metricsSnapshot)
 	metricEventBrokerPendingScanTaskCount.Set(float64(snapshot.pendingTaskCount))
 
 	// Update dispatcher status metrics
-	metrics.EventServiceDispatcherStatusCount.WithLabelValues("running").Set(float64(snapshot.runningDispatcherCount))
-	metrics.EventServiceDispatcherStatusCount.WithLabelValues("paused").Set(float64(snapshot.pausedDispatcherCount))
 	metrics.EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(snapshot.dispatcherCount))
 }
 
@@ -252,7 +242,6 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 		zap.Duration("updateDiff",
 			time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())-
 				time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())),
-		zap.Bool("isPaused", !snapshot.slowestDispatcher.IsReadyRecevingData()),
 		zap.Uint64("epoch", snapshot.slowestDispatcher.epoch),
 		zap.Uint64("seq", snapshot.slowestDispatcher.seq.Load()),
 		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),

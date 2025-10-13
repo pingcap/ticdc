@@ -64,12 +64,11 @@ const (
 // all threads are read/write information from/to the ReplicationDB
 type Maintainer struct {
 	id         common.ChangeFeedID
-	config     *config.ChangeFeedInfo
+	info       *config.ChangeFeedInfo
 	selfNode   *node.Info
 	controller *Controller
 
 	pdClock pdutil.Clock
-
 	eventCh *chann.DrainableChann[*Event]
 
 	mc messaging.MessageCenter
@@ -142,16 +141,18 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
-	cancel                         context.CancelFunc
-	changefeedCheckpointTsGauge    prometheus.Gauge
-	changefeedCheckpointTsLagGauge prometheus.Gauge
-	changefeedResolvedTsGauge      prometheus.Gauge
-	changefeedResolvedTsLagGauge   prometheus.Gauge
-	changefeedStatusGauge          prometheus.Gauge
-	scheduledTaskGauge             prometheus.Gauge
-	spanCountGauge                 prometheus.Gauge
-	tableCountGauge                prometheus.Gauge
-	handleEventDuration            prometheus.Observer
+	cancel context.CancelFunc
+
+	checkpointTsGauge    prometheus.Gauge
+	checkpointTsLagGauge prometheus.Gauge
+
+	resolvedTsGauge    prometheus.Gauge
+	resolvedTsLagGauge prometheus.Gauge
+
+	scheduledTaskGauge  prometheus.Gauge
+	spanCountGauge      prometheus.Gauge
+	tableCountGauge     prometheus.Gauge
+	handleEventDuration prometheus.Observer
 
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
@@ -161,7 +162,7 @@ type Maintainer struct {
 // NewMaintainer create the maintainer for the changefeed
 func NewMaintainer(cfID common.ChangeFeedID,
 	conf *config.SchedulerConfig,
-	cfg *config.ChangeFeedInfo,
+	info *config.ChangeFeedInfo,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	checkpointTs uint64,
@@ -173,23 +174,28 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.DefaultMode)
 	var redoDDLSpan *replica.SpanReplication
-	enableRedo := redo.IsConsistentEnabled(cfg.Config.Consistent.Level)
+	enableRedo := redo.IsConsistentEnabled(info.Config.Consistent.Level)
 	if enableRedo {
 		_, redoDDLSpan = newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.RedoMode)
 	}
+
+	var (
+		keyspace = cfID.Keyspace()
+		name     = cfID.Name()
+	)
 	m := &Maintainer{
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), keyspaceID, enableRedo),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), keyspaceID, enableRedo),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
 		closedNodes:           make(map[node.ID]struct{}),
 		statusChanged:         atomic.NewBool(true),
-		config:                cfg,
+		info:                  info,
 		pdClock:               appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		ddlSpan:               ddlSpan,
 		redoDDLSpan:           redoDDLSpan,
@@ -198,19 +204,19 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		newChangefeed:         newChangefeed,
 		enableRedo:            enableRedo,
 
-		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-		changefeedResolvedTsLagGauge:   metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-		changefeedStatusGauge:          metrics.ChangefeedStatusGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-		scheduledTaskGauge:             metrics.ScheduleTaskGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "default"),
-		spanCountGauge:                 metrics.SpanCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "default"),
-		tableCountGauge:                metrics.TableCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "default"),
-		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		checkpointTsGauge:    metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, name),
+		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspace, name),
+		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspace, name),
+		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspace, name),
 
-		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "redo"),
-		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "redo"),
-		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(cfID.Keyspace(), cfID.Name(), "redo"),
+		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspace, name, "default"),
+		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspace, name, "default"),
+		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(keyspace, name, "default"),
+		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(keyspace, name),
+
+		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspace, name, "redo"),
+		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspace, name, "redo"),
+		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspace, name, "redo"),
 	}
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
@@ -230,7 +236,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		m.createBootstrapMessageFactory(),
 	)
 
-	metrics.MaintainerGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()).Inc()
+	metrics.MaintainerGauge.WithLabelValues(keyspace, name).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 
@@ -241,7 +247,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	}
 
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
-		zap.String("state", string(cfg.State)),
+		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
 		zap.String("redoTs", m.redoTs.String()),
@@ -276,10 +282,20 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 	defer func() {
 		duration := time.Since(start)
 		if duration > time.Second {
-			log.Info("maintainer is too slow",
-				zap.String("changefeed", m.id.String()),
-				zap.Int("eventType", event.eventType),
-				zap.Duration("duration", duration))
+			// add a log for debug an occasional slow bootstrap problem
+			if event.eventType == EventMessage {
+				log.Info("maintainer is too slow",
+					zap.String("changefeed", m.id.String()),
+					zap.Int("eventType", event.eventType),
+					zap.Duration("duration", duration),
+					zap.Any("Message", event.message),
+				)
+			} else {
+				log.Info("maintainer is too slow",
+					zap.String("changefeed", m.id.String()),
+					zap.Int("eventType", event.eventType),
+					zap.Duration("duration", duration))
+			}
 		}
 		m.handleEventDuration.Observe(duration.Seconds())
 	}()
@@ -322,10 +338,6 @@ func (m *Maintainer) Close() {
 	m.cancel()
 	m.cleanupMetrics()
 	m.controller.Stop()
-	log.Info("changefeed maintainer closed",
-		zap.String("changefeed", m.id.String()),
-		zap.Bool("removed", m.removed.Load()),
-		zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs))
 }
 
 func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
@@ -380,7 +392,7 @@ func (m *Maintainer) initialize() error {
 	m.sendMessages(m.bootstrapper.HandleNewNodes(newNodes))
 
 	log.Info("changefeed maintainer initialized",
-		zap.String("info", m.config.String()),
+		zap.String("info", m.info.String()),
 		zap.String("id", m.id.String()),
 		zap.String("status", common.FormatMaintainerStatus(m.GetMaintainerStatus())),
 		zap.Duration("duration", time.Since(start)))
@@ -389,15 +401,25 @@ func (m *Maintainer) initialize() error {
 }
 
 func (m *Maintainer) cleanupMetrics() {
-	metrics.ChangefeedCheckpointTsGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.ChangefeedStatusGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.ScheduleTaskGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.SpanCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.TableCountGauge.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
-	metrics.MaintainerHandleEventDuration.DeleteLabelValues(m.id.Keyspace(), m.id.Name())
+	keyspace := m.id.Keyspace()
+	name := m.id.Name()
+	metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
+	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
+
+	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
+	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
+	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
+	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
+	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "default")
+	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
 }
 
 func (m *Maintainer) onInit() bool {
@@ -451,12 +473,11 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	m.changefeedRemoved.Store(changefeedRemoved)
 	closed := m.tryCloseChangefeed()
 	if closed {
-		log.Info("changefeed maintainer closed",
-			zap.Stringer("changefeed", m.id),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs))
 		m.removed.Store(true)
 		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
 		metrics.MaintainerGauge.WithLabelValues(m.id.Keyspace(), m.id.Name()).Dec()
+		log.Info("changefeed maintainer closed", zap.Stringer("changefeed", m.id),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs), zap.Bool("removed", m.removed.Load()))
 	}
 }
 
@@ -519,8 +540,6 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 			updateCheckpointTs := true
 
 			newWatermark := heartbeatpb.NewMaxWatermark()
-			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs()
-			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables()
 			// if there is no tables, there must be a table trigger dispatcher
 			for id := range m.bootstrapper.GetAllNodeIDs() {
 				// maintainer node has the table trigger dispatcher
@@ -539,12 +558,10 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 				newWatermark.UpdateMin(watermark)
 			}
 
-			if minRedoCheckpointTsForScheduler != uint64(math.MaxUint64) {
-				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
-			}
-			if minRedoCheckpointTsForBarrier != uint64(math.MaxUint64) {
-				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
-			}
+			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
+			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
+			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
+			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
 
 			if m.redoTs.ResolvedTs < newWatermark.CheckpointTs && updateCheckpointTs {
 				m.redoTs.ResolvedTs = newWatermark.CheckpointTs
@@ -596,12 +613,6 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				break
 			}
 
-			// the min checkpointTs is taken from the minimum of three sources: dispatcher reported checkpointTs,
-			// minimum checkpointTs of new tables undergoing DDL, and checkpointTs of tasks in scheduling.
-
-			minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs()
-			minCheckpointTsForBarrier := m.controller.barrier.GetMinBlockedCheckpointTsForNewTables()
-
 			newWatermark := heartbeatpb.NewMaxWatermark()
 			// if there is no tables, there must be a table trigger dispatcher
 			for id := range m.bootstrapper.GetAllNodeIDs() {
@@ -627,19 +638,18 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				break
 			}
 
-			if minCheckpointTsForBarrier != uint64(math.MaxUint64) {
-				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
-			}
-			if minCheckpointTsForScheduler != uint64(math.MaxUint64) {
-				newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
-			}
+			// the min checkpointTs is taken from the minimum of three sources: dispatcher reported checkpointTs,
+			// minimum checkpointTs of new tables undergoing DDL, and checkpointTs of tasks in scheduling.
+			minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs(newWatermark.CheckpointTs)
+			minCheckpointTsForBarrier := m.controller.barrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
+			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
+			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
 
 			log.Debug("can advance checkpointTs",
 				zap.String("changefeed", m.id.Name()),
 				zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
 			)
-
 			m.setWatermark(*newWatermark)
 			m.updateMetrics()
 		}
@@ -649,18 +659,16 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 func (m *Maintainer) updateMetrics() {
 	watermark := m.getWatermark()
 
-	pdTime := m.pdClock.CurrentTime()
+	pdPhysicalTime := oracle.GetPhysical(m.pdClock.CurrentTime())
 	phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
-	m.changefeedCheckpointTsGauge.Set(float64(phyCkpTs))
-	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
-	m.changefeedCheckpointTsLagGauge.Set(lag)
+	m.checkpointTsGauge.Set(float64(phyCkpTs))
+	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
+	m.checkpointTsLagGauge.Set(lag)
 
 	phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
-	m.changefeedResolvedTsGauge.Set(float64(phyResolvedTs))
-	lag = float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
-	m.changefeedResolvedTsLagGauge.Set(lag)
-
-	m.changefeedStatusGauge.Set(float64(m.scheduleState.Load()))
+	m.resolvedTsGauge.Set(float64(phyResolvedTs))
+	lag = float64(pdPhysicalTime-phyResolvedTs) / 1e3
+	m.resolvedTsLagGauge.Set(lag)
 }
 
 // send message to other components
@@ -686,13 +694,13 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	m.controller.HandleStatus(msg.From, req.Statuses)
 	if req.Watermark != nil {
 		old, ok := m.checkpointTsByCapture.Get(msg.From)
-		if !ok || req.Watermark.Seq >= old.Seq {
+		if !ok || (req.Watermark.Seq >= old.Seq && req.Watermark.CheckpointTs >= old.CheckpointTs) {
 			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
 		}
 	}
 	if req.RedoWatermark != nil {
 		old, ok := m.redoTsByCapture.Get(msg.From)
-		if !ok || req.RedoWatermark.Seq >= old.Seq {
+		if !ok || (req.RedoWatermark.Seq >= old.Seq && req.RedoWatermark.CheckpointTs >= old.CheckpointTs) {
 			m.redoTsByCapture.Set(msg.From, *req.RedoWatermark)
 		}
 	}
@@ -808,7 +816,7 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	if cachedResp == nil {
 		return
 	}
-	isMySQLSinkCompatible, err := isMysqlCompatible(m.config.SinkURI)
+	isMySQLSinkCompatible, err := isMysqlCompatible(m.info.SinkURI)
 	if err != nil {
 		m.handleError(err)
 		return
@@ -942,9 +950,9 @@ func (m *Maintainer) handleError(err error) {
 // - Flag indicating if this is a new changefeed
 func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessageFn {
 	// cfgBytes only holds necessary fields to initialize a changefeed dispatcher manager.
-	cfgBytes, err := json.Marshal(m.config.ToChangefeedConfig())
+	cfgBytes, err := json.Marshal(m.info.ToChangefeedConfig())
 	if err != nil {
-		log.Panic("marshal changefeed config failed",
+		log.Panic("marshal changefeed info failed",
 			zap.String("changefeed", m.id.Name()),
 			zap.Error(err))
 	}

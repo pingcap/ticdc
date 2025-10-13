@@ -57,8 +57,8 @@ func NewChangefeed(cfID common.ChangeFeedID,
 ) *Changefeed {
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
-		log.Panic("unable to marshal changefeed config",
-			zap.Error(err))
+		log.Panic("unable to parse sink-uri",
+			zap.String("url", info.SinkURI), zap.Error(err))
 	}
 	bytes, err := json.Marshal(info)
 	if err != nil {

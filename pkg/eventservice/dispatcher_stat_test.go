@@ -57,7 +57,6 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, startTs, stat.receivedResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
-	require.True(t, stat.isReadyReceivingData.Load())
 }
 
 func TestDispatcherStatResolvedTs(t *testing.T) {

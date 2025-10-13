@@ -25,15 +25,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// Mock hasher
-func mockHasher(p string) uint64 {
-	return uint64(len(p))
-}
-
 func TestParallelDynamicStreamBasic(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
-	stream := NewParallelDynamicStream(mockHasher, handler, option)
+	stream := NewParallelDynamicStream(handler, option)
 	stream.Start()
 	defer stream.Close()
 
@@ -57,7 +52,7 @@ func TestParallelDynamicStreamBasic(t *testing.T) {
 func TestParallelDynamicStreamPush(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
-	stream := newParallelDynamicStream(mockHasher, handler, option)
+	stream := newParallelDynamicStream(handler, option)
 	stream.Start()
 	defer stream.Close()
 
@@ -80,7 +75,7 @@ func TestParallelDynamicStreamPush(t *testing.T) {
 func TestParallelDynamicStreamMetrics(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
-	stream := newParallelDynamicStream(mockHasher, handler, option)
+	stream := newParallelDynamicStream(handler, option)
 
 	stream.Start()
 	defer stream.Close()
@@ -106,7 +101,7 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 		StreamCount:         4,
 		EnableMemoryControl: true,
 	}
-	stream := newParallelDynamicStream(mockHasher, handler, option)
+	stream := newParallelDynamicStream(handler, option)
 
 	stream.Start()
 	defer stream.Close()
@@ -166,7 +161,7 @@ func TestParallelDynamicStreamStress(t *testing.T) {
 	for i := 0; i < streamCount; i++ {
 		handlers[i] = &mockHandler{}
 		option := Option{StreamCount: 4}
-		streams[i] = newParallelDynamicStream(mockHasher, handlers[i], option)
+		streams[i] = newParallelDynamicStream(handlers[i], option)
 		streams[i].Start()
 	}
 
@@ -277,7 +272,7 @@ func TestParallelDynamicStreamConcurrentClose(t *testing.T) {
 		t.Run(fmt.Sprintf("iteration_%d", iter), func(t *testing.T) {
 			handler := &mockHandler{}
 			option := Option{StreamCount: 4}
-			stream := newParallelDynamicStream(mockHasher, handler, option)
+			stream := newParallelDynamicStream(handler, option)
 			stream.Start()
 
 			// Add some initial paths

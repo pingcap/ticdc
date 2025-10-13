@@ -186,7 +186,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 	doSendDML := func(e *event.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
-			c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+			c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- newWrapBatchDMLEvent(remoteID, e)
 			updateMetricEventServiceSendKvCount(d.info.GetMode(), float64(e.Len()))
 		}
 	}
@@ -233,7 +233,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
 	e.Epoch = d.epoch
-	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
+	ddlEvent := newWrapDDLEvent(remoteID, e)
 	select {
 	case <-ctx.Done():
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
@@ -242,7 +242,9 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
 	log.Info("send ddl event to dispatcher",
-		zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", e.TableID),
+		zap.Stringer("dispatcherID", d.id),
+		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
+		zap.Int64("EventTableID", e.TableID),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
@@ -251,7 +253,8 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
 	re := event.NewResolvedEvent(watermark, d.id, d.epoch)
-	resolvedEvent := newWrapResolvedEvent(remoteID, re, d.getEventSenderState())
+	re.Seq = d.seq.Load()
+	resolvedEvent := newWrapResolvedEvent(remoteID, re)
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
@@ -359,11 +362,6 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 // to decide whether scanning is needed and returns the appropriate time range.
 // If no valid range is found, it returns an empty DataRange.
 func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRange) {
-	// Only do scan when the dispatcher is ready to receive data.
-	if !task.IsReadyRecevingData() {
-		return false, common.DataRange{}
-	}
-
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
@@ -423,17 +421,6 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 
 	c.sendHandshakeIfNeed(task)
 
-	// Only check scan when the dispatcher is ready to receive data event.
-	if !task.IsReadyRecevingData() {
-		// If the dispatcher is not ready to receive data event,
-		// we still need to send the last resolvedTs to the dispatcher.
-		// the dispatcher may be paused, send resolved-ts so that the event-collector knows about
-		// this dispatcher is still alive, and will resume it later.
-		resolvedTs := task.sentResolvedTs.Load()
-		c.sendResolvedTs(task, resolvedTs)
-		return false
-	}
-
 	ok, _ := c.getScanTaskDataRange(task)
 	return ok
 }
@@ -451,6 +438,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		event := event.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
+		log.Debug("send ready event to dispatcher", zap.Stringer("dispatcherID", task.id))
 		task.lastReadySendTime.Store(now)
 		newInterval := currentInterval * 2
 		if newInterval > maxReadyEventIntervalSeconds {
@@ -464,12 +452,15 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 }
 
 func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
+	// Fast path.
 	if task.isHandshaked() {
 		return
 	}
 
-	if !task.setHandshaked() {
-		log.Panic("should not happen: sendHandshakeIfNeed should not be called concurrently")
+	task.handshakeLock.Lock()
+	defer task.handshakeLock.Unlock()
+
+	if task.isHandshaked() {
 		return
 	}
 
@@ -484,6 +475,9 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	wrapEvent := newWrapHandshakeEvent(remoteID, event)
 	c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 	updateMetricEventServiceSendCommandCount(task.info.GetMode())
+	// Send handshake event to channel before calling `setHandshaked`
+	// This ensures the handshake event precedes any subsequent data events.
+	task.setHandshaked()
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
@@ -512,7 +506,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
-		syncPointEvent := newWrapSyncPointEvent(remoteID, e, d.getEventSenderState())
+		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
 		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
@@ -526,7 +520,6 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
 	return scanLimit{
 		maxDMLBytes: task.getCurrentScanLimitInBytes(),
-		timeout:     time.Second,
 	}
 }
 
@@ -625,12 +618,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		scannedBytes = int64(c.scanLimitInBytes)
 	}
 	task.lastScanBytes.Store(scannedBytes)
-
-	// Check whether the task is ready to receive data events again before sending events.
-	if !task.IsReadyRecevingData() {
-		log.Warn("skip sending events, since the task is not ready to receive data events")
-		return
-	}
 
 	for _, e := range events {
 		if task.isRemoved.Load() {
@@ -867,10 +854,12 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 	if d.isRemoved.Load() {
 		return
 	}
+
 	// make sure only one scan task can run at the same time.
 	if !d.isTaskScanning.CompareAndSwap(false, true) {
 		return
 	}
+
 	if force {
 		c.taskChan[d.scanWorkerIndex] <- d
 	} else {
@@ -919,6 +908,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	start := time.Now()
 	success := c.eventStore.RegisterDispatcher(
+		changefeedID,
 		id,
 		span,
 		info.GetStartTs(),
@@ -947,6 +937,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	err := c.schemaStore.RegisterTable(span.KeyspaceID, span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
+			zap.Uint32("keyspaceID", span.KeyspaceID),
 			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
 			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err),
@@ -992,8 +983,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat.isRemoved.Store(true)
-	stat.isReadyReceivingData.Store(false)
-	c.eventStore.UnregisterDispatcher(id)
+	c.eventStore.UnregisterDispatcher(changefeedID, id)
 
 	span := dispatcherInfo.GetTableSpan()
 	c.schemaStore.UnregisterTable(span.KeyspaceID, span.TableID)
@@ -1004,36 +994,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Stringer("dispatcherID", id), zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
-}
-
-func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
-	statPtr := c.getDispatcher(dispatcherInfo.GetID())
-	if statPtr == nil {
-		return
-	}
-	stat := statPtr.Load()
-	log.Info("pause dispatcher",
-		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", stat.id), zap.Int64("tableID", stat.info.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
-		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()), zap.Uint64("seq", stat.seq.Load()))
-	stat.isReadyReceivingData.Store(false)
-	stat.resetScanLimit()
-}
-
-func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
-	statPtr := c.getDispatcher(dispatcherInfo.GetID())
-	if statPtr == nil {
-		return
-	}
-	stat := statPtr.Load()
-	log.Info("resume dispatcher",
-		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", stat.id), zap.Int64("tableID", stat.info.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
-		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
-		zap.Uint64("seq", stat.seq.Load()))
-	stat.isReadyReceivingData.Store(true)
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
@@ -1170,7 +1130,7 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 
 		available, ok := holder[changefeedID.ID()]
 		if !ok {
-			log.Warn("cannot found memory quota for changefeed", zap.Stringer("changefeedID", changefeedID))
+			return true
 		}
 		changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))

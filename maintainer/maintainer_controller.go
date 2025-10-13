@@ -14,7 +14,6 @@
 package maintainer
 
 import (
-	"math"
 	"time"
 
 	"github.com/pingcap/log"
@@ -102,10 +101,10 @@ func NewController(changefeedID common.ChangeFeedID,
 	)
 	if enableRedo {
 		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, keyspaceID, common.RedoMode)
-		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize)
+		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize, common.RedoMode)
 	}
 	// Create operator controller using spanController
-	oc := operator.NewOperatorController(changefeedID, spanController, batchSize)
+	oc := operator.NewOperatorController(changefeedID, spanController, batchSize, common.DefaultMode)
 
 	sc := NewScheduleController(
 		changefeedID, batchSize, oc, redoOC, spanController, redoSpanController, balanceInterval, splitter, schedulerCfg,
@@ -171,21 +170,19 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	}
 }
 
-func (c *Controller) GetMinCheckpointTs() uint64 {
-	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs()
-	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForAbsentSpans()
-	if minCheckpointTsForOperator == math.MaxUint64 {
-		return minCheckpointTsForSpan
-	}
-	if minCheckpointTsForSpan == math.MaxUint64 {
-		return minCheckpointTsForOperator
-	}
+func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
+	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs(minCheckpointTs)
+	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForAbsentSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
 
 func (c *Controller) Stop() {
 	for _, handler := range c.taskHandles {
 		handler.Cancel()
+	}
+	c.operatorController.Close()
+	if c.enableRedo {
+		c.redoOperatorController.Close()
 	}
 }
 
@@ -201,14 +198,8 @@ func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
 }
 
-func (c *Controller) GetMinRedoCheckpointTs() uint64 {
-	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs()
-	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForAbsentSpans()
-	if minCheckpointTsForOperator == math.MaxUint64 {
-		return minCheckpointTsForSpan
-	}
-	if minCheckpointTsForSpan == math.MaxUint64 {
-		return minCheckpointTsForOperator
-	}
+func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
+	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs(minCheckpointTs)
+	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForAbsentSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }

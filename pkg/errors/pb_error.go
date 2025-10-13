@@ -26,3 +26,10 @@ func IsKeyspaceNotExistError(err error) bool {
 	}
 	return strings.Contains(err.Error(), pdpb.ErrorType_ENTRY_NOT_FOUND.String())
 }
+
+func IsGCBarrierTSBehindTxnSafePointError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "ErrGCBarrierTSBehindTxnSafePoint")
+}

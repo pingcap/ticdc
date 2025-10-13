@@ -271,6 +271,34 @@ func TestVerifyEventSequence(t *testing.T) {
 			},
 			expectedResult: false,
 		},
+		{
+			name:         "continuous resolved ts event sequence",
+			lastEventSeq: 4,
+			event: dispatcher.DispatcherEvent{
+				Event: &commonEvent.ResolvedEvent{
+					DispatcherID: common.NewDispatcherID(),
+					ResolvedTs:   100,
+					Version:      1,
+					Epoch:        1,
+					Seq:          4, // ResolvedEvent seq should equal lastEventSeq
+				},
+			},
+			expectedResult: true,
+		},
+		{
+			name:         "discontinuous resolved ts event sequence",
+			lastEventSeq: 4,
+			event: dispatcher.DispatcherEvent{
+				Event: &commonEvent.ResolvedEvent{
+					DispatcherID: common.NewDispatcherID(),
+					ResolvedTs:   100,
+					Version:      1,
+					Epoch:        1,
+					Seq:          3, // ResolvedEvent seq should equal lastEventSeq, but it's 3 instead of 4
+				},
+			},
+			expectedResult: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -837,7 +865,7 @@ func TestHandleDataEvents(t *testing.T) {
 					From: &remoteServerID,
 					Event: &mockEvent{
 						eventType: commonEvent.TypeResolvedEvent,
-						seq:       2,
+						seq:       1,
 						epoch:     10,
 						commitTs:  100,
 					},

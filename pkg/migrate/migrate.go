@@ -398,15 +398,13 @@ func (m *migrator) migrateGcServiceSafePoint(ctx context.Context,
 		}
 	}
 	if cdcGcSafePoint != nil {
-		_, err := gc.SetServiceGCSafepoint(ctx, pdClient, newGcServiceID,
-			ttl,
-			cdcGcSafePoint.SafePoint)
+		_, err := gc.SetServiceGCSafepoint(ctx, pdClient, newGcServiceID, ttl, cdcGcSafePoint.SafePoint)
 		if err != nil {
 			log.Error("set gc service safepoint failed",
 				zap.Error(err))
 			return errors.Trace(err)
 		}
-		err = gc.RemoveServiceGCSafepoint(ctx, pdClient, oldGcServiceID)
+		err = gc.UnifyDeleteGcSafepoint(ctx, pdClient, 0, oldGcServiceID)
 		if err != nil {
 			log.Warn("remove old gc safepoint failed", zap.Error(err))
 		}

@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -58,6 +59,7 @@ type Controller struct {
 	version int64
 
 	pdClient           pd.Client
+	pdClock            pdutil.Clock
 	scheduler          *scheduler.Controller
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
@@ -79,10 +81,7 @@ type Controller struct {
 	messageCenter    messaging.MessageCenter
 
 	changefeedChangeCh chan []*ChangefeedChange
-
-	lastPrintStatusTime time.Time
-
-	apiLock sync.RWMutex
+	apiLock            sync.RWMutex
 }
 
 type ChangefeedChange struct {
@@ -99,7 +98,6 @@ func NewController(
 	changefeedChangeCh chan []*ChangefeedChange,
 	backend changefeed.Backend,
 	eventCh *chann.DrainableChann[*Event],
-	taskScheduler threadpool.ThreadPool,
 	batchSize int,
 	balanceInterval time.Duration,
 	pdClient pd.Client,
@@ -129,16 +127,16 @@ func NewController(
 				balanceInterval,
 			),
 		}),
-		eventCh:             eventCh,
-		operatorController:  oc,
-		messageCenter:       mc,
-		changefeedDB:        changefeedDB,
-		nodeManager:         nodeManager,
-		taskScheduler:       taskScheduler,
-		backend:             backend,
-		changefeedChangeCh:  changefeedChangeCh,
-		lastPrintStatusTime: time.Now(),
-		pdClient:            pdClient,
+		eventCh:            eventCh,
+		operatorController: oc,
+		messageCenter:      mc,
+		changefeedDB:       changefeedDB,
+		nodeManager:        nodeManager,
+		taskScheduler:      threadpool.NewThreadPoolDefault(),
+		backend:            backend,
+		changefeedChangeCh: changefeedChangeCh,
+		pdClient:           pdClient,
+		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 	}
 	c.nodeChanged.changed = false
 
@@ -146,6 +144,7 @@ func NewController(
 		bootstrapperID,
 		c.newBootstrapMessage,
 	)
+
 	// init bootstrapper nodes
 	nodes := c.nodeManager.GetAliveNodes()
 	// detect the capture changes
@@ -172,6 +171,35 @@ func NewController(
 	}
 	c.submitPeriodTask()
 	return c
+}
+
+func (c *Controller) collectMetrics(ctx context.Context) error {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
+			metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
+			metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
+			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
+			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
+
+			c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
+				info := cf.GetInfo()
+				keyspace := info.ChangefeedID.Keyspace()
+				name := info.ChangefeedID.Name()
+				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
+
+				pdPhysicalTime := oracle.GetPhysical(c.pdClock.CurrentTime())
+				phyCkpTs := oracle.ExtractPhysical(cf.GetLastSavedCheckPointTs())
+				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
+				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+			})
+		}
+	}
 }
 
 // HandleEvent implements the event-driven process mode
@@ -215,7 +243,6 @@ func (c *Controller) checkOnNodeChanged() {
 func (c *Controller) onPeriodTask() {
 	// resend bootstrap message
 	c.sendMessages(c.bootstrapper.ResendBootstrapMessage())
-	c.collectMetrics()
 }
 
 func (c *Controller) onMessage(msg *messaging.TargetMessage) {
@@ -513,10 +540,11 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 
 func (c *Controller) Stop() {
 	c.taskHandlerMutex.Lock()
-	defer c.taskHandlerMutex.Unlock()
 	for _, h := range c.taskHandlers {
 		h.Cancel()
 	}
+	c.taskHandlerMutex.Unlock()
+	c.taskScheduler.Stop()
 }
 
 func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {
@@ -526,6 +554,7 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if !c.bootstrapped.Load() {
 		return errors.New("not initialized, wait a moment")
 	}
+
 	old := c.changefeedDB.GetByChangefeedDisplayName(info.ChangefeedID.DisplayName)
 	if old != nil {
 		return errors.New("changefeed already exists")
@@ -535,13 +564,13 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	// the remove changefeed may not finished, so we need to wait a moment
 	count := 0
 	for count < createChangefeedMaxRetry {
-		if ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName); ok {
-			log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
-			time.Sleep(createChangefeedRetryInterval)
-			count += 1
-		} else {
+		ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName)
+		if !ok {
 			break
 		}
+		log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
+		time.Sleep(createChangefeedRetryInterval)
+		count += 1
 	}
 	if count >= createChangefeedMaxRetry {
 		return errors.New("changefeed is still in scheduling, please try again later")
@@ -582,14 +611,15 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 		return errors.New("changefeed not found")
 	}
 	if err := c.backend.PauseChangefeed(ctx, id); err != nil {
-		return errors.Trace(err)
+		return err
 	}
-	if clone, err := cf.GetInfo().Clone(); err != nil {
-		return errors.Trace(err)
-	} else {
-		clone.State = config.StateStopped
-		cf.SetInfo(clone)
+
+	clone, err := cf.GetInfo().Clone()
+	if err != nil {
+		return err
 	}
+	clone.State = config.StateStopped
+	cf.SetInfo(clone)
 	c.operatorController.StopChangefeed(ctx, id, false)
 	return nil
 }
@@ -609,21 +639,23 @@ func (c *Controller) ResumeChangefeed(
 		return errors.New("changefeed not found")
 	}
 	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
-		return errors.Trace(err)
+		return err
 	}
-	if clone, err := cf.GetInfo().Clone(); err != nil {
-		return errors.Trace(err)
-	} else {
-		clone.State = config.StateNormal
-		clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
-		cf.SetInfo(clone)
+
+	clone, err := cf.GetInfo().Clone()
+	if err != nil {
+		return err
 	}
+
+	clone.State = config.StateNormal
+	clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	cf.SetInfo(clone)
 
 	status := cf.GetClonedStatus()
 	status.CheckpointTs = newCheckpointTs
-	_, _, err := cf.ForceUpdateStatus(status)
-	if err != nil {
-		return errors.New(err.Message)
+	_, _, runningErr := cf.ForceUpdateStatus(status)
+	if runningErr != nil {
+		return errors.New(runningErr.Message)
 	}
 	c.moveChangefeedToSchedulingQueue(id, true, overwriteCheckpointTs)
 	return nil
@@ -710,17 +742,6 @@ func (c *Controller) newBootstrapMessage(id node.ID) *messaging.TargetMessage {
 		id,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: c.version})
-}
-
-func (c *Controller) collectMetrics() {
-	if time.Since(c.lastPrintStatusTime) > time.Second*20 {
-		metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
-		metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
-		metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
-		metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
-		metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
-		c.lastPrintStatusTime = time.Now()
-	}
 }
 
 func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.ChangeFeedID) {

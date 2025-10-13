@@ -18,51 +18,35 @@ import (
 )
 
 var (
-	ChangefeedBarrierTsGauge = prometheus.NewGaugeVec(
+	MaintainerCheckpointTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "barrier_ts",
-			Help:      "barrier ts of changefeeds",
-		}, []string{"namespace", "changefeed"})
-
-	ChangefeedCheckpointTsGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
+			Subsystem: "maintainer",
 			Name:      "checkpoint_ts",
-			Help:      "checkpoint ts of changefeeds",
+			Help:      "checkpoint ts of maintainer",
 		}, []string{"namespace", "changefeed"})
 
-	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
+	MaintainerCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
-			Subsystem: "owner",
+			Subsystem: "maintainer",
 			Name:      "checkpoint_ts_lag",
-			Help:      "checkpoint ts lag of changefeeds in seconds",
+			Help:      "checkpoint ts lag of maintainer in seconds",
 		}, []string{"namespace", "changefeed"})
 
-	CurrentPDTsGauge = prometheus.NewGaugeVec(
+	MaintainerResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "current_pd_ts",
-			Help:      "The current PD ts",
-		}, []string{"namespace", "changefeed"})
-
-	ChangefeedResolvedTsGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
+			Subsystem: "maintainer",
 			Name:      "resolved_ts",
-			Help:      "resolved ts of changefeeds",
+			Help:      "resolved ts of maintainer",
 		}, []string{"namespace", "changefeed"})
-	ChangefeedResolvedTsLagGauge = prometheus.NewGaugeVec(
+	MaintainerResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
-			Subsystem: "owner",
+			Subsystem: "maintainer",
 			Name:      "resolved_ts_lag",
-			Help:      "resolved ts lag of changefeeds in seconds",
+			Help:      "resolved ts lag of maintainer in seconds",
 		}, []string{"namespace", "changefeed"})
 
 	CoordinatorCounter = prometheus.NewCounter(
@@ -81,14 +65,6 @@ var (
 			Help:      "The counter of changefeed maintainer",
 		}, []string{"namespace", "changefeed"})
 
-	HandleMaintainerRequsetCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "changefeed",
-			Name:      "handle_maintainer_request",
-			Help:      "Total count of dispatcher request.",
-		}, []string{"namespace", "changefeed", "type"})
-
 	ChangefeedStatusGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -97,27 +73,22 @@ var (
 			Help:      "The status of changefeeds",
 		}, []string{"namespace", "changefeed"})
 
-	ChangefeedTickDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
+	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "owner",
-			Name:      "changefeed_tick_duration",
-			Help:      "Bucketed histogram of owner tick changefeed reactor time (s).",
-			Buckets:   prometheus.ExponentialBuckets(0.01 /* 10 ms */, 2, 18),
+			Name:      "checkpoint_ts_lag",
+			Help:      "changefeed checkpoint ts lag in changefeeds in seconds",
 		}, []string{"namespace", "changefeed"})
 )
 
-// InitMetrics registers all metrics used in owner
-func InitChangefeedMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(ChangefeedBarrierTsGauge)
-	registry.MustRegister(ChangefeedCheckpointTsGauge)
-	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
-	registry.MustRegister(ChangefeedResolvedTsGauge)
-	registry.MustRegister(ChangefeedResolvedTsLagGauge)
-	registry.MustRegister(CurrentPDTsGauge)
+func initChangefeedMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(MaintainerCheckpointTsGauge)
+	registry.MustRegister(MaintainerCheckpointTsLagGauge)
+	registry.MustRegister(MaintainerResolvedTsGauge)
+	registry.MustRegister(MaintainerResolvedTsLagGauge)
 	registry.MustRegister(CoordinatorCounter)
 	registry.MustRegister(MaintainerGauge)
-	registry.MustRegister(HandleMaintainerRequsetCounter)
 	registry.MustRegister(ChangefeedStatusGauge)
-	registry.MustRegister(ChangefeedTickDuration)
+	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 }

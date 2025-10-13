@@ -91,6 +91,9 @@ const (
 	TypeMaintainerCloseResponse
 
 	TypeMessageHandShake
+
+	// used to upload changefeed metrics from event store to log coordinator
+	TypeLogCoordinatorChangefeedStates
 )
 
 func (t IOType) String() string {
@@ -138,7 +141,7 @@ func (t IOType) String() string {
 	case TypeDispatcherRequest:
 		return "DispatcherRequest"
 	case TypeMaintainerBootstrapRequest:
-		return "BootstrapMaintainerRequest"
+		return "MaintainerBootstrapRequest"
 	case TypeMaintainerBootstrapResponse:
 		return "MaintainerBootstrapResponse"
 	case TypeMaintainerPostBootstrapRequest:
@@ -157,13 +160,15 @@ func (t IOType) String() string {
 		return "DispatcherHeartbeat"
 	case TypeRedoMessage:
 		return "RedoMessage"
-		return "RedoHeartbeatMessage"
+
 	case TypeDispatcherHeartbeatResponse:
 		return "DispatcherHeartbeatResponse"
 	case TypeCongestionControl:
 		return "CongestionControl"
 	case TypeMergeDispatcherRequest:
 		return "MergeDispatcherRequest"
+	case TypeLogCoordinatorChangefeedStates:
+		return "TypeLogCoordinatorChangefeedStates"
 	default:
 	}
 	return "Unknown"
@@ -343,6 +348,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &commonEvent.CongestionControl{}
 	case TypeMergeDispatcherRequest:
 		m = &heartbeatpb.MergeDispatcherRequest{}
+	case TypeLogCoordinatorChangefeedStates:
+		m = &logservicepb.ChangefeedStates{}
 	default:
 		log.Panic("Unimplemented IOType", zap.Stringer("Type", ioType))
 	}
@@ -440,6 +447,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeCongestionControl
 	case *heartbeatpb.MergeDispatcherRequest:
 		ioType = TypeMergeDispatcherRequest
+	case *logservicepb.ChangefeedStates:
+		ioType = TypeLogCoordinatorChangefeedStates
 	default:
 		panic("unknown io type")
 	}

@@ -22,7 +22,6 @@ import (
 
 func TestSyncpointEvent(t *testing.T) {
 	e := NewSyncPointEvent(common.NewDispatcherID(), []uint64{100, 102}, 1000, 10)
-	e.State = EventSenderStatePaused
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize()))
@@ -35,7 +34,6 @@ func TestSyncpointEvent(t *testing.T) {
 
 func TestSyncpointEventWithEmtpyCommitTsList(t *testing.T) {
 	e := NewSyncPointEvent(common.NewDispatcherID(), []uint64{}, 1000, 10)
-	e.State = EventSenderStateNormal
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize()))
