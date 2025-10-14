@@ -31,7 +31,7 @@ while ! curl -o /dev/null -v -s "http://$S3_ENDPOINT/"; do
 done
 
 stop_minio() {
-	kill -2 $MINIO_PID
+	kill -2 $MINIO_PID || true
 }
 
 stop() {
