@@ -32,6 +32,10 @@ import (
 func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
 		log.Info("Dry run DDL", zap.String("sql", event.GetDDLQuery()))
+		// use RecordDDLExecution to record the metrics of execute ddl
+		w.statistics.RecordDDLExecution(func() error {
+			return nil
+		})
 		time.Sleep(w.cfg.DryRunDelay)
 		return nil
 	}
