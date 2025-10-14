@@ -207,6 +207,8 @@ tikv-worker --addr "$TLS_TIKV_WORKER_HOST:$TLS_TIKV_WORKER_PORT" \
 	>"$OUT_DIR/log/tls/tikv-worker/tikv-worker-stdout.log" \
 	2>"$OUT_DIR/log/tls/tikv-worker/tikv-worker-stderr.log" &
 
+sleep 5
+
 echo "Starting System TLS TiDB..."
 mkdir -p "$OUT_DIR/log/tls/tidb-system"
 tidb-server -V

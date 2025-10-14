@@ -89,8 +89,6 @@ fi
 
 # start minio
 echo "Starting MinIO server..."
-rm -rf "$OUT_DIR/data/minio"
-rm -rf "$OUT_DIR/log/minio"
 mkdir -p "$OUT_DIR/data/minio"
 mkdir -p "$OUT_DIR/log/minio"
 minio server --address ":$MINIO_API_PORT" "$OUT_DIR/data/minio" \
@@ -332,6 +330,8 @@ tikv-worker --addr "$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT" \
 
 check_port_available "$UP_TIKV_WORKER_HOST" "$UP_TIKV_WORKER_PORT" "Upstream TiKV-Worker is not ready yet"
 check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstream TiKV-Worker is not ready yet"
+
+sleep 5
 
 ####################start TiDB####################
 touch "$OUT_DIR/upstream-tidb-system.toml"
