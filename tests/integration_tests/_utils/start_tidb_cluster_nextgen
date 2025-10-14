@@ -89,6 +89,8 @@ fi
 
 # start minio
 echo "Starting MinIO server..."
+rm -rf "$OUT_DIR/data/minio"
+rm -rf "$OUT_DIR/log/minio"
 mkdir -p "$OUT_DIR/data/minio"
 mkdir -p "$OUT_DIR/log/minio"
 minio server --address ":$MINIO_API_PORT" "$OUT_DIR/data/minio" \
