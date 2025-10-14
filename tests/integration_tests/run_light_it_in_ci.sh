@@ -146,37 +146,37 @@ pulsar_groups=(
 # 6 CPU, 16 Gi memory.
 storage_groups=(
 	# G00
-	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
-	# G01
-	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
-	# G02
-	'new_ci_collation savepoint fail_over_ddl_C'
-	# G03
-	'kv_client_stream_reconnect fail_over_ddl_D'
-	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
-	# G05
-	'vector simple partition_table fail_over_ddl_F'
-	# G06
-	'lossy_ddl fail_over_ddl_G'
-	# G07
-	'storage_cleanup fail_over_ddl_H changefeed_update_config'
-	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
-	# G09
-	'cdc_server_tips ddl_sequence fail_over_ddl_J'
-	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K  split_table_check'
-	# G11
-	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
-	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
 	# G14
-	'csv_storage_multi_tables_ddl fail_over_ddl_O'
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
 	# G15
-	'split_region autorandom gc_safepoint ddl_for_split_tables'
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G04
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G13
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G14
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G15
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G08
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G13
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G14
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G15
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G12
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G13
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G14
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
+	# G15
+	'csv_storage_multi_tables_ddl csv_storage_multi_tables_ddl'
 )
 
 # Source shared functions and check test coverage
