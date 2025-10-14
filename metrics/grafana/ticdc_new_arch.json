@@ -7374,7 +7374,7 @@
               "refId": "A"
             }
           ],
-          "title": "Resolved TS Batch Size (Regions)",
+          "title": "Resolved Ts Batch Size (Regions)",
           "tooltip": {
             "show": true,
             "showHistogram": true
