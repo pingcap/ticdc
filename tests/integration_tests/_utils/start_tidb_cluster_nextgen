@@ -347,7 +347,7 @@ run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
 tikv-worker-url = "http://$UP_TIKV_WORKER_HOST:$UP_TIKV_WORKER_PORT"
-temp-dir = "$OUT_DIR/data/upstream/tidb-system"
+# temp-dir = "$OUT_DIR/data/upstream/tidb-system"
 
 [log.file]
 max-backups = 100
@@ -377,7 +377,7 @@ new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
-temp-dir = "$OUT_DIR/data/upstream/tidb-$KEYSPACE_NAME"
+# temp-dir = "$OUT_DIR/data/upstream/tidb-$KEYSPACE_NAME"
 
 [log.file]
 max-backups = 100
@@ -409,7 +409,7 @@ run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
 tikv-worker-url = "http://$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT"
-temp-dir = "$OUT_DIR/data/downstream/tidb-system"
+# temp-dir = "$OUT_DIR/data/downstream/tidb-system"
 
 [log.file]
 max-backups = 100
@@ -439,7 +439,7 @@ new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
-temp-dir = "$OUT_DIR/data/downstream/tidb-$KEYSPACE_NAME"
+# temp-dir = "$OUT_DIR/data/downstream/tidb-$KEYSPACE_NAME"
 
 [log.file]
 max-backups = 100
@@ -540,6 +540,15 @@ run_sql "update mysql.tidb set variable_value='60m' where variable_name='tikv_gc
 run_sql "CREATE user 'normal'@'%' identified by '123456';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 run_sql "GRANT select,insert,update,delete,index,create,drop,alter,create view,references ON *.* TO 'normal'@'%';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 run_sql "FLUSH privileges" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+
+# upstream system
+run_sql "set global tidb_cloud_storage_uri = 's3://cse-test-up/system-tidb-global-sort?access-key=$MINIO_ROOT_USER&secret-access-key=$MINIO_ROOT_PASSWORD&endpoint=http://127.0.0.1:$MINIO_API_PORT&force-path-style=ture';" "$UP_TIDB_SYSTEM_HOST" "$UP_TIDB_SYSTEM_PORT"
+# upstream keyspace1
+run_sql "set global tidb_cloud_storage_uri = 's3://cse-test-up/$KEYSPACE_NAME-tidb-global-sort?access-key=$MINIO_ROOT_USER&secret-access-key=$MINIO_ROOT_PASSWORD&endpoint=http://127.0.0.1:$MINIO_API_PORT&force-path-style=ture';" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+# downstream system
+run_sql "set global tidb_cloud_storage_uri = 's3://cse-test-down/system-tidb-global-sort?access-key=$MINIO_ROOT_USER&secret-access-key=$MINIO_ROOT_PASSWORD&endpoint=http://127.0.0.1:$MINIO_API_PORT&force-path-style=ture';" "$DOWN_TIDB_SYSTEM_HOST" "$DOWN_TIDB_SYSTEM_PORT"
+# downstream keyspace1
+run_sql "set global tidb_cloud_storage_uri = 's3://cse-test-down/$KEYSPACE_NAME-tidb-global-sort?access-key=$MINIO_ROOT_USER&secret-access-key=$MINIO_ROOT_PASSWORD&endpoint=http://127.0.0.1:$MINIO_API_PORT&force-path-style=ture';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 
 ################### start tiflash #####################
 #cat >"$OUT_DIR/tiflash-config.toml" <<EOF
