@@ -85,4 +85,9 @@ export MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-cdcs3secretkey}
 export MINIO_ACCESS_KEY=$MINIO_ROOT_USER
 export MINIO_SECRET_KEY=$MINIO_ROOT_PASSWORD
 
-export KEYSPACE_NAME=${KEYSPACE_NAME:-keyspace1}
+export NEXT_GEN=${NEXT_GEN:-0}
+if [ "$NEXT_GEN" = 1 ]; then
+    export KEYSPACE_NAME=${KEYSPACE_NAME:-keyspace1}
+else
+    export KEYSPACE_NAME=${KEYSPACE_NAME:-default}
+fi
