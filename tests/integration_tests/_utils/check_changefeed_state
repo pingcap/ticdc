@@ -15,9 +15,9 @@ error_msg=${4}
 tls_dir=${!#}
 
 if [[ "$endpoints" =~ "https" ]]; then
-	info=$(cdc_cli_changefeed query --ca="${tls_dir}/ca.pem" --cert="${tls_dir}/client.pem" --key="${tls_dir}/client-key.pem" -c $changefeed_id -s | grep -v "Command to ticdc")
+	info=$(cdc.test cli query --ca="${tls_dir}/ca.pem" --cert="${tls_dir}/client.pem" --key="${tls_dir}/client-key.pem" -c $changefeed_id -s | grep -v "Command to ticdc")
 else
-	info=$(cdc_cli_changefeed query -c $changefeed_id -s | grep -v "Command to ticdc")
+	info=$(cdc.test cli query -c $changefeed_id -s | grep -v "Command to ticdc")
 fi
 echo "$info"
 
