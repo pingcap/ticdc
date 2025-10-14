@@ -329,7 +329,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	if err := m.extStorage.WriteFile(ctx, deleteMarker, []byte("D")); err != nil {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
-	log.Info("redo manager write deleted mark",
+	log.Info("redo meta write deleted mark",
 		zap.String("keyspace", m.changeFeedID.Keyspace()),
 		zap.String("changefeed", m.changeFeedID.Name()))
 
@@ -475,7 +475,7 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 	for {
 		select {
 		case <-egCtx.Done():
-			log.Info("redo manager GC exits as context cancelled",
+			log.Info("redo meta GC exits as context cancelled",
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
 				zap.String("changefeed", m.changeFeedID.Name()))
 			return errors.Trace(egCtx.Err())
@@ -485,7 +485,7 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 				continue
 			}
 			preCkpt = ckpt
-			log.Debug("redo manager GC is triggered",
+			log.Debug("redo meta GC is triggered",
 				zap.Uint64("checkpointTs", ckpt),
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
 				zap.String("changefeed", m.changeFeedID.Name()))
@@ -493,7 +493,7 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 				return m.shouldRemoved(path, ckpt)
 			}, nil)
 			if err != nil {
-				log.Warn("redo manager log GC fail",
+				log.Warn("redo meta log GC fail",
 					zap.String("keyspace", m.changeFeedID.Keyspace()),
 					zap.String("changefeed", m.changeFeedID.Name()), zap.Error(err))
 				return errors.Trace(err)

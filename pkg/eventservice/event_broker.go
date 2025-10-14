@@ -253,6 +253,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	remoteID := node.ID(d.info.GetServerID())
 	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
 	re := event.NewResolvedEvent(watermark, d.id, d.epoch)
+	re.Seq = d.seq.Load()
 	resolvedEvent := newWrapResolvedEvent(remoteID, re)
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)

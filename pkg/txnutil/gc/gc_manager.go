@@ -23,7 +23,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/errors"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
@@ -48,7 +51,7 @@ type Manager interface {
 // keyspaceGCBarrierInfo is the gc info for a keyspace
 type keyspaceGCBarrierInfo struct {
 	lastSucceededTime time.Time
-	lastGcBarrierTs   uint64
+	lastSafePointTs   uint64
 	isTiCDCBlockGC    bool
 }
 
@@ -138,12 +141,26 @@ func (m *gcManager) TryUpdateGCSafePoint(
 func (m *gcManager) CheckStaleCheckpointTs(
 	ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts,
 ) error {
+	if kerneltype.IsClassic() {
+		return m.checkStaleCheckPointTsGlobal(changefeedID, checkpointTs)
+	}
+	return m.checkStaleCheckpointTsKeyspace(ctx, changefeedID, checkpointTs)
+}
+
+func checkStaleCheckpointTs(
+	changefeedID common.ChangeFeedID,
+	checkpointTs common.Ts,
+	pdClock pdutil.Clock,
+	isTiCDCBlockGC bool,
+	lastSafePointTs uint64,
+	gcTTL int64,
+) error {
 	gcSafepointUpperBound := checkpointTs - 1
-	if m.isTiCDCBlockGC.Load() {
-		pdTime := m.pdClock.CurrentTime()
+	if isTiCDCBlockGC {
+		pdTime := pdClock.CurrentTime()
 		if pdTime.Sub(
 			oracle.GetTimeFromTS(gcSafepointUpperBound),
-		) > time.Duration(m.gcTTL)*time.Second {
+		) > time.Duration(gcTTL)*time.Second {
 			return cerror.ErrGCTTLExceeded.
 				GenWithStackByArgs(
 					checkpointTs,
@@ -153,15 +170,35 @@ func (m *gcManager) CheckStaleCheckpointTs(
 	} else {
 		// if `isTiCDCBlockGC` is false, it means there is another service gc
 		// point less than the min checkpoint ts.
-		if gcSafepointUpperBound < m.lastSafePointTs.Load() {
+		if gcSafepointUpperBound < lastSafePointTs {
 			return cerror.ErrSnapshotLostByGC.
 				GenWithStackByArgs(
 					checkpointTs,
-					m.lastSafePointTs.Load(),
+					lastSafePointTs,
 				)
 		}
 	}
 	return nil
+}
+
+func (m *gcManager) checkStaleCheckpointTsKeyspace(ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
+	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, changefeedID.Keyspace())
+	if err != nil {
+		return err
+	}
+
+	barrierInfo := new(keyspaceGCBarrierInfo)
+	o, ok := m.keyspaceGCBarrierInfoMap.Load(keyspaceMeta.Id)
+	if ok {
+		barrierInfo = o.(*keyspaceGCBarrierInfo)
+	}
+
+	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, barrierInfo.isTiCDCBlockGC, barrierInfo.lastSafePointTs, m.gcTTL)
+}
+
+func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
+	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
 }
 
 func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts, forceUpdate bool) error {
@@ -176,8 +213,10 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 
 	gcCli := m.pdClient.GetGCStatesClient(keyspaceID)
 	ttl := time.Duration(m.gcTTL) * time.Second
-	actual, err := SetGCBarrier(ctx, gcCli, m.gcServiceID, checkpointTs, ttl)
-	if err != nil {
+	_, err := SetGCBarrier(ctx, gcCli, m.gcServiceID, checkpointTs, ttl)
+	// align to classic mode, if the checkpointTs is less than TxnSafePoint,
+	// we can also use the TxnSafePoint as the lastSafePointTs
+	if err != nil && !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
 		log.Warn("updateKeyspaceGCBarrier failed",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Uint64("safePointTs", checkpointTs),
@@ -192,7 +231,13 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 		}
 		return nil
 	}
-	failpoint.Inject("InjectActualGCBarrier", func(val failpoint.Value) {
+
+	actual, err := UnifyGetServiceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID)
+	if err != nil {
+		return err
+	}
+
+	failpoint.Inject("InjectActualGCSafePoint", func(val failpoint.Value) {
 		actual = uint64(val.(int))
 	})
 
@@ -205,9 +250,8 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	// that the service gc barrier ts set by TiCDC is the min service gc barrier ts
 	newBarrierInfo := &keyspaceGCBarrierInfo{
 		lastSucceededTime: time.Now(),
-		lastGcBarrierTs:   actual,
-		// TODO tenfyzhong 2025-10-10 18:39:26
-		isTiCDCBlockGC: actual == checkpointTs,
+		lastSafePointTs:   actual,
+		isTiCDCBlockGC:    actual == checkpointTs,
 	}
 	m.keyspaceGCBarrierInfoMap.Store(keyspaceID, newBarrierInfo)
 

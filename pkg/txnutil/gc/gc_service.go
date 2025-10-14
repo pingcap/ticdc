@@ -138,7 +138,7 @@ func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
 	gcState, err := getGCState(ctx, gcCli)
 	if err != nil {
-		return 0, err
+		return 0, errors.Trace(errors.ErrGetGCBarrierFailed)
 	}
 	return gcState.TxnSafePoint, nil
 }

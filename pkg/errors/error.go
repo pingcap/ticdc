@@ -570,6 +570,10 @@ var (
 		"updating gc barrier failed",
 		errors.RFCCodeText("CDC:ErrUpdateGCBarrierFailed"),
 	)
+	ErrGetGCBarrierFailed = errors.Normalize(
+		"get gc barrier failed",
+		errors.RFCCodeText("CDC:ErrGetGCBarrierFailed"),
+	)
 	ErrLoadKeyspaceFailed = errors.Normalize(
 		"loading keyspace failed",
 		errors.RFCCodeText("CDC:ErrLoadKeyspaceFailed"),
