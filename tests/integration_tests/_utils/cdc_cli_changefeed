@@ -4,7 +4,7 @@ set -eu
 
 next_gen=${NEXT_GEN:-0}
 if [ "$next_gen" = 1 ]; then
-	cdc.test cli changefeed -k "$KEYSPACE_NAME" "$@"
+	cdc cli changefeed -k "$KEYSPACE_NAME" "$@"
 else
-	cdc.test cli changefeed "$@"
+	cdc cli changefeed "$@"
 fi
