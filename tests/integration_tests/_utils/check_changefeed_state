@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -ex
+set -e
 
 # parameter 1: pd endpoints
 # parameter 2: changefeed id
