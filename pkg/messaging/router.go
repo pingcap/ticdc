@@ -65,6 +65,7 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 			}
 			start := time.Now()
 			err := handler(ctx, msg)
+			log.Info("handle message", zap.Any("msgType", msg.Type))
 			now := time.Now()
 			if now.Sub(start) > 100*time.Millisecond {
 				// Rate limit logging: only log once every 10 seconds
