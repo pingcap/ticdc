@@ -331,7 +331,10 @@ tikv-worker --addr "$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT" \
 check_port_available "$UP_TIKV_WORKER_HOST" "$UP_TIKV_WORKER_PORT" "Upstream TiKV-Worker is not ready yet"
 check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstream TiKV-Worker is not ready yet"
 
-sleep 5
+# BUG tenfyzhong 2025-10-14 16:07:22 There maybe a bug when deploying upstream
+# system tidb immediately after the deployment of tikv and pd. When tidb inserts into
+# `mysql.bind_info`, an error occurs: Unknown database 'mysql'
+sleep 1
 
 ####################start TiDB####################
 touch "$OUT_DIR/upstream-tidb-system.toml"
