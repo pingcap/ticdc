@@ -7699,7 +7699,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Subscription Resolved Ts Lag",
+          "title": "Subscriptions Resolved Ts Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -7814,7 +7814,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Subscription Data GC Lag",
+          "title": "Subscriptions Data GC Lag",
           "tooltip": {
             "shared": true,
             "sort": 0,
