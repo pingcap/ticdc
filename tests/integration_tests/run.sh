@@ -10,6 +10,7 @@ source "$CUR/_utils/test_prepare"
 export PATH=$PATH:$CUR/_utils:$CUR/../bin:$CUR/../../bin:$CUR/../../scripts/bin
 export TICDC_NEWARCH=true
 export CDC_BINARY=cdc.test
+export NEXT_GEN=${NEXT_GEN:-0}
 
 mkdir -p $OUT_DIR || true
 
