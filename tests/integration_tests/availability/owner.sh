@@ -16,7 +16,7 @@ set -eu
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
-CDC_BINARY=cdc.test
+CDC_BINARY=cdc
 MAX_RETRIES=10
 function test_owner_ha() {
 	test_kill_owner
