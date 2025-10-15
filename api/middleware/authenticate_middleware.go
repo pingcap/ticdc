@@ -89,6 +89,7 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		return errors.ErrUnauthorized.GenWithStackByArgs(username, errMsg)
 	}
 
+	// TODO tenfyzhong 2025-10-15 15:07:48
 	// The next gen kernel does not write topology info into etcd.
 	if kerneltype.IsNextGen() {
 		return nil
