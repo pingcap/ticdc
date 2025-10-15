@@ -133,7 +133,6 @@ func NewController(changefeedID common.ChangeFeedID,
 
 // HandleStatus handle the status report from the node
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
-	log.Info("handle status", zap.String("changefeed", c.changefeedID.Name()), zap.String("from", from.String()), zap.Any("statusList", statusList))
 	start := time.Now()
 	defer func() {
 		log.Info("finish handle status", zap.Duration("duration", time.Since(start)))
