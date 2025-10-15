@@ -9317,7 +9317,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event Store Write Worker Busy Ratio",
+          "title": "Write Worker Busy Ratio",
           "tooltip": {
             "shared": true,
             "sort": 0,
