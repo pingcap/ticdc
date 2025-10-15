@@ -218,8 +218,8 @@ func (c *server) initialize(ctx context.Context) error {
 	c.subModules = []common.SubModule{
 		subscriptionClient,
 		schemaStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler),
 		eventStore,
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler),
 		eventService,
 	}
 	// register it into global var
@@ -270,6 +270,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 
 	// Set DispatcherOrchestrator to Global Context
 	dispatcherOrchestrator := dispatcherorchestrator.New()
+	dispatcherOrchestrator.Run(ctx)
 	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
 	c.preServices = append(c.preServices, dispatcherOrchestrator)
 
@@ -434,13 +435,16 @@ func (c *server) Close(ctx context.Context) {
 		c.closePreServices()
 	}()
 
-	for _, subModule := range c.subModules {
-		if err := subModule.Close(ctx); err != nil {
+	// There are also some dependencies inside subModules,
+	// so we close subModules in reverse order of their startup.
+	for i := len(c.subModules) - 1; i >= 0; i-- {
+		m := c.subModules[i]
+		if err := m.Close(ctx); err != nil {
 			log.Warn("failed to close sub module",
-				zap.String("module", subModule.Name()),
+				zap.String("module", m.Name()),
 				zap.Error(err))
 		}
-		log.Info("sub module closed", zap.String("module", subModule.Name()))
+		log.Info("sub module closed", zap.String("module", m.Name()))
 	}
 
 	for _, m := range c.nodeModules {

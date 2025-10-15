@@ -228,6 +228,9 @@ type eventStore struct {
 	// changefeed id -> changefeedStat
 	changefeedMeta sync.Map
 
+	// closed is used to indicate the event store is closed.
+	closed atomic.Bool
+
 	// compressionThreshold is the size in bytes above which a value will be compressed.
 	compressionThreshold int
 }
@@ -396,6 +399,8 @@ func (e *eventStore) Close(ctx context.Context) error {
 	log.Info("event store start to close")
 	defer log.Info("event store closed")
 
+	e.closed.Store(true)
+
 	for _, db := range e.dbs {
 		if err := db.Close(); err != nil {
 			log.Error("failed to close pebble db", zap.Error(err))
@@ -414,6 +419,10 @@ func (e *eventStore) RegisterDispatcher(
 	onlyReuse bool,
 	bdrMode bool,
 ) bool {
+	if e.closed.Load() {
+		return false
+	}
+
 	// Defer a cleanup function that will run if registration fails.
 	// The success flag is set to true only at the end of successful registration paths.
 	success := false
@@ -651,6 +660,10 @@ func (e *eventStore) RegisterDispatcher(
 }
 
 func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
+	if e.closed.Load() {
+		return
+	}
+
 	log.Info("unregister dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
 	defer func() {
 		log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
@@ -688,6 +701,10 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	dispatcherID common.DispatcherID,
 	checkpointTs uint64,
 ) {
+	if e.closed.Load() {
+		return
+	}
+
 	e.dispatcherMeta.RLock()
 	defer e.dispatcherMeta.RUnlock()
 
@@ -775,6 +792,10 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 }
 
 func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
+	if e.closed.Load() {
+		return nil
+	}
+
 	e.dispatcherMeta.RLock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {

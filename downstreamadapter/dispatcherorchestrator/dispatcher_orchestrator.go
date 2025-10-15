@@ -39,35 +39,88 @@ type DispatcherOrchestrator struct {
 	mc                 messaging.MessageCenter
 	mutex              sync.Mutex // protect dispatcherManagers
 	dispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
+
+	// Fields for asynchronous message processing
+	msgChan chan *messaging.TargetMessage
+	wg      sync.WaitGroup
+	cancel  context.CancelFunc
 }
 
 func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
 		mc:                 appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		msgChan:            make(chan *messaging.TargetMessage, 1024), // buffer size 1024
 	}
 	m.mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.RecvMaintainerRequest)
 	return m
 }
 
+// Run starts the message handling goroutine
+func (m *DispatcherOrchestrator) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	m.cancel = cancel
+
+	log.Info("dispatcher orchestrator is running")
+
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		err := m.handleMessages(ctx)
+		if err != nil && err != context.Canceled {
+			log.Error("failed to handle messages", zap.Error(err))
+		}
+	}()
+}
+
 // RecvMaintainerRequest is the handler for the maintainer request message.
-// It will delegate the request to the corresponding handler based on the message type.
+// It puts the message into a channel for asynchronous processing to avoid blocking the message center.
 func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	_ context.Context,
 	msg *messaging.TargetMessage,
 ) error {
-	switch req := msg.Message[0].(type) {
-	case *heartbeatpb.MaintainerBootstrapRequest:
-		return m.handleBootstrapRequest(msg.From, req)
-	case *heartbeatpb.MaintainerPostBootstrapRequest:
-		// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request
-		return m.handlePostBootstrapRequest(msg.From, req)
-	case *heartbeatpb.MaintainerCloseRequest:
-		return m.handleCloseRequest(msg.From, req)
+	// Put message into channel for asynchronous processing by another goroutine
+	select {
+	case m.msgChan <- msg:
+		return nil
 	default:
-		log.Panic("unknown message type", zap.Any("message", msg.Message))
+		// Channel is full, log warning and drop the message
+		log.Warn("message channel is full, dropping message", zap.Any("message", msg.Message))
+		return nil
 	}
-	return nil
+}
+
+// handleMessages processes messages from the channel
+func (m *DispatcherOrchestrator) handleMessages(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("dispatcher orchestrator is shutting down, exit handleMessages")
+			return ctx.Err()
+		case msg := <-m.msgChan:
+			if msg == nil {
+				continue
+			}
+			// Process the message
+			switch req := msg.Message[0].(type) {
+			case *heartbeatpb.MaintainerBootstrapRequest:
+				if err := m.handleBootstrapRequest(msg.From, req); err != nil {
+					log.Error("failed to handle bootstrap request", zap.Error(err))
+				}
+			case *heartbeatpb.MaintainerPostBootstrapRequest:
+				// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request
+				if err := m.handlePostBootstrapRequest(msg.From, req); err != nil {
+					log.Error("failed to handle post bootstrap request", zap.Error(err))
+				}
+			case *heartbeatpb.MaintainerCloseRequest:
+				if err := m.handleCloseRequest(msg.From, req); err != nil {
+					log.Error("failed to handle close request", zap.Error(err))
+				}
+			default:
+				log.Panic("unknown message type", zap.Any("message", msg.Message))
+			}
+		}
+	}
 }
 
 func (m *DispatcherOrchestrator) handleBootstrapRequest(
@@ -323,6 +376,15 @@ func (m *DispatcherOrchestrator) sendResponse(to node.ID, topic string, msg mess
 func (m *DispatcherOrchestrator) Close() {
 	log.Info("dispatcher orchestrator is closing")
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
+
+	// Stop the message handling goroutine
+	if m.cancel != nil {
+		m.cancel()
+	}
+	m.wg.Wait()
+
+	// Close the message channel
+	close(m.msgChan)
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
