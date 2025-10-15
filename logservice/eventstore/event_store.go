@@ -307,6 +307,11 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, index int, ch *chann.Unl
 	}
 }
 
+const (
+	batchEventMaxCount int = 64
+	batchEventMaxSize  int = 256 * 1024 // 256KB
+)
+
 func (p *writeTaskPool) run(ctx context.Context) {
 	p.store.wg.Add(p.workerNum)
 	for i := 0; i < p.workerNum; i++ {
@@ -317,7 +322,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 				log.Panic("failed to create zstd encoder", zap.Error(err))
 			}
 			defer encoder.Close()
-			buffer := make([]eventWithCallback, 0, 128)
+			buffer := make([]eventWithCallback, 0, batchEventMaxCount)
 
 			ioWriteDuration := metrics.EventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
 			totalDuration := metrics.EventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
@@ -327,7 +332,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				default:
-					events, ok := p.dataCh.GetMultipleNoGroup(buffer)
+					events, ok := p.dataCh.GetMultipleNoGroup(buffer, batchEventMaxSize)
 					if !ok {
 						return
 					}
