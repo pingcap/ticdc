@@ -1,8 +1,6 @@
 #!/bin/bash
 
 set -eu
-export PS4='+$(basename ${BASH_SOURCE}):${LINENO}:'
-set -x
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare

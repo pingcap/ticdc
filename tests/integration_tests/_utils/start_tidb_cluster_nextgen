@@ -2,8 +2,6 @@
 # depencencies: minio, mc(minio client)
 
 set -e
-# export PS4='+$(basename ${BASH_SOURCE}):${LINENO}: '
-# set -x
 
 # Random generate the sockets config.
 # Make sure we dont use the same sock.
