@@ -197,7 +197,7 @@ var (
 			Subsystem: "event_store",
 			Name:      "write_worker_total_duration",
 			Help:      "total duration (s) event store write worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 20), // 1ms~524s
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
 		}, []string{"db", "worker"})
 )
 
