@@ -165,9 +165,9 @@ type BasicDispatcher struct {
 	tableSchemaStore *util.TableSchemaStore
 
 	isRemoving atomic.Bool
-	// duringHandleEvents is used to indicate whether the dispatcher is during handling events.
-	// this field is used to avoid we called tryClosed first and then finish handle events.
-	// In this corner case, we will remove dispatcher wrongly
+	// duringHandleEvents is used to indicate whether the dispatcher is currently handling events.
+	// This field prevents a race condition where TryClose is called while events are being processed.
+	// In this corner case, `tableProgress` might be empty, which could lead to the dispatcher being removed prematurely.
 	duringHandleEvents atomic.Bool
 
 	seq  uint64
