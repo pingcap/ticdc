@@ -43,7 +43,9 @@ function test_kill_owner() {
 	# ensure the server become the owner
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"
 	owner_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
-	owner_id=$($CDC_BINARY cli capture list 2>&1 | jq -r '.[0].id')
+	result=$($CDC_BINARY cli capture list 2>&1)
+	echo "result:$result"
+	owner_id=$(echo "$result" | jq -r '.[0].id')
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
 	# run another server
