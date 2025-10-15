@@ -282,6 +282,7 @@ Loop:
 					continue Loop
 				}
 				if path.removed.Load() {
+					cleanUpEventBuf()
 					continue Loop
 				}
 				path.blocking = s.handler.Handle(path.dest, eventBuf...)
