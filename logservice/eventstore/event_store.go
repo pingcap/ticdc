@@ -332,13 +332,11 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					metric.Add(busyTimeSlice.Seconds())
 					busyTimeSlice = 0
 				default:
-					start := time.Now()
 					events, ok := p.dataCh.GetMultipleNoGroup(buffer)
 					if !ok {
 						return
 					}
-					busyTimeSlice += time.Since(start)
-					start = time.Now()
+					start := time.Now()
 					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
 						log.Panic("write events failed")
 					}
