@@ -337,6 +337,11 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
 // It will be called when all the events are flushed to downstream successfully.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
+	if d.GetRemovingStatus() {
+		log.Warn("dispatcher is removing", zap.Any("id", d.id))
+		return true
+	}
+
 	d.duringHandleEvents.Store(true)
 	defer d.duringHandleEvents.Store(false)
 
