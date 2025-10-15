@@ -163,7 +163,9 @@ function test_delete_owner_key() {
 	# ensure the server become the owner
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"
 	owner_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
-	owner_id=$($CDC_BINARY cli capture list 2>&1 | jq -r '.[0].id')
+	result=$($CDC_BINARY cli capture list 2>&1)
+	echo "result:$result"
+	owner_id=$(echo "$result" | jq -r '.[0].id')
 	owner_key=$(etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep -B 1 "$owner_id" | head -n 1)
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
