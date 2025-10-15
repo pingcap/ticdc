@@ -309,7 +309,7 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, index int, ch *chann.Unl
 
 const (
 	batchEventMaxCount int = 128
-	batchEventMaxSize  int = 4 * 1024
+	batchEventMaxSize  int = 1 * 1024
 )
 
 func (p *writeTaskPool) run(ctx context.Context) {
