@@ -165,6 +165,10 @@ type BasicDispatcher struct {
 	tableSchemaStore *util.TableSchemaStore
 
 	isRemoving atomic.Bool
+	// duringHandleEvents is used to indicate whether the dispatcher is during handling events.
+	// this field is used to avoid we called tryClosed first and then finish handle events.
+	// In this corner case, we will remove dispatcher wrongly
+	duringHandleEvents atomic.Bool
 
 	seq  uint64
 	mode int64
@@ -195,6 +199,7 @@ func NewBasicDispatcher(
 		componentStatus:            newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
 		resolvedTs:                 startTs,
 		isRemoving:                 atomic.Bool{},
+		duringHandleEvents:         atomic.Bool{},
 		blockEventStatus:           BlockEventStatus{blockPendingEvent: nil},
 		tableProgress:              NewTableProgress(),
 		schemaID:                   schemaID,
@@ -332,6 +337,9 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
 // It will be called when all the events are flushed to downstream successfully.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
+	d.duringHandleEvents.Store(true)
+	defer d.duringHandleEvents.Store(false)
+
 	// Only return false when all events are resolvedTs Event.
 	block := false
 	dmlWakeOnce := &sync.Once{}
@@ -786,11 +794,10 @@ func (d *BasicDispatcher) Remove() {
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
-	if !d.sink.IsNormal() || d.tableProgress.Empty() {
+	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
-		d.componentStatus.Set(heartbeatpb.ComponentState_Stopped)
 		if d.IsTableTriggerEventDispatcher() && d.tableSchemaStore != nil {
 			d.tableSchemaStore.Clear()
 		}
