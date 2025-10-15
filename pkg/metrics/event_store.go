@@ -181,6 +181,15 @@ var (
 			Help:      "The lag of startTs when registering a dispatcher.",
 			Buckets:   LagBucket(),
 		})
+
+	// EventStoreWriteWorkerBusyRatio records the busy ratio of event store write worker.
+	EventStoreWriteWorkerBusyRatio = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "write_worker_busy_ratio",
+			Help:      "Busy ratio for event store write worker.",
+		}, []string{"db", "worker"})
 )
 
 func initEventStoreMetrics(registry *prometheus.Registry) {
@@ -204,4 +213,5 @@ func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreReadDurationHistogram)
 	registry.MustRegister(EventStoreNotifyDispatcherDurationHist)
 	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
+	registry.MustRegister(EventStoreWriteWorkerBusyRatio)
 }
