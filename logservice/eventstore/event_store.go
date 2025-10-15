@@ -238,7 +238,7 @@ type eventStore struct {
 const (
 	dataDir             = "event_store"
 	dbCount             = 4
-	writeWorkerNumPerDB = 2
+	writeWorkerNumPerDB = 8
 )
 
 func New(
@@ -309,7 +309,7 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, index int, ch *chann.Unl
 
 const (
 	batchEventMaxCount int = 128
-	batchEventMaxSize  int = 1 * 1024
+	batchEventMaxSize  int = 64 * 1024
 )
 
 func (p *writeTaskPool) run(ctx context.Context) {
@@ -337,9 +337,9 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						return
 					}
 					start := time.Now()
-					// if err := p.store.writeEvents(p.db, events, encoder); err != nil {
-					// 	log.Panic("write events failed")
-					// }
+					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
+						log.Panic("write events failed")
+					}
 					for i := range events {
 						events[i].callback()
 					}
