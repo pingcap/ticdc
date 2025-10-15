@@ -319,29 +319,33 @@ func (p *writeTaskPool) run(ctx context.Context) {
 			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
 
-			ioWriteDuration := metrics.EventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
-			totalDuration := metrics.EventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
-			totalStart := time.Now()
+			metric := metrics.EventStoreWriteWorkerBusyRatio.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
+			var busyTimeSlice time.Duration
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+
 			for {
 				select {
 				case <-ctx.Done():
 					return
+				case <-ticker.C:
+					metric.Add(busyTimeSlice.Seconds())
+					busyTimeSlice = 0
 				default:
-
+					start := time.Now()
 					events, ok := p.dataCh.GetMultipleNoGroup(buffer)
 					if !ok {
 						return
 					}
-					start := time.Now()
+					busyTimeSlice += time.Since(start)
+					start = time.Now()
 					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
 						log.Panic("write events failed")
 					}
 					for i := range events {
 						events[i].callback()
 					}
-					ioWriteDuration.Observe(time.Since(start).Seconds())
-					totalDuration.Observe(time.Since(totalStart).Seconds())
-					totalStart = time.Now()
+					busyTimeSlice += time.Since(start)
 					buffer = buffer[:0]
 				}
 			}

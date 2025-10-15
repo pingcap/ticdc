@@ -182,22 +182,13 @@ var (
 			Buckets:   LagBucket(),
 		})
 
-	EventStoreWriteWorkerIODuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
+	// EventStoreWriteWorkerBusyRatio records the busy ratio of event store write worker.
+	EventStoreWriteWorkerBusyRatio = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
-			Name:      "write_worker_io_duration",
-			Help:      "IO duration (s) for event store write worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{"db", "worker"})
-
-	EventStoreWriteWorkerTotalDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "event_store",
-			Name:      "write_worker_total_duration",
-			Help:      "total duration (s) event store write worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 20), // 1ms~524s
+			Name:      "write_worker_busy_ratio",
+			Help:      "Busy ratio for event store write worker.",
 		}, []string{"db", "worker"})
 )
 
@@ -222,6 +213,5 @@ func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreReadDurationHistogram)
 	registry.MustRegister(EventStoreNotifyDispatcherDurationHist)
 	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
-	registry.MustRegister(EventStoreWriteWorkerIODuration)
-	registry.MustRegister(EventStoreWriteWorkerTotalDuration)
+	registry.MustRegister(EventStoreWriteWorkerBusyRatio)
 }
