@@ -118,7 +118,6 @@ EOF
 cat - >"$OUT_DIR/tidb-system-config-tls.toml" <<EOF
 socket = "/tmp/tidb-system-tls.sock"
 keyspace-name = "SYSTEM"
-split-table = false
 enable-telemetry = false
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
@@ -150,7 +149,6 @@ EOF
 # keyspace1 tidb server config file
 cat >"$OUT_DIR/tidb-$KEYSPACE_NAME-tls.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
-split-table = false
 enable-telemetry = false
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
