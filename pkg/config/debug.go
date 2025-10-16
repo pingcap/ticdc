@@ -107,8 +107,12 @@ func NewDefaultSchemaStoreConfig() *SchemaStoreConfig {
 
 // EventServiceConfig represents config for event service
 type EventServiceConfig struct {
-	ScanTaskQueueSize        int  `toml:"scan-task-queue-size" json:"scan-task-queue-size"`
-	ScanLimitInBytes         int  `toml:"scan-limit-in-bytes" json:"scan-limit-in-bytes"`
+	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan-task-queue-size"`
+	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan-limit-in-bytes"`
+
+	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.
+	// So we add this config to be able to disable remote event service in such scenario.
+	// TODO: Remove this config after we find a proper way to fix the OOM issue.
 	EnableRemoteEventService bool `toml:"enable-remote-event-service" json:"enable-remote-event-service"`
 }
 
