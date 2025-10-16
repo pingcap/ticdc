@@ -786,6 +786,13 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 					oldCheckpointTs,
 					newCheckpointTs,
 				)
+			} else {
+				log.Info("skip adding gc item",
+					zap.Uint64("subscriptionID", uint64(subStat.subID)),
+					zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
+					zap.Int64("lastReceiveDMLTime", lastReceiveDMLTime),
+					zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+					zap.Uint64("newCheckpointTs", newCheckpointTs))
 			}
 		} else {
 			log.Info("skip adding gc item",
