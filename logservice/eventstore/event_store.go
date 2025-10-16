@@ -815,7 +815,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			subStat.dbIndex,
 			uint64(subStat.subID),
 			subStat.tableSpan.TableID,
-			oldCheckpointTs,
+			0,
 			newCheckpointTs,
 		)
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
