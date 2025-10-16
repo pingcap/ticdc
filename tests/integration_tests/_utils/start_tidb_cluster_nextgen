@@ -342,7 +342,6 @@ fi
 mkdir -p "$OUT_DIR/data/upstream/tidb-system"
 cat >>"$OUT_DIR/upstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
-split-table = false
 enable-telemetry = false
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
@@ -373,7 +372,6 @@ fi
 mkdir -p "$OUT_DIR/data/upstream/tidb-$KEYSPACE_NAME"
 cat >>"$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
-split-table = false
 enable-telemetry = false
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
@@ -404,7 +402,6 @@ fi
 mkdir -p "$OUT_DIR/data/downstream/tidb-system"
 cat >>"$OUT_DIR/downstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
-split-table = false
 enable-telemetry = false
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
@@ -435,7 +432,6 @@ fi
 mkdir -p "$OUT_DIR/data/downstream/tidb-$KEYSPACE_NAME"
 cat >>"$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
-split-table = false
 enable-telemetry = false
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
