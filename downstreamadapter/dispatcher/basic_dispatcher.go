@@ -258,6 +258,7 @@ func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
 func (d *BasicDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
 	h.Watermark.CheckpointTs = d.GetCheckpointTs()
 	h.Watermark.ResolvedTs = d.GetResolvedTs()
+	h.Watermark.LastSyncedTs = d.GetLastSyncedTs()
 	h.Id = d.GetId()
 	h.ComponentStatus = d.GetComponentStatus()
 	h.IsRemoving = d.GetRemovingStatus()
@@ -265,6 +266,10 @@ func (d *BasicDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
 
 func (d *BasicDispatcher) GetResolvedTs() uint64 {
 	return atomic.LoadUint64(&d.resolvedTs)
+}
+
+func (d *BasicDispatcher) GetLastSyncedTs() uint64 {
+	return d.tableProgress.GetLastSyncedTs()
 }
 
 func (d *BasicDispatcher) GetCheckpointTs() uint64 {

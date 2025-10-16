@@ -44,9 +44,9 @@ mysql_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
-	'http_api http_api_tls fail_over_ddl_G'
+	'http_api http_api_tls fail_over_ddl_G synced_status'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config'
+	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
