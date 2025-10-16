@@ -225,6 +225,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 	dispatcherMap *DispatcherMap[T],
 	sinkType common.SinkType,
 ) {
+	log.Info("hyy remove dispatcher", zap.Stringer("dispatcherID", id))
 	changefeedID := e.changefeedID
 	statusesChan := e.sharedInfo.GetStatusesChan()
 
@@ -264,6 +265,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id))
 	} else {
+		log.Info("hyy return response of stopped status", zap.Stringer("dispatcherID", id))
 		statusesChan <- dispatcher.TableSpanStatusWithSeq{
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
 				ID:              id.ToPB(),
