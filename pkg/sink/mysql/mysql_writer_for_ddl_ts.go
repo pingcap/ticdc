@@ -45,6 +45,9 @@ const timeFormat = "2006-01-02 15:04:05.000000"
 // and after send the ddl ts, we update the ddl ts item to finished.
 // It can maximum guarantee we use the correct startTs.
 func (w *Writer) FlushDDLTsPre(event commonEvent.BlockEvent) error {
+	if w.cfg.DryRun {
+		return nil
+	}
 	err := w.createDDLTsTableIfNotExist()
 	if err != nil {
 		return err
@@ -53,6 +56,9 @@ func (w *Writer) FlushDDLTsPre(event commonEvent.BlockEvent) error {
 }
 
 func (w *Writer) FlushDDLTs(event commonEvent.BlockEvent) error {
+	if w.cfg.DryRun {
+		return nil
+	}
 	err := w.createDDLTsTableIfNotExist()
 	if err != nil {
 		return err

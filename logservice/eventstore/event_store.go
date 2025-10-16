@@ -238,7 +238,7 @@ type eventStore struct {
 const (
 	dataDir             = "event_store"
 	dbCount             = 4
-	writeWorkerNumPerDB = 4
+	writeWorkerNumPerDB = 2
 )
 
 func New(
@@ -281,7 +281,7 @@ func New(
 	// create a write task pool per db instance
 	for i := 0; i < dbCount; i++ {
 		store.chs = append(store.chs, chann.NewUnlimitedChannel[eventWithCallback, uint64](nil, eventWithCallbackSizer))
-		store.writeTaskPools = append(store.writeTaskPools, newWriteTaskPool(store, store.dbs[i], store.chs[i], writeWorkerNumPerDB))
+		store.writeTaskPools = append(store.writeTaskPools, newWriteTaskPool(store, store.dbs[i], i, store.chs[i], writeWorkerNumPerDB))
 	}
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
 	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
@@ -292,14 +292,16 @@ func New(
 type writeTaskPool struct {
 	store     *eventStore
 	db        *pebble.DB
+	dbIndex   int
 	dataCh    *chann.UnlimitedChannel[eventWithCallback, uint64]
 	workerNum int
 }
 
-func newWriteTaskPool(store *eventStore, db *pebble.DB, ch *chann.UnlimitedChannel[eventWithCallback, uint64], workerNum int) *writeTaskPool {
+func newWriteTaskPool(store *eventStore, db *pebble.DB, index int, ch *chann.UnlimitedChannel[eventWithCallback, uint64], workerNum int) *writeTaskPool {
 	return &writeTaskPool{
 		store:     store,
 		db:        db,
+		dbIndex:   index,
 		dataCh:    ch,
 		workerNum: workerNum,
 	}
@@ -308,7 +310,7 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, ch *chann.UnlimitedChann
 func (p *writeTaskPool) run(ctx context.Context) {
 	p.store.wg.Add(p.workerNum)
 	for i := 0; i < p.workerNum; i++ {
-		go func() {
+		go func(workerID int) {
 			defer p.store.wg.Done()
 			encoder, err := zstd.NewWriter(nil)
 			if err != nil {
@@ -316,6 +318,10 @@ func (p *writeTaskPool) run(ctx context.Context) {
 			}
 			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
+
+			ioWriteDuration := metrics.EventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
+			totalDuration := metrics.EventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
+			totalStart := time.Now()
 			for {
 				select {
 				case <-ctx.Done():
@@ -325,16 +331,20 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
+					start := time.Now()
 					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
 						log.Panic("write events failed")
 					}
 					for i := range events {
 						events[i].callback()
 					}
+					ioWriteDuration.Observe(time.Since(start).Seconds())
+					totalDuration.Observe(time.Since(totalStart).Seconds())
+					totalStart = time.Now()
 					buffer = buffer[:0]
 				}
 			}
-		}()
+		}(i)
 	}
 }
 

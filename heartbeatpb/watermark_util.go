@@ -25,6 +25,15 @@ func (w *Watermark) UpdateMin(other Watermark) {
 	}
 }
 
+// Update updates the watermark with the minimum values of checkpointTs and resolvedTs from another watermark.
+// It also updates the LastSyncedTs to the maximum value between the two watermarks.
+func (w *Watermark) Update(other Watermark) {
+	w.UpdateMin(other)
+	if w.LastSyncedTs < other.LastSyncedTs {
+		w.LastSyncedTs = other.LastSyncedTs
+	}
+}
+
 func NewMaxWatermark() *Watermark {
 	return &Watermark{
 		CheckpointTs: math.MaxUint64,

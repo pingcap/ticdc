@@ -113,7 +113,7 @@ var (
 			Subsystem: "sink",
 			Name:      "txn_worker_total_duration",
 			Help:      "total duration (s) for txn worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 20), // 1ms~524s
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
 		}, []string{"namespace", "changefeed", "id"})
 
 	WorkerHandledRows = prometheus.NewCounterVec(
