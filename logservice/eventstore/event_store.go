@@ -771,6 +771,14 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		if lastReceiveDMLTime > 0 {
 			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
 			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
+				log.Info("add gc item",
+					zap.Uint64("subscriptionID", uint64(subStat.subID)),
+					zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
+					zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+					zap.Uint64("newCheckpointTs", newCheckpointTs),
+					zap.Time("oldCheckpointPhysicalTime", oldCheckpointPhysicalTime),
+					zap.Time("newCheckpointPhysicalTime", oracle.GetTimeFromTS(newCheckpointTs)))
+				// add gc item
 				e.gcManager.addGCItem(
 					subStat.dbIndex,
 					uint64(subStat.subID),
@@ -779,6 +787,13 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 					newCheckpointTs,
 				)
 			}
+		} else {
+			log.Info("skip adding gc item",
+				zap.Uint64("subscriptionID", uint64(subStat.subID)),
+				zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
+				zap.Int64("lastReceiveDMLTime", lastReceiveDMLTime),
+				zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+				zap.Uint64("newCheckpointTs", newCheckpointTs))
 		}
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
 			ChangeType:   SubscriptionChangeTypeUpdate,
