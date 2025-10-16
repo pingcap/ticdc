@@ -767,41 +767,57 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		}
 		// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
 		// So we can skip adding gc item.
-		lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
-		if lastReceiveDMLTime > 0 {
-			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
-			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
-				log.Info("add gc item",
-					zap.Uint64("subscriptionID", uint64(subStat.subID)),
-					zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
-					zap.Uint64("oldCheckpointTs", oldCheckpointTs),
-					zap.Uint64("newCheckpointTs", newCheckpointTs),
-					zap.Time("oldCheckpointPhysicalTime", oldCheckpointPhysicalTime),
-					zap.Time("newCheckpointPhysicalTime", oracle.GetTimeFromTS(newCheckpointTs)))
-				// add gc item
-				e.gcManager.addGCItem(
-					subStat.dbIndex,
-					uint64(subStat.subID),
-					subStat.tableSpan.TableID,
-					oldCheckpointTs,
-					newCheckpointTs,
-				)
-			} else {
-				log.Info("skip adding gc item",
-					zap.Uint64("subscriptionID", uint64(subStat.subID)),
-					zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
-					zap.Int64("lastReceiveDMLTime", lastReceiveDMLTime),
-					zap.Uint64("oldCheckpointTs", oldCheckpointTs),
-					zap.Uint64("newCheckpointTs", newCheckpointTs))
-			}
-		} else {
-			log.Info("skip adding gc item",
-				zap.Uint64("subscriptionID", uint64(subStat.subID)),
-				zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
-				zap.Int64("lastReceiveDMLTime", lastReceiveDMLTime),
-				zap.Uint64("oldCheckpointTs", oldCheckpointTs),
-				zap.Uint64("newCheckpointTs", newCheckpointTs))
-		}
+		// lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
+		// if lastReceiveDMLTime > 0 {
+		// 	oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
+		// 	if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
+		// 		log.Info("add gc item",
+		// 			zap.Uint64("subscriptionID", uint64(subStat.subID)),
+		// 			zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
+		// 			zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+		// 			zap.Uint64("newCheckpointTs", newCheckpointTs),
+		// 			zap.Time("oldCheckpointPhysicalTime", oldCheckpointPhysicalTime),
+		// 			zap.Time("newCheckpointPhysicalTime", oracle.GetTimeFromTS(newCheckpointTs)),
+		// 			zap.Time("lastReceiveDMLTime", time.UnixMilli(lastReceiveDMLTime)),
+		// 		)
+		// 		// add gc item
+		// 		e.gcManager.addGCItem(
+		// 			subStat.dbIndex,
+		// 			uint64(subStat.subID),
+		// 			subStat.tableSpan.TableID,
+		// 			oldCheckpointTs,
+		// 			newCheckpointTs,
+		// 		)
+		// 	} else {
+		// 		log.Info("skip adding gc item",
+		// 			zap.Uint64("subscriptionID", uint64(subStat.subID)),
+		// 			zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
+		// 			zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+		// 			zap.Uint64("newCheckpointTs", newCheckpointTs),
+		// 			zap.Time("oldCheckpointPhysicalTime", oldCheckpointPhysicalTime),
+		// 			zap.Time("newCheckpointPhysicalTime", oracle.GetTimeFromTS(newCheckpointTs)),
+		// 			zap.Time("lastReceiveDMLTime", time.UnixMilli(lastReceiveDMLTime)),
+		// 		)
+		// 	}
+		// } else {
+		// 	log.Info("skip adding gc item",
+		// 		zap.Uint64("subscriptionID", uint64(subStat.subID)),
+		// 		zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
+		// 		zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+		// 		zap.Uint64("newCheckpointTs", newCheckpointTs),
+		// 		zap.Time("oldCheckpointPhysicalTime", oracle.GetTimeFromTS(oldCheckpointTs)),
+		// 		zap.Time("newCheckpointPhysicalTime", oracle.GetTimeFromTS(newCheckpointTs)),
+		// 		zap.Time("lastReceiveDMLTime", time.UnixMilli(lastReceiveDMLTime)),
+		// 	)
+		// }
+
+		e.gcManager.addGCItem(
+			subStat.dbIndex,
+			uint64(subStat.subID),
+			subStat.tableSpan.TableID,
+			oldCheckpointTs,
+			newCheckpointTs,
+		)
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
 			ChangeType:   SubscriptionChangeTypeUpdate,
 			SubID:        uint64(subStat.subID),
