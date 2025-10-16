@@ -113,6 +113,7 @@ type EventServiceConfig struct {
 	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.
 	// So we add this config to be able to disable remote event service in such scenario.
 	// TODO: Remove this config after we find a proper way to fix the OOM issue.
+	// Ref: https://github.com/pingcap/ticdc/issues/1784
 	EnableRemoteEventService bool `toml:"enable-remote-event-service" json:"enable-remote-event-service"`
 }
 
