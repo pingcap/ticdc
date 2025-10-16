@@ -86,7 +86,7 @@ func (v *RawKVEntry) SplitUpdate() (deleteRow, insertRow *RawKVEntry, err error)
 		StartTs:  v.StartTs,
 		RegionID: v.RegionID,
 		Key:      v.Key,
-		Value:    v.OldValue,
+		OldValue: v.OldValue,
 	}
 
 	insertRow = &RawKVEntry{
