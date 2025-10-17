@@ -125,7 +125,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	for i, cs := range cases {
-		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionCountPerSpan, cs.cfg.RegionThreshold)
+		splitter := newRegionCountSplitter(common.DefaultKeyspaceID, cfID, cs.cfg.RegionCountPerSpan, cs.cfg.RegionThreshold)
 		spans := splitter.split(context.Background(), cs.span, cs.spansNum)
 		require.Equalf(t, cs.expectSpans, spans, "%d %s", i, cs.span.String())
 	}
@@ -216,7 +216,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
 	spans := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	for i, cs := range cases {
-		splitter := newRegionCountSplitter(cfID, cs.cfg.RegionCountPerSpan, cs.cfg.RegionThreshold)
+		splitter := newRegionCountSplitter(common.DefaultKeyspaceID, cfID, cs.cfg.RegionCountPerSpan, cs.cfg.RegionThreshold)
 		spans := splitter.split(context.Background(), spans, cs.spansNum)
 		require.Equalf(t, cs.expectedSpans, len(spans), "%d %v", i, cs)
 	}
@@ -234,7 +234,7 @@ func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 		RegionCountPerSpan: 1,
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
-	splitter := newRegionCountSplitter(cfID, cfg.RegionCountPerSpan, cfg.RegionCountPerSpan)
+	splitter := newRegionCountSplitter(common.DefaultKeyspaceID, cfID, cfg.RegionCountPerSpan, cfg.RegionCountPerSpan)
 	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	spans := splitter.split(context.Background(), span, 0)
 	require.Equal(
@@ -275,5 +275,5 @@ func (m *mockCache) LoadRegionsInKeyRange(
 		regions = append(regions, region)
 		return true
 	})
-	return
+	return regions, err
 }

@@ -228,6 +228,9 @@ type eventStore struct {
 	// changefeed id -> changefeedStat
 	changefeedMeta sync.Map
 
+	// closed is used to indicate the event store is closed.
+	closed atomic.Bool
+
 	// compressionThreshold is the size in bytes above which a value will be compressed.
 	compressionThreshold int
 }
@@ -235,7 +238,7 @@ type eventStore struct {
 const (
 	dataDir             = "event_store"
 	dbCount             = 4
-	writeWorkerNumPerDB = 4
+	writeWorkerNumPerDB = 2
 )
 
 func New(
@@ -277,7 +280,7 @@ func New(
 	// create a write task pool per db instance
 	for i := 0; i < dbCount; i++ {
 		store.chs = append(store.chs, chann.NewUnlimitedChannel[eventWithCallback, uint64](nil, eventWithCallbackSizer))
-		store.writeTaskPools = append(store.writeTaskPools, newWriteTaskPool(store, store.dbs[i], store.chs[i], writeWorkerNumPerDB))
+		store.writeTaskPools = append(store.writeTaskPools, newWriteTaskPool(store, store.dbs[i], i, store.chs[i], writeWorkerNumPerDB))
 	}
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
 	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
@@ -288,14 +291,16 @@ func New(
 type writeTaskPool struct {
 	store     *eventStore
 	db        *pebble.DB
+	dbIndex   int
 	dataCh    *chann.UnlimitedChannel[eventWithCallback, uint64]
 	workerNum int
 }
 
-func newWriteTaskPool(store *eventStore, db *pebble.DB, ch *chann.UnlimitedChannel[eventWithCallback, uint64], workerNum int) *writeTaskPool {
+func newWriteTaskPool(store *eventStore, db *pebble.DB, index int, ch *chann.UnlimitedChannel[eventWithCallback, uint64], workerNum int) *writeTaskPool {
 	return &writeTaskPool{
 		store:     store,
 		db:        db,
+		dbIndex:   index,
 		dataCh:    ch,
 		workerNum: workerNum,
 	}
@@ -304,7 +309,7 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, ch *chann.UnlimitedChann
 func (p *writeTaskPool) run(ctx context.Context) {
 	p.store.wg.Add(p.workerNum)
 	for i := 0; i < p.workerNum; i++ {
-		go func() {
+		go func(workerID int) {
 			defer p.store.wg.Done()
 			encoder, err := zstd.NewWriter(nil)
 			if err != nil {
@@ -312,6 +317,10 @@ func (p *writeTaskPool) run(ctx context.Context) {
 			}
 			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
+
+			ioWriteDuration := metrics.EventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
+			totalDuration := metrics.EventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
+			totalStart := time.Now()
 			for {
 				select {
 				case <-ctx.Done():
@@ -321,16 +330,20 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
+					start := time.Now()
 					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
 						log.Panic("write events failed")
 					}
 					for i := range events {
 						events[i].callback()
 					}
+					ioWriteDuration.Observe(time.Since(start).Seconds())
+					totalDuration.Observe(time.Since(totalStart).Seconds())
+					totalStart = time.Now()
 					buffer = buffer[:0]
 				}
 			}
-		}()
+		}(i)
 	}
 }
 
@@ -395,6 +408,8 @@ func (e *eventStore) Close(_ context.Context) error {
 	log.Info("event store start to close")
 	defer log.Info("event store closed")
 
+	e.closed.Store(true)
+
 	for _, db := range e.dbs {
 		if err := db.Close(); err != nil {
 			log.Error("failed to close pebble db", zap.Error(err))
@@ -413,6 +428,10 @@ func (e *eventStore) RegisterDispatcher(
 	onlyReuse bool,
 	bdrMode bool,
 ) bool {
+	if e.closed.Load() {
+		return false
+	}
+
 	// Defer a cleanup function that will run if registration fails.
 	// The success flag is set to true only at the end of successful registration paths.
 	success := false
@@ -650,6 +669,10 @@ func (e *eventStore) RegisterDispatcher(
 }
 
 func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
+	if e.closed.Load() {
+		return
+	}
+
 	log.Info("unregister dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
 	defer func() {
 		log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
@@ -687,6 +710,10 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	dispatcherID common.DispatcherID,
 	checkpointTs uint64,
 ) {
+	if e.closed.Load() {
+		return
+	}
+
 	e.dispatcherMeta.RLock()
 	defer e.dispatcherMeta.RUnlock()
 
@@ -737,13 +764,21 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				zap.Uint64("newCheckpointTs", newCheckpointTs),
 				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
 		}
-		e.gcManager.addGCItem(
-			subStat.dbIndex,
-			uint64(subStat.subID),
-			subStat.tableSpan.TableID,
-			subStat.checkpointTs.Load(),
-			newCheckpointTs,
-		)
+		// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
+		// So we can skip adding gc item.
+		lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
+		if lastReceiveDMLTime > 0 {
+			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
+			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
+				e.gcManager.addGCItem(
+					subStat.dbIndex,
+					uint64(subStat.subID),
+					subStat.tableSpan.TableID,
+					oldCheckpointTs,
+					newCheckpointTs,
+				)
+			}
+		}
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
 			ChangeType:   SubscriptionChangeTypeUpdate,
 			SubID:        uint64(subStat.subID),
@@ -751,7 +786,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			CheckpointTs: newCheckpointTs,
 			ResolvedTs:   subStat.resolvedTs.Load(),
 		}
-		subStat.checkpointTs.CompareAndSwap(subStat.checkpointTs.Load(), newCheckpointTs)
+		subStat.checkpointTs.Store(newCheckpointTs)
 		if log.GetLevel() <= zap.DebugLevel {
 			log.Debug("update checkpoint ts",
 				zap.Any("dispatcherID", dispatcherID),
@@ -766,6 +801,10 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 }
 
 func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
+	if e.closed.Load() {
+		return nil
+	}
+
 	e.dispatcherMeta.RLock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
@@ -1082,7 +1121,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			} else {
 				uninitializedStatCount++
 			}
-			metrics.EventStoreDispatcherResolvedTsLagHist.Observe(subResolvedTsLagInSec)
+			metrics.EventStoreSubscriptionResolvedTsLagHist.Observe(subResolvedTsLagInSec)
 			if globalMinResolvedTs == 0 || subResolvedTs < globalMinResolvedTs {
 				globalMinResolvedTs = subResolvedTs
 			}
@@ -1090,7 +1129,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			subCheckpointTs := subStat.checkpointTs.Load()
 			subCheckpointPhysicalTime := oracle.ExtractPhysical(subCheckpointTs)
 			subCheckpointTsLagInSec := float64(pdPhysicalTime-subCheckpointPhysicalTime) / 1e3
-			metrics.EventStoreDispatcherWatermarkLagHist.Observe(subCheckpointTsLagInSec)
+			metrics.EventStoreSubscriptionDataGCLagHist.Observe(subCheckpointTsLagInSec)
 		}
 	}
 	e.dispatcherMeta.RUnlock()

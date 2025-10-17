@@ -16,8 +16,10 @@ package messaging
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )
 
@@ -47,6 +49,7 @@ func (r *router) deRegisterHandler(topic string) {
 }
 
 func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
+	lastSlowLogTime := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -60,7 +63,23 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 				log.Debug("no handler for message, drop it", zap.Any("msg", msg))
 				continue
 			}
+			start := time.Now()
 			err := handler(ctx, msg)
+			now := time.Now()
+			if now.Sub(start) > 100*time.Millisecond {
+				// Rate limit logging: only log once every 10 seconds
+				if now.Sub(lastSlowLogTime) >= 10*time.Second {
+					lastSlowLogTime = now
+					log.Warn("slow message handling detected",
+						zap.String("topic", msg.Topic),
+						zap.String("type", msg.Type.String()),
+						zap.Duration("duration", now.Sub(start)),
+						zap.String("from", msg.From.String()))
+				}
+
+				// Always increment metrics counter for slow message handling
+				metrics.MessagingSlowHandleCounter.WithLabelValues(msg.Type.String()).Inc()
+			}
 			if err != nil {
 				log.Error("Handle message failed", zap.Error(err), zap.Any("msg", msg))
 			}

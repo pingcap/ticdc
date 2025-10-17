@@ -356,11 +356,23 @@ func (info *ChangeFeedInfo) GetTargetTs() uint64 {
 
 // Marshal returns the json marshal format of a ChangeFeedInfo
 func (info *ChangeFeedInfo) Marshal() (string, error) {
-	if info.Error != nil && len(info.Error.Message) > 100 {
-		// we cut down error message to 100 characters to avoid the whole message too long to send to etcd
-		info.Error.Message = info.Error.Message[:100] + "..."
+	return info.MarshalWithTruncation(true)
+}
+
+// MarshalWithTruncation allows controlling whether to truncate error messages
+func (info *ChangeFeedInfo) MarshalWithTruncation(truncateError bool) (string, error) {
+	var dataToMarshal interface{} = info
+
+	if truncateError && info.Error != nil && len(info.Error.Message) > 100 {
+		infoToMarshal := *info
+		// Create a complete deep copy error message to avoid any data races
+		errorCopy := *infoToMarshal.Error
+		errorCopy.Message = errorCopy.Message[:100] + "..."
+		infoToMarshal.Error = &errorCopy
+		dataToMarshal = &infoToMarshal
 	}
-	data, err := json.Marshal(info)
+
+	data, err := json.Marshal(dataToMarshal)
 	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
 }
 
@@ -376,7 +388,8 @@ func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 
 // Clone returns a cloned ChangeFeedInfo
 func (info *ChangeFeedInfo) Clone() (*ChangeFeedInfo, error) {
-	s, err := info.Marshal()
+	// Use MarshalWithTruncation(false) to preserve original data in clones
+	s, err := info.MarshalWithTruncation(false)
 	if err != nil {
 		return nil, err
 	}
@@ -681,6 +694,12 @@ type ChangeFeedStatus struct {
 	// TODO: remove this filed after we don't use ChangeFeedStatus to
 	// control processor. This is too ambiguous.
 	AdminJobType AdminJobType `json:"admin-job-type"`
+	// LastSyncedTs is the last synced max timestamp of the changefeed.
+	// It is used to indicate the progress of the changefeed.
+	// It is not stored in etcd.
+	LastSyncedTs uint64 `json:"-"`
+	// LogCoordinatorResolvedTs is the resolved timestamp from the log coordinator.
+	LogCoordinatorResolvedTs uint64 `json:"-"`
 }
 
 // Marshal returns json encoded string of ChangeFeedStatus, only contains necessary fields stored in storage

@@ -164,7 +164,7 @@ func (s *Sink) Close(_ bool) {
 	s.logBuffer.Close()
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
-			log.Error("redo manager fails to close ddl writer",
+			log.Error("redo sink fails to close ddl writer",
 				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 				zap.Error(err))
@@ -172,7 +172,7 @@ func (s *Sink) Close(_ bool) {
 	}
 	if s.dmlWriter != nil {
 		if err := s.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
-			log.Error("redo manager fails to close dml writer",
+			log.Error("redo sink fails to close dml writer",
 				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 				zap.Error(err))
@@ -181,7 +181,7 @@ func (s *Sink) Close(_ bool) {
 	if s.statistics != nil {
 		s.statistics.Close()
 	}
-	log.Info("redo manager closed",
+	log.Info("redo sink closed",
 		zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 		zap.String("changefeed", s.cfg.ChangeFeedID.Name()))
 }

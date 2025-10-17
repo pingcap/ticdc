@@ -76,8 +76,20 @@ func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 	pdClient := h.server.GetPdClient()
 	defer pdClient.Close()
 
-	err := gc.RemoveServiceGCSafepoint(c, pdClient,
-		h.server.GetEtcdClient().GetGCServiceID())
+	keyspaceName := GetKeyspaceValueWithDefault(c)
+	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), keyspaceName)
+	if err != nil {
+		_ = c.Error(cerror.WrapError(cerror.ErrKeyspaceNotFound, err))
+		return
+	}
+
+	err = gc.UnifyDeleteGcSafepoint(
+		c,
+		pdClient,
+		keyspaceMeta.Id,
+		h.server.GetEtcdClient().GetGCServiceID(),
+	)
 	if err != nil {
 		_ = c.Error(cerror.WrapError(cerror.ErrInternalServerError, err))
 	}

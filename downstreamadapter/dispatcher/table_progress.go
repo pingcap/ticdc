@@ -35,6 +35,9 @@ type TableProgress struct {
 	list        *list.List
 	elemMap     map[Ts]*list.Element
 	maxCommitTs uint64
+	// lastSyncedTs is the last commit ts that has been synced to downstream.
+	// It's used in /:changefeed_id/synced API.
+	lastSyncedTs uint64
 
 	// cumulate dml event size for a period of time,
 	// it will be cleared after once query
@@ -98,6 +101,11 @@ func (p *TableProgress) Remove(event commonEvent.FlushableEvent) {
 	if elem, ok := p.elemMap[ts]; ok {
 		p.list.Remove(elem)
 		delete(p.elemMap, ts)
+		// Get the bigger last synced ts of dispatcher.
+		// We don't allow lastSyncedTs to move backwards here.
+		if p.lastSyncedTs < ts.commitTs {
+			p.lastSyncedTs = ts.commitTs
+		}
 	}
 	p.cumulateEventSize += event.GetSize()
 }
@@ -148,6 +156,12 @@ func (p *TableProgress) GetCheckpointTs() (uint64, bool) {
 		return p.maxCommitTs - 1, true
 	}
 	return p.list.Front().Value.(Ts).commitTs - 1, false
+}
+
+func (p *TableProgress) GetLastSyncedTs() uint64 {
+	p.rwMutex.RLock()
+	defer p.rwMutex.RUnlock()
+	return p.lastSyncedTs
 }
 
 // GetEventSizePerSecond returns the sum-dml-event-size/s between the last query time and now.

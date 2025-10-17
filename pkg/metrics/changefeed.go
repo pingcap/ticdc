@@ -65,14 +65,6 @@ var (
 			Help:      "The counter of changefeed maintainer",
 		}, []string{"namespace", "changefeed"})
 
-	HandleMaintainerRequsetCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "changefeed",
-			Name:      "handle_maintainer_request",
-			Help:      "Total count of dispatcher request.",
-		}, []string{"namespace", "changefeed", "type"})
-
 	ChangefeedStatusGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -88,6 +80,15 @@ var (
 			Name:      "checkpoint_ts_lag",
 			Help:      "changefeed checkpoint ts lag in changefeeds in seconds",
 		}, []string{"namespace", "changefeed"})
+
+	// it's a metrics used in a large number of tcms, we should always keep this metrics
+	ChangefeedCheckpointTsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "owner",
+			Name:      "checkpoint_ts",
+			Help:      "checkpoint ts of changefeeds",
+		}, []string{"namespace", "changefeed"})
 )
 
 func initChangefeedMetrics(registry *prometheus.Registry) {
@@ -97,7 +98,7 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerResolvedTsLagGauge)
 	registry.MustRegister(CoordinatorCounter)
 	registry.MustRegister(MaintainerGauge)
-	registry.MustRegister(HandleMaintainerRequsetCounter)
 	registry.MustRegister(ChangefeedStatusGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
+	registry.MustRegister(ChangefeedCheckpointTsGauge)
 }

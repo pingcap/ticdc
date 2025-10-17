@@ -282,10 +282,20 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 	defer func() {
 		duration := time.Since(start)
 		if duration > time.Second {
-			log.Info("maintainer is too slow",
-				zap.String("changefeed", m.id.String()),
-				zap.Int("eventType", event.eventType),
-				zap.Duration("duration", duration))
+			// add a log for debug an occasional slow bootstrap problem
+			if event.eventType == EventMessage {
+				log.Info("maintainer is too slow",
+					zap.String("changefeed", m.id.String()),
+					zap.Int("eventType", event.eventType),
+					zap.Duration("duration", duration),
+					zap.Any("Message", event.message),
+				)
+			} else {
+				log.Info("maintainer is too slow",
+					zap.String("changefeed", m.id.String()),
+					zap.Int("eventType", event.eventType),
+					zap.Duration("duration", duration))
+			}
 		}
 		m.handleEventDuration.Observe(duration.Seconds())
 	}()
@@ -348,6 +358,7 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		CheckpointTs:  m.getWatermark().CheckpointTs,
 		Err:           runningErrors,
 		BootstrapDone: m.bootstrapped.Load(),
+		LastSyncedTs:  m.getWatermark().LastSyncedTs,
 	}
 	return status
 }
@@ -434,7 +445,7 @@ func (m *Maintainer) onInit() bool {
 func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeHeartBeatRequest:
-		m.onHeartBeatRequest(msg)
+		m.onHeartbeatRequest(msg)
 	case messaging.TypeBlockStatusRequest:
 		m.onBlockStateRequest(msg)
 	case messaging.TypeMaintainerBootstrapResponse:
@@ -674,7 +685,7 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
-func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
+func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// ignore the heartbeat if the maintainer not bootstrapped
 	if !m.bootstrapped.Load() {
 		return
@@ -687,6 +698,14 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 		if !ok || (req.Watermark.Seq >= old.Seq && req.Watermark.CheckpointTs >= old.CheckpointTs) {
 			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
 		}
+		// Update last synced ts from all dispatchers.
+		// We don't care about the checkpoint ts of scheduler or barrier here,
+		// we just want to know the max time that all dispatchers have synced.
+		m.watermark.mu.Lock()
+		if m.watermark.LastSyncedTs < req.Watermark.LastSyncedTs {
+			m.watermark.LastSyncedTs = req.Watermark.LastSyncedTs
+		}
+		m.watermark.mu.Unlock()
 	}
 	if req.RedoWatermark != nil {
 		old, ok := m.redoTsByCapture.Get(msg.From)
@@ -1057,6 +1076,7 @@ func (m *Maintainer) getWatermark() heartbeatpb.Watermark {
 	res := heartbeatpb.Watermark{
 		CheckpointTs: m.watermark.CheckpointTs,
 		ResolvedTs:   m.watermark.ResolvedTs,
+		LastSyncedTs: m.watermark.LastSyncedTs,
 	}
 	return res
 }

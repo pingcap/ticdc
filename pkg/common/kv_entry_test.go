@@ -116,7 +116,7 @@ func TestRawKVEntry_SplitUpdate_UpdateOperation(t *testing.T) {
 	require.Equal(t, updateEntry.StartTs, deleteRow.StartTs)
 	require.Equal(t, updateEntry.RegionID, deleteRow.RegionID)
 	require.Equal(t, updateEntry.Key, deleteRow.Key)
-	require.Equal(t, updateEntry.OldValue, deleteRow.Value)
+	require.Equal(t, updateEntry.OldValue, deleteRow.OldValue)
 
 	// Verify insert row
 	require.Equal(t, OpTypePut, insertRow.OpType)

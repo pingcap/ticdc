@@ -51,7 +51,7 @@ func NewSplitter(
 ) *Splitter {
 	return &Splitter{
 		changefeedID:          changefeedID,
-		regionCounterSplitter: newRegionCountSplitter(changefeedID, config.RegionCountPerSpan, config.RegionThreshold),
+		regionCounterSplitter: newRegionCountSplitter(keyspaceID, changefeedID, config.RegionCountPerSpan, config.RegionThreshold),
 		writeBytesSplitter:    newWriteBytesSplitter(keyspaceID, changefeedID),
 	}
 }

@@ -74,13 +74,13 @@ function run_normal_case_and_unavailable_pd() {
 		exit 1
 	fi
 	# the timestamp for puller_resolved_ts is 0 when do data insert
-	if [ "$puller_resolved_ts" != "1970-01-01 08:00:00.000" ]; then
-		echo "puller_resolved_ts is not 1970-01-01 08:00:00.000"
+	if [ "$puller_resolved_ts" != "1970-01-01 08:00:00.000" ] && [ "$puller_resolved_ts" != "1970-01-01 00:00:00.000" ]; then
+		echo "puller_resolved_ts is not 1970-01-01 08:00:00.000 or 1970-01-01 00:00:00.000"
 		exit 1
 	fi
 	# the timestamp for last_synced_ts is 0 when do data insert
-	if [ "$last_synced_ts" != "1970-01-01 08:00:00.000" ]; then
-		echo "last_synced_ts is not 1970-01-01 08:00:00.000"
+	if [ "$last_synced_ts" != "1970-01-01 08:00:00.000" ] && [ "$last_synced_ts" != "1970-01-01 00:00:00.000" ]; then
+		echo "last_synced_ts is not 1970-01-01 08:00:00.000 or 1970-01-01 00:00:00.000"
 		exit 1
 	fi
 
@@ -178,8 +178,6 @@ function run_case_with_unavailable_tikv() {
 	info=$(echo $synced_status | jq -r '.info')
 	target_message="Please check whether PD is online and TiKV Regions are all available. \
 If PD is offline or some TiKV regions are not available, it means that the data syncing process is complete. \
-To check whether TiKV regions are all available, you can view \
-'TiKV-Details' > 'Resolved-Ts' > 'Max Leader Resolved TS gap' on Grafana. \
 If the gap is large, such as a few minutes, it means that some regions in TiKV are unavailable. \
 Otherwise, if the gap is small and PD is online, it means the data syncing is incomplete, so please wait"
 
@@ -238,7 +236,7 @@ function run_case_with_unavailable_tidb() {
 		exit 1
 	fi
 	info=$(echo $synced_status | jq -r '.info')
-	target_message="Data syncing is finished"
+	target_message="The data syncing is finished"
 
 	if [ "$info" != "$target_message" ]; then
 		echo "synced status info is not correct"
@@ -257,7 +255,7 @@ function run_case_with_failpoint() {
 	cd $WORK_DIR
 
 	# make failpoint to block checkpoint-ts
-	export GO_FAILPOINTS='github.com/pingcap/tiflow/cdc/owner/ChangefeedOwnerNotUpdateCheckpoint=return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/coordinator/changefeed/CoordinatorDontUpdateChangefeedCheckpoint=return(true)'
 
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
@@ -277,8 +275,6 @@ function run_case_with_failpoint() {
 	info=$(echo $synced_status | jq -r '.info')
 	target_message="Please check whether PD is online and TiKV Regions are all available. \
 If PD is offline or some TiKV regions are not available, it means that the data syncing process is complete. \
-To check whether TiKV regions are all available, you can view \
-'TiKV-Details' > 'Resolved-Ts' > 'Max Leader Resolved TS gap' on Grafana. \
 If the gap is large, such as a few minutes, it means that some regions in TiKV are unavailable. \
 Otherwise, if the gap is small and PD is online, it means the data syncing is incomplete, so please wait"
 	if [ "$info" != "$target_message" ]; then

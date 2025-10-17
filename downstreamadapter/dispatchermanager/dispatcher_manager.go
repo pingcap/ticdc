@@ -694,7 +694,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			toCleanMap = append(toCleanMap, cleanMap)
 		}
 		if watermark != nil {
-			message.Watermark.UpdateMin(*watermark)
+			message.Watermark.Update(*watermark)
 		}
 	})
 	message.Watermark.Seq = seq
@@ -820,8 +820,13 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	defer e.closing.Store(false)
 	if e.RedoEnable {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
+		log.Info("closed all redo dispatchers",
+			zap.Stringer("changefeedID", e.changefeedID))
 	}
+
 	closeAllDispatchers(e.changefeedID, e.dispatcherMap, e.sink.SinkType())
+	log.Info("closed all event dispatchers",
+		zap.Stringer("changefeedID", e.changefeedID))
 
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(e.changefeedID)
 	if err != nil {

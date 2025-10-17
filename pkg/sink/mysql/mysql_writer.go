@@ -114,10 +114,6 @@ func (w *Writer) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
-	if w.cfg.DryRun {
-		return nil
-	}
-
 	if w.cfg.IsTiDB {
 		// first we check whether there is some async ddl executed now.
 		w.waitAsyncDDLDone(event)
