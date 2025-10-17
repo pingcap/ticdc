@@ -188,9 +188,7 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 
 		// Update per-changefeed min received resolved ts
 		cfID := dispatcher.info.GetChangefeedID()
-		if minTs, ok := snapshot.changefeedReceivedResolvedTs[cfID]; ok && resolvedTs < minTs {
-			snapshot.changefeedReceivedResolvedTs[cfID] = resolvedTs
-		} else if !ok {
+		if minTs, ok := snapshot.changefeedReceivedResolvedTs[cfID]; !ok || resolvedTs < minTs {
 			snapshot.changefeedReceivedResolvedTs[cfID] = resolvedTs
 		}
 
@@ -265,7 +263,7 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 // reportChangefeedStates collects and reports the state of all changefeeds to the coordinator.
 func (mc *metricsCollector) reportChangefeedStates(snapshot *metricsSnapshot) {
 	changefeedStates := &logservicepb.ChangefeedStates{
-		States: make([]*logservicepb.ChangefeedStateEntry, 0),
+		States: make([]*logservicepb.ChangefeedStateEntry, 0, len(snapshot.changefeedReceivedResolvedTs)),
 	}
 	for changefeedID, minResolvedTs := range snapshot.changefeedReceivedResolvedTs {
 		changefeedStates.States = append(changefeedStates.States, &logservicepb.ChangefeedStateEntry{

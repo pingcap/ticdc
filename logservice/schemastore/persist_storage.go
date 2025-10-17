@@ -183,8 +183,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		log.Warn("get ts failed, will retry in 1s", zap.Error(err))
 		select {
 		case <-ctx.Done():
-			log.Warn("context is canceled during getting gc safepoint", zap.Error(ctx.Err()))
-			return
+			log.Panic("context is canceled during getting gc safepoint", zap.Error(ctx.Err()))
 		case <-time.After(time.Second):
 		}
 	}
