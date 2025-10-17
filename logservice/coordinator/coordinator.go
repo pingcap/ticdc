@@ -99,7 +99,6 @@ func New() LogCoordinator {
 
 	// recv and handle messages
 	messageCenter.RegisterHandler(logCoordinatorTopic, c.handleMessage)
-	messageCenter.RegisterHandler(eventServiceTopic, c.handleMessage)
 	// watch node changes
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodes := nodeManager.GetAliveNodes()
@@ -123,9 +122,10 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 		case <-broadcastTick.C:
 			// send broadcast message to all nodes
 			c.nodes.Lock()
-			messages := make([]*messaging.TargetMessage, 0, 2*len(c.nodes.m))
+			messages := make([]*messaging.TargetMessage, 0, 3*len(c.nodes.m))
 			for id := range c.nodes.m {
 				messages = append(messages, messaging.NewSingleTargetMessage(id, eventStoreTopic, &common.LogCoordinatorBroadcastRequest{}))
+				messages = append(messages, messaging.NewSingleTargetMessage(id, eventServiceTopic, &common.LogCoordinatorBroadcastRequest{}))
 				messages = append(messages, messaging.NewSingleTargetMessage(id, logCoordinatorClientTopic, &common.LogCoordinatorBroadcastRequest{}))
 			}
 			c.nodes.Unlock()

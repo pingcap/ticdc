@@ -20,9 +20,10 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/metrics/logservice"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -102,6 +103,8 @@ type metricsSnapshot struct {
 	pendingTaskCount      int
 	slowestDispatcher     *dispatcherStat
 	pdTime                time.Time
+	// changefeedID -> min received resolved ts
+	changefeedReceivedResolvedTs map[common.ChangeFeedID]uint64
 }
 
 // metricsCollector is responsible for collecting and reporting metrics for the event broker
@@ -137,7 +140,7 @@ func (mc *metricsCollector) Run(ctx context.Context) error {
 		case <-ticker.C:
 			snapshot := mc.collectMetrics()
 			mc.updateMetricsFromSnapshot(snapshot)
-			mc.reportChangefeedStates()
+			mc.reportChangefeedStates(snapshot)
 			mc.logSlowDispatchers(snapshot)
 		}
 	}
@@ -146,9 +149,10 @@ func (mc *metricsCollector) Run(ctx context.Context) error {
 // collectMetrics gathers all metrics data from the event broker
 func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 	snapshot := &metricsSnapshot{
-		receivedMinResolvedTs: uint64(math.MaxUint64),
-		sentMinResolvedTs:     uint64(math.MaxUint64),
-		pdTime:                mc.broker.pdClock.CurrentTime(),
+		receivedMinResolvedTs:        uint64(math.MaxUint64),
+		sentMinResolvedTs:            uint64(math.MaxUint64),
+		changefeedReceivedResolvedTs: make(map[common.ChangeFeedID]uint64),
+		pdTime:                       mc.broker.pdClock.CurrentTime(),
 	}
 
 	mc.collectDispatcherMetrics(snapshot)
@@ -166,12 +170,6 @@ func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 
 // collectDispatcherMetrics collects metrics related to dispatchers
 func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) {
-	// changefeedID -> min sent resolved ts
-	changefeedMinTs := make(map[common.ChangeFeedID]uint64)
-	mc.broker.changefeedMap.Range(func(key, value interface{}) bool {
-		changefeedMinTs[key.(common.ChangeFeedID)] = uint64(math.MaxUint64)
-		return true
-	})
 	collect := func(dispatcher *dispatcherStat) {
 		// Record update time difference
 		updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
@@ -188,10 +186,12 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 			snapshot.sentMinResolvedTs = watermark
 		}
 
-		// Update per-changefeed min sent resolved ts
+		// Update per-changefeed min received resolved ts
 		cfID := dispatcher.info.GetChangefeedID()
-		if minTs, ok := changefeedMinTs[cfID]; ok && watermark < minTs {
-			changefeedMinTs[cfID] = watermark
+		if minTs, ok := snapshot.changefeedReceivedResolvedTs[cfID]; ok && resolvedTs < minTs {
+			snapshot.changefeedReceivedResolvedTs[cfID] = resolvedTs
+		} else if !ok {
+			snapshot.changefeedReceivedResolvedTs[cfID] = resolvedTs
 		}
 
 		// Track slowest dispatcher
@@ -212,14 +212,6 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		collect(dispatcher)
 		return true
 	})
-
-	// Store the calculated minimum resolved ts for each changefeed.
-	for cfID, minTs := range changefeedMinTs {
-		if stat, ok := mc.broker.changefeedMap.Load(cfID); ok {
-			cfStat := stat.(*changefeedStatus)
-			cfStat.minResolvedTs.Store(minTs)
-		}
-	}
 }
 
 // collectPendingTaskMetrics collects metrics about pending tasks
@@ -271,31 +263,21 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 }
 
 // reportChangefeedStates collects and reports the state of all changefeeds to the coordinator.
-func (mc *metricsCollector) reportChangefeedStates() {
-	changefeedStates := &logservice.ChangefeedStates{
-		States: make([]*logservice.ChangefeedStateEntry, 0),
+func (mc *metricsCollector) reportChangefeedStates(snapshot *metricsSnapshot) {
+	changefeedStates := &logservicepb.ChangefeedStates{
+		States: make([]*logservicepb.ChangefeedStateEntry, 0),
 	}
-
-	mc.broker.changefeedMap.Range(func(key, value interface{}) bool {
-		changefeedID := key.(common.ChangeFeedID)
-		cfStat := value.(*changefeedStatus)
-
-		minResolvedTs := cfStat.minResolvedTs.Load()
-		// If minResolvedTs is MaxUint64, it means the changefeed has no dispatchers.
-		// In this case, we should not report it, as it has no valid resolved ts.
-		// The coordinator will handle the case where a changefeed is not reported.
-		if minResolvedTs != uint64(math.MaxUint64) {
-			changefeedStates.States = append(changefeedStates.States, &logservice.ChangefeedStateEntry{
-				ChangefeedID: changefeedID.ToPB(),
-				ResolvedTs:   minResolvedTs,
-			})
-		}
-		return true
-	})
-
-	if len(changefeedStates.States) > 0 {
-		if err := mc.broker.msgSender.SendEvent(mc.broker.newCoordinatorMessage(changefeedStates)); err != nil {
-			log.Warn("send changefeed states to coordinator failed", zap.Error(err))
+	for changefeedID, minResolvedTs := range snapshot.changefeedReceivedResolvedTs {
+		changefeedStates.States = append(changefeedStates.States, &logservicepb.ChangefeedStateEntry{
+			ChangefeedID: changefeedID.ToPB(),
+			ResolvedTs:   minResolvedTs,
+		})
+	}
+	coordinatorID := mc.broker.getCoordinatorInfo()
+	if coordinatorID != "" {
+		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, changefeedStates)
+		if err := mc.broker.msgSender.SendEvent(msg); err != nil {
+			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
 		}
 	}
 }
