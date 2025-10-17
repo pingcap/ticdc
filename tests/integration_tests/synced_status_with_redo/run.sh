@@ -37,26 +37,21 @@ CDC_COUNT=3
 DB_COUNT=4
 
 function kill_pd() {
-	info=$(ps aux | grep pd-server | grep $WORK_DIR) || true
-	$(ps aux | grep pd-server | grep $WORK_DIR | awk '{print $2}' | xargs kill -9 &>/dev/null) || true
+	ps aux | grep pd-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
 }
 
 function kill_tikv() {
-	info=$(ps aux | grep tikv-server | grep $WORK_DIR) || true
-	$(ps aux | grep tikv-server | grep $WORK_DIR | awk '{print $2}' | xargs kill -9 &>/dev/null) || true
+	ps aux | grep tikv-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
 }
 
 function kill_tidb() {
-	info=$(ps aux | grep tidb-server | grep $WORK_DIR) || true
-	$(ps aux | grep tidb-server | grep $WORK_DIR | awk '{print $2}' | xargs kill -9 &>/dev/null) || true
+	ps aux | grep tidb-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
 }
 
 function run_normal_case_and_unavailable_pd() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
-
-	cd $WORK_DIR
 
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
@@ -139,8 +134,6 @@ function run_case_with_unavailable_tikv() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
@@ -199,8 +192,6 @@ function run_case_with_unavailable_tidb() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
@@ -255,8 +246,6 @@ function run_case_with_failpoint() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
-
-	cd $WORK_DIR
 
 	# make failpoint to block checkpoint-ts
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/coordinator/changefeed/CoordinatorDontUpdateChangefeedCheckpoint=return(true)'
