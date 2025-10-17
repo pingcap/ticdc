@@ -67,7 +67,7 @@ type PullerConfig struct {
 
 	// PendingRegionRequestQueueSize is the total size of the pending region request queue shared across
 	// all puller workers connecting to a single TiKV store. This size is divided equally among all workers.
-	// For example, if PendingRegionRequestQueueSize is 64 and there are 8 workers connecting to the same store,
+	// For example, if PendingRegionRequestQueueSize is 256 and there are 8 workers connecting to the same store,
 	// each worker's queue size will be 256 / 8 = 32.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending-region-request-queue-size"`
 }
