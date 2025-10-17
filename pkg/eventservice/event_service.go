@@ -172,7 +172,8 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		s.handleCongestionControl(msg.From, m)
 	case messaging.TypeLogCoordinatorBroadcastRequest:
 		if len(msg.Message) != 1 {
-			log.Panic("invalid log coordinator broadcast message", zap.Any("msg", msg))
+			log.Warn("invalid log coordinator broadcast message", zap.Any("msg", msg))
+			return nil
 		}
 		if _, ok := msg.Message[0].(*common.LogCoordinatorBroadcastRequest); ok {
 			s.handleLogCoordinatorBroadcast(msg.From)
