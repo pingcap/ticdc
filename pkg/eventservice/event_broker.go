@@ -834,6 +834,13 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 	}
 }
 
+func (c *eventBroker) newCoordinatorMessage(m interface{}) *messaging.TargetMessage {
+	// TODO: get coordinatorID from eventService
+	// Currently, we assume that the coordinator is on the same node as the eventService.
+	// So we can broadcast the message to all nodes.
+	return messaging.NewBroadcastMessage(messaging.LogCoordinatorTopic, m)
+}
+
 func (c *eventBroker) close() {
 	c.cancel()
 	_ = c.g.Wait()

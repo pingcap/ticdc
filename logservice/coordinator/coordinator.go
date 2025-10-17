@@ -39,6 +39,7 @@ import (
 
 const (
 	eventStoreTopic           = messaging.EventStoreTopic
+	eventServiceTopic         = messaging.EventServiceTopic
 	logCoordinatorTopic       = messaging.LogCoordinatorTopic
 	logCoordinatorClientTopic = messaging.LogCoordinatorClientTopic
 )
@@ -98,6 +99,7 @@ func New() LogCoordinator {
 
 	// recv and handle messages
 	messageCenter.RegisterHandler(logCoordinatorTopic, c.handleMessage)
+	messageCenter.RegisterHandler(eventServiceTopic, c.handleMessage)
 	// watch node changes
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodes := nodeManager.GetAliveNodes()
