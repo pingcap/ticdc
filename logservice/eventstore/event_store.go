@@ -169,6 +169,8 @@ type subscriptionStat struct {
 	maxEventCommitTs atomic.Uint64
 }
 
+type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
+
 type eventWithCallback struct {
 	subID   logpuller.SubscriptionID
 	tableID int64
@@ -485,7 +487,6 @@ func (e *eventStore) RegisterDispatcher(
 						zap.Uint64("subscriptionID", uint64(subStat.subID)),
 						zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
-					success = true
 				}
 
 				// Track the smallest containing span that meets ts requirements
