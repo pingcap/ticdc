@@ -1065,15 +1065,12 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 
 func (e *eventStore) runMetricsCollector(ctx context.Context) error {
 	storeMetricsTicker := time.NewTicker(10 * time.Second)
-	changefeedMetricsTicker := time.NewTicker(1 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-storeMetricsTicker.C:
 			e.collectAndReportStoreMetrics()
-		case <-changefeedMetricsTicker.C:
-			e.collectAndReportChangefeedMetrics()
 		}
 	}
 }
@@ -1144,49 +1141,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	globalMinResolvedPhysicalTime := oracle.ExtractPhysical(globalMinResolvedTs)
 	eventStoreResolvedTsLagInSec := float64(pdPhysicalTime-globalMinResolvedPhysicalTime) / 1e3
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
-}
-
-func (e *eventStore) collectAndReportChangefeedMetrics() {
-	// Collect resolved ts for each changefeed and send to log coordinator.
-	changefeedStates := &logservicepb.ChangefeedStates{
-		States: make([]*logservicepb.ChangefeedStateEntry, 0),
-	}
-	e.changefeedMeta.Range(func(key, value interface{}) bool {
-		changefeedID := key.(common.ChangeFeedID)
-		cfStat := value.(*changefeedStat)
-
-		// By taking the lock here, we ensure that the set of dispatchers for this
-		// changefeed does not change while we calculate the minimum resolved ts.
-		// The `advanceResolvedTs` function updates an individual dispatcher's resolvedTs
-		// atomically, so it does not conflict with this lock.
-		cfStat.mutex.Lock()
-		cfMinResolvedTs := uint64(math.MaxUint64)
-		found := false
-		for _, dispatcherStat := range cfStat.dispatchers {
-			dispatcherResolvedTs := dispatcherStat.resolvedTs.Load()
-			if dispatcherResolvedTs < cfMinResolvedTs {
-				cfMinResolvedTs = dispatcherResolvedTs
-			}
-			found = true
-		}
-		cfStat.mutex.Unlock()
-
-		if found {
-			changefeedStates.States = append(changefeedStates.States, &logservicepb.ChangefeedStateEntry{
-				ChangefeedID: changefeedID.ToPB(),
-				ResolvedTs:   cfMinResolvedTs,
-			})
-		}
-		return true
-	})
-
-	coordinatorID := e.getCoordinatorInfo()
-	if coordinatorID != "" {
-		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, changefeedStates)
-		if err := e.messageCenter.SendEvent(msg); err != nil {
-			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
-		}
-	}
 }
 
 func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, encoder *zstd.Encoder) error {
