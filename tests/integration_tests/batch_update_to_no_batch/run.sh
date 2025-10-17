@@ -37,25 +37,25 @@ function run() {
 	SINK_URI="mysql://root@127.0.0.1:3306/?batch-dml-enable=true"
 
 	changefeed_id="test"
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c ${changefeed_id}
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c ${changefeed_id}
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# pause changefeed
-	run_cdc_cli changefeed pause -c ${changefeed_id}
+	cdc_cli_changefeed pause -c ${changefeed_id}
 	# update changefeed to no batch dml mode
-	run_cdc_cli changefeed update -c ${changefeed_id} --sink-uri="mysql://root@127.0.0.1:3306/?batch-dml-enable=false" --no-confirm
+	cdc_cli_changefeed update -c ${changefeed_id} --sink-uri="mysql://root@127.0.0.1:3306/?batch-dml-enable=false" --no-confirm
 	# resume changefeed
-	run_cdc_cli changefeed resume -c ${changefeed_id}
+	cdc_cli_changefeed resume -c ${changefeed_id}
 
 	run_sql_file $CUR/data/test_v5.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# pause changefeed
-	run_cdc_cli changefeed pause -c ${changefeed_id}
+	cdc_cli_changefeed pause -c ${changefeed_id}
 	# update changefeed to no batch dml mode
-	run_cdc_cli changefeed update -c ${changefeed_id} --sink-uri="mysql://root@127.0.0.1:3306/?batch-dml-enable=true" --no-confirm
+	cdc_cli_changefeed update -c ${changefeed_id} --sink-uri="mysql://root@127.0.0.1:3306/?batch-dml-enable=true" --no-confirm
 	# resume changefeed
-	run_cdc_cli changefeed resume -c ${changefeed_id}
+	cdc_cli_changefeed resume -c ${changefeed_id}
 
 	run_sql_file $CUR/data/test_finish.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -e
+
+if [ $# -ne 2 ]; then
+	echo "Usage: get_cdc_pid <host> <port>"
+	exit 1
+fi
+
+host=$1
+port=$2
+
+if [ -z "$TICDC_CA_PATH" ]; then
+	curl "http://$host:$port/status" 2>/dev/null | jq '.pid'
+else
+	curl "https://$host:$port/status" --cacert $TICDC_CA_PATH --cert $TICDC_CERT_PATH --key $TICDC_KEY_PATH 2>/dev/null | jq '.pid'
+fi

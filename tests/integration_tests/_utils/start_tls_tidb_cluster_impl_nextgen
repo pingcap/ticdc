@@ -1,0 +1,245 @@
+#!/bin/bash
+
+# --workdir: work directory
+# --tlsdir: certificates directory
+
+OUT_DIR=
+TLS_DIR=
+
+while [[ ${1} ]]; do
+	case "${1}" in
+	--workdir)
+		OUT_DIR=${2}
+		shift
+		;;
+	--tlsdir)
+		TLS_DIR=${2}
+		shift
+		;;
+	*)
+		echo "Unknown parameter: ${1}" >&2
+		exit 1
+		;;
+	esac
+
+	if ! shift; then
+		echo 'Missing parameter argument.' >&2
+		exit 1
+	fi
+done
+
+CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source $CUR/../_utils/test_prepare
+
+cd $OUT_DIR && echo "start tidb cluster in $OUT_DIR"
+
+cat - >"$OUT_DIR/pd-config-tls.toml" <<EOF
+[keyspace]
+pre-alloc = ["$KEYSPACE_NAME"]
+
+[replication]
+# The number of replicas for each region.
+max-replicas = 1
+[security]
+cacert-path = "$TLS_DIR/ca.pem"
+cert-path = "$TLS_DIR/server.pem"
+key-path = "$TLS_DIR/server-key.pem"
+EOF
+
+mkdir -p "$OUT_DIR/log/tls/pd"
+mkdir -p "$OUT_DIR/data/tls"
+echo "Starting TLS PD..."
+pd-server --version
+pd-server \
+	--client-urls https://${TLS_PD_HOST}:${TLS_PD_PORT} \
+	--peer-urls https://${TLS_PD_HOST}:${TLS_PD_PEER_PORT} \
+	--config "$OUT_DIR/pd-config-tls.toml" \
+	--log-file "$OUT_DIR/log/tls/pd/pd_tls.log" \
+	--data-dir "$OUT_DIR/data/tls/pd_tls" &
+
+check_pd_health --cacert $TLS_DIR/ca.pem \
+	--cert $TLS_DIR/client.pem \
+	--key $TLS_DIR/client-key.pem \
+	"$TLS_PD_HOST" "$TLS_PD_PORT"
+
+if ! mc ls "$MINIO_MC_ALIAS/tls-cse-test" &>/dev/null; then
+	mc mb "$MINIO_MC_ALIAS/tls-cse-test"
+else
+	echo "Bucket tls-cse-test already exists, skipping creation"
+fi
+
+# Tries to limit the max number of open files under the system limit
+cat - >"$OUT_DIR/tikv-config-tls.toml" <<EOF
+[storage]
+api-version = 2
+enable-ttl = true
+
+[dfs]
+prefix = "tls-nextgen"
+s3-endpoint = "http://127.0.0.1:$MINIO_API_PORT"
+s3-key-id = "$MINIO_ROOT_USER"
+s3-secret-key = "$MINIO_ROOT_PASSWORD"
+s3-bucket = "tls-cse-test"
+s3-region = "local"
+
+[rfengine]
+wal-sync-dir = "$OUT_DIR/tls/wal-sync/tikv/raft-wal"
+lightweight-backup = true
+target-file-size = "512MB"
+wal-chunk-target-file-size = "128MB"
+
+[security]
+ca-path = "$TLS_DIR/ca.pem"
+cert-path = "$TLS_DIR/server.pem"
+key-path = "$TLS_DIR/server-key.pem"
+EOF
+
+cat >"$OUT_DIR/tikv-worker-tls.toml" <<EOF
+[dfs]
+prefix = "tls-nextgen"
+s3-endpoint = "http://127.0.0.1:$MINIO_API_PORT"
+s3-key-id = "$MINIO_ROOT_USER"
+s3-secret-key = "$MINIO_ROOT_PASSWORD"
+s3-bucket = "tls-cse-test"
+s3-region = "local"
+
+# ia should be configured when enabled.
+[ia]
+mem-cap = "5GB"  # or "10%"
+disk-cap = "20GB"  # or "20%"
+
+[security]
+ca-path = "$TLS_DIR/ca.pem"
+cert-path = "$TLS_DIR/server.pem"
+key-path = "$TLS_DIR/server-key.pem"
+EOF
+
+# system tidb server config file
+cat - >"$OUT_DIR/tidb-system-config-tls.toml" <<EOF
+socket = "/tmp/tidb-system-tls.sock"
+keyspace-name = "SYSTEM"
+enable-telemetry = false
+mem-quota-query = 671088640
+new_collations_enabled_on_first_bootstrap = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
+analyze-always-skip-wide-columns = true
+tikv-worker-url = "http://$UP_TIKV_WORKER_HOST:$UP_TIKV_WORKER_PORT"
+
+[log.file]
+max-backups = 100
+
+[performance]
+tcp-keep-alive = true
+
+[instance]
+tidb_service_scope = 'dxf_service'
+max-server-connections = 0
+
+[security]
+enable-sem = false
+ssl-ca = "$TLS_DIR/ca.pem"
+ssl-cert = "$TLS_DIR/server.pem"
+ssl-key = "$TLS_DIR/server-key.pem"
+cluster-ssl-ca = "$TLS_DIR/ca.pem"
+cluster-ssl-cert = "$TLS_DIR/server.pem"
+cluster-ssl-key = "$TLS_DIR/server-key.pem"
+EOF
+
+# keyspace1 tidb server config file
+cat >"$OUT_DIR/tidb-$KEYSPACE_NAME-tls.toml" <<EOF
+keyspace-name = "$KEYSPACE_NAME"
+enable-telemetry = false
+mem-quota-query = 671088640
+new_collations_enabled_on_first_bootstrap = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
+analyze-always-skip-wide-columns = true
+
+[log.file]
+max-backups = 100
+
+[performance]
+tcp-keep-alive = true
+
+[instance]
+max-server-connections = 0
+
+[security]
+enable-sem = false
+ssl-ca = "$TLS_DIR/ca.pem"
+ssl-cert = "$TLS_DIR/server.pem"
+ssl-key = "$TLS_DIR/server-key.pem"
+cluster-ssl-ca = "$TLS_DIR/ca.pem"
+cluster-ssl-cert = "$TLS_DIR/server.pem"
+cluster-ssl-key = "$TLS_DIR/server-key.pem"
+EOF
+
+echo "Starting TLS TiKV..."
+tikv-server --version
+# Uncomment to turn on grpc versbose log.
+# GRPC_VERBOSITY=debug \
+# GRPC_TRACE=server_channel,call_error,handshaker,tsi \
+mkdir -p "$OUT_DIR/log/tls/tikv"
+mkdir -p "$OUT_DIR/data/tls"
+tikv-server \
+	--pd "${TLS_PD_HOST}:${TLS_PD_PORT}" \
+	-A "${TLS_TIKV_HOST}:${TLS_TIKV_PORT}" \
+	--status-addr "${TLS_TIKV_HOST}:${TLS_TIKV_STATUS_PORT}" \
+	--log-file "$OUT_DIR/log/tls/tikv/tikv_tls.log" \
+	-C "$OUT_DIR/tikv-config-tls.toml" \
+	-s "$OUT_DIR/data/tls/tikv_tls" \
+	>"$OUT_DIR/log/tls/tikv/tikv_tls.stdout" \
+	2>"$OUT_DIR/log/tls/tikv/tikv_tls.stderr" &
+
+check_port_available "$TLS_TIKV_HOST" "$TLS_TIKV_PORT" "Waiting for TLS TiKV to be ready"
+
+echo "Starting TLS TiKV-Worker..."
+mkdir -p "$OUT_DIR/data/tls"
+mkdir -p "$OUT_DIR/log/tls/tikv-worker"
+tikv-worker --addr "$TLS_TIKV_WORKER_HOST:$TLS_TIKV_WORKER_PORT" \
+	--pd-endpoints "http://$TLS_PD_HOST:$TLS_PD_PORT" \
+	--config "$OUT_DIR/tikv-worker-tls.toml" \
+	--data-dir "$OUT_DIR/data/tls/tikv-worker" \
+	--log-file "$OUT_DIR/log/tls/tikv-worker/tikv-worker.log" \
+	>"$OUT_DIR/log/tls/tikv-worker/tikv-worker-stdout.log" \
+	2>"$OUT_DIR/log/tls/tikv-worker/tikv-worker-stderr.log" &
+
+sleep 1
+
+echo "Starting System TLS TiDB..."
+mkdir -p "$OUT_DIR/log/tls/tidb-system"
+tidb-server -V
+tidb-server \
+	-P ${SYSTEM_TLS_TIDB_PORT} \
+	-config "$OUT_DIR/tidb-system-config-tls.toml" \
+	--store tikv \
+	--path ${TLS_PD_HOST}:${TLS_PD_PORT} \
+	--status=${SYSTEM_TLS_TIDB_STATUS} \
+	--log-file "$OUT_DIR/log/tls/tidb-system/tidb_tls.log" \
+	>"$OUT_DIR/log/tls/tidb-system/tidb_tls_stdout.log" \
+	2>"$OUT_DIR/log/tls/tidb-system/tidb_tls_stderr.log" &
+
+echo "Verifying System TLS TiDB is started..."
+check_tidb_health "$SYSTEM_TLS_TIDB_HOST" "$SYSTEM_TLS_TIDB_PORT" 60
+
+echo "Starting $KEYSPACE_NAME TLS TiDB..."
+mkdir -p "$OUT_DIR/log/tls/tidb-$KEYSPACE_NAME"
+tidb-server -V
+tidb-server \
+	-P ${TLS_TIDB_PORT} \
+	-config "$OUT_DIR/tidb-$KEYSPACE_NAME-tls.toml" \
+	--store tikv \
+	--path ${TLS_PD_HOST}:${TLS_PD_PORT} \
+	--status=${TLS_TIDB_STATUS} \
+	--log-file "$OUT_DIR/log/tls/tidb-$KEYSPACE_NAME/tidb_tls.log" \
+	>"$OUT_DIR/log/tls/tidb-$KEYSPACE_NAME/tidb_tls_stdout.log" \
+	2>"$OUT_DIR/log/tls/tidb-$KEYSPACE_NAME/tidb_tls_stderr.log" &
+
+echo "Verifying $KEYSPACE_NAME TLS TiDB is started..."
+check_tidb_health "$TLS_TIDB_HOST" "$TLS_TIDB_PORT" 60
+
+run_sql "update mysql.tidb set variable_value='60m' where variable_name='tikv_gc_life_time';" ${TLS_TIDB_HOST} ${TLS_TIDB_PORT} \
+	--ssl-ca=$TLS_DIR/ca.pem \
+	--ssl-cert=$TLS_DIR/server.pem \
+	--ssl-key=$TLS_DIR/server-key.pem

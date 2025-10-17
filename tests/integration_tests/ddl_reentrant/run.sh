@@ -37,11 +37,11 @@ SINK_URI="mysql://root@127.0.0.1:3306/"
 
 function check_ts_forward() {
 	changefeedid=$1
-	rts1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.resolved_ts')
-	checkpoint1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+	rts1=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} | grep -v "Command to ticdc" | jq '.resolved_ts')
+	checkpoint1=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	sleep 1
-	rts2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.resolved_ts')
-	checkpoint2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+	rts2=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} | grep -v "Command to ticdc" | jq '.resolved_ts')
+	checkpoint2=$(cdc_cli_changefeed query --changefeed-id=${changefeedid} | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	if [[ "$rts1" != "null" ]] && [[ "$rts1" != "0" ]]; then
 		if [[ "$rts1" -ne "$rts2" ]] || [[ "$checkpoint1" -ne "$checkpoint2" ]]; then
 			echo "changefeed is working normally rts: ${rts1}->${rts2} checkpoint: ${checkpoint1}->${checkpoint2}"
@@ -89,8 +89,8 @@ function ddl_test() {
 	echo $restored_sql >${WORK_DIR}/ddl_temp.sql
 	ensure 10 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" true
 	ddl_finished_ts=$(grep "Execute DDL succeeded" ${WORK_DIR}/cdc.log | tail -n 1 | grep -oE 'FinishedTs: [0-9]+' | awk '{print $2}')
-	cdc cli changefeed pause --changefeed-id=${changefeedid}
-	cdc cli changefeed resume --no-confirm --changefeed-id=${changefeedid} --overwrite-checkpoint-ts=$((ddl_finished_ts - 1))
+	cdc_cli_changefeed pause --changefeed-id=${changefeedid}
+	cdc_cli_changefeed resume --no-confirm --changefeed-id=${changefeedid} --overwrite-checkpoint-ts=$((ddl_finished_ts - 1))
 	echo "resume changefeed ${changefeedid} from ${ddl_finished_ts}"
 	ensure 10 check_ts_forward $changefeedid
 	ensure 1000000000000000 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" $is_reentrant
@@ -111,7 +111,7 @@ function run() {
 	cd $WORK_DIR
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	changefeedid=$(cdc cli changefeed create --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
+	changefeedid=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
 
 	OLDIFS=$IFS
 	IFS=""

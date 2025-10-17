@@ -32,7 +32,7 @@ function run() {
 	case $SINK_TYPE in
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
 	esac
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 
 	run_sql "CREATE TABLE changefeed_dup_error_restart.finish_mark_1 (a int primary key);"
 	check_table_exists "changefeed_dup_error_restart.finish_mark_1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300

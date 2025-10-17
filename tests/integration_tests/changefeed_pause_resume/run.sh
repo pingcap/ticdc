@@ -27,7 +27,7 @@ function run() {
 	esac
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
-	changefeed_id=$(cdc cli changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
+	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -47,7 +47,7 @@ function run() {
 
 	for i in $(seq 1 10); do
 		echo "Run $i test" # && read
-		cdc cli changefeed pause --changefeed-id=$changefeed_id --pd=$pd_addr
+		cdc_cli_changefeed pause --changefeed-id=$changefeed_id --pd=$pd_addr
 
 		for j in $(seq 1 $TABLE_COUNT); do
 			stmt="drop table changefeed_pause_resume.t$j"
@@ -64,7 +64,7 @@ function run() {
 			run_sql "$stmt" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 		done
 
-		cdc cli changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr
+		cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr
 
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 

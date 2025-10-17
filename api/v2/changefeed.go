@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
@@ -1516,6 +1517,10 @@ func getVerifiedTables(
 }
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
+	if kerneltype.IsClassic() {
+		return common.DefaultKeyspace
+	}
+
 	keyspace := c.Query(api.APIOpVarKeyspace)
 	if keyspace == "" {
 		keyspace = common.DefaultKeyspace

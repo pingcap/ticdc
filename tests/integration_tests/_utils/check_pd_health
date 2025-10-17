@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+# Parse command-line arguments
+CURL_OPTS=()
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--cacert)
+		CURL_OPTS+=("--cacert" "$2")
+		shift 2
+		;;
+	--cert)
+		CURL_OPTS+=("--cert" "$2")
+		shift 2
+		;;
+	--key)
+		CURL_OPTS+=("--key" "$2")
+		shift 2
+		;;
+	*)
+		POSITIONAL_ARGS+=("$1")
+		shift
+		;;
+	esac
+done
+
+host="${POSITIONAL_ARGS[0]}"
+port="${POSITIONAL_ARGS[1]}"
+check_count=${POSITIONAL_ARGS[2]:-60}
+
+if [ -z "$host" ] || [ -z "$port" ]; then
+	echo "Usage: $0 [--cacert <path>] [--cert <path>] [--key <path>] <pd_host> <pd_port> [<check_count>]"
+	exit 1
+fi
+
+scheme="http"
+if [ ${#CURL_OPTS[@]} -gt 0 ]; then
+	scheme="https"
+fi
+
+i=0
+while ! curl "${CURL_OPTS[@]}" -o /dev/null -sf "${scheme}://${host}:${port}/pd/api/v1/version"; do
+	i=$((i + 1))
+	if [ "$i" -gt "$check_count" ]; then
+		echo 'Failed to start PD'
+		exit 1
+	fi
+	sleep 1
+done
+
+i=0
+while [ "$(curl "${CURL_OPTS[@]}" "${scheme}://${host}:${port}/pd/api/v1/health" 2>/dev/null | jq '.[0].health')" != "true" ]; do
+	i=$((i + 1))
+	if [ "$i" -gt "$check_count" ]; then
+		echo 'Failed to start PD'
+		exit 1
+	fi
+	sleep 1
+done

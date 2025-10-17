@@ -36,9 +36,9 @@ function run() {
 	run_sql "INSERT INTO capture_session_done_during_task.t values (),(),(),(),(),(),()" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatchermanager/NewDispatcherManagerDelay=sleep(4000)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
-	changefeed_id=$(cdc cli changefeed create --pd=$pd_addr --start-ts=$start_ts --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
+	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --start-ts=$start_ts --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
 	# wait task is dispatched
-	cdc_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	echo "cdc pid: $cdc_pid"
 
 	sleep 1

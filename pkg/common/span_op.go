@@ -44,7 +44,7 @@ func TableIDToComparableSpan(keyspaceID uint32, tableID int64) heartbeatpb.Table
 	if err != nil {
 		// This block should never be reached
 		// The error only happends when the keyspaceID is greater than 0xFFFFFF, which is an invalid keyspaceID
-		log.Fatal("GetKeyspaceTableRange failed", zap.Uint32("keyspaceID", keyspaceID), zap.Int64("tableID", tableID))
+		log.Error("GetKeyspaceTableRange failed", zap.Uint32("keyspaceID", keyspaceID), zap.Int64("tableID", tableID), zap.Error(err))
 	}
 	return heartbeatpb.TableSpan{
 		TableID:    tableID,
@@ -71,7 +71,7 @@ func IsCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
 	if err != nil {
 		// This block should never be reached
 		// The error only happends when the keyspaceID is greater than 0xFFFFFF, which is an invalid keyspaceID
-		log.Fatal("IsCompleteSpan GetKeyspaceTableRange failed", zap.Uint32("keyspaceID", tableSpan.KeyspaceID))
+		log.Error("IsCompleteSpan GetKeyspaceTableRange failed", zap.Uint32("keyspaceID", tableSpan.KeyspaceID), zap.Error(err))
 	}
 	if StartCompare(ToComparableKey(startKey), tableSpan.StartKey) == 0 && EndCompare(ToComparableKey(endKey), tableSpan.EndKey) == 0 {
 		return true

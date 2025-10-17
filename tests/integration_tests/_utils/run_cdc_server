@@ -114,7 +114,7 @@ fi
 
 echo "[$(date)] <<<<<< START cdc server in $TEST_NAME case >>>>>>"
 cd $workdir
-pid=$(ps -C run_cdc_server -o pid= | tr -d '[:space:]')
+pid=$$
 # Uncomment to turn on grpc versbose log.
 # GRPC_GO_LOG_VERBOSITY_LEVEL=99 GRPC_GO_LOG_SEVERITY_LEVEL=debug \
 
@@ -175,9 +175,9 @@ fi
 for ((i = 0; i <= 50; i++)); do
 	# Check if curl returns HTTP 200 OK status code
 	if [ -z "$tls_dir" ]; then
-		http_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 20 http://$addr_url/api/v2/changefeeds --user ticdc:ticdc_secret)
+		http_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 20 "http://$addr_url/api/v2/changefeeds?keyspace=$KEYSPACE_NAME" --user ticdc:ticdc_secret)
 	else
-		http_code=$(curl -o /dev/null -s -w "%{http_code}" --cacert $tls_dir/ca.pem --cert $tls_dir/$certcn_name.pem --key $tls_dir/$certcn_name-key.pem --user ticdc:ticdc_secret --max-time 20 https://$addr_url/api/v2/changefeeds)
+		http_code=$(curl -o /dev/null -s -w "%{http_code}" --cacert $tls_dir/ca.pem --cert $tls_dir/$certcn_name.pem --key $tls_dir/$certcn_name-key.pem --user ticdc:ticdc_secret --max-time 20 "https://$addr_url/api/v2/changefeeds?keyspace=$KEYSPACE_NAME")
 	fi
 	if [ "$http_code" = "200" ]; then
 		break

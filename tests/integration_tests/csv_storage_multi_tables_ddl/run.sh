@@ -33,13 +33,13 @@ function run() {
 	cf_err2="test-error-2"
 
 	SINK_URI1="file://$WORK_DIR/storage_test/$TOPIC_NAME_1?flush-interval=5s&protocol=csv"
-	cdc cli changefeed create -c=$cf_normal --start-ts=$start_ts --sink-uri="$SINK_URI1" --config="$CUR/conf/normal.toml"
+	cdc_cli_changefeed create -c=$cf_normal --start-ts=$start_ts --sink-uri="$SINK_URI1" --config="$CUR/conf/normal.toml"
 
 	SINK_URI2="file://$WORK_DIR/storage_test/$TOPIC_NAME_2?flush-interval=5s&protocol=csv"
-	cdc cli changefeed create -c=$cf_err1 --start-ts=$start_ts --sink-uri="$SINK_URI2" --config="$CUR/conf/error-1.toml"
+	cdc_cli_changefeed create -c=$cf_err1 --start-ts=$start_ts --sink-uri="$SINK_URI2" --config="$CUR/conf/error-1.toml"
 
 	SINK_URI3="file://$WORK_DIR/storage_test/$TOPIC_NAME_3?flush-interval=5s&protocol=csv"
-	cdc cli changefeed create -c=$cf_err2 --start-ts=$start_ts --sink-uri="$SINK_URI3" --config="$CUR/conf/error-2.toml"
+	cdc_cli_changefeed create -c=$cf_err2 --start-ts=$start_ts --sink-uri="$SINK_URI3" --config="$CUR/conf/error-2.toml"
 	run_storage_consumer $WORK_DIR $SINK_URI1 "$CUR/conf/normal.toml" 1
 	run_storage_consumer $WORK_DIR $SINK_URI2 "$CUR/conf/error-1.toml" 2
 	run_storage_consumer $WORK_DIR $SINK_URI3 "$CUR/conf/error-2.toml" 3

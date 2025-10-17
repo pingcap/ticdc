@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -eu
+
+if [ "$NEXT_GEN" = 1 ]; then
+	cdc cli changefeed -k "$KEYSPACE_NAME" "$@"
+else
+	cdc cli changefeed "$@"
+fi

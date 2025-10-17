@@ -19,7 +19,7 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="file://$WORK_DIR/storage_test?flush-interval=5s"
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 
 	run_sql_file $CUR/data/schema.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_file $CUR/data/data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}

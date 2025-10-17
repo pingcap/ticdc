@@ -25,7 +25,7 @@ function run() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config $CUR/conf/force_replicate.toml
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config $CUR/conf/force_replicate.toml
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first

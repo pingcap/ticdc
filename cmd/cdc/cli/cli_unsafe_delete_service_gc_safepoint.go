@@ -28,6 +28,7 @@ import (
 // unsafeDeleteServiceGcSafepointOptions defines flags
 // for the `cli unsafe delete-service-gc-safepoint` command.
 type unsafeDeleteServiceGcSafepointOptions struct {
+	keyspace         string
 	apiClient        apiv2client.APIV2Interface
 	upstreamPDAddrs  string
 	upstreamCaPath   string
@@ -47,6 +48,7 @@ func (o *unsafeDeleteServiceGcSafepointOptions) addFlags(cmd *cobra.Command) {
 	if o == nil {
 		return
 	}
+	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", "", "Replication task (changefeed) Keyspace")
 	cmd.PersistentFlags().StringVar(&o.upstreamPDAddrs, "upstream-pd", "",
 		"upstream PD address, use ',' to separate multiple PDs")
 	cmd.PersistentFlags().StringVar(&o.upstreamCaPath, "upstream-ca", "",
@@ -76,7 +78,7 @@ func (o *unsafeDeleteServiceGcSafepointOptions) complete(f factory.Factory) erro
 func (o *unsafeDeleteServiceGcSafepointOptions) run(cmd *cobra.Command) error {
 	ctx := context.Background()
 
-	err := o.apiClient.Unsafe().DeleteServiceGcSafePoint(ctx, o.getUpstreamConfig())
+	err := o.apiClient.Unsafe().DeleteServiceGcSafePoint(ctx, o.getUpstreamConfig(), o.keyspace)
 	if err == nil {
 		cmd.Println("CDC service GC safepoint truncated in PD!")
 	}
