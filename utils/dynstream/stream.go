@@ -281,6 +281,10 @@ Loop:
 					eventQueueEmpty = true
 					continue Loop
 				}
+				if path.removed.Load() {
+					cleanUpEventBuf()
+					continue Loop
+				}
 				path.blocking = s.handler.Handle(path.dest, eventBuf...)
 				if path.blocking {
 					s.eventQueue.blockPath(path)

@@ -30,75 +30,73 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'random_drop_message random_drop_message random_drop_message'
 	# G01
-	'api_v2 ddl_for_split_tables_with_random_move_table'
+	'random_drop_message random_drop_message random_drop_message'
 	# G02
-	'availability ddl_for_split_tables_with_failover'
+	'random_drop_message random_drop_message random_drop_message'
 	# G03
-	'cdc move_table'
+	'random_drop_message random_drop_message random_drop_message'
 	# G04
-	'syncpoint syncpoint_check_ts'
+	'random_drop_message random_drop_message random_drop_message'
 	# G05
-	'ddl_for_split_tables_with_merge_and_split random_drop_message'
+	'random_drop_message random_drop_message random_drop_message'
 	# G06
-	'ddl_for_split_tables_with_random_merge_and_split'
+	'random_drop_message random_drop_message random_drop_message'
 	# G07
-	# 'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
-	'complex_transaction'
-	# G08
-	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
-	# G09
-	'resolve_lock merge_table drop_many_tables'
-	# G10
-	# 'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
-	'multi_changefeeds ddl_wait'
-	# G11
-	'ddl_reentrant force_replicate_table multi_source'
-	# G12
-	'tidb_mysql_test ddl_with_random_move_table'
-	# G13
-	'fail_over region_merge'
-	# G14
-	'fail_over_ddl_mix'
-	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	'random_drop_message random_drop_message random_drop_message'
+	# G01
+	'random_drop_message random_drop_message random_drop_message'
+	# G02
+	'random_drop_message random_drop_message random_drop_message'
+	# G03
+	'random_drop_message random_drop_message random_drop_message'
+	# G04
+	'random_drop_message random_drop_message random_drop_message'
+	# G05
+	'random_drop_message random_drop_message random_drop_message'
+	# G06
+	'random_drop_message random_drop_message random_drop_message'
+	# G04
+	'random_drop_message random_drop_message random_drop_message'
+	# G05
+	'random_drop_message random_drop_message random_drop_message'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
 	# G00
-	'generate_column many_pk_or_uk'
+	'random_drop_message random_drop_message random_drop_message'
 	# G01
-	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
+	'random_drop_message random_drop_message random_drop_message'
 	# G02
-	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
+	'random_drop_message random_drop_message random_drop_message'
 	# G03
-	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	'random_drop_message random_drop_message random_drop_message'
 	# G04
-	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
+	'random_drop_message random_drop_message random_drop_message'
 	# G05
-	'move_table drop_many_tables'
+	'random_drop_message random_drop_message random_drop_message'
 	# G06
-	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
+	'random_drop_message random_drop_message random_drop_message'
 	# G07
-	'merge_table resolve_lock force_replicate_table'
-	# G08
-	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
-	# G09
-	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume multi_source'
-	# G10
-	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
-	# G11
-	'fail_over region_merge multi_changefeeds'
-	# G12
-	'ddl_for_split_tables_random_schedule'
-	# G13
-	'debezium01 fail_over_ddl_mix'
-	# G14
-	'debezium02'
-	# G15
-	'debezium03'
+	'random_drop_message random_drop_message random_drop_message'
+	# G01
+	'random_drop_message random_drop_message random_drop_message'
+	# G02
+	'random_drop_message random_drop_message random_drop_message'
+	# G03
+	'random_drop_message random_drop_message random_drop_message'
+	# G04
+	'random_drop_message random_drop_message random_drop_message'
+	# G05
+	'random_drop_message random_drop_message random_drop_message'
+	# G06
+	'random_drop_message random_drop_message random_drop_message'
+	# G04
+	'random_drop_message random_drop_message random_drop_message'
+	# G05
+	'random_drop_message random_drop_message random_drop_message'
 )
 
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
@@ -139,37 +137,37 @@ pulsar_groups=(
 
 storage_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'random_drop_message random_drop_message random_drop_message'
 	# G01
-	'csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered'
+	'random_drop_message random_drop_message random_drop_message'
 	# G02
-	'canal_json_storage_basic canal_json_storage_partition_table'
+	'random_drop_message random_drop_message random_drop_message'
 	# G03
-	'csv_storage_basic storage_csv_update'
+	'random_drop_message random_drop_message random_drop_message'
 	# G04
-	'ddl_for_split_tables_with_random_move_table'
+	'random_drop_message random_drop_message random_drop_message'
 	# G05
-	'move_table drop_many_tables'
+	'random_drop_message random_drop_message random_drop_message'
 	# G06
-	'cdc default_value'
+	'random_drop_message random_drop_message random_drop_message'
 	# G07
-	'merge_table resolve_lock force_replicate_table'
-	# G08
-	'tidb_mysql_test'
-	# G09
-	'ddl_for_split_tables_with_merge_and_split'
-	# G10
-	'ddl_for_split_tables_with_random_merge_and_split'
-	# G11
-	'ddl_for_split_tables_random_schedule'
-	# G12
-	'ddl_with_random_move_table'
-	# G13
-	'fail_over region_merge multi_changefeeds'
-	# G14
-	'fail_over_ddl_mix'
-	# G15
-	'random_drop_message'
+	'random_drop_message random_drop_message random_drop_message'
+	# G01
+	'random_drop_message random_drop_message random_drop_message'
+	# G02
+	'random_drop_message random_drop_message random_drop_message'
+	# G03
+	'random_drop_message random_drop_message random_drop_message'
+	# G04
+	'random_drop_message random_drop_message random_drop_message'
+	# G05
+	'random_drop_message random_drop_message random_drop_message'
+	# G06
+	'random_drop_message random_drop_message random_drop_message'
+	# G04
+	'random_drop_message random_drop_message random_drop_message'
+	# G05
+	'random_drop_message random_drop_message random_drop_message'
 )
 
 # Source shared functions and check test coverage

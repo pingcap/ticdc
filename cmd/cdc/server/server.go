@@ -60,6 +60,7 @@ func newOptions() *options {
 // addFlags receives a *cobra.Command reference and binds
 // flags related to template printing to it.
 func (o *options) addFlags(cmd *cobra.Command) {
+	cmd.Flags().BoolVarP(&o.serverConfig.Newarch, "newarch", "x", o.serverConfig.Newarch, "Run the new architecture of TiCDC server")
 	cmd.Flags().StringVar(&o.serverConfig.ClusterID, "cluster-id", "default", "Set cdc cluster id")
 	cmd.Flags().StringVar(&o.serverConfig.Addr, "addr", o.serverConfig.Addr, "Set the listening address")
 	cmd.Flags().StringVar(&o.serverConfig.AdvertiseAddr, "advertise-addr", o.serverConfig.AdvertiseAddr, "Set the advertise listening address for client communication")
@@ -174,6 +175,8 @@ func (o *options) complete(command *cobra.Command) error {
 			cfg.ClusterID = o.serverConfig.ClusterID
 		case "pd", "config":
 			// do nothing
+		case "newarch", "x":
+			cfg.Newarch = o.serverConfig.Newarch
 		default:
 			log.Panic("unknown flag, please report a bug", zap.String("flagName", flag.Name))
 		}
@@ -256,20 +259,25 @@ func isNewArchEnabledByConfig(serverConfigFilePath string) bool {
 	return cfg.Newarch
 }
 
-func isOldArchEnabled(o *options) bool {
-	oldArch := os.Getenv("TICDC_NEWARCH") == "false"
-	if oldArch {
-		log.Debug("Enable old arch from environment variable")
-		return true
+func isNewArchEnabled(o *options) bool {
+	newarch := o.serverConfig.Newarch
+	if newarch {
+		log.Debug("Set newarch from command line")
+		return newarch
+	}
+
+	newarch = os.Getenv("TICDC_NEWARCH") == "true"
+	if newarch {
+		log.Debug("Set newarch from environment variable")
+		return newarch
 	}
 
 	serverConfigFilePath := parseConfigFlagFromOSArgs()
-	oldArch = !isNewArchEnabledByConfig(serverConfigFilePath)
-	if oldArch {
-		log.Debug("Enable old arch from config file")
-		return true
+	newarch = isNewArchEnabledByConfig(serverConfigFilePath)
+	if newarch {
+		log.Debug("Set newarch from config file")
 	}
-	return false
+	return newarch
 }
 
 func runTiFlowServer(o *options, cmd *cobra.Command) error {
@@ -305,22 +313,22 @@ func NewCmdServer() *cobra.Command {
 		Short: "Start a TiCDC server server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			err := o.complete(cmd)
-			if err != nil {
-				return err
+			if isNewArchEnabled(o) {
+				log.Info("Running TiCDC server in new architecture")
+				err := o.complete(cmd)
+				if err != nil {
+					return err
+				}
+				err = o.validate()
+				if err != nil {
+					return err
+				}
+				err = o.run(cmd)
+				cobra.CheckErr(err)
+				return nil
 			}
-			err = o.validate()
-			if err != nil {
-				return err
-			}
-			if isOldArchEnabled(o) {
-				log.Info("Running TiCDC server in old architecture")
-				return runTiFlowServer(o, cmd)
-			}
-			log.Info("Running TiCDC server in new architecture")
-			err = o.run(cmd)
-			cobra.CheckErr(err)
-			return nil
+			log.Info("Running TiCDC server in old architecture")
+			return runTiFlowServer(o, cmd)
 		},
 	}
 	patchTiDBConfig()

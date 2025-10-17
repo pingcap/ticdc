@@ -66,10 +66,6 @@ func NewRedoDispatcher(
 }
 
 func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
-	if rd.GetRemovingStatus() {
-		log.Warn("redo dispatcher has removed", zap.Any("id", rd.id))
-		return true
-	}
 	return rd.handleEvents(dispatcherEvents, wakeCallback)
 }
 

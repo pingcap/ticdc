@@ -65,6 +65,10 @@ type PullerConfig struct {
 	// LogRegionDetails determines whether logs Region details or not in puller and kv-client.
 	LogRegionDetails bool `toml:"log-region-details" json:"log-region-details"`
 
+	// PendingRegionRequestQueueSize is the total size of the pending region request queue shared across
+	// all puller workers connecting to a single TiKV store. This size is divided equally among all workers.
+	// For example, if PendingRegionRequestQueueSize is 64 and there are 8 workers connecting to the same store,
+	// each worker's queue size will be 256 / 8 = 32.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending-region-request-queue-size"`
 }
 
@@ -74,7 +78,7 @@ func NewDefaultPullerConfig() *PullerConfig {
 		EnableResolvedTsStuckDetection: false,
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,
-		PendingRegionRequestQueueSize:  64, // Base on test result
+		PendingRegionRequestQueueSize:  256, // Base on test result
 	}
 }
 

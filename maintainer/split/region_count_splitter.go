@@ -36,6 +36,7 @@ const maxSpanCount = 1000
 // 1. if spansNum > 0, means we split the span to spansNum spans
 // 2. if spansNum == 0, means we split the span as each span contains at most regionCountPerSpan regions.
 type regionCountSplitter struct {
+	keyspaceID         uint32
 	changefeedID       common.ChangeFeedID
 	regionCache        RegionCache
 	regionThreshold    int
@@ -43,10 +44,14 @@ type regionCountSplitter struct {
 }
 
 func newRegionCountSplitter(
-	changefeedID common.ChangeFeedID, regionCountPerSpan int, regionThreshold int,
+	keyspaceID uint32,
+	changefeedID common.ChangeFeedID,
+	regionCountPerSpan int,
+	regionThreshold int,
 ) *regionCountSplitter {
 	regionCache := appcontext.GetService[RegionCache](appcontext.RegionCache)
 	return &regionCountSplitter{
+		keyspaceID:         keyspaceID,
 		changefeedID:       changefeedID,
 		regionCache:        regionCache,
 		regionCountPerSpan: regionCountPerSpan,
@@ -113,7 +118,7 @@ func (m *regionCountSplitter) split(
 			TableID:    span.TableID,
 			StartKey:   startKey,
 			EndKey:     endKey,
-			KeyspaceID: span.KeyspaceID,
+			KeyspaceID: m.keyspaceID,
 		},
 		)
 
