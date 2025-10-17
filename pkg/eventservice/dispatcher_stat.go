@@ -420,9 +420,6 @@ type changefeedStatus struct {
 	dispatcherCount atomic.Uint64
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
-
-	// The minimum resolved ts of all dispatchers that belong to this changefeed.
-	minResolvedTs atomic.Uint64
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

@@ -91,6 +91,11 @@ type eventBroker struct {
 
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
+
+	coordinatorInfo struct {
+		mu sync.RWMutex
+		id node.ID
+	}
 }
 
 func newEventBroker(
@@ -180,6 +185,18 @@ func newEventBroker(
 
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
+}
+
+func (c *eventBroker) setCoordinatorInfo(id node.ID) {
+	c.coordinatorInfo.mu.Lock()
+	defer c.coordinatorInfo.mu.Unlock()
+	c.coordinatorInfo.id = id
+}
+
+func (c *eventBroker) getCoordinatorInfo() node.ID {
+	c.coordinatorInfo.mu.RLock()
+	defer c.coordinatorInfo.mu.RUnlock()
+	return c.coordinatorInfo.id
 }
 
 func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent, d *dispatcherStat) {
@@ -832,13 +849,6 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 			}
 		}
 	}
-}
-
-func (c *eventBroker) newCoordinatorMessage(m interface{}) *messaging.TargetMessage {
-	// TODO: get coordinatorID from eventService
-	// Currently, we assume that the coordinator is on the same node as the eventService.
-	// So we can broadcast the message to all nodes.
-	return messaging.NewBroadcastMessage(messaging.LogCoordinatorTopic, m)
 }
 
 func (c *eventBroker) close() {
