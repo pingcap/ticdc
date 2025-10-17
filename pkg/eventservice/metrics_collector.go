@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
@@ -101,6 +103,8 @@ type metricsSnapshot struct {
 	pendingTaskCount      int
 	slowestDispatcher     *dispatcherStat
 	pdTime                time.Time
+	// changefeedID -> min received resolved ts
+	changefeedReceivedResolvedTs map[common.ChangeFeedID]uint64
 }
 
 // metricsCollector is responsible for collecting and reporting metrics for the event broker
@@ -124,7 +128,7 @@ func newMetricsCollector(broker *eventBroker) *metricsCollector {
 
 // Run starts the metrics collection loop
 func (mc *metricsCollector) Run(ctx context.Context) error {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	log.Info("metrics collector started")
@@ -136,6 +140,7 @@ func (mc *metricsCollector) Run(ctx context.Context) error {
 		case <-ticker.C:
 			snapshot := mc.collectMetrics()
 			mc.updateMetricsFromSnapshot(snapshot)
+			mc.reportChangefeedStates(snapshot)
 			mc.logSlowDispatchers(snapshot)
 		}
 	}
@@ -144,9 +149,10 @@ func (mc *metricsCollector) Run(ctx context.Context) error {
 // collectMetrics gathers all metrics data from the event broker
 func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 	snapshot := &metricsSnapshot{
-		receivedMinResolvedTs: uint64(math.MaxUint64),
-		sentMinResolvedTs:     uint64(math.MaxUint64),
-		pdTime:                mc.broker.pdClock.CurrentTime(),
+		receivedMinResolvedTs:        uint64(math.MaxUint64),
+		sentMinResolvedTs:            uint64(math.MaxUint64),
+		changefeedReceivedResolvedTs: make(map[common.ChangeFeedID]uint64),
+		pdTime:                       mc.broker.pdClock.CurrentTime(),
 	}
 
 	mc.collectDispatcherMetrics(snapshot)
@@ -178,6 +184,12 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		watermark := dispatcher.sentResolvedTs.Load()
 		if watermark < snapshot.sentMinResolvedTs {
 			snapshot.sentMinResolvedTs = watermark
+		}
+
+		// Update per-changefeed min received resolved ts
+		cfID := dispatcher.info.GetChangefeedID()
+		if minTs, ok := snapshot.changefeedReceivedResolvedTs[cfID]; !ok || resolvedTs < minTs {
+			snapshot.changefeedReceivedResolvedTs[cfID] = resolvedTs
 		}
 
 		// Track slowest dispatcher
@@ -246,4 +258,24 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 		zap.Uint64("seq", snapshot.slowestDispatcher.seq.Load()),
 		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
 	)
+}
+
+// reportChangefeedStates collects and reports the state of all changefeeds to the coordinator.
+func (mc *metricsCollector) reportChangefeedStates(snapshot *metricsSnapshot) {
+	changefeedStates := &logservicepb.ChangefeedStates{
+		States: make([]*logservicepb.ChangefeedStateEntry, 0, len(snapshot.changefeedReceivedResolvedTs)),
+	}
+	for changefeedID, minResolvedTs := range snapshot.changefeedReceivedResolvedTs {
+		changefeedStates.States = append(changefeedStates.States, &logservicepb.ChangefeedStateEntry{
+			ChangefeedID: changefeedID.ToPB(),
+			ResolvedTs:   minResolvedTs,
+		})
+	}
+	coordinatorID := mc.broker.getCoordinatorInfo()
+	if coordinatorID != "" {
+		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, changefeedStates)
+		if err := mc.broker.msgSender.SendEvent(msg); err != nil {
+			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
+		}
+	}
 }

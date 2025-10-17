@@ -91,6 +91,8 @@ type eventBroker struct {
 
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
+
+	coordinatorInfo atomic.Value // stores node.ID
 }
 
 func newEventBroker(
@@ -180,6 +182,17 @@ func newEventBroker(
 
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
+}
+
+func (c *eventBroker) setCoordinatorInfo(id node.ID) {
+	c.coordinatorInfo.Store(id)
+}
+
+func (c *eventBroker) getCoordinatorInfo() node.ID {
+	if v := c.coordinatorInfo.Load(); v != nil {
+		return v.(node.ID)
+	}
+	return ""
 }
 
 func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent, d *dispatcherStat) {

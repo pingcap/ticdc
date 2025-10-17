@@ -419,7 +419,6 @@ type changefeedStatus struct {
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
 	dispatcherCount atomic.Uint64
 
-	dispatcherStatMap    sync.Map // nodeID -> dispatcherID -> dispatcherStat
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 }
 
