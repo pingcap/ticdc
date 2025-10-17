@@ -92,10 +92,7 @@ type eventBroker struct {
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
 
-	coordinatorInfo struct {
-		mu sync.RWMutex
-		id node.ID
-	}
+	coordinatorInfo atomic.Value // stores node.ID
 }
 
 func newEventBroker(
@@ -188,15 +185,14 @@ func newEventBroker(
 }
 
 func (c *eventBroker) setCoordinatorInfo(id node.ID) {
-	c.coordinatorInfo.mu.Lock()
-	defer c.coordinatorInfo.mu.Unlock()
-	c.coordinatorInfo.id = id
+	c.coordinatorInfo.Store(id)
 }
 
 func (c *eventBroker) getCoordinatorInfo() node.ID {
-	c.coordinatorInfo.mu.RLock()
-	defer c.coordinatorInfo.mu.RUnlock()
-	return c.coordinatorInfo.id
+	if v := c.coordinatorInfo.Load(); v != nil {
+		return v.(node.ID)
+	}
+	return ""
 }
 
 func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent, d *dispatcherStat) {
