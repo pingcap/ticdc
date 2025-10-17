@@ -169,13 +169,6 @@ type subscriptionStat struct {
 	maxEventCommitTs atomic.Uint64
 }
 
-type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
-
-type changefeedStat struct {
-	mutex       sync.Mutex
-	dispatchers map[common.DispatcherID]*dispatcherStat
-}
-
 type eventWithCallback struct {
 	subID   logpuller.SubscriptionID
 	tableID int64
@@ -224,9 +217,6 @@ type eventStore struct {
 	}
 
 	decoderPool *sync.Pool
-
-	// changefeed id -> changefeedStat
-	changefeedMeta sync.Map
 
 	// closed is used to indicate the event store is closed.
 	closed atomic.Bool
@@ -433,18 +423,6 @@ func (e *eventStore) RegisterDispatcher(
 		return false
 	}
 
-	// Defer a cleanup function that will run if registration fails.
-	// The success flag is set to true only at the end of successful registration paths.
-	success := false
-	defer func() {
-		if !success {
-			log.Info("register dispatcher failed, cleaning up from changefeed stat",
-				zap.Stringer("changefeedID", changefeedID),
-				zap.Stringer("dispatcherID", dispatcherID))
-			e.removeDispatcherFromChangefeedStat(changefeedID, dispatcherID)
-		}
-	}()
-
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
 	metrics.EventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
 	if lag >= 10*time.Second {
@@ -475,31 +453,6 @@ func (e *eventStore) RegisterDispatcher(
 		checkpointTs: startTs,
 	}
 	stat.resolvedTs.Store(startTs)
-
-	// Loop to handle the race condition where a cfStat might be deleted
-	// after being loaded but before being locked.
-	for {
-		var cfStat *changefeedStat
-		if actual, ok := e.changefeedMeta.Load(changefeedID); ok {
-			cfStat = actual.(*changefeedStat)
-		} else {
-			newCfStat := &changefeedStat{dispatchers: make(map[common.DispatcherID]*dispatcherStat)}
-			actual, _ := e.changefeedMeta.LoadOrStore(changefeedID, newCfStat)
-			cfStat = actual.(*changefeedStat)
-		}
-
-		cfStat.mutex.Lock()
-		// After acquiring the lock, we must re-check if this cfStat is still the one
-		// in the map. If it has been removed and replaced, we must retry with the new one.
-		if current, ok := e.changefeedMeta.Load(changefeedID); !ok || current != cfStat {
-			cfStat.mutex.Unlock()
-			continue // Retry the loop
-		}
-
-		cfStat.dispatchers[dispatcherID] = stat
-		cfStat.mutex.Unlock()
-		break // Success
-	}
 
 	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
 		util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs)
@@ -533,7 +486,6 @@ func (e *eventStore) RegisterDispatcher(
 						zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
 					success = true
-					return true
 				}
 
 				// Track the smallest containing span that meets ts requirements
@@ -564,7 +516,6 @@ func (e *eventStore) RegisterDispatcher(
 			zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
 		// when onlyReuse is true, we don't need a exact span match
 		if onlyReuse {
-			success = true
 			return true
 		}
 	} else {
@@ -665,7 +616,6 @@ func (e *eventStore) RegisterDispatcher(
 		ResolvedTs:   startTs,
 	}
 	metrics.EventStoreSubscriptionGauge.Inc()
-	success = true
 	return true
 }
 
@@ -686,25 +636,6 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
 	e.dispatcherMeta.Unlock()
-
-	e.removeDispatcherFromChangefeedStat(changefeedID, dispatcherID)
-}
-
-// removeDispatcherFromChangefeedStat removes a dispatcher from its changefeed's statistics.
-// If the changefeed becomes empty after the removal, the changefeed statistic itself is deleted.
-func (e *eventStore) removeDispatcherFromChangefeedStat(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
-	if v, ok := e.changefeedMeta.Load(changefeedID); ok {
-		cfStat := v.(*changefeedStat)
-		cfStat.mutex.Lock()
-		defer cfStat.mutex.Unlock()
-		delete(cfStat.dispatchers, dispatcherID)
-
-		// If the changefeed has no more dispatchers, remove the changefeed stat.
-		if len(cfStat.dispatchers) == 0 {
-			e.changefeedMeta.Delete(changefeedID)
-			log.Info("changefeed stat is empty, removed it", zap.Stringer("changefeedID", changefeedID))
-		}
-	}
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(
