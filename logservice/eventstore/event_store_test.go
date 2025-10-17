@@ -250,7 +250,6 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 		ok := es.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.True(t, ok)
 	}
-
 }
 
 func TestEventStoreUpdateCheckpointTs(t *testing.T) {
