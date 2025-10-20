@@ -324,20 +324,17 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
-	pendingSize          atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
-	paused               atomic.Bool  // The path is paused to send events.
-	lastSendFeedbackTime atomic.Value
+	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
+	paused      atomic.Bool  // The path is paused to send events.
 }
 
 func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
-		area:                 area,
-		path:                 path,
-		dest:                 dest,
-		pendingQueue:         deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
-		lastSendFeedbackTime: atomic.Value{},
+		area:         area,
+		path:         path,
+		dest:         dest,
+		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
 	}
-	pi.lastSendFeedbackTime.Store(time.Unix(0, 0))
 	return pi
 }
 

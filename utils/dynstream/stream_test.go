@@ -205,5 +205,4 @@ func TestPathInfo(t *testing.T) {
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())
 	require.Equal(t, false, pi.paused.Load())
-	require.Equal(t, time.Unix(0, 0), pi.lastSendFeedbackTime.Load())
 }

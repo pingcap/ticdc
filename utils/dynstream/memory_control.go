@@ -31,6 +31,9 @@ const (
 	// It will only send pause and resume [path] feedback.
 	// For now, we only use it in event collector.
 	MemoryControlForEventCollector = 1
+
+	defaultReleaseMemoryThreshold = 0.2
+	defaultDeadlockDuration       = 10 * time.Second
 )
 
 // areaMemStat is used to store the memory statistics of an area.
@@ -50,6 +53,8 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	paused               atomic.Bool
 	lastSendFeedbackTime atomic.Value
 	algorithm            MemoryControlAlgorithm
+
+	lastSizeDecreaseTime atomic.Value
 }
 
 func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
@@ -82,7 +87,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	event eventWrap[A, P, T, D, H],
 	handler H,
 ) bool {
-	defer as.updatePathPauseState(path)
 	defer as.updateAreaPauseState(path)
 
 	// Check if we should merge periodic signals.
@@ -97,13 +101,16 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	}
 
 	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
-		MemoryControlForEventCollector && event.eventType.Droppable {
-		dropEvent := handler.OnDrop(event.event)
-		if dropEvent != nil {
-			event.eventType = handler.GetType(dropEvent.(T))
-			event.event = dropEvent.(T)
-			path.pendingQueue.PushBack(event)
-			return true
+		MemoryControlForEventCollector {
+
+		if event.eventType.Droppable {
+			dropEvent := handler.OnDrop(event.event)
+			if dropEvent != nil {
+				event.eventType = handler.GetType(dropEvent.(T))
+				event.event = dropEvent.(T)
+				path.pendingQueue.PushBack(event)
+				return true
+			}
 		}
 	}
 
@@ -129,62 +136,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 
 func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
 	return float64(as.totalPendingSize.Load()) / float64(as.settings.Load().maxPendingSize)
-}
-
-// updatePathPauseState determines the pause state of a path and sends feedback to handler if the state is changed.
-// It needs to be called after a event is appended.
-// Note: Our gaol is to fast pause, and lazy resume.
-func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H]) {
-	pause, resume, memoryUsageRatio := as.algorithm.ShouldPausePath(
-		path.paused.Load(),
-		path.pendingSize.Load(),
-		as.totalPendingSize.Load(),
-		as.settings.Load().maxPendingSize,
-		as.pathCount.Load(),
-	)
-
-	sendFeedback := func(pause bool) {
-		now := time.Now()
-		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
-
-		// fast pause and lazy resume path
-		if !pause && time.Since(lastTime) < as.settings.Load().feedbackInterval {
-			return
-		}
-
-		if !path.lastSendFeedbackTime.CompareAndSwap(lastTime, now) {
-			return // Another goroutine already updated the time
-		}
-
-		feedbackType := PausePath
-		if !pause {
-			feedbackType = ResumePath
-		}
-
-		as.feedbackChan <- Feedback[A, P, D]{
-			Area:         path.area,
-			Path:         path.path,
-			Dest:         path.dest,
-			FeedbackType: feedbackType,
-		}
-		path.paused.Store(pause)
-
-		log.Info("send path feedback", zap.Any("area", as.area),
-			zap.Any("path", path.path), zap.Stringer("feedbackType", feedbackType),
-			zap.Float64("pathMemoryUsageRatio", memoryUsageRatio), zap.String("component", as.settings.Load().component))
-	}
-
-	failpoint.Inject("PausePath", func() {
-		log.Warn("inject PausePath")
-		sendFeedback(true)
-	})
-
-	switch {
-	case pause:
-		sendFeedback(true)
-	case resume:
-		sendFeedback(false)
-	}
 }
 
 func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {
@@ -251,8 +202,6 @@ func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, 
 		log.Debug("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
 		as.totalPendingSize.Store(0)
 	}
-	as.updatePathPauseState(path)
-	as.updateAreaPauseState(path)
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.

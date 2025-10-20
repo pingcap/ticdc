@@ -34,9 +34,6 @@ func setupTestComponents() (*memControl[int, string, *mockEvent, any, *mockHandl
 		dest:         "test-dest",
 		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
 	}
-
-	path.lastSendFeedbackTime.Store(time.Unix(0, 0))
-
 	return mc, path
 }
 
@@ -215,13 +212,13 @@ func TestGetMetrics(t *testing.T) {
 	}, nil)
 	metrics = mc.getMetrics()
 	require.Equal(t, 1, len(metrics.AreaMemoryMetrics))
-	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].usedMemory)
-	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].maxMemory)
+	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].UsedMemoryValue)
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].MaxMemoryValue)
 
 	path.areaMemStat.totalPendingSize.Store(100)
 	metrics = mc.getMetrics()
-	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].usedMemory)
-	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].maxMemory)
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].UsedMemoryValue)
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].MaxMemoryValue)
 }
 
 func TestUpdateAreaPauseState(t *testing.T) {
@@ -260,51 +257,6 @@ func TestUpdateAreaPauseState(t *testing.T) {
 	// Wait feedback interval, no more feedback should be sent
 	time.Sleep(settings.feedbackInterval)
 	areaMemStat.updateAreaPauseState(path)
-	timer := time.After(settings.feedbackInterval)
-	select {
-	case fb = <-feedbackChan:
-		require.Fail(t, "feedback should not be received")
-	case <-timer:
-		// Pass
-	}
-}
-
-func TestUpdatePathPauseState(t *testing.T) {
-	mc, path := setupTestComponents()
-	settings := AreaSettings{
-		maxPendingSize:   100,
-		feedbackInterval: time.Millisecond * 100,
-	}
-	feedbackChan := make(chan Feedback[int, string, any], 10)
-	mc.addPathToArea(path, settings, feedbackChan)
-	areaMemStat := path.areaMemStat
-
-	path.pendingSize.Store(int64(10))
-	areaMemStat.updatePathPauseState(path)
-	require.False(t, path.paused.Load())
-
-	path.pendingSize.Store(int64(60))
-	areaMemStat.updatePathPauseState(path)
-	require.True(t, path.paused.Load())
-	fb := <-feedbackChan
-	require.Equal(t, PausePath, fb.FeedbackType)
-	require.Equal(t, path.area, fb.Area)
-
-	path.pendingSize.Store(int64(9))
-	areaMemStat.updatePathPauseState(path)
-	require.True(t, path.paused.Load())
-
-	// Wait feedback interval, the path should be resumed
-	time.Sleep(settings.feedbackInterval)
-	areaMemStat.updatePathPauseState(path)
-	require.False(t, path.paused.Load())
-	fb = <-feedbackChan
-	require.Equal(t, ResumePath, fb.FeedbackType)
-	require.Equal(t, path.area, fb.Area)
-
-	// Wait feedback interval, no more feedback should be sent
-	time.Sleep(settings.feedbackInterval)
-	areaMemStat.updatePathPauseState(path)
 	timer := time.After(settings.feedbackInterval)
 	select {
 	case fb = <-feedbackChan:
