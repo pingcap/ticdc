@@ -322,6 +322,10 @@ func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange
 	return iter
 }
 
+func (m *mockEventStore) GetLogCoordinatorNodeID() node.ID {
+	return ""
+}
+
 func (m *mockEventStore) RegisterDispatcher(
 	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
