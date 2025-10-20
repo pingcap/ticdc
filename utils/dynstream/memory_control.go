@@ -129,7 +129,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			if dropEvent != nil {
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
-				path.pendingQueue.PushBack(event)
+				// path.pendingQueue.PushBack(event)
 				failpoint.Return(true)
 			}
 		}
