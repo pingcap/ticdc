@@ -222,8 +222,8 @@ func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings 
 	}
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A] {
-	metrics := Metrics[A]{}
+func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {
+	metrics := Metrics[A, P]{}
 	for _, ds := range s.streams {
 		metrics.PendingQueueLen += ds.getPendingSize()
 	}

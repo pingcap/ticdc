@@ -289,14 +289,16 @@ func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
 }
 
 type AvailableMemory struct {
-	Gid       common.GID // GID is the internal representation of ChangeFeedID
-	Available uint64     // in bytes, used to report the Available memory
+	Gid                 common.GID                    // GID is the internal representation of ChangeFeedID
+	Available           uint64                        // in bytes, used to report the Available memory
+	DispatcherAvailable map[common.DispatcherID]int64 // in bytes, used to report the memory usage of each dispatcher
 }
 
 func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
 	return AvailableMemory{
-		Gid:       gid,
-		Available: available,
+		Gid:                 gid,
+		Available:           available,
+		DispatcherAvailable: make(map[common.DispatcherID]int64),
 	}
 }
 
@@ -376,6 +378,13 @@ func (c *CongestionControl) Unmarshal(data []byte) error {
 func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64) {
 	c.changefeedCount++
 	c.availables = append(c.availables, NewAvailableMemory(gid, available))
+}
+
+func (c *CongestionControl) AddAvailableMemoryWithDispatchers(gid common.GID, available uint64, dispatcherAvailable map[common.DispatcherID]int64) {
+	c.changefeedCount++
+	availMem := NewAvailableMemory(gid, available)
+	availMem.DispatcherAvailable = dispatcherAvailable
+	c.availables = append(c.availables, availMem)
 }
 
 func (c *CongestionControl) GetAvailables() []AvailableMemory {

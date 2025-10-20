@@ -36,7 +36,9 @@ const (
 // areaMemStat is used to store the memory statistics of an area.
 // It is a global level struct, not stream level.
 type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	area A
+	area    A
+	pathMap sync.Map // key: path, value: pathInfo
+
 	// Reverse reference to the memControl this area belongs to.
 	memControl *memControl[A, P, T, D, H]
 
@@ -289,6 +291,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 	}
 
 	path.areaMemStat = area
+	area.pathMap.Store(path.path, path)
 	area.pathCount.Add(1)
 	// Update the settings
 	area.settings.Store(&settings)
@@ -309,50 +312,64 @@ func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D
 }
 
 // FIXME/TODO: We use global metric here, which is not good for multiple streams.
-func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A] {
+func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	metrics := MemoryMetric[A]{}
+	metrics := MemoryMetric[A, P]{}
 	for _, area := range m.areaStatMap {
-		areaMetric := AreaMemoryMetric[A]{
-			area:       area.area,
-			usedMemory: area.totalPendingSize.Load(),
-			maxMemory:  int64(area.settings.Load().maxPendingSize),
+		areaMetric := AreaMemoryMetric[A, P]{
+			AreaValue:           area.area,
+			PathAvailableMemory: make(map[P]int64),
+			UsedMemoryValue:     area.totalPendingSize.Load(),
+			MaxMemoryValue:      int64(area.settings.Load().maxPendingSize),
+			PathMaxMemoryValue:  int64(area.settings.Load().pathMaxPendingSize),
 		}
+		area.pathMap.Range(func(k, v interface{}) bool {
+			usedMemory := v.(*pathInfo[A, P, T, D, H]).pendingSize.Load()
+			availableMemory := max(0, areaMetric.PathMaxMemoryValue-usedMemory)
+			areaMetric.PathAvailableMemory[k.(P)] = availableMemory
+			return true
+		})
 		metrics.AreaMemoryMetrics = append(metrics.AreaMemoryMetrics, areaMetric)
 	}
 	return metrics
 }
 
-type MemoryMetric[A Area] struct {
-	AreaMemoryMetrics []AreaMemoryMetric[A]
+type MemoryMetric[A Area, P Path] struct {
+	AreaMemoryMetrics []AreaMemoryMetric[A, P]
 }
 
-type AreaMemoryMetric[A Area] struct {
-	area       A
-	usedMemory int64
-	maxMemory  int64
+type AreaMemoryMetric[A Area, P Path] struct {
+	AreaValue           A
+	PathAvailableMemory map[P]int64
+	UsedMemoryValue     int64
+	MaxMemoryValue      int64
+	PathMaxMemoryValue  int64
 }
 
-func (a *AreaMemoryMetric[A]) MemoryUsageRatio() float64 {
-	return float64(a.usedMemory) / float64(a.maxMemory)
+func (a *AreaMemoryMetric[A, P]) MemoryUsageRatio() float64 {
+	return float64(a.UsedMemoryValue) / float64(a.MaxMemoryValue)
 }
 
-func (a *AreaMemoryMetric[A]) MemoryUsage() int64 {
-	return a.usedMemory
+func (a *AreaMemoryMetric[A, P]) MemoryUsage() int64 {
+	return a.UsedMemoryValue
 }
 
-func (a *AreaMemoryMetric[A]) MaxMemory() int64 {
-	return a.maxMemory
+func (a *AreaMemoryMetric[A, P]) MaxMemory() int64 {
+	return a.MaxMemoryValue
 }
 
-func (a *AreaMemoryMetric[A]) AvailableMemory() int64 {
-	if a.usedMemory > a.maxMemory {
+func (a *AreaMemoryMetric[A, P]) AvailableMemory() int64 {
+	if a.UsedMemoryValue > a.MaxMemoryValue {
 		return 0
 	}
-	return a.maxMemory - a.usedMemory
+	return a.MaxMemoryValue - a.UsedMemoryValue
 }
 
-func (a *AreaMemoryMetric[A]) Area() A {
-	return a.area
+func (a *AreaMemoryMetric[A, P]) Area() A {
+	return a.AreaValue
+}
+
+func (a *AreaMemoryMetric[A, P]) PathMetrics() map[P]int64 {
+	return a.PathAvailableMemory
 }

@@ -185,7 +185,7 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
 	SetAreaSettings(area A, settings AreaSettings)
 
-	GetMetrics() Metrics[A]
+	GetMetrics() Metrics[A, P]
 }
 
 const (
@@ -236,9 +236,10 @@ func (o *Option) fix() {
 }
 
 type AreaSettings struct {
-	component        string
-	maxPendingSize   uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 1GB.
-	feedbackInterval time.Duration // The interval of the feedback. By default 1000ms.
+	component          string
+	maxPendingSize     uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 1GB.
+	pathMaxPendingSize uint64        // The max memory usage of the pending events of the path. Must be larger than 0. By default 10% of the area max pending size.
+	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
 	// Remove it when we determine the v2 is working well.
 	algorithm int // The algorithm of the memory control.
 }
@@ -254,11 +255,15 @@ func (s *AreaSettings) fix() {
 }
 
 func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, component string) AreaSettings {
+	// The path max pending size is at least 1MB.
+	pathMaxPendingSize := max(size/10, 1*1024*1024)
+
 	return AreaSettings{
-		component:        component,
-		feedbackInterval: DefaultFeedbackInterval,
-		maxPendingSize:   size,
-		algorithm:        memoryControlAlgorithm,
+		component:          component,
+		feedbackInterval:   DefaultFeedbackInterval,
+		maxPendingSize:     size,
+		pathMaxPendingSize: pathMaxPendingSize,
+		algorithm:          memoryControlAlgorithm,
 	}
 }
 
@@ -306,11 +311,11 @@ func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	return newParallelDynamicStream(handler, opt)
 }
 
-type Metrics[A Area] struct {
+type Metrics[A Area, P Path] struct {
 	EventChanSize   int
 	PendingQueueLen int
 	AddPath         int
 	RemovePath      int
 
-	MemoryControl MemoryMetric[A]
+	MemoryControl MemoryMetric[A, P]
 }

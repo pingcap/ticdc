@@ -298,3 +298,53 @@ func TestCongestionControl(t *testing.T) {
 		require.Equal(t, item.Available, decoded.availables[idx].Available)
 	}
 }
+
+func TestCongestionControl_AddAvailableMemoryWithDispatchers(t *testing.T) {
+	t.Parallel()
+
+	// Test case 1: Add available memory with dispatcher details
+	control := NewCongestionControl()
+	gid := common.NewGID()
+	available := uint64(1000)
+	dispatcherAvailable := map[common.DispatcherID]int64{
+		common.NewDispatcherID(): 500,
+		common.NewDispatcherID(): 500,
+	}
+
+	control.AddAvailableMemoryWithDispatchers(gid, available, dispatcherAvailable)
+
+	availables := control.GetAvailables()
+	require.Len(t, availables, 1)
+
+	availableMem := availables[0]
+	require.Equal(t, gid, availableMem.Gid)
+	require.Equal(t, available, availableMem.Available)
+	require.Len(t, availableMem.DispatcherAvailable, 2)
+
+	// Verify that the dispatcher available memory is correctly set
+	totalDispatcherAvailable := int64(0)
+	for _, mem := range availableMem.DispatcherAvailable {
+		totalDispatcherAvailable += mem
+	}
+	require.Equal(t, int64(1000), totalDispatcherAvailable)
+}
+
+func TestCongestionControl_AddAvailableMemoryWithDispatchers_Empty(t *testing.T) {
+	t.Parallel()
+
+	// Test case 2: Add available memory with empty dispatcher map
+	control := NewCongestionControl()
+	gid := common.NewGID()
+	available := uint64(2000)
+	dispatcherAvailable := map[common.DispatcherID]int64{}
+
+	control.AddAvailableMemoryWithDispatchers(gid, available, dispatcherAvailable)
+
+	availables := control.GetAvailables()
+	require.Len(t, availables, 1)
+
+	availableMem := availables[0]
+	require.Equal(t, gid, availableMem.Gid)
+	require.Equal(t, available, availableMem.Available)
+	require.Len(t, availableMem.DispatcherAvailable, 0)
+}
