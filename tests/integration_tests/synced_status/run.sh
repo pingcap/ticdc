@@ -33,18 +33,15 @@ CDC_COUNT=3
 DB_COUNT=4
 
 function kill_pd() {
-	info=$(ps aux | grep pd-server | grep $WORK_DIR) || true
-	$(ps aux | grep pd-server | grep $WORK_DIR | awk '{print $2}' | xargs kill -9 &>/dev/null) || true
+	ps aux | grep pd-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
 }
 
 function kill_tikv() {
-	info=$(ps aux | grep tikv-server | grep $WORK_DIR) || true
-	$(ps aux | grep tikv-server | grep $WORK_DIR | awk '{print $2}' | xargs kill -9 &>/dev/null) || true
+	ps aux | grep tikv-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
 }
 
 function kill_tidb() {
-	info=$(ps aux | grep tidb-server | grep $WORK_DIR) || true
-	$(ps aux | grep tidb-server | grep $WORK_DIR | awk '{print $2}' | xargs kill -9 &>/dev/null) || true
+	ps aux | grep tidb-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
 }
 
 function run_normal_case_and_unavailable_pd() {
@@ -52,18 +49,16 @@ function run_normal_case_and_unavailable_pd() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	config_path=$1
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
 	# case 1: test in available cluster
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 
 	status=$(echo $synced_status | jq '.synced')
 	sink_checkpoint_ts=$(echo $synced_status | jq -r '.sink_checkpoint_ts')
@@ -74,13 +69,13 @@ function run_normal_case_and_unavailable_pd() {
 		exit 1
 	fi
 	# the timestamp for puller_resolved_ts is 0 when do data insert
-	if [ "$puller_resolved_ts" != "1970-01-01 08:00:00.000" ]; then
-		echo "puller_resolved_ts is not 1970-01-01 08:00:00.000"
+	if [ "$puller_resolved_ts" != "1970-01-01 08:00:00.000" ] && [ "$puller_resolved_ts" != "1970-01-01 00:00:00.000" ]; then
+		echo "puller_resolved_ts is not 1970-01-01 08:00:00.000 or 1970-01-01 00:00:00.000"
 		exit 1
 	fi
 	# the timestamp for last_synced_ts is 0 when do data insert
-	if [ "$last_synced_ts" != "1970-01-01 08:00:00.000" ]; then
-		echo "last_synced_ts is not 1970-01-01 08:00:00.000"
+	if [ "$last_synced_ts" != "1970-01-01 08:00:00.000" ] && [ "$last_synced_ts" != "1970-01-01 00:00:00.000" ]; then
+		echo "last_synced_ts is not 1970-01-01 08:00:00.000 or 1970-01-01 00:00:00.000"
 		exit 1
 	fi
 
@@ -98,7 +93,7 @@ function run_normal_case_and_unavailable_pd() {
 	check_table_exists "test.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	sleep 5 # wait data insert
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"
@@ -111,7 +106,7 @@ function run_normal_case_and_unavailable_pd() {
 	fi
 
 	sleep 130 # wait enough time for pass synced-check-interval
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != true ]; then
 		echo "synced status isn't correct"
@@ -124,7 +119,8 @@ function run_normal_case_and_unavailable_pd() {
 
 	sleep 20
 
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
+	echo "synced_status: $synced_status"
 	error_code=$(echo $synced_status | jq -r '.error_code')
 	cleanup_process $CDC_BINARY
 	stop_tidb_cluster
@@ -135,15 +131,13 @@ function run_case_with_unavailable_tikv() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	config_path=$1
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
 	# case 3: test in unavailable tikv cluster
 	run_sql "USE TEST;Create table t1(a int primary key, b int);insert into t1 values(1,2);insert into t1 values(2,3);"
@@ -153,7 +147,7 @@ function run_case_with_unavailable_tikv() {
 	kill_tikv
 
 	# test the case when pdNow - lastSyncedTs < threshold
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"
@@ -169,7 +163,7 @@ function run_case_with_unavailable_tikv() {
 
 	sleep 130 # wait enough time for pass synced-check-interval
 	# test the case when pdNow - lastSyncedTs > threshold
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"
@@ -178,8 +172,6 @@ function run_case_with_unavailable_tikv() {
 	info=$(echo $synced_status | jq -r '.info')
 	target_message="Please check whether PD is online and TiKV Regions are all available. \
 If PD is offline or some TiKV regions are not available, it means that the data syncing process is complete. \
-To check whether TiKV regions are all available, you can view \
-'TiKV-Details' > 'Resolved-Ts' > 'Max Leader Resolved TS gap' on Grafana. \
 If the gap is large, such as a few minutes, it means that some regions in TiKV are unavailable. \
 Otherwise, if the gap is small and PD is online, it means the data syncing is incomplete, so please wait"
 
@@ -197,15 +189,13 @@ function run_case_with_unavailable_tidb() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	config_path=$1
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
 	# case 3: test in unavailable tikv cluster
 	run_sql "USE TEST;Create table t1(a int primary key, b int);insert into t1 values(1,2);insert into t1 values(2,3);"
@@ -215,7 +205,7 @@ function run_case_with_unavailable_tidb() {
 	kill_tidb
 
 	# test the case when pdNow - lastSyncedTs < threshold
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"
@@ -231,14 +221,14 @@ function run_case_with_unavailable_tidb() {
 
 	sleep 130 # wait enough time for pass synced-check-interval
 	# test the case when pdNow - lastSyncedTs > threshold
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != true ]; then
 		echo "synced status isn't correct"
 		exit 1
 	fi
 	info=$(echo $synced_status | jq -r '.info')
-	target_message="Data syncing is finished"
+	target_message="The data syncing is finished"
 
 	if [ "$info" != "$target_message" ]; then
 		echo "synced status info is not correct"
@@ -254,10 +244,8 @@ function run_case_with_failpoint() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	# make failpoint to block checkpoint-ts
-	export GO_FAILPOINTS='github.com/pingcap/tiflow/cdc/owner/ChangefeedOwnerNotUpdateCheckpoint=return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/coordinator/changefeed/CoordinatorDontUpdateChangefeedCheckpoint=return(true)'
 
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
@@ -265,10 +253,10 @@ function run_case_with_failpoint() {
 	config_path=$1
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
 	sleep 20 # wait enough time for pass checkpoint-check-interval
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced)
+	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
 	if [ $status != false ]; then
 		echo "synced status isn't correct"
@@ -277,8 +265,6 @@ function run_case_with_failpoint() {
 	info=$(echo $synced_status | jq -r '.info')
 	target_message="Please check whether PD is online and TiKV Regions are all available. \
 If PD is offline or some TiKV regions are not available, it means that the data syncing process is complete. \
-To check whether TiKV regions are all available, you can view \
-'TiKV-Details' > 'Resolved-Ts' > 'Max Leader Resolved TS gap' on Grafana. \
 If the gap is large, such as a few minutes, it means that some regions in TiKV are unavailable. \
 Otherwise, if the gap is small and PD is online, it means the data syncing is incomplete, so please wait"
 	if [ "$info" != "$target_message" ]; then

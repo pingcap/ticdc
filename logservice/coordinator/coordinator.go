@@ -56,8 +56,10 @@ type changefeedState struct {
 	cfID       common.ChangeFeedID
 	nodeStates map[node.ID]uint64
 
-	resolvedTsGauge    prometheus.Gauge
-	resolvedTsLagGauge prometheus.Gauge
+	// equal to min puller resolved ts
+	minLogServiceResolvedTs uint64
+	resolvedTsGauge         prometheus.Gauge
+	resolvedTsLagGauge      prometheus.Gauge
 }
 
 type logCoordinator struct {
@@ -159,11 +161,28 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 				req:    msg,
 				target: targetMessage.From,
 			}
+		case *heartbeatpb.LogCoordinatorResolvedTsRequest:
+			c.sendResolvedTsToCoordinator(targetMessage.From, common.NewChangefeedIDFromPB(msg.ChangefeedID))
 		default:
 			log.Panic("invalid message type", zap.Any("msg", msg))
 		}
 	}
 	return nil
+}
+
+func (c *logCoordinator) sendResolvedTsToCoordinator(id node.ID, changefeedID common.ChangeFeedID) {
+	c.nodes.Lock()
+	defer c.nodes.Unlock()
+	resolvedTs := c.getMinLogServiceResolvedTs(changefeedID)
+	msg := messaging.NewSingleTargetMessage(
+		id,
+		messaging.CoordinatorTopic,
+		&heartbeatpb.LogCoordinatorResolvedTsResponse{
+			ChangefeedID: changefeedID.ToPB(),
+			ResolvedTs:   resolvedTs,
+		},
+	)
+	c.messageCenter.SendEvent(msg)
 }
 
 func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
@@ -287,10 +306,22 @@ func (c *logCoordinator) updateChangefeedMetrics() {
 		}
 
 		phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
+		state.minLogServiceResolvedTs = minResolvedTs
 		state.resolvedTsGauge.Set(float64(phyResolvedTs))
 		lag := float64(pdPhyTs-phyResolvedTs) / 1e3
 		state.resolvedTsLagGauge.Set(lag)
 	}
+}
+
+func (c *logCoordinator) getMinLogServiceResolvedTs(cfID common.ChangeFeedID) uint64 {
+	c.changefeedStates.Lock()
+	defer c.changefeedStates.Unlock()
+
+	gid := cfID.ID()
+	if state, exists := c.changefeedStates.m[gid]; exists {
+		return state.minLogServiceResolvedTs
+	}
+	return 0
 }
 
 // getCandidateNode return all nodes(exclude the request node) which may contain data for `span` from `startTs`,

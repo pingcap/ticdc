@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -42,7 +43,8 @@ type Changefeed struct {
 
 	configBytes []byte
 	// it's saved to the backend db
-	lastSavedCheckpointTs *atomic.Uint64
+	lastSavedCheckpointTs    *atomic.Uint64
+	logCoordinatorResolvedTs *atomic.Uint64
 	// the heartbeatpb.MaintainerStatus is read only
 	status *atomic.Pointer[heartbeatpb.MaintainerStatus]
 
@@ -67,12 +69,13 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	}
 
 	res := &Changefeed{
-		ID:                    cfID,
-		info:                  atomic.NewPointer(info),
-		configBytes:           bytes,
-		lastSavedCheckpointTs: atomic.NewUint64(checkpointTs),
-		sinkType:              getSinkType(uri.Scheme),
-		isNew:                 isNew,
+		ID:                       cfID,
+		info:                     atomic.NewPointer(info),
+		configBytes:              bytes,
+		lastSavedCheckpointTs:    atomic.NewUint64(checkpointTs),
+		logCoordinatorResolvedTs: atomic.NewUint64(checkpointTs),
+		sinkType:                 getSinkType(uri.Scheme),
+		isNew:                    isNew,
 		// Initialize the status
 		status: atomic.NewPointer(
 			&heartbeatpb.MaintainerStatus{
@@ -138,6 +141,9 @@ func (c *Changefeed) ShouldRun() bool {
 // It returns the new state and error if the status is changed
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
 	old := c.status.Load()
+	failpoint.Inject("CoordinatorDontUpdateChangefeedCheckpoint", func() {
+		newStatus = old
+	})
 
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
 		c.status.Store(newStatus)
@@ -158,6 +164,14 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 	}
 
 	return false, config.StateNormal, nil
+}
+
+func (c *Changefeed) GetLogCoordinatorResolvedTs() uint64 {
+	return c.logCoordinatorResolvedTs.Load()
+}
+
+func (c *Changefeed) SetLogCoordinatorResolvedTs(logCoordinatorResolvedTs uint64) {
+	c.logCoordinatorResolvedTs.Store(logCoordinatorResolvedTs)
 }
 
 func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {

@@ -429,6 +429,10 @@ func (c *coordinator) Stop() {
 	}
 }
 
+func (c *coordinator) RequestResolvedTsFromLogCoordinator(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) {
+	c.controller.RequestResolvedTsFromLogCoordinator(ctx, changefeedDisplayName)
+}
+
 func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
 		err := c.mc.SendCommand(msg)

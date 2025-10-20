@@ -694,7 +694,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			toCleanMap = append(toCleanMap, cleanMap)
 		}
 		if watermark != nil {
-			message.Watermark.UpdateMin(*watermark)
+			message.Watermark.Update(*watermark)
 		}
 	})
 	message.Watermark.Seq = seq

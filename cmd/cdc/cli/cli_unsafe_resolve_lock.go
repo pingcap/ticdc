@@ -32,6 +32,7 @@ type unsafeResolveLockOptions struct {
 
 	regionID uint64
 	ts       uint64
+	keyspace string
 
 	upstreamPDAddrs  string
 	upstreamCaPath   string
@@ -92,7 +93,7 @@ func (o *unsafeResolveLockOptions) run() error {
 			CertPath: o.upstreamCertPath,
 			KeyPath:  o.upstreamKeyPath,
 		},
-	})
+	}, o.keyspace)
 }
 
 // addFlags receives a *cobra.Command reference and binds
@@ -102,6 +103,7 @@ func (o *unsafeResolveLockOptions) addFlags(cmd *cobra.Command) {
 		return
 	}
 
+	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", "", "Replication task (changefeed) Keyspace")
 	cmd.Flags().Uint64Var(&o.regionID, "region", 0, "Region ID")
 	cmd.Flags().Uint64Var(&o.ts, "ts", 0,
 		"resolve locks before the timestamp, default 1 minute ago from now")

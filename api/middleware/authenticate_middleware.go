@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/server"
@@ -86,6 +87,12 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 			errMsg = "Empty username is not allowed."
 		}
 		return errors.ErrUnauthorized.GenWithStackByArgs(username, errMsg)
+	}
+
+	// TODO tenfyzhong 2025-10-15 15:07:48
+	// The next gen kernel does not write topology info into etcd.
+	if kerneltype.IsNextGen() {
+		return nil
 	}
 
 	// verifyTiDBUser verify whether the username and password are valid in TiDB. It does the validation via

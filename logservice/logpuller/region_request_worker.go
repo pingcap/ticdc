@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -68,15 +67,13 @@ func newRegionRequestWorker(
 	credential *security.Credential,
 	g *errgroup.Group,
 	store *requestedStore,
+	requestCacheSize int,
 ) *regionRequestWorker {
-	config := config.GetGlobalServerConfig()
-	maxPendingCount := config.Debug.Puller.PendingRegionRequestQueueSize
-
 	worker := &regionRequestWorker{
 		workerID:     workerIDGen.Add(1),
 		client:       client,
 		store:        store,
-		requestCache: newRequestCache(maxPendingCount),
+		requestCache: newRequestCache(requestCacheSize),
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 

@@ -33,13 +33,13 @@ function run() {
 	cf_err2="test-error-2"
 
 	SINK_URI1="file://$WORK_DIR/storage_test/$TOPIC_NAME_1?flush-interval=5s&protocol=csv"
-	cdc cli changefeed create -c=$cf_normal --start-ts=$start_ts --sink-uri="$SINK_URI1" --config="$CUR/conf/normal.toml"
+	cdc_cli_changefeed create -c=$cf_normal --start-ts=$start_ts --sink-uri="$SINK_URI1" --config="$CUR/conf/normal.toml"
 
 	SINK_URI2="file://$WORK_DIR/storage_test/$TOPIC_NAME_2?flush-interval=5s&protocol=csv"
-	cdc cli changefeed create -c=$cf_err1 --start-ts=$start_ts --sink-uri="$SINK_URI2" --config="$CUR/conf/error-1.toml"
+	cdc_cli_changefeed create -c=$cf_err1 --start-ts=$start_ts --sink-uri="$SINK_URI2" --config="$CUR/conf/error-1.toml"
 
 	SINK_URI3="file://$WORK_DIR/storage_test/$TOPIC_NAME_3?flush-interval=5s&protocol=csv"
-	cdc cli changefeed create -c=$cf_err2 --start-ts=$start_ts --sink-uri="$SINK_URI3" --config="$CUR/conf/error-2.toml"
+	cdc_cli_changefeed create -c=$cf_err2 --start-ts=$start_ts --sink-uri="$SINK_URI3" --config="$CUR/conf/error-2.toml"
 	run_storage_consumer $WORK_DIR $SINK_URI1 "$CUR/conf/normal.toml" 1
 	run_storage_consumer $WORK_DIR $SINK_URI2 "$CUR/conf/error-1.toml" 2
 	run_storage_consumer $WORK_DIR $SINK_URI3 "$CUR/conf/error-2.toml" 3
@@ -56,9 +56,9 @@ function run() {
 	# changefeed test-error will not report an error, "multi_tables_ddl_test.t555 to multi_tables_ddl_test.t55" patr will be skipped.
 	run_sql "rename table multi_tables_ddl_test.t7 to multi_tables_ddl_test.t77, multi_tables_ddl_test.t555 to multi_tables_ddl_test.t55;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $cf_normal "normal" "null" ""
-	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $cf_err1 "normal" "null" ""
-	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $cf_err2 "failed" "ErrSyncRenameTableFailed" ""
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $cf_normal "normal" "null" ""
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $cf_err1 "normal" "null" ""
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $cf_err2 "failed" "ErrSyncRenameTableFailed" ""
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 

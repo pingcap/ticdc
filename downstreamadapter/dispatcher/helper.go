@@ -275,7 +275,7 @@ func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatc
 func (t *ResendTask) Execute() time.Time {
 	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.GetId()))
 	t.dispatcher.GetBlockStatusesChan() <- t.message
-	return time.Now().Add(200 * time.Millisecond)
+	return time.Now().Add(5 * time.Second)
 }
 
 func (t *ResendTask) Cancel() {
