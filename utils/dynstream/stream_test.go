@@ -204,5 +204,4 @@ func TestPathInfo(t *testing.T) {
 	require.Equal(t, 1, pi.area)
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())
-	require.Equal(t, false, pi.paused.Load())
 }

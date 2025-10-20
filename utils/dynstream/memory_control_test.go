@@ -81,7 +81,6 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	ok := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
 	require.True(t, ok)
 	require.Equal(t, int64(1), path1.areaMemStat.totalPendingSize.Load())
-	require.False(t, path1.paused.Load())
 	require.False(t, path1.areaMemStat.paused.Load())
 
 	// Append 2 periodic signals, and the second one will replace the first one
@@ -114,7 +113,6 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	// The last event timestamp should be the latest
 	back, _ = path1.pendingQueue.BackRef()
 	require.Equal(t, periodicEvent2.timestamp, back.timestamp)
-	require.False(t, path1.paused.Load())
 	require.False(t, path1.areaMemStat.paused.Load())
 
 	// 3. Add a normal event, and it should not be dropped, but the path should be paused
@@ -132,7 +130,6 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	require.Equal(t, normalEvent2.timestamp, back.timestamp)
 	events := handler.drainDroppedEvents()
 	require.Equal(t, 0, len(events))
-	require.True(t, path1.paused.Load())
 	require.True(t, path1.areaMemStat.paused.Load())
 
 	// 4. Change the settings, enlarge the max pending size
@@ -164,7 +161,6 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	require.Equal(t, 4, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
 	require.Equal(t, normalEvent3.timestamp, back.timestamp)
-	require.False(t, path1.paused.Load())
 	require.False(t, path1.areaMemStat.paused.Load())
 }
 
@@ -262,6 +258,203 @@ func TestUpdateAreaPauseState(t *testing.T) {
 	case fb = <-feedbackChan:
 		require.Fail(t, "feedback should not be received")
 	case <-timer:
+		// Pass
+	}
+}
+
+func TestReleaseMemory(t *testing.T) {
+	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
+	area := 1
+	settings := AreaSettings{
+		maxPendingSize:   1000,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForEventCollector,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+
+	// Create 3 paths with different last handle event timestamps
+	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		area:         area,
+		path:         "path-1",
+		dest:         "dest-1",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+	}
+	path2 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		area:         area,
+		path:         "path-2",
+		dest:         "dest-2",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+	}
+	path3 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		area:         area,
+		path:         "path-3",
+		dest:         "dest-3",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+	}
+
+	// Add paths to area
+	mc.addPathToArea(path1, settings, feedbackChan)
+	mc.addPathToArea(path2, settings, feedbackChan)
+	mc.addPathToArea(path3, settings, feedbackChan)
+
+	// Set different last handle event timestamps
+	// path1: most recent (largest ts), should be released first
+	// path2: medium recent
+	// path3: oldest (smallest ts), should be kept
+	path1.lastHandleEventTs.Store(300)
+	path2.lastHandleEventTs.Store(200)
+	path3.lastHandleEventTs.Store(100)
+
+	// Case 1: release path1
+	// Add events to each path
+	// Each event has size 100
+	for i := 0; i < 3; i++ {
+		event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			event:     &mockEvent{id: i, path: path1.path},
+			eventSize: 100,
+		}
+		path1.pendingQueue.PushBack(event)
+		path1.pendingSize.Add(100)
+	}
+
+	for i := 0; i < 3; i++ {
+		event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			event:     &mockEvent{id: i + 10, path: path2.path},
+			eventSize: 100,
+		}
+		path2.pendingQueue.PushBack(event)
+		path2.pendingSize.Add(100)
+	}
+
+	for i := 0; i < 3; i++ {
+		event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			event:     &mockEvent{id: i + 20, path: path3.path},
+			eventSize: 100,
+		}
+		path3.pendingQueue.PushBack(event)
+		path3.pendingSize.Add(100)
+	}
+
+	// Update total pending size
+	path1.areaMemStat.totalPendingSize.Store(900)
+
+	// Verify initial state
+	require.Equal(t, 3, path1.pendingQueue.Length())
+	require.Equal(t, 3, path2.pendingQueue.Length())
+	require.Equal(t, 3, path3.pendingQueue.Length())
+	require.Equal(t, int64(300), path1.pendingSize.Load())
+	require.Equal(t, int64(300), path2.pendingSize.Load())
+	require.Equal(t, int64(300), path3.pendingSize.Load())
+	require.Equal(t, int64(900), path1.areaMemStat.totalPendingSize.Load())
+
+	path1.areaMemStat.releaseMemory()
+	require.Equal(t, 0, path1.pendingQueue.Length())
+	require.Equal(t, 3, path2.pendingQueue.Length())
+	require.Equal(t, 3, path3.pendingQueue.Length())
+	require.Equal(t, int64(0), path1.pendingSize.Load())
+	require.Equal(t, int64(300), path2.pendingSize.Load())
+	require.Equal(t, int64(300), path3.pendingSize.Load())
+	require.Equal(t, int64(600), path1.areaMemStat.totalPendingSize.Load())
+
+	feedbacks := make([]Feedback[int, string, any], 0)
+	for i := 0; i < 1; i++ {
+		select {
+		case fb := <-feedbackChan:
+			feedbacks = append(feedbacks, fb)
+		case <-time.After(100 * time.Millisecond):
+			require.Fail(t, "should receive 2 feedbacks")
+		}
+	}
+	require.Equal(t, 1, len(feedbacks))
+	require.Equal(t, ResetPath, feedbacks[0].FeedbackType)
+	require.Equal(t, area, feedbacks[0].Area)
+	require.Equal(t, path1.path, feedbacks[0].Path)
+
+	// Case 2: release path1 and path2
+	// Reset the paths
+	for path1.pendingQueue.Length() > 0 {
+		path1.pendingQueue.PopFront()
+	}
+	for path2.pendingQueue.Length() > 0 {
+		path2.pendingQueue.PopFront()
+	}
+	for path3.pendingQueue.Length() > 0 {
+		path3.pendingQueue.PopFront()
+	}
+
+	// Add 1 event per path with size 110
+	event1 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event:     &mockEvent{id: 1, path: path1.path},
+		eventSize: 110,
+	}
+	path1.pendingQueue.PushBack(event1)
+	path1.pendingSize.Store(110)
+
+	event2 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event:     &mockEvent{id: 2, path: path2.path},
+		eventSize: 110,
+	}
+	path2.pendingQueue.PushBack(event2)
+	path2.pendingSize.Store(110)
+
+	event3 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event:     &mockEvent{id: 3, path: path3.path},
+		eventSize: 110,
+	}
+	path3.pendingQueue.PushBack(event3)
+	path3.pendingSize.Store(110)
+
+	path1.areaMemStat.totalPendingSize.Store(330)
+
+	// Call releaseMemory
+	// sizeToRelease = 1000 * 0.2 = 200
+	// path1 (ts=300): release 110 bytes, sizeToRelease = 200 - 110 = 90
+	// path2 (ts=200): release 110 bytes, sizeToRelease = 90 - 110 = -20, stop
+	path1.areaMemStat.releaseMemory()
+
+	// Verify that path1 and path2 are cleared
+	require.Equal(t, 0, path1.pendingQueue.Length())
+	require.Equal(t, 0, path2.pendingQueue.Length())
+	require.Equal(t, 1, path3.pendingQueue.Length()) // path3 should still have events
+
+	require.Equal(t, int64(0), path1.pendingSize.Load())
+	require.Equal(t, int64(0), path2.pendingSize.Load())
+	require.Equal(t, int64(110), path3.pendingSize.Load())
+
+	// Verify feedback messages
+	// Should receive 2 ResetPath feedbacks
+	feedbacks = make([]Feedback[int, string, any], 0)
+	timer := time.After(100 * time.Millisecond)
+	for i := 0; i < 2; i++ {
+		select {
+		case fb := <-feedbackChan:
+			feedbacks = append(feedbacks, fb)
+		case <-timer:
+			require.Fail(t, "should receive 2 feedbacks")
+		}
+	}
+
+	require.Equal(t, 2, len(feedbacks))
+	// Both should be ResetPath type
+	for _, fb := range feedbacks {
+		require.Equal(t, ResetPath, fb.FeedbackType)
+		require.Equal(t, area, fb.Area)
+	}
+
+	// Check that we got feedbacks for path1 and path2
+	paths := make(map[string]bool)
+	for _, fb := range feedbacks {
+		paths[fb.Path] = true
+	}
+	require.True(t, paths["path-1"])
+	require.True(t, paths["path-2"])
+	require.False(t, paths["path-3"])
+
+	// Verify no more feedbacks
+	select {
+	case fb := <-feedbackChan:
+		require.Fail(t, fmt.Sprintf("should not receive more feedbacks, got %v", fb))
+	case <-time.After(50 * time.Millisecond):
 		// Pass
 	}
 }
