@@ -1161,7 +1161,6 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		dispatcher := v.(*atomic.Pointer[dispatcherStat]).Load()
 		available, ok := dispatcherAvailable[dispatcherID]
 		if ok {
-			log.Info("found dispatcher available memory quota", zap.Stringer("dispatcherID", dispatcherID), zap.Uint64("available", available))
 			dispatcher.availableMemoryQuota.Store(available)
 		}
 		return true

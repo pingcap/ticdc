@@ -105,6 +105,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		MemoryControlForEventCollector {
 
 		if as.checkDeadlock() {
+			log.Info("check deadlock and release memory", zap.Any("area", as.area), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Uint64("maxPendingSize", as.settings.Load().maxPendingSize), zap.Time("lastSizeDecreaseTime", as.lastSizeDecreaseTime.Load().(time.Time)))
+
 			as.releaseMemory()
 			return true
 		}
@@ -114,7 +116,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			if dropEvent != nil {
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
-				path.pendingQueue.PushBack(event)
+				// fizz: remove the pushing Drop event logic after test
+				// path.pendingQueue.PushBack(event)
 				return true
 			}
 		}
@@ -141,6 +144,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 }
 
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
+	failpoint.Inject("CheckDeadlock", func() { failpoint.Return(true) })
+
 	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
 }
 
