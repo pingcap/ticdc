@@ -90,6 +90,7 @@ type dispatcherStat struct {
 	maxScanLimitInBytes     atomic.Int64
 	lastUpdateScanLimitTime atomic.Time
 	lastScanBytes           atomic.Int64
+	availableMemoryQuota    atomic.Uint64
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
@@ -417,9 +418,7 @@ type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
 
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
-	dispatcherCount atomic.Uint64
-
-	dispatcherStatMap    sync.Map // nodeID -> dispatcherID -> dispatcherStat
+	dispatcherCount      atomic.Uint64
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 }
 

@@ -49,6 +49,8 @@ const (
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
 
 	maxReadyEventIntervalSeconds = 10
+	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
+	defaultSendResolvedTsInterval = time.Second * 2
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -247,6 +249,14 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Int64("EventTableID", e.TableID),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+}
+
+func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
+	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval {
+		return
+	}
+	watermark := d.sentResolvedTs.Load()
+	c.sendResolvedTs(d, watermark)
 }
 
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
@@ -560,13 +570,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
 	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
-	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
-		log.Debug("scan rate limit exceeded",
-			zap.Stringer("dispatcher", task.id),
-			zap.Int64("lastScanBytes", task.lastScanBytes.Load()),
-			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
-		return
-	}
+	// if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
+	// 	log.Debug("scan rate limit exceeded",
+	// 		zap.Stringer("dispatcher", task.id),
+	// 		zap.Int64("lastScanBytes", task.lastScanBytes.Load()),
+	// 		zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
+	// 	return
+	// }
 
 	item, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
@@ -589,11 +599,18 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
-		log.Debug("not enough memory quota, skip scan",
+		log.Debug("changefeed available memory quota is not enough, skip scan",
 			zap.String("changefeed", changefeedID.String()),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
+		c.sendSignalResolvedTs(task)
+		return
+	}
+
+	if int64(sl.maxDMLBytes) > int64(task.availableMemoryQuota.Load()) {
+		log.Info("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
+		c.sendSignalResolvedTs(task)
 		return
 	}
 
@@ -1120,20 +1137,33 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
+	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
+		for dispatcherID, available := range item.DispatcherAvailable {
+			dispatcherAvailable[dispatcherID] = available
+		}
 	}
 
 	c.changefeedMap.Range(func(k, v interface{}) bool {
 		changefeedID := k.(common.ChangeFeedID)
 		changefeed := v.(*changefeedStatus)
-
 		available, ok := holder[changefeedID.ID()]
-		if !ok {
-			return true
+		if ok {
+			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		}
-		changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		return true
+	})
+
+	c.dispatchers.Range(func(k, v interface{}) bool {
+		dispatcherID := k.(common.DispatcherID)
+		dispatcher := v.(*atomic.Pointer[dispatcherStat]).Load()
+		available, ok := dispatcherAvailable[dispatcherID]
+		if ok {
+			log.Info("found dispatcher available memory quota", zap.Stringer("dispatcherID", dispatcherID), zap.Uint64("available", available))
+			dispatcher.availableMemoryQuota.Store(available)
+		}
 		return true
 	})
 }

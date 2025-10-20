@@ -542,8 +542,8 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 
 func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
 	// collect path-level available memory and total available memory for each changefeed
-	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]int64)
-	changefeedTotalMemory := make(map[common.ChangeFeedID]int64)
+	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
+	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
 
 	// collect from main dynamic stream
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
@@ -553,14 +553,14 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		cfID := changefeedID.(common.ChangeFeedID)
 		if changefeedPathMemory[cfID] == nil {
-			changefeedPathMemory[cfID] = make(map[common.DispatcherID]int64)
+			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
 		}
 		// merge path-level available memory
 		for dispatcherID, available := range quota.PathMetrics() {
-			changefeedPathMemory[cfID][dispatcherID] = available
+			changefeedPathMemory[cfID][dispatcherID] = uint64(available)
 		}
 		// store total available memory from AreaMemoryMetric
-		changefeedTotalMemory[cfID] = quota.AvailableMemory()
+		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
 	}
 
 	// collect from redo dynamic stream and take minimum
@@ -571,21 +571,21 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		cfID := changefeedID.(common.ChangeFeedID)
 		if changefeedPathMemory[cfID] == nil {
-			changefeedPathMemory[cfID] = make(map[common.DispatcherID]int64)
+			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
 		}
 		// take minimum between main and redo streams
 		for dispatcherID, available := range quota.PathMetrics() {
 			if existing, exists := changefeedPathMemory[cfID][dispatcherID]; exists {
-				changefeedPathMemory[cfID][dispatcherID] = min(existing, available)
+				changefeedPathMemory[cfID][dispatcherID] = min(existing, uint64(available))
 			} else {
-				changefeedPathMemory[cfID][dispatcherID] = available
+				changefeedPathMemory[cfID][dispatcherID] = uint64(available)
 			}
 		}
 		// take minimum total available memory between main and redo streams
 		if existing, exists := changefeedTotalMemory[cfID]; exists {
-			changefeedTotalMemory[cfID] = min(existing, quota.AvailableMemory())
+			changefeedTotalMemory[cfID] = min(existing, uint64(quota.AvailableMemory()))
 		} else {
-			changefeedTotalMemory[cfID] = quota.AvailableMemory()
+			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
 		}
 	}
 
@@ -594,7 +594,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	}
 
 	// group dispatchers by node and calculate node-level available memory
-	nodeDispatcherMemory := make(map[node.ID]map[common.ChangeFeedID]map[common.DispatcherID]int64)
+	nodeDispatcherMemory := make(map[node.ID]map[common.ChangeFeedID]map[common.DispatcherID]uint64)
 
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
@@ -607,15 +607,15 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		changefeedID := stat.target.GetChangefeedID()
 
 		if nodeDispatcherMemory[eventServiceID] == nil {
-			nodeDispatcherMemory[eventServiceID] = make(map[common.ChangeFeedID]map[common.DispatcherID]int64)
+			nodeDispatcherMemory[eventServiceID] = make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
 		}
 		if nodeDispatcherMemory[eventServiceID][changefeedID] == nil {
-			nodeDispatcherMemory[eventServiceID][changefeedID] = make(map[common.DispatcherID]int64)
+			nodeDispatcherMemory[eventServiceID][changefeedID] = make(map[common.DispatcherID]uint64)
 		}
 
 		// get available memory for this dispatcher
 		if pathMemory, exists := changefeedPathMemory[changefeedID][dispatcherID]; exists {
-			nodeDispatcherMemory[eventServiceID][changefeedID][dispatcherID] = pathMemory
+			nodeDispatcherMemory[eventServiceID][changefeedID][dispatcherID] = uint64(pathMemory)
 		}
 		return true
 	})

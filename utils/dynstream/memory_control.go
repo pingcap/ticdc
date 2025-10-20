@@ -360,10 +360,7 @@ func (a *AreaMemoryMetric[A, P]) MaxMemory() int64 {
 }
 
 func (a *AreaMemoryMetric[A, P]) AvailableMemory() int64 {
-	if a.UsedMemoryValue > a.MaxMemoryValue {
-		return 0
-	}
-	return a.MaxMemoryValue - a.UsedMemoryValue
+	return max(0, a.MaxMemoryValue-a.UsedMemoryValue)
 }
 
 func (a *AreaMemoryMetric[A, P]) Area() A {
