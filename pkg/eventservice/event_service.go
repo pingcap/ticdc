@@ -170,16 +170,6 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		}
 		m := msg.Message[0].(*event.CongestionControl)
 		s.handleCongestionControl(msg.From, m)
-	case messaging.TypeLogCoordinatorBroadcastRequest:
-		if len(msg.Message) != 1 {
-			log.Warn("invalid log coordinator broadcast message", zap.Any("msg", msg))
-			return nil
-		}
-		if _, ok := msg.Message[0].(*common.LogCoordinatorBroadcastRequest); ok {
-			s.handleLogCoordinatorBroadcast(msg.From)
-			return nil
-		}
-
 	default:
 		log.Panic("unknown message type", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	}
@@ -236,12 +226,6 @@ func (s *eventService) handleCongestionControl(from node.ID, m *event.Congestion
 		return
 	}
 	c.handleCongestionControl(from, m)
-}
-
-func (s *eventService) handleLogCoordinatorBroadcast(from node.ID) {
-	for _, broker := range s.brokers {
-		broker.setCoordinatorInfo(from)
-	}
 }
 
 func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {

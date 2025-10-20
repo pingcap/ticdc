@@ -84,6 +84,8 @@ type EventStore interface {
 
 	// GetIterator return an iterator which scan the data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd]
 	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
+
+	GetLogCoordinatorNodeID() node.ID
 }
 
 type DMLEventState struct {
@@ -872,6 +874,10 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		decoder:       decoder,
 		decoderPool:   e.decoderPool,
 	}
+}
+
+func (e *eventStore) GetLogCoordinatorNodeID() node.ID {
+	return e.getCoordinatorInfo()
 }
 
 func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {

@@ -271,7 +271,7 @@ func (mc *metricsCollector) reportChangefeedStates(snapshot *metricsSnapshot) {
 			ResolvedTs:   minResolvedTs,
 		})
 	}
-	coordinatorID := mc.broker.getCoordinatorInfo()
+	coordinatorID := mc.broker.eventStore.GetLogCoordinatorNodeID()
 	if coordinatorID != "" {
 		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, changefeedStates)
 		if err := mc.broker.msgSender.SendEvent(msg); err != nil {
