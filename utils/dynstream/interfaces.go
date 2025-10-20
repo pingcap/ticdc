@@ -270,7 +270,7 @@ func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, 
 type FeedbackType int
 
 const (
-	PausePath FeedbackType = iota
+	ResetPath FeedbackType = iota
 	ResumePath
 	PauseArea
 	ResumeArea
@@ -278,8 +278,8 @@ const (
 
 func (f FeedbackType) String() string {
 	switch f {
-	case PausePath:
-		return "PausePath"
+	case ResetPath:
+		return "ResetPath"
 	case ResumePath:
 		return "ResumePath"
 	case PauseArea:

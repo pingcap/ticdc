@@ -14,6 +14,7 @@
 package dynstream
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,6 +104,11 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
 		MemoryControlForEventCollector {
 
+		if as.checkDeadlock() {
+			as.releaseMemory()
+			return true
+		}
+
 		if event.eventType.Droppable {
 			dropEvent := handler.OnDrop(event.event)
 			if dropEvent != nil {
@@ -132,6 +138,56 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path.updatePendingSize(int64(event.eventSize))
 	as.totalPendingSize.Add(int64(event.eventSize))
 	return true
+}
+
+func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
+	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
+}
+
+func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
+	paths := make([]*pathInfo[A, P, T, D, H], 0, as.pathCount.Load())
+	as.pathMap.Range(func(k, v interface{}) bool {
+		paths = append(paths, v.(*pathInfo[A, P, T, D, H]))
+		return true
+	})
+	// sort by the last handle event ts in descending order
+	sort.Slice(paths, func(i, j int) bool {
+		return paths[i].lastHandleEventTs.Load() > paths[j].lastHandleEventTs.Load()
+	})
+
+	sizeToRelease := int64(float64(as.settings.Load().maxPendingSize) * defaultReleaseMemoryThreshold)
+	releasedPaths := make([]*pathInfo[A, P, T, D, H], 0)
+
+	for _, path := range paths {
+		if sizeToRelease <= 0 {
+			break
+		}
+
+		log.Info("release path memory", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("size", path.pendingSize.Load()))
+
+		// Clear this path
+		for {
+			_, ok := path.pendingQueue.PopFront()
+			if !ok {
+				break
+			}
+		}
+
+		as.decPendingSize(path, int64(path.pendingSize.Load()))
+		sizeToRelease -= int64(path.pendingSize.Load())
+		path.pendingSize.Store(0)
+		releasedPaths = append(releasedPaths, path)
+
+	}
+
+	for _, path := range releasedPaths {
+		as.feedbackChan <- Feedback[A, P, D]{
+			Area:         as.area,
+			Path:         path.path,
+			Dest:         path.dest,
+			FeedbackType: ResetPath,
+		}
+	}
 }
 
 func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
@@ -202,6 +258,7 @@ func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, 
 		log.Debug("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
 		as.totalPendingSize.Store(0)
 	}
+	as.lastSizeDecreaseTime.Store(time.Now())
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.

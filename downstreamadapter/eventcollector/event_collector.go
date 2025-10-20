@@ -379,9 +379,22 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case <-c.ds.Feedback():
-			// ignore feedback
-		case <-c.redoDs.Feedback():
+		case feedback := <-c.ds.Feedback():
+			if feedback.FeedbackType == dynstream.ResetPath {
+				stat := c.getDispatcherStatByID(feedback.Path)
+				if stat != nil {
+					log.Info("reset dispatcher", zap.Any("dispatcher", stat.target.GetId()), zap.Any("eventServiceID", feedback.Dest.connState.getEventServiceID()))
+					stat.reset(feedback.Dest.connState.getEventServiceID())
+				}
+			}
+		case feedback := <-c.redoDs.Feedback():
+			if feedback.FeedbackType == dynstream.ResetPath {
+				stat := c.getDispatcherStatByID(feedback.Path)
+				if stat != nil {
+					log.Info("reset dispatcher", zap.Any("dispatcher", stat.target.GetId()), zap.Any("eventServiceID", feedback.Dest.connState.getEventServiceID()))
+					stat.reset(feedback.Dest.connState.getEventServiceID())
+				}
+			}
 		}
 	}
 }
