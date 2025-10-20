@@ -119,14 +119,12 @@ func TestReadLogs(t *testing.T) {
 	})
 
 	for _, ts := range expectedRows {
-		row, ok, err := r.ReadNextRow(egCtx)
-		require.True(t, ok)
+		row, err := r.ReadNextRow(egCtx)
 		require.NoError(t, err)
 		require.Equal(t, ts, row.Row.CommitTs)
 	}
 	for _, ts := range expectedDDLs {
-		ddl, ok, err := r.ReadNextDDL(egCtx)
-		require.True(t, ok)
+		ddl, err := r.ReadNextDDL(egCtx)
 		require.NoError(t, err)
 		require.Equal(t, ts, ddl.DDL.CommitTs)
 	}

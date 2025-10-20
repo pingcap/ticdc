@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/applier"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -35,6 +36,8 @@ type applyRedoOptions struct {
 	sinkURI              string
 	enableProfiling      bool
 	memoryLimitInGiBytes int64
+	changefeedID         string
+	logLevel             string
 }
 
 // newapplyRedoOptions creates new applyRedoOptions for the `redo apply` command.
@@ -46,10 +49,13 @@ func newapplyRedoOptions() *applyRedoOptions {
 // flags related to template printing to it.
 func (o *applyRedoOptions) addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.sinkURI, "sink-uri", "", "target database sink-uri")
+	cmd.Flags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	// the possible error returned from MarkFlagRequired is `no such flag`
-	cmd.MarkFlagRequired("sink-uri") //nolint:errcheck
+	cmd.MarkFlagRequired("sink-uri")      //nolint:errcheck
+	cmd.MarkFlagRequired("changefeed-id") //nolint:errcheck
 	cmd.Flags().BoolVar(&o.enableProfiling, "enable-profiling", true, "enable pprof profiling")
 	cmd.Flags().Int64Var(&o.memoryLimitInGiBytes, "memory-limit", 10, "memory limit in GiB")
+	cmd.Flags().StringVar(&o.logLevel, "log-level", "info", "log level (etc: debug|info|warn|error)")
 }
 
 //nolint:unparam
@@ -84,7 +90,12 @@ func (o *applyRedoOptions) complete(cmd *cobra.Command) error {
 // run runs the `redo apply` command.
 func (o *applyRedoOptions) run(cmd *cobra.Command) error {
 	ctx := context.Background()
-
+	err := logger.InitLogger(&logger.Config{
+		Level: o.logLevel,
+	})
+	if err != nil {
+		log.Panic("init logger failed", zap.Error(err))
+	}
 	if o.enableProfiling {
 		go func() {
 			server := &http.Server{
@@ -99,12 +110,13 @@ func (o *applyRedoOptions) run(cmd *cobra.Command) error {
 	}
 
 	cfg := &applier.RedoApplierConfig{
-		Storage: o.storage,
-		SinkURI: o.sinkURI,
-		Dir:     o.dir,
+		Storage:      o.storage,
+		SinkURI:      o.sinkURI,
+		Dir:          o.dir,
+		ChangefeedID: o.changefeedID,
 	}
 	ap := applier.NewRedoApplier(cfg)
-	err := ap.Apply(ctx)
+	err = ap.Apply(ctx)
 	if err != nil {
 		return err
 	}

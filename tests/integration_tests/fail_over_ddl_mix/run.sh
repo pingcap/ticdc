@@ -283,7 +283,7 @@ main_with_consistent() {
 	sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
 
 	cat $WORK_DIR/consistent_diff_config.toml
-	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" -c=$changefeed_id --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 	check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml
 }
 
@@ -292,7 +292,6 @@ main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
 stop_tidb_cluster
-# FIXME: refactor redo apply
-# main_with_consistent
-# check_logs $WORK_DIR
-# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

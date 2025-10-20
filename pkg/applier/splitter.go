@@ -18,7 +18,9 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	"go.uber.org/zap"
 )
@@ -96,11 +98,11 @@ func (u *updateEventSplitter) readNextRow(ctx context.Context) (*event.RedoDMLEv
 			return nil, nil
 		}
 		// case 3: read and process events from RedoLogReader
-		event, ok, err := u.rd.ReadNextRow(ctx)
+		event, err := u.rd.ReadNextRow(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
+		if event == nil {
 			u.rdFinished = true
 		} else {
 			u.checkEventOrder(event)
@@ -118,5 +120,45 @@ func (u *updateEventSplitter) readNextRow(ctx context.Context) (*event.RedoDMLEv
 				log.Panic("event to emit and pending event cannot all be nil")
 			}
 		}
+	}
+}
+
+// processEvent return (event to emit, pending event)
+func processEvent(
+	event *commonEvent.RedoDMLEvent,
+	prevTxnStartTs commonType.Ts,
+	tempStorage *tempTxnInsertEventStorage,
+) (*commonEvent.RedoDMLEvent, *commonEvent.RedoDMLEvent, error) {
+	if event == nil {
+		log.Panic("event should not be nil")
+	}
+
+	// meet a new transaction
+	if prevTxnStartTs != 0 && prevTxnStartTs != event.Row.StartTs {
+		if tempStorage.hasEvent() {
+			// emit the insert events in the previous transaction
+			return nil, event, nil
+		}
+	}
+	if event.IsDelete() {
+		return event, nil, nil
+	} else if event.IsInsert() {
+		if tempStorage.hasEvent() {
+			// pend current event and emit the insert events in temp storage first to release memory
+			return nil, event, nil
+		}
+		return event, nil, nil
+	} else if !shouldSplitUpdateEvent(event) {
+		return event, nil, nil
+	} else {
+		deleteEvent, insertEvent, err := splitUpdateEvent(event)
+		if err != nil {
+			return nil, nil, err
+		}
+		err = tempStorage.addEvent(insertEvent)
+		if err != nil {
+			return nil, nil, err
+		}
+		return deleteEvent, nil, nil
 	}
 }

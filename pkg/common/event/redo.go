@@ -260,7 +260,6 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 			Name:  ast.NewCIStr(col.Name),
 			State: timodel.StatePublic,
 		}
-		// r.Row.IndexColumns
 		colInfo.SetType(col.Type)
 		colInfo.SetCharset(col.Charset)
 		colInfo.SetCollate(col.Collation)
@@ -293,22 +292,35 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 			Name:  ast.NewCIStr(fmt.Sprintf("index_%d", i)),
 			State: timodel.StatePublic,
 		}
+		firstCol := tidbTableInfo.Columns[index[0]]
+		if mysql.HasPriKeyFlag(firstCol.GetFlag()) || mysql.HasUniKeyFlag(firstCol.GetFlag()) {
+			indexInfo.Unique = true
+		}
+		isPrimary := true
 		for _, id := range index {
+			col := tidbTableInfo.Columns[id]
+			// When only all columns in the index are primary key, then the index is primary key.
+			if col == nil || !mysql.HasPriKeyFlag(firstCol.GetFlag()) {
+				isPrimary = false
+			}
 			indexInfo.Columns = append(indexInfo.Columns, &timodel.IndexColumn{
 				Name:   ast.NewCIStr(rawCols[id].Name),
 				Offset: id,
 			})
 		}
+		indexInfo.Primary = isPrimary
 		tidbTableInfo.Indices = append(tidbTableInfo.Indices, indexInfo)
 	}
 	event := &DMLEvent{
-		TableInfo: commonType.WrapTableInfo(r.Row.Table.Schema, tidbTableInfo),
-		CommitTs:  r.Row.CommitTs,
+		TableInfo:       commonType.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo),
+		CommitTs:        r.Row.CommitTs,
+		Length:          1,
+		PhysicalTableID: r.Row.Table.TableID,
 	}
 
-	chk := chunk.NewChunkFromPoolWithCapacity(event.TableInfo.GetFieldSlice(), 1)
+	chk := chunk.NewChunkFromPoolWithCapacity(event.TableInfo.GetFieldSlice(), chunk.InitialCapacity)
 	event.AddPostFlushFunc(func() {
-		chk.Destroy(1, event.TableInfo.GetFieldSlice())
+		chk.Destroy(chunk.InitialCapacity, event.TableInfo.GetFieldSlice())
 	})
 	columns := event.TableInfo.GetColumns()
 	if r.IsDelete() {
@@ -423,7 +435,12 @@ func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.
 		chk.AppendFloat64(idx, raw.(float64))
 	case mysql.TypeVarString, mysql.TypeVarchar, mysql.TypeString,
 		mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
-		chk.AppendBytes(idx, raw.([]byte))
+		switch val := raw.(type) {
+		case string:
+			chk.AppendBytes(idx, []byte(val))
+		case []byte:
+			chk.AppendBytes(idx, val)
+		}
 	case mysql.TypeNewDecimal:
 		chk.AppendMyDecimal(idx, raw.(*tiTypes.MyDecimal))
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:

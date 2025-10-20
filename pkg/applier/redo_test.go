@@ -67,21 +67,21 @@ func (br *MockReader) Run(ctx context.Context) error {
 }
 
 // ReadNextRow implements LogReader.ReadNextRow
-func (br *MockReader) ReadNextRow(ctx context.Context) (row *commonEvent.RedoDMLEvent, ok bool, err error) {
+func (br *MockReader) ReadNextRow(ctx context.Context) (row *commonEvent.RedoDMLEvent, err error) {
 	select {
 	case <-ctx.Done():
-		return nil, false, ctx.Err()
-	case row, ok = <-br.redoLogCh:
+		return nil, ctx.Err()
+	case row = <-br.redoLogCh:
 	}
 	return
 }
 
 // ReadNextDDL implements LogReader.ReadNextDDL
-func (br *MockReader) ReadNextDDL(ctx context.Context) (ddl *commonEvent.RedoDDLEvent, ok bool, err error) {
+func (br *MockReader) ReadNextDDL(ctx context.Context) (ddl *commonEvent.RedoDDLEvent, err error) {
 	select {
 	case <-ctx.Done():
-		return nil, false, ctx.Err()
-	case ddl, ok = <-br.ddlEventCh:
+		return nil, ctx.Err()
+	case ddl = <-br.ddlEventCh:
 	}
 	return
 }

@@ -128,3 +128,31 @@ func splitUpdateEvent(
 
 	return &deleteEvent, &insertEvent, nil
 }
+
+// EventsGroup could store change event message.
+type eventsGroup struct {
+	tableID int64
+
+	events        []*commonEvent.DMLEvent
+	highWatermark uint64
+}
+
+// newEventsGroup will create new event group.
+func newEventsGroup(tableID int64) *eventsGroup {
+	return &eventsGroup{
+		tableID: tableID,
+	}
+}
+
+// append will append an event to event groups.
+func (g *eventsGroup) append(row *commonEvent.DMLEvent) {
+	g.highWatermark = row.CommitTs
+	g.events = append(g.events, row)
+}
+
+// getEvents will get all events.
+func (g *eventsGroup) getEvents() []*commonEvent.DMLEvent {
+	result := g.events
+	g.events = nil
+	return result
+}

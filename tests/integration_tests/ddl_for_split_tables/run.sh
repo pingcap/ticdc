@@ -77,7 +77,7 @@ main_with_consistent() {
 	ensure 20 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 	cleanup_process $CDC_BINARY
 
-	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" -c=$changefeed_id --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 }
 
@@ -86,7 +86,6 @@ main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
 stop_tidb_cluster
-# FIXME: refactor redo apply
-# main_with_consistent
-# check_logs $WORK_DIR
-# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

@@ -46,9 +46,9 @@ type RedoLogReader interface {
 	// Run read and decode redo logs in background.
 	Run(ctx context.Context) error
 	// ReadNextRow read one row event from redo logs.
-	ReadNextRow(ctx context.Context) (*pevent.RedoDMLEvent, bool, error)
+	ReadNextRow(ctx context.Context) (*pevent.RedoDMLEvent, error)
 	// ReadNextDDL read one ddl event from redo logs.
-	ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEvent, bool, error)
+	ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEvent, error)
 	// ReadMeta reads meta from redo logs and returns the latest checkpointTs and resolvedTs
 	ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error)
 }
@@ -237,21 +237,21 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 }
 
 // ReadNextRow implement the `RedoLogReader` interface.
-func (l *LogReader) ReadNextRow(ctx context.Context) (row *pevent.RedoDMLEvent, ok bool, err error) {
+func (l *LogReader) ReadNextRow(ctx context.Context) (row *pevent.RedoDMLEvent, err error) {
 	select {
 	case <-ctx.Done():
 		err = errors.Trace(ctx.Err())
-	case row, ok = <-l.rowCh:
+	case row = <-l.rowCh:
 	}
 	return
 }
 
 // ReadNextDDL implement the `RedoLogReader` interface.
-func (l *LogReader) ReadNextDDL(ctx context.Context) (ddl *pevent.RedoDDLEvent, ok bool, err error) {
+func (l *LogReader) ReadNextDDL(ctx context.Context) (ddl *pevent.RedoDDLEvent, err error) {
 	select {
 	case <-ctx.Done():
 		err = errors.Trace(ctx.Err())
-	case ddl, ok = <-l.ddlCh:
+	case ddl = <-l.ddlCh:
 	}
 	return
 }

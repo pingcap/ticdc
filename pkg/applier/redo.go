@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -52,6 +51,8 @@ type RedoApplierConfig struct {
 	SinkURI string
 	Storage string
 	Dir     string
+	// ChangefeedID is used to identify the changefeed that this applier belongs to.
+	ChangefeedID string
 }
 
 // RedoApplier implements a redo log applier
@@ -64,12 +65,11 @@ type RedoApplier struct {
 	appliedDDLCount uint64
 
 	eventsGroup     map[commonType.TableID]*eventsGroup
+	tableDDLTs      map[commonType.TableID]int64
 	appliedLogCount uint64
 
 	errCh chan error
 
-	// changefeedID is used to identify the changefeed that this applier belongs to.
-	// not used for now.
 	changefeedID commonType.ChangeFeedID
 }
 
@@ -78,7 +78,9 @@ func NewRedoApplier(cfg *RedoApplierConfig) *RedoApplier {
 	return &RedoApplier{
 		cfg:          cfg,
 		errCh:        make(chan error, 1024),
-		changefeedID: commonType.NewChangeFeedIDWithName(applierChangefeed, commonType.DefaultKeyspace),
+		tableDDLTs:   make(map[commonType.TableID]int64),
+		eventsGroup:  make(map[commonType.TableID]*eventsGroup),
+		changefeedID: commonType.NewChangeFeedIDWithName(cfg.ChangefeedID, commonType.DefaultKeyspace),
 	}
 }
 
@@ -100,34 +102,23 @@ func (rac *RedoApplierConfig) toLogReaderConfig() (string, *reader.LogReaderConf
 	return uri.Scheme, cfg, nil
 }
 
-func (ra *RedoApplier) catchError(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case err := <-ra.errCh:
-			return err
+func (ra *RedoApplier) getTableDDLTs(tableID commonType.TableID, checkpointTs int64) int64 {
+	// we have to refactor redo apply to tolerate DDL execution errors.
+	// Besides, we have to query ddl_ts to get the correct checkpointTs to avoid inconsistency.
+	ts, ok := ra.tableDDLTs[tableID]
+	if !ok {
+		newStartTsList, _, err := ra.mysqlSink.GetStartTsList([]int64{tableID}, []int64{checkpointTs}, false)
+		if err != nil || len(newStartTsList) != 1 {
+			log.Panic("get startTs list failed", zap.Any("tableID", tableID), zap.Any("newStartTsList", newStartTsList), zap.Error(err))
 		}
+		ra.tableDDLTs[tableID] = newStartTsList[0]
+		log.Info("calculate real startTs for redo apply",
+			zap.Stringer("changefeedID", ra.changefeedID),
+			zap.Int64("tableID", tableID),
+			zap.Any("realStartTs", newStartTsList))
+		return ra.tableDDLTs[tableID]
 	}
-}
-
-func (ra *RedoApplier) initSink(ctx context.Context) (err error) {
-	if ra.mysqlSink != nil || ra.eventsGroup != nil {
-		log.Warn("redo applier has initialized")
-		return nil
-	}
-	replicaConfig := &config.ChangefeedConfig{
-		SinkURI:    ra.cfg.SinkURI,
-		SinkConfig: &config.SinkConfig{},
-	}
-	sink, err := sink.New(ctx, replicaConfig, ra.changefeedID)
-	if err != nil {
-		return err
-	}
-	ra.mysqlSink = sink.(*mysql.Sink)
-
-	ra.eventsGroup = make(map[commonType.TableID]*eventsGroup)
-	return nil
+	return ts
 }
 
 func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
@@ -138,10 +129,6 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	log.Info("apply redo log starts",
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.Uint64("resolvedTs", resolvedTs))
-	if err := ra.initSink(ctx); err != nil {
-		return err
-	}
-	defer ra.mysqlSink.Close(true)
 
 	shouldApplyDDL := func(row *commonEvent.RedoDMLEvent, ddl *commonEvent.RedoDDLEvent) bool {
 		if ddl == nil {
@@ -159,19 +146,19 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ddl, ok, err := ra.rd.ReadNextDDL(ctx)
-	if err != nil || !ok {
+	ddl, err := ra.rd.ReadNextDDL(ctx)
+	if err != nil {
 		return err
 	}
 	for {
-		if row == nil {
+		if row == nil && ddl == nil {
 			break
 		}
 		if shouldApplyDDL(row, ddl) {
 			if err := ra.applyDDL(ctx, ddl, checkpointTs); err != nil {
 				return err
 			}
-			if ddl, _, err = ra.rd.ReadNextDDL(ctx); err != nil {
+			if ddl, err = ra.rd.ReadNextDDL(ctx); err != nil {
 				return err
 			}
 		} else {
@@ -207,19 +194,16 @@ func (ra *RedoApplier) applyDDL(
 			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
 			return true
 		}
-		if ddl.DDL.CommitTs == checkpointTs {
-			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
-				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
-				return true
-			}
-		}
-		newStartTsList, _, err := ra.mysqlSink.GetStartTsList([]int64{ddl.TableName.TableID}, []int64{0}, false)
-		if err != nil {
-			log.Error("get startTs list failed", zap.Any("ddl", ddl), zap.Error(err))
-		}
-		if len(newStartTsList) > 0 && newStartTsList[0] > int64(checkpointTs) {
+		ts := ra.getTableDDLTs(ddl.TableName.TableID, int64(checkpointTs))
+		if ts >= int64(ddl.DDL.CommitTs) {
 			return true
 		}
+		// if ddl.DDL.CommitTs == checkpointTs {
+		// 	if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
+		// 		log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
+		// 		return true
+		// 	}
+		// }
 		return false
 	}
 	if shouldSkip() {
@@ -227,7 +211,6 @@ func (ra *RedoApplier) applyDDL(
 	}
 	log.Warn("apply DDL", zap.Any("ddl", ddl))
 	// Wait all tables to flush data before applying DDL.
-	// TODO: only block tables that are affected by this DDL.
 	for tableID := range ra.eventsGroup {
 		if err := ra.waitTableFlush(ctx, tableID, ddl.DDL.CommitTs); err != nil {
 			return err
@@ -245,7 +228,7 @@ func (ra *RedoApplier) applyRow(
 ) error {
 	tableID := row.Row.Table.TableID
 	if _, ok := ra.eventsGroup[tableID]; !ok {
-		ra.eventsGroup[tableID] = NewEventsGroup(0, tableID)
+		ra.eventsGroup[tableID] = newEventsGroup(tableID)
 	}
 
 	if row.Row.CommitTs < ra.eventsGroup[tableID].highWatermark {
@@ -254,7 +237,14 @@ func (ra *RedoApplier) applyRow(
 			zap.Uint64("commitTs", row.Row.CommitTs),
 			zap.Any("resolvedTs", ra.eventsGroup[tableID].highWatermark))
 	}
-	ra.eventsGroup[tableID].Append(row.ToDMLEvent(), false)
+
+	ts := ra.getTableDDLTs(tableID, int64(checkpointTs))
+	if ts >= int64(row.Row.CommitTs) {
+		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", ts), zap.Any("row", row))
+		return nil
+	}
+
+	ra.eventsGroup[tableID].append(row.ToDMLEvent())
 
 	ra.appliedLogCount++
 	return nil
@@ -270,10 +260,9 @@ func (ra *RedoApplier) waitTableFlush(
 	}
 
 	var flushed atomic.Int64
-
-	events := ra.eventsGroup[tableID].Resolve(rts)
+	events := ra.eventsGroup[tableID].getEvents()
 	total := len(events)
-	done := make(chan struct{}, 1)
+	done := make(chan struct{})
 	for _, e := range events {
 		e.AddPostFlushFunc(func() {
 			if flushed.Inc() == int64(total) {
@@ -286,18 +275,19 @@ func (ra *RedoApplier) waitTableFlush(
 	start := time.Now()
 	ticker := time.NewTicker(warnDuration)
 	defer ticker.Stop()
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	case <-done:
-		log.Info("flush DML events done", zap.Uint64("resolvedTs", rts),
-			zap.Int("total", total), zap.Duration("duration", time.Since(start)))
-	case <-ticker.C:
-		log.Panic("DML events cannot be flushed in time", zap.Uint64("resolvedTs", rts),
-			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-done:
+			log.Info("flush DML events done", zap.Uint64("resolvedTs", rts),
+				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+			return nil
+		case <-ticker.C:
+			log.Warn("DML events cannot be flushed in time", zap.Uint64("resolvedTs", rts),
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+		}
 	}
-
-	return nil
 }
 
 var createRedoReader = createRedoReaderImpl
@@ -308,46 +298,6 @@ func createRedoReaderImpl(ctx context.Context, cfg *RedoApplierConfig) (reader.R
 		return nil, err
 	}
 	return reader.NewRedoLogReader(ctx, storageType, readerCfg)
-}
-
-// processEvent return (event to emit, pending event)
-func processEvent(
-	event *commonEvent.RedoDMLEvent,
-	prevTxnStartTs commonType.Ts,
-	tempStorage *tempTxnInsertEventStorage,
-) (*commonEvent.RedoDMLEvent, *commonEvent.RedoDMLEvent, error) {
-	if event == nil {
-		log.Panic("event should not be nil")
-	}
-
-	// meet a new transaction
-	if prevTxnStartTs != 0 && prevTxnStartTs != event.Row.StartTs {
-		if tempStorage.hasEvent() {
-			// emit the insert events in the previous transaction
-			return nil, event, nil
-		}
-	}
-	if event.IsDelete() {
-		return event, nil, nil
-	} else if event.IsInsert() {
-		if tempStorage.hasEvent() {
-			// pend current event and emit the insert events in temp storage first to release memory
-			return nil, event, nil
-		}
-		return event, nil, nil
-	} else if !shouldSplitUpdateEvent(event) {
-		return event, nil, nil
-	} else {
-		deleteEvent, insertEvent, err := splitUpdateEvent(event)
-		if err != nil {
-			return nil, nil, err
-		}
-		err = tempStorage.addEvent(insertEvent)
-		if err != nil {
-			return nil, nil, err
-		}
-		return deleteEvent, nil, nil
-	}
 }
 
 // ReadMeta creates a new redo applier and read meta from reader
@@ -362,6 +312,21 @@ func (ra *RedoApplier) ReadMeta(ctx context.Context) (checkpointTs uint64, resol
 // Apply applies redo log to given target
 func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	eg, egCtx := errgroup.WithContext(egCtx)
+	replicaConfig := &config.ChangefeedConfig{
+		SinkURI:    ra.cfg.SinkURI,
+		SinkConfig: &config.SinkConfig{},
+	}
+	sinkURI, err := url.Parse(replicaConfig.SinkURI)
+	if err != nil {
+		return errors.WrapError(errors.ErrSinkURIInvalid, err)
+	}
+	ra.mysqlSink, err = mysql.New(egCtx, ra.changefeedID, replicaConfig, sinkURI)
+	if err != nil {
+		return err
+	}
+	eg.Go(func() error {
+		return ra.mysqlSink.Run(egCtx)
+	})
 
 	if ra.rd, err = createRedoReader(egCtx, ra.cfg); err != nil {
 		return err
@@ -372,10 +337,8 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	ra.updateSplitter = newUpdateEventSplitter(ra.rd, ra.cfg.Dir)
 
 	eg.Go(func() error {
+		defer ra.mysqlSink.Close(true)
 		return ra.consumeLogs(egCtx)
-	})
-	eg.Go(func() error {
-		return ra.catchError(egCtx)
 	})
 
 	err = eg.Wait()

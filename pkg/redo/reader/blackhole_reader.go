@@ -33,13 +33,13 @@ func (br *BlackHoleReader) Run(ctx context.Context) error {
 }
 
 // ReadNextRow implements LogReader.ReadNextRow
-func (br *BlackHoleReader) ReadNextRow(ctx context.Context) (*pevent.RedoDMLEvent, bool, error) {
-	return &pevent.RedoDMLEvent{}, false, nil
+func (br *BlackHoleReader) ReadNextRow(ctx context.Context) (*pevent.RedoDMLEvent, error) {
+	return &pevent.RedoDMLEvent{}, nil
 }
 
 // ReadNextDDL implements LogReader.ReadNextDDL
-func (br *BlackHoleReader) ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEvent, bool, error) {
-	return &pevent.RedoDDLEvent{}, false, nil
+func (br *BlackHoleReader) ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEvent, error) {
+	return &pevent.RedoDDLEvent{}, nil
 }
 
 // ReadMeta implements LogReader.ReadMeta
