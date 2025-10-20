@@ -2813,4 +2813,24 @@ func TestRenameTable(t *testing.T) {
 		},
 	})
 	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
+
+	// use test;
+	job = buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
+		Database: "test",
+		Table:    "t1",
+	})
+	job.Query = "ALTER TABLE t1 RENAME TO t2"
+	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
+			200: {Name: "t", Tables: map[int64]bool{103: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "t1"},
+			102: {SchemaID: 100, Name: "t2"},
+			103: {SchemaID: 200, Name: "t3"},
+		},
+	})
+	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
 }
