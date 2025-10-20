@@ -36,7 +36,6 @@ import (
 const (
 	applierChangefeed = "redo-applier"
 	warnDuration      = 3 * time.Minute
-	flushWaitDuration = 200 * time.Millisecond
 )
 
 var (
@@ -77,8 +76,9 @@ type RedoApplier struct {
 // NewRedoApplier creates a new RedoApplier instance
 func NewRedoApplier(cfg *RedoApplierConfig) *RedoApplier {
 	return &RedoApplier{
-		cfg:   cfg,
-		errCh: make(chan error, 1024),
+		cfg:          cfg,
+		errCh:        make(chan error, 1024),
+		changefeedID: commonType.NewChangeFeedIDWithName(applierChangefeed, commonType.DefaultKeyspace),
 	}
 }
 
@@ -171,7 +171,7 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 			if err := ra.applyDDL(ctx, ddl, checkpointTs); err != nil {
 				return err
 			}
-			if ddl, ok, err = ra.rd.ReadNextDDL(ctx); err != nil {
+			if ddl, _, err = ra.rd.ReadNextDDL(ctx); err != nil {
 				return err
 			}
 		} else {
@@ -284,7 +284,7 @@ func (ra *RedoApplier) waitTableFlush(
 	}
 	// Make sure all events are flushed to downstream.
 	start := time.Now()
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(warnDuration)
 	defer ticker.Stop()
 	select {
 	case <-ctx.Done():
@@ -293,7 +293,7 @@ func (ra *RedoApplier) waitTableFlush(
 		log.Info("flush DML events done", zap.Uint64("resolvedTs", rts),
 			zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 	case <-ticker.C:
-		log.Panic("DML events cannot be flushed in 1 minute", zap.Uint64("resolvedTs", rts),
+		log.Panic("DML events cannot be flushed in time", zap.Uint64("resolvedTs", rts),
 			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 	}
 

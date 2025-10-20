@@ -457,7 +457,7 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 	case s.checkpointChan <- ts:
 	case <-s.ctx.Done():
 		return
-		// We can just drop the checkpoint ts if the channel is full to avoid blocking since the  checkpointTs will come indefinitely
+		// We can just drop the checkpoint ts if the channel is full to avoid blocking since the checkpointTs will come indefinitely
 	default:
 	}
 }
