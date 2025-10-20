@@ -9,8 +9,13 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 TEST_HOST_LIST=(UP_TIDB_HOST UP_PD_HOST_{1..3} UP_TIKV_HOST_{1..3})
-# FIXME: hostname in macOS doesn't support -I option.
-lan_addrs=($(hostname -I))
+if [[ "$(uname)" == "Darwin" ]]; then
+	# macOS
+	lan_addrs=($(ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}'))
+else
+	# Linux
+	lan_addrs=($(hostname -I))
+fi
 lan_addr=${lan_addrs[0]-"127.0.0.1"}
 export UP_TIDB_HOST=$lan_addr \
 	UP_PD_HOST_1=$lan_addr \
@@ -71,7 +76,7 @@ function prepare() {
 	echo started cdc server successfully
 
 	SINK_URI="blackhole:///"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 }
 
 function check() {

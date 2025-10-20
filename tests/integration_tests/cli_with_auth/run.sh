@@ -15,7 +15,7 @@ export TICDC_PASSWORD=ticdc_secret
 function check_changefeed_count() {
 	pd_addr=$1
 	expected=$2
-	feed_count=$(cdc cli changefeed list --pd=$pd_addr | grep -v "Command to ticdc" | jq '.|length')
+	feed_count=$(cdc_cli_changefeed list --pd=$pd_addr | grep -v "Command to ticdc" | jq '.|length')
 	if [[ "$feed_count" != "$expected" ]]; then
 		echo "[$(date)] <<<<< unexpect changefeed count! expect ${expected} got ${feed_count} >>>>>"
 		exit 1
@@ -45,7 +45,7 @@ function run() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config "$WORK_DIR/server.toml"
 
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	TOPIC_NAME="ticdc-cli-test-$RANDOM"
 	case $SINK_TYPE in
@@ -59,7 +59,7 @@ function run() {
 	esac
 
 	uuid="custom-changefeed-name"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -79,7 +79,7 @@ function run() {
 
 	# Make sure changefeed can not be created if the name is already exists.
 	set +e
-	exists=$(run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" 2>&1 | grep -oE 'already exists')
+	exists=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="$uuid" 2>&1 | grep -oE 'already exists')
 	set -e
 	if [[ -z $exists ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${exists} >>>>>"
@@ -93,19 +93,19 @@ case-sensitive = true
 enable-table-across-nodes = true
 EOF
 	set +e
-	update_result=$(cdc cli changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid)
+	update_result=$(cdc_cli_changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid)
 	set -e
 	if [[ ! $update_result == *"can only update changefeed config when it is stopped"* ]]; then
 		echo "update changefeed config should fail when changefeed is running, got $update_result"
 	fi
 
 	# Pause changefeed
-	run_cdc_cli changefeed --changefeed-id $uuid pause && sleep 3
+	cdc_cli_changefeed --changefeed-id $uuid pause && sleep 3
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $uuid "stopped" "null" ""
 
 	# Update changefeed
-	run_cdc_cli changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid
-	changefeed_info=$(curl -s -X GET "http://127.0.0.1:8300/api/v2/changefeeds/$uuid" 2>&1)
+	cdc_cli_changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid
+	changefeed_info=$(curl -s -X GET "http://127.0.0.1:8300/api/v2/changefeeds/$uuid?keyspace=$KEYSPACE_NAME" 2>&1)
 	if [[ ! $changefeed_info == *"\"case_sensitive\":true"* ]]; then
 		echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
 		exit 1
@@ -116,18 +116,18 @@ EOF
 	fi
 
 	# Resume changefeed
-	run_cdc_cli changefeed --changefeed-id $uuid resume && sleep 3
+	cdc_cli_changefeed --changefeed-id $uuid resume && sleep 3
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $uuid "normal" "null" ""
 
 	# Remove changefeed
-	run_cdc_cli changefeed --changefeed-id $uuid remove && sleep 3
+	cdc_cli_changefeed --changefeed-id $uuid remove && sleep 3
 	check_changefeed_count http://${UP_PD_HOST_1}:${UP_PD_PORT_1} 0
 
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid" && sleep 3
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --tz="Asia/Shanghai" -c="$uuid" && sleep 3
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $uuid "normal" "null" ""
 
 	# Make sure bad sink url fails at creating changefeed.
-	badsink=$(run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" 2>&1 | grep -oE 'fail')
+	badsink=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="mysql://badsink" 2>&1 | grep -oE 'fail')
 	if [[ -z $badsink ]]; then
 		echo "[$(date)] <<<<< unexpect output got ${badsink} >>>>>"
 		exit 1
@@ -137,12 +137,12 @@ EOF
 	if [ "$SINK_TYPE" == "kafka" ]; then
 		SSL_TOPIC_NAME="ticdc-cli-test-ssl-$RANDOM"
 		SINK_URI="kafka://127.0.0.1:9093/$SSL_TOPIC_NAME?protocol=open-protocol&ca=${TLS_DIR}/ca.pem&cert=${TLS_DIR}/client.pem&key=${TLS_DIR}/client-key.pem&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760&insecure-skip-verify=true"
-		run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai"
+		cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai"
 	fi
 
 	# Test unsafe commands
 	echo "Start delete service gc safepoint"
-	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
+	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint -k "$KEYSPACE_NAME"
 	echo "Pass delete service gc safepoint"
 
 	echo "Start reset"
@@ -150,7 +150,8 @@ EOF
 	echo "Pass reset"
 
 	# ensure server exit
-	ensure 30 "! ps -p $cdc_pid_1 > /dev/null 2>&1"
+	# ensure 30 "! ps -p $cdc_pid > /dev/null 2>&1"
+	ensure 30 "! kill -0 $cdc_pid > /dev/null 2>&1"
 
 	# restart server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300" --config "$WORK_DIR/server.toml"
@@ -170,10 +171,17 @@ EOF
 		exit 1
 	fi
 
-	REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
 	TS=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-	run_cdc_cli unsafe resolve-lock --region=$REGION_ID
-	run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
+	if [ "$NEXT_GEN" = 1 ]; then
+		KEYSPACE_ID=$(pd-ctl -u=$pd_addr keyspace show name "$KEYSPACE_NAME" | jq -r '.id')
+		REGION_ID=$(pd-ctl region keyspace id $KEYSPACE_ID | jq '.regions[] | select(.start_key | startswith("78")) | .id' | head -n 1)
+		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID
+		run_cdc_cli unsafe resolve-lock -k "$KEYSPACE_NAME" --region=$REGION_ID --ts=$TS
+	else
+		REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID
+		run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
+	fi
 
 	sleep 3
 	# make sure TiCDC does not panic
