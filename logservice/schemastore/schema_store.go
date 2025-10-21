@@ -238,17 +238,16 @@ func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchema
 	}
 
 	ctx := context.Background()
-
 	// If the schemastore does not contain the keyspace, it means it is not a maintainer node.
-	// It should register the keyspace when it try to get keyspace schema_store.
+	// It should register the keyspace when it tries to get keyspace schema_store.
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.GetKeyspaceByID(ctx, keyspaceID)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	if err = s.RegisterKeyspace(ctx, keyspaceMeta.Name); err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	s.keyspaceLocker.RLock()
@@ -258,7 +257,7 @@ func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchema
 		return store, nil
 	}
 
-	return nil, errors.ErrKeyspaceNotFound
+	return nil, errors.ErrKeyspaceNotFound.FastGenByArgs(keyspaceID)
 }
 
 func (s *schemaStore) Run(ctx context.Context) error {
@@ -291,38 +290,38 @@ func (s *schemaStore) Close(_ context.Context) error {
 }
 
 func (s *schemaStore) GetAllPhysicalTables(keyspaceID uint32, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
-	schemaStore, err := s.getKeyspaceSchemaStore(keyspaceID)
+	store, err := s.getKeyspaceSchemaStore(keyspaceID)
 	if err != nil {
 		return nil, err
 	}
 
-	schemaStore.waitResolvedTs(0, snapTs, 10*time.Second)
-	return schemaStore.dataStorage.getAllPhysicalTables(snapTs, filter)
+	store.waitResolvedTs(0, snapTs, 10*time.Second)
+	return store.dataStorage.getAllPhysicalTables(snapTs, filter)
 }
 
 func (s *schemaStore) RegisterTable(keyspaceID uint32, tableID int64, startTs uint64) error {
-	schemaStore, err := s.getKeyspaceSchemaStore(keyspaceID)
+	store, err := s.getKeyspaceSchemaStore(keyspaceID)
 	if err != nil {
 		return err
 	}
 
 	metrics.SchemaStoreResolvedRegisterTableGauge.Inc()
-	schemaStore.waitResolvedTs(tableID, startTs, 5*time.Second)
+	store.waitResolvedTs(tableID, startTs, 5*time.Second)
 	log.Info("register table",
 		zap.Uint32("keyspaceID", keyspaceID),
 		zap.Int64("tableID", tableID),
 		zap.Uint64("startTs", startTs),
-		zap.Uint64("resolvedTs", schemaStore.resolvedTs.Load()))
-	return schemaStore.dataStorage.registerTable(tableID, startTs)
+		zap.Uint64("resolvedTs", store.resolvedTs.Load()))
+	return store.dataStorage.registerTable(tableID, startTs)
 }
 
 func (s *schemaStore) UnregisterTable(keyspaceID uint32, tableID int64) error {
-	schemaStore, err := s.getKeyspaceSchemaStore(keyspaceID)
+	store, err := s.getKeyspaceSchemaStore(keyspaceID)
 	if err != nil {
 		return err
 	}
 	metrics.SchemaStoreResolvedRegisterTableGauge.Dec()
-	return schemaStore.dataStorage.unregisterTable(tableID)
+	return store.dataStorage.unregisterTable(tableID)
 }
 
 func (s *schemaStore) GetTableInfo(keyspaceID uint32, tableID int64, ts uint64) (*common.TableInfo, error) {
