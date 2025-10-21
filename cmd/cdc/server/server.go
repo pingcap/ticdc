@@ -138,12 +138,12 @@ func (o *options) run(cmd *cobra.Command) error {
 	defer ticker.Stop()
 	go func() {
 		svr.Close(ctx)
-		ch <- struct{}{}
+close(ch)
 	}()
 	select {
 	case <-ch:
 	case <-ticker.C:
-		log.Warn("gracefull close timeout")
+log.Warn("graceful close timeout")
 	}
 	return err
 }
