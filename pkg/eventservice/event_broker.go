@@ -895,6 +895,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
+	status.dispatchers.Store(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
 		log.Info("table trigger dispatcher register dispatcher",
@@ -971,10 +972,16 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 
-	stat.changefeedStat.removeDispatcher()
+	stat.changefeedStat.dispatchers.Delete(id)
 	changefeedID := dispatcherInfo.GetChangefeedID()
 
-	if stat.changefeedStat.dispatcherCount.Load() == 0 {
+	// Check if there are any dispatchers left for this changefeed.
+	empty := true
+	stat.changefeedStat.dispatchers.Range(func(key, value any) bool {
+		empty = false
+		return false // stop iteration
+	})
+	if empty {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
 		)
@@ -1043,6 +1050,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	status := c.getOrSetChangefeedStatus(changefeedID)
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
+	status.dispatchers.Store(dispatcherID, statPtr)
 
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
