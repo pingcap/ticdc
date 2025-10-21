@@ -274,7 +274,8 @@ func (c *server) setPreServices(ctx context.Context) error {
 	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
 	c.preServices = append(c.preServices, dispatcherOrchestrator)
 
-	keyspaceManager := keyspace.NewKeyspaceManager(c.pdEndpoints)
+	keyspaceManager := keyspace.NewManager(c.pdEndpoints)
+	keyspaceManager.Run()
 	appctx.SetService(appctx.KeyspaceManager, keyspaceManager)
 	c.preServices = append(c.preServices, keyspaceManager)
 

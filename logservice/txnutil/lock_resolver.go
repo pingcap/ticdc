@@ -69,7 +69,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		Limit:      scanLockLimit,
 	})
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.GetKeyspaceByID(ctx, keyspaceID)
 	if err != nil {
 		return err

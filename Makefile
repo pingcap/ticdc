@@ -124,7 +124,7 @@ UT_PACKAGES_DISPATCHER := ./pkg/sink/cloudstorage/... ./pkg/sink/mysql/... ./pkg
 UT_PACKAGES_MAINTAINER := ./maintainer/... ./pkg/scheduler/...
 UT_PACKAGES_COORDINATOR := ./coordinator/...
 UT_PACKAGES_LOGSERVICE := ./logservice/...
-UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/... ./pkg/common/... ./api/middleware/...
+UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/... ./pkg/common/... ./api/middleware/... ./pkg/keyspace/...
 
 include tools/Makefile
 
@@ -281,6 +281,7 @@ unit_test_in_verify_ci_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/b
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
 
+# Usage: PKG=./api/middleware/... make unit_test_pkg
 unit_test_pkg: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
 	mkdir -p "$(TEST_DIR)"
 	$(FAILPOINT_ENABLE)
@@ -294,6 +295,7 @@ unit_test_pkg: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
 
+# Usage: PKG=./api/middleware/... make unit_test_pkg_next_gen
 unit_test_pkg_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
 	mkdir -p "$(TEST_DIR)"
 	$(FAILPOINT_ENABLE)

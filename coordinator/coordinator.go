@@ -287,7 +287,7 @@ func (c *coordinator) handleStateChange(
 		log.Info("changefeed is resumed or created successfully, try to delete its safeguard gc safepoint",
 			zap.String("changefeed", event.changefeedID.String()))
 
-		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 		keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, event.changefeedID.Keyspace())
 		if err != nil {
 			log.Warn("failed to load keyspace", zap.String("keyspace", event.changefeedID.Keyspace()), zap.Error(err))
@@ -473,7 +473,7 @@ func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 
 func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, barrierMap map[string]uint64, keyspaceName string) error {
 	// Obtain keyspace metadata from PD
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrLoadKeyspaceFailed, err)

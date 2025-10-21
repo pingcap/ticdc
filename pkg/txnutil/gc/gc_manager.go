@@ -182,7 +182,7 @@ func checkStaleCheckpointTs(
 }
 
 func (m *gcManager) checkStaleCheckpointTsKeyspace(ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, changefeedID.Keyspace())
 	if err != nil {
 		return err

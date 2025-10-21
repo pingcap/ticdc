@@ -250,7 +250,7 @@ func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchema
 
 	// If the schemastore does not contain the keyspace, it means it is not a maintainer node.
 	// It should register the keyspace when it try to get keyspace schema_store.
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.GetKeyspaceByID(ctx, keyspaceID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -443,7 +443,7 @@ func (s *schemaStore) RegisterKeyspace(
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
 	if err != nil {
 		return errors.Trace(err)

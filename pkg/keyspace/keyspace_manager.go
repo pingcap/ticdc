@@ -17,6 +17,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
@@ -32,35 +33,57 @@ import (
 	"go.uber.org/zap"
 )
 
-type KeyspaceManager interface {
+const (
+	updateDuration = 60 * time.Second
+)
+
+type Manager interface {
+	// Run starts the manager
+	Run()
+	// LoadKeyspace loads keyspace metadata by name from local
+	// If the local cache is not found, it will load from pd
 	LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error)
+	// ForceLoadKeyspace force loads keyspace metadata from pd and update local cache
+	ForceLoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error)
+	// GetKeyspaceByID loads keyspace metadata by id
 	GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error)
+	// GetStorage get a storag for the keyspace
 	GetStorage(keyspace string) (kv.Storage, error)
+	// Close close the manager
 	Close()
 }
 
-func NewKeyspaceManager(pdEndpoints []string) KeyspaceManager {
-	return &keyspaceManager{
+func NewManager(pdEndpoints []string) Manager {
+	m := &manager{
 		pdEndpoints:   pdEndpoints,
 		keyspaceMap:   make(map[string]*keyspacepb.KeyspaceMeta),
 		keyspaceIDMap: make(map[uint32]*keyspacepb.KeyspaceMeta),
 		storageMap:    make(map[string]kv.Storage),
 	}
+
+	return m
 }
 
-type keyspaceManager struct {
+type manager struct {
 	pdEndpoints []string
 
-	// TODO tenfyzhong 2025-09-16 23:46:01 update keyspaceMeta periodicity
 	keyspaceMap   map[string]*keyspacepb.KeyspaceMeta
 	keyspaceIDMap map[uint32]*keyspacepb.KeyspaceMeta
 	keyspaceMu    sync.Mutex
 
 	storageMap map[string]kv.Storage
 	storageMu  sync.Mutex
+
+	ticker   *time.Ticker
+	updateMu sync.Mutex
 }
 
-func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
+func (k *manager) Run() {
+	k.ticker = time.NewTicker(updateDuration)
+	go k.updatePeriodicity()
+}
+
+func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
 		return &keyspacepb.KeyspaceMeta{
 			Name: common.DefaultKeyspace,
@@ -74,6 +97,11 @@ func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*k
 		return meta, nil
 	}
 
+	return k.ForceLoadKeyspace(ctx, keyspace)
+}
+
+func (k *manager) ForceLoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
+	var meta *keyspacepb.KeyspaceMeta
 	var err error
 	pdAPIClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
 	err = retry.Do(ctx, func() error {
@@ -90,10 +118,6 @@ func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*k
 
 	k.keyspaceMu.Lock()
 	defer k.keyspaceMu.Unlock()
-	// Double check, another goroutine might have fetched and stored it.
-	if meta, ok := k.keyspaceMap[keyspace]; ok {
-		return meta, nil
-	}
 
 	k.keyspaceMap[keyspace] = meta
 	k.keyspaceIDMap[meta.Id] = meta
@@ -101,7 +125,7 @@ func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*k
 	return meta, nil
 }
 
-func (k *keyspaceManager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
+func (k *manager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
 		return &keyspacepb.KeyspaceMeta{
 			Name: common.DefaultKeyspace,
@@ -142,7 +166,7 @@ func (k *keyspaceManager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32
 	return meta, nil
 }
 
-func (k *keyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {
+func (k *manager) GetStorage(keyspace string) (kv.Storage, error) {
 	k.storageMu.Lock()
 	defer k.storageMu.Unlock()
 
@@ -161,7 +185,7 @@ func (k *keyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {
 	return kvStorage, nil
 }
 
-func (k *keyspaceManager) Close() {
+func (k *manager) Close() {
 	k.storageMu.Lock()
 	defer k.storageMu.Unlock()
 
@@ -169,6 +193,49 @@ func (k *keyspaceManager) Close() {
 		err := storage.Close()
 		if err != nil {
 			log.Error("close storage", zap.String("keyspace", storage.GetKeyspace()), zap.Error(err))
+		}
+	}
+
+	k.storageMap = make(map[string]kv.Storage)
+
+	if k.ticker != nil {
+		k.ticker.Stop()
+		k.ticker = nil
+	}
+}
+
+func (k *manager) updatePeriodicity() {
+	if kerneltype.IsClassic() {
+		return
+	}
+
+	for range k.ticker.C {
+		k.update()
+	}
+}
+
+func (k *manager) update() {
+	// If we cannot get the lock, we don't need to do anything
+	// because that means the previous process is still running.
+	if !k.updateMu.TryLock() {
+		log.Info("update keyspace lock failed")
+		return
+	}
+
+	defer k.updateMu.Unlock()
+
+	k.keyspaceMu.Lock()
+	keyspaces := make([]string, 0, len(k.keyspaceMap))
+	for _, keyspace := range k.keyspaceMap {
+		keyspaces = append(keyspaces, keyspace.Name)
+	}
+	k.keyspaceMu.Unlock()
+
+	ctx := context.Background()
+	for _, keyspace := range keyspaces {
+		_, err := k.ForceLoadKeyspace(ctx, keyspace)
+		if err != nil {
+			log.Warn("force load keyspace", zap.String("keyspace", keyspace), zap.Error(err))
 		}
 	}
 }

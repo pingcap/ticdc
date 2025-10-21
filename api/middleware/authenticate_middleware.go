@@ -102,7 +102,7 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 
 // fetchTiDBTopology parses the TiDB topology from etcd.
 func fetchTiDBTopology(ctx context.Context, etcdClient etcd.Client, ks string) ([]upstream.TidbInstance, error) {
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	meta, err := keyspaceManager.LoadKeyspace(ctx, ks)
 	if err != nil {
 		return nil, err

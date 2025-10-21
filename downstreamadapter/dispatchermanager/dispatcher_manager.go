@@ -158,7 +158,7 @@ func NewDispatcherManager(
 	ctx, cancel := context.WithCancel(context.Background())
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, changefeedID.Keyspace())
 	if err != nil {
 		cancel()
