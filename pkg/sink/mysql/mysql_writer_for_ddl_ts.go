@@ -45,7 +45,7 @@ const timeFormat = "2006-01-02 15:04:05.000000"
 // and after send the ddl ts, we update the ddl ts item to finished.
 // It can maximum guarantee we use the correct startTs.
 func (w *Writer) FlushDDLTsPre(event commonEvent.BlockEvent) error {
-	if w.cfg.DryRun {
+	if w.cfg.DryRun || !w.cfg.EnableDDLTs {
 		return nil
 	}
 	err := w.createDDLTsTableIfNotExist()
@@ -56,7 +56,7 @@ func (w *Writer) FlushDDLTsPre(event commonEvent.BlockEvent) error {
 }
 
 func (w *Writer) FlushDDLTs(event commonEvent.BlockEvent) error {
-	if w.cfg.DryRun {
+	if w.cfg.DryRun || !w.cfg.EnableDDLTs {
 		return nil
 	}
 	err := w.createDDLTsTableIfNotExist()
@@ -336,59 +336,70 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 				isSyncpoints[idx] = isSyncpoint
 			}
 		} else {
-			if !w.cfg.IsTiDB {
-				log.Panic("ddl ts table is not finished, but downstream is not tidb, FIX IT")
+			for _, idx := range tableIdIdxMap[tableId] {
+				retStartTsList[idx] = ddlTs - 1
 			}
-
-			createdAt, err := time.Parse(timeFormat, string(createdAtBytes))
-			if err != nil {
-				log.Error("Failed to parse created_at", zap.Any("createdAtBytes", createdAtBytes), zap.Any("error", err))
-				for _, idx := range tableIdIdxMap[tableId] {
-					retStartTsList[idx] = ddlTs - 1
-				}
-				continue
-			}
-
-			// query the ddl_jobs table to find whether the ddl is executed and the ddl created time
-			createdTime, ok := w.queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob)
-			if !ok {
-				for _, idx := range tableIdIdxMap[tableId] {
-					retStartTsList[idx] = ddlTs - 1
-				}
-			} else {
-				if createdAt.Before(createdTime) {
-					// show the ddl is executed
-					for _, idx := range tableIdIdxMap[tableId] {
-						retStartTsList[idx] = ddlTs
-						isSyncpoints[idx] = isSyncpoint
-					}
-					log.Debug("createdTime is larger than createdAt",
-						zap.Int64("tableId", tableId),
-						zap.Any("tableNameInDDLJob", tableNameInDDLJob),
-						zap.Any("dbNameInDDLJob", dbNameInDDLJob),
-						zap.Int64("ddlTs", ddlTs),
-						zap.Int64("startTs", ddlTs),
-						zap.Any("ddlJobCreatedTime", createdTime),
-						zap.Any("createdAt", createdAt),
-					)
-					continue
-				} else {
-					// show the ddl is not executed
+			/*
+				if !w.cfg.IsTiDB {
+					// If the downstream is not TiDB, we use the ddlTs - 1 as the startTs.
+					// Even in some corner case, the ddl actually executed, we can tolerate to rewrite the ddl again.
+					// Because the ddl ts is not finish, so no dmls after this ddl will be flushed downstream.
+					// Besides, the granularity of DDL execution is guaranteed, so executing DDL once more will not affect its correctness.
 					for _, idx := range tableIdIdxMap[tableId] {
 						retStartTsList[idx] = ddlTs - 1
 					}
-					log.Debug("createdTime is less than createdAt",
-						zap.Int64("tableId", tableId),
-						zap.Any("tableNameInDDLJob", tableNameInDDLJob),
-						zap.Any("dbNameInDDLJob", dbNameInDDLJob),
-						zap.Int64("ddlTs", ddlTs),
-						zap.Int64("startTs", ddlTs-1),
-						zap.Any("ddlJobCreatedTime", createdTime),
-						zap.Any("createdAt", createdAt),
-					)
+				}
+
+				createdAt, err := time.Parse(timeFormat, string(createdAtBytes))
+				if err != nil {
+					log.Error("Failed to parse created_at", zap.Any("createdAtBytes", createdAtBytes), zap.Any("error", err))
+					for _, idx := range tableIdIdxMap[tableId] {
+						retStartTsList[idx] = ddlTs - 1
+					}
 					continue
 				}
-			}
+
+				// query the ddl_jobs table to find whether the ddl is executed and the ddl created time
+				createdTime, ok := w.queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob)
+				if !ok {
+					for _, idx := range tableIdIdxMap[tableId] {
+						retStartTsList[idx] = ddlTs - 1
+					}
+				} else {
+					if createdAt.Before(createdTime) {
+						// show the ddl is executed
+						for _, idx := range tableIdIdxMap[tableId] {
+							retStartTsList[idx] = ddlTs
+							isSyncpoints[idx] = isSyncpoint
+						}
+						log.Debug("createdTime is larger than createdAt",
+							zap.Int64("tableId", tableId),
+							zap.Any("tableNameInDDLJob", tableNameInDDLJob),
+							zap.Any("dbNameInDDLJob", dbNameInDDLJob),
+							zap.Int64("ddlTs", ddlTs),
+							zap.Int64("startTs", ddlTs),
+							zap.Any("ddlJobCreatedTime", createdTime),
+							zap.Any("createdAt", createdAt),
+						)
+						continue
+					} else {
+						// show the ddl is not executed
+						for _, idx := range tableIdIdxMap[tableId] {
+							retStartTsList[idx] = ddlTs - 1
+						}
+						log.Debug("createdTime is less than createdAt",
+							zap.Int64("tableId", tableId),
+							zap.Any("tableNameInDDLJob", tableNameInDDLJob),
+							zap.Any("dbNameInDDLJob", dbNameInDDLJob),
+							zap.Int64("ddlTs", ddlTs),
+							zap.Int64("startTs", ddlTs-1),
+							zap.Any("ddlJobCreatedTime", createdTime),
+							zap.Any("createdAt", createdAt),
+						)
+						continue
+					}
+				}
+			*/
 		}
 	}
 
