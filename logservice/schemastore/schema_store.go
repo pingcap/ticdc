@@ -213,23 +213,15 @@ type schemaStore struct {
 	// The key is keyspaceID
 	keyspaceSchemaStoreMap map[uint32]*keyspaceSchemaStore
 	keyspaceLocker         sync.RWMutex
-
-	pdEndpoints []string
 }
 
-func New(
-	root string,
-	pdCli pd.Client,
-	pdEndpoints []string,
-) SchemaStore {
+func New(root string, pdCli pd.Client) SchemaStore {
 	s := &schemaStore{
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		pdCli:                  pdCli,
 		root:                   root,
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
-		pdEndpoints:            pdEndpoints,
 	}
-
 	return s
 }
 
@@ -288,8 +280,8 @@ func (s *schemaStore) Close(_ context.Context) error {
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
-	for keyspaceID, schemaStore := range s.keyspaceSchemaStoreMap {
-		err := schemaStore.dataStorage.close()
+	for keyspaceID, store := range s.keyspaceSchemaStoreMap {
+		err := store.dataStorage.close()
 		if err != nil {
 			log.Error("dataStorage close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		}
@@ -454,13 +446,11 @@ func (s *schemaStore) RegisterKeyspace(
 		return err
 	}
 
-	dataStorage := newPersistentStorage(s.root, keyspaceID, s.pdCli, kvStorage)
-	dataStorage.initialize(ctx)
-
+	storage := newPersistentStorage(ctx, s.root, keyspaceID, s.pdCli, kvStorage)
 	store := &keyspaceSchemaStore{
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
-		dataStorage:   dataStorage,
+		dataStorage:   storage,
 		notifyCh:      make(chan any, 4),
 	}
 
@@ -492,12 +482,14 @@ func (s *schemaStore) RegisterKeyspace(
 		return err
 	}
 
-	go dataStorage.gc(ctx)
-	go dataStorage.persistUpperBoundPeriodically(ctx)
+	go storage.gc(ctx)
+	go storage.persistUpperBoundPeriodically(ctx)
 	go func(ctx context.Context, schemaStore *keyspaceSchemaStore) {
 		ticker := time.NewTicker(50 * time.Millisecond)
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-ticker.C:
 				schemaStore.tryUpdateResolvedTs()
 			case <-schemaStore.notifyCh:

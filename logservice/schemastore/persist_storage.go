@@ -133,6 +133,7 @@ func openDB(dbPath string) *pebble.DB {
 }
 
 func newPersistentStorage(
+	ctx context.Context,
 	root string,
 	keyspaceID uint32,
 	pdCli pd.Client,
@@ -151,6 +152,7 @@ func newPersistentStorage(
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
 	}
+	dataStorage.initialize(ctx)
 
 	return dataStorage
 }
@@ -194,7 +196,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 
 	// FIXME: currently we don't try to reuse data at restart, when we need, just remove the following line
 	if err := os.RemoveAll(dbPath); err != nil {
-		log.Panic("fail to remove path")
+		log.Panic("fail to remove path", zap.String("dbPath", dbPath), zap.Error(err))
 	}
 
 	isDataReusable := false
@@ -223,7 +225,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 			p.upperBound = upperBound
 			p.initializeFromDisk()
 		} else {
-			db.Close()
+			_ = db.Close()
 		}
 	}
 	if !isDataReusable {
