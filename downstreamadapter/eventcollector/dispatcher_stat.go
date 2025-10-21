@@ -589,13 +589,15 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event))
 	}
+
 	if !d.isFromCurrentEpoch(event) {
-		log.Info("receive a drop event from a stale epoch, ignore it",
+		log.Debug("receive a drop event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event.Event))
 		return
 	}
+
 	log.Info("received a dropEvent, need to reset the dispatcher",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),

@@ -106,7 +106,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 
 	if as.checkDeadlock() {
 		log.Info("check deadlock and release memory", zap.Any("area", as.area), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Uint64("maxPendingSize", as.settings.Load().maxPendingSize), zap.Time("lastSizeDecreaseTime", as.lastSizeDecreaseTime.Load().(time.Time)))
-
 		as.releaseMemory()
 		return true
 	}
@@ -147,7 +146,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 	failpoint.Inject("CheckDeadlock", func() { failpoint.Return(true) })
 
-	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration && float64(as.totalPendingSize.Load())/float64(as.settings.Load().maxPendingSize) > (1-defaultReleaseMemoryRatio)
+	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration &&
+		as.memoryUsageRatio() > (1-defaultReleaseMemoryRatio)
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
@@ -267,7 +267,6 @@ func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, 
 		log.Debug("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
 		as.totalPendingSize.Store(0)
 	}
-	as.lastSizeDecreaseTime.Store(time.Now())
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.
