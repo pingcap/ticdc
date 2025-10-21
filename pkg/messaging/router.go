@@ -80,6 +80,7 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 				// Always increment metrics counter for slow message handling
 				metrics.MessagingSlowHandleCounter.WithLabelValues(msg.Type.String()).Inc()
 			}
+			log.Info("Handle message", zap.Any("msg", msg), zap.String("type", msg.Type.String()), zap.String("topic", msg.Topic))
 			if err != nil {
 				log.Error("Handle message failed", zap.Error(err), zap.Any("msg", msg))
 			}

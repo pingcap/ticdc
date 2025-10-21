@@ -300,6 +300,7 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 		panic("invalid response count")
 	}
 	heartbeatResponse := resps[0]
+	log.Info("HeartBeatResponseHandler handle", zap.Any("heartbeatResponse", heartbeatResponse), zap.Any("changefeedID", dispatcherManager.changefeedID))
 	dispatcherStatuses := heartbeatResponse.GetDispatcherStatuses()
 	for _, dispatcherStatus := range dispatcherStatuses {
 		influencedDispatchersType := dispatcherStatus.InfluencedDispatchers.InfluenceType

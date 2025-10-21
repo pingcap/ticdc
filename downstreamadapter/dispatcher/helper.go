@@ -353,6 +353,7 @@ func (h *DispatcherStatusHandler) Path(event DispatcherStatusWithID) common.Disp
 }
 
 func (h *DispatcherStatusHandler) Handle(dispatcher Dispatcher, events ...DispatcherStatusWithID) (await bool) {
+	log.Info("DispatcherStatusHandler handle", zap.Any("events", events), zap.Any("dispatcherID", dispatcher.GetChangefeedID().ID()))
 	for _, event := range events {
 		dispatcher.HandleDispatcherStatus(event.GetDispatcherStatus())
 	}
