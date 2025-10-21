@@ -367,7 +367,8 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 		return true
 	} else {
 		pi.pendingQueue.PushBack(event)
-		pi.updatePendingSize(int64(event.eventSize))
+		// fizz: do not count the periodic signal size
+		// pi.updatePendingSize(int64(event.eventSize))
 		return true
 	}
 }
@@ -377,11 +378,14 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	if !ok {
 		return eventWrap[A, P, T, D, H]{}, false
 	}
-	pi.updatePendingSize(int64(-e.eventSize))
 
-	if pi.areaMemStat != nil {
-		pi.areaMemStat.decPendingSize(pi, int64(e.eventSize))
+	if e.eventType.Property != PeriodicSignal {
+		pi.updatePendingSize(int64(-e.eventSize))
+		if pi.areaMemStat != nil {
+			pi.areaMemStat.decPendingSize(pi, int64(e.eventSize))
+		}
 	}
+
 	return e, true
 }
 

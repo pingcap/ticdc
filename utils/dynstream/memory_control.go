@@ -137,15 +137,17 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
-	path.updatePendingSize(int64(event.eventSize))
-	as.totalPendingSize.Add(int64(event.eventSize))
+	if event.eventType.Property != PeriodicSignal {
+		path.updatePendingSize(int64(event.eventSize))
+		as.totalPendingSize.Add(int64(event.eventSize))
+	}
 	return true
 }
 
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 	failpoint.Inject("CheckDeadlock", func() { failpoint.Return(true) })
 
-	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration && float64(as.totalPendingSize.Load())/float64(as.settings.Load().maxPendingSize) > 1-defaultReleaseMemoryRatio
+	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration && float64(as.totalPendingSize.Load())/float64(as.settings.Load().maxPendingSize) > (1-defaultReleaseMemoryRatio)
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
