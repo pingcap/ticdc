@@ -146,6 +146,11 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 	failpoint.Inject("CheckDeadlock", func() { failpoint.Return(true) })
 
+	if as.settings.Load().algorithm !=
+		MemoryControlForEventCollector {
+		return false
+	}
+
 	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration &&
 		as.memoryUsageRatio() > (1-defaultReleaseMemoryRatio)
 }
