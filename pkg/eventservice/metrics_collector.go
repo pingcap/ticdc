@@ -128,7 +128,7 @@ func newMetricsCollector(broker *eventBroker) *metricsCollector {
 
 // Run starts the metrics collection loop
 func (mc *metricsCollector) Run(ctx context.Context) error {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	log.Info("metrics collector started")
