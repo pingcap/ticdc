@@ -1044,10 +1044,10 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	status := c.getOrSetChangefeedStatus(changefeedID)
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
-	status.addDispatcher(dispatcherID, statPtr)
 
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
+			status.addDispatcher(dispatcherID, statPtr)
 			break
 		}
 		log.Warn("reset dispatcher failed since the dispatcher is changed concurrently",

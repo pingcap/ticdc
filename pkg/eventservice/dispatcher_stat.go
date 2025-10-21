@@ -414,8 +414,7 @@ func (c *resolvedTsCache) reset() {
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
 
-	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
-	dispatchers sync.Map // common.DispatcherID -> *dispatcherStat
+	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 }
