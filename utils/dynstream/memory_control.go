@@ -191,6 +191,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 			FeedbackType: ReleasePath,
 		}
 	}
+	as.lastSizeDecreaseTime.Store(time.Now())
 }
 
 func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
