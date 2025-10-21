@@ -19,6 +19,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/pingcap/log"
@@ -37,6 +38,9 @@ import (
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 )
+
+// gracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
+const gracefulShutdownTimeout = 30 * time.Second
 
 // options defines flags for the `server` command.
 type options struct {
@@ -132,7 +136,18 @@ func (o *options) run(cmd *cobra.Command) error {
 		log.Info("cdc server exits normally")
 	}
 	// Gracefully close the server, and exit the process.
-	svr.Close(ctx)
+	ch := make(chan struct{})
+	ticker := time.NewTicker(gracefulShutdownTimeout)
+	defer ticker.Stop()
+	go func() {
+		svr.Close(ctx)
+		ch <- struct{}{}
+	}()
+	select {
+	case <-ch:
+	case <-ticker.C:
+		log.Warn("gracefull close timeout")
+	}
 	return err
 }
 
