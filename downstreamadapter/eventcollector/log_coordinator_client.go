@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
@@ -39,6 +40,7 @@ type LogCoordinatorClient struct {
 	mc                        messaging.MessageCenter
 	coordinatorInfo           atomic.Value
 	logCoordinatorRequestChan *chann.DrainableChann[*logservicepb.ReusableEventServiceRequest]
+	enableRemoteEventService  bool
 }
 
 func newLogCoordinatorClient(eventCollector *EventCollector) *LogCoordinatorClient {
@@ -46,6 +48,7 @@ func newLogCoordinatorClient(eventCollector *EventCollector) *LogCoordinatorClie
 		eventCollector:            eventCollector,
 		mc:                        appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		logCoordinatorRequestChan: chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
+		enableRemoteEventService:  config.GetGlobalServerConfig().Debug.EventService.EnableRemoteEventService,
 	}
 	client.mc.RegisterHandler(logCoordinatorClientTopic, client.MessageCenterHandler)
 	return client
@@ -59,7 +62,7 @@ func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMes
 		case *logservicepb.ReusableEventServiceResponse:
 			dispatcherID := common.NewDispatcherIDFromPB(msg.ID)
 			dispatcher := l.eventCollector.getDispatcherStatByID(dispatcherID)
-			if dispatcher != nil {
+			if dispatcher != nil && l.enableRemoteEventService {
 				dispatcher.setRemoteCandidates(msg.Nodes)
 			}
 		default:

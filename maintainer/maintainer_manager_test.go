@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -27,6 +29,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
@@ -61,7 +64,21 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	}
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-	keyspaceManager := keyspace.NewKeyspaceManager([]string{"127.0.0.1:2379"})
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	meta := &keyspacepb.KeyspaceMeta{
+		Id:   0,
+		Name: "default",
+	}
+	if kerneltype.IsNextGen() {
+		meta = &keyspacepb.KeyspaceMeta{
+			Id:   1,
+			Name: "ks1",
+		}
+	}
+	keyspaceManager := keyspace.NewMockKeyspaceManager(ctrl)
+	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), gomock.Any()).Return(meta, nil)
 	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
 
 	appcontext.SetService(appcontext.SchemaStore, store)
@@ -274,6 +291,23 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	meta := &keyspacepb.KeyspaceMeta{
+		Id:   0,
+		Name: "default",
+	}
+	if kerneltype.IsNextGen() {
+		meta = &keyspacepb.KeyspaceMeta{
+			Id:   1,
+			Name: "ks1",
+		}
+	}
+	keyspaceManager := keyspace.NewMockKeyspaceManager(ctrl)
+	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), gomock.Any()).Return(meta, nil)
+	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
+
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
@@ -393,6 +427,24 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	meta := &keyspacepb.KeyspaceMeta{
+		Id:   0,
+		Name: "default",
+	}
+	if kerneltype.IsNextGen() {
+		meta = &keyspacepb.KeyspaceMeta{
+			Id:   1,
+			Name: "ks1",
+		}
+	}
+	keyspaceManager := keyspace.NewMockKeyspaceManager(ctrl)
+	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), gomock.Any()).Return(meta, nil).AnyTimes()
+
+	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
+
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()

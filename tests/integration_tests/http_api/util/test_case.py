@@ -82,7 +82,7 @@ def requests_get_with_retry(url, max_retries=RETRY_TIME, delay_seconds=1):
 
 
 def create_changefeed(sink_uri):
-    url = BASE_URL1_V2+"/changefeeds"
+    url = BASE_URL1_V2+"/changefeeds?keyspace=keyspace1"
     # create changefeed
     for i in range(1, 4):
         data = {
@@ -116,7 +116,7 @@ def create_changefeed(sink_uri):
     assert_status_code(resp, rq.codes.bad_request, url)
 
     # create changefeed fail because dispatcher is invalid
-    url = BASE_URL1_V2+"/changefeeds"
+    url = BASE_URL1_V2+"/changefeeds?keyspace=keyspace1"
     data = json.dumps({
         "changefeed_id": "changefeed-test-v2",
         "sink_uri": "kafka://127.0.0.1:9092/http_api?protocol=simple",
@@ -141,7 +141,7 @@ def create_changefeed(sink_uri):
 
 def list_changefeed():
     # test state: all
-    url = BASE_URL0_V2+"/changefeeds?state=all"
+    url = BASE_URL0_V2+"/changefeeds?state=all&keyspace=keyspace1"
 
     # Add retry logic to wait for changefeeds
     # We need to retry because the coordinator need some time to sync the changefeed infos from etcd
@@ -157,7 +157,7 @@ def list_changefeed():
     assert len(changefeeds) > 0, "No changefeeds found after retries"
 
     # test state: normal
-    url = BASE_URL0_V2+"/changefeeds?state=normal"
+    url = BASE_URL0_V2+"/changefeeds?state=normal&keyspace=keyspace1"
     resp = rq.get(url)
     assert_status_code(resp, rq.codes.ok, url)
     data = resp.json()
@@ -166,7 +166,7 @@ def list_changefeed():
         assert cf["state"] == "normal"
 
     # test state: stopped
-    url = BASE_URL0_V2+"/changefeeds?state=stopped"
+    url = BASE_URL0_V2+"/changefeeds?state=stopped&keyspace=keyspace1"
     resp = rq.get(url)
     assert_status_code(resp, rq.codes.ok, url)
     data = resp.json()
@@ -177,16 +177,16 @@ def list_changefeed():
 
 def get_changefeed():
     # test get changefeed success
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test1"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test1?keyspace=keyspace1"
     resp = rq.get(url)
     assert_status_code(resp, rq.codes.ok, url)
 
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2?keyspace=keyspace1"
     resp = rq.get(url)
     assert_status_code(resp, rq.codes.ok, url)
 
     # test get changefeed failed
-    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists?keyspace=keyspace1"
     resp = rq.get(url)
     assert_status_code(resp, rq.codes.bad_request, url)
     data = resp.json()
@@ -195,7 +195,7 @@ def get_changefeed():
 
 def pause_changefeed():
     # pause changefeed
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test2/pause"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2/pause?keyspace=keyspace1"
     for i in range(RETRY_TIME):
         resp = rq.post(url)
         if resp.status_code == rq.codes.ok:
@@ -203,7 +203,7 @@ def pause_changefeed():
         time.sleep(1)
     assert_status_code(resp, rq.codes.ok, url)
     # check if pause changefeed success
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2?keyspace=keyspace1"
     for i in range(RETRY_TIME):
         resp = rq.get(url)
         assert_status_code(resp, rq.codes.ok, url)
@@ -213,7 +213,7 @@ def pause_changefeed():
         time.sleep(1)
     assert data["state"] == "stopped"
     # test pause changefeed failed
-    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists/pause"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists/pause?keyspace=keyspace1"
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.bad_request, url)
     data = resp.json()
@@ -223,14 +223,14 @@ def pause_changefeed():
 def update_changefeed():
     # update fail
     # can only update a stopped changefeed
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test1"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test1?keyspace=keyspace1"
     data = json.dumps({"mounter_worker_num": 32})
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers)
     assert_status_code(resp, rq.codes.bad_request, url)
 
     # update success
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2?keyspace=keyspace1"
     data = json.dumps({"mounter_worker_num": 32})
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers)
@@ -238,14 +238,14 @@ def update_changefeed():
 
     # update fail
     # can't update start_ts
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2?keyspace=keyspace1"
     data = json.dumps({"start_ts": 1})
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers)
     assert_status_code(resp, rq.codes.bad_request, url)
 
     # can't update dispatchers
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2?keyspace=keyspace1"
     data = json.dumps({
         "sink_uri": "kafka://127.0.0.1:9092/http_api?protocol=simple",
         "replica_config": {
@@ -269,12 +269,12 @@ def update_changefeed():
 
 def resume_changefeed():
     # resume changefeed
-    url = BASE_URL1_V2+"/changefeeds/changefeed-test2/resume"
+    url = BASE_URL1_V2+"/changefeeds/changefeed-test2/resume?keyspace=keyspace1"
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.ok, url)
 
     # check if resume changefeed success
-    url = BASE_URL1_V2+"/changefeeds/changefeed-test2"
+    url = BASE_URL1_V2+"/changefeeds/changefeed-test2?keyspace=keyspace1"
     for i in range(RETRY_TIME):
         resp = rq.get(url)
         assert_status_code(resp, rq.codes.ok, url)
@@ -285,7 +285,7 @@ def resume_changefeed():
     assert data["state"] == "normal"
 
     # test resume changefeed failed
-    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists/resume"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists/resume?keyspace=keyspace1"
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.bad_request, url)
     data = resp.json()
@@ -294,12 +294,12 @@ def resume_changefeed():
 
 def remove_changefeed(cfID="changefeed-test3"):
     # remove changefeed
-    url = BASE_URL0_V2+"/changefeeds/" + cfID
+    url = BASE_URL0_V2+"/changefeeds/" + cfID + "?keyspace=keyspace1"
     resp = rq.delete(url)
     assert_status_code(resp, rq.codes.ok, url)
 
     # test remove non-exists changefeed, it should return 200 and do nothing
-    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists?keyspace=keyspace1"
     resp = rq.delete(url)
     assert_status_code(resp, rq.codes.ok, url)
 
@@ -318,7 +318,7 @@ def move_table(cfID="changefeed-test1"):
     logging.info(f"Find target capture_id: {capture_id}")
 
     # find the table id
-    url = BASE_URL0_V2 + "/changefeeds/" + cfID + "/tables"
+    url = BASE_URL0_V2 + "/changefeeds/" + cfID + "/tables?keyspace=keyspace1"
     resp = requests_get_with_retry(url)
     data = resp.json()
     table_ids = data[0]["table_ids"]
@@ -332,14 +332,14 @@ def move_table(cfID="changefeed-test1"):
 
     # move table
     url = BASE_URL0_V2 + "/changefeeds/" + cfID + \
-        "/move_table?targetNodeID=" + capture_id + "&tableID=" + str(table_id)
+        "/move_table?targetNodeID=" + capture_id + "&tableID=" + str(table_id) + "&keyspace=keyspace1"
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.ok, url)
     logging.info(f"Move table success")
     # move table fail
     # The target node is not found
     url = BASE_URL0_V2 + "/changefeeds/" + cfID + \
-        "/move_table?targetNodeID=&tableID=" + str(table_id)
+        "/move_table?targetNodeID=&tableID=" + str(table_id) + "&keyspace=keyspace1"
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.internal_server_error, url)
 

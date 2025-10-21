@@ -55,8 +55,8 @@ const (
 	closeServiceTimeout  = 15 * time.Second
 	cleanMetaDuration    = 10 * time.Second
 	oldArchCheckInterval = 100 * time.Millisecond
-	// gracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
-	gracefulShutdownTimeout = 30 * time.Second
+	// GracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
+	GracefulShutdownTimeout = 30 * time.Second
 )
 
 // server represents the main TiCDC server with carefully orchestrated module lifecycle management.
@@ -345,7 +345,7 @@ func (c *server) Run(ctx context.Context) error {
 	ch := make(chan error, 1)
 	go func() {
 		<-gctx.Done()
-		time.Sleep(gracefulShutdownTimeout)
+		time.Sleep(GracefulShutdownTimeout)
 		ch <- errors.ErrTimeout.FastGenByArgs("gracefull shutdown timeout")
 	}()
 	go func() {

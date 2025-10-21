@@ -178,9 +178,10 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 	//	set the old dispatchers to waiting merge state.
 	//	now, we just create a non-working dispatcher, we will make the dispatcher into work when DoMerge() called
 	return &heartbeatpb.TableSpan{
-		TableID:  prevTableSpan.TableID,
-		StartKey: startKey,
-		EndKey:   endKey,
+		KeyspaceID: prevTableSpan.KeyspaceID,
+		TableID:    prevTableSpan.TableID,
+		StartKey:   startKey,
+		EndKey:     endKey,
 	}, fakeStartTs, schemaID
 }
 
