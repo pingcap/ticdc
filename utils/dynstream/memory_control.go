@@ -162,30 +162,29 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 	})
 
 	sizeToRelease := int64(float64(as.totalPendingSize.Load()) * defaultReleaseMemoryRatio)
+	releasedSize := int64(0)
 	releasedPaths := make([]*pathInfo[A, P, T, D, H], 0)
 
 	log.Info("release memory", zap.Any("area", as.area), zap.Int64("sizeToRelease", sizeToRelease), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Float64("releaseMemoryRatio", defaultReleaseMemoryRatio))
 
 	for _, path := range paths {
-		if sizeToRelease <= 0 ||
+		if releasedSize >= sizeToRelease ||
 			path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) {
 			continue
 		}
+
+		releasedSize += int64(path.pendingSize.Load())
+		releasedPaths = append(releasedPaths, path)
 
 		log.Info("release path memory", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("size", path.pendingSize.Load()))
 
 		// Clear this path
 		for {
-			_, ok := path.pendingQueue.PopFront()
+			_, ok := path.popEvent()
 			if !ok {
 				break
 			}
 		}
-
-		as.decPendingSize(path, int64(path.pendingSize.Load()))
-		sizeToRelease -= int64(path.pendingSize.Load())
-		path.pendingSize.Store(0)
-		releasedPaths = append(releasedPaths, path)
 
 	}
 

@@ -385,7 +385,6 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 			pi.areaMemStat.lastSizeDecreaseTime.Store(time.Now())
 		}
 	}
-
 	return e, true
 }
 
