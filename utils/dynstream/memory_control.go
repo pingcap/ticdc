@@ -167,7 +167,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 	for _, path := range paths {
 		if sizeToRelease <= 0 ||
 			path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) {
-			break
+			continue
 		}
 
 		log.Info("release path memory", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("size", path.pendingSize.Load()))
