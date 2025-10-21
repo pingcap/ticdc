@@ -33,8 +33,9 @@ const (
 	// For now, we only use it in event collector.
 	MemoryControlForEventCollector = 1
 
-	defaultReleaseMemoryThreshold = 0.2
+	defaultReleaseMemoryRatio     = 0.2
 	defaultDeadlockDuration       = 10 * time.Second
+	defaultReleaseMemoryThreshold = 1024 // 1KB
 )
 
 // areaMemStat is used to store the memory statistics of an area.
@@ -144,7 +145,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 	failpoint.Inject("CheckDeadlock", func() { failpoint.Return(true) })
 
-	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
+	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration && float64(as.totalPendingSize.Load())/float64(as.settings.Load().maxPendingSize) > 1-defaultReleaseMemoryRatio
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
@@ -158,11 +159,14 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 		return paths[i].lastHandleEventTs.Load() > paths[j].lastHandleEventTs.Load()
 	})
 
-	sizeToRelease := int64(float64(as.settings.Load().maxPendingSize) * defaultReleaseMemoryThreshold)
+	sizeToRelease := int64(float64(as.totalPendingSize.Load()) * defaultReleaseMemoryRatio)
 	releasedPaths := make([]*pathInfo[A, P, T, D, H], 0)
 
+	log.Info("release memory", zap.Any("area", as.area), zap.Int64("sizeToRelease", sizeToRelease), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Float64("releaseMemoryRatio", defaultReleaseMemoryRatio))
+
 	for _, path := range paths {
-		if sizeToRelease <= 0 {
+		if sizeToRelease <= 0 ||
+			path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) {
 			break
 		}
 
