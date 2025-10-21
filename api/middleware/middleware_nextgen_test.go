@@ -24,20 +24,23 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/ticdc/pkg/api"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/stretchr/testify/assert"
+	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/stretchr/testify/require"
 )
 
 func TestKeyspaceCheckerMiddleware(t *testing.T) {
 	tests := []struct {
-		name           string
-		keyspace       string
-		mockKeyspace   *keyspacepb.KeyspaceMeta
-		mockError      error
-		expectedStatus int
-		expectedAbort  bool
+		name                 string
+		keyspace             string
+		init                 func(t *testing.T, mock *keyspace.MockKeyspaceManager)
+		expectedStatus       int
+		expectedAbort        bool
+		expectedBodyContains string
 	}{
 		{
 			name:           "default keyspace",
@@ -46,53 +49,52 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			expectedAbort:  true,
 		},
 		{
-			name:           "valid keyspace",
-			keyspace:       "test_keyspace",
-			mockKeyspace:   &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_ENABLED},
-			expectedStatus: http.StatusOK,
-			expectedAbort:  false,
+			name:     "keyspace not exist",
+			keyspace: "not-exist",
+			init: func(t *testing.T, mock *keyspace.MockKeyspaceManager) {
+				mock.EXPECT().LoadKeyspace(gomock.Any(), "not-exist").Return(nil, errors.New(pdpb.ErrorType_ENTRY_NOT_FOUND.String()))
+			},
+			expectedStatus:       http.StatusBadRequest,
+			expectedAbort:        true,
+			expectedBodyContains: "invalid api parameter",
 		},
 		{
-			name:           "disabled keyspace",
-			keyspace:       "test_keyspace",
-			mockKeyspace:   &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_DISABLED},
-			expectedStatus: http.StatusBadRequest,
-			expectedAbort:  true,
+			name:     "internal server error",
+			keyspace: "internal-error",
+			init: func(t *testing.T, mock *keyspace.MockKeyspaceManager) {
+				mock.EXPECT().LoadKeyspace(gomock.Any(), "internal-error").Return(nil, errors.New("internal error"))
+			},
+			expectedStatus:       http.StatusInternalServerError,
+			expectedAbort:        true,
+			expectedBodyContains: "internal error",
 		},
 		{
-			name:           "archived keyspace",
-			keyspace:       "test_keyspace",
-			mockKeyspace:   &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_ARCHIVED},
-			expectedStatus: http.StatusBadRequest,
-			expectedAbort:  true,
-		},
-		{
-			name:           "tombstone keyspace",
-			keyspace:       "test_keyspace",
-			mockKeyspace:   &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_TOMBSTONE},
-			expectedStatus: http.StatusBadRequest,
-			expectedAbort:  true,
-		},
-		{
-			name:           "load keyspace error",
-			keyspace:       "test_keyspace",
-			mockError:      errors.New("load keyspace error"),
-			expectedStatus: http.StatusInternalServerError,
-			expectedAbort:  true,
+			name:     "success",
+			keyspace: "success",
+			init: func(t *testing.T, mock *keyspace.MockKeyspaceManager) {
+				mock.EXPECT().LoadKeyspace(gomock.Any(), "success").Return(&keyspacepb.KeyspaceMeta{
+					State: keyspacepb.KeyspaceState_ENABLED,
+				}, nil)
+			},
+			expectedStatus:       http.StatusOK,
+			expectedAbort:        false,
+			expectedBodyContains: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create mock PD API client
-			mockPDClient := &mockPDAPIClient{
-				keyspace: tt.mockKeyspace,
-				err:      tt.mockError,
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mock := keyspace.NewMockKeyspaceManager(ctrl)
+
+			if tt.init != nil {
+				tt.init(t, mock)
 			}
 
-			// Set up context with mock client
 			ctx := context.Background()
-			appcontext.SetService(appcontext.PDAPIClient, mockPDClient)
+			appcontext.SetService(appcontext.KeyspaceManager, mock)
 
 			// Create test request
 			req := httptest.NewRequestWithContext(ctx, "GET", fmt.Sprintf("/test?%s=%s", api.APIOpVarKeyspace, tt.keyspace), nil)
@@ -103,8 +105,13 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			c.Request = req
 			KeyspaceCheckerMiddleware()(c)
 
-			assert.Equal(t, tt.expectedAbort, c.IsAborted())
-			assert.Equal(t, tt.expectedStatus, w.Code)
+			require.Equal(t, tt.expectedAbort, c.IsAborted())
+			require.Equal(t, tt.expectedStatus, w.Code)
+
+			if tt.expectedBodyContains != "" {
+				require.NotNil(t, w.Body)
+				require.Contains(t, w.Body.String(), tt.expectedBodyContains)
+			}
 		})
 	}
 }

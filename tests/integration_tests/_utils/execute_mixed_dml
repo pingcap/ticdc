@@ -39,7 +39,7 @@ function execute_mixed_dml() {
 	echo "DML: Executing mixed operations on $table_name..."
 
 	# Ensure table has some initial data for UPDATE and DELETE operations
-	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('initial_data_1_${dml_counter}'), ('initial_data_2_$((dml_counter + 1))'), ('initial_data_3_$((dml_counter + 2)));" $host $port || true
+	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('initial_data_1_${dml_counter}'), ('initial_data_2_$((dml_counter + 1))'), ('initial_data_3_$((dml_counter + 2))');" $host $port || true
 	dml_counter=$((dml_counter + 3))
 
 	while true; do

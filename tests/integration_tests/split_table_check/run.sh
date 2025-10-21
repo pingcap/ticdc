@@ -21,8 +21,6 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
@@ -52,7 +50,7 @@ build_sink_and_create_changefeed() {
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
 	sleep 10
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "$cf_id" --config="$cfg_path"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "$cf_id" --config="$cfg_path"
 
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;

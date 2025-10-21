@@ -19,6 +19,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/pingcap/log"
@@ -132,7 +133,18 @@ func (o *options) run(cmd *cobra.Command) error {
 		log.Info("cdc server exits normally")
 	}
 	// Gracefully close the server, and exit the process.
-	svr.Close(ctx)
+	ch := make(chan struct{})
+	ticker := time.NewTicker(server.GracefulShutdownTimeout)
+	defer ticker.Stop()
+	go func() {
+		svr.Close(ctx)
+		close(ch)
+	}()
+	select {
+	case <-ch:
+	case <-ticker.C:
+		log.Warn("graceful shutdown timeout, exit server")
+	}
 	return err
 }
 
