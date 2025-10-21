@@ -151,8 +151,6 @@ func newDispatcherStat(
 	// A small value to avoid too many scan tasks at the first place.
 	dispStat.lastScanBytes.Store(1024)
 
-	changefeedStatus.addDispatcher()
-
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
 		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
@@ -428,10 +426,19 @@ func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 	}
 }
 
-func (c *changefeedStatus) addDispatcher() {
-	// No-op, the count can be derived from the map.
+func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {
+	c.dispatchers.Store(id, dispatcher)
 }
 
-func (c *changefeedStatus) removeDispatcher() {
-	// No-op, the count can be derived from the map.
+func (c *changefeedStatus) removeDispatcher(id common.DispatcherID) {
+	c.dispatchers.Delete(id)
+}
+
+func (c *changefeedStatus) isEmpty() bool {
+	empty := true
+	c.dispatchers.Range(func(key, value any) bool {
+		empty = false
+		return false // stop iteration
+	})
+	return empty
 }
