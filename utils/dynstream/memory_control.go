@@ -156,6 +156,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 		paths = append(paths, v.(*pathInfo[A, P, T, D, H]))
 		return true
 	})
+
 	// sort by the last handle event ts in descending order
 	sort.Slice(paths, func(i, j int) bool {
 		return paths[i].lastHandleEventTs.Load() > paths[j].lastHandleEventTs.Load()
@@ -169,7 +170,8 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 
 	for _, path := range paths {
 		if releasedSize >= sizeToRelease ||
-			path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) {
+			path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) ||
+			!path.blocking {
 			continue
 		}
 
@@ -180,12 +182,14 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 
 		// Clear this path
 		for {
+			if !path.blocking {
+				break
+			}
 			_, ok := path.popEvent()
 			if !ok {
 				break
 			}
 		}
-
 	}
 
 	for _, path := range releasedPaths {
