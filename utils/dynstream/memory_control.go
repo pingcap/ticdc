@@ -72,7 +72,8 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		lastSendFeedbackTime: atomic.Value{},
 		algorithm:            NewMemoryControlAlgorithm(settings.algorithm),
 	}
-	res.lastSendFeedbackTime.Store(time.Unix(0, 0))
+	res.lastSendFeedbackTime.Store(time.Now())
+	res.lastSizeDecreaseTime.Store(time.Now())
 	res.settings.Store(&settings)
 	return res
 }
