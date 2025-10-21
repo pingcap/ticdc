@@ -181,6 +181,11 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// If the path doesn't exist, it will return ErrorTypeNotExist.
 	RemovePath(path P) error
 
+	// ReleasePath releases all the events of the path.
+	// After this call return, future events with the path will be dropped, including events which are already in the stream.
+	// If the path doesn't exist, it will return ErrorTypeNotExist.
+	Release(path P)
+
 	// SetAreaSettings sets the settings of the area. An area uses the default settings if it is not set.
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
 	SetAreaSettings(area A, settings AreaSettings)
@@ -270,7 +275,7 @@ func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, 
 type FeedbackType int
 
 const (
-	ResetPath FeedbackType = iota
+	ReleasePath FeedbackType = iota
 	ResumePath
 	PauseArea
 	ResumeArea
@@ -278,8 +283,8 @@ const (
 
 func (f FeedbackType) String() string {
 	switch f {
-	case ResetPath:
-		return "ResetPath"
+	case ReleasePath:
+		return "ReleasePath"
 	case ResumePath:
 		return "ResumePath"
 	case PauseArea:

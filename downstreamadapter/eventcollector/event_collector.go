@@ -380,20 +380,13 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case feedback := <-c.ds.Feedback():
-			if feedback.FeedbackType == dynstream.ResetPath {
-				stat := c.getDispatcherStatByID(feedback.Path)
-				if stat != nil {
-					log.Info("reset dispatcher", zap.Any("dispatcher", stat.target.GetId()), zap.Any("eventServiceID", feedback.Dest.connState.getEventServiceID()))
-					stat.reset(feedback.Dest.connState.getEventServiceID())
-				}
+			if feedback.FeedbackType == dynstream.ReleasePath {
+				log.Info("release dispatcher memory in DS", zap.Any("dispatcherID", feedback.Path))
+				c.ds.Release(feedback.Path)
 			}
 		case feedback := <-c.redoDs.Feedback():
-			if feedback.FeedbackType == dynstream.ResetPath {
-				stat := c.getDispatcherStatByID(feedback.Path)
-				if stat != nil {
-					log.Info("reset dispatcher", zap.Any("dispatcher", stat.target.GetId()), zap.Any("eventServiceID", feedback.Dest.connState.getEventServiceID()))
-					stat.reset(feedback.Dest.connState.getEventServiceID())
-				}
+			if feedback.FeedbackType == dynstream.ReleasePath {
+				log.Info("release dispatcher memory in redo DS", zap.Any("dispatcherID", feedback.Path))
 			}
 		}
 	}

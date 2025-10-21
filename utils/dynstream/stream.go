@@ -204,6 +204,8 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 			s.eventQueue.wakePath(e.pathInfo)
 		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
+		case e.release:
+			s.eventQueue.releasePath(e.pathInfo)
 		case e.pathInfo.removed.Load():
 			// The path is removed, so we don't need to handle its events.
 			return
@@ -288,10 +290,12 @@ Loop:
 
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 
-				path.blocking = s.handler.Handle(path.dest, eventBuf...)
-				if path.blocking {
+				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
+
+				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
+
 				cleanUpEventBuf()
 			}
 		}
@@ -319,7 +323,7 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// guaranteed to see the memory change of this field.
 	removed atomic.Bool
 	// The path is blocked by the handler.
-	blocking bool
+	blocking atomic.Bool
 
 	// The pending events of the path.
 	pendingQueue *deque.Deque[eventWrap[A, P, T, D, H]]
@@ -380,7 +384,7 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 
 	pi.updatePendingSize(int64(-e.eventSize))
 	if pi.areaMemStat != nil {
-		pi.areaMemStat.decPendingSize(pi, int64(e.eventSize))
+		pi.areaMemStat.decPendingSize(int64(e.eventSize))
 		if e.eventType.Property != PeriodicSignal {
 			pi.areaMemStat.lastSizeDecreaseTime.Store(time.Now())
 		}
@@ -402,6 +406,7 @@ type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	event   T
 	wake    bool
 	newPath bool
+	release bool
 
 	pathInfo *pathInfo[A, P, T, D, H]
 

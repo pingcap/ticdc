@@ -171,25 +171,13 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 	for _, path := range paths {
 		if releasedSize >= sizeToRelease ||
 			path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) ||
-			!path.blocking {
+			!path.blocking.Load() {
 			continue
 		}
 
 		releasedSize += int64(path.pendingSize.Load())
 		releasedPaths = append(releasedPaths, path)
-
 		log.Info("release path memory", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("size", path.pendingSize.Load()))
-
-		// Clear this path
-		for {
-			if !path.blocking {
-				break
-			}
-			_, ok := path.popEvent()
-			if !ok {
-				break
-			}
-		}
 	}
 
 	for _, path := range releasedPaths {
@@ -197,7 +185,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 			Area:         as.area,
 			Path:         path.path,
 			Dest:         path.dest,
-			FeedbackType: ResetPath,
+			FeedbackType: ReleasePath,
 		}
 	}
 }
@@ -264,7 +252,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	}
 }
 
-func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
+func (as *areaMemStat[A, P, T, D, H]) decPendingSize(size int64) {
 	as.totalPendingSize.Add(int64(-size))
 	if as.totalPendingSize.Load() < 0 {
 		log.Debug("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
@@ -317,7 +305,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.decPendingSize(path, int64(path.pendingSize.Load()))
+	area.decPendingSize(int64(path.pendingSize.Load()))
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()

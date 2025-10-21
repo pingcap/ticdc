@@ -366,7 +366,7 @@ func TestReleaseMemory(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, len(feedbacks))
-	require.Equal(t, ResetPath, feedbacks[0].FeedbackType)
+	require.Equal(t, ReleasePath, feedbacks[0].FeedbackType)
 	require.Equal(t, area, feedbacks[0].Area)
 	require.Equal(t, path1.path, feedbacks[0].Path)
 
@@ -437,7 +437,7 @@ func TestReleaseMemory(t *testing.T) {
 	require.Equal(t, 2, len(feedbacks))
 	// Both should be ResetPath type
 	for _, fb := range feedbacks {
-		require.Equal(t, ResetPath, fb.FeedbackType)
+		require.Equal(t, ReleasePath, fb.FeedbackType)
 		require.Equal(t, area, fb.Area)
 	}
 
