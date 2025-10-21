@@ -384,7 +384,7 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 
 	pi.updatePendingSize(int64(-e.eventSize))
 	if pi.areaMemStat != nil {
-		pi.areaMemStat.decPendingSize(int64(e.eventSize))
+		pi.areaMemStat.decPendingSize(pi, int64(e.eventSize))
 		if e.eventType.Property != PeriodicSignal {
 			pi.areaMemStat.lastSizeDecreaseTime.Store(time.Now())
 		}

@@ -78,7 +78,7 @@ func (q *eventQueue[A, P, T, D, H]) releasePath(path *pathInfo[A, P, T, D, H]) {
 		}
 	}
 	if path.areaMemStat != nil {
-		path.areaMemStat.decPendingSize(int64(path.pendingSize.Load()))
+		path.areaMemStat.decPendingSize(path, int64(path.pendingSize.Load()))
 	}
 	path.pendingSize.Store(0)
 }
