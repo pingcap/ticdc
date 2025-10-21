@@ -41,7 +41,7 @@ function run() {
 	changefeed_id="test"
 	TOPIC_NAME="column-selector-avro-test-$RANDOM"
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=avro&enable-tidb-extension=true&avro-enable-watermark=true"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c ${changefeed_id} --config="$CUR/conf/changefeed.toml" --schema-registry=http://127.0.0.1:8088
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c ${changefeed_id} --config="$CUR/conf/changefeed.toml" --schema-registry=http://127.0.0.1:8088
 
 	run_kafka_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml "http://127.0.0.1:8088"
 

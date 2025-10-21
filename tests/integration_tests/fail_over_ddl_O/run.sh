@@ -27,8 +27,6 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
@@ -44,7 +42,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
+	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -69,12 +67,12 @@ function failOverCaseO-1() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
@@ -90,7 +88,7 @@ function failOverCaseO-1() {
 	# ensure the ddl event reach the dispatchers
 	sleep 15
 
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid "$CDC_HOST" "8301")
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -107,6 +105,7 @@ function failOverCaseO-1() {
 	query_dispatcher_count "127.0.0.1:8300" "test" 3 10
 
 	cleanup_process $CDC_BINARY
+	stop_tidb_cluster
 
 	echo "failOverCaseO-1 passed successfully"
 }
@@ -120,12 +119,12 @@ function failOverCaseO-2() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
@@ -141,7 +140,7 @@ function failOverCaseO-2() {
 	# ensure the ddl event reach the dispatchers
 	sleep 15
 
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid "$CDC_HOST" "8301")
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -165,6 +164,7 @@ function failOverCaseO-2() {
 	query_dispatcher_count "127.0.0.1:8300" "test" 4 10
 
 	cleanup_process $CDC_BINARY
+	stop_tidb_cluster
 
 	echo "failOverCaseO-2 passed successfully"
 }
@@ -178,12 +178,12 @@ function failOverCaseO-3() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
@@ -199,7 +199,7 @@ function failOverCaseO-3() {
 	# ensure the ddl event reach the dispatchers
 	sleep 15
 
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid "$CDC_HOST" "8301")
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -226,6 +226,7 @@ function failOverCaseO-3() {
 	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
 
 	cleanup_process $CDC_BINARY
+	stop_tidb_cluster
 
 	echo "failOverCaseO-3 passed successfully"
 }
@@ -239,12 +240,12 @@ function failOverCaseO-4() {
 	fi
 
 	# restart cdc server to enable failpoint
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid_1
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	cdc_pid_1=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 
 	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
@@ -263,7 +264,7 @@ function failOverCaseO-4() {
 	# ensure the ddl event reach the dispatchers
 	sleep 15
 
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid "$CDC_HOST" "8301")
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -290,6 +291,7 @@ function failOverCaseO-4() {
 	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
 
 	cleanup_process $CDC_BINARY
+	stop_tidb_cluster
 
 	echo "failOverCaseO-4 passed successfully"
 }

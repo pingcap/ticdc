@@ -25,8 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/ticdc/pkg/api"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestKeyspaceCheckerMiddleware(t *testing.T) {
@@ -48,15 +47,7 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create mock PD API client
-			mockPDClient := &mockPDAPIClient{
-				keyspace: tt.mockKeyspace,
-				err:      tt.mockError,
-			}
-
-			// Set up context with mock client
 			ctx := context.Background()
-			appcontext.SetService(appcontext.PDAPIClient, mockPDClient)
 
 			// Create test request
 			req := httptest.NewRequestWithContext(ctx, "GET", fmt.Sprintf("/test?%s=%s", api.APIOpVarKeyspace, tt.keyspace), nil)
@@ -67,8 +58,8 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			c.Request = req
 			KeyspaceCheckerMiddleware()(c)
 
-			assert.Equal(t, tt.expectedAbort, c.IsAborted())
-			assert.Equal(t, tt.expectedStatus, w.Code)
+			require.Equal(t, tt.expectedAbort, c.IsAborted())
+			require.Equal(t, tt.expectedStatus, w.Code)
 		})
 	}
 }

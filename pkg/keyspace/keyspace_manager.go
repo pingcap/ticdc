@@ -168,6 +168,8 @@ func (k *manager) Close() {
 
 	for _, storage := range k.storageMap {
 		err := storage.Close()
-		log.Error("close storage", zap.String("keyspace", storage.GetKeyspace()), zap.Error(err))
+		if err != nil {
+			log.Error("close storage", zap.String("keyspace", storage.GetKeyspace()), zap.Error(err))
+		}
 	}
 }
