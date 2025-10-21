@@ -34,7 +34,7 @@ const (
 	MemoryControlForEventCollector = 1
 
 	defaultReleaseMemoryRatio     = 0.2
-	defaultDeadlockDuration       = 10 * time.Second
+	defaultDeadlockDuration       = 5 * time.Second
 	defaultReleaseMemoryThreshold = 1024 // 1KB
 )
 
