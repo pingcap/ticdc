@@ -101,25 +101,21 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		}
 	}
 
+	if as.checkDeadlock() {
+		log.Info("check deadlock and release memory", zap.Any("area", as.area), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Uint64("maxPendingSize", as.settings.Load().maxPendingSize), zap.Time("lastSizeDecreaseTime", as.lastSizeDecreaseTime.Load().(time.Time)))
+
+		as.releaseMemory()
+		return true
+	}
+
 	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
-		MemoryControlForEventCollector {
-
-		if as.checkDeadlock() {
-			log.Info("check deadlock and release memory", zap.Any("area", as.area), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Uint64("maxPendingSize", as.settings.Load().maxPendingSize), zap.Time("lastSizeDecreaseTime", as.lastSizeDecreaseTime.Load().(time.Time)))
-
-			as.releaseMemory()
+		MemoryControlForEventCollector && event.eventType.Droppable {
+		dropEvent := handler.OnDrop(event.event)
+		if dropEvent != nil {
+			event.eventType = handler.GetType(dropEvent.(T))
+			event.event = dropEvent.(T)
+			path.pendingQueue.PushBack(event)
 			return true
-		}
-
-		if event.eventType.Droppable {
-			dropEvent := handler.OnDrop(event.event)
-			if dropEvent != nil {
-				event.eventType = handler.GetType(dropEvent.(T))
-				event.event = dropEvent.(T)
-				// fizz: remove the pushing Drop event logic after test
-				// path.pendingQueue.PushBack(event)
-				return true
-			}
 		}
 	}
 
@@ -129,7 +125,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			if dropEvent != nil {
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
-				// path.pendingQueue.PushBack(event)
+				path.pendingQueue.PushBack(event)
 				failpoint.Return(true)
 			}
 		}
