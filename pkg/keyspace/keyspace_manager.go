@@ -41,7 +41,7 @@ type Manager interface {
 
 func NewManager(pdEndpoints []string) Manager {
 	return &manager{
-		pdEndpoints:   pdEndpoints,
+		urls:          strings.Join(pdEndpoints, ","),
 		keyspaceMap:   make(map[string]*keyspacepb.KeyspaceMeta),
 		keyspaceIDMap: make(map[uint32]*keyspacepb.KeyspaceMeta),
 		storageMap:    make(map[string]kv.Storage),
@@ -49,7 +49,7 @@ func NewManager(pdEndpoints []string) Manager {
 }
 
 type manager struct {
-	pdEndpoints []string
+	urls string
 
 	// TODO tenfyzhong 2025-09-16 23:46:01 update keyspaceMeta periodicity
 	keyspaceMap   map[string]*keyspacepb.KeyspaceMeta
@@ -60,12 +60,16 @@ type manager struct {
 	storageMu  sync.Mutex
 }
 
+var (
+	defaultKeyspaceMeta = &keyspacepb.KeyspaceMeta{
+		Name: common.DefaultKeyspace,
+		Id:   common.DefaultKeyspaceID,
+	}
+)
+
 func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
-		return &keyspacepb.KeyspaceMeta{
-			Name: common.DefaultKeyspace,
-			Id:   common.DefaultKeyspaceID,
-		}, nil
+		return defaultKeyspaceMeta, nil
 	}
 
 	k.keyspaceMu.Lock()
@@ -83,7 +87,9 @@ func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacep
 			return err
 		}
 		return nil
-	}, retry.WithBackoffBaseDelay(500), retry.WithBackoffMaxDelay(1000), retry.WithMaxTries(6))
+	}, retry.WithBackoffBaseDelay(500),
+		retry.WithBackoffMaxDelay(1000),
+		retry.WithMaxTries(6))
 	if err != nil {
 		log.Error("retry to load keyspace from pd", zap.String("keyspace", keyspace), zap.Error(err))
 		return nil, errors.Trace(err)
@@ -104,9 +110,7 @@ func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacep
 
 func (k *manager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
-		return &keyspacepb.KeyspaceMeta{
-			Name: common.DefaultKeyspace,
-		}, nil
+		return defaultKeyspaceMeta, nil
 	}
 
 	k.keyspaceMu.Lock()
@@ -124,7 +128,9 @@ func (k *manager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keys
 			return err
 		}
 		return nil
-	}, retry.WithBackoffBaseDelay(500), retry.WithBackoffMaxDelay(1000), retry.WithMaxTries(6))
+	}, retry.WithBackoffBaseDelay(500),
+		retry.WithBackoffMaxDelay(1000),
+		retry.WithMaxTries(6))
 	if err != nil {
 		log.Error("retry to load keyspace from pd", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		return nil, errors.Trace(err)
@@ -152,9 +158,9 @@ func (k *manager) GetStorage(keyspace string) (kv.Storage, error) {
 	}
 
 	conf := config.GetGlobalServerConfig()
-	kvStorage, err := upstream.CreateTiStore(strings.Join(k.pdEndpoints, ","), conf.Security, keyspace)
+	kvStorage, err := upstream.CreateTiStore(k.urls, conf.Security, keyspace)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	k.storageMap[keyspace] = kvStorage

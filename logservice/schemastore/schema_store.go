@@ -255,7 +255,7 @@ func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchema
 		return nil, errors.Trace(err)
 	}
 
-	if err := s.RegisterKeyspace(ctx, keyspaceMeta.Name); err != nil {
+	if err = s.RegisterKeyspace(ctx, keyspaceMeta.Name); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -433,9 +433,6 @@ func (s *schemaStore) RegisterKeyspace(
 	ctx context.Context,
 	keyspaceName string,
 ) error {
-	s.keyspaceLocker.Lock()
-	defer s.keyspaceLocker.Unlock()
-
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
 	if err != nil {
@@ -444,6 +441,8 @@ func (s *schemaStore) RegisterKeyspace(
 
 	keyspaceID := keyspaceMeta.Id
 
+	s.keyspaceLocker.Lock()
+	defer s.keyspaceLocker.Unlock()
 	// If the keyspace has already been registered
 	// No need to register again
 	if _, ok := s.keyspaceSchemaStoreMap[keyspaceID]; ok {
