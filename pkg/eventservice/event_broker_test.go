@@ -178,6 +178,11 @@ func TestCURDDispatcher(t *testing.T) {
 	require.Nil(t, err)
 	disp := broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
+	// Check changefeedStatus after adding a dispatcher
+	cfStatus, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok, "changefeedStatus should exist after adding a dispatcher")
+	require.False(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should not be empty")
+
 	require.Equal(t, disp.id, dispInfo.GetID())
 
 	// Case 2: Reset a dispatcher.
@@ -189,12 +194,19 @@ func TestCURDDispatcher(t *testing.T) {
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 	// Check the resetTs is updated.
+	// Check changefeedStatus after resetting a dispatcher
+	cfStatus, ok = broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok, "changefeedStatus should still exist after resetting")
+	require.False(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should not be empty after resetting")
 	require.Equal(t, disp.startTs, dispInfo.GetStartTs())
 
 	// Case 3: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
 	dispPtr := broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, dispPtr)
+	// Check changefeedStatus after removing the only dispatcher
+	_, ok = broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
 }
 
 func TestResetDispatcher(t *testing.T) {
