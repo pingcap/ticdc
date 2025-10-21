@@ -143,7 +143,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	select {
 	case <-ch:
 	case <-ticker.C:
-		log.Warn("graceful close timeout")
+		log.Warn("graceful shutdown timeout, exit server")
 	}
 	return err
 }
