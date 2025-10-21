@@ -417,22 +417,21 @@ type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
 
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
-	dispatcherCount atomic.Uint64
+	dispatchers sync.Map // common.DispatcherID -> *dispatcherStat
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	stat := &changefeedStatus{
+	return &changefeedStatus{
 		changefeedID: changefeedID,
 	}
-	return stat
 }
 
 func (c *changefeedStatus) addDispatcher() {
-	c.dispatcherCount.Inc()
+	// No-op, the count can be derived from the map.
 }
 
 func (c *changefeedStatus) removeDispatcher() {
-	c.dispatcherCount.Dec()
+	// No-op, the count can be derived from the map.
 }
