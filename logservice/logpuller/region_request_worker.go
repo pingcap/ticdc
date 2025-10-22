@@ -171,13 +171,21 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 			zap.Bool("canceled", canceled))
 	}()
 
-	g, gctx := errgroup.WithContext(ctx)
+	// Use a cancelable context to ensure all goroutines are cleaned up on exit
+	gctx, cancel := context.WithCancel(ctx)
+	defer cancel() // Cancel context when function exits to clean up all goroutines
+
+	g := new(errgroup.Group)
 	conn, err := Connect(gctx, credential, s.store.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
 			zap.String("addr", s.store.storeAddr),
 			zap.Error(err))
+		// Close the connection if it was partially created
+		if conn != nil && conn.Conn != nil {
+			_ = conn.Conn.Close()
+		}
 		return isCanceled()
 	}
 	defer func() {

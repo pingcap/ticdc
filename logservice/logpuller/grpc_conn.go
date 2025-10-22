@@ -121,8 +121,13 @@ func Connect(ctx context.Context, credential *security.Credential, target string
 	rpc := cdcpb.NewChangeDataClient(clientConn)
 	ctx = getContextFromFeatures(ctx, []string{rpcMetaFeatureStreamMultiplexing})
 	client, err := rpc.EventFeedV2(ctx)
+	if err != nil {
+		// Close the connection if creating the stream fails to prevent goroutine leaks
+		_ = clientConn.Close()
+		return nil, err
+	}
 	return &ConnAndClient{
 		Conn:   clientConn,
 		Client: client,
-	}, err
+	}, nil
 }
