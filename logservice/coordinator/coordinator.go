@@ -144,7 +144,7 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 				log.Warn("send reusable event service response failed", zap.Error(err))
 			}
 		case <-metricTick.C:
-			c.updateChangefeedMetrics()
+			c.reportChangefeedMetrics()
 		}
 	}
 }
@@ -171,8 +171,6 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 }
 
 func (c *logCoordinator) sendResolvedTsToCoordinator(id node.ID, changefeedID common.ChangeFeedID) {
-	c.nodes.Lock()
-	defer c.nodes.Unlock()
 	resolvedTs := c.getMinLogServiceResolvedTs(changefeedID)
 	msg := messaging.NewSingleTargetMessage(
 		id,
@@ -280,7 +278,7 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 	}
 }
 
-func (c *logCoordinator) updateChangefeedMetrics() {
+func (c *logCoordinator) reportChangefeedMetrics() {
 	pdTime := c.pdClock.CurrentTime()
 	pdPhyTs := oracle.GetPhysical(pdTime)
 
