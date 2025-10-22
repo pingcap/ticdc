@@ -191,7 +191,6 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-
 	t.Run("DuplicateTableIDs", func(t *testing.T) {
 		writer, db, mock := newTestMysqlWriterForDDLTs(t)
 		defer db.Close()
@@ -228,4 +227,3 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
-
