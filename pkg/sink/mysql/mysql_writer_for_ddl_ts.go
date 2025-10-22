@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -27,10 +26,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const timeFormat = "2006-01-02 15:04:05.000000"
-
 // FlushDDLTsPre is used to flush ddl ts before the ddl event is sent to downstream.
-// It only be called when downstream is tidb.
 // It's used to fix the potential data loss problem leading by the ddl ts event and ddl event can't be atomicly send to downstream.
 //
 // For example,
@@ -217,13 +213,12 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 
 func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint, tableNameInDDLJob, dbNameInDDlJob string) string {
 	var builder strings.Builder
-	builder.WriteString("SET @current_ts = NOW(6);")
 
 	builder.WriteString("INSERT INTO ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
-	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint, created_at) VALUES ")
+	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ")
 
 	for idx, tableId := range tableIds {
 		builder.WriteString("('")
@@ -242,13 +237,12 @@ func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, fini
 		builder.WriteString(finished)
 		builder.WriteString(", ")
 		builder.WriteString(isSyncpoint)
-		builder.WriteString(", @current_ts")
 		builder.WriteString(")")
 		if idx < len(tableIds)-1 {
 			builder.WriteString(", ")
 		}
 	}
-	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=VALUES(created_at), is_syncpoint=VALUES(is_syncpoint);")
+	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);")
 
 	return builder.String()
 }
@@ -290,7 +284,8 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 //     2.2.2.1 if the latest ddl job time is larger than the createdAt, startTs = ddlTs
 //     2.2.2.2 else startTs = ddlTs - 1
 //
-// for the skipSyncpointSameAsStartTs List, only when the ddlTs is finished or we query find the last ddl job time is larger than the createdAt,
+// TODO(hyy): do we still need skipSyncpointSameAsStartTs?
+// for the skipSyncpointSameAsStartTs List, only when the ddlTs is finished and
 // the skipSyncpointSameAsStartTs equals the query result in ddl_ts table, otherwise, the skipSyncpointSameAsStartTs is false.
 func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
@@ -324,9 +319,8 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	var ddlTs, tableId int64
 	var tableNameInDDLJob, dbNameInDDLJob string
 	var finished, isSyncpoint bool
-	var createdAtBytes []byte
 	for rows.Next() {
-		err = rows.Scan(&tableId, &tableNameInDDLJob, &dbNameInDDLJob, &ddlTs, &finished, &createdAtBytes, &isSyncpoint)
+		err = rows.Scan(&tableId, &tableNameInDDLJob, &dbNameInDDLJob, &ddlTs, &finished, &isSyncpoint)
 		if err != nil {
 			return retStartTsList, isSyncpoints, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
@@ -336,70 +330,12 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 				isSyncpoints[idx] = isSyncpoint
 			}
 		} else {
+			// Even in some corner case, the ddl actually executed, but ddl ts is not finished. We can tolerate to rewrite the ddl again.
+			// Because the ddl ts is not finish, so no dmls after this ddl will be flushed downstream.
+			// Besides, the granularity of DDL execution is guaranteed, so executing DDL once more will not affect its correctness.
 			for _, idx := range tableIdIdxMap[tableId] {
 				retStartTsList[idx] = ddlTs - 1
 			}
-			/*
-				if !w.cfg.IsTiDB {
-					// If the downstream is not TiDB, we use the ddlTs - 1 as the startTs.
-					// Even in some corner case, the ddl actually executed, we can tolerate to rewrite the ddl again.
-					// Because the ddl ts is not finish, so no dmls after this ddl will be flushed downstream.
-					// Besides, the granularity of DDL execution is guaranteed, so executing DDL once more will not affect its correctness.
-					for _, idx := range tableIdIdxMap[tableId] {
-						retStartTsList[idx] = ddlTs - 1
-					}
-				}
-
-				createdAt, err := time.Parse(timeFormat, string(createdAtBytes))
-				if err != nil {
-					log.Error("Failed to parse created_at", zap.Any("createdAtBytes", createdAtBytes), zap.Any("error", err))
-					for _, idx := range tableIdIdxMap[tableId] {
-						retStartTsList[idx] = ddlTs - 1
-					}
-					continue
-				}
-
-				// query the ddl_jobs table to find whether the ddl is executed and the ddl created time
-				createdTime, ok := w.queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob)
-				if !ok {
-					for _, idx := range tableIdIdxMap[tableId] {
-						retStartTsList[idx] = ddlTs - 1
-					}
-				} else {
-					if createdAt.Before(createdTime) {
-						// show the ddl is executed
-						for _, idx := range tableIdIdxMap[tableId] {
-							retStartTsList[idx] = ddlTs
-							isSyncpoints[idx] = isSyncpoint
-						}
-						log.Debug("createdTime is larger than createdAt",
-							zap.Int64("tableId", tableId),
-							zap.Any("tableNameInDDLJob", tableNameInDDLJob),
-							zap.Any("dbNameInDDLJob", dbNameInDDLJob),
-							zap.Int64("ddlTs", ddlTs),
-							zap.Int64("startTs", ddlTs),
-							zap.Any("ddlJobCreatedTime", createdTime),
-							zap.Any("createdAt", createdAt),
-						)
-						continue
-					} else {
-						// show the ddl is not executed
-						for _, idx := range tableIdIdxMap[tableId] {
-							retStartTsList[idx] = ddlTs - 1
-						}
-						log.Debug("createdTime is less than createdAt",
-							zap.Int64("tableId", tableId),
-							zap.Any("tableNameInDDLJob", tableNameInDDLJob),
-							zap.Any("dbNameInDDLJob", dbNameInDDLJob),
-							zap.Int64("ddlTs", ddlTs),
-							zap.Int64("startTs", ddlTs-1),
-							zap.Any("ddlJobCreatedTime", createdTime),
-							zap.Any("createdAt", createdAt),
-						)
-						continue
-					}
-				}
-			*/
 		}
 	}
 
@@ -408,7 +344,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 
 func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID string) string {
 	var builder strings.Builder
-	builder.WriteString("SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, created_at, is_syncpoint FROM ")
+	builder.WriteString("SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, is_syncpoint FROM ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
@@ -428,45 +364,6 @@ func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID stri
 	}
 	builder.WriteString(")")
 	return builder.String()
-}
-
-var queryDDLJobs = `SELECT CREATE_TIME FROM information_schema.ddl_jobs WHERE DB_NAME = '%s' AND TABLE_NAME = '%s' order by CREATE_TIME desc limit 1;`
-
-func (w *Writer) queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob string) (time.Time, bool) {
-	if dbNameInDDLJob == "" && tableNameInDDLJob == "" {
-		log.Info("tableNameInDDLJob and dbNameInDDLJob both are nil")
-		return time.Time{}, false
-	}
-	// query the ddl_jobs table to find whether the ddl is executed
-	query := fmt.Sprintf(queryDDLJobs, dbNameInDDLJob, tableNameInDDLJob)
-	log.Info("query the info from ddl jobs", zap.String("query", query))
-
-	start := time.Now()
-	ddlJobRows, err := w.db.Query(query)
-	if err != nil {
-		log.Error("failed to query ddl jobs", zap.Error(err))
-		return time.Time{}, false
-	}
-	log.Info("query ddl jobs cost time", zap.Duration("cost", time.Since(start)))
-
-	defer ddlJobRows.Close()
-	var createdTimeBytes []byte
-	var createdTime time.Time
-	for ddlJobRows.Next() {
-		err = ddlJobRows.Scan(&createdTimeBytes)
-		if err != nil {
-			log.Error("failed to query ddl jobs", zap.Error(err))
-			return time.Time{}, false
-		}
-		createdTime, err = time.Parse(timeFormat, string(createdTimeBytes))
-		if err != nil {
-			log.Error("Failed to parse createdTimeBytes", zap.Any("createdTimeBytes", createdTimeBytes), zap.Any("error", err))
-			return time.Time{}, false
-		}
-		return createdTime, true
-	}
-	log.Debug("no ddl job item", zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob))
-	return time.Time{}, false
 }
 
 func (w *Writer) RemoveDDLTsItem() error {
@@ -603,7 +500,6 @@ func (w *Writer) createDDLTsTable() error {
 		table_name_in_ddl_job varchar(1024),
 		db_name_in_ddl_job varchar(1024),
 		is_syncpoint bool,
-		created_at datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		INDEX (ticdc_cluster_id, changefeed, table_id),
 		PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
 	);`
