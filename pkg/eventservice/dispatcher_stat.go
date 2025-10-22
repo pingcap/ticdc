@@ -150,7 +150,8 @@ func newDispatcherStat(
 	}
 
 	// A small value to avoid too many scan tasks at the first place.
-	dispStat.lastScanBytes.Store(1024)
+	dispStat.lastScanBytes.Store(minScanLimitInBytes)
+	dispStat.availableMemoryQuota.Store(minScanLimitInBytes)
 
 	changefeedStatus.addDispatcher()
 
