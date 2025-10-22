@@ -214,6 +214,9 @@ type subscriptionClient struct {
 	// errCh is used to receive region errors.
 	// The errors will be handled in `handleErrors` goroutine.
 	errCache *errCache
+
+	// closed is used to avoid resolveLockTaskCh block
+	closed chan struct{}
 }
 
 // NewSubscriptionClient creates a client.
@@ -238,6 +241,7 @@ func NewSubscriptionClient(
 		regionTaskQueue:   NewPriorityQueue(),
 		resolveLockTaskCh: make(chan resolveLockTask, 1024),
 		errCache:          newErrCache(),
+		closed:            make(chan struct{}),
 	}
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
@@ -452,6 +456,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	// FIXME: close and drain all channels
+	close(s.closed)
 	s.ds.Close()
 	s.regionTaskQueue.Close()
 	return nil
@@ -1043,12 +1048,15 @@ func (s *subscriptionClient) newSubscribedSpan(
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
 		targetTs := rt.staleLocksTargetTs.Load()
 		if state.ResolvedTs.Load() < targetTs && state.Initialized.Load() {
-			s.resolveLockTaskCh <- resolveLockTask{
+			select {
+			case s.resolveLockTaskCh <- resolveLockTask{
 				keyspaceID: span.KeyspaceID,
 				regionID:   regionID,
 				targetTs:   targetTs,
 				state:      state,
 				create:     time.Now(),
+			}:
+			case <-s.closed:
 			}
 		}
 	}
