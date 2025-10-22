@@ -364,10 +364,14 @@ func (s *subscriptionClient) Subscribe(
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
-	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode, priority: TaskLowPrior}
-	log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
-		zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
-		zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
+	select {
+	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode, priority: TaskLowPrior}:
+		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
+			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
+			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
+	case <-s.closed:
+		log.Error("subscribes span failed, the subscription client has closed")
+	}
 }
 
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
@@ -455,7 +459,6 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
-	// FIXME: close and drain all channels
 	close(s.closed)
 	s.ds.Close()
 	s.regionTaskQueue.Close()
