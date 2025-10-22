@@ -48,7 +48,7 @@ type ddlJobFetcher struct {
 	}
 
 	// cacheDDLEvent and advanceResolvedTs may be called concurrently
-	// the only gurantee is that when call advanceResolvedTs with ts, all ddl job with commit ts <= ts has been passed to cacheDDLEvent
+	// the only guarantee is that when call advanceResolvedTs with ts, all ddl job with commit ts <= ts has been passed to cacheDDLEvent
 	cacheDDLEvent     func(ddlEvent DDLJobWithCommitTs)
 	advanceResolvedTs func(resolvedTS uint64)
 
@@ -57,7 +57,7 @@ type ddlJobFetcher struct {
 	keyspaceID uint32
 
 	ddlTableInfo         *event.DDLTableInfo
-	onceInitddlTableInfo sync.Once
+	onceInitDDLTableInfo sync.Once
 }
 
 func newDDLJobFetcher(
@@ -122,16 +122,16 @@ func (p *ddlJobFetcher) tryAdvanceResolvedTs(subID logpuller.SubscriptionID, new
 	if !ok || minResolvedTsItem.resolvedTs == math.MaxUint64 {
 		log.Panic("should not happen")
 	}
-	// minResolvedTsItem may be 0, it it ok to send it because it will be filtered later.
+	// minResolvedTsItem may be 0, it's ok to send it because it will be filtered later.
 	// it is ok to send redundant resolved ts to advanceResolvedTs.
 	p.advanceResolvedTs(minResolvedTsItem.resolvedTs)
 }
 
 func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
-	for _, kv := range kvs {
-		job, err := p.unmarshalDDL(&kv)
+	for _, entry := range kvs {
+		job, err := p.unmarshalDDL(&entry)
 		if err != nil {
-			log.Fatal("unmarshal ddl failed", zap.Any("kv", kv), zap.Error(err))
+			log.Fatal("unmarshal ddl failed", zap.Any("entry", entry), zap.Error(err))
 		}
 
 		if job == nil {
@@ -141,19 +141,19 @@ func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
 		// cache ddl job in memory until the resolve ts pass its commit ts
 		p.cacheDDLEvent(DDLJobWithCommitTs{
 			Job:      job,
-			CommitTs: kv.CRTs,
+			CommitTs: entry.CRTs,
 		})
 	}
 	return false
 }
 
-// unmarshalDDL unmarshals a ddl job from a raw kv entry.
+// unmarshalDDL unmarshal a ddl job from a raw kv entry.
 func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, error) {
 	if rawKV.OpType != common.OpTypePut {
 		return nil, nil
 	}
 	if !event.IsLegacyFormatJob(rawKV) {
-		p.onceInitddlTableInfo.Do(func() {
+		p.onceInitDDLTableInfo.Do(func() {
 			if err := p.initDDLTableInfo(p.ctx, p.kvStorage); err != nil {
 				log.Fatal("init ddl table info failed", zap.Error(err))
 			}
