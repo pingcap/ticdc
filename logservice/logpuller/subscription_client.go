@@ -364,12 +364,12 @@ func (s *subscriptionClient) Subscribe(
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	select {
+	case <-s.ctx.Done():
+		log.Error("subscribes span failed, the subscription client has closed")
 	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode, priority: TaskLowPrior}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
-	case <-s.ctx.Done():
-		log.Error("subscribes span failed, the subscription client has closed")
 	}
 }
 
@@ -1051,6 +1051,7 @@ func (s *subscriptionClient) newSubscribedSpan(
 		targetTs := rt.staleLocksTargetTs.Load()
 		if state.ResolvedTs.Load() < targetTs && state.Initialized.Load() {
 			select {
+			case <-s.ctx.Done():
 			case s.resolveLockTaskCh <- resolveLockTask{
 				keyspaceID: span.KeyspaceID,
 				regionID:   regionID,
@@ -1058,7 +1059,6 @@ func (s *subscriptionClient) newSubscribedSpan(
 				state:      state,
 				create:     time.Now(),
 			}:
-			case <-s.ctx.Done():
 			}
 		}
 	}
