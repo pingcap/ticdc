@@ -327,7 +327,7 @@ func TestReportMetricsForAffectedChangefeeds(t *testing.T) {
 	pdPhyTs := oracle.GetPhysical(c.pdClock.CurrentTime())
 
 	// Call update metrics
-	c.updateChangefeedMetrics()
+	c.reportChangefeedMetrics()
 
 	// Verify metrics for cf1
 	cf1State := c.changefeedStates.m[cfID1.ID()]
