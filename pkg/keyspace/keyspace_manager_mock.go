@@ -13,43 +13,43 @@ import (
 	kv "github.com/pingcap/tidb/pkg/kv"
 )
 
-// MockKeyspaceManager is a mock of KeyspaceManager interface.
-type MockKeyspaceManager struct {
+// MockManager is a mock of Manager interface.
+type MockManager struct {
 	ctrl     *gomock.Controller
-	recorder *MockKeyspaceManagerMockRecorder
+	recorder *MockManagerMockRecorder
 }
 
-// MockKeyspaceManagerMockRecorder is the mock recorder for MockKeyspaceManager.
-type MockKeyspaceManagerMockRecorder struct {
-	mock *MockKeyspaceManager
+// MockManagerMockRecorder is the mock recorder for MockManager.
+type MockManagerMockRecorder struct {
+	mock *MockManager
 }
 
-// NewMockKeyspaceManager creates a new mock instance.
-func NewMockKeyspaceManager(ctrl *gomock.Controller) *MockKeyspaceManager {
-	mock := &MockKeyspaceManager{ctrl: ctrl}
-	mock.recorder = &MockKeyspaceManagerMockRecorder{mock}
+// NewMockManager creates a new mock instance.
+func NewMockManager(ctrl *gomock.Controller) *MockManager {
+	mock := &MockManager{ctrl: ctrl}
+	mock.recorder = &MockManagerMockRecorder{mock}
 	return mock
 }
 
 // EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockKeyspaceManager) EXPECT() *MockKeyspaceManagerMockRecorder {
+func (m *MockManager) EXPECT() *MockManagerMockRecorder {
 	return m.recorder
 }
 
 // Close mocks base method.
-func (m *MockKeyspaceManager) Close() {
+func (m *MockManager) Close() {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "Close")
 }
 
 // Close indicates an expected call of Close.
-func (mr *MockKeyspaceManagerMockRecorder) Close() *gomock.Call {
+func (mr *MockManagerMockRecorder) Close() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockKeyspaceManager)(nil).Close))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockManager)(nil).Close))
 }
 
 // GetKeyspaceByID mocks base method.
-func (m *MockKeyspaceManager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
+func (m *MockManager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetKeyspaceByID", ctx, keyspaceID)
 	ret0, _ := ret[0].(*keyspacepb.KeyspaceMeta)
@@ -58,13 +58,13 @@ func (m *MockKeyspaceManager) GetKeyspaceByID(ctx context.Context, keyspaceID ui
 }
 
 // GetKeyspaceByID indicates an expected call of GetKeyspaceByID.
-func (mr *MockKeyspaceManagerMockRecorder) GetKeyspaceByID(ctx, keyspaceID interface{}) *gomock.Call {
+func (mr *MockManagerMockRecorder) GetKeyspaceByID(ctx, keyspaceID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetKeyspaceByID", reflect.TypeOf((*MockKeyspaceManager)(nil).GetKeyspaceByID), ctx, keyspaceID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetKeyspaceByID", reflect.TypeOf((*MockManager)(nil).GetKeyspaceByID), ctx, keyspaceID)
 }
 
 // GetStorage mocks base method.
-func (m *MockKeyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {
+func (m *MockManager) GetStorage(keyspace string) (kv.Storage, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetStorage", keyspace)
 	ret0, _ := ret[0].(kv.Storage)
@@ -73,13 +73,13 @@ func (m *MockKeyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {
 }
 
 // GetStorage indicates an expected call of GetStorage.
-func (mr *MockKeyspaceManagerMockRecorder) GetStorage(keyspace interface{}) *gomock.Call {
+func (mr *MockManagerMockRecorder) GetStorage(keyspace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStorage", reflect.TypeOf((*MockKeyspaceManager)(nil).GetStorage), keyspace)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStorage", reflect.TypeOf((*MockManager)(nil).GetStorage), keyspace)
 }
 
 // LoadKeyspace mocks base method.
-func (m *MockKeyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
+func (m *MockManager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "LoadKeyspace", ctx, keyspace)
 	ret0, _ := ret[0].(*keyspacepb.KeyspaceMeta)
@@ -88,7 +88,7 @@ func (m *MockKeyspaceManager) LoadKeyspace(ctx context.Context, keyspace string)
 }
 
 // LoadKeyspace indicates an expected call of LoadKeyspace.
-func (mr *MockKeyspaceManagerMockRecorder) LoadKeyspace(ctx, keyspace interface{}) *gomock.Call {
+func (mr *MockManagerMockRecorder) LoadKeyspace(ctx, keyspace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadKeyspace", reflect.TypeOf((*MockKeyspaceManager)(nil).LoadKeyspace), ctx, keyspace)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadKeyspace", reflect.TypeOf((*MockManager)(nil).LoadKeyspace), ctx, keyspace)
 }
