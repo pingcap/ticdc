@@ -564,12 +564,12 @@ func addTableInfoFromKVSnap(
 	return nil
 }
 
-func (p *persistentStorage) gc(ctx context.Context) error {
+func (p *persistentStorage) gc(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
 			gcSafePoint, err := p.getGcSafePoint(ctx)
 			if err != nil {
@@ -581,7 +581,7 @@ func (p *persistentStorage) gc(ctx context.Context) error {
 	}
 }
 
-func (p *persistentStorage) doGc(gcTs uint64) error {
+func (p *persistentStorage) doGc(gcTs uint64) {
 	p.mu.Lock()
 	if gcTs > p.upperBound.ResolvedTs {
 		// It might happen when all changefeed is removed in the maintainer side,
@@ -592,16 +592,15 @@ func (p *persistentStorage) doGc(gcTs uint64) error {
 	}
 	if gcTs <= p.gcTs {
 		p.mu.Unlock()
-		return nil
+		return
 	}
 	oldGcTs := p.gcTs
 	p.mu.Unlock()
 
 	serverConfig := config.GetGlobalServerConfig()
 	if !serverConfig.Debug.SchemaStore.EnableGC {
-		log.Info("gc is disabled",
-			zap.Uint64("gcTs", gcTs))
-		return nil
+		log.Info("gc is disabled", zap.Uint64("gcTs", gcTs))
+		return
 	}
 
 	start := time.Now()
@@ -610,24 +609,18 @@ func (p *persistentStorage) doGc(gcTs uint64) error {
 		log.Warn("fail to write kv snapshot during gc",
 			zap.Uint64("gcTs", gcTs), zap.Error(err))
 		// TODO: return err and retry?
-		return nil
+		return
 	}
 	log.Info("gc finish write schema snapshot",
-		zap.Uint64("gcTs", gcTs),
-		zap.Any("duration", time.Since(start)))
+		zap.Uint64("gcTs", gcTs), zap.Any("duration", time.Since(start)))
 
 	// clean data in memory before clean data on disk
 	p.cleanObsoleteDataInMemory(gcTs)
 	log.Info("gc finish clean in memory data",
-		zap.Uint64("gcTs", gcTs),
-		zap.Any("duration", time.Since(start)))
+		zap.Uint64("gcTs", gcTs), zap.Any("duration", time.Since(start)))
 
 	cleanObsoleteData(p.db, oldGcTs, gcTs)
-	log.Info("gc finish",
-		zap.Uint64("gcTs", gcTs),
-		zap.Any("duration", time.Since(start)))
-
-	return nil
+	log.Info("gc finish", zap.Uint64("gcTs", gcTs), zap.Any("duration", time.Since(start)))
 }
 
 func (p *persistentStorage) cleanObsoleteDataInMemory(gcTs uint64) {
@@ -684,12 +677,12 @@ func (p *persistentStorage) getUpperBound() UpperBoundMeta {
 	return p.upperBound
 }
 
-func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) error {
+func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
 			p.mu.Lock()
 			if !p.upperBoundChanged {

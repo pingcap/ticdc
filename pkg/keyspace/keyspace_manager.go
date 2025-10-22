@@ -60,12 +60,10 @@ type manager struct {
 	storageMu  sync.Mutex
 }
 
-var (
-	defaultKeyspaceMeta = &keyspacepb.KeyspaceMeta{
-		Name: common.DefaultKeyspace,
-		Id:   common.DefaultKeyspaceID,
-	}
-)
+var defaultKeyspaceMeta = &keyspacepb.KeyspaceMeta{
+	Name: common.DefaultKeyspace,
+	Id:   common.DefaultKeyspaceID,
+}
 
 func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
