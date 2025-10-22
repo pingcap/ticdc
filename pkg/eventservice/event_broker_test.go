@@ -299,8 +299,6 @@ func TestHandleResolvedTs(t *testing.T) {
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 
-	//mc := broker.msgSender.(*mockMessageCenter)
-
 	ctx := context.Background()
 	cacheMap := make(map[node.ID]*resolvedTsCache)
 	wrapEvent := &wrapEvent{
