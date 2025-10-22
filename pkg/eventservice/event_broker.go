@@ -252,7 +252,9 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
-	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval {
+	// Can't send resolvedTs if there was a interrupted scan task happened before.
+	// d.lastScannedStartTs.Load() != 0 indicates that there was a interrupted scan task happened before.
+	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval || d.lastScannedStartTs.Load() != 0 {
 		return
 	}
 	watermark := d.sentResolvedTs.Load()
