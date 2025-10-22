@@ -182,7 +182,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 	}
 
 	for _, path := range releasedPaths {
-		log.Info("release path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("releasedSize", path.pendingSize.Load()))
+		log.Debug("release path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("releasedSize", path.pendingSize.Load()))
 		as.feedbackChan <- Feedback[A, P, D]{
 			Area:         as.area,
 			Path:         path.path,
