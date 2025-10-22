@@ -172,7 +172,7 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		Length:          1,
 	}
 	event.AddPostFlushFunc(func() {
-		event.Rows.Destroy(1, tableInfo.GetFieldSlice())
+		event.Rows.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
 	})
 	columns := tableInfo.GetColumns()
 	before, ok1 := d.valuePayload["before"].(map[string]interface{})

@@ -18,7 +18,7 @@ echo "query dispatcher count"
 count=0
 
 while [[ $count -lt $retryCount ]]; do
-	ans=$(curl -X GET http://"${ipAddr}"/api/v2/changefeeds/"${changefeedID}"/get_dispatcher_count?mode=$mode)
+	ans=$(curl -X GET http://"${ipAddr}"/api/v2/changefeeds/"${changefeedID}"/get_dispatcher_count?mode=$mode\&keyspace=$KEYSPACE_NAME)
 	echo $ans
 	value=$(echo $ans | jq -r '.count')
 

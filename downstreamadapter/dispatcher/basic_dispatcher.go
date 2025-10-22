@@ -737,7 +737,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && d.tableSpan != common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID) {
+	if event.GetUpdatedSchemas() != nil && !d.IsTableTriggerEventDispatcher() {
 		for _, schemaIDChange := range event.GetUpdatedSchemas() {
 			if schemaIDChange.TableID == d.tableSpan.TableID {
 				if schemaIDChange.OldSchemaID != d.schemaID {

@@ -75,7 +75,7 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	tableInfo := dmlEvent.TableInfo
 
 	sink := sink.NewMockSink(common.MysqlSinkType)
-	tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
 	require.NoError(t, err)
 	dispatcher := newRedoDispatcherForTest(sink, tableSpan)
 	require.Equal(t, uint64(0), dispatcher.GetCheckpointTs())
@@ -514,7 +514,7 @@ func TestRedoDispatcherClose(t *testing.T) {
 
 	{
 		sink := sink.NewMockSink(common.MysqlSinkType)
-		tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+		tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
 		require.NoError(t, err)
 		dispatcher := newRedoDispatcherForTest(sink, tableSpan)
 
@@ -537,7 +537,7 @@ func TestRedoDispatcherClose(t *testing.T) {
 	// test sink is not normal
 	{
 		sink := sink.NewMockSink(common.MysqlSinkType)
-		tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+		tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
 		require.NoError(t, err)
 		dispatcher := newRedoDispatcherForTest(sink, tableSpan)
 
@@ -582,7 +582,7 @@ func TestRedoBatchDMLEventsPartialFlush(t *testing.T) {
 	dmlEvent3.Length = 1
 
 	mockSink := sink.NewMockSink(common.MysqlSinkType)
-	tableSpan, err := getCompleteTableSpan(common.DefaultKeyspaceID)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
 	require.NoError(t, err)
 	dispatcher := newRedoDispatcherForTest(mockSink, tableSpan)
 

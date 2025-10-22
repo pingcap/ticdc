@@ -27,9 +27,12 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	ticonfig "github.com/pingcap/tidb/pkg/config"
+	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
@@ -67,13 +70,19 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
 	writer := NewWriter(ctx, db, cfg, changefeedID, statistics, false)
 
+	if kerneltype.IsNextGen() {
+		ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
+			conf.Instance.TiDBServiceScope = handle.NextGenTargetScope
+		})
+	}
+
 	return writer, db, mock
 }
 
 func newTestMockDB(t *testing.T) (db *sql.DB, mock sqlmock.Sqlmock) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.Nil(t, err)
-	return
+	return db, mock
 }
 
 func TestMysqlWriter_FlushDML(t *testing.T) {

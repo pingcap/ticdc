@@ -23,6 +23,14 @@ rename table test1 to common.test2, common.test2 to test3, common.test4 to test1
 insert into test1 values (1, 2);
 insert into common.test4 values (3, 4), (5, 6);
 
+create table test5 (a bigint primary key, b int);
+create table test6 (a bigint primary key, b int);
+alter table test5 rename to test7;
+alter table test6 rename to common_1.test8;
+
+insert into test7 values (1, 2);
+insert into common_1.test8 values (3, 4), (5, 6);
+
 CREATE TABLE finish_mark
 (
     a int primary key

@@ -38,9 +38,9 @@ function run() {
         auth-tls-private-key-path="${WORK_DIR}/broker_client.key-pk8.pem"
         auth-tls-certificate-path="${WORK_DIR}/broker_client.cert.pem"
 EOF
-		do_retry 5 3 cdc cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config=$WORK_DIR/pulsar_test.toml
+		do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config=$WORK_DIR/pulsar_test.toml
 	else
-		do_retry 5 3 cdc cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+		do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 	fi
 
 	case $SINK_TYPE in

@@ -42,7 +42,7 @@ function prepare() {
 		;;
 	*) SINK_URI="mysql://root:@127.0.0.1:3306/" ;;
 	esac
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
+	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -75,7 +75,7 @@ main() {
 
 	query_dispatcher_count "127.0.0.1:8300" "test" 36 100 le # 6 * 5 + 5 + 1
 
-	cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+	cdc_pid_1=$(get_cdc_pid 127.0.0.1 8300)
 	if [ -z "$cdc_pid_1" ]; then
 		echo "ERROR: cdc server 1 is not running"
 		exit 1
@@ -112,7 +112,7 @@ main_with_consistent() {
 
 	query_dispatcher_count "127.0.0.1:8300" "test" 36 100 le 1 # 6 * 5 + 5 + 1
 
-	cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+	cdc_pid_1=$(get_cdc_pid 127.0.0.1 8300)
 	if [ -z "$cdc_pid_1" ]; then
 		echo "ERROR: cdc server 1 is not running"
 		exit 1

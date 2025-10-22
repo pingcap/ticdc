@@ -72,7 +72,7 @@ function test_kill_capture() {
 
 	# ensure the server become the owner
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"
-	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	owner_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
@@ -110,7 +110,7 @@ function test_hang_up_capture() {
 
 	# ensure the server become the owner
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"
-	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	owner_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
@@ -139,14 +139,18 @@ function test_expire_capture() {
 
 	# ensure the server become the owner
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"
-	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	owner_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
 
 	# stop the owner
 	kill -SIGSTOP $owner_pid
-	echo "process status:" $(ps -h -p $owner_pid -o "s")
+	if [[ "$(uname)" == "Darwin" ]]; then
+		echo "process status:" $(ps -p $owner_pid -o state=)
+	else
+		echo "process status:" $(ps -h -p $owner_pid -o "s")
+	fi
 
 	# ensure the session has expired
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep -v '$owner_id'"
