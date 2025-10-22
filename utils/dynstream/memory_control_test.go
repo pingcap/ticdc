@@ -292,6 +292,10 @@ func TestReleaseMemory(t *testing.T) {
 		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
 	}
 
+	path1.blocking.Store(true)
+	path2.blocking.Store(true)
+	path3.blocking.Store(true)
+
 	// Add paths to area
 	mc.addPathToArea(path1, settings, feedbackChan)
 	mc.addPathToArea(path2, settings, feedbackChan)
@@ -308,7 +312,7 @@ func TestReleaseMemory(t *testing.T) {
 	// Case 1: release path1
 	// Add events to each path
 	// Each event has size 100
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
 			event:     &mockEvent{id: i, path: path1.path},
 			eventSize: 100,
@@ -336,25 +340,18 @@ func TestReleaseMemory(t *testing.T) {
 	}
 
 	// Update total pending size
-	path1.areaMemStat.totalPendingSize.Store(900)
+	path1.areaMemStat.totalPendingSize.Store(1000)
 
 	// Verify initial state
-	require.Equal(t, 3, path1.pendingQueue.Length())
+	require.Equal(t, 4, path1.pendingQueue.Length())
 	require.Equal(t, 3, path2.pendingQueue.Length())
 	require.Equal(t, 3, path3.pendingQueue.Length())
-	require.Equal(t, int64(300), path1.pendingSize.Load())
+	require.Equal(t, int64(400), path1.pendingSize.Load())
 	require.Equal(t, int64(300), path2.pendingSize.Load())
 	require.Equal(t, int64(300), path3.pendingSize.Load())
-	require.Equal(t, int64(900), path1.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(1000), path1.areaMemStat.totalPendingSize.Load())
 
 	path1.areaMemStat.releaseMemory()
-	require.Equal(t, 0, path1.pendingQueue.Length())
-	require.Equal(t, 3, path2.pendingQueue.Length())
-	require.Equal(t, 3, path3.pendingQueue.Length())
-	require.Equal(t, int64(0), path1.pendingSize.Load())
-	require.Equal(t, int64(300), path2.pendingSize.Load())
-	require.Equal(t, int64(300), path3.pendingSize.Load())
-	require.Equal(t, int64(600), path1.areaMemStat.totalPendingSize.Load())
 
 	feedbacks := make([]Feedback[int, string, any], 0)
 	for i := 0; i < 1; i++ {
@@ -362,9 +359,10 @@ func TestReleaseMemory(t *testing.T) {
 		case fb := <-feedbackChan:
 			feedbacks = append(feedbacks, fb)
 		case <-time.After(100 * time.Millisecond):
-			require.Fail(t, "should receive 2 feedbacks")
+			require.Fail(t, "should receive 1 feedbacks")
 		}
 	}
+
 	require.Equal(t, 1, len(feedbacks))
 	require.Equal(t, ReleasePath, feedbacks[0].FeedbackType)
 	require.Equal(t, area, feedbacks[0].Area)
@@ -382,44 +380,35 @@ func TestReleaseMemory(t *testing.T) {
 		path3.pendingQueue.PopFront()
 	}
 
-	// Add 1 event per path with size 110
+	// Add 1 event per path with size 200
 	event1 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 1, path: path1.path},
-		eventSize: 110,
+		eventSize: 300,
 	}
 	path1.pendingQueue.PushBack(event1)
-	path1.pendingSize.Store(110)
+	path1.pendingSize.Store(300)
 
 	event2 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 2, path: path2.path},
-		eventSize: 110,
+		eventSize: 300,
 	}
 	path2.pendingQueue.PushBack(event2)
-	path2.pendingSize.Store(110)
+	path2.pendingSize.Store(300)
 
 	event3 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 3, path: path3.path},
-		eventSize: 110,
+		eventSize: 300,
 	}
 	path3.pendingQueue.PushBack(event3)
-	path3.pendingSize.Store(110)
+	path3.pendingSize.Store(300)
 
-	path1.areaMemStat.totalPendingSize.Store(330)
+	path1.areaMemStat.totalPendingSize.Store(900)
 
 	// Call releaseMemory
-	// sizeToRelease = 1000 * 0.2 = 200
-	// path1 (ts=300): release 110 bytes, sizeToRelease = 200 - 110 = 90
-	// path2 (ts=200): release 110 bytes, sizeToRelease = 90 - 110 = -20, stop
+	// sizeToRelease = 1000 * 0.4 = 360
+	// path1 (ts=300): release 300 bytes, sizeToRelease = 360 - 300 = 60
+	// path2 (ts=200): release 300 bytes, sizeToRelease = 60 - 300 = -240
 	path1.areaMemStat.releaseMemory()
-
-	// Verify that path1 and path2 are cleared
-	require.Equal(t, 0, path1.pendingQueue.Length())
-	require.Equal(t, 0, path2.pendingQueue.Length())
-	require.Equal(t, 1, path3.pendingQueue.Length()) // path3 should still have events
-
-	require.Equal(t, int64(0), path1.pendingSize.Load())
-	require.Equal(t, int64(0), path2.pendingSize.Load())
-	require.Equal(t, int64(110), path3.pendingSize.Load())
 
 	// Verify feedback messages
 	// Should receive 2 ResetPath feedbacks

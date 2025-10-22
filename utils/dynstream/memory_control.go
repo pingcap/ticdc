@@ -35,7 +35,7 @@ const (
 
 	defaultReleaseMemoryRatio     = 0.4
 	defaultDeadlockDuration       = 5 * time.Second
-	defaultReleaseMemoryThreshold = 1024 // 1KB
+	defaultReleaseMemoryThreshold = 256
 )
 
 // areaMemStat is used to store the memory statistics of an area.
@@ -105,7 +105,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	}
 
 	if as.checkDeadlock() {
-		log.Info("check deadlock and release memory", zap.Any("area", as.area), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Uint64("maxPendingSize", as.settings.Load().maxPendingSize), zap.Time("lastSizeDecreaseTime", as.lastSizeDecreaseTime.Load().(time.Time)))
 		as.releaseMemory()
 		return true
 	}
@@ -180,10 +179,10 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 
 		releasedSize += int64(path.pendingSize.Load())
 		releasedPaths = append(releasedPaths, path)
-		log.Info("release path memory", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("size", path.pendingSize.Load()))
 	}
 
 	for _, path := range releasedPaths {
+		log.Info("release path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("releasedSize", path.pendingSize.Load()))
 		as.feedbackChan <- Feedback[A, P, D]{
 			Area:         as.area,
 			Path:         path.path,
