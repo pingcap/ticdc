@@ -55,7 +55,7 @@ var (
 		errors.RFCCodeText("CDC:ErrMetaListDatabases"),
 	)
 	ErrDDLSchemaNotFound = errors.Normalize(
-		"cannot find mysql.tidb_ddl_job schema",
+		"cannot find schema: %s",
 		errors.RFCCodeText("CDC:ErrDDLSchemaNotFound"),
 	)
 	ErrPDEtcdAPIError = errors.Normalize(

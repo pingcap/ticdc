@@ -18,13 +18,12 @@ import (
 	"math"
 	"sync"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
@@ -179,7 +178,7 @@ func (p *ddlJobFetcher) initDDLTableInfo(ctx context.Context, kvStorage kv.Stora
 
 	dbInfos, err := snap.ListDatabases()
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMetaListDatabases, err)
+		return errors.WrapError(errors.ErrMetaListDatabases, err)
 	}
 
 	db, err := findDBByName(dbInfos, mysql.SystemDB)
@@ -231,8 +230,8 @@ func findDBByName(dbs []*model.DBInfo, name string) (*model.DBInfo, error) {
 			return db, nil
 		}
 	}
-	return nil, cerror.WrapError(
-		cerror.ErrDDLSchemaNotFound,
+	return nil, errors.WrapError(
+		errors.ErrDDLSchemaNotFound,
 		errors.Errorf("can't find schema %s", name))
 }
 
@@ -242,8 +241,8 @@ func findTableByName(tbls []*model.TableInfo, name string) (*model.TableInfo, er
 			return t, nil
 		}
 	}
-	return nil, cerror.WrapError(
-		cerror.ErrDDLSchemaNotFound,
+	return nil, errors.WrapError(
+		errors.ErrDDLSchemaNotFound,
 		errors.Errorf("can't find table %s", name))
 }
 
@@ -253,8 +252,8 @@ func findColumnByName(cols []*model.ColumnInfo, name string) (*model.ColumnInfo,
 			return c, nil
 		}
 	}
-	return nil, cerror.WrapError(
-		cerror.ErrDDLSchemaNotFound,
+	return nil, errors.WrapError(
+		errors.ErrDDLSchemaNotFound,
 		errors.Errorf("can't find column %s", name))
 }
 
