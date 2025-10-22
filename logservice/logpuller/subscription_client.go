@@ -177,6 +177,8 @@ type SubscriptionClient interface {
 }
 
 type subscriptionClient struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
 	config    *SubscriptionClientConfig
 	metrics   sharedClientMetrics
 	clusterID uint64
@@ -214,9 +216,6 @@ type subscriptionClient struct {
 	// errCh is used to receive region errors.
 	// The errors will be handled in `handleErrors` goroutine.
 	errCache *errCache
-
-	// closed is used to avoid resolveLockTaskCh block
-	closed chan struct{}
 }
 
 // NewSubscriptionClient creates a client.
@@ -241,8 +240,8 @@ func NewSubscriptionClient(
 		regionTaskQueue:   NewPriorityQueue(),
 		resolveLockTaskCh: make(chan resolveLockTask, 1024),
 		errCache:          newErrCache(),
-		closed:            make(chan struct{}),
 	}
+	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
@@ -369,7 +368,7 @@ func (s *subscriptionClient) Subscribe(
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
-	case <-s.closed:
+	case <-s.ctx.Done():
 		log.Error("subscribes span failed, the subscription client has closed")
 	}
 }
@@ -459,7 +458,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
-	close(s.closed)
+	s.cancel()
 	s.ds.Close()
 	s.regionTaskQueue.Close()
 	return nil
@@ -1059,7 +1058,7 @@ func (s *subscriptionClient) newSubscribedSpan(
 				state:      state,
 				create:     time.Now(),
 			}:
-			case <-s.closed:
+			case <-s.ctx.Done():
 			}
 		}
 	}
