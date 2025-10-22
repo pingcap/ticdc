@@ -55,7 +55,7 @@ type SchemaStore interface {
 	// TODO: add a parameter limit
 	FetchTableDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error)
 
-	FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64) ([]commonEvent.DDLEvent, uint64, error)
+	FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
 
 	// RegisterKeyspace register a keyspace to fetch table ddl
 	RegisterKeyspace(ctx context.Context, keyspaceName string) error
@@ -380,9 +380,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
-func (s *schemaStore) FetchTableTriggerDDLEvents(
-	keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64,
-) ([]commonEvent.DDLEvent, uint64, error) {
+func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	store, err := s.getKeyspaceSchemaStore(keyspaceID)
 	if err != nil {
 		return nil, 0, err
@@ -394,7 +392,6 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(
 		return nil, currentResolvedTs, nil
 	}
 
-	const limit = 100
 	events, err := store.dataStorage.fetchTableTriggerDDLEvents(tableFilter, start, limit)
 	if err != nil {
 		return nil, 0, err
