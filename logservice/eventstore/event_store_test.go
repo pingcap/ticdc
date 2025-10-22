@@ -252,6 +252,103 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 	}
 }
 
+func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
+	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
+
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+	dispatcherID3 := common.NewDispatcherID()
+	dispatcherID4 := common.NewDispatcherID()
+	tableID := int64(1)
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	// add a subscription to create a subscription
+	{
+		span := &heartbeatpb.TableSpan{
+			TableID:  tableID,
+			StartKey: []byte("a"),
+			EndKey:   []byte("h"),
+		}
+		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		require.True(t, ok)
+	}
+	// add a dispatcher(onlyReuse=false) with a non-containing span
+	{
+		span := &heartbeatpb.TableSpan{
+			TableID:  tableID,
+			StartKey: []byte("c"),
+			EndKey:   []byte("i"),
+		}
+		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		require.True(t, ok)
+	}
+	// do some check
+	{
+		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		// 2 = 1 dispatcher for dispatcherID1 + 1 dispatcher for dispatcherID2
+		require.Equal(t, 2, len(subStats))
+	}
+	// add a dispatcher(onlyReuse=false) with a containing span
+	{
+		span := &heartbeatpb.TableSpan{
+			TableID:  tableID,
+			StartKey: []byte("b"),
+			EndKey:   []byte("h"),
+		}
+		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		require.True(t, ok)
+	}
+	// do some check
+	{
+		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		// 3 = 1 dispatcher for dispatcherID1 + 1 dispatcher for dispatcherID2 + 1 dispatcher for dispatcherID3
+		require.Equal(t, 3, len(subStats))
+		// subStat with subID 1 should have two dispatchers
+		subStat := subStats[logpuller.SubscriptionID(1)]
+		require.NotNil(t, subStat)
+		subData := subStat.subscribers.Load()
+		require.NotNil(t, subData)
+		require.Equal(t, 2, len(subData.subscribers))
+	}
+	// add a dispatcher(onlyReuse=false) with the same span
+	{
+		span := &heartbeatpb.TableSpan{
+			TableID:  tableID,
+			StartKey: []byte("a"),
+			EndKey:   []byte("h"),
+		}
+		ok := store.RegisterDispatcher(cfID, dispatcherID4, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		require.True(t, ok)
+		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		require.Equal(t, 3, len(subStats))
+		// subStat with subID 1 should have three dispatchers
+		subStat := subStats[logpuller.SubscriptionID(1)]
+		require.NotNil(t, subStat)
+		subData := subStat.subscribers.Load()
+		require.NotNil(t, subData)
+		require.Equal(t, 3, len(subData.subscribers))
+	}
+	// test unregister dispatcherID3 can remove its dependency on two subscriptions
+	{
+		store.UnregisterDispatcher(cfID, dispatcherID3)
+		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		require.Equal(t, 3, len(subStats))
+		{
+			subStat := subStats[logpuller.SubscriptionID(1)]
+			require.NotNil(t, subStat)
+			subData := subStat.subscribers.Load()
+			require.NotNil(t, subData)
+			require.Equal(t, 2, len(subData.subscribers))
+		}
+		{
+			subStat := subStats[logpuller.SubscriptionID(3)]
+			require.NotNil(t, subStat)
+			subData := subStat.subscribers.Load()
+			require.NotNil(t, subData)
+			require.Equal(t, 0, len(subData.subscribers))
+		}
+	}
+}
+
 func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 
