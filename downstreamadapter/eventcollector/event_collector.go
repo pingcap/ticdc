@@ -387,6 +387,7 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 		case feedback := <-c.redoDs.Feedback():
 			if feedback.FeedbackType == dynstream.ReleasePath {
 				log.Info("release dispatcher memory in redo DS", zap.Any("dispatcherID", feedback.Path))
+				c.redoDs.Release(feedback.Path)
 			}
 		}
 	}

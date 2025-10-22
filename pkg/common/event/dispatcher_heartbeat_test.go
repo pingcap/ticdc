@@ -407,8 +407,8 @@ func TestCongestionControlMarshalUnmarshal(t *testing.T) {
 	availableMem := unmarshaled4.GetAvailables()[0]
 	require.Equal(t, gid4, availableMem.Gid)
 	require.Equal(t, uint64(3000), availableMem.Available)
-	// Note: DispatcherAvailable is not properly deserialized due to bug in Unmarshal method
-	// require.Len(t, availableMem.DispatcherAvailable, 2)
+	require.Equal(t, uint32(2), availableMem.DispatcherCount)
+	require.Len(t, availableMem.DispatcherAvailable, 2)
 }
 
 func TestCongestionControlMarshalUnmarshalEdgeCases(t *testing.T) {
