@@ -107,11 +107,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	}
 	dmlEvent.CommitTs = 2
 
-	mock.ExpectBegin()
-	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
+	// Step 1: FlushDDLTsPre - Create ddl_ts table and insert pre-record (finished=0)
 	mock.ExpectBegin()
 	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("USE tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -130,6 +126,17 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 		);`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, '', '', 0, 0), ('default', 'test/test', '1', 1, '', '', 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	// Step 2: execDDLWithMaxRetries - Execute the actual DDL
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	// Step 3: FlushDDLTs - Update ddl_ts record (finished=1)
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, '', '', 1, 0), ('default', 'test/test', '1', 1, '', '', 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -216,6 +223,30 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 		},
 	}
 
+	// Step 1: FlushDDLTsPre - Create ddl_ts table and insert pre-record (finished=0)
+	mock.ExpectBegin()
+	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("USE tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ddl_ts_v1
+		(
+			ticdc_cluster_id varchar (255),
+			changefeed varchar(255),
+			ddl_ts varchar(18),
+			table_id bigint(21),
+			finished bool,
+			table_name_in_ddl_job varchar(1024),
+			db_name_in_ddl_job varchar(1024),
+			is_syncpoint bool,
+			INDEX (ticdc_cluster_id, changefeed, table_id),
+			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
+		);`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ('default', 'test/test', '2', 0, '', '', 0, 0), ('default', 'test/test', '2', 1, '', '', 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	// Step 2: execDDLWithMaxRetries - Execute the actual DDL (will fail)
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnError(errors.New("connect: connection refused"))
