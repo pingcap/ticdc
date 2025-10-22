@@ -141,7 +141,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 }
 
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
-	failpoint.Inject("CheckDeadlock", func() { failpoint.Return(true) })
+	failpoint.Inject("InjectDeadlock", func() { failpoint.Return(true) })
 
 	if as.settings.Load().algorithm !=
 		MemoryControlForEventCollector {
