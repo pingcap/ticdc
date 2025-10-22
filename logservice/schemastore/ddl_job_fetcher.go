@@ -69,7 +69,7 @@ func newDDLJobFetcher(
 	cacheDDLEvent func(ddlEvent DDLJobWithCommitTs),
 	advanceResolvedTs func(resolvedTS uint64),
 ) *ddlJobFetcher {
-	ddlJobFetcher := &ddlJobFetcher{
+	fetcher := &ddlJobFetcher{
 		ctx:               ctx,
 		subClient:         subClient,
 		cacheDDLEvent:     cacheDDLEvent,
@@ -77,10 +77,10 @@ func newDDLJobFetcher(
 		kvStorage:         kvStorage,
 		keyspaceID:        keyspaceID,
 	}
-	ddlJobFetcher.resolvedTsTracker.resolvedTsItemMap = make(map[logpuller.SubscriptionID]*resolvedTsItem)
-	ddlJobFetcher.resolvedTsTracker.resolvedTsHeap = heap.NewHeap[*resolvedTsItem]()
+	fetcher.resolvedTsTracker.resolvedTsItemMap = make(map[logpuller.SubscriptionID]*resolvedTsItem)
+	fetcher.resolvedTsTracker.resolvedTsHeap = heap.NewHeap[*resolvedTsItem]()
 
-	return ddlJobFetcher
+	return fetcher
 }
 
 func (p *ddlJobFetcher) run(startTs uint64) error {

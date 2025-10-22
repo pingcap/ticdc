@@ -308,7 +308,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				c.sendHandshakeIfNeed(stat)
 				startTs := stat.sentResolvedTs.Load()
 				remoteID := node.ID(stat.info.GetServerID())
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.info.GetTableSpan().KeyspaceID, key.(common.DispatcherID), stat.filter, startTs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.info.GetTableSpan().KeyspaceID, key.(common.DispatcherID), stat.filter, startTs)
 				if err != nil {
 					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
