@@ -19,10 +19,23 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
+const Version = 1
+
 // LogMeta is used for store meta info.
+//
+//go:generate msgp
 type LogMeta struct {
 	CheckpointTs uint64 `msg:"checkpointTs"`
 	ResolvedTs   uint64 `msg:"resolvedTs"`
+	Version      int    `msg:"version"`
+}
+
+func DefaultMeta() LogMeta {
+	return LogMeta{Version: Version}
+}
+
+func NewMeta(checkpointTs, resolvedTs uint64) LogMeta {
+	return LogMeta{CheckpointTs: checkpointTs, ResolvedTs: resolvedTs, Version: Version}
 }
 
 // ParseMeta parses meta.

@@ -18,6 +18,7 @@ import (
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 )
 
 // BlackHoleReader is a blockHole storage which implements LogReader interface
@@ -51,6 +52,11 @@ func (br *BlackHoleReader) ReadMeta(ctx context.Context) (checkpointTs, resolved
 // GetChangefeedID implements LogReader.GetChangefeedID
 func (br *BlackHoleReader) GetChangefeedID() commonType.ChangeFeedID {
 	return commonType.ChangeFeedID{}
+}
+
+// GetChangefeedID implements LogReader.GetChangefeedID
+func (br *BlackHoleReader) GetVersion() int {
+	return misc.Version
 }
 
 // Close implement the Close interface

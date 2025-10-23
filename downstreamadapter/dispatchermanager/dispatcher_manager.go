@@ -847,6 +847,8 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 	if e.RedoEnable {
 		e.redoSink.Close(removeChangefeed)
+		// FIXME: cleanup redo log when remove the changefeed
+		e.closeRedoMeta(removeChangefeed)
 	}
 	e.sink.Close(removeChangefeed)
 	e.cancel()

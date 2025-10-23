@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	pkgMysql "github.com/pingcap/ticdc/pkg/sink/mysql"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -94,6 +95,11 @@ func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs ui
 // GetChangefeedID implements LogReader.GetChangefeedID
 func (br *MockReader) GetChangefeedID() commonType.ChangeFeedID {
 	return commonType.ChangeFeedID{}
+}
+
+// GetVersion implements LogReader.GetVersion
+func (br *MockReader) GetVersion() int {
+	return misc.Version
 }
 
 func newFieldType(tp byte, flag uint) *types.FieldType {

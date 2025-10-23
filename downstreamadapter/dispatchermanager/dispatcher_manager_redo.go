@@ -225,6 +225,12 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 	)
 }
 
+func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) {
+	if removeChangefeed {
+		e.redoTableTriggerEventDispatcher.GetRedoMeta().Cleanup(context.Background())
+	}
+}
+
 func (e *DispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
 	// only update meta on the one node
 	if e.redoTableTriggerEventDispatcher != nil {

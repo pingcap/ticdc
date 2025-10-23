@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/atomic"
@@ -33,8 +34,7 @@ import (
 )
 
 const (
-	applierChangefeed = "redo-applier"
-	warnDuration      = 3 * time.Minute
+	warnDuration = 3 * time.Minute
 )
 
 var (
@@ -310,13 +310,20 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	if ra.rd, err = createRedoReader(egCtx, ra.cfg); err != nil {
 		return err
 	}
-	replicaConfig := &config.ChangefeedConfig{
-		SinkURI:    ra.cfg.SinkURI,
-		SinkConfig: &config.SinkConfig{},
-	}
-	sinkURI, err := url.Parse(replicaConfig.SinkURI)
+
+	sinkURI, err := url.Parse(ra.cfg.SinkURI)
 	if err != nil {
 		return errors.WrapError(errors.ErrSinkURIInvalid, err)
+	}
+	if ra.rd.GetVersion() != misc.Version {
+		query := sinkURI.Query()
+		query.Set("enable-ddl-ts", "false")
+		sinkURI.RawQuery = query.Encode()
+		log.Warn("The redo log version is different the current version, enable-ddl-ts will be set to false", zap.Any("logVersion", ra.rd.GetVersion()), zap.Any("currentVersion", misc.Version))
+	}
+	replicaConfig := &config.ChangefeedConfig{
+		SinkURI:    sinkURI.String(),
+		SinkConfig: &config.SinkConfig{},
 	}
 	ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
 	if err != nil {
@@ -331,7 +338,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	ra.updateSplitter = newUpdateEventSplitter(ra.rd, ra.cfg.Dir)
 
 	eg.Go(func() error {
-		defer ra.mysqlSink.Close(true)
+		defer ra.mysqlSink.Close(false)
 		return ra.consumeLogs(egCtx)
 	})
 

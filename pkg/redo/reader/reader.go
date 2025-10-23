@@ -53,6 +53,7 @@ type RedoLogReader interface {
 	// ReadMeta reads meta from redo logs and returns the latest checkpointTs and resolvedTs
 	ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error)
 	GetChangefeedID() commonType.ChangeFeedID
+	GetVersion() int
 }
 
 // NewRedoLogReader creates a new redo log reader
@@ -305,7 +306,7 @@ func (l *LogReader) initMeta(ctx context.Context) error {
 			zap.Uint64("resolvedTs", resolvedTs),
 			zap.Uint64("checkpointTs", checkpointTs))
 	}
-	l.meta = &misc.LogMeta{CheckpointTs: checkpointTs, ResolvedTs: resolvedTs}
+	l.meta = &misc.LogMeta{CheckpointTs: checkpointTs, ResolvedTs: resolvedTs, Version: metas[0].Version}
 	return nil
 }
 
@@ -320,6 +321,11 @@ func (l *LogReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint
 // GetChangefeedID implement the `RedoLogReader` interface.
 func (l *LogReader) GetChangefeedID() commonType.ChangeFeedID {
 	return l.changefeedID
+}
+
+// GetVersion implement the `RedoLogReader` interface.
+func (l *LogReader) GetVersion() int {
+	return l.meta.Version
 }
 
 type logWithIdx struct {
