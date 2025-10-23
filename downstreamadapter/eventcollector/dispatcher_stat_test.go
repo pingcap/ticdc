@@ -1234,28 +1234,28 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 		expectedSyncPointTs    uint64
 	}{
 		{
-			name:                       "reset at startTs, skipSyncpointAtStartTs is true",
-			resetTs:                    startTs,
+			name:                   "reset at startTs, skipSyncpointAtStartTs is true",
+			resetTs:                startTs,
 			skipSyncpointAtStartTs: true,
-			expectedSyncPointTs:        nextSyncpointTs,
+			expectedSyncPointTs:    nextSyncpointTs,
 		},
 		{
-			name:                       "reset at startTs, skipSyncpointAtStartTs is false",
-			resetTs:                    startTs,
+			name:                   "reset at startTs, skipSyncpointAtStartTs is false",
+			resetTs:                startTs,
 			skipSyncpointAtStartTs: false,
-			expectedSyncPointTs:        startTs,
+			expectedSyncPointTs:    startTs,
 		},
 		{
-			name:                       "reset at nextSyncpointTs, skipSyncpointAtStartTs is true",
-			resetTs:                    nextSyncpointTs,
+			name:                   "reset at nextSyncpointTs, skipSyncpointAtStartTs is true",
+			resetTs:                nextSyncpointTs,
 			skipSyncpointAtStartTs: true,
-			expectedSyncPointTs:        nextSyncpointTs,
+			expectedSyncPointTs:    nextSyncpointTs,
 		},
 		{
-			name:                       "reset at nextSyncpointTs, skipSyncpointAtStartTs is false",
-			resetTs:                    nextSyncpointTs,
+			name:                   "reset at nextSyncpointTs, skipSyncpointAtStartTs is false",
+			resetTs:                nextSyncpointTs,
 			skipSyncpointAtStartTs: false,
-			expectedSyncPointTs:        nextSyncpointTs,
+			expectedSyncPointTs:    nextSyncpointTs,
 		},
 	}
 
