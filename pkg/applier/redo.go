@@ -193,12 +193,12 @@ func (ra *RedoApplier) applyDDL(
 		if ts >= int64(ddl.DDL.CommitTs) {
 			return true
 		}
-		// if ddl.DDL.CommitTs == checkpointTs {
-		// 	if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
-		// 		log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
-		// 		return true
-		// 	}
-		// }
+		if ddl.DDL.CommitTs == max(uint64(ts), checkpointTs) {
+			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
+				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
+				return true
+			}
+		}
 		return false
 	}
 	if shouldSkip() {
