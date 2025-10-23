@@ -272,7 +272,7 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 	return builder.String()
 }
 
-// GetStartTsList return the startTs list and skipSyncpointSameAsStartTs list for each table in the tableIDs list.
+// GetStartTsList return the startTs list, skipSyncpointAtStartTs list, and skipDMLAsStartTs list for each table in the tableIDs list.
 // For each table,
 //  1. If no ddl-ts-v1 table or no the row for the table , startTs = 0; -- means the table is new.
 //  2. Else,
@@ -284,17 +284,27 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 //     2.2.2.1 if the latest ddl job time is larger than the createdAt, startTs = ddlTs
 //     2.2.2.2 else startTs = ddlTs - 1
 //
-// TODO(hyy): do we still need skipSyncpointSameAsStartTs?
-// for the skipSyncpointSameAsStartTs List, only when the ddlTs is finished and
-// the skipSyncpointSameAsStartTs equals the query result in ddl_ts table, otherwise, the skipSyncpointSameAsStartTs is false.
-func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
+// TODO(hyy): do we still need skipSyncpointAtStartTs?
+// for the skipSyncpointAtStartTs List, only when the ddlTs is finished and
+// the skipSyncpointAtStartTs equals the query result in ddl_ts table, otherwise, the skipSyncpointAtStartTs is false.
+//
+// skipDMLAsStartTs indicates whether to skip DML events at startTs+1 timestamp.
+// When true, the dispatcher should filter out DML events with commitTs == startTs+1, but keep DDL events.
+// This flag is set to true ONLY when is_syncpoint=false AND finished=0 (non-syncpoint DDL not finished).
+// In this case, we return startTs = ddlTs-1 to replay the DDL, and skip the already-written DML at ddlTs
+// to avoid duplicate writes while ensuring the DDL is replayed.
+// Note: When is_syncpoint=true AND finished=0 (DDL finished but syncpoint not finished),
+// skipDMLAsStartTs is false because the DDL is already completed and DML should be processed normally.
+func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
 	// when split table enabled, there may have some same tableID in tableIDs
 	tableIdIdxMap := make(map[int64][]int, len(tableIDs))
-	isSyncpoints := make([]bool, len(tableIDs))
+	skipSyncpointAtStartTs := make([]bool, len(tableIDs))
+	skipDMLAsStartTsList := make([]bool, len(tableIDs))
 	for i, tableID := range tableIDs {
 		tableIdIdxMap[tableID] = append(tableIdIdxMap[tableID], i)
-		isSyncpoints[i] = false
+		skipSyncpointAtStartTs[i] = false
+		skipDMLAsStartTsList[i] = false
 	}
 
 	changefeedID := w.ChangefeedID.String()
@@ -310,9 +320,9 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),
 				zap.String("changefeedID", w.ChangefeedID.Name()),
 				zap.Error(err))
-			return retStartTsList, isSyncpoints, nil
+			return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, nil
 		}
-		return retStartTsList, isSyncpoints, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
+		return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 	}
 
 	defer rows.Close()
@@ -322,24 +332,50 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	for rows.Next() {
 		err = rows.Scan(&tableId, &tableNameInDDLJob, &dbNameInDDLJob, &ddlTs, &finished, &isSyncpoint)
 		if err != nil {
-			return retStartTsList, isSyncpoints, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
+			return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
 		if finished {
 			for _, idx := range tableIdIdxMap[tableId] {
 				retStartTsList[idx] = ddlTs
-				isSyncpoints[idx] = isSyncpoint
+				skipSyncpointAtStartTs[idx] = isSyncpoint
 			}
 		} else {
-			// Even in some corner case, the ddl actually executed, but ddl ts is not finished. We can tolerate to rewrite the ddl again.
-			// Because the ddl ts is not finish, so no dmls after this ddl will be flushed downstream.
-			// Besides, the granularity of DDL execution is guaranteed, so executing DDL once more will not affect its correctness.
-			for _, idx := range tableIdIdxMap[tableId] {
-				retStartTsList[idx] = ddlTs - 1
+			// finished = 0, need to distinguish between DDL and Syncpoint
+			if isSyncpoint {
+				// Case: Syncpoint not finished, but DDL already finished.
+				// Since syncpoint's pre can be written, it means the DDL has been completed.
+				// We only need to replay the syncpoint, not the DDL.
+				// The execution order is: FlushDDLTsPre(DDL) -> execDDL() -> FlushDDLTs(DDL) -> FlushDDLTsPre(Syncpoint)
+				// If we see isSyncpoint=1 && finished=0, it means we crashed after FlushDDLTsPre(Syncpoint).
+				// At this point, DDL has been written to downstream, so we should:
+				// - Start from ddlTs (not ddlTs-1) to avoid replaying DDL
+				// - Set skipSyncpoint=false to receive and replay the syncpoint event
+				// - Set skipDMLAsStartTs=false because DML should be processed normally
+				for _, idx := range tableIdIdxMap[tableId] {
+					retStartTsList[idx] = ddlTs
+					skipSyncpointAtStartTs[idx] = false             // Need to receive syncpoint event
+					skipDMLAsStartTsList[idx] = false               // DML should not be skipped
+				}
+			} else {
+				// Case: DDL not finished (or finished but not marked).
+				// Even in some corner case, the DDL actually executed, but ddl ts is not finished.
+				// We can tolerate to rewrite the DDL again.
+				// Because the ddl ts is not finish, so no dmls after this ddl will be flushed downstream.
+				// Besides, the granularity of DDL execution is guaranteed, so executing DDL once more will not affect its correctness.
+				//
+				// In this case, we set startTs = ddlTs - 1 to replay the DDL at ddlTs.
+				// However, the DML at ddlTs might have already been written to downstream before the crash.
+				// To avoid duplicate DML writes, we set skipDMLAsStartTs = true to filter out DML events at startTs+1 (which is ddlTs).
+				// DDL events at ddlTs will still be processed to ensure the DDL is replayed.
+				for _, idx := range tableIdIdxMap[tableId] {
+					retStartTsList[idx] = ddlTs - 1
+					skipDMLAsStartTsList[idx] = true
+				}
 			}
 		}
 	}
 
-	return retStartTsList, isSyncpoints, nil
+	return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, nil
 }
 
 func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID string) string {

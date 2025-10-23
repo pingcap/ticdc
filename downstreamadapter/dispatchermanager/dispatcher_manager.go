@@ -364,16 +364,17 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	return nil
 }
 
-func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
+func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int64, removeDDLTs bool) ([]int64, []bool, []bool, error) {
 	var (
 		newStartTsList []int64
 		err            error
 	)
-	skipSyncpointSameAsStartTsList := make([]bool, len(startTsList))
+	skipSyncpointAtStartTsList := make([]bool, len(startTsList))
+	skipDMLAsStartTsList := make([]bool, len(startTsList))
 	if e.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, skipSyncpointSameAsStartTsList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
+		newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		log.Info("calculate real startTs for dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID),
@@ -384,7 +385,7 @@ func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int6
 	} else {
 		newStartTsList = startTsList
 	}
-	return newStartTsList, skipSyncpointSameAsStartTsList, nil
+	return newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, nil
 }
 
 // removeDDLTs means we don't need to check startTs from ddl_ts_table when sink is mysql-class,
@@ -413,7 +414,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 	// If there is a ddl event and a syncpoint event at the same time, we ensure the syncpoint event always after the ddl event.
 	// So we need to know whether the commitTs is from a syncpoint event or a ddl event,
 	// to decide whether we need to send generate the syncpoint event of this commitTs to downstream.
-	newStartTsList, skipSyncpointSameAsStartTsList, err := e.getStartTsFromMysqlSink(tableIds, startTsList, removeDDLTs)
+	newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := e.getStartTsFromMysqlSink(tableIds, startTsList, removeDDLTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -439,7 +440,8 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			uint64(newStartTsList[idx]),
 			schemaIds[idx],
 			e.schemaIDToDispatchers,
-			skipSyncpointSameAsStartTsList[idx],
+			skipSyncpointAtStartTsList[idx],
+			skipDMLAsStartTsList[idx],
 			currentPdTs,
 			e.sink,
 			e.sharedInfo,
@@ -781,8 +783,9 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		fakeStartTs, // real startTs will be calculated later.
 		schemaID,
 		e.schemaIDToDispatchers,
-		false,
-		0, // currentPDTs will be calculated later.
+		false, // skipSyncpointAtStartTs
+		false, // skipDMLAsStartTs will be set later after calculating real startTs
+		0,     // currentPDTs will be calculated later.
 		e.sink,
 		e.sharedInfo,
 		e.RedoEnable,
