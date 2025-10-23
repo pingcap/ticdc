@@ -43,6 +43,24 @@ func (z *DDLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "Query")
 				return
 			}
+		case "block-tables":
+			if dc.IsNil() {
+				err = dc.ReadNil()
+				if err != nil {
+					err = msgp.WrapError(err, "BlockTables")
+					return
+				}
+				z.BlockTables = nil
+			} else {
+				if z.BlockTables == nil {
+					z.BlockTables = new(InfluencedTables)
+				}
+				err = z.BlockTables.DecodeMsg(dc)
+				if err != nil {
+					err = msgp.WrapError(err, "BlockTables")
+					return
+				}
+			}
 		default:
 			err = dc.Skip()
 			if err != nil {
@@ -55,10 +73,10 @@ func (z *DDLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 }
 
 // EncodeMsg implements msgp.Encodable
-func (z DDLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 3
+func (z *DDLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
+	// map header, size 4
 	// write "start-ts"
-	err = en.Append(0x83, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
+	err = en.Append(0x84, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
 	if err != nil {
 		return
 	}
@@ -87,15 +105,32 @@ func (z DDLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
 		err = msgp.WrapError(err, "Query")
 		return
 	}
+	// write "block-tables"
+	err = en.Append(0xac, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x2d, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x73)
+	if err != nil {
+		return
+	}
+	if z.BlockTables == nil {
+		err = en.WriteNil()
+		if err != nil {
+			return
+		}
+	} else {
+		err = z.BlockTables.EncodeMsg(en)
+		if err != nil {
+			err = msgp.WrapError(err, "BlockTables")
+			return
+		}
+	}
 	return
 }
 
 // MarshalMsg implements msgp.Marshaler
-func (z DDLEventInRedoLog) MarshalMsg(b []byte) (o []byte, err error) {
+func (z *DDLEventInRedoLog) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 3
+	// map header, size 4
 	// string "start-ts"
-	o = append(o, 0x83, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
+	o = append(o, 0x84, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
 	o = msgp.AppendUint64(o, z.StartTs)
 	// string "commit-ts"
 	o = append(o, 0xa9, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2d, 0x74, 0x73)
@@ -103,6 +138,17 @@ func (z DDLEventInRedoLog) MarshalMsg(b []byte) (o []byte, err error) {
 	// string "query"
 	o = append(o, 0xa5, 0x71, 0x75, 0x65, 0x72, 0x79)
 	o = msgp.AppendString(o, z.Query)
+	// string "block-tables"
+	o = append(o, 0xac, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x2d, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x73)
+	if z.BlockTables == nil {
+		o = msgp.AppendNil(o)
+	} else {
+		o, err = z.BlockTables.MarshalMsg(o)
+		if err != nil {
+			err = msgp.WrapError(err, "BlockTables")
+			return
+		}
+	}
 	return
 }
 
@@ -142,6 +188,23 @@ func (z *DDLEventInRedoLog) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				err = msgp.WrapError(err, "Query")
 				return
 			}
+		case "block-tables":
+			if msgp.IsNil(bts) {
+				bts, err = msgp.ReadNilBytes(bts)
+				if err != nil {
+					return
+				}
+				z.BlockTables = nil
+			} else {
+				if z.BlockTables == nil {
+					z.BlockTables = new(InfluencedTables)
+				}
+				bts, err = z.BlockTables.UnmarshalMsg(bts)
+				if err != nil {
+					err = msgp.WrapError(err, "BlockTables")
+					return
+				}
+			}
 		default:
 			bts, err = msgp.Skip(bts)
 			if err != nil {
@@ -155,8 +218,13 @@ func (z *DDLEventInRedoLog) UnmarshalMsg(bts []byte) (o []byte, err error) {
 }
 
 // Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
-func (z DDLEventInRedoLog) Msgsize() (s int) {
-	s = 1 + 9 + msgp.Uint64Size + 10 + msgp.Uint64Size + 6 + msgp.StringPrefixSize + len(z.Query)
+func (z *DDLEventInRedoLog) Msgsize() (s int) {
+	s = 1 + 9 + msgp.Uint64Size + 10 + msgp.Uint64Size + 6 + msgp.StringPrefixSize + len(z.Query) + 13
+	if z.BlockTables == nil {
+		s += msgp.NilSize
+	} else {
+		s += z.BlockTables.Msgsize()
+	}
 	return
 }
 
@@ -1036,45 +1104,10 @@ func (z *RedoDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				if z.DDL == nil {
 					z.DDL = new(DDLEventInRedoLog)
 				}
-				var zb0002 uint32
-				zb0002, err = dc.ReadMapHeader()
+				err = z.DDL.DecodeMsg(dc)
 				if err != nil {
 					err = msgp.WrapError(err, "DDL")
 					return
-				}
-				for zb0002 > 0 {
-					zb0002--
-					field, err = dc.ReadMapKeyPtr()
-					if err != nil {
-						err = msgp.WrapError(err, "DDL")
-						return
-					}
-					switch msgp.UnsafeString(field) {
-					case "start-ts":
-						z.DDL.StartTs, err = dc.ReadUint64()
-						if err != nil {
-							err = msgp.WrapError(err, "DDL", "StartTs")
-							return
-						}
-					case "commit-ts":
-						z.DDL.CommitTs, err = dc.ReadUint64()
-						if err != nil {
-							err = msgp.WrapError(err, "DDL", "CommitTs")
-							return
-						}
-					case "query":
-						z.DDL.Query, err = dc.ReadString()
-						if err != nil {
-							err = msgp.WrapError(err, "DDL", "Query")
-							return
-						}
-					default:
-						err = dc.Skip()
-						if err != nil {
-							err = msgp.WrapError(err, "DDL")
-							return
-						}
-					}
 				}
 			}
 		case "type":
@@ -1114,35 +1147,9 @@ func (z *RedoDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 			return
 		}
 	} else {
-		// map header, size 3
-		// write "start-ts"
-		err = en.Append(0x83, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
+		err = z.DDL.EncodeMsg(en)
 		if err != nil {
-			return
-		}
-		err = en.WriteUint64(z.DDL.StartTs)
-		if err != nil {
-			err = msgp.WrapError(err, "DDL", "StartTs")
-			return
-		}
-		// write "commit-ts"
-		err = en.Append(0xa9, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2d, 0x74, 0x73)
-		if err != nil {
-			return
-		}
-		err = en.WriteUint64(z.DDL.CommitTs)
-		if err != nil {
-			err = msgp.WrapError(err, "DDL", "CommitTs")
-			return
-		}
-		// write "query"
-		err = en.Append(0xa5, 0x71, 0x75, 0x65, 0x72, 0x79)
-		if err != nil {
-			return
-		}
-		err = en.WriteString(z.DDL.Query)
-		if err != nil {
-			err = msgp.WrapError(err, "DDL", "Query")
+			err = msgp.WrapError(err, "DDL")
 			return
 		}
 	}
@@ -1178,16 +1185,11 @@ func (z *RedoDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	if z.DDL == nil {
 		o = msgp.AppendNil(o)
 	} else {
-		// map header, size 3
-		// string "start-ts"
-		o = append(o, 0x83, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
-		o = msgp.AppendUint64(o, z.DDL.StartTs)
-		// string "commit-ts"
-		o = append(o, 0xa9, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2d, 0x74, 0x73)
-		o = msgp.AppendUint64(o, z.DDL.CommitTs)
-		// string "query"
-		o = append(o, 0xa5, 0x71, 0x75, 0x65, 0x72, 0x79)
-		o = msgp.AppendString(o, z.DDL.Query)
+		o, err = z.DDL.MarshalMsg(o)
+		if err != nil {
+			err = msgp.WrapError(err, "DDL")
+			return
+		}
 	}
 	// string "type"
 	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
@@ -1231,45 +1233,10 @@ func (z *RedoDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				if z.DDL == nil {
 					z.DDL = new(DDLEventInRedoLog)
 				}
-				var zb0002 uint32
-				zb0002, bts, err = msgp.ReadMapHeaderBytes(bts)
+				bts, err = z.DDL.UnmarshalMsg(bts)
 				if err != nil {
 					err = msgp.WrapError(err, "DDL")
 					return
-				}
-				for zb0002 > 0 {
-					zb0002--
-					field, bts, err = msgp.ReadMapKeyZC(bts)
-					if err != nil {
-						err = msgp.WrapError(err, "DDL")
-						return
-					}
-					switch msgp.UnsafeString(field) {
-					case "start-ts":
-						z.DDL.StartTs, bts, err = msgp.ReadUint64Bytes(bts)
-						if err != nil {
-							err = msgp.WrapError(err, "DDL", "StartTs")
-							return
-						}
-					case "commit-ts":
-						z.DDL.CommitTs, bts, err = msgp.ReadUint64Bytes(bts)
-						if err != nil {
-							err = msgp.WrapError(err, "DDL", "CommitTs")
-							return
-						}
-					case "query":
-						z.DDL.Query, bts, err = msgp.ReadStringBytes(bts)
-						if err != nil {
-							err = msgp.WrapError(err, "DDL", "Query")
-							return
-						}
-					default:
-						bts, err = msgp.Skip(bts)
-						if err != nil {
-							err = msgp.WrapError(err, "DDL")
-							return
-						}
-					}
 				}
 			}
 		case "type":
@@ -1302,7 +1269,7 @@ func (z *RedoDDLEvent) Msgsize() (s int) {
 	if z.DDL == nil {
 		s += msgp.NilSize
 	} else {
-		s += 1 + 9 + msgp.Uint64Size + 10 + msgp.Uint64Size + 6 + msgp.StringPrefixSize + len(z.DDL.Query)
+		s += z.DDL.Msgsize()
 	}
 	s += 5 + msgp.ByteSize + 11 + z.TableName.Msgsize()
 	return
