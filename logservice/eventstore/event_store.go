@@ -187,8 +187,8 @@ type eventWithCallback struct {
 
 func eventWithCallbackSizer(e eventWithCallback) int {
 	size := 0
-	for _, e := range e.kvs {
-		size += int(e.KeyLen + e.ValueLen + e.OldValueLen)
+	for _, kv := range e.kvs {
+		size += int(kv.KeyLen + kv.ValueLen + kv.OldValueLen)
 	}
 	return size
 }
@@ -242,7 +242,6 @@ const (
 )
 
 func New(
-	ctx context.Context,
 	root string,
 	subClient logpuller.SubscriptionClient,
 ) EventStore {
@@ -265,6 +264,7 @@ func New(
 		gcManager: newGCManager(),
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
+		messageCenter:        appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 
 		decoderPool: &sync.Pool{
 			New: func() any {
@@ -286,6 +286,7 @@ func New(
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
 	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
 
+	store.messageCenter.RegisterHandler(messaging.EventStoreTopic, store.handleMessage)
 	return store
 }
 
@@ -332,11 +333,11 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						return
 					}
 					start := time.Now()
-					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
-						log.Panic("write events failed")
+					if err = p.store.writeEvents(p.db, events, encoder); err != nil {
+						log.Panic("write events failed", zap.Error(err))
 					}
-					for i := range events {
-						events[i].callback()
+					for idx := range events {
+						events[idx].callback()
 					}
 					ioWriteDuration.Observe(time.Since(start).Seconds())
 					totalDuration.Observe(time.Since(totalStart).Seconds())
@@ -368,15 +369,9 @@ func (e *eventStore) Run(ctx context.Context) error {
 	defer func() {
 		log.Info("event store exited")
 	}()
+
 	eg, ctx := errgroup.WithContext(ctx)
-
-	// recv and handle messages
-	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	e.messageCenter = messageCenter
-	messageCenter.RegisterHandler(messaging.EventStoreTopic, e.handleMessage)
-
 	for _, p := range e.writeTaskPools {
-		p := p
 		eg.Go(func() error {
 			p.run(ctx)
 			return nil
@@ -405,7 +400,7 @@ func (e *eventStore) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (e *eventStore) Close(ctx context.Context) error {
+func (e *eventStore) Close(_ context.Context) error {
 	log.Info("event store start to close")
 	defer log.Info("event store closed")
 
@@ -1447,7 +1442,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 			// When the log coordinator resides on the same node, it will receive the same object reference.
 			// To prevent data races, we need to create a clone of the state.
 			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
-			// just ignore messagees fail to send
+			// just ignore messages fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {
 				log.Warn("send broadcast message to coordinator failed", zap.Error(err))
 			}

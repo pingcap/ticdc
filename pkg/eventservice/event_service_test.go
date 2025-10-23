@@ -68,9 +68,7 @@ func TestEventServiceBasic(t *testing.T) {
 	mockStore := newMockEventStore(100)
 	_ = mockStore.Run(ctx)
 
-	mc := &mockMessageCenter{
-		messageCh: make(chan *messaging.TargetMessage, 100),
-	}
+	mc := messaging.NewMockMessageCenter()
 	esImpl := startEventService(ctx, t, mc, mockStore)
 	_ = esImpl.Close(ctx)
 
@@ -107,8 +105,9 @@ func TestEventServiceBasic(t *testing.T) {
 		msgCnt   int
 		dmlCount int
 	)
+	msgCh := mc.GetMessageChannel()
 	for {
-		msg := <-mc.messageCh
+		msg := <-msgCh
 		log.Info("receive message", zap.Any("message", msg))
 		for _, m := range msg.Message {
 			msgCnt++
@@ -155,51 +154,6 @@ func TestEventServiceBasic(t *testing.T) {
 			break
 		}
 	}
-}
-
-var _ messaging.MessageCenter = &mockMessageCenter{}
-
-// mockMessageCenter is a mock implementation of the MessageCenter interface
-type mockMessageCenter struct {
-	messageCh chan *messaging.TargetMessage
-}
-
-func newMockMessageCenter() *mockMessageCenter {
-	return &mockMessageCenter{
-		messageCh: make(chan *messaging.TargetMessage, 100),
-	}
-}
-
-func (m *mockMessageCenter) OnNodeChanges(nodeInfos map[node.ID]*node.Info) {
-}
-
-func (m *mockMessageCenter) SendEvent(event *messaging.TargetMessage) error {
-	m.messageCh <- event
-	return nil
-}
-
-func (m *mockMessageCenter) SendCommand(command *messaging.TargetMessage) error {
-	m.messageCh <- command
-	return nil
-}
-
-func (m *mockMessageCenter) RegisterHandler(topic string, handler messaging.MessageHandler) {
-}
-
-func (m *mockMessageCenter) DeRegisterHandler(topic string) {
-}
-
-func (m *mockMessageCenter) AddTarget(id node.ID, epoch uint64, addr string) {
-}
-
-func (m *mockMessageCenter) RemoveTarget(id node.ID) {
-}
-
-func (m *mockMessageCenter) Close() {
-}
-
-func (m *mockMessageCenter) IsReadyToSend(id node.ID) bool {
-	return true
 }
 
 var _ eventstore.EventStore = &mockEventStore{}

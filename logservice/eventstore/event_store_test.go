@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
@@ -89,11 +90,12 @@ func (s *mockSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
 }
 
 func newEventStoreForTest(path string) (logpuller.SubscriptionClient, EventStore) {
-	ctx := context.Background()
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
 	subClient := NewMockSubscriptionClient()
-	store := New(ctx, path, subClient)
+	store := New(path, subClient)
 	return subClient, store
 }
 
@@ -720,15 +722,12 @@ func TestChangefeedStatManagementConcurrent(t *testing.T) {
 }
 
 func TestWriteToEventStore(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
 	dir := t.TempDir()
-	store := New(ctx, dir, nil).(*eventStore)
-	defer store.Close(ctx)
+	store := New(dir, nil).(*eventStore)
+	defer store.Close(context.Background())
 
 	smallEntryKey := []byte("small-key")
 	smallEntryValue := []byte("small-value")

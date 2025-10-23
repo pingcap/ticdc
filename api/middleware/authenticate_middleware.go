@@ -116,11 +116,17 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 }
 
 // fetchTiDBTopology parses the TiDB topology from etcd.
+<<<<<<< HEAD
 func fetchTiDBTopology(ctx context.Context, etcdClient etcd.Client) ([]tidbInstance, error) {
 	ctx2, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
 	resp, err := etcdClient.Get(ctx2, topologyTiDB, clientv3.WithPrefix())
+=======
+func fetchTiDBTopology(ctx context.Context, etcdClient etcd.Client, ks string) ([]upstream.TidbInstance, error) {
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	meta, err := keyspaceManager.LoadKeyspace(ctx, ks)
+>>>>>>> 506b9c242 (logservice: read code and some tiny refactor (#2772))
 	if err != nil {
 		return nil, errors.ErrPDEtcdAPIError.Wrap(err)
 	}
