@@ -292,7 +292,7 @@ func (s *Sink) GetTableRecoveryInfo(
 	}
 
 	// Query ddl_ts table for crash recovery information
-	ddlTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := s.ddlWriter.GetStartTsList(tableIds)
+	ddlTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := s.ddlWriter.GetTableRecoveryInfo(tableIds)
 	if err != nil {
 		s.isNormal.Store(false)
 		return nil, nil, nil, err

@@ -78,8 +78,8 @@ func newTestMockDBForDDLTs(t *testing.T) (db *sql.DB, mock sqlmock.Sqlmock) {
 	return
 }
 
-// TestGetStartTsList_Comprehensive - Comprehensive end-to-end test for GetStartTsList
-func TestGetStartTsList_Comprehensive(t *testing.T) {
+// TestGetTableRecoveryInfo_Comprehensive - Comprehensive end-to-end test for GetTableRecoveryInfo
+func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 	// Test scenarios:
 	// 1. Table not exists (should return all 0s)
 	// 2. Finished DDL for non-TiDB downstream
@@ -100,7 +100,7 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		}
 		mock.ExpectQuery(expectedQuery).WillReturnError(tableNotExistsErr)
 
-		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetStartTsList(tableIDs)
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
 
 		require.NoError(t, err)
 		require.Len(t, startTsList, 3)
@@ -130,7 +130,7 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 
-		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetStartTsList(tableIDs)
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
 
 		require.NoError(t, err)
 		require.Len(t, startTsList, 2)
@@ -159,7 +159,7 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 
-		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetStartTsList(tableIDs)
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
 
 		require.NoError(t, err)
 		require.Len(t, startTsList, 1)
@@ -186,7 +186,7 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 
-		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetStartTsList(tableIDs)
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
 
 		require.NoError(t, err)
 		require.Len(t, startTsList, 1)
@@ -214,7 +214,7 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 
-		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetStartTsList(tableIDs)
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
 
 		require.NoError(t, err)
 		require.Len(t, startTsList, 1)
@@ -246,7 +246,7 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 
-		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetStartTsList(tableIDs)
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
 
 		require.NoError(t, err)
 		require.Len(t, startTsList, 4)
