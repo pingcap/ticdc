@@ -253,40 +253,41 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
 
-// GetStartTsList return the startTs list and skipSyncpointSameAsStartTs list for each table in the tableIDs list.
+// GetStartTsList return the startTs list and skipSyncpointAtStartTs list for each table in the tableIDs list.
 // If removeDDLTs is true, we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
-// If removeDDLTs is false, we need to query the ddl ts from the ddl_ts table, and return the startTs list and skipSyncpointSameAsStartTs list.
-// The skipSyncpointSameAsStartTs list is used to determine whether we need to skip the syncpoint event which is same as the startTs
+// If removeDDLTs is false, we need to query the ddl ts from the ddl_ts table, and return the startTs list and skipSyncpointAtStartTs list.
+// The skipSyncpointAtStartTs list is used to determine whether we need to skip the syncpoint event which is same as the startTs
 // when the startTs in input list is larger than the the startTs from ddlTs,
-// we need to set the related skipSyncpointSameAsStartTs to false, and return the input startTs value.
+// we need to set the related skipSyncpointAtStartTs to false, and return the input startTs value.
 func (s *Sink) GetStartTsList(
 	tableIds []int64,
 	startTsList []int64,
 	removeDDLTs bool,
-) ([]int64, []bool, error) {
+) ([]int64, []bool, []bool, error) {
 	if removeDDLTs {
 		// means we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
 		err := s.ddlWriter.RemoveDDLTsItem()
 		if err != nil {
 			s.isNormal.Store(false)
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		isSyncpointList := make([]bool, len(startTsList))
-		return startTsList, isSyncpointList, nil
+		skipSyncpointAtStartTsList := make([]bool, len(startTsList))
+		skipDMLAsStartTsList := make([]bool, len(startTsList))
+		return startTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, nil
 	}
-	ddlTsList, isSyncpointList, err := s.ddlWriter.GetStartTsList(tableIds)
+	ddlTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := s.ddlWriter.GetStartTsList(tableIds)
 	if err != nil {
 		s.isNormal.Store(false)
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	newStartTsList := make([]int64, len(startTsList))
 	for idx, ddlTs := range ddlTsList {
 		if startTsList[idx] > ddlTs {
-			isSyncpointList[idx] = false
+			skipSyncpointAtStartTsList[idx] = false
 		}
 		newStartTsList[idx] = max(ddlTs, startTsList[idx])
 	}
-	return newStartTsList, isSyncpointList, nil
+	return newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, nil
 }
 
 func (s *Sink) Close(removeChangefeed bool) {

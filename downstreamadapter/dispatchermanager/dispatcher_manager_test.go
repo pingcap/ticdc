@@ -62,7 +62,8 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		0,
 		0,
 		dispatcher.NewSchemaIDToDispatchers(),
-		false,
+		false, // skipSyncpointAtStartTs
+		false, // skipDMLAsStartTs
 		0, // currentPDTs
 		mockSink,
 		sharedInfo,
