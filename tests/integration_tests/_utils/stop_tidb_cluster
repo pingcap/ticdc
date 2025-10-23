@@ -18,6 +18,7 @@ ${PKILL} tiflash || true
 ${PKILL} flash_cluster_manager || true
 ${PKILL} pd-server || true
 ${PKILL} oauth_server || true
+${PKILL} minio || true
 ${PKILL} tikv-worker || true
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
