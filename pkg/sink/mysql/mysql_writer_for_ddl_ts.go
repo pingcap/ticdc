@@ -276,8 +276,10 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 //  3. finished=0, is_syncpoint=false: DDL not finished (crash during DDL)
 //     - Returns ddlTs-1 to replay DDL at ddlTs
 //     - skipDMLAsStartTs = true (skip already-written DML at ddlTs)
-//  4. finished=0, is_syncpoint=true: DDL finished, syncpoint not finished
-//     - Returns ddlTs (don't replay DDL)
+//  4. finished=0, is_syncpoint=true: Syncpoint not finished
+//     - If there was a DDL at the same ts, it has already been executed
+//     (because we only write syncpoint pre after DDL is fully completed)
+//     - Returns ddlTs (no need to replay DDL even if it existed)
 //     - skipSyncpointAtStartTs = false (replay syncpoint)
 //     - skipDMLAsStartTs = false (process DML normally)
 func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool, error) {
@@ -326,13 +328,16 @@ func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool
 		} else {
 			// finished = 0, need to distinguish between DDL and Syncpoint
 			if isSyncpoint {
-				// Case: Syncpoint not finished, but DDL already finished.
-				// Since syncpoint's pre can be written, it means the DDL has been completed.
-				// We only need to replay the syncpoint, not the DDL.
+				// Case: Syncpoint not finished (crashed after writing syncpoint pre).
 				// The execution order is: FlushDDLTsPre(DDL) -> execDDL() -> FlushDDLTs(DDL) -> FlushDDLTsPre(Syncpoint)
-				// If we see isSyncpoint=1 && finished=0, it means we crashed after FlushDDLTsPre(Syncpoint).
-				// At this point, DDL has been written to downstream, so we should:
-				// - Start from ddlTs (not ddlTs-1) to avoid replaying DDL
+				// If we see isSyncpoint=1 && finished=0, we crashed after FlushDDLTsPre(Syncpoint).
+				//
+				// Key insight: Since we've written syncpoint pre, any DDL at the same ts (if exists)
+				// must have already been executed and completed. We only write syncpoint pre after
+				// the DDL is fully done.
+				//
+				// Therefore:
+				// - Start from ddlTs (not ddlTs-1) - no need to replay DDL even if it existed
 				// - Set skipSyncpoint=false to receive and replay the syncpoint event
 				// - Set skipDMLAsStartTs=false because DML should be processed normally
 				for _, idx := range tableIdIdxMap[tableId] {
