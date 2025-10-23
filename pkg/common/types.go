@@ -34,8 +34,6 @@ const (
 	DefaultKeyspaceID = 0
 )
 
-var DefaultEndian = binary.LittleEndian
-
 type (
 	Ts      = uint64
 	TableID = int64

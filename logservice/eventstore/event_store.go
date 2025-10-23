@@ -84,6 +84,8 @@ type EventStore interface {
 
 	// GetIterator return an iterator which scan the data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd]
 	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
+
+	GetLogCoordinatorNodeID() node.ID
 }
 
 type DMLEventState struct {
@@ -171,11 +173,6 @@ type subscriptionStat struct {
 
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
-type changefeedStat struct {
-	mutex       sync.Mutex
-	dispatchers map[common.DispatcherID]*dispatcherStat
-}
-
 type eventWithCallback struct {
 	subID   logpuller.SubscriptionID
 	tableID int64
@@ -187,8 +184,8 @@ type eventWithCallback struct {
 
 func eventWithCallbackSizer(e eventWithCallback) int {
 	size := 0
-	for _, e := range e.kvs {
-		size += int(e.KeyLen + e.ValueLen + e.OldValueLen)
+	for _, kv := range e.kvs {
+		size += int(kv.KeyLen + kv.ValueLen + kv.OldValueLen)
 	}
 	return size
 }
@@ -225,9 +222,6 @@ type eventStore struct {
 
 	decoderPool *sync.Pool
 
-	// changefeed id -> changefeedStat
-	changefeedMeta sync.Map
-
 	// closed is used to indicate the event store is closed.
 	closed atomic.Bool
 
@@ -242,7 +236,6 @@ const (
 )
 
 func New(
-	ctx context.Context,
 	root string,
 	subClient logpuller.SubscriptionClient,
 ) EventStore {
@@ -265,6 +258,7 @@ func New(
 		gcManager: newGCManager(),
 
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
+		messageCenter:        appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 
 		decoderPool: &sync.Pool{
 			New: func() any {
@@ -286,6 +280,7 @@ func New(
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
 	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
 
+	store.messageCenter.RegisterHandler(messaging.EventStoreTopic, store.handleMessage)
 	return store
 }
 
@@ -332,11 +327,11 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						return
 					}
 					start := time.Now()
-					if err := p.store.writeEvents(p.db, events, encoder); err != nil {
-						log.Panic("write events failed")
+					if err = p.store.writeEvents(p.db, events, encoder); err != nil {
+						log.Panic("write events failed", zap.Error(err))
 					}
-					for i := range events {
-						events[i].callback()
+					for idx := range events {
+						events[idx].callback()
 					}
 					ioWriteDuration.Observe(time.Since(start).Seconds())
 					totalDuration.Observe(time.Since(totalStart).Seconds())
@@ -368,15 +363,9 @@ func (e *eventStore) Run(ctx context.Context) error {
 	defer func() {
 		log.Info("event store exited")
 	}()
+
 	eg, ctx := errgroup.WithContext(ctx)
-
-	// recv and handle messages
-	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	e.messageCenter = messageCenter
-	messageCenter.RegisterHandler(messaging.EventStoreTopic, e.handleMessage)
-
 	for _, p := range e.writeTaskPools {
-		p := p
 		eg.Go(func() error {
 			p.run(ctx)
 			return nil
@@ -405,7 +394,7 @@ func (e *eventStore) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (e *eventStore) Close(ctx context.Context) error {
+func (e *eventStore) Close(_ context.Context) error {
 	log.Info("event store start to close")
 	defer log.Info("event store closed")
 
@@ -432,18 +421,6 @@ func (e *eventStore) RegisterDispatcher(
 	if e.closed.Load() {
 		return false
 	}
-
-	// Defer a cleanup function that will run if registration fails.
-	// The success flag is set to true only at the end of successful registration paths.
-	success := false
-	defer func() {
-		if !success {
-			log.Info("register dispatcher failed, cleaning up from changefeed stat",
-				zap.Stringer("changefeedID", changefeedID),
-				zap.Stringer("dispatcherID", dispatcherID))
-			e.removeDispatcherFromChangefeedStat(changefeedID, dispatcherID)
-		}
-	}()
 
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
 	metrics.EventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
@@ -476,31 +453,6 @@ func (e *eventStore) RegisterDispatcher(
 	}
 	stat.resolvedTs.Store(startTs)
 
-	// Loop to handle the race condition where a cfStat might be deleted
-	// after being loaded but before being locked.
-	for {
-		var cfStat *changefeedStat
-		if actual, ok := e.changefeedMeta.Load(changefeedID); ok {
-			cfStat = actual.(*changefeedStat)
-		} else {
-			newCfStat := &changefeedStat{dispatchers: make(map[common.DispatcherID]*dispatcherStat)}
-			actual, _ := e.changefeedMeta.LoadOrStore(changefeedID, newCfStat)
-			cfStat = actual.(*changefeedStat)
-		}
-
-		cfStat.mutex.Lock()
-		// After acquiring the lock, we must re-check if this cfStat is still the one
-		// in the map. If it has been removed and replaced, we must retry with the new one.
-		if current, ok := e.changefeedMeta.Load(changefeedID); !ok || current != cfStat {
-			cfStat.mutex.Unlock()
-			continue // Retry the loop
-		}
-
-		cfStat.dispatchers[dispatcherID] = stat
-		cfStat.mutex.Unlock()
-		break // Success
-	}
-
 	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
 		util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs)
 		notifier(resolvedTs, latestCommitTs)
@@ -532,7 +484,6 @@ func (e *eventStore) RegisterDispatcher(
 						zap.Uint64("subscriptionID", uint64(subStat.subID)),
 						zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
-					success = true
 					return true
 				}
 
@@ -564,7 +515,6 @@ func (e *eventStore) RegisterDispatcher(
 			zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
 		// when onlyReuse is true, we don't need a exact span match
 		if onlyReuse {
-			success = true
 			return true
 		}
 	} else {
@@ -665,7 +615,6 @@ func (e *eventStore) RegisterDispatcher(
 		ResolvedTs:   startTs,
 	}
 	metrics.EventStoreSubscriptionGauge.Inc()
-	success = true
 	return true
 }
 
@@ -686,25 +635,6 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
 	e.dispatcherMeta.Unlock()
-
-	e.removeDispatcherFromChangefeedStat(changefeedID, dispatcherID)
-}
-
-// removeDispatcherFromChangefeedStat removes a dispatcher from its changefeed's statistics.
-// If the changefeed becomes empty after the removal, the changefeed statistic itself is deleted.
-func (e *eventStore) removeDispatcherFromChangefeedStat(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
-	if v, ok := e.changefeedMeta.Load(changefeedID); ok {
-		cfStat := v.(*changefeedStat)
-		cfStat.mutex.Lock()
-		defer cfStat.mutex.Unlock()
-		delete(cfStat.dispatchers, dispatcherID)
-
-		// If the changefeed has no more dispatchers, remove the changefeed stat.
-		if len(cfStat.dispatchers) == 0 {
-			e.changefeedMeta.Delete(changefeedID)
-			log.Info("changefeed stat is empty, removed it", zap.Stringer("changefeedID", changefeedID))
-		}
-	}
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(
@@ -941,6 +871,10 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 }
 
+func (e *eventStore) GetLogCoordinatorNodeID() node.ID {
+	return e.getCoordinatorInfo()
+}
+
 func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {
 	if subStat == nil {
 		return
@@ -1065,15 +999,12 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 
 func (e *eventStore) runMetricsCollector(ctx context.Context) error {
 	storeMetricsTicker := time.NewTicker(10 * time.Second)
-	changefeedMetricsTicker := time.NewTicker(1 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-storeMetricsTicker.C:
 			e.collectAndReportStoreMetrics()
-		case <-changefeedMetricsTicker.C:
-			e.collectAndReportChangefeedMetrics()
 		}
 	}
 }
@@ -1144,49 +1075,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	globalMinResolvedPhysicalTime := oracle.ExtractPhysical(globalMinResolvedTs)
 	eventStoreResolvedTsLagInSec := float64(pdPhysicalTime-globalMinResolvedPhysicalTime) / 1e3
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
-}
-
-func (e *eventStore) collectAndReportChangefeedMetrics() {
-	// Collect resolved ts for each changefeed and send to log coordinator.
-	changefeedStates := &logservicepb.ChangefeedStates{
-		States: make([]*logservicepb.ChangefeedStateEntry, 0),
-	}
-	e.changefeedMeta.Range(func(key, value interface{}) bool {
-		changefeedID := key.(common.ChangeFeedID)
-		cfStat := value.(*changefeedStat)
-
-		// By taking the lock here, we ensure that the set of dispatchers for this
-		// changefeed does not change while we calculate the minimum resolved ts.
-		// The `advanceResolvedTs` function updates an individual dispatcher's resolvedTs
-		// atomically, so it does not conflict with this lock.
-		cfStat.mutex.Lock()
-		cfMinResolvedTs := uint64(math.MaxUint64)
-		found := false
-		for _, dispatcherStat := range cfStat.dispatchers {
-			dispatcherResolvedTs := dispatcherStat.resolvedTs.Load()
-			if dispatcherResolvedTs < cfMinResolvedTs {
-				cfMinResolvedTs = dispatcherResolvedTs
-			}
-			found = true
-		}
-		cfStat.mutex.Unlock()
-
-		if found {
-			changefeedStates.States = append(changefeedStates.States, &logservicepb.ChangefeedStateEntry{
-				ChangefeedID: changefeedID.ToPB(),
-				ResolvedTs:   cfMinResolvedTs,
-			})
-		}
-		return true
-	})
-
-	coordinatorID := e.getCoordinatorInfo()
-	if coordinatorID != "" {
-		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, changefeedStates)
-		if err := e.messageCenter.SendEvent(msg); err != nil {
-			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
-		}
-	}
 }
 
 func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, encoder *zstd.Encoder) error {
@@ -1447,7 +1335,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 			// When the log coordinator resides on the same node, it will receive the same object reference.
 			// To prevent data races, we need to create a clone of the state.
 			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
-			// just ignore messagees fail to send
+			// just ignore messages fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {
 				log.Warn("send broadcast message to coordinator failed", zap.Error(err))
 			}

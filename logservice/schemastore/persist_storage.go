@@ -133,6 +133,7 @@ func openDB(dbPath string) *pebble.DB {
 }
 
 func newPersistentStorage(
+	ctx context.Context,
 	root string,
 	keyspaceID uint32,
 	pdCli pd.Client,
@@ -151,6 +152,7 @@ func newPersistentStorage(
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
 	}
+	dataStorage.initialize(ctx)
 
 	return dataStorage
 }
@@ -166,7 +168,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		var err error
 		gcSafePoint, err = p.getGcSafePoint(ctx)
 		if err == nil {
-			log.Info("GetGCState success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcState", gcSafePoint))
+			log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
 			// Ensure the start ts is valid during the gc service ttl
 			err = gc.EnsureChangefeedStartTsSafety(
 				ctx,
@@ -194,7 +196,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 
 	// FIXME: currently we don't try to reuse data at restart, when we need, just remove the following line
 	if err := os.RemoveAll(dbPath); err != nil {
-		log.Panic("fail to remove path")
+		log.Panic("fail to remove path", zap.String("dbPath", dbPath), zap.Error(err))
 	}
 
 	isDataReusable := false
@@ -223,7 +225,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 			p.upperBound = upperBound
 			p.initializeFromDisk()
 		} else {
-			db.Close()
+			_ = db.Close()
 		}
 	}
 	if !isDataReusable {
@@ -562,12 +564,12 @@ func addTableInfoFromKVSnap(
 	return nil
 }
 
-func (p *persistentStorage) gc(ctx context.Context) error {
+func (p *persistentStorage) gc(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
 			gcSafePoint, err := p.getGcSafePoint(ctx)
 			if err != nil {
@@ -579,7 +581,7 @@ func (p *persistentStorage) gc(ctx context.Context) error {
 	}
 }
 
-func (p *persistentStorage) doGc(gcTs uint64) error {
+func (p *persistentStorage) doGc(gcTs uint64) {
 	p.mu.Lock()
 	if gcTs > p.upperBound.ResolvedTs {
 		// It might happen when all changefeed is removed in the maintainer side,
@@ -590,16 +592,15 @@ func (p *persistentStorage) doGc(gcTs uint64) error {
 	}
 	if gcTs <= p.gcTs {
 		p.mu.Unlock()
-		return nil
+		return
 	}
 	oldGcTs := p.gcTs
 	p.mu.Unlock()
 
 	serverConfig := config.GetGlobalServerConfig()
 	if !serverConfig.Debug.SchemaStore.EnableGC {
-		log.Info("gc is disabled",
-			zap.Uint64("gcTs", gcTs))
-		return nil
+		log.Info("gc is disabled", zap.Uint64("gcTs", gcTs))
+		return
 	}
 
 	start := time.Now()
@@ -608,24 +609,18 @@ func (p *persistentStorage) doGc(gcTs uint64) error {
 		log.Warn("fail to write kv snapshot during gc",
 			zap.Uint64("gcTs", gcTs), zap.Error(err))
 		// TODO: return err and retry?
-		return nil
+		return
 	}
 	log.Info("gc finish write schema snapshot",
-		zap.Uint64("gcTs", gcTs),
-		zap.Any("duration", time.Since(start)))
+		zap.Uint64("gcTs", gcTs), zap.Any("duration", time.Since(start)))
 
 	// clean data in memory before clean data on disk
 	p.cleanObsoleteDataInMemory(gcTs)
 	log.Info("gc finish clean in memory data",
-		zap.Uint64("gcTs", gcTs),
-		zap.Any("duration", time.Since(start)))
+		zap.Uint64("gcTs", gcTs), zap.Any("duration", time.Since(start)))
 
 	cleanObsoleteData(p.db, oldGcTs, gcTs)
-	log.Info("gc finish",
-		zap.Uint64("gcTs", gcTs),
-		zap.Any("duration", time.Since(start)))
-
-	return nil
+	log.Info("gc finish", zap.Uint64("gcTs", gcTs), zap.Any("duration", time.Since(start)))
 }
 
 func (p *persistentStorage) cleanObsoleteDataInMemory(gcTs uint64) {
@@ -682,12 +677,12 @@ func (p *persistentStorage) getUpperBound() UpperBoundMeta {
 	return p.upperBound
 }
 
-func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) error {
+func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
 			p.mu.Lock()
 			if !p.upperBoundChanged {

@@ -153,8 +153,6 @@ func newDispatcherStat(
 	dispStat.lastScanBytes.Store(minScanLimitInBytes)
 	dispStat.availableMemoryQuota.Store(minScanLimitInBytes)
 
-	changefeedStatus.addDispatcher()
-
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
 		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
@@ -418,22 +416,30 @@ func (c *resolvedTsCache) reset() {
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
 
-	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
-	dispatcherCount      atomic.Uint64
+	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
+
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	stat := &changefeedStatus{
+	return &changefeedStatus{
 		changefeedID: changefeedID,
 	}
-	return stat
 }
 
-func (c *changefeedStatus) addDispatcher() {
-	c.dispatcherCount.Inc()
+func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {
+	c.dispatchers.Store(id, dispatcher)
 }
 
-func (c *changefeedStatus) removeDispatcher() {
-	c.dispatcherCount.Dec()
+func (c *changefeedStatus) removeDispatcher(id common.DispatcherID) {
+	c.dispatchers.Delete(id)
+}
+
+func (c *changefeedStatus) isEmpty() bool {
+	empty := true
+	c.dispatchers.Range(func(key, value any) bool {
+		empty = false
+		return false // stop iteration
+	})
+	return empty
 }

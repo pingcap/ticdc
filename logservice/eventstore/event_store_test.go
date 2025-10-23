@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
@@ -89,11 +90,12 @@ func (s *mockSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
 }
 
 func newEventStoreForTest(path string) (logpuller.SubscriptionClient, EventStore) {
-	ctx := context.Background()
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
 	subClient := NewMockSubscriptionClient()
-	store := New(ctx, path, subClient)
+	store := New(path, subClient)
 	return subClient, store
 }
 
@@ -250,19 +252,6 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 		ok := es.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.True(t, ok)
 	}
-
-	// 4. Verify that dispatcherID2 and dispatcherID3 are included in the changefeedStat, confirming
-	//    that the defer cleanup logic was not incorrectly triggered.
-	v, ok := es.changefeedMeta.Load(cfID)
-	require.True(t, ok)
-	cfStat := v.(*changefeedStat)
-	cfStat.mutex.Lock()
-	defer cfStat.mutex.Unlock()
-	require.Len(t, cfStat.dispatchers, 3, "dispatcher2 and dispatcher3 should be registered successfully")
-	_, dispatcher2Exists := cfStat.dispatchers[dispatcherID2]
-	require.True(t, dispatcher2Exists, "dispatcher2 should exist in changefeedStat")
-	_, dispatcher3Exists := cfStat.dispatchers[dispatcherID3]
-	require.True(t, dispatcher3Exists, "dispatcher3 should exist in changefeedStat")
 }
 
 func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
@@ -596,139 +585,13 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	}
 }
 
-func TestChangefeedStatManagement(t *testing.T) {
-	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
-	es := store.(*eventStore)
-
-	cfID1 := common.NewChangefeedID4Test("default", "test-cf-1")
-	cfID2 := common.NewChangefeedID4Test("default", "test-cf-2")
-
-	dispatcherID1 := common.NewDispatcherID()
-	dispatcherID2 := common.NewDispatcherID()
-	dispatcherID3 := common.NewDispatcherID()
-
-	span1 := &heartbeatpb.TableSpan{TableID: 1}
-	span2 := &heartbeatpb.TableSpan{TableID: 2}
-	span3 := &heartbeatpb.TableSpan{TableID: 3}
-
-	// 1. Register dispatcher1 for cfID1.
-	ok := es.RegisterDispatcher(cfID1, dispatcherID1, span1, 100, func(u uint64, u2 uint64) {}, false, false)
-	require.True(t, ok)
-
-	// Check if changefeedStat for cfID1 is created.
-	v, ok := es.changefeedMeta.Load(cfID1)
-	require.True(t, ok)
-	cfStat1 := v.(*changefeedStat)
-	require.NotNil(t, cfStat1)
-	cfStat1.mutex.Lock()
-	require.Len(t, cfStat1.dispatchers, 1)
-	_, ok = cfStat1.dispatchers[dispatcherID1]
-	cfStat1.mutex.Unlock()
-	require.True(t, ok)
-
-	// 2. Register dispatcher2 for cfID1.
-	ok = es.RegisterDispatcher(cfID1, dispatcherID2, span2, 110, func(u uint64, u2 uint64) {}, false, false)
-	require.True(t, ok)
-
-	// Check if dispatcher2 is added to the same changefeedStat.
-	v, ok = es.changefeedMeta.Load(cfID1)
-	require.True(t, ok)
-	cfStat1 = v.(*changefeedStat)
-	cfStat1.mutex.Lock()
-	require.Len(t, cfStat1.dispatchers, 2)
-	_, ok = cfStat1.dispatchers[dispatcherID2]
-	cfStat1.mutex.Unlock()
-	require.True(t, ok)
-
-	// 3. Register dispatcher3 for cfID2.
-	ok = es.RegisterDispatcher(cfID2, dispatcherID3, span3, 120, func(u uint64, u2 uint64) {}, false, false)
-	require.True(t, ok)
-
-	// Check if changefeedStat for cfID2 is created.
-	v, ok = es.changefeedMeta.Load(cfID2)
-	require.True(t, ok)
-	cfStat2 := v.(*changefeedStat)
-	require.NotNil(t, cfStat2)
-	cfStat2.mutex.Lock()
-	require.Len(t, cfStat2.dispatchers, 1)
-	cfStat2.mutex.Unlock()
-
-	// 4. Unregister dispatcher1 from cfID1.
-	es.UnregisterDispatcher(cfID1, dispatcherID1)
-	v, ok = es.changefeedMeta.Load(cfID1)
-	require.True(t, ok)
-	cfStat1 = v.(*changefeedStat)
-	cfStat1.mutex.Lock()
-	require.Len(t, cfStat1.dispatchers, 1)
-	_, ok = cfStat1.dispatchers[dispatcherID1]
-	cfStat1.mutex.Unlock()
-	require.False(t, ok)
-
-	// 5. Unregister dispatcher2 from cfID1 (the last one).
-	es.UnregisterDispatcher(cfID1, dispatcherID2)
-	// Check if changefeedStat for cfID1 is removed.
-	_, ok = es.changefeedMeta.Load(cfID1)
-	require.False(t, ok)
-
-	// 6. Check cfID2 is not affected.
-	v, ok = es.changefeedMeta.Load(cfID2)
-	require.True(t, ok)
-	cfStat2 = v.(*changefeedStat)
-	cfStat2.mutex.Lock()
-	require.Len(t, cfStat2.dispatchers, 1)
-	cfStat2.mutex.Unlock()
-}
-
-func TestChangefeedStatManagementConcurrent(t *testing.T) {
-	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
-	es := store.(*eventStore)
-
-	cfID1 := common.NewChangefeedID4Test("default", "test-cf-1")
-	cfID2 := common.NewChangefeedID4Test("default", "test-cf-2")
-	cfIDs := []common.ChangeFeedID{cfID1, cfID2}
-
-	concurrency := 100
-	dispatchersPerRoutine := 20
-	var wg sync.WaitGroup
-	wg.Add(concurrency)
-
-	for i := 0; i < concurrency; i++ {
-		go func(routineID int) {
-			defer wg.Done()
-			for j := 0; j < dispatchersPerRoutine; j++ {
-				dispatcherID := common.NewDispatcherID()
-				cfID := cfIDs[(routineID*dispatchersPerRoutine+j)%len(cfIDs)]
-				span := &heartbeatpb.TableSpan{TableID: int64(j)}
-
-				ok := es.RegisterDispatcher(cfID, dispatcherID, span, 100, func(u uint64, u2 uint64) {}, false, false)
-				require.True(t, ok)
-
-				es.UnregisterDispatcher(cfID, dispatcherID)
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	// After all operations, the changefeedMeta should be empty because all dispatchers are unregistered.
-	isEmpty := true
-	es.changefeedMeta.Range(func(key, value interface{}) bool {
-		isEmpty = false
-		return false // stop iteration
-	})
-	require.True(t, isEmpty, "changefeedMeta should be empty after all dispatchers are unregistered")
-}
-
 func TestWriteToEventStore(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
 	dir := t.TempDir()
-	store := New(ctx, dir, nil).(*eventStore)
-	defer store.Close(ctx)
+	store := New(dir, nil).(*eventStore)
+	defer store.Close(context.Background())
 
 	smallEntryKey := []byte("small-key")
 	smallEntryValue := []byte("small-value")

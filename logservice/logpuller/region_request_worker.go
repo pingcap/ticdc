@@ -178,6 +178,10 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 			zap.Uint64("workerID", s.workerID),
 			zap.String("addr", s.store.storeAddr),
 			zap.Error(err))
+		// Close the connection if it was partially created to prevent goroutine leaks
+		if conn != nil && conn.Conn != nil {
+			_ = conn.Conn.Close()
+		}
 		return isCanceled()
 	}
 	defer func() {

@@ -54,7 +54,7 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 
 	keyspaceName := GetKeyspaceValueWithDefault(c)
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	// The ctx's lifecycle is the same as the HTTP request.
 	// The schema store may use the context to fetch database information asynchronously.
 	// Therefore, we cannot use the context of the HTTP request.
@@ -93,7 +93,7 @@ func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 	defer pdClient.Close()
 
 	keyspaceName := GetKeyspaceValueWithDefault(c)
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), keyspaceName)
 	if err != nil {
 		_ = c.Error(cerror.WrapError(cerror.ErrKeyspaceNotFound, err))

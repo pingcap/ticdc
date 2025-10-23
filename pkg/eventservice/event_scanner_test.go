@@ -56,7 +56,7 @@ func TestEventScanner(t *testing.T) {
 		`insert into test.t(id,c) values (3, "c3")`,
 	}...)
 
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
@@ -364,7 +364,7 @@ func TestEventScanner(t *testing.T) {
 
 // Test the case where some DMLs have commit timestamps newer than the table's delete version
 func TestEventScannerWithDeleteTable(t *testing.T) {
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
 
 	mockEventStore := broker.eventStore.(*mockEventStore)
@@ -442,7 +442,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 // The scanner should return the DDL event plus any DML events sharing the same commitTs
 // It should also return a resolvedTs event with the commitTs of the last DML event
 func TestEventScannerWithDDL(t *testing.T) {
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
 
 	mockEventStore := broker.eventStore.(*mockEventStore)
@@ -1540,7 +1540,7 @@ func (s *schemaStoreWithErr) GetTableInfo(keyspaceID uint32, tableID common.Tabl
 
 func TestGetTableInfo4Txn(t *testing.T) {
 	// Setup
-	broker, _, mockSS := newEventBrokerForTest()
+	broker, _, mockSS, _ := newEventBrokerForTest()
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)

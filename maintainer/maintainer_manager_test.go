@@ -77,7 +77,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 			Name: "ks1",
 		}
 	}
-	keyspaceManager := keyspace.NewMockKeyspaceManager(ctrl)
+	keyspaceManager := keyspace.NewMockManager(ctrl)
 	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), gomock.Any()).Return(meta, nil)
 	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
 
@@ -304,7 +304,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 			Name: "ks1",
 		}
 	}
-	keyspaceManager := keyspace.NewMockKeyspaceManager(ctrl)
+	keyspaceManager := keyspace.NewMockManager(ctrl)
 	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), gomock.Any()).Return(meta, nil)
 	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
 
@@ -440,7 +440,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 			Name: "ks1",
 		}
 	}
-	keyspaceManager := keyspace.NewMockKeyspaceManager(ctrl)
+	keyspaceManager := keyspace.NewMockManager(ctrl)
 	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), gomock.Any()).Return(meta, nil).AnyTimes()
 
 	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
