@@ -92,7 +92,7 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1, 2, 3}
-		expectedQuery := "SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 3))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 3))"
 
 		tableNotExistsErr := &mysql.MySQLError{
 			Number:  1146, // ER_NO_SUCH_TABLE
@@ -121,12 +121,12 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1, 2}
-		expectedQuery := "SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2))"
 
 		// Mock query results: finished DDL with different syncpoint settings
-		rows := sqlmock.NewRows([]string{"table_id", "table_name_in_ddl_job", "db_name_in_ddl_job", "ddl_ts", "finished", "is_syncpoint"}).
-			AddRow(1, "table1", "test", 100, true, true).
-			AddRow(2, "table2", "test", 200, true, false)
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(1, 100, true, true).
+			AddRow(2, 200, true, false)
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 
@@ -152,10 +152,10 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1}
-		expectedQuery := "SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1))"
 
-		rows := sqlmock.NewRows([]string{"table_id", "table_name_in_ddl_job", "db_name_in_ddl_job", "ddl_ts", "finished", "is_syncpoint"}).
-			AddRow(1, "table1", "test", 100, true, true)
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(1, 100, true, true)
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 
@@ -178,11 +178,11 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1}
-		expectedQuery := "SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1))"
 
 		// Mock DDL TS query result: unfinished DDL (is_syncpoint=false)
-		rows := sqlmock.NewRows([]string{"table_id", "table_name_in_ddl_job", "db_name_in_ddl_job", "ddl_ts", "finished", "is_syncpoint"}).
-			AddRow(1, "table1", "test", 100, false, false)
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(1, 100, false, false)
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 
@@ -205,12 +205,12 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1}
-		expectedQuery := "SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1))"
 
 		// Mock query result: DDL finished, but Syncpoint not finished (is_syncpoint=true, finished=false)
 		// This happens when crash occurs after FlushDDLTsPre(Syncpoint) but before FlushDDLTs(Syncpoint)
-		rows := sqlmock.NewRows([]string{"table_id", "table_name_in_ddl_job", "db_name_in_ddl_job", "ddl_ts", "finished", "is_syncpoint"}).
-			AddRow(1, "table1", "test", 100, false, true)
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(1, 100, false, true)
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 
@@ -238,11 +238,11 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		// Test with duplicate table IDs
 		tableIDs := []int64{1, 1, 2, 1}
 		// The actual query will include duplicate entries for table ID 1
-		expectedQuery := "SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 1))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 1))"
 
-		rows := sqlmock.NewRows([]string{"table_id", "table_name_in_ddl_job", "db_name_in_ddl_job", "ddl_ts", "finished", "is_syncpoint"}).
-			AddRow(1, "table1", "test", 100, true, true).
-			AddRow(2, "table2", "test", 200, true, false)
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(1, 100, true, true).
+			AddRow(2, 200, true, false)
 
 		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 

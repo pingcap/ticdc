@@ -93,14 +93,10 @@ func (w *Writer) SendDDLTsPre(event commonEvent.BlockEvent) error {
 
 	if len(tableIds) > 0 {
 		isSyncpoint := "1"
-		tableNameInDDLJob := ""
-		dbNameInDDLJob := ""
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
-			tableNameInDDLJob = event.(*commonEvent.DDLEvent).GetTableNameInDDLJob()
-			dbNameInDDLJob = event.(*commonEvent.DDLEvent).GetDBNameInDDLJob()
 		}
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint, tableNameInDDLJob, dbNameInDDLJob)
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -168,14 +164,10 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 
 	if len(tableIds) > 0 {
 		isSyncpoint := "1"
-		tableNameInDDLJob := ""
-		dbNameInDDLJob := ""
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
-			tableNameInDDLJob = event.(*commonEvent.DDLEvent).GetTableNameInDDLJob()
-			dbNameInDDLJob = event.(*commonEvent.DDLEvent).GetDBNameInDDLJob()
 		}
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint, tableNameInDDLJob, dbNameInDDLJob)
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -211,14 +203,14 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 	return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
 }
 
-func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint, tableNameInDDLJob, dbNameInDDlJob string) string {
+func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint string) string {
 	var builder strings.Builder
 
 	builder.WriteString("INSERT INTO ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
-	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ")
+	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ")
 
 	for idx, tableId := range tableIds {
 		builder.WriteString("('")
@@ -229,11 +221,7 @@ func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, fini
 		builder.WriteString(ddlTs)
 		builder.WriteString("', ")
 		builder.WriteString(strconv.FormatInt(tableId, 10))
-		builder.WriteString(", '")
-		builder.WriteString(tableNameInDDLJob)
-		builder.WriteString("', '")
-		builder.WriteString(dbNameInDDlJob)
-		builder.WriteString("', ")
+		builder.WriteString(", ")
 		builder.WriteString(finished)
 		builder.WriteString(", ")
 		builder.WriteString(isSyncpoint)
@@ -242,7 +230,7 @@ func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, fini
 			builder.WriteString(", ")
 		}
 	}
-	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);")
+	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);")
 
 	return builder.String()
 }
@@ -327,10 +315,9 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, []bool, erro
 
 	defer rows.Close()
 	var ddlTs, tableId int64
-	var tableNameInDDLJob, dbNameInDDLJob string
 	var finished, isSyncpoint bool
 	for rows.Next() {
-		err = rows.Scan(&tableId, &tableNameInDDLJob, &dbNameInDDLJob, &ddlTs, &finished, &isSyncpoint)
+		err = rows.Scan(&tableId, &ddlTs, &finished, &isSyncpoint)
 		if err != nil {
 			return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
@@ -380,7 +367,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, []bool, erro
 
 func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID string) string {
 	var builder strings.Builder
-	builder.WriteString("SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, is_syncpoint FROM ")
+	builder.WriteString("SELECT table_id, ddl_ts, finished, is_syncpoint FROM ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
@@ -533,8 +520,6 @@ func (w *Writer) createDDLTsTable() error {
 		ddl_ts varchar(18),
 		table_id bigint(21),
 		finished bool,
-		table_name_in_ddl_job varchar(1024),
-		db_name_in_ddl_job varchar(1024),
 		is_syncpoint bool,
 		INDEX (ticdc_cluster_id, changefeed, table_id),
 		PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
