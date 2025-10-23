@@ -105,12 +105,12 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, startTsList, 3)
 		require.Len(t, skipSyncpointAtStartTs, 3)
-	require.Len(t, skipDMLAsStartTsList, 3)
+		require.Len(t, skipDMLAsStartTsList, 3)
 
 		for i := 0; i < 3; i++ {
 			require.Equal(t, int64(0), startTsList[i])
 			require.False(t, skipSyncpointAtStartTs[i])
-		require.False(t, skipDMLAsStartTsList[i])
+			require.False(t, skipDMLAsStartTsList[i])
 		}
 
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -135,14 +135,14 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, startTsList, 2)
 		require.Len(t, skipSyncpointAtStartTs, 2)
-	require.Len(t, skipDMLAsStartTsList, 2)
+		require.Len(t, skipDMLAsStartTsList, 2)
 
 		require.Equal(t, int64(100), startTsList[0])
 		require.True(t, skipSyncpointAtStartTs[0])
-	require.False(t, skipDMLAsStartTsList[0])
+		require.False(t, skipDMLAsStartTsList[0])
 		require.Equal(t, int64(200), startTsList[1])
 		require.False(t, skipSyncpointAtStartTs[1])
-	require.False(t, skipDMLAsStartTsList[1])
+		require.False(t, skipDMLAsStartTsList[1])
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -164,11 +164,11 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, startTsList, 1)
 		require.Len(t, skipSyncpointAtStartTs, 1)
-	require.Len(t, skipDMLAsStartTsList, 1)
+		require.Len(t, skipDMLAsStartTsList, 1)
 
 		require.Equal(t, int64(100), startTsList[0])
 		require.True(t, skipSyncpointAtStartTs[0])
-	require.False(t, skipDMLAsStartTsList[0])
+		require.False(t, skipDMLAsStartTsList[0])
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -191,11 +191,11 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, startTsList, 1)
 		require.Len(t, skipSyncpointAtStartTs, 1)
-	require.Len(t, skipDMLAsStartTsList, 1)
+		require.Len(t, skipDMLAsStartTsList, 1)
 
 		require.Equal(t, int64(99), startTsList[0]) // Should use ddlTs - 1
 		require.False(t, skipSyncpointAtStartTs[0])
-		require.True(t, skipDMLAsStartTsList[0])    // Should skip DML at startTs+1
+		require.True(t, skipDMLAsStartTsList[0]) // Should skip DML at startTs+1
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -251,12 +251,12 @@ func TestGetStartTsList_Comprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, startTsList, 4)
 		require.Len(t, skipSyncpointAtStartTs, 4)
-	require.Len(t, skipDMLAsStartTsList, 4)
+		require.Len(t, skipDMLAsStartTsList, 4)
 
 		// All positions with table ID 1 should have the same values
 		require.Equal(t, int64(100), startTsList[0])
 		require.True(t, skipSyncpointAtStartTs[0])
-	require.False(t, skipDMLAsStartTsList[0])
+		require.False(t, skipDMLAsStartTsList[0])
 		require.Equal(t, int64(100), startTsList[1])
 		require.True(t, skipSyncpointAtStartTs[1])
 		require.Equal(t, int64(100), startTsList[3])

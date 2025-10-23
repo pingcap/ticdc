@@ -77,8 +77,8 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		common.Ts(0), // startTs
 		1,            // schemaID
 		NewSchemaIDToDispatchers(),
-		false, // skipSyncpointAtStartTs
-		false, // skipDMLAsStartTs
+		false,        // skipSyncpointAtStartTs
+		false,        // skipDMLAsStartTs
 		common.Ts(0), // pdTs
 		sink,
 		sharedInfo,
@@ -796,8 +796,8 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		common.Ts(0), // startTs
 		1,            // schemaID
 		NewSchemaIDToDispatchers(),
-		false, // skipSyncpointAtStartTs
-		false, // skipDMLAsStartTs
+		false,        // skipSyncpointAtStartTs
+		false,        // skipDMLAsStartTs
 		common.Ts(0), // pdTs
 		sink,
 		sharedInfo,

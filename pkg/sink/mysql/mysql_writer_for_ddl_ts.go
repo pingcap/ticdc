@@ -340,8 +340,8 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, []bool, erro
 				// - Set skipDMLAsStartTs=false because DML should be processed normally
 				for _, idx := range tableIdIdxMap[tableId] {
 					retStartTsList[idx] = ddlTs
-					skipSyncpointAtStartTs[idx] = false             // Need to receive syncpoint event
-					skipDMLAsStartTsList[idx] = false               // DML should not be skipped
+					skipSyncpointAtStartTs[idx] = false // Need to receive syncpoint event
+					skipDMLAsStartTsList[idx] = false   // DML should not be skipped
 				}
 			} else {
 				// Case: DDL not finished (or finished but not marked).
