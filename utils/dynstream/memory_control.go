@@ -106,7 +106,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 
 	if as.checkDeadlock() {
 		as.releaseMemory()
-		return true
 	}
 
 	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
