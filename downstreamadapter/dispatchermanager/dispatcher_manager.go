@@ -372,7 +372,7 @@ func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int6
 	skipSyncpointAtStartTsList := make([]bool, len(startTsList))
 	skipDMLAsStartTsList := make([]bool, len(startTsList))
 	if e.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
+		newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err = e.sink.(*mysql.Sink).GetTableRecoveryInfo(tableIds, startTsList, removeDDLTs)
 		if err != nil {
 			return nil, nil, nil, err
 		}
