@@ -263,10 +263,7 @@ function run_case_with_failpoint() {
 		exit 1
 	fi
 	info=$(echo $synced_status | jq -r '.info')
-	target_message="Please check whether PD is online and TiKV Regions are all available. \
-If PD is offline or some TiKV regions are not available, it means that the data syncing process is complete. \
-If the gap is large, such as a few minutes, it means that some regions in TiKV are unavailable. \
-Otherwise, if the gap is small and PD is online, it means the data syncing is incomplete, so please wait"
+	target_message="The data syncing is not finished, please wait"
 	if [ "$info" != "$target_message" ]; then
 		echo "synced status info is not correct"
 		exit 1

@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -192,7 +193,7 @@ func TestFloatTypes(t *testing.T) {
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
     	id int primary key auto_increment,
-	    a float, b float(10, 3), c float(10), 
+	    a float, b float(10, 3), c float(10),
 	    d double, e double(20, 3))`)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d,e) values (1.23, 4.56, 7.89, 10.11, 12.13)`)
@@ -441,17 +442,17 @@ func TestOtherTypes(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
-    	id int primary key auto_increment, 
+    	id int primary key auto_increment,
     	a bool, b bool, c year,
-		d bit(10), e json, 
-		f decimal(10,2), 
+		d bit(10), e json,
+		f decimal(10,2),
 		g enum('a','b','c'), h set('a','b','c'))`)
 	tableInfo := helper.GetTableInfo(job)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a, b, c, d, e, f, g, h) values (
-   		true, false, 2000, 
-	    0b0101010101, '{"key1": "value1"}', 
-	    153.123, 
+   		true, false, 2000,
+	    0b0101010101, '{"key1": "value1"}',
+	    153.123,
 	    'a', 'a,b')`)
 
 	require.NotNil(t, dmlEvent)
@@ -687,50 +688,50 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 
 	_ = helper.DDL2Event(`create table t (
 		id          int primary key auto_increment,
-	
+
 		c_tinyint   tinyint   null,
 		c_smallint  smallint  null,
 		c_mediumint mediumint null,
 		c_int       int       null,
 		c_bigint    bigint    null,
-	
+
 		c_unsigned_tinyint   tinyint   unsigned null,
 		c_unsigned_smallint  smallint  unsigned null,
 		c_unsigned_mediumint mediumint unsigned null,
 		c_unsigned_int       int       unsigned null,
 		c_unsigned_bigint    bigint    unsigned null,
-	
+
 		c_float   float   null,
 		c_double  double  null,
 		c_decimal decimal null,
 		c_decimal_2 decimal(10, 4) null,
-	
+
 		c_unsigned_float     float unsigned   null,
 		c_unsigned_double    double unsigned  null,
 		c_unsigned_decimal   decimal unsigned null,
 		c_unsigned_decimal_2 decimal(10, 4) unsigned null,
-	
+
 		c_date      date      null,
 		c_datetime  datetime  null,
 		c_timestamp timestamp null,
 		c_time      time      null,
 		c_year      year      null,
-	
+
 		c_tinytext   tinytext      null,
 		c_text       text          null,
 		c_mediumtext mediumtext    null,
 		c_longtext   longtext      null,
-	
+
 		c_tinyblob   tinyblob      null,
 		c_blob       blob          null,
 		c_mediumblob mediumblob    null,
 		c_longblob   longblob      null,
-	
+
 		c_char       char(16)      null,
 		c_varchar    varchar(16)   null,
 		c_binary     binary(16)    null,
 		c_varbinary  varbinary(16) null,
-	
+
 		c_enum enum ('a','b','c') null,
 		c_set  set ('a','b','c')  null,
 		c_bit  bit(64)            null,
@@ -1262,5 +1263,9 @@ func TestRowKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEqual(t, tidb_ext.CommitTs, 0)
-	require.Equal(t, "dIAAAAAAAAByX3KAAAAAAAAAAQ==", tidb_ext.Rowkey)
+	expected := "dIAAAAAAAAByX3KAAAAAAAAAAQ=="
+	if kerneltype.IsNextGen() {
+		expected = "dIAAAAAAAAAHX3KAAAAAAAAAAQ=="
+	}
+	require.Equal(t, expected, tidb_ext.Rowkey)
 }

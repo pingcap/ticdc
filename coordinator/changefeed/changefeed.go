@@ -142,7 +142,7 @@ func (c *Changefeed) ShouldRun() bool {
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
 	old := c.status.Load()
 	failpoint.Inject("CoordinatorDontUpdateChangefeedCheckpoint", func() {
-		newStatus = old
+		newStatus.CheckpointTs = old.CheckpointTs
 	})
 
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {

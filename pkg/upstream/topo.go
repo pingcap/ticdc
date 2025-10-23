@@ -15,12 +15,15 @@ package upstream
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/tidb-dashboard/util/distro"
 	"github.com/pingcap/tidb-dashboard/util/netutil"
 	"github.com/pingcap/tidb/pkg/domain/serverinfo"
@@ -37,33 +40,38 @@ const (
 	topologyTiDBTTL = serverinfo.TopologySessionTTL
 	// defaultTimeout is the default timeout for etcd and mysql operations.
 	defaultTimeout = time.Second * 2
+
+	// keyspaceTiDBTopologyPrefix is the prefix of the TiDB topology key in etcd.
+	keyspaceTiDBTopologyPrefix = "/keyspaces/tidb/"
 )
 
-type tidbInstance struct {
+type TidbInstance struct {
 	IP   string
 	Port uint
 }
 
-// fetchTiDBTopology parses the TiDB topology from etcd.
-func fetchTiDBTopology(ctx context.Context, etcdClient *clientv3.Client) ([]tidbInstance, error) {
+// FetchTiDBTopology parses the TiDB topology from etcd.
+func FetchTiDBTopology(ctx context.Context, etcdClient etcd.Client, keyspaceID uint32) ([]TidbInstance, error) {
 	ctx2, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
-	resp, err := etcdClient.Get(ctx2, topologyTiDB, clientv3.WithPrefix())
+	keyPrefix := wrapTopologyTiDBKey(keyspaceID)
+
+	resp, err := etcdClient.Get(ctx2, keyPrefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, errors.ErrPDEtcdAPIError.Wrap(err)
 	}
 
 	nodesAlive := make(map[string]struct{}, len(resp.Kvs))
-	nodesInfo := make(map[string]*tidbInstance, len(resp.Kvs))
+	nodesInfo := make(map[string]*TidbInstance, len(resp.Kvs))
 
 	for _, kv := range resp.Kvs {
 		key := string(kv.Key)
-		if !strings.HasPrefix(key, topologyTiDB) {
+		if !strings.HasPrefix(key, keyPrefix) {
 			continue
 		}
 		// remainingKey looks like `ip:port/info` or `ip:port/ttl`.
-		remainingKey := strings.TrimPrefix(key[len(topologyTiDB):], "/")
+		remainingKey := strings.TrimPrefix(key[len(keyPrefix):], "/")
 		keyParts := strings.Split(remainingKey, "/")
 		if len(keyParts) != 2 {
 			log.Warn("Ignored invalid topology key", zap.String("component", distro.R().TiDB), zap.String("key", key))
@@ -81,7 +89,7 @@ func fetchTiDBTopology(ctx context.Context, etcdClient *clientv3.Client) ([]tidb
 					zap.Error(err))
 				continue
 			}
-			nodesInfo[keyParts[0]] = &tidbInstance{
+			nodesInfo[keyParts[0]] = &TidbInstance{
 				IP:   hostname,
 				Port: port,
 			}
@@ -98,13 +106,23 @@ func fetchTiDBTopology(ctx context.Context, etcdClient *clientv3.Client) ([]tidb
 		}
 	}
 
-	nodes := make([]tidbInstance, 0)
+	nodes := make([]TidbInstance, 0)
 	for addr, info := range nodesInfo {
 		if _, ok := nodesAlive[addr]; ok {
 			nodes = append(nodes, *info)
 		}
 	}
 	return nodes, nil
+}
+
+// wrapTopologyTiDBKey wrap the key of topologyTiDB to support next gen model
+// the key format of topologyTiDB is `/keyspaces/tidb/{keyspaceID}/topology/tidb` in next gen mode
+func wrapTopologyTiDBKey(keyspaceID uint32) string {
+	if kerneltype.IsClassic() {
+		return topologyTiDB
+	}
+
+	return fmt.Sprintf("%s%d%s", keyspaceTiDBTopologyPrefix, keyspaceID, topologyTiDB)
 }
 
 func parseTiDBAliveness(value []byte) (bool, error) {

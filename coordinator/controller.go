@@ -193,6 +193,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				name := info.ChangefeedID.Name()
 				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
 
+				// don't update checkpoint ts and checkpoint ts lag for stopped changefeed
+				if info.State == config.StateStopped {
+					return
+				}
+
 				pdPhysicalTime := oracle.GetPhysical(c.pdClock.CurrentTime())
 				phyCkpTs := oracle.ExtractPhysical(cf.GetLastSavedCheckPointTs())
 				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3

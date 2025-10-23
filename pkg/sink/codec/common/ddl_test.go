@@ -17,9 +17,20 @@ import (
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	ticonfig "github.com/pingcap/tidb/pkg/config"
+	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	if kerneltype.IsNextGen() {
+		ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
+			conf.Instance.TiDBServiceScope = handle.NextGenTargetScope
+		})
+	}
+}
 
 func TestGetDDLActionType(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
@@ -163,7 +174,7 @@ func TestGetDDLActionType(t *testing.T) {
 	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropTableSQL))
 
 	// partition table related test
-	createPartitionTableSQL := `create table t (a int primary key) 
+	createPartitionTableSQL := `create table t (a int primary key)
     	partition by range(a) (
     	partition p0 values less than (10),
     	partition p1 values less than (20))`

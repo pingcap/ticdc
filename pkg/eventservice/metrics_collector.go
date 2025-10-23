@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
@@ -124,8 +126,14 @@ func newMetricsCollector(broker *eventBroker) *metricsCollector {
 
 // Run starts the metrics collection loop
 func (mc *metricsCollector) Run(ctx context.Context) error {
+	// note: this ticker cannot be frequent,
+	// otherwise it may influence the performance of data sync
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	// need a more frequent ticker to report changefeed metrics to log coordinator for accurate metrics
+	// and the frequency is ok because the reporting doesn't hold any lock which may influence data sync.
+	reportTicker := time.NewTicker(1 * time.Second)
+	defer reportTicker.Stop()
 
 	log.Info("metrics collector started")
 	for {
@@ -137,6 +145,8 @@ func (mc *metricsCollector) Run(ctx context.Context) error {
 			snapshot := mc.collectMetrics()
 			mc.updateMetricsFromSnapshot(snapshot)
 			mc.logSlowDispatchers(snapshot)
+		case <-reportTicker.C:
+			mc.reportChangefeedStatesToLogCoordinator()
 		}
 	}
 }
@@ -246,4 +256,33 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 		zap.Uint64("seq", snapshot.slowestDispatcher.seq.Load()),
 		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
 	)
+}
+
+// reportChangefeedStatesToLogCoordinator collects and reports the state of all changefeeds to the log coordinator.
+func (mc *metricsCollector) reportChangefeedStatesToLogCoordinator() {
+	var states []*logservicepb.ChangefeedStateEntry
+	mc.broker.changefeedMap.Range(func(key, value any) bool {
+		cfStatus := value.(*changefeedStatus)
+		minResolvedTs := uint64(math.MaxUint64)
+		cfStatus.dispatchers.Range(func(key, value any) bool {
+			dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+			resolvedTs := dispatcher.receivedResolvedTs.Load()
+			if resolvedTs < minResolvedTs {
+				minResolvedTs = resolvedTs
+			}
+			return true
+		})
+		states = append(states, &logservicepb.ChangefeedStateEntry{
+			ChangefeedID: cfStatus.changefeedID.ToPB(),
+			ResolvedTs:   minResolvedTs,
+		})
+		return true
+	})
+	coordinatorID := mc.broker.eventStore.GetLogCoordinatorNodeID()
+	if coordinatorID != "" {
+		msg := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, &logservicepb.ChangefeedStates{States: states})
+		if err := mc.broker.msgSender.SendEvent(msg); err != nil {
+			log.Warn("send changefeed metrics to coordinator failed", zap.Error(err))
+		}
+	}
 }

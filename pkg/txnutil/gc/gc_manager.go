@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
@@ -107,7 +106,7 @@ func (m *gcManager) TryUpdateGCSafePoint(
 			zap.Uint64("safePointTs", checkpointTs),
 			zap.Error(err))
 		if time.Since(m.lastSucceededTime.Load()) >= time.Second*time.Duration(m.gcTTL) {
-			return cerror.ErrUpdateServiceSafepointFailed.Wrap(err)
+			return errors.ErrUpdateServiceSafepointFailed.Wrap(err)
 		}
 		return nil
 	}
@@ -161,7 +160,7 @@ func checkStaleCheckpointTs(
 		if pdTime.Sub(
 			oracle.GetTimeFromTS(gcSafepointUpperBound),
 		) > time.Duration(gcTTL)*time.Second {
-			return cerror.ErrGCTTLExceeded.
+			return errors.ErrGCTTLExceeded.
 				GenWithStackByArgs(
 					checkpointTs,
 					changefeedID,
@@ -171,7 +170,7 @@ func checkStaleCheckpointTs(
 		// if `isTiCDCBlockGC` is false, it means there is another service gc
 		// point less than the min checkpoint ts.
 		if gcSafepointUpperBound < lastSafePointTs {
-			return cerror.ErrSnapshotLostByGC.
+			return errors.ErrSnapshotLostByGC.
 				GenWithStackByArgs(
 					checkpointTs,
 					lastSafePointTs,
@@ -182,7 +181,7 @@ func checkStaleCheckpointTs(
 }
 
 func (m *gcManager) checkStaleCheckpointTsKeyspace(ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, changefeedID.Keyspace())
 	if err != nil {
 		return err
@@ -227,7 +226,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 			lastSucceededTime = barrierInfo.lastSucceededTime
 		}
 		if time.Since(lastSucceededTime) >= time.Duration(m.gcTTL)*time.Second {
-			return cerror.ErrUpdateGCBarrierFailed.Wrap(err)
+			return errors.ErrUpdateGCBarrierFailed.Wrap(err)
 		}
 		return nil
 	}

@@ -55,8 +55,8 @@ const (
 	closeServiceTimeout  = 15 * time.Second
 	cleanMetaDuration    = 10 * time.Second
 	oldArchCheckInterval = 100 * time.Millisecond
-	// gracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
-	gracefulShutdownTimeout = 30 * time.Second
+	// GracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
+	GracefulShutdownTimeout = 30 * time.Second
 )
 
 // server represents the main TiCDC server with carefully orchestrated module lifecycle management.
@@ -184,7 +184,7 @@ func (c *server) initialize(ctx context.Context) error {
 		appctx.GetService[messaging.MessageCenter](appctx.MessageCenter).OnNodeChanges)
 
 	conf := config.GetGlobalServerConfig()
-	schemaStore := schemastore.New(ctx, conf.DataDir, c.pdClient, c.pdEndpoints)
+	schemaStore := schemastore.New(conf.DataDir, c.pdClient)
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore: 8,
@@ -192,7 +192,7 @@ func (c *server) initialize(ctx context.Context) error {
 		txnutil.NewLockerResolver(),
 		c.security,
 	)
-	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient)
+	eventStore := eventstore.New(conf.DataDir, subscriptionClient)
 	eventService := eventservice.New(eventStore, schemaStore)
 	c.upstreamManager = upstream.NewManager(ctx, upstream.NodeTopologyCfg{
 		Info:        c.info,
@@ -274,7 +274,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
 	c.preServices = append(c.preServices, dispatcherOrchestrator)
 
-	keyspaceManager := keyspace.NewKeyspaceManager(c.pdEndpoints)
+	keyspaceManager := keyspace.NewManager(c.pdEndpoints)
 	appctx.SetService(appctx.KeyspaceManager, keyspaceManager)
 	c.preServices = append(c.preServices, keyspaceManager)
 
@@ -345,7 +345,7 @@ func (c *server) Run(ctx context.Context) error {
 	ch := make(chan error, 1)
 	go func() {
 		<-gctx.Done()
-		time.Sleep(gracefulShutdownTimeout)
+		time.Sleep(GracefulShutdownTimeout)
 		ch <- errors.ErrTimeout.FastGenByArgs("gracefull shutdown timeout")
 	}()
 	go func() {
