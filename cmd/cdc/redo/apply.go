@@ -36,7 +36,6 @@ type applyRedoOptions struct {
 	sinkURI              string
 	enableProfiling      bool
 	memoryLimitInGiBytes int64
-	changefeedID         string
 	logLevel             string
 }
 
@@ -49,10 +48,8 @@ func newapplyRedoOptions() *applyRedoOptions {
 // flags related to template printing to it.
 func (o *applyRedoOptions) addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.sinkURI, "sink-uri", "", "target database sink-uri")
-	cmd.Flags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	// the possible error returned from MarkFlagRequired is `no such flag`
-	cmd.MarkFlagRequired("sink-uri")      //nolint:errcheck
-	cmd.MarkFlagRequired("changefeed-id") //nolint:errcheck
+	cmd.MarkFlagRequired("sink-uri") //nolint:errcheck
 	cmd.Flags().BoolVar(&o.enableProfiling, "enable-profiling", true, "enable pprof profiling")
 	cmd.Flags().Int64Var(&o.memoryLimitInGiBytes, "memory-limit", 10, "memory limit in GiB")
 	cmd.Flags().StringVar(&o.logLevel, "log-level", "info", "log level (etc: debug|info|warn|error)")
@@ -110,10 +107,9 @@ func (o *applyRedoOptions) run(cmd *cobra.Command) error {
 	}
 
 	cfg := &applier.RedoApplierConfig{
-		Storage:      o.storage,
-		SinkURI:      o.sinkURI,
-		Dir:          o.dir,
-		ChangefeedID: o.changefeedID,
+		Storage: o.storage,
+		SinkURI: o.sinkURI,
+		Dir:     o.dir,
 	}
 	ap := applier.NewRedoApplier(cfg)
 	err = ap.Apply(ctx)

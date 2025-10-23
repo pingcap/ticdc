@@ -16,6 +16,7 @@ package reader
 import (
 	"context"
 
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 )
 
@@ -45,6 +46,11 @@ func (br *BlackHoleReader) ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEven
 // ReadMeta implements LogReader.ReadMeta
 func (br *BlackHoleReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error) {
 	return 0, 1, nil
+}
+
+// GetChangefeedID implements LogReader.GetChangefeedID
+func (br *BlackHoleReader) GetChangefeedID() commonType.ChangeFeedID {
+	return commonType.ChangeFeedID{}
 }
 
 // Close implement the Close interface

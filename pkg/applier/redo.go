@@ -51,8 +51,6 @@ type RedoApplierConfig struct {
 	SinkURI string
 	Storage string
 	Dir     string
-	// ChangefeedID is used to identify the changefeed that this applier belongs to.
-	ChangefeedID string
 }
 
 // RedoApplier implements a redo log applier
@@ -69,18 +67,15 @@ type RedoApplier struct {
 	appliedLogCount uint64
 
 	errCh chan error
-
-	changefeedID commonType.ChangeFeedID
 }
 
 // NewRedoApplier creates a new RedoApplier instance
 func NewRedoApplier(cfg *RedoApplierConfig) *RedoApplier {
 	return &RedoApplier{
-		cfg:          cfg,
-		errCh:        make(chan error, 1024),
-		tableDDLTs:   make(map[commonType.TableID]int64),
-		eventsGroup:  make(map[commonType.TableID]*eventsGroup),
-		changefeedID: commonType.NewChangeFeedIDWithName(cfg.ChangefeedID, commonType.DefaultKeyspace),
+		cfg:         cfg,
+		errCh:       make(chan error, 1024),
+		tableDDLTs:  make(map[commonType.TableID]int64),
+		eventsGroup: make(map[commonType.TableID]*eventsGroup),
 	}
 }
 
@@ -113,7 +108,7 @@ func (ra *RedoApplier) getTableDDLTs(tableID commonType.TableID, checkpointTs in
 		}
 		ra.tableDDLTs[tableID] = newStartTsList[0]
 		log.Info("calculate real startTs for redo apply",
-			zap.Stringer("changefeedID", ra.changefeedID),
+			zap.Stringer("changefeedID", ra.rd.GetChangefeedID()),
 			zap.Int64("tableID", tableID),
 			zap.Any("realStartTs", newStartTsList))
 		return ra.tableDDLTs[tableID]
@@ -312,6 +307,9 @@ func (ra *RedoApplier) ReadMeta(ctx context.Context) (checkpointTs uint64, resol
 // Apply applies redo log to given target
 func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	eg, egCtx := errgroup.WithContext(egCtx)
+	if ra.rd, err = createRedoReader(egCtx, ra.cfg); err != nil {
+		return err
+	}
 	replicaConfig := &config.ChangefeedConfig{
 		SinkURI:    ra.cfg.SinkURI,
 		SinkConfig: &config.SinkConfig{},
@@ -320,17 +318,13 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	if err != nil {
 		return errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
-	ra.mysqlSink, err = mysql.New(egCtx, ra.changefeedID, replicaConfig, sinkURI)
+	ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
 	if err != nil {
 		return err
 	}
 	eg.Go(func() error {
 		return ra.mysqlSink.Run(egCtx)
 	})
-
-	if ra.rd, err = createRedoReader(egCtx, ra.cfg); err != nil {
-		return err
-	}
 	eg.Go(func() error {
 		return ra.rd.Run(egCtx)
 	})

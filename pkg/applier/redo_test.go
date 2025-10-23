@@ -91,6 +91,11 @@ func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs ui
 	return br.checkpointTs, br.resolvedTs, nil
 }
 
+// GetChangefeedID implements LogReader.GetChangefeedID
+func (br *MockReader) GetChangefeedID() commonType.ChangeFeedID {
+	return commonType.ChangeFeedID{}
+}
+
 func newFieldType(tp byte, flag uint) *types.FieldType {
 	ft := types.NewFieldType(tp)
 	ft.SetFlag(flag)
@@ -334,7 +339,7 @@ func TestApply(t *testing.T) {
 	}
 	ap := NewRedoApplier(cfg)
 	// use mock db init sink
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, ap.changefeedID, pkgMysql.New(), db, false)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, ap.rd.GetChangefeedID(), pkgMysql.New(), db, false)
 	ap.eventsGroup = make(map[commonType.TableID]*eventsGroup)
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
@@ -526,7 +531,7 @@ func TestApplyBigTxn(t *testing.T) {
 	}
 	ap := NewRedoApplier(cfg)
 	// use mock db init sink
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, ap.changefeedID, pkgMysql.New(), db, false)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, ap.rd.GetChangefeedID(), pkgMysql.New(), db, false)
 	ap.eventsGroup = make(map[commonType.TableID]*eventsGroup)
 	err = ap.Apply(ctx)
 	require.Nil(t, err)

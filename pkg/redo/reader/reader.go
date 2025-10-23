@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -51,6 +52,7 @@ type RedoLogReader interface {
 	ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEvent, error)
 	// ReadMeta reads meta from redo logs and returns the latest checkpointTs and resolvedTs
 	ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error)
+	GetChangefeedID() commonType.ChangeFeedID
 }
 
 // NewRedoLogReader creates a new redo log reader
@@ -85,10 +87,11 @@ type LogReaderConfig struct {
 
 // LogReader implement RedoLogReader interface
 type LogReader struct {
-	cfg   *LogReaderConfig
-	meta  *misc.LogMeta
-	rowCh chan *pevent.RedoDMLEvent
-	ddlCh chan *pevent.RedoDDLEvent
+	cfg          *LogReaderConfig
+	meta         *misc.LogMeta
+	rowCh        chan *pevent.RedoDMLEvent
+	ddlCh        chan *pevent.RedoDDLEvent
+	changefeedID commonType.ChangeFeedID
 }
 
 // newLogReader creates a LogReader instance.
@@ -271,6 +274,7 @@ func (l *LogReader) initMeta(ctx context.Context) error {
 		if !strings.HasSuffix(path, redo.MetaEXT) {
 			return nil
 		}
+		l.changefeedID = getChangefeedFromMetaPath(path)
 
 		data, err := extStorage.ReadFile(ctx, path)
 		if err != nil && !util.IsNotExistInExtStorage(err) {
@@ -311,6 +315,11 @@ func (l *LogReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint
 		return 0, 0, errors.Trace(errors.ErrRedoMetaFileNotFound.GenWithStackByArgs(l.cfg.Dir))
 	}
 	return l.meta.CheckpointTs, l.meta.ResolvedTs, nil
+}
+
+// GetChangefeedID implement the `RedoLogReader` interface.
+func (l *LogReader) GetChangefeedID() commonType.ChangeFeedID {
+	return l.changefeedID
 }
 
 type logWithIdx struct {
@@ -394,4 +403,11 @@ func (h *logHeap) Pop() interface{} {
 	x := old[n-1]
 	*h = old[0 : n-1]
 	return x
+}
+
+func getChangefeedFromMetaPath(path string) commonType.ChangeFeedID {
+	parts := strings.Split(path, "_")
+	keyspace := parts[1]
+	name := parts[2]
+	return commonType.NewChangeFeedIDWithName(name, keyspace)
 }

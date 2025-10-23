@@ -74,7 +74,6 @@ function run() {
 
 	cdc redo apply --tmp-dir="$tmp_download_path/apply" \
 		--storage="$storage_path" \
-		-c=$changefeed_id \
 		--sink-uri="mysql://normal:${ENPASSWORD}@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 }
