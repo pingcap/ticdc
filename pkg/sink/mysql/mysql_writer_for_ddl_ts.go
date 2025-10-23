@@ -260,30 +260,27 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 	return builder.String()
 }
 
-// GetStartTsList return the startTs list, skipSyncpointAtStartTs list, and skipDMLAsStartTs list for each table in the tableIDs list.
-// For each table,
-//  1. If no ddl-ts-v1 table or no the row for the table , startTs = 0; -- means the table is new.
-//  2. Else,
-//     2.1 If the downstream is non-tidb, startTs = ddlTs
-//     2.2 Else
-//     2.2.1 if the ddlTs is finished, startTs = ddlTs
-//     2.2.2 else query the ddl_jobs table to find the latest ddl job time for the table
-//     (we use related table to find the ddl job -- take `truncate table` as an example, the ddl job used the table truncated, but not the new table)
-//     2.2.2.1 if the latest ddl job time is larger than the createdAt, startTs = ddlTs
-//     2.2.2.2 else startTs = ddlTs - 1
+// GetTableRecoveryInfo queries the ddl-ts table to determine recovery information for the given tables.
 //
-// TODO(hyy): do we still need skipSyncpointAtStartTs?
-// for the skipSyncpointAtStartTs List, only when the ddlTs is finished and
-// the skipSyncpointAtStartTs equals the query result in ddl_ts table, otherwise, the skipSyncpointAtStartTs is false.
+// Returns:
+//   - startTsList: The startTs to use for each table
+//   - skipSyncpointAtStartTsList: Whether to skip syncpoint events at startTs for each table
+//   - skipDMLAsStartTsList: Whether to skip DML events at startTs+1 for each table
 //
-// skipDMLAsStartTs indicates whether to skip DML events at startTs+1 timestamp.
-// When true, the dispatcher should filter out DML events with commitTs == startTs+1, but keep DDL events.
-// This flag is set to true ONLY when is_syncpoint=false AND finished=0 (non-syncpoint DDL not finished).
-// In this case, we return startTs = ddlTs-1 to replay the DDL, and skip the already-written DML at ddlTs
-// to avoid duplicate writes while ensuring the DDL is replayed.
-// Note: When is_syncpoint=true AND finished=0 (DDL finished but syncpoint not finished),
-// skipDMLAsStartTs is false because the DDL is already completed and DML should be processed normally.
-func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, []bool, error) {
+// Recovery logic based on ddl-ts table state:
+//  1. No record found (new table): Returns 0 for all values
+//  2. finished=1: DDL and optional syncpoint completed normally
+//     - Returns ddlTs
+//     - skipSyncpointAtStartTs = is_syncpoint (skip if it was a syncpoint)
+//     - skipDMLAsStartTs = false
+//  3. finished=0, is_syncpoint=false: DDL not finished (crash during DDL)
+//     - Returns ddlTs-1 to replay DDL at ddlTs
+//     - skipDMLAsStartTs = true (skip already-written DML at ddlTs)
+//  4. finished=0, is_syncpoint=true: DDL finished, syncpoint not finished
+//     - Returns ddlTs (don't replay DDL)
+//     - skipSyncpointAtStartTs = false (replay syncpoint)
+//     - skipDMLAsStartTs = false (process DML normally)
+func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
 	// when split table enabled, there may have some same tableID in tableIDs
 	tableIdIdxMap := make(map[int64][]int, len(tableIDs))
