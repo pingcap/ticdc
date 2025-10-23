@@ -53,7 +53,7 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.DMLMaxRetry = 1
 	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
-	cfg.EnableDDLTs = true  // Enable DDL-ts feature for testing
+	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
 
 	sink := newMySQLSink(ctx, changefeedID, cfg, db, false)
 	return ctx, sink, mock
@@ -362,9 +362,9 @@ func TestGetTableRecoveryInfo_StartTsGreaterThanDDLTs(t *testing.T) {
 	expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 3))"
 
 	rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
-		AddRow(1, 100, false, false).  // Unfinished DDL, skipDML should be true initially
-		AddRow(2, 200, true, false).   // Finished DDL, skipSyncpoint=false
-		AddRow(3, 250, false, false)   // Unfinished DDL, input startTs=300 > ddlTs=250
+		AddRow(1, 100, false, false). // Unfinished DDL, skipDML should be true initially
+		AddRow(2, 200, true, false).  // Finished DDL, skipSyncpoint=false
+		AddRow(3, 250, false, false)  // Unfinished DDL, input startTs=300 > ddlTs=250
 
 	mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
 	mock.ExpectClose() // Expect database close when sink.Close() is called
