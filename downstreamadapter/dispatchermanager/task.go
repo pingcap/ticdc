@@ -205,7 +205,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	if common.IsDefaultMode(t.mergedDispatcher.GetMode()) && t.manager.sink.SinkType() == common.MysqlSinkType {
 		newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := t.manager.sink.(*mysql.Sink).GetTableRecoveryInfo([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
 		if err != nil {
-			log.Error("calculate real startTs for merge dispatcher failed",
+			log.Error("get table recovery info for merge dispatcher failed",
 				zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 				zap.Stringer("changefeedID", t.manager.changefeedID),
 				zap.Error(err),
@@ -213,7 +213,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 			t.mergedDispatcher.HandleError(err)
 			return
 		}
-		log.Info("calculate real startTs for Merge Dispatcher",
+		log.Info("get table recovery info for Merge Dispatcher",
 			zap.Stringer("changefeedID", t.manager.changefeedID),
 			zap.Any("receiveStartTs", minCheckpointTs),
 			zap.Any("realStartTs", newStartTsList),
