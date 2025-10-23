@@ -364,7 +364,7 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	return nil
 }
 
-func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int64, removeDDLTs bool) ([]int64, []bool, []bool, error) {
+func (e *DispatcherManager) getTableRecoveryInfoFromMysqlSink(tableIds, startTsList []int64, removeDDLTs bool) ([]int64, []bool, []bool, error) {
 	var (
 		newStartTsList []int64
 		err            error
@@ -414,7 +414,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 	// If there is a ddl event and a syncpoint event at the same time, we ensure the syncpoint event always after the ddl event.
 	// So we need to know whether the commitTs is from a syncpoint event or a ddl event,
 	// to decide whether we need to send generate the syncpoint event of this commitTs to downstream.
-	newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := e.getStartTsFromMysqlSink(tableIds, startTsList, removeDDLTs)
+	newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := e.getTableRecoveryInfoFromMysqlSink(tableIds, startTsList, removeDDLTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
