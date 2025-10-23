@@ -79,11 +79,6 @@ type DDLEvent struct {
 	//   Recover Table
 	TableNameChange *TableNameChange `json:"table_name_change"`
 
-	// the table name for the ddl job in the information_schema.ddl_jobs table(just ddl job.TableName)
-	TableNameInDDLJob string `msg:"table_name_in_ddl_job"`
-	// the database name for the ddl job in the information_schema.ddl_jobs table(just ddl job.dbName)
-	DBNameInDDLJob string `msg:"db_name_in_ddl_job"`
-
 	TiDBOnly bool   `json:"tidb_only"`
 	BDRMode  string `json:"bdr_mode"`
 	Err      string `json:"err"`
@@ -110,8 +105,8 @@ type DDLEvent struct {
 }
 
 func (d *DDLEvent) String() string {
-	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, TableID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, FinishedTs: %d, Seq: %d, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TableNameInDDLJob: %s, DBNameInDDLJob: %s, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
-		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.TableID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TableNameInDDLJob, d.DBNameInDDLJob, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
+	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, TableID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, FinishedTs: %d, Seq: %d, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
+		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.TableID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
 }
 
 func (d *DDLEvent) GetType() int {
@@ -157,14 +152,6 @@ func (d *DDLEvent) GetExtraSchemaName() string {
 
 func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
-}
-
-func (d *DDLEvent) GetTableNameInDDLJob() string {
-	return d.TableNameInDDLJob
-}
-
-func (d *DDLEvent) GetDBNameInDDLJob() string {
-	return d.DBNameInDDLJob
 }
 
 func (d *DDLEvent) GetEvents() []*DDLEvent {
