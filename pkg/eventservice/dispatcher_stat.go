@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -190,14 +189,6 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 
 	a.lastReceivedResolvedTsTime.Store(src.lastReceivedResolvedTsTime.Load())
 	a.lastSentResolvedTsTime.Store(src.lastSentResolvedTsTime.Load())
-}
-
-func (a *dispatcherStat) largeGap(ts uint64) bool {
-	sendTs := a.sentResolvedTs.Load()
-	downCkpts := a.checkpointTs.Load()
-
-	gap := oracle.GetTimeFromTS(sendTs).Sub(oracle.GetTimeFromTS(downCkpts))
-	return gap > 5*time.Second
 }
 
 func (a *dispatcherStat) isHandshaked() bool {

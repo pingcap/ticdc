@@ -598,12 +598,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		task.resetScanLimit()
 	}
 
-	if task.largeGap(task.sentResolvedTs.Load()) {
-		log.Info("large gap between sent resolved ts and checkpoint ts, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Uint64("checkpointTs", task.checkpointTs.Load()))
-		c.sendSignalResolvedTs(task)
-		return
-	}
-
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
