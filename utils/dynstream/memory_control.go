@@ -56,7 +56,8 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	lastSendFeedbackTime atomic.Value
 	algorithm            MemoryControlAlgorithm
 
-	lastSizeDecreaseTime atomic.Value
+	lastSizeDecreaseTime  atomic.Value
+	lastReleaseMemoryTime atomic.Value
 }
 
 func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
@@ -76,6 +77,7 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	}
 	res.lastSendFeedbackTime.Store(time.Now())
 	res.lastSizeDecreaseTime.Store(time.Now())
+	res.lastReleaseMemoryTime.Store(time.Now())
 	res.settings.Store(&settings)
 	return res
 }
@@ -111,7 +113,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
 		MemoryControlForEventCollector {
 		as.releaseMemory()
-
 		if !event.eventType.Droppable {
 			dropEvent := handler.OnDrop(event.event)
 			if dropEvent != nil {
@@ -156,6 +157,11 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
+	if time.Since(as.lastReleaseMemoryTime.Load().(time.Time)) < 1*time.Second {
+		return
+	}
+	as.lastReleaseMemoryTime.Store(time.Now())
+
 	paths := make([]*pathInfo[A, P, T, D, H], 0, as.pathCount.Load())
 	as.pathMap.Range(func(k, v interface{}) bool {
 		paths = append(paths, v.(*pathInfo[A, P, T, D, H]))
