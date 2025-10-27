@@ -14,6 +14,7 @@
 package dynstream
 
 import (
+	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -56,6 +57,7 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	lastSendFeedbackTime atomic.Value
 	algorithm            MemoryControlAlgorithm
 
+	lastAppendEventTime   atomic.Value
 	lastSizeDecreaseTime  atomic.Value
 	lastReleaseMemoryTime atomic.Value
 }
@@ -75,6 +77,8 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		lastSizeDecreaseTime: atomic.Value{},
 		algorithm:            NewMemoryControlAlgorithm(settings.algorithm),
 	}
+
+	res.lastAppendEventTime.Store(time.Now())
 	res.lastSendFeedbackTime.Store(time.Now())
 	res.lastSizeDecreaseTime.Store(time.Now())
 	res.lastReleaseMemoryTime.Store(time.Now())
@@ -94,6 +98,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	handler H,
 ) bool {
 	defer as.updateAreaPauseState(path)
+	as.lastAppendEventTime.Store(time.Now())
 
 	// Check if we should merge periodic signals.
 	if event.eventType.Property == PeriodicSignal {
@@ -145,6 +150,12 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 }
 
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
+	// 1% to trigger release memory for testing
+	// fizz: remove me after testing
+	if rand.Intn(1000) < 10 {
+		return true
+	}
+
 	failpoint.Inject("InjectDeadlock", func() { failpoint.Return(true) })
 
 	if as.settings.Load().algorithm !=
@@ -152,8 +163,11 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 		return false
 	}
 
-	return time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration &&
-		as.memoryUsageRatio() > (1-defaultReleaseMemoryRatio)
+	hasEventComeButNotOut := time.Since(as.lastAppendEventTime.Load().(time.Time)) < defaultDeadlockDuration && time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
+
+	memoryHighWaterMark := as.memoryUsageRatio() > (1 - defaultReleaseMemoryRatio)
+
+	return hasEventComeButNotOut && memoryHighWaterMark
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
@@ -180,6 +194,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 	log.Info("release memory", zap.Any("area", as.area), zap.Int64("sizeToRelease", sizeToRelease), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Float64("releaseMemoryRatio", defaultReleaseMemoryRatio))
 
 	for _, path := range paths {
+		// Only release path that is blocking and has pending size larger than the threshold.
 		if releasedSize >= sizeToRelease ||
 			path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) ||
 			!path.blocking.Load() {
