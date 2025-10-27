@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -198,12 +199,12 @@ func TestLogWriterWriteDDL(t *testing.T) {
 
 	for _, tt := range tests {
 		mockWriter := &mockFileWriter{}
-		mockWriter.On("Write", mock.Anything).Return(1, tt.writerErr)
 		mockWriter.On("IsRunning").Return(tt.isRunning)
-		mockWriter.On("AdvanceTs", mock.Anything)
+		mockWriter.On("SyncWrite", mock.Anything).Return(tt.writerErr)
 		w := logWriter{
 			cfg:           &writer.LogWriterConfig{},
 			backendWriter: mockWriter,
+			fileType:      redo.RedoDDLLogFileType,
 		}
 
 		if tt.name == "context cancel" {

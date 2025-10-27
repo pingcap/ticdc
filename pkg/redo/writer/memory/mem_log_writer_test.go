@@ -86,7 +86,7 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	})
 	require.NoError(t, err)
 
-	require.ErrorIs(t, lw.Close(), context.Canceled)
+	require.ErrorIs(t, lw.Close(), nil)
 	// duplicate close should return the same error
-	require.ErrorIs(t, lw.Close(), context.Canceled)
+	require.ErrorIs(t, lw.Close(), nil)
 }
