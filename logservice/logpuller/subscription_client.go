@@ -80,6 +80,7 @@ var subscriptionIDGen atomic.Uint64
 
 // subscriptionID is a unique identifier for a subscription.
 // It is used as `RequestId` in region requests to remote store.
+// The same table span has the same subscriptionID.
 type SubscriptionID uint64
 
 const InvalidSubscriptionID SubscriptionID = 0
