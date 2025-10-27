@@ -275,6 +275,7 @@ func (c *Controller) initializeComponents(
 	c.barrier = NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, common.DefaultMode)
 
 	// Start scheduler
+	c.taskHandlesMu.Lock()
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
 
 	if c.enableRedo {
@@ -282,6 +283,7 @@ func (c *Controller) initializeComponents(
 	}
 	// Start operator controller
 	c.taskHandles = append(c.taskHandles, c.taskPool.Submit(c.operatorController, time.Now()))
+	c.taskHandlesMu.Unlock()
 }
 
 func (c *Controller) prepareSchemaInfoResponse(
