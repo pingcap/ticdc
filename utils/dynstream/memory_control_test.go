@@ -279,6 +279,7 @@ func TestReleaseMemory(t *testing.T) {
 		dest:         "dest-1",
 		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
 	}
+
 	path2 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
 		area:         area,
 		path:         "path-2",
@@ -351,6 +352,7 @@ func TestReleaseMemory(t *testing.T) {
 	require.Equal(t, int64(300), path3.pendingSize.Load())
 	require.Equal(t, int64(1000), path1.areaMemStat.totalPendingSize.Load())
 
+	path1.areaMemStat.lastReleaseMemoryTime.Store(time.Now().Add(-2 * time.Second))
 	path1.areaMemStat.releaseMemory()
 
 	feedbacks := make([]Feedback[int, string, any], 0)
@@ -408,6 +410,7 @@ func TestReleaseMemory(t *testing.T) {
 	// sizeToRelease = 1000 * 0.4 = 360
 	// path1 (ts=300): release 300 bytes, sizeToRelease = 360 - 300 = 60
 	// path2 (ts=200): release 300 bytes, sizeToRelease = 60 - 300 = -240
+	path1.areaMemStat.lastReleaseMemoryTime.Store(time.Now().Add(-2 * time.Second))
 	path1.areaMemStat.releaseMemory()
 
 	// Verify feedback messages
