@@ -25,7 +25,7 @@ import (
 
 const (
 	prewriteCacheSize       = 16
-	clearCacheDelayInSecond = 5
+	clearCacheDelayInSecond = 5 * time.Second
 )
 
 var (
@@ -166,16 +166,14 @@ func (m *matcher) tryCleanUnmatchedValue() {
 	}
 	// Only clear the unmatched value if it has been 10 seconds since the last prewrite event
 	// and there is no unmatched value left.
-	if time.Since(m.lastPrewriteTime) > clearCacheDelayInSecond*time.Second && len(m.unmatchedValue) == 0 {
+	if time.Since(m.lastPrewriteTime) > clearCacheDelayInSecond && len(m.unmatchedValue) == 0 {
 		m.clearUnmatchedValue()
 	}
 }
 
 func (m *matcher) clearUnmatchedValue() {
 	m.lastPrewriteTime = time.Time{}
-	for k := range m.unmatchedValue {
-		delete(m.unmatchedValue, k)
-	}
+	clear(m.unmatchedValue)
 	m.unmatchedValue = nil
 }
 

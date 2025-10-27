@@ -667,9 +667,12 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	taskType TaskType,
 ) error {
 	// Limit the number of regions loaded at a time to make the load more stable.
-	limit := 1024
-	nextSpan := span
-	backoffBeforeLoad := false
+	const limit = 1024
+	var (
+		backoffBeforeLoad = false
+		nextSpan          = span
+		subscriptionID    = subscribedSpan.subID
+	)
 	for {
 		if backoffBeforeLoad {
 			if err := util.Hang(ctx, loadRegionRetryInterval); err != nil {
@@ -678,15 +681,15 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			backoffBeforeLoad = false
 		}
 		log.Debug("subscription client is going to load regions",
-			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-			zap.Any("span", nextSpan))
+			zap.Any("subscriptionID", subscriptionID),
+			zap.Any("span", common.FormatTableSpan(&nextSpan)))
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		regions, err := s.regionCache.BatchLoadRegionsWithKeyRange(backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
 		if err != nil {
 			log.Warn("subscription client load regions failed",
-				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", nextSpan),
+				zap.Any("subscriptionID", subscriptionID),
+				zap.Any("span", common.FormatTableSpan(&nextSpan)),
 				zap.Error(err))
 			backoffBeforeLoad = true
 			continue
@@ -700,8 +703,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		regionMetas = regionlock.CutRegionsLeftCoverSpan(regionMetas, nextSpan)
 		if len(regionMetas) == 0 {
 			log.Warn("subscription client load regions with holes",
-				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", nextSpan))
+				zap.Any("subscriptionID", subscriptionID),
+				zap.Any("span", common.FormatTableSpan(&nextSpan)))
 			backoffBeforeLoad = true
 			continue
 		}
@@ -721,7 +724,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			intersectSpan := common.GetIntersectSpan(subscribedSpan.span, regionSpan)
 			if common.IsEmptySpan(intersectSpan) {
 				log.Panic("subscription client check spans intersect shouldn't fail",
-					zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)))
+					zap.Any("subscriptionID", subscriptionID))
 			}
 
 			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)

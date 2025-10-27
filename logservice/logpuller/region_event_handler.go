@@ -177,18 +177,19 @@ func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 }
 
 func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *regionRequestWorker) {
+	subscriptionID := SubscriptionID(state.requestID)
 	stepsToRemoved := state.markRemoved()
 	err := state.takeError()
 	if err != nil {
 		log.Debug("region event handler get a region error",
 			zap.Uint64("workerID", worker.workerID),
-			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
+			zap.Any("subscriptionID", subscriptionID),
 			zap.Uint64("regionID", state.region.verID.GetID()),
 			zap.Bool("reschedule", stepsToRemoved),
 			zap.Error(err))
 	}
 	if stepsToRemoved {
-		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
+		worker.takeRegionState(subscriptionID, state.getRegionID())
 		h.subClient.onRegionFail(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
@@ -294,12 +295,13 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	if state.isStale() || !state.isInitialized() {
 		return 0
 	}
+	subscriptionID := SubscriptionID(state.requestID)
 	state.matcher.tryCleanUnmatchedValue()
 	regionID := state.getRegionID()
 	lastResolvedTs := state.getLastResolvedTs()
 	if resolvedTs < lastResolvedTs {
 		log.Info("The resolvedTs is fallen back in subscription client",
-			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
+			zap.Any("subscriptionID", subscriptionID),
 			zap.Uint64("regionID", regionID),
 			zap.Uint64("resolvedTs", resolvedTs),
 			zap.Uint64("lastResolvedTs", lastResolvedTs))

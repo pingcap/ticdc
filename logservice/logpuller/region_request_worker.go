@@ -296,13 +296,13 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	if resolvedTsEvent.Ts == 0 {
 		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
 			zap.Uint64("workerID", s.workerID),
-			zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
+			zap.Any("subscriptionID", subscriptionID),
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
+			s.client.pushRegionEventToDS(subscriptionID, regionEvent{
 				state:      state,
 				worker:     s,
 				resolvedTs: resolvedTsEvent.Ts,
@@ -310,7 +310,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 		} else {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
+				zap.Any("subscriptionID", subscriptionID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 		}
