@@ -541,7 +541,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
-			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs, perWorkerQueueSize)
+			requestWorker := newRegionRequestWorker(ctx, s, eg, rs, perWorkerQueueSize)
 			rs.requestWorkers.Lock()
 			rs.requestWorkers.s = append(rs.requestWorkers.s, requestWorker)
 			rs.requestWorkers.Unlock()

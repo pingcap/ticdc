@@ -58,7 +58,7 @@ const (
 
 // `createGRPCConn` return a grpc connection to `target` but no IO is performed.
 // Use of the `ClientConn` for RPCs will automatically cause it to connect.
-func createGRPCConn(ctx context.Context, credential *security.Credential, target string) (*grpc.ClientConn, error) {
+func createGRPCConn(credential *security.Credential, target string) (*grpc.ClientConn, error) {
 	grpcTLSOption, err := credential.ToGRPCDialOption()
 	if err != nil {
 		return nil, err
@@ -91,9 +91,6 @@ func createGRPCConn(ctx context.Context, credential *security.Credential, target
 		dialOptions = append(dialOptions, grpc.WithUnaryInterceptor(grpcMetrics.UnaryClientInterceptor()))
 		dialOptions = append(dialOptions, grpc.WithStreamInterceptor(grpcMetrics.StreamClientInterceptor()))
 	}
-
-	// return grpc.DialContext(ctx, target, dialOptions...)
-
 	return grpc.NewClient(target, dialOptions...)
 }
 
@@ -113,7 +110,7 @@ type ConnAndClient struct {
 
 // `Connect` returns a connection and client to remote store.
 func Connect(ctx context.Context, credential *security.Credential, target string) (*ConnAndClient, error) {
-	clientConn, err := createGRPCConn(ctx, credential, target)
+	clientConn, err := createGRPCConn(credential, target)
 	if err != nil {
 		return nil, err
 	}

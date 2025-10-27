@@ -64,7 +64,6 @@ type regionRequestWorker struct {
 func newRegionRequestWorker(
 	ctx context.Context,
 	client *subscriptionClient,
-	credential *security.Credential,
 	g *errgroup.Group,
 	store *requestedStore,
 	requestCacheSize int,
@@ -118,7 +117,7 @@ func newRegionRequestWorker(
 					regionErr = &sendRequestToStoreErr{}
 				}
 			} else {
-				if canceled := worker.run(ctx, credential); canceled {
+				if canceled := worker.run(ctx, client.credential); canceled {
 					return nil
 				}
 				regionErr = &sendRequestToStoreErr{}
@@ -246,7 +245,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				if eventData == nil {
 					log.Warn("region request worker receives a region event with nil entries, ignore it",
 						zap.Uint64("workerID", s.workerID),
-						zap.Uint64("subscriptionID", uint64(subscriptionID)),
+						zap.Any("subscriptionID", subscriptionID),
 						zap.Uint64("regionID", regionID))
 					continue
 				}
@@ -257,7 +256,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			case *cdcpb.Event_Error:
 				log.Debug("region request worker receives a region error",
 					zap.Uint64("workerID", s.workerID),
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Any("subscriptionID", subscriptionID),
 					zap.Uint64("regionID", event.RegionId),
 					zap.Bool("stateIsNil", state == nil),
 					zap.Any("error", eventData.Error))
@@ -270,19 +269,19 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			s.client.pushRegionEventToDS(subscriptionID, regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
 				// it is normal to receive region error after deregister a subscription
 				log.Debug("region request worker receives an error for a stale region, ignore it",
 					zap.Uint64("workerID", s.workerID),
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Any("subscriptionID", subscriptionID),
 					zap.Uint64("regionID", event.RegionId))
 			default:
 				log.Warn("region request worker receives a region event for an untracked region",
 					zap.Uint64("workerID", s.workerID),
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Any("subscriptionID", subscriptionID),
 					zap.Uint64("regionID", event.RegionId))
 			}
 		}

@@ -77,8 +77,6 @@ func (pq *PriorityQueue) Pop(ctx context.Context) (PriorityTask, error) {
 				// Signal channel is closed.
 				return nil, errors.New("signal channel is closed")
 			}
-			// Got signal, try to pop again
-			continue
 		}
 	}
 }
