@@ -14,7 +14,6 @@
 package dynstream
 
 import (
-	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -150,12 +149,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 }
 
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
-	// 1% to trigger release memory for testing
-	// fizz: remove me after testing
-	if rand.Intn(1000) < 10 {
-		return true
-	}
-
 	failpoint.Inject("InjectDeadlock", func() { failpoint.Return(true) })
 
 	if as.settings.Load().algorithm !=
