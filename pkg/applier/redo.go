@@ -254,9 +254,12 @@ func (ra *RedoApplier) waitTableFlush(
 			zap.Any("newResolvedTs", rts))
 	}
 
-	var flushed atomic.Int64
 	events := ra.eventsGroup[tableID].getEvents()
 	total := len(events)
+	if total == 0 {
+		return nil
+	}
+	var flushed atomic.Int64
 	done := make(chan struct{})
 	for _, e := range events {
 		e.AddPostFlushFunc(func() {
