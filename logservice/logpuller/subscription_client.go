@@ -365,7 +365,7 @@ func (s *subscriptionClient) Subscribe(
 
 	select {
 	case <-s.ctx.Done():
-		log.Error("subscribes span failed, the subscription client has closed")
+		log.Warn("subscribes span failed, the subscription client has closed")
 	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode, priority: TaskLowPrior}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
