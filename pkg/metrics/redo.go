@@ -29,7 +29,7 @@ var (
 		Subsystem: subsystem,
 		Name:      "write_bytes_total",
 		Help:      "Total number of bytes redo log written",
-	}, []string{"namespace", "changefeed", "type"})
+	}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoFsyncDurationHistogram records the latency distributions of fsync called by redo writer.
 	RedoFsyncDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -38,7 +38,7 @@ var (
 		Name:      "fsync_duration_seconds",
 		Help:      "The latency distributions of fsync called by redo writer",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{"namespace", "changefeed", "type"})
+	}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoFlushAllDurationHistogram records the latency distributions of flushAll
 	// called by redo writer.
@@ -48,7 +48,7 @@ var (
 		Name:      "flush_all_duration_seconds",
 		Help:      "The latency distributions of flushall called by redo writer",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{"namespace", "changefeed", "type"})
+	}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoFlushLogDurationHistogram records the latency distributions of flushLog.
 	RedoFlushLogDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -57,7 +57,7 @@ var (
 		Name:      "flush_log_duration_seconds",
 		Help:      "The latency distributions of flushLog called by redo sink",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{"namespace", "changefeed", "type"})
+	}, []string{getKeyspaceLabel(), "changefeed", "type"})
 )
 
 func InitRedoMetrics(registry *prometheus.Registry) {
