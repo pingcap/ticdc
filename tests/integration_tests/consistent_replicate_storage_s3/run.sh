@@ -19,10 +19,9 @@ rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
 MINIO_PID=0
 stop_minio() {
-	if [ $MINIO_PID -ne 0 ];
-	then
+	if [ $MINIO_PID -ne 0 ]; then
 		kill -2 $MINIO_PID || true
-	fi	
+	fi
 }
 
 stop() {

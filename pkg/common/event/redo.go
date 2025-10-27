@@ -332,8 +332,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		collectAllColumnsValue(r.PreColumns, columns, chk)
 		collectAllColumnsValue(r.Columns, columns, chk)
 		// FIXME: exclude columns with same value
-		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate)
-		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate, commonType.RowTypeUpdate)
 	} else if r.IsInsert() {
 		collectAllColumnsValue(r.Columns, columns, chk)
 		event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
