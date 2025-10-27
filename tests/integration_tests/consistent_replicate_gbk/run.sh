@@ -34,7 +34,6 @@ function run() {
 	fi
 
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 
 	bin/minio server --address $S3_ENDPOINT "$WORK_DIR/s3" &
 	MINIO_PID=$!
@@ -49,6 +48,7 @@ function run() {
 	done
 	s3cmd --access_key=$MINIO_ACCESS_KEY --secret_key=$MINIO_SECRET_KEY --host=$S3_ENDPOINT --host-bucket=$S3_ENDPOINT --no-ssl mb s3://logbucket
 
+	cd $WORK_DIR
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
