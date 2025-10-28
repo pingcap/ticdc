@@ -570,7 +570,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if task.sentResolvedTs.Load() > task.changefeedStat.dispatchersMinSyncpointTs.Load() {
+	if task.lastScannedCommitTs.Load() > task.changefeedStat.dispatchersMinSyncpointTs.Load() {
 		return
 	}
 
