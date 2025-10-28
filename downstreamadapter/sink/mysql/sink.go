@@ -253,40 +253,65 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
 
-// GetStartTsList return the startTs list and skipSyncpointSameAsStartTs list for each table in the tableIDs list.
-// If removeDDLTs is true, we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
-// If removeDDLTs is false, we need to query the ddl ts from the ddl_ts table, and return the startTs list and skipSyncpointSameAsStartTs list.
-// The skipSyncpointSameAsStartTs list is used to determine whether we need to skip the syncpoint event which is same as the startTs
-// when the startTs in input list is larger than the the startTs from ddlTs,
-// we need to set the related skipSyncpointSameAsStartTs to false, and return the input startTs value.
-func (s *Sink) GetStartTsList(
+// GetTableRecoveryInfo queries DDL crash recovery information for the given tables.
+//
+// Returns:
+//   - startTsList: The actual startTs to use for each table
+//   - skipSyncpointAtStartTsList: Whether to skip syncpoint events at startTs
+//   - skipDMLAsStartTsList: Whether to skip DML events at startTs+1
+//
+// Parameters:
+//   - tableIds: List of table IDs to query
+//   - startTsList: Input startTs list (used as fallback if larger than ddl_ts)
+//   - removeDDLTs: If true, remove ddl_ts records and use input startTsList directly
+//
+// Logic:
+//  1. If removeDDLTs is true: Remove ddl_ts records for this changefeed and return
+//     input startTsList with all skip flags set to false (normal operation, no recovery needed).
+//  2. If removeDDLTs is false: Query ddl_ts table to get recovery information:
+//     - For each table, compare ddl_ts with input startTs
+//     - If input startTs > ddl_ts: Use input startTs and reset all skip flags to false
+//     (the table has advanced beyond the ddl_ts crash point, no recovery needed)
+//     - Otherwise: Use ddl_ts and its associated skip flags from the ddl_ts table
+func (s *Sink) GetTableRecoveryInfo(
 	tableIds []int64,
 	startTsList []int64,
 	removeDDLTs bool,
-) ([]int64, []bool, error) {
+) ([]int64, []bool, []bool, error) {
 	if removeDDLTs {
-		// means we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
+		// Removing changefeed: clean up ddl_ts records and use input startTs directly.
+		// All skip flags are false because we're starting fresh, no crash recovery needed.
 		err := s.ddlWriter.RemoveDDLTsItem()
 		if err != nil {
 			s.isNormal.Store(false)
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		isSyncpointList := make([]bool, len(startTsList))
-		return startTsList, isSyncpointList, nil
+		skipSyncpointAtStartTsList := make([]bool, len(startTsList))
+		skipDMLAsStartTsList := make([]bool, len(startTsList))
+		return startTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, nil
 	}
-	ddlTsList, isSyncpointList, err := s.ddlWriter.GetStartTsList(tableIds)
+
+	// Query ddl_ts table for crash recovery information
+	ddlTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := s.ddlWriter.GetTableRecoveryInfo(tableIds)
 	if err != nil {
 		s.isNormal.Store(false)
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+
+	// For each table, determine the actual startTs and skip flags
 	newStartTsList := make([]int64, len(startTsList))
 	for idx, ddlTs := range ddlTsList {
 		if startTsList[idx] > ddlTs {
-			isSyncpointList[idx] = false
+			// Input startTs is ahead of ddl_ts crash point.
+			// This means the table has already progressed beyond the crash point,
+			// so we use input startTs and disable all skip flags (no recovery needed).
+			skipSyncpointAtStartTsList[idx] = false
+			skipDMLAsStartTsList[idx] = false
 		}
+		// Use the maximum of ddl_ts and input startTs
 		newStartTsList[idx] = max(ddlTs, startTsList[idx])
 	}
-	return newStartTsList, isSyncpointList, nil
+	return newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, nil
 }
 
 func (s *Sink) Close(removeChangefeed bool) {

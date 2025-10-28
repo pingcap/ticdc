@@ -177,6 +177,8 @@ type SubscriptionClient interface {
 }
 
 type subscriptionClient struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
 	config    *SubscriptionClientConfig
 	metrics   sharedClientMetrics
 	clusterID uint64
@@ -239,6 +241,7 @@ func NewSubscriptionClient(
 		resolveLockTaskCh: make(chan resolveLockTask, 1024),
 		errCache:          newErrCache(),
 	}
+	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
@@ -360,10 +363,14 @@ func (s *subscriptionClient) Subscribe(
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
-	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode, priority: TaskLowPrior}
-	log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
-		zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
-		zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
+	select {
+	case <-s.ctx.Done():
+		log.Warn("subscribes span failed, the subscription client has closed")
+	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode, priority: TaskLowPrior}:
+		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
+			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
+			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
+	}
 }
 
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
@@ -451,7 +458,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
-	// FIXME: close and drain all channels
+	s.cancel()
 	s.ds.Close()
 	s.regionTaskQueue.Close()
 	return nil
@@ -1043,12 +1050,15 @@ func (s *subscriptionClient) newSubscribedSpan(
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
 		targetTs := rt.staleLocksTargetTs.Load()
 		if state.ResolvedTs.Load() < targetTs && state.Initialized.Load() {
-			s.resolveLockTaskCh <- resolveLockTask{
+			select {
+			case <-s.ctx.Done():
+			case s.resolveLockTaskCh <- resolveLockTask{
 				keyspaceID: span.KeyspaceID,
 				regionID:   regionID,
 				targetTs:   targetTs,
 				state:      state,
 				create:     time.Now(),
+			}:
 			}
 		}
 	}

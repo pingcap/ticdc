@@ -36,18 +36,6 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "Type")
 				return
 			}
-		case "table_name_in_ddl_job":
-			z.TableNameInDDLJob, err = dc.ReadString()
-			if err != nil {
-				err = msgp.WrapError(err, "TableNameInDDLJob")
-				return
-			}
-		case "db_name_in_ddl_job":
-			z.DBNameInDDLJob, err = dc.ReadString()
-			if err != nil {
-				err = msgp.WrapError(err, "DBNameInDDLJob")
-				return
-			}
 		case "schema_id":
 			z.SchemaID, err = dc.ReadInt64()
 			if err != nil {
@@ -290,9 +278,9 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 27
+	// map header, size 25
 	// write "id"
-	err = en.Append(0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
+	err = en.Append(0xde, 0x0, 0x19, 0xa2, 0x69, 0x64)
 	if err != nil {
 		return
 	}
@@ -309,26 +297,6 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 	err = en.WriteByte(z.Type)
 	if err != nil {
 		err = msgp.WrapError(err, "Type")
-		return
-	}
-	// write "table_name_in_ddl_job"
-	err = en.Append(0xb5, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x5f, 0x69, 0x6e, 0x5f, 0x64, 0x64, 0x6c, 0x5f, 0x6a, 0x6f, 0x62)
-	if err != nil {
-		return
-	}
-	err = en.WriteString(z.TableNameInDDLJob)
-	if err != nil {
-		err = msgp.WrapError(err, "TableNameInDDLJob")
-		return
-	}
-	// write "db_name_in_ddl_job"
-	err = en.Append(0xb2, 0x64, 0x62, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x5f, 0x69, 0x6e, 0x5f, 0x64, 0x64, 0x6c, 0x5f, 0x6a, 0x6f, 0x62)
-	if err != nil {
-		return
-	}
-	err = en.WriteString(z.DBNameInDDLJob)
-	if err != nil {
-		err = msgp.WrapError(err, "DBNameInDDLJob")
 		return
 	}
 	// write "schema_id"
@@ -616,19 +584,13 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 // MarshalMsg implements msgp.Marshaler
 func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 27
+	// map header, size 25
 	// string "id"
-	o = append(o, 0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
+	o = append(o, 0xde, 0x0, 0x19, 0xa2, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.ID)
 	// string "type"
 	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
 	o = msgp.AppendByte(o, z.Type)
-	// string "table_name_in_ddl_job"
-	o = append(o, 0xb5, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x5f, 0x69, 0x6e, 0x5f, 0x64, 0x64, 0x6c, 0x5f, 0x6a, 0x6f, 0x62)
-	o = msgp.AppendString(o, z.TableNameInDDLJob)
-	// string "db_name_in_ddl_job"
-	o = append(o, 0xb2, 0x64, 0x62, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x5f, 0x69, 0x6e, 0x5f, 0x64, 0x64, 0x6c, 0x5f, 0x6a, 0x6f, 0x62)
-	o = msgp.AppendString(o, z.DBNameInDDLJob)
 	// string "schema_id"
 	o = append(o, 0xa9, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.SchemaID)
@@ -750,18 +712,6 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 			z.Type, bts, err = msgp.ReadByteBytes(bts)
 			if err != nil {
 				err = msgp.WrapError(err, "Type")
-				return
-			}
-		case "table_name_in_ddl_job":
-			z.TableNameInDDLJob, bts, err = msgp.ReadStringBytes(bts)
-			if err != nil {
-				err = msgp.WrapError(err, "TableNameInDDLJob")
-				return
-			}
-		case "db_name_in_ddl_job":
-			z.DBNameInDDLJob, bts, err = msgp.ReadStringBytes(bts)
-			if err != nil {
-				err = msgp.WrapError(err, "DBNameInDDLJob")
 				return
 			}
 		case "schema_id":
@@ -1007,7 +957,7 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 
 // Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
 func (z *PersistedDDLEvent) Msgsize() (s int) {
-	s = 3 + 3 + msgp.Int64Size + 5 + msgp.ByteSize + 22 + msgp.StringPrefixSize + len(z.TableNameInDDLJob) + 19 + msgp.StringPrefixSize + len(z.DBNameInDDLJob) + 10 + msgp.Int64Size + 9 + msgp.Int64Size + 12 + msgp.StringPrefixSize + len(z.SchemaName) + 11 + msgp.StringPrefixSize + len(z.TableName) + 16 + msgp.Int64Size + 15 + msgp.Int64Size + 18 + msgp.StringPrefixSize + len(z.ExtraSchemaName) + 17 + msgp.StringPrefixSize + len(z.ExtraTableName) + 11 + msgp.ArrayHeaderSize + (len(z.SchemaIDs) * (msgp.Int64Size)) + 13 + msgp.ArrayHeaderSize
+	s = 3 + 3 + msgp.Int64Size + 5 + msgp.ByteSize + 10 + msgp.Int64Size + 9 + msgp.Int64Size + 12 + msgp.StringPrefixSize + len(z.SchemaName) + 11 + msgp.StringPrefixSize + len(z.TableName) + 16 + msgp.Int64Size + 15 + msgp.Int64Size + 18 + msgp.StringPrefixSize + len(z.ExtraSchemaName) + 17 + msgp.StringPrefixSize + len(z.ExtraTableName) + 11 + msgp.ArrayHeaderSize + (len(z.SchemaIDs) * (msgp.Int64Size)) + 13 + msgp.ArrayHeaderSize
 	for za0002 := range z.SchemaNames {
 		s += msgp.StringPrefixSize + len(z.SchemaNames[za0002])
 	}

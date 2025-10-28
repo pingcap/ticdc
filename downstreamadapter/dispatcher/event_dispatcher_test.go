@@ -86,7 +86,8 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		common.Ts(0), // startTs
 		1,            // schemaID
 		NewSchemaIDToDispatchers(),
-		false,
+		false,        // skipSyncpointAtStartTs
+		false,        // skipDMLAsStartTs
 		common.Ts(0), // pdTs
 		sink,
 		sharedInfo,
@@ -804,7 +805,8 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		common.Ts(0), // startTs
 		1,            // schemaID
 		NewSchemaIDToDispatchers(),
-		false,
+		false,        // skipSyncpointAtStartTs
+		false,        // skipDMLAsStartTs
 		common.Ts(0), // pdTs
 		sink,
 		sharedInfo,
@@ -851,4 +853,155 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		require.Fail(t, "Expected error to be reported within 1 second")
 	}
+}
+
+// TestDispatcher_SkipDMLAsStartTs_FilterCorrectly tests DML filtering during DDL crash recovery.
+// When skipDMLAsStartTs=true and startTs=99, DML events at commitTs=100 (startTs+1) should be skipped.
+func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t(id int primary key, v int)")
+
+	// Create DML events with different commitTs
+	dmlEvent99 := helper.DML2Event("test", "t", "insert into t values(1, 1)")
+	dmlEvent99.CommitTs = 99
+	dmlEvent99.Length = 1
+
+	dmlEvent100 := helper.DML2Event("test", "t", "insert into t values(2, 2)")
+	dmlEvent100.CommitTs = 100
+	dmlEvent100.Length = 1
+
+	dmlEvent101 := helper.DML2Event("test", "t", "insert into t values(3, 3)")
+	dmlEvent101.CommitTs = 101
+	dmlEvent101.Length = 1
+
+	mockSink := sink.NewMockSink(common.MysqlSinkType)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	// Create dispatcher with skipDMLAsStartTs=true, startTs=99
+	// This simulates DDL crash recovery where:
+	// - DDL commitTs = 100
+	// - We start from ddlTs-1 = 99
+	// - Need to skip DML at commitTs = 100 (already written before crash)
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	sharedInfo := NewSharedInfo(
+		common.NewChangefeedID(common.DefaultKeyspace),
+		"system",
+		false,
+		false,
+		nil,
+		nil,
+		&syncpoint.SyncPointConfig{
+			SyncPointInterval:  time.Duration(5 * time.Second),
+			SyncPointRetention: time.Duration(10 * time.Minute),
+		},
+		false,
+		make(chan TableSpanStatusWithSeq, 128),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		make(chan error, 1),
+	)
+
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(99), // startTs = 99 (ddlTs - 1)
+		1,             // schemaID
+		NewSchemaIDToDispatchers(),
+		false, // skipSyncpointAtStartTs
+		true,  // skipDMLAsStartTs = true (KEY: enable DML filtering)
+		common.Ts(99),
+		mockSink,
+		sharedInfo,
+		false,
+		&redoTs,
+	)
+
+	nodeID := node.NewID()
+
+	// Test 1: DML at commitTs=99 should NOT be skipped (less than startTs+1)
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent99)}, func() {})
+	require.True(t, block)
+	require.Equal(t, 1, len(mockSink.GetDMLs()), "DML at commitTs=99 should be processed")
+	mockSink.FlushDMLs()
+
+	// Test 2: DML at commitTs=100 SHOULD be skipped (equals startTs+1)
+	// This is the critical test - DML at ddlTs should be filtered
+	dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent100)}, func() {})
+	// Note: block return value may be false when event is skipped
+	require.Equal(t, 0, len(mockSink.GetDMLs()), "DML at commitTs=100 should be skipped (already written before crash)")
+
+	// Test 3: DML at commitTs=101 should NOT be skipped (greater than startTs+1)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent101)}, func() {})
+	require.True(t, block)
+	require.Equal(t, 1, len(mockSink.GetDMLs()), "DML at commitTs=101 should be processed")
+	mockSink.FlushDMLs()
+
+	// Verify checkpoint advances correctly
+	checkpointTs, isEmpty := dispatcher.GetCheckpointTs(), false
+	require.False(t, isEmpty)
+	require.Greater(t, checkpointTs, uint64(99), "Checkpoint should advance beyond startTs")
+}
+
+// TestDispatcher_SkipDMLAsStartTs_Disabled tests that DML is not filtered when skipDMLAsStartTs=false
+func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t(id int primary key, v int)")
+
+	// Create DML event at commitTs=100
+	dmlEvent100 := helper.DML2Event("test", "t", "insert into t values(2, 2)")
+	dmlEvent100.CommitTs = 100
+	dmlEvent100.Length = 1
+
+	mockSink := sink.NewMockSink(common.MysqlSinkType)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	// Create dispatcher with skipDMLAsStartTs=false
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	sharedInfo := NewSharedInfo(
+		common.NewChangefeedID(common.DefaultKeyspace),
+		"system",
+		false,
+		false,
+		nil,
+		nil,
+		&syncpoint.SyncPointConfig{
+			SyncPointInterval:  time.Duration(5 * time.Second),
+			SyncPointRetention: time.Duration(10 * time.Minute),
+		},
+		false,
+		make(chan TableSpanStatusWithSeq, 128),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		make(chan error, 1),
+	)
+
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(99), // startTs = 99
+		1,
+		NewSchemaIDToDispatchers(),
+		false, // skipSyncpointAtStartTs
+		false, // skipDMLAsStartTs = false (KEY: DML filtering disabled)
+		common.Ts(99),
+		mockSink,
+		sharedInfo,
+		false,
+		&redoTs,
+	)
+
+	nodeID := node.NewID()
+
+	// DML at commitTs=100 should NOT be skipped when skipDMLAsStartTs=false
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent100)}, func() {})
+	require.True(t, block)
+	require.Equal(t, 1, len(mockSink.GetDMLs()), "DML at commitTs=100 should be processed when skipDMLAsStartTs=false")
 }

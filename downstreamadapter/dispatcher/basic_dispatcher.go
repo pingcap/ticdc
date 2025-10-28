@@ -45,7 +45,7 @@ type DispatcherService interface {
 	GetFilterConfig() *eventpb.FilterConfig
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
-	GetSkipSyncpointSameAsStartTs() bool
+	GetSkipSyncpointAtStartTs() bool
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
@@ -63,7 +63,8 @@ type Dispatcher interface {
 	SetSeq(seq uint64)
 	SetStartTs(startTs uint64)
 	SetCurrentPDTs(currentPDTs uint64)
-	SetSkipSyncpointSameAsStartTs(skipSyncpointSameAsStartTs bool)
+	SetSkipSyncpointAtStartTs(skipSyncpointAtStartTs bool)
+	SetSkipDMLAsStartTs(skipDMLAsStartTs bool)
 	SetComponentStatus(status heartbeatpb.ComponentState)
 	GetRemovingStatus() bool
 	GetHeartBeatInfo(h *HeartBeatInfo)
@@ -119,13 +120,21 @@ type BasicDispatcher struct {
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
 	startTs uint64
 
-	// skipSyncpointSameAsStartTs is used to determine whether we need to skip the syncpoint event which is same as the startTs
-	// skipSyncpointSameAsStartTs only maybe true in MysqlSink.
+	// skipSyncpointAtStartTs is used to determine whether we need to skip the syncpoint event which is same as the startTs
+	// skipSyncpointAtStartTs only maybe true in MysqlSink.
 	// it's used to deal with the corner case when ddl commitTs is same as the syncpointTs commitTs
 	// For example, syncpointInterval = 10, ddl commitTs = 20, syncpointTs = 20
-	// case 1: ddl and syncpoint is flushed successfully, and then restart --> startTs = 20, skipSyncpointSameAsStartTs = true
-	// case 2: ddl is flushed successfully, syncpointTs not and then restart --> startTs = 20, skipSyncpointSameAsStartTs = false --> receive syncpoint first
-	skipSyncpointSameAsStartTs bool
+	// case 1: ddl and syncpoint is flushed successfully, and then restart --> startTs = 20, skipSyncpointAtStartTs = true
+	// case 2: ddl is flushed successfully, syncpointTs not and then restart --> startTs = 20, skipSyncpointAtStartTs = false --> receive syncpoint first
+	skipSyncpointAtStartTs bool
+	// skipDMLAsStartTs indicates whether to skip DML events at startTs+1 timestamp.
+	// When true, the dispatcher should filter out DML events with commitTs == startTs+1, but keep DDL events.
+	// This flag is set to true ONLY when is_syncpoint=false AND finished=0 in ddl-ts table (non-syncpoint DDL not finished).
+	// In this case, we return startTs = ddlTs-1 to replay the DDL, and skip the already-written DML at ddlTs
+	// to avoid duplicate writes while ensuring the DDL is replayed.
+	// Note: When is_syncpoint=true AND finished=0 (DDL finished but syncpoint not finished),
+	// skipDMLAsStartTs is false because the DDL is already completed and DML should be processed normally.
+	skipDMLAsStartTs bool
 	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
 	// to determine whether the insert event should use `Replace` or just `Insert`
@@ -182,32 +191,34 @@ func NewBasicDispatcher(
 	startTs uint64,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
-	skipSyncpointSameAsStartTs bool,
+	skipSyncpointAtStartTs bool,
+	skipDMLAsStartTs bool,
 	currentPDTs uint64,
 	mode int64,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                         id,
-		tableSpan:                  tableSpan,
-		isCompleteTable:            common.IsCompleteSpan(tableSpan),
-		startTs:                    startTs,
-		skipSyncpointSameAsStartTs: skipSyncpointSameAsStartTs,
-		sharedInfo:                 sharedInfo,
-		sink:                       sink,
-		componentStatus:            newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		resolvedTs:                 startTs,
-		isRemoving:                 atomic.Bool{},
-		duringHandleEvents:         atomic.Bool{},
-		blockEventStatus:           BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:              NewTableProgress(),
-		schemaID:                   schemaID,
-		schemaIDToDispatchers:      schemaIDToDispatchers,
-		resendTaskMap:              newResendTaskMap(),
-		creationPDTs:               currentPDTs,
-		mode:                       mode,
-		BootstrapState:             BootstrapFinished,
+		id:                     id,
+		tableSpan:              tableSpan,
+		isCompleteTable:        common.IsCompleteSpan(tableSpan),
+		startTs:                startTs,
+		skipSyncpointAtStartTs: skipSyncpointAtStartTs,
+		skipDMLAsStartTs:       skipDMLAsStartTs,
+		sharedInfo:             sharedInfo,
+		sink:                   sink,
+		componentStatus:        newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		resolvedTs:             startTs,
+		isRemoving:             atomic.Bool{},
+		duringHandleEvents:     atomic.Bool{},
+		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:          NewTableProgress(),
+		schemaID:               schemaID,
+		schemaIDToDispatchers:  schemaIDToDispatchers,
+		resendTaskMap:          newResendTaskMap(),
+		creationPDTs:           currentPDTs,
+		mode:                   mode,
+		BootstrapState:         BootstrapFinished,
 	}
 
 	return dispatcher
@@ -396,6 +407,19 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			if dml.Len() == 0 {
 				continue
 			}
+
+			// Skip DML events at startTs+1 when skipDMLAsStartTs is true.
+			// This handles the corner case where a DDL at ts=X crashed after writing DML but before marking finished.
+			// We return startTs=X-1 to replay the DDL, but need to skip the already-written DML at ts=X (startTs+1).
+			if d.skipDMLAsStartTs && event.GetCommitTs() == d.startTs+1 {
+				log.Info("skip DML event at startTs+1 due to DDL crash recovery",
+					zap.Stringer("dispatcher", d.id),
+					zap.Uint64("startTs", d.startTs),
+					zap.Uint64("dmlCommitTs", event.GetCommitTs()),
+					zap.Uint64("seq", event.GetSeq()))
+				continue
+			}
+
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
 			dml.AddPostFlushFunc(func() {

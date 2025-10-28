@@ -364,18 +364,19 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	return nil
 }
 
-func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
+func (e *DispatcherManager) getTableRecoveryInfoFromMysqlSink(tableIds, startTsList []int64, removeDDLTs bool) ([]int64, []bool, []bool, error) {
 	var (
 		newStartTsList []int64
 		err            error
 	)
-	skipSyncpointSameAsStartTsList := make([]bool, len(startTsList))
+	skipSyncpointAtStartTsList := make([]bool, len(startTsList))
+	skipDMLAsStartTsList := make([]bool, len(startTsList))
 	if e.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, skipSyncpointSameAsStartTsList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
+		newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err = e.sink.(*mysql.Sink).GetTableRecoveryInfo(tableIds, startTsList, removeDDLTs)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		log.Info("calculate real startTs for dispatchers",
+		log.Info("get table recovery info for dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Any("receiveStartTs", startTsList),
 			zap.Any("realStartTs", newStartTsList),
@@ -384,7 +385,7 @@ func (e *DispatcherManager) getStartTsFromMysqlSink(tableIds, startTsList []int6
 	} else {
 		newStartTsList = startTsList
 	}
-	return newStartTsList, skipSyncpointSameAsStartTsList, nil
+	return newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, nil
 }
 
 // removeDDLTs means we don't need to check startTs from ddl_ts_table when sink is mysql-class,
@@ -401,19 +402,18 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		return nil
 	}
 
-	// When sink is mysql-class, we need to query the startTs from the downstream.
-	// Because we have to sync data at least from the last ddl commitTs to avoid write old data to new schema
-	// While for other type sink, they don't have the problem of writing old data to new schema,
-	// so we just return the startTs we get.
-	// Besides, we batch the creation for the dispatchers,
-	// mainly because we need to batch the query for startTs when sink is mysql-class to reduce the time cost.
+	// When sink is mysql-class, we need to query DDL crash recovery information from the downstream.
+	// This includes:
+	// 1. The actual startTs to use (must be at least from the last DDL commitTs to avoid writing old data to new schema)
+	// 2. Whether to skip syncpoint events at startTs (skipSyncpointAtStartTs)
+	// 3. Whether to skip DML events at startTs+1 (skipDMLAsStartTs)
 	//
-	// When we enable syncpoint, we also need to know the last ddl commitTs whether is a syncpoint event.
-	// because the commitTs of a syncpoint event can be the same as a ddl event
-	// If there is a ddl event and a syncpoint event at the same time, we ensure the syncpoint event always after the ddl event.
-	// So we need to know whether the commitTs is from a syncpoint event or a ddl event,
-	// to decide whether we need to send generate the syncpoint event of this commitTs to downstream.
-	newStartTsList, skipSyncpointSameAsStartTsList, err := e.getStartTsFromMysqlSink(tableIds, startTsList, removeDDLTs)
+	// For other sink types, they don't have the problem of writing old data to new schema,
+	// so we just return the input startTs with all skip flags set to false.
+	//
+	// We batch the creation for the dispatchers to batch the recovery info query when sink is mysql-class,
+	// which reduces the time cost.
+	newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := e.getTableRecoveryInfoFromMysqlSink(tableIds, startTsList, removeDDLTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -439,7 +439,8 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			uint64(newStartTsList[idx]),
 			schemaIds[idx],
 			e.schemaIDToDispatchers,
-			skipSyncpointSameAsStartTsList[idx],
+			skipSyncpointAtStartTsList[idx],
+			skipDMLAsStartTsList[idx],
 			currentPdTs,
 			e.sink,
 			e.sharedInfo,
@@ -781,8 +782,9 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		fakeStartTs, // real startTs will be calculated later.
 		schemaID,
 		e.schemaIDToDispatchers,
-		false,
-		0, // currentPDTs will be calculated later.
+		false, // skipSyncpointAtStartTs
+		false, // skipDMLAsStartTs will be set later after calculating real startTs
+		0,     // currentPDTs will be calculated later.
 		e.sink,
 		e.sharedInfo,
 		e.RedoEnable,
