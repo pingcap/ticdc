@@ -35,7 +35,7 @@ function generate_ddl_workload() {
 		);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 		# Store table name for data insertion thread
-		echo "$table_name" >> "$WORK_DIR/created_tables.txt"
+		echo "$table_name" >>"$WORK_DIR/created_tables.txt"
 
 		table_counter=$((table_counter + 1))
 
@@ -75,7 +75,6 @@ function generate_data_insertion() {
 
 	echo "Data insertion workload completed"
 }
-
 
 # Function to simulate crashes
 function simulate_crashes() {
@@ -160,7 +159,7 @@ function run() {
 	);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# Run concurrent workloads with crash simulation
-	test_duration=120  # 120 seconds of intensive testing
+	test_duration=120 # 120 seconds of intensive testing
 
 	# Initialize created tables file
 	rm -f "$WORK_DIR/created_tables.txt"
