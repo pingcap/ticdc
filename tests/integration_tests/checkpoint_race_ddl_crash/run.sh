@@ -30,7 +30,7 @@ function run() {
 	*) SINK_URI="mysql://root@127.0.0.1:3306/" ;;
 	esac
 
-	do_retry 5 3 cdc_cli_changefeed changefeed create --sink-uri="$SINK_URI" -c "test"
+	do_retry 5 3 cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
