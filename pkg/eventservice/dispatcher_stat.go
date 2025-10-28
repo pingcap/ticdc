@@ -438,6 +438,7 @@ func (c *changefeedStatus) updateDispatchersMinSyncpointTs(ts uint64) {
 	if ts == 0 {
 		return
 	}
+
 	if ts > c.dispatchersMinSyncpointTs.Load() {
 		return
 	}
