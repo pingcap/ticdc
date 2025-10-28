@@ -19,6 +19,15 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR
 	cd $WORK_DIR
 
+	# Main test execution
+	echo "=== Starting checkpoint race condition stress test ==="
+
+	# Start initial CDC server
+	start_cdc_server "initial"
+
+	# Wait for initial stabilization
+	sleep 5
+
 	TOPIC_NAME="ticdc-checkpoint-race-ddl-crash-$RANDOM"
 	case $SINK_TYPE in
 	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=3" ;;
@@ -144,14 +153,6 @@ function run() {
 		echo "Crash simulation completed with $crash_count crashes"
 	}
 
-	# Main test execution
-	echo "=== Starting checkpoint race condition stress test ==="
-
-	# Start initial CDC server
-	start_cdc_server "initial"
-
-	# Wait for initial stabilization
-	sleep 5
 
 	# Run concurrent workloads with crash simulation
 	test_duration=120  # 120 seconds of intensive testing
