@@ -504,12 +504,13 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
 	commitTsList := make([]uint64, 0)
 	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
-
-		d.changefeedStat.updateDispatchersMinSyncpointTs(d.nextSyncPoint.Load())
-
 		commitTsList = append(commitTsList, d.nextSyncPoint.Load())
+		d.lastSyncPointTs.Store(d.nextSyncPoint.Load())
+
 		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint.Load()).Add(d.syncPointInterval)))
 	}
+	d.changefeedStat.updateDispatchersMinSyncpointTs()
+
 	for len(commitTsList) > 0 {
 		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
 		newCommitTsList := commitTsList
@@ -571,6 +572,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if task.lastScannedCommitTs.Load() > task.changefeedStat.dispatchersMinSyncpointTs.Load() {
+		log.Debug("skip scan because the last scanned commit ts is greater than the dispatchers min syncpoint ts", zap.Stringer("dispatcher", task.id), zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("dispatchersMinSyncpointTs", task.changefeedStat.dispatchersMinSyncpointTs.Load()))
 		return
 	}
 

@@ -71,6 +71,8 @@ type dispatcherStat struct {
 	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
 
+	lastSyncPointTs atomic.Uint64
+
 	// =============================================================================
 	// ================== below are fields need copied when reset ==================
 
@@ -414,6 +416,8 @@ func (c *resolvedTsCache) reset() {
 	c.len = 0
 }
 
+const updateDispatchersMinSyncpointTsInterval = time.Millisecond * 50
+
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
 
@@ -422,8 +426,9 @@ type changefeedStatus struct {
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 
 	// This lock is used to protect the dispatchersMinSyncpointTs.
-	mu                        sync.Mutex
-	dispatchersMinSyncpointTs atomic.Uint64
+	mu                                      sync.Mutex
+	dispatchersMinSyncpointTs               atomic.Uint64
+	lastUpdateDispatchersMinSyncpointTsTime atomic.Time
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
@@ -431,23 +436,43 @@ func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 		changefeedID: changefeedID,
 	}
 	res.dispatchersMinSyncpointTs.Store(math.MaxUint64)
+	res.lastUpdateDispatchersMinSyncpointTsTime.Store(time.Now())
 	return res
 }
 
-func (c *changefeedStatus) updateDispatchersMinSyncpointTs(ts uint64) {
-	if ts == 0 {
+func (c *changefeedStatus) updateDispatchersMinSyncpointTs() {
+	now := time.Now()
+
+	if now.Sub(c.lastUpdateDispatchersMinSyncpointTsTime.Load()) < updateDispatchersMinSyncpointTsInterval {
 		return
 	}
 
-	if ts > c.dispatchersMinSyncpointTs.Load() {
+	minTs := uint64(math.MaxUint64)
+	c.dispatchers.Range(func(key, value any) bool {
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		ts := dispatcher.lastSyncPointTs.Load()
+		if ts < minTs {
+			minTs = ts
+		}
+		return true
+	})
+
+	if minTs == uint64(math.MaxUint64) {
+		return
+	}
+
+	c.lastUpdateDispatchersMinSyncpointTsTime.Store(now)
+
+	if minTs > c.dispatchersMinSyncpointTs.Load() {
 		return
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if ts < c.dispatchersMinSyncpointTs.Load() {
-		c.dispatchersMinSyncpointTs.Store(ts)
+	if minTs < c.dispatchersMinSyncpointTs.Load() {
+		c.dispatchersMinSyncpointTs.Store(minTs)
 	}
+
 }
 
 func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {
