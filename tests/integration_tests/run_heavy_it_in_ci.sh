@@ -30,39 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
 	# G01
-	'api_v2 ddl_for_split_tables_with_random_move_table'
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
 	# G02
-	'availability ddl_for_split_tables_with_failover'
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
 	# G03
-	'cdc move_table'
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
 	# G04
-	'syncpoint syncpoint_check_ts'
-	# G05
-	'ddl_for_split_tables_with_merge_and_split random_drop_message'
-	# G06
-	'ddl_for_split_tables_with_random_merge_and_split'
-	# G07
-	# 'consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
-	'complex_transaction'
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
+	# G01
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
+	# G02
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
+	# G03
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
 	# G08
-	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
-	# G09
-	'resolve_lock merge_table drop_many_tables'
-	# G10
-	# 'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
-	'multi_changefeeds ddl_wait'
-	# G11
-	'ddl_reentrant force_replicate_table multi_source'
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
+	# G01
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
+	# G02
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
+	# G03
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
 	# G12
-	'tidb_mysql_test ddl_with_random_move_table'
-	# G13
-	'fail_over region_merge'
-	# G14
-	'fail_over_ddl_mix'
-	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
+	# G01
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
+	# G02
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
+	# G03
+	'checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash checkpoint_race_ddl_crash'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
