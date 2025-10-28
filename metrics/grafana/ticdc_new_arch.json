@@ -1447,7 +1447,7 @@
             },
             {
               "exemplar": true,
-              "expr": "ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\", changefeed=~\"$changefeed\"}",
+              "expr": "ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1545,7 +1545,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_dispatchermanager_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\", changefeed=~\"$changefeed\"}",
+              "expr": "ticdc_dispatchermanager_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1643,7 +1643,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_dispatchermanager_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\", changefeed=~\"$changefeed\"}",
+              "expr": "ticdc_dispatchermanager_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -4357,7 +4357,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
+              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -10661,7 +10661,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\", changefeed=~\"$changefeed\"}",
+              "expr": "ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -13791,7 +13791,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_outgoing_byte_rate{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, broker)",
+              "expr": "sum(ticdc_sink_kafka_producer_outgoing_byte_rate{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
