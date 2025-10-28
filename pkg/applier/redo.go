@@ -63,7 +63,7 @@ type RedoApplier struct {
 	appliedDDLCount uint64
 
 	eventsGroup     map[commonType.TableID]*eventsGroup
-	tableDDLTs      map[commonType.TableID]int64
+	tableDDLTs      map[commonType.TableID]ddlTs
 	appliedLogCount uint64
 
 	errCh chan error
@@ -74,7 +74,7 @@ func NewRedoApplier(cfg *RedoApplierConfig) *RedoApplier {
 	return &RedoApplier{
 		cfg:         cfg,
 		errCh:       make(chan error, 1024),
-		tableDDLTs:  make(map[commonType.TableID]int64),
+		tableDDLTs:  make(map[commonType.TableID]ddlTs),
 		eventsGroup: make(map[commonType.TableID]*eventsGroup),
 	}
 }
@@ -97,16 +97,19 @@ func (rac *RedoApplierConfig) toLogReaderConfig() (string, *reader.LogReaderConf
 	return uri.Scheme, cfg, nil
 }
 
-func (ra *RedoApplier) getTableDDLTs(tableID commonType.TableID, checkpointTs int64) int64 {
+func (ra *RedoApplier) getTableDDLTs(tableID commonType.TableID, checkpointTs int64) ddlTs {
 	// we have to refactor redo apply to tolerate DDL execution errors.
 	// Besides, we have to query ddl_ts to get the correct checkpointTs to avoid inconsistency.
 	ts, ok := ra.tableDDLTs[tableID]
 	if !ok {
-		newStartTsList, _, err := ra.mysqlSink.GetStartTsList([]int64{tableID}, []int64{checkpointTs}, false)
+		newStartTsList, _, skipDMLAsStartTsList, err := ra.mysqlSink.GetTableRecoveryInfo([]int64{tableID}, []int64{checkpointTs}, false)
 		if err != nil || len(newStartTsList) != 1 {
 			log.Panic("get startTs list failed", zap.Any("tableID", tableID), zap.Any("newStartTsList", newStartTsList), zap.Error(err))
 		}
-		ra.tableDDLTs[tableID] = newStartTsList[0]
+		ra.tableDDLTs[tableID] = ddlTs{
+			ts:      newStartTsList[0],
+			skipDML: skipDMLAsStartTsList[0],
+		}
 		log.Info("calculate real startTs for redo apply",
 			zap.Stringer("changefeedID", ra.rd.GetChangefeedID()),
 			zap.Int64("tableID", tableID),
@@ -189,16 +192,16 @@ func (ra *RedoApplier) applyDDL(
 			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
 			return true
 		}
-		ts := ra.getTableDDLTs(ddl.TableName.TableID, int64(checkpointTs))
-		if ts >= int64(ddl.DDL.CommitTs) {
+		ddlTs := ra.getTableDDLTs(ddl.TableName.TableID, int64(checkpointTs))
+		if ddlTs.ts >= int64(ddl.DDL.CommitTs) {
 			return true
 		}
-		if ddl.DDL.CommitTs == max(uint64(ts), checkpointTs) {
-			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
-				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
-				return true
-			}
-		}
+		// if ddl.DDL.CommitTs == max(uint64(ddlTs.ts), checkpointTs) {
+		// 	if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
+		// 		log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
+		// 		return true
+		// 	}
+		// }
 		return false
 	}
 	if shouldSkip() {
@@ -233,10 +236,13 @@ func (ra *RedoApplier) applyRow(
 			zap.Any("resolvedTs", ra.eventsGroup[tableID].highWatermark))
 	}
 
-	ts := ra.getTableDDLTs(tableID, int64(checkpointTs))
-	if ts >= int64(row.Row.CommitTs) {
-		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", ts), zap.Any("row", row))
+	ddlTs := ra.getTableDDLTs(tableID, int64(checkpointTs))
+	if ddlTs.ts >= int64(row.Row.CommitTs) {
+		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", ddlTs.ts), zap.Any("row", row))
 		return nil
+	}
+	if ddlTs.skipDML && int64(row.Row.CommitTs)-1 == ddlTs.ts {
+		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", ddlTs.ts), zap.Any("row", row))
 	}
 
 	ra.eventsGroup[tableID].append(row.ToDMLEvent())

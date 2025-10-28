@@ -156,3 +156,8 @@ func (g *eventsGroup) getEvents() []*commonEvent.DMLEvent {
 	g.events = nil
 	return result
 }
+
+type ddlTs struct {
+	ts      int64
+	skipDML bool
+}
