@@ -44,6 +44,9 @@ type Coordinator interface {
 	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, overwriteCheckpointTs bool) error
 	// UpdateChangefeed updates a changefeed
 	UpdateChangefeed(ctx context.Context, change *config.ChangeFeedInfo) error
+	// RequestResolvedTsFromLogCoordinator requests the log coordinator to report the resolved ts of the changefeed,
+	// and coordinator will update the changefeed status after receiving the resolved ts from log coordinator.
+	RequestResolvedTsFromLogCoordinator(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName)
 
 	Bootstrapped() bool
 }

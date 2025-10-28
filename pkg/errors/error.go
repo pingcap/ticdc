@@ -55,7 +55,7 @@ var (
 		errors.RFCCodeText("CDC:ErrMetaListDatabases"),
 	)
 	ErrDDLSchemaNotFound = errors.Normalize(
-		"cannot find mysql.tidb_ddl_job schema",
+		"cannot find schema: %s",
 		errors.RFCCodeText("CDC:ErrDDLSchemaNotFound"),
 	)
 	ErrPDEtcdAPIError = errors.Normalize(
@@ -361,7 +361,7 @@ var (
 		errors.RFCCodeText("CDC:ErrInvalidKeyspace"),
 	)
 	ErrKeyspaceNotFound = errors.Normalize(
-		"keyspace not found",
+		"keyspace not found: %d",
 		errors.RFCCodeText("CDC:ErrKeyspaceNotFound"),
 	)
 	ErrKeyspaceIDInvalid = errors.Normalize(
@@ -569,6 +569,10 @@ var (
 	ErrUpdateGCBarrierFailed = errors.Normalize(
 		"updating gc barrier failed",
 		errors.RFCCodeText("CDC:ErrUpdateGCBarrierFailed"),
+	)
+	ErrGetGCBarrierFailed = errors.Normalize(
+		"get gc barrier failed",
+		errors.RFCCodeText("CDC:ErrGetGCBarrierFailed"),
 	)
 	ErrLoadKeyspaceFailed = errors.Normalize(
 		"loading keyspace failed",

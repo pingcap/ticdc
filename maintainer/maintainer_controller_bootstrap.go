@@ -275,6 +275,7 @@ func (c *Controller) initializeComponents(
 	c.barrier = NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, common.DefaultMode)
 
 	// Start scheduler
+	c.taskHandlesMu.Lock()
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
 
 	if c.enableRedo {
@@ -282,6 +283,7 @@ func (c *Controller) initializeComponents(
 	}
 	// Start operator controller
 	c.taskHandles = append(c.taskHandles, c.taskPool.Submit(c.operatorController, time.Now()))
+	c.taskHandlesMu.Unlock()
 }
 
 func (c *Controller) prepareSchemaInfoResponse(
@@ -358,9 +360,10 @@ func addToWorkingTaskMap(
 // findHoles returns an array of Span that are not covered in the range
 func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication], totalSpan *heartbeatpb.TableSpan) []*heartbeatpb.TableSpan {
 	lastSpan := &heartbeatpb.TableSpan{
-		TableID:  totalSpan.TableID,
-		StartKey: totalSpan.StartKey,
-		EndKey:   totalSpan.StartKey,
+		TableID:    totalSpan.TableID,
+		StartKey:   totalSpan.StartKey,
+		EndKey:     totalSpan.StartKey,
+		KeyspaceID: totalSpan.KeyspaceID,
 	}
 	var holes []*heartbeatpb.TableSpan
 	// table span is sorted
@@ -369,9 +372,10 @@ func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplic
 		if ord < 0 {
 			// Find a hole.
 			holes = append(holes, &heartbeatpb.TableSpan{
-				TableID:  totalSpan.TableID,
-				StartKey: lastSpan.EndKey,
-				EndKey:   current.StartKey,
+				TableID:    totalSpan.TableID,
+				StartKey:   lastSpan.EndKey,
+				EndKey:     current.StartKey,
+				KeyspaceID: totalSpan.KeyspaceID,
 			})
 		} else if ord > 0 {
 			log.Panic("map is out of order",
@@ -385,9 +389,10 @@ func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplic
 	// the lastSpan not reach the totalSpan end
 	if !bytes.Equal(lastSpan.EndKey, totalSpan.EndKey) {
 		holes = append(holes, &heartbeatpb.TableSpan{
-			TableID:  totalSpan.TableID,
-			StartKey: lastSpan.EndKey,
-			EndKey:   totalSpan.EndKey,
+			TableID:    totalSpan.TableID,
+			StartKey:   lastSpan.EndKey,
+			EndKey:     totalSpan.EndKey,
+			KeyspaceID: totalSpan.KeyspaceID,
 		})
 	}
 	return holes

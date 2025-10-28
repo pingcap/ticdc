@@ -18,13 +18,12 @@ import (
 	"math"
 	"sync"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
@@ -49,7 +48,7 @@ type ddlJobFetcher struct {
 	}
 
 	// cacheDDLEvent and advanceResolvedTs may be called concurrently
-	// the only gurantee is that when call advanceResolvedTs with ts, all ddl job with commit ts <= ts has been passed to cacheDDLEvent
+	// the only guarantee is that when call advanceResolvedTs with ts, all ddl job with commit ts <= ts has been passed to cacheDDLEvent
 	cacheDDLEvent     func(ddlEvent DDLJobWithCommitTs)
 	advanceResolvedTs func(resolvedTS uint64)
 
@@ -58,7 +57,7 @@ type ddlJobFetcher struct {
 	keyspaceID uint32
 
 	ddlTableInfo         *event.DDLTableInfo
-	onceInitddlTableInfo sync.Once
+	onceInitDDLTableInfo sync.Once
 }
 
 func newDDLJobFetcher(
@@ -69,7 +68,7 @@ func newDDLJobFetcher(
 	cacheDDLEvent func(ddlEvent DDLJobWithCommitTs),
 	advanceResolvedTs func(resolvedTS uint64),
 ) *ddlJobFetcher {
-	ddlJobFetcher := &ddlJobFetcher{
+	fetcher := &ddlJobFetcher{
 		ctx:               ctx,
 		subClient:         subClient,
 		cacheDDLEvent:     cacheDDLEvent,
@@ -77,10 +76,10 @@ func newDDLJobFetcher(
 		kvStorage:         kvStorage,
 		keyspaceID:        keyspaceID,
 	}
-	ddlJobFetcher.resolvedTsTracker.resolvedTsItemMap = make(map[logpuller.SubscriptionID]*resolvedTsItem)
-	ddlJobFetcher.resolvedTsTracker.resolvedTsHeap = heap.NewHeap[*resolvedTsItem]()
+	fetcher.resolvedTsTracker.resolvedTsItemMap = make(map[logpuller.SubscriptionID]*resolvedTsItem)
+	fetcher.resolvedTsTracker.resolvedTsHeap = heap.NewHeap[*resolvedTsItem]()
 
-	return ddlJobFetcher
+	return fetcher
 }
 
 func (p *ddlJobFetcher) run(startTs uint64) error {
@@ -123,16 +122,16 @@ func (p *ddlJobFetcher) tryAdvanceResolvedTs(subID logpuller.SubscriptionID, new
 	if !ok || minResolvedTsItem.resolvedTs == math.MaxUint64 {
 		log.Panic("should not happen")
 	}
-	// minResolvedTsItem may be 0, it it ok to send it because it will be filtered later.
+	// minResolvedTsItem may be 0, it's ok to send it because it will be filtered later.
 	// it is ok to send redundant resolved ts to advanceResolvedTs.
 	p.advanceResolvedTs(minResolvedTsItem.resolvedTs)
 }
 
 func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
-	for _, kv := range kvs {
-		job, err := p.unmarshalDDL(&kv)
+	for _, entry := range kvs {
+		job, err := p.unmarshalDDL(&entry)
 		if err != nil {
-			log.Fatal("unmarshal ddl failed", zap.Any("kv", kv), zap.Error(err))
+			log.Fatal("unmarshal ddl failed", zap.Any("entry", entry), zap.Error(err))
 		}
 
 		if job == nil {
@@ -142,19 +141,19 @@ func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
 		// cache ddl job in memory until the resolve ts pass its commit ts
 		p.cacheDDLEvent(DDLJobWithCommitTs{
 			Job:      job,
-			CommitTs: kv.CRTs,
+			CommitTs: entry.CRTs,
 		})
 	}
 	return false
 }
 
-// unmarshalDDL unmarshals a ddl job from a raw kv entry.
+// unmarshalDDL unmarshal a ddl job from a raw kv entry.
 func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, error) {
 	if rawKV.OpType != common.OpTypePut {
 		return nil, nil
 	}
 	if !event.IsLegacyFormatJob(rawKV) {
-		p.onceInitddlTableInfo.Do(func() {
+		p.onceInitDDLTableInfo.Do(func() {
 			if err := p.initDDLTableInfo(p.ctx, p.kvStorage); err != nil {
 				log.Fatal("init ddl table info failed", zap.Error(err))
 			}
@@ -179,7 +178,7 @@ func (p *ddlJobFetcher) initDDLTableInfo(ctx context.Context, kvStorage kv.Stora
 
 	dbInfos, err := snap.ListDatabases()
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMetaListDatabases, err)
+		return errors.WrapError(errors.ErrMetaListDatabases, err)
 	}
 
 	db, err := findDBByName(dbInfos, mysql.SystemDB)
@@ -231,8 +230,8 @@ func findDBByName(dbs []*model.DBInfo, name string) (*model.DBInfo, error) {
 			return db, nil
 		}
 	}
-	return nil, cerror.WrapError(
-		cerror.ErrDDLSchemaNotFound,
+	return nil, errors.WrapError(
+		errors.ErrDDLSchemaNotFound,
 		errors.Errorf("can't find schema %s", name))
 }
 
@@ -242,8 +241,8 @@ func findTableByName(tbls []*model.TableInfo, name string) (*model.TableInfo, er
 			return t, nil
 		}
 	}
-	return nil, cerror.WrapError(
-		cerror.ErrDDLSchemaNotFound,
+	return nil, errors.WrapError(
+		errors.ErrDDLSchemaNotFound,
 		errors.Errorf("can't find table %s", name))
 }
 
@@ -253,8 +252,8 @@ func findColumnByName(cols []*model.ColumnInfo, name string) (*model.ColumnInfo,
 			return c, nil
 		}
 	}
-	return nil, cerror.WrapError(
-		cerror.ErrDDLSchemaNotFound,
+	return nil, errors.WrapError(
+		errors.ErrDDLSchemaNotFound,
 		errors.Errorf("can't find column %s", name))
 }
 

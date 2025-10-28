@@ -231,7 +231,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	}
 
 	ctx := context.Background()
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, cfID.Keyspace())
 	if err != nil {
 		// BUG tenfyzhong 2025-09-11 17:29:08 how to process err
@@ -261,7 +261,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		}
 
 		ctx := context.Background()
-		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 		keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, cfID.Keyspace())
 		if err != nil {
 			// BUG tenfyzhong 2025-09-11 17:29:08 how to process err

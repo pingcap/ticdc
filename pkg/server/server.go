@@ -35,7 +35,7 @@ type Server interface {
 	GetCoordinator() (Coordinator, error)
 	IsCoordinator() bool
 
-	// GetCoordinatorInfo returns the coordinator server， it will be used when forward api request
+	// GetCoordinatorInfo returns the coordinator server, it will be used when forward api request
 	GetCoordinatorInfo(ctx context.Context) (*node.Info, error)
 
 	GetPdClient() pd.Client

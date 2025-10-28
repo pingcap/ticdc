@@ -694,6 +694,12 @@ type ChangeFeedStatus struct {
 	// TODO: remove this filed after we don't use ChangeFeedStatus to
 	// control processor. This is too ambiguous.
 	AdminJobType AdminJobType `json:"admin-job-type"`
+	// LastSyncedTs is the last synced max timestamp of the changefeed.
+	// It is used to indicate the progress of the changefeed.
+	// It is not stored in etcd.
+	LastSyncedTs uint64 `json:"-"`
+	// LogCoordinatorResolvedTs is the resolved timestamp from the log coordinator.
+	LogCoordinatorResolvedTs uint64 `json:"-"`
 }
 
 // Marshal returns json encoded string of ChangeFeedStatus, only contains necessary fields stored in storage

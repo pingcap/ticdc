@@ -38,9 +38,9 @@ mysql_groups=(
 	# G03
 	'cdc move_table'
 	# G04
-	'syncpoint syncpoint_check_ts '
+	'syncpoint syncpoint_check_ts'
 	# G05
-	'ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_merge_and_split random_drop_message'
 	# G06
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G07
@@ -52,9 +52,9 @@ mysql_groups=(
 	'resolve_lock merge_table drop_many_tables'
 	# G10
 	# 'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
-	'multi_changefeeds' 'ddl_wait'
+	'multi_changefeeds ddl_wait'
 	# G11
-	'ddl_reentrant force_replicate_table'
+	'ddl_reentrant force_replicate_table multi_source'
 	# G12
 	'tidb_mysql_test ddl_with_random_move_table'
 	# G13
@@ -68,7 +68,7 @@ mysql_groups=(
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
 	# G00
-	'generate_column many_pk_or_uk multi_source'
+	'generate_column many_pk_or_uk'
 	# G01
 	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
 	# G02
@@ -76,7 +76,7 @@ kafka_groups=(
 	# G03
 	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
-	'open_protocol_claim_check open_protocol_handle_key_only'
+	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
 	# G05
 	'move_table drop_many_tables'
 	# G06
@@ -86,7 +86,7 @@ kafka_groups=(
 	# G08
 	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
 	# G09
-	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume'
+	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume multi_source'
 	# G10
 	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
@@ -141,7 +141,7 @@ storage_groups=(
 	# G00
 	'generate_column many_pk_or_uk multi_source'
 	# G01
-	csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered
+	'csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered'
 	# G02
 	'canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
@@ -169,7 +169,7 @@ storage_groups=(
 	# G14
 	'fail_over_ddl_mix'
 	# G15
-	''
+	'random_drop_message'
 )
 
 # Source shared functions and check test coverage

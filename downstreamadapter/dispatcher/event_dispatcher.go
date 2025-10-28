@@ -58,7 +58,8 @@ func NewEventDispatcher(
 	startTs uint64,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
-	skipSyncpointSameAsStartTs bool,
+	skipSyncpointAtStartTs bool,
+	skipDMLAsStartTs bool,
 	currentPdTs uint64,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
@@ -71,7 +72,8 @@ func NewEventDispatcher(
 		startTs,
 		schemaID,
 		schemaIDToDispatchers,
-		skipSyncpointSameAsStartTs,
+		skipSyncpointAtStartTs,
+		skipDMLAsStartTs,
 		currentPdTs,
 		common.DefaultMode,
 		sink,
@@ -140,7 +142,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 	}
 	select {
 	case d.cacheEvents.events <- cacheEvents:
-		log.Info("cache events",
+		log.Debug("cache events",
 			zap.Stringer("dispatcher", d.id),
 			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 			zap.Int("length", len(dispatcherEvents)),

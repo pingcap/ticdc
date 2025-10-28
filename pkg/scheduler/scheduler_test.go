@@ -50,5 +50,8 @@ func TestCheckBalanceStatus(t *testing.T) {
 		"node1": {ID: "node1"},
 		"node2": {ID: "node2"},
 		"node3": {ID: "node3"},
+		"node4": {ID: "node4"},
+		"node5": {ID: "node5"},
+		"node6": {ID: "node6"},
 	}))
 }

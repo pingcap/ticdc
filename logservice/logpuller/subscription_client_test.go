@@ -38,6 +38,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 10),
 	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},

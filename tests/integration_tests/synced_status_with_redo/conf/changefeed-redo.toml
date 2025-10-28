@@ -4,4 +4,4 @@ checkpoint-interval = 20
 
 [consistent]
 level="eventual"
-storage = "file:///tmp/tidb_cdc_test/synced_status/redo"
+storage = "file:///tmp/tidb_cdc_test/synced_status_with_redo/redo"

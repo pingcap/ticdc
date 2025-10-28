@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -59,7 +60,8 @@ type Controller struct {
 	taskPool threadpool.ThreadPool
 
 	// Store the task handles, it's used to stop the task handlers when the controller is stopped.
-	taskHandles []*threadpool.TaskHandle
+	taskHandles   []*threadpool.TaskHandle
+	taskHandlesMu sync.RWMutex
 
 	enableTableAcrossNodes bool
 	batchSize              int
@@ -177,9 +179,12 @@ func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 }
 
 func (c *Controller) Stop() {
+	c.taskHandlesMu.RLock()
 	for _, handler := range c.taskHandles {
 		handler.Cancel()
 	}
+	c.taskHandlesMu.RUnlock()
+
 	c.operatorController.Close()
 	if c.enableRedo {
 		c.redoOperatorController.Close()

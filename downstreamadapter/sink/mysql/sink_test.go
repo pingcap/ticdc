@@ -43,6 +43,22 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	return ctx, sink, mock
 }
 
+// getMysqlSinkWithDDLTs creates a sink with DDL-ts feature enabled for testing GetTableRecoveryInfo
+func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	cfg := mysql.New()
+	cfg.WorkerCount = 1
+	cfg.DMLMaxRetry = 1
+	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.CachePrepStmts = false
+	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
+
+	sink := newMySQLSink(ctx, changefeedID, cfg, db, false)
+	return ctx, sink, mock
+}
+
 func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
 	ctx, sink, mock := getMysqlSink()
 	go sink.Run(ctx)
@@ -107,11 +123,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	}
 	dmlEvent.CommitTs = 2
 
-	mock.ExpectBegin()
-	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
+	// Step 1: FlushDDLTsPre - Create ddl_ts table and insert pre-record (finished=0)
 	mock.ExpectBegin()
 	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("USE tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -122,17 +134,25 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 			ddl_ts varchar(18),
 			table_id bigint(21),
 			finished bool,
-			table_name_in_ddl_job varchar(1024),
-			db_name_in_ddl_job varchar(1024),
 			is_syncpoint bool,
-			created_at datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 			INDEX (ticdc_cluster_id, changefeed, table_id),
 			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
 		);`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("SET @current_ts = NOW(6);INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint, created_at) VALUES ('default', 'test/test', '1', 0, '', '', 1, 0, @current_ts), ('default', 'test/test', '1', 1, '', '', 1, 0, @current_ts) ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=VALUES(created_at), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 0, 0), ('default', 'test/test', '1', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	// Step 2: execDDLWithMaxRetries - Execute the actual DDL
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	// Step 3: FlushDDLTs - Update ddl_ts record (finished=1)
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 1, 0), ('default', 'test/test', '1', 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
@@ -217,6 +237,28 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 		},
 	}
 
+	// Step 1: FlushDDLTsPre - Create ddl_ts table and insert pre-record (finished=0)
+	mock.ExpectBegin()
+	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("USE tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ddl_ts_v1
+		(
+			ticdc_cluster_id varchar (255),
+			changefeed varchar(255),
+			ddl_ts varchar(18),
+			table_id bigint(21),
+			finished bool,
+			is_syncpoint bool,
+			INDEX (ticdc_cluster_id, changefeed, table_id),
+			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
+		);`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '2', 0, 0, 0), ('default', 'test/test', '2', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	// Step 2: execDDLWithMaxRetries - Execute the actual DDL (will fail)
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnError(errors.New("connect: connection refused"))
@@ -296,4 +338,101 @@ func TestMysqlSinkFlushLargeBatchEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, int64(2), count.Load(), "Should have executed 2 callbacks (2 DML events)")
+}
+
+// TestGetTableRecoveryInfo_StartTsGreaterThanDDLTs tests the critical scenario where
+// input startTs is greater than ddlTs from the ddl_ts table.
+// This happens when the table has already progressed beyond the crash point.
+// In this case, all skip flags should be reset to false.
+func TestGetTableRecoveryInfo_StartTsGreaterThanDDLTs(t *testing.T) {
+	_, sink, mock := getMysqlSinkWithDDLTs()
+
+	// Test scenario:
+	// - Table 1: ddlTs=100, skipSyncpoint=true, skipDML=true, but input startTs=150
+	//   Expected: Return startTs=150, reset both skip flags to false
+	// - Table 2: ddlTs=200, skipSyncpoint=false, skipDML=false, input startTs=150
+	//   Expected: Return startTs=200, keep skip flags as is
+	// - Table 3: ddlTs=300, skipSyncpoint=true, skipDML=true, input startTs=300
+	//   Expected: Return startTs=300, keep skip flags as is (equal case)
+
+	tableIDs := []int64{1, 2, 3}
+	inputStartTsList := []int64{150, 150, 300}
+
+	// Mock the ddl_ts query
+	expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 3))"
+
+	rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+		AddRow(1, 100, false, false). // Unfinished DDL, skipDML should be true initially
+		AddRow(2, 200, true, false).  // Finished DDL, skipSyncpoint=false
+		AddRow(3, 250, false, false)  // Unfinished DDL, input startTs=300 > ddlTs=250
+
+	mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
+	mock.ExpectClose() // Expect database close when sink.Close() is called
+
+	// Call GetTableRecoveryInfo
+	resultStartTsList, skipSyncpointList, skipDMLList, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, false)
+
+	require.NoError(t, err)
+	require.Len(t, resultStartTsList, 3)
+	require.Len(t, skipSyncpointList, 3)
+	require.Len(t, skipDMLList, 3)
+
+	// Table 1: startTs > ddlTs, should reset all skip flags
+	require.Equal(t, int64(150), resultStartTsList[0], "Table 1: Should use input startTs (150) instead of ddlTs (100)")
+	require.False(t, skipSyncpointList[0], "Table 1: skipSyncpoint should be reset to false when startTs > ddlTs")
+	require.False(t, skipDMLList[0], "Table 1: skipDML should be reset to false when startTs > ddlTs")
+
+	// Table 2: startTs < ddlTs, should use ddlTs and keep original skip flags
+	require.Equal(t, int64(200), resultStartTsList[1], "Table 2: Should use ddlTs (200) instead of input startTs (150)")
+	require.False(t, skipSyncpointList[1], "Table 2: skipSyncpoint should be false (finished DDL)")
+	require.False(t, skipDMLList[1], "Table 2: skipDML should be false (finished DDL)")
+
+	// Table 3: startTs > ddlTs, should reset skip flags
+	require.Equal(t, int64(300), resultStartTsList[2], "Table 3: Should use input startTs (300) instead of ddlTs (250)")
+	require.False(t, skipSyncpointList[2], "Table 3: skipSyncpoint should be reset to false when startTs > ddlTs")
+	require.False(t, skipDMLList[2], "Table 3: skipDML should be reset to false when startTs > ddlTs")
+
+	// Clean up
+	sink.Close(false)
+
+	// Check all mock expectations were met (after closing)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetTableRecoveryInfo_RemoveDDLTs tests the scenario where removeDDLTs=true
+// This happens when removing a changefeed, and we need to clean up ddl_ts records.
+func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
+	_, sink, mock := getMysqlSinkWithDDLTs()
+
+	tableIDs := []int64{1, 2, 3}
+	inputStartTsList := []int64{100, 200, 300}
+
+	// Mock the DELETE query for removing ddl_ts records
+	// Note: The actual SQL uses IN syntax
+	expectedDeleteQuery := "DELETE FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed) IN (('default', 'test/test'))"
+	mock.ExpectBegin()
+	mock.ExpectExec(expectedDeleteQuery).WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectCommit()
+	mock.ExpectClose() // Expect database close when sink.Close() is called
+
+	// Call GetTableRecoveryInfo with removeDDLTs=true
+	resultStartTsList, skipSyncpointList, skipDMLList, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, true)
+
+	require.NoError(t, err)
+	require.Len(t, resultStartTsList, 3)
+	require.Len(t, skipSyncpointList, 3)
+	require.Len(t, skipDMLList, 3)
+
+	// When removeDDLTs=true, should return input startTs with all skip flags = false
+	for i := 0; i < 3; i++ {
+		require.Equal(t, inputStartTsList[i], resultStartTsList[i], "Should return input startTs unchanged")
+		require.False(t, skipSyncpointList[i], "All skip flags should be false when removeDDLTs=true")
+		require.False(t, skipDMLList[i], "All skip flags should be false when removeDDLTs=true")
+	}
+
+	// Clean up
+	sink.Close(false)
+
+	// Check all mock expectations were met (after closing)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

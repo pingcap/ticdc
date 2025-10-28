@@ -525,20 +525,18 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID
 	// and usually job.BinlogInfo.TableInfo.ID will be the newly created IDs.
 	event := PersistedDDLEvent{
-		ID:                job.ID,
-		Type:              byte(job.Type),
-		TableNameInDDLJob: job.TableName,
-		DBNameInDDLJob:    job.SchemaName,
-		SchemaID:          job.SchemaID,
-		TableID:           job.TableID,
-		Query:             query,
-		SchemaVersion:     job.BinlogInfo.SchemaVersion,
-		DBInfo:            job.BinlogInfo.DBInfo,
-		TableInfo:         job.BinlogInfo.TableInfo,
-		FinishedTs:        job.BinlogInfo.FinishedTS,
-		StartTs:           job.StartTS,
-		BDRRole:           job.BDRRole,
-		CDCWriteSource:    job.CDCWriteSource,
+		ID:             job.ID,
+		Type:           byte(job.Type),
+		SchemaID:       job.SchemaID,
+		TableID:        job.TableID,
+		Query:          query,
+		SchemaVersion:  job.BinlogInfo.SchemaVersion,
+		DBInfo:         job.BinlogInfo.DBInfo,
+		TableInfo:      job.BinlogInfo.TableInfo,
+		FinishedTs:     job.BinlogInfo.FinishedTS,
+		StartTs:        job.StartTS,
+		BDRRole:        job.BDRRole,
+		CDCWriteSource: job.CDCWriteSource,
 	}
 	return event
 }
@@ -647,11 +645,21 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		oldTableName := args.job.InvolvingSchemaInfo[0].Table
 		stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
 		if err != nil {
-			log.Warn("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
+			log.Error("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
 		} else {
-			oldTableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
-			if schemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O; schemaName != "" {
-				oldSchemaName = schemaName
+			switch s := stmt.(type) {
+			case *ast.AlterTableStmt:
+				oldTableName = s.Table.Name.O
+				if schemaName := s.Table.Schema.O; schemaName != "" {
+					oldSchemaName = schemaName
+				}
+			case *ast.RenameTableStmt:
+				oldTableName = s.TableToTables[0].OldTable.Name.O
+				if schemaName := s.TableToTables[0].OldTable.Schema.O; schemaName != "" {
+					oldSchemaName = schemaName
+				}
+			default:
+				log.Error("unknown stmt type", zap.String("query", args.job.Query), zap.Any("stmt", stmt))
 			}
 		}
 		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
@@ -1632,9 +1640,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TiDBOnly:   tiDBOnly,
 		BDRMode:    rawEvent.BDRRole,
 
-		TableNameInDDLJob: rawEvent.TableNameInDDLJob,
-		DBNameInDDLJob:    rawEvent.DBNameInDDLJob,
-		NotSync:           notSync,
+		NotSync: notSync,
 	}, !filtered, nil
 }
 

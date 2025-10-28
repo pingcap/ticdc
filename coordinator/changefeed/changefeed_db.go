@@ -358,3 +358,31 @@ func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 	db.stopped[cf.ChangefeedID] = newCf
 	db.changefeeds[cf.ChangefeedID] = newCf
 }
+
+func (db *ChangefeedDB) UpdateLogCoordinatorResolvedTsByID(changefeedID common.ChangeFeedID, resolvedTs uint64) {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+
+	cf := db.changefeeds[changefeedID]
+	if cf != nil {
+		cf.SetLogCoordinatorResolvedTs(resolvedTs)
+	}
+}
+
+func (db *ChangefeedDB) GetLogCoordinatorResolvedTsByName(name common.ChangeFeedDisplayName) uint64 {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+
+	cf := db.changefeeds[db.changefeedDisplayNames[name]]
+	if cf != nil {
+		return cf.GetLogCoordinatorResolvedTs()
+	}
+	return 0
+}
+
+func (db *ChangefeedDB) GetChangefeedIDByName(name common.ChangeFeedDisplayName) common.ChangeFeedID {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+
+	return db.changefeedDisplayNames[name]
+}

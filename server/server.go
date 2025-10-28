@@ -55,8 +55,8 @@ const (
 	closeServiceTimeout  = 15 * time.Second
 	cleanMetaDuration    = 10 * time.Second
 	oldArchCheckInterval = 100 * time.Millisecond
-	// gracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
-	gracefulShutdownTimeout = 30 * time.Second
+	// GracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
+	GracefulShutdownTimeout = 30 * time.Second
 )
 
 // server represents the main TiCDC server with carefully orchestrated module lifecycle management.
@@ -87,11 +87,13 @@ type server struct {
 
 	liveness api.Liveness
 
-	pdClient        pd.Client
-	pdAPIClient     pdutil.PDAPIClient
-	pdEndpoints     []string
-	coordinatorMu   sync.Mutex
-	coordinator     tiserver.Coordinator
+	pdClient      pd.Client
+	pdAPIClient   pdutil.PDAPIClient
+	pdEndpoints   []string
+	coordinatorMu sync.Mutex
+
+	coordinator tiserver.Coordinator
+
 	upstreamManager *upstream.Manager
 
 	// session keeps alive between the server and etcd
@@ -182,7 +184,7 @@ func (c *server) initialize(ctx context.Context) error {
 		appctx.GetService[messaging.MessageCenter](appctx.MessageCenter).OnNodeChanges)
 
 	conf := config.GetGlobalServerConfig()
-	schemaStore := schemastore.New(ctx, conf.DataDir, c.pdClient, c.pdEndpoints)
+	schemaStore := schemastore.New(conf.DataDir, c.pdClient)
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore: 8,
@@ -190,7 +192,7 @@ func (c *server) initialize(ctx context.Context) error {
 		txnutil.NewLockerResolver(),
 		c.security,
 	)
-	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient)
+	eventStore := eventstore.New(conf.DataDir, subscriptionClient)
 	eventService := eventservice.New(eventStore, schemaStore)
 	c.upstreamManager = upstream.NewManager(ctx, upstream.NodeTopologyCfg{
 		Info:        c.info,
@@ -216,8 +218,8 @@ func (c *server) initialize(ctx context.Context) error {
 	c.subModules = []common.SubModule{
 		subscriptionClient,
 		schemaStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler),
 		eventStore,
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler),
 		eventService,
 	}
 	// register it into global var
@@ -268,10 +270,11 @@ func (c *server) setPreServices(ctx context.Context) error {
 
 	// Set DispatcherOrchestrator to Global Context
 	dispatcherOrchestrator := dispatcherorchestrator.New()
+	dispatcherOrchestrator.Run(ctx)
 	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
 	c.preServices = append(c.preServices, dispatcherOrchestrator)
 
-	keyspaceManager := keyspace.NewKeyspaceManager(c.pdEndpoints)
+	keyspaceManager := keyspace.NewManager(c.pdEndpoints)
 	appctx.SetService(appctx.KeyspaceManager, keyspaceManager)
 	c.preServices = append(c.preServices, keyspaceManager)
 
@@ -342,7 +345,7 @@ func (c *server) Run(ctx context.Context) error {
 	ch := make(chan error, 1)
 	go func() {
 		<-gctx.Done()
-		time.Sleep(gracefulShutdownTimeout)
+		time.Sleep(GracefulShutdownTimeout)
 		ch <- errors.ErrTimeout.FastGenByArgs("gracefull shutdown timeout")
 	}()
 	go func() {
@@ -432,13 +435,16 @@ func (c *server) Close(ctx context.Context) {
 		c.closePreServices()
 	}()
 
-	for _, subModule := range c.subModules {
-		if err := subModule.Close(ctx); err != nil {
+	// There are also some dependencies inside subModules,
+	// so we close subModules in reverse order of their startup.
+	for i := len(c.subModules) - 1; i >= 0; i-- {
+		m := c.subModules[i]
+		if err := m.Close(ctx); err != nil {
 			log.Warn("failed to close sub module",
-				zap.String("module", subModule.Name()),
+				zap.String("module", m.Name()),
 				zap.Error(err))
 		}
-		log.Info("sub module closed", zap.String("module", subModule.Name()))
+		log.Info("sub module closed", zap.String("module", m.Name()))
 	}
 
 	for _, m := range c.nodeModules {

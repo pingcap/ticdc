@@ -33,16 +33,17 @@ import (
 	"go.uber.org/zap"
 )
 
-func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore) {
+func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, chan *messaging.TargetMessage) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	es := newMockEventStore(100)
 	ss := NewMockSchemaStore()
-	mc := newMockMessageCenter()
+	mc := messaging.NewMockMessageCenter()
+	outputCh := mc.GetMessageChannel()
 	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC, &integrity.Config{
 		IntegrityCheckLevel:   integrity.CheckLevelNone,
 		CorruptionHandleLevel: integrity.CorruptionHandleLevelWarn,
-	}), es, ss
+	}), es, ss, outputCh
 }
 
 func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
@@ -56,7 +57,7 @@ type notifyMsg struct {
 }
 
 func TestCheckNeedScan(t *testing.T) {
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
 	broker.close()
 
@@ -99,7 +100,7 @@ func TestCheckNeedScan(t *testing.T) {
 }
 
 func TestOnNotify(t *testing.T) {
-	broker, _, ss := newEventBrokerForTest()
+	broker, _, ss, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
 	broker.close()
 
@@ -169,7 +170,7 @@ func TestOnNotify(t *testing.T) {
 }
 
 func TestCURDDispatcher(t *testing.T) {
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
 
 	dispInfo := newMockDispatcherInfoForTest(t)
@@ -178,6 +179,11 @@ func TestCURDDispatcher(t *testing.T) {
 	require.Nil(t, err)
 	disp := broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
+	// Check changefeedStatus after adding a dispatcher
+	cfStatus, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok, "changefeedStatus should exist after adding a dispatcher")
+	require.False(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should not be empty")
+
 	require.Equal(t, disp.id, dispInfo.GetID())
 
 	// Case 2: Reset a dispatcher.
@@ -189,16 +195,23 @@ func TestCURDDispatcher(t *testing.T) {
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
 	// Check the resetTs is updated.
+	// Check changefeedStatus after resetting a dispatcher
+	cfStatus, ok = broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok, "changefeedStatus should still exist after resetting")
+	require.False(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should not be empty after resetting")
 	require.Equal(t, disp.startTs, dispInfo.GetStartTs())
 
 	// Case 3: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
 	dispPtr := broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, dispPtr)
+	// Check changefeedStatus after removing the only dispatcher
+	_, ok = broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
 }
 
 func TestResetDispatcher(t *testing.T) {
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
 
 	// 1. Reset a non-existent dispatcher.
@@ -247,7 +260,7 @@ func TestResetDispatcher(t *testing.T) {
 }
 
 func TestResetDispatcherConcurrently(t *testing.T) {
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
 
 	// 1. Add a dispatcher first.
@@ -288,7 +301,7 @@ func TestResetDispatcherConcurrently(t *testing.T) {
 }
 
 func TestHandleResolvedTs(t *testing.T) {
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, outputCh := newEventBrokerForTest()
 	defer broker.close()
 
 	dispInfo := newMockDispatcherInfoForTest(t)
@@ -297,8 +310,6 @@ func TestHandleResolvedTs(t *testing.T) {
 	disp := broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
-
-	mc := broker.msgSender.(*mockMessageCenter)
 
 	ctx := context.Background()
 	cacheMap := make(map[node.ID]*resolvedTsCache)
@@ -311,12 +322,12 @@ func TestHandleResolvedTs(t *testing.T) {
 		broker.handleResolvedTs(ctx, cacheMap, wrapEvent, disp.messageWorkerIndex, messaging.EventCollectorTopic)
 	}
 
-	msg := <-mc.messageCh
+	msg := <-outputCh
 	require.Equal(t, msg.Type, messaging.TypeBatchResolvedTs)
 }
 
 func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, outputCh := newEventBrokerForTest()
 	defer broker.close()
 
 	// Create a dispatcher and add it to the broker
@@ -381,8 +392,6 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	}
 
 	// Mock the message center to capture the response
-	mc := broker.msgSender.(*mockMessageCenter)
-
 	// Handle heartbeat for the removed dispatcher
 	// This should generate a response indicating the dispatcher should be removed
 	broker.handleDispatcherHeartbeat(heartbeatForInactiveDispatcher)
@@ -395,7 +404,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	defer cancel()
 	// Verify that a response was sent indicating the dispatcher is removed
 	select {
-	case msg := <-mc.messageCh:
+	case msg := <-outputCh:
 		require.Equal(t, messaging.TypeDispatcherHeartbeatResponse, msg.Type)
 		// The response should contain a dispatcher state indicating removal
 		require.Len(t, msg.Message, 1)
@@ -412,7 +421,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 
 // TestSendHandshakeIfNeedConcurrency tests the concurrent safety of sendHandshakeIfNeed method
 func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
-	broker, _, _ := newEventBrokerForTest()
+	broker, _, _, outputCh := newEventBrokerForTest()
 	defer broker.close()
 
 	// Create a mock dispatcher info
@@ -443,13 +452,12 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 
 		// Should only receive one handshake event
 		handshakeCount := 0
-		mc := broker.msgSender.(*mockMessageCenter)
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 	LOOP:
 		for {
 			select {
-			case e := <-mc.messageCh:
+			case e := <-outputCh:
 				if e.Type == messaging.TypeHandshakeEvent {
 					handshakeCount++
 				}
@@ -505,13 +513,12 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 
 		// Count handshake events
 		handshakeCount := 0
-		mc := broker.msgSender.(*mockMessageCenter)
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 	LOOP:
 		for {
 			select {
-			case e := <-mc.messageCh:
+			case e := <-outputCh:
 				if e.Type == messaging.TypeHandshakeEvent {
 					handshakeCount++
 				}

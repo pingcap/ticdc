@@ -269,7 +269,7 @@ func (c *coordinator) handleStateChange(
 	if event.state == config.StateFailed || event.state == config.StateFinished {
 		progress = config.ProgressStopping
 	}
-	if err := c.backend.UpdateChangefeed(context.Background(), cfInfo, cf.GetStatus().CheckpointTs, progress); err != nil {
+	if err = c.backend.UpdateChangefeed(context.Background(), cfInfo, cf.GetStatus().CheckpointTs, progress); err != nil {
 		log.Error("failed to update changefeed state",
 			zap.Error(err))
 		return errors.Trace(err)
@@ -286,17 +286,25 @@ func (c *coordinator) handleStateChange(
 	case config.StateNormal:
 		log.Info("changefeed is resumed or created successfully, try to delete its safeguard gc safepoint",
 			zap.String("changefeed", event.changefeedID.String()))
-		// We need to clean its gc safepoint when changefeed is resumed or created
-		gcServiceID := c.getEnsureGCServiceID(gc.EnsureGCServiceCreating)
-		err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, gcServiceID, event.changefeedID)
+
+		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+		keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, event.changefeedID.Keyspace())
 		if err != nil {
-			log.Warn("failed to delete create changefeed gc safepoint", zap.Error(err))
+			log.Warn("failed to load keyspace", zap.String("keyspace", event.changefeedID.Keyspace()), zap.Error(err))
+		} else {
+			// We need to clean its gc safepoint when changefeed is resumed or created
+			gcServiceID := c.getEnsureGCServiceID(gc.EnsureGCServiceCreating)
+			err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, keyspaceMeta.Id, gcServiceID, event.changefeedID)
+			if err != nil {
+				log.Warn("failed to delete create changefeed gc safepoint", zap.Error(err))
+			}
+			gcServiceID = c.getEnsureGCServiceID(gc.EnsureGCServiceResuming)
+			err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, keyspaceMeta.Id, gcServiceID, event.changefeedID)
+			if err != nil {
+				log.Warn("failed to delete resume changefeed gc safepoint", zap.Error(err))
+			}
 		}
-		gcServiceID = c.getEnsureGCServiceID(gc.EnsureGCServiceResuming)
-		err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, gcServiceID, event.changefeedID)
-		if err != nil {
-			log.Warn("failed to delete resume changefeed gc safepoint", zap.Error(err))
-		}
+
 	default:
 	}
 	return nil
@@ -421,6 +429,10 @@ func (c *coordinator) Stop() {
 	}
 }
 
+func (c *coordinator) RequestResolvedTsFromLogCoordinator(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) {
+	c.controller.RequestResolvedTsFromLogCoordinator(ctx, changefeedDisplayName)
+}
+
 func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
 		err := c.mc.SendCommand(msg)
@@ -461,7 +473,7 @@ func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 
 func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, barrierMap map[string]uint64, keyspaceName string) error {
 	// Obtain keyspace metadata from PD
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrLoadKeyspaceFailed, err)

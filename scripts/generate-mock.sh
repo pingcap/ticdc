@@ -24,8 +24,8 @@ if [ ! -f "$MOCKGEN" ]; then
 fi
 
 "$MOCKGEN" -source coordinator/changefeed/changefeed_db_backend.go -destination coordinator/changefeed/mock/changefeed_db_backend.go
-"$MOCKGEN" -source pkg/etcd/etcd.go -destination pkg/etcd/mock/etcd.go
-"$MOCKGEN" -source pkg/etcd/client.go -destination pkg/etcd/mock/client.go
+"$MOCKGEN" -source pkg/etcd/etcd.go -destination pkg/etcd/etcd_mock.go -package etcd
+"$MOCKGEN" -source pkg/etcd/client.go -destination pkg/etcd/client_mock.go -package etcd
 "$MOCKGEN" -source pkg/api/v2/tso.go -destination pkg/api/v2/mock/tso_mock.go -package mock
 "$MOCKGEN" -source pkg/api/v2/unsafe.go -destination pkg/api/v2/mock/unsafe_mock.go -package mock
 "$MOCKGEN" -source pkg/api/v2/status.go -destination pkg/api/v2/mock/status_mock.go -package mock
@@ -33,3 +33,4 @@ fi
 "$MOCKGEN" -source pkg/api/v2/processor.go -destination pkg/api/v2/mock/processor_mock.go -package mock
 "$MOCKGEN" -source pkg/api/v2/changefeed.go -destination pkg/api/v2/mock/changefeed_mock.go -package mock
 "$MOCKGEN" -source pkg/sink/codec/simple/marshaller.go -destination pkg/sink/codec/simple/mock/marshaller.go
+"$MOCKGEN" -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace

@@ -65,6 +65,10 @@ type PullerConfig struct {
 	// LogRegionDetails determines whether logs Region details or not in puller and kv-client.
 	LogRegionDetails bool `toml:"log-region-details" json:"log-region-details"`
 
+	// PendingRegionRequestQueueSize is the total size of the pending region request queue shared across
+	// all puller workers connecting to a single TiKV store. This size is divided equally among all workers.
+	// For example, if PendingRegionRequestQueueSize is 256 and there are 8 workers connecting to the same store,
+	// each worker's queue size will be 256 / 8 = 32.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending-region-request-queue-size"`
 }
 
@@ -74,7 +78,7 @@ func NewDefaultPullerConfig() *PullerConfig {
 		EnableResolvedTsStuckDetection: false,
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,
-		PendingRegionRequestQueueSize:  64, // Base on test result
+		PendingRegionRequestQueueSize:  256, // Base on test result
 	}
 }
 
@@ -105,12 +109,19 @@ func NewDefaultSchemaStoreConfig() *SchemaStoreConfig {
 type EventServiceConfig struct {
 	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan-task-queue-size"`
 	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan-limit-in-bytes"`
+
+	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.
+	// So we add this config to be able to disable remote event service in such scenario.
+	// TODO: Remove this config after we find a proper way to fix the OOM issue.
+	// Ref: https://github.com/pingcap/ticdc/issues/1784
+	EnableRemoteEventService bool `toml:"enable-remote-event-service" json:"enable-remote-event-service"`
 }
 
 // NewDefaultEventServiceConfig return the default event service configuration
 func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
-		ScanTaskQueueSize: 1024 * 8,
-		ScanLimitInBytes:  1024 * 1024 * 256, // 256MB
+		ScanTaskQueueSize:        1024 * 8,
+		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
+		EnableRemoteEventService: true,
 	}
 }

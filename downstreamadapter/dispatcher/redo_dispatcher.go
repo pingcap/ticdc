@@ -42,7 +42,7 @@ func NewRedoDispatcher(
 	startTs uint64,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
-	skipSyncpointSameAsStartTs bool,
+	skipSyncpointAtStartTs bool,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *RedoDispatcher {
@@ -52,7 +52,8 @@ func NewRedoDispatcher(
 		startTs,
 		schemaID,
 		schemaIDToDispatchers,
-		skipSyncpointSameAsStartTs,
+		skipSyncpointAtStartTs,
+		false, // skipDMLAsStartTs is not needed for redo dispatcher
 		0,
 		common.RedoMode,
 		sink,
@@ -66,10 +67,6 @@ func NewRedoDispatcher(
 }
 
 func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
-	if rd.GetRemovingStatus() {
-		log.Warn("redo dispatcher has removed", zap.Any("id", rd.id))
-		return true
-	}
 	return rd.handleEvents(dispatcherEvents, wakeCallback)
 }
 

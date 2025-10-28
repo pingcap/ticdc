@@ -22,7 +22,7 @@ var (
 			Subsystem: "dispatchermanagermanager",
 			Name:      "event_dispatcher_manager_count",
 			Help:      "The number of event dispatcher managers",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	TableTriggerEventDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -30,7 +30,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "table_trigger_event_dispatcher_count",
 			Help:      "The number of table event dispatchers",
-		}, []string{"namespace", "changefeed", "event_type"})
+		}, []string{getKeyspaceLabel(), "changefeed", "event_type"})
 
 	EventDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -38,7 +38,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "table_event_dispatcher_count",
 			Help:      "The number of table event dispatchers",
-		}, []string{"namespace", "changefeed", "event_type"})
+		}, []string{getKeyspaceLabel(), "changefeed", "event_type"})
 
 	CreateDispatcherDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -47,7 +47,7 @@ var (
 			Name:      "create_dispatcher_duration",
 			Help:      "Bucketed histogram of create dispatcher time (s) for table span.",
 			Buckets:   prometheus.ExponentialBuckets(0.000001, 2, 20), // 1us~524ms
-		}, []string{"namespace", "changefeed", "event_type"})
+		}, []string{getKeyspaceLabel(), "changefeed", "event_type"})
 
 	DispatcherManagerResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -55,7 +55,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "resolved_ts",
 			Help:      "Resolved ts of event dispatcher manager(changefeed)",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	DispatcherManagerResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -63,7 +63,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "resolved_ts_lag",
 			Help:      "Resolved ts lag of event dispatcher manager(changefeed) in seconds",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	DispatcherManagerCheckpointTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -71,7 +71,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "checkpoint_ts",
 			Help:      "Checkpoint ts of event dispatcher manager(changefeed)",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	DispatcherManagerCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -79,7 +79,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "checkpoint_ts_lag",
 			Help:      "Checkpoint ts lag of event dispatcher manager(changefeed) in seconds",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	HandleDispatcherRequsetCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -87,7 +87,7 @@ var (
 			Subsystem: "sink",
 			Name:      "handle_dispatcher_request",
 			Help:      "Total count of dispatcher request.",
-		}, []string{"namespace", "changefeed", "type"})
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
 	DispatcherReceivedEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",

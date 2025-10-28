@@ -16,6 +16,7 @@ package v2
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -34,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
@@ -101,7 +103,12 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
+		return
+	}
 
 	co, err := h.server.GetCoordinator()
 	if err != nil {
@@ -147,6 +154,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		ctx,
 		h.server.GetPdClient(),
 		createGcServiceID,
+		keyspaceMeta.Id,
 		changefeedID,
 		ensureTTL, cfg.StartTs); err != nil {
 		if !errors.ErrStartTsBeforeGC.Equal(err) {
@@ -245,9 +253,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		if !needRemoveGCSafePoint {
 			return
 		}
+
 		err = gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			pdClient,
+			keyspaceMeta.Id,
 			createGcServiceID,
 			changefeedID,
 		)
@@ -371,7 +381,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	}
 	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
 
-	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceName := GetKeyspaceValueWithDefault(c)
 	kvStorage, err := keyspaceManager.GetStorage(keyspaceName)
 	if err != nil {
@@ -603,7 +613,8 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 // @Router	/api/v2/changefeeds/{changefeed_id}/resume [post]
 func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
+	keyspaceName := GetKeyspaceValueWithDefault(c)
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -652,24 +663,35 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		newCheckpointTs = cfg.OverwriteCheckpointTs
 	}
 
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
+		return
+	}
+
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err := verifyResumeChangefeedConfig(
 		ctx,
 		h.server.GetPdClient(),
 		resumeGcServiceID,
+		keyspaceMeta.Id,
 		cfInfo.ChangefeedID,
 		newCheckpointTs); err != nil {
 		_ = c.Error(err)
 		return
 	}
+
 	needRemoveGCSafePoint := false
 	defer func() {
 		if !needRemoveGCSafePoint {
 			return
 		}
-		err := gc.UndoEnsureChangefeedStartTsSafety(
+
+		err = gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			h.server.GetPdClient(),
+			keyspaceMeta.Id,
 			resumeGcServiceID,
 			cfInfo.ChangefeedID,
 		)
@@ -798,7 +820,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(oldCfInfo.Config.Sink.Protocol))
 
-		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 
 		kvStorage, err := keyspaceManager.GetStorage(keyspaceName)
 		if err != nil {
@@ -843,6 +865,7 @@ func verifyResumeChangefeedConfig(
 	ctx context.Context,
 	pdClient pd.Client,
 	gcServiceID string,
+	keyspaceID uint32,
 	changefeedID common.ChangeFeedID,
 	overrideCheckpointTs uint64,
 ) error {
@@ -866,6 +889,7 @@ func verifyResumeChangefeedConfig(
 		ctx,
 		pdClient,
 		gcServiceID,
+		keyspaceID,
 		changefeedID,
 		gcTTL, overrideCheckpointTs)
 	if err != nil {
@@ -1350,12 +1374,10 @@ func (h *OpenAPIV2) status(c *gin.Context) {
 	})
 }
 
-// syncState returns the sync state of a changefeed.
+// synced returns the sync state of a changefeed.
 // Usage:
 // curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/synced
-// Note: This feature has not been implemented yet. It will be implemented in the future.
-// Currently, it always returns false.
-func (h *OpenAPIV2) syncState(c *gin.Context) {
+func (h *OpenAPIV2) synced(c *gin.Context) {
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
 	co, err := h.server.GetCoordinator()
 	if err != nil {
@@ -1369,11 +1391,18 @@ func (h *OpenAPIV2) syncState(c *gin.Context) {
 		return
 	}
 
-	_, status, err := co.GetChangefeed(c, changefeedDisplayName)
+	co.RequestResolvedTsFromLogCoordinator(c, changefeedDisplayName)
+	info, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
+	if info.Config.SyncedStatus.SyncedCheckInterval == 0 || info.Config.SyncedStatus.CheckpointInterval == 0 {
+		info.Config.SyncedStatus.SyncedCheckInterval = config.GetDefaultReplicaConfig().SyncedStatus.SyncedCheckInterval
+		info.Config.SyncedStatus.CheckpointInterval = config.GetDefaultReplicaConfig().SyncedStatus.CheckpointInterval
+	}
+	syncedCheckInterval := info.Config.SyncedStatus.SyncedCheckInterval
+	checkpointInterval := info.Config.SyncedStatus.CheckpointInterval
 
 	// get time from pd
 	ctx := c.Request.Context()
@@ -1383,11 +1412,53 @@ func (h *OpenAPIV2) syncState(c *gin.Context) {
 		return
 	}
 
+	// If physcialNow - lastSyncedTs > SyncedCheckInterval && physcialNow - CheckpointTs < CheckpointInterval
+	//         --> reach strict synced status
+	if (ts-oracle.ExtractPhysical(status.LastSyncedTs) > syncedCheckInterval*1000) &&
+		(ts-oracle.ExtractPhysical(status.CheckpointTs) < checkpointInterval*1000) {
+		c.JSON(http.StatusOK, SyncedStatus{
+			Synced:           true,
+			SinkCheckpointTs: api.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
+			PullerResolvedTs: api.JSONTime(oracle.GetTimeFromTS(status.LogCoordinatorResolvedTs)),
+			LastSyncedTs:     api.JSONTime(oracle.GetTimeFromTS(status.LastSyncedTs)),
+			NowTs:            api.JSONTime(time.Unix(ts/1e3, 0)),
+			Info:             "The data syncing is finished",
+		})
+		return
+	}
+
+	// If physcialNow - lastSyncedTs > SyncedCheckInterval && physcialNow - CheckpointTs > CheckpointInterval
+	//         we should consider the situation that pd or tikv region is not healthy and blocked the advancing resolveTs.
+	//         if pullerResolvedTs - checkpointTs > CheckpointInterval-->  data is not synced
+	//         otherwise, if pd & tikv is healthy --> data is not synced
+	//                    if not healthy --> data is synced
+	if ts-oracle.ExtractPhysical(status.LastSyncedTs) > syncedCheckInterval*1000 {
+		var message string
+		if oracle.ExtractPhysical(status.LogCoordinatorResolvedTs)-oracle.ExtractPhysical(status.CheckpointTs) < checkpointInterval*1000 {
+			message = fmt.Sprintf("Please check whether PD is online and TiKV Regions are all available. " +
+				"If PD is offline or some TiKV regions are not available, it means that the data syncing process is complete. " +
+				"If the gap is large, such as a few minutes, it means that some regions in TiKV are unavailable. " +
+				"Otherwise, if the gap is small and PD is online, it means the data syncing is incomplete, so please wait")
+		} else {
+			message = "The data syncing is not finished, please wait"
+		}
+		c.JSON(http.StatusOK, SyncedStatus{
+			Synced:           false,
+			SinkCheckpointTs: api.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
+			PullerResolvedTs: api.JSONTime(oracle.GetTimeFromTS(status.LogCoordinatorResolvedTs)),
+			LastSyncedTs:     api.JSONTime(oracle.GetTimeFromTS(status.LastSyncedTs)),
+			NowTs:            api.JSONTime(time.Unix(ts/1e3, 0)),
+			Info:             message,
+		})
+		return
+	}
+
+	// If physcialNow - lastSyncedTs < SyncedCheckInterval --> data is not synced
 	c.JSON(http.StatusOK, SyncedStatus{
 		Synced:           false,
 		SinkCheckpointTs: api.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
-		PullerResolvedTs: api.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
-		LastSyncedTs:     api.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
+		PullerResolvedTs: api.JSONTime(oracle.GetTimeFromTS(status.LogCoordinatorResolvedTs)),
+		LastSyncedTs:     api.JSONTime(oracle.GetTimeFromTS(status.LastSyncedTs)),
 		NowTs:            api.JSONTime(time.Unix(ts/1e3, 0)),
 		Info:             "The data syncing is not finished, please wait",
 	})
@@ -1446,6 +1517,10 @@ func getVerifiedTables(
 }
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
+	if kerneltype.IsClassic() {
+		return common.DefaultKeyspace
+	}
+
 	keyspace := c.Query(api.APIOpVarKeyspace)
 	if keyspace == "" {
 		keyspace = common.DefaultKeyspace
