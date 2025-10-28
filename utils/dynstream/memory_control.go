@@ -33,7 +33,7 @@ const (
 	// For now, we only use it in event collector.
 	MemoryControlForEventCollector = 1
 
-	defaultReleaseMemoryRatio     = 0.4
+	defaultReleaseMemoryRatio     = 0.2
 	defaultDeadlockDuration       = 5 * time.Second
 	defaultReleaseMemoryThreshold = 256
 )
@@ -116,6 +116,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 
 	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
 		MemoryControlForEventCollector {
+		as.releaseMemory()
 		if event.eventType.Droppable {
 			dropEvent := handler.OnDrop(event.event)
 			if dropEvent != nil {
