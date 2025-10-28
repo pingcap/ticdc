@@ -298,3 +298,171 @@ func TestCongestionControl(t *testing.T) {
 		require.Equal(t, item.Available, decoded.availables[idx].Available)
 	}
 }
+
+func TestCongestionControlAddAvailableMemoryWithDispatchers(t *testing.T) {
+	t.Parallel()
+
+	// Test case 1: Add available memory with dispatcher details
+	control := NewCongestionControl()
+	gid := common.NewGID()
+	available := uint64(1000)
+	dispatcherAvailable := map[common.DispatcherID]uint64{
+		common.NewDispatcherID(): 500,
+		common.NewDispatcherID(): 500,
+	}
+
+	control.AddAvailableMemoryWithDispatchers(gid, available, dispatcherAvailable)
+
+	availables := control.GetAvailables()
+	require.Len(t, availables, 1)
+
+	availableMem := availables[0]
+	require.Equal(t, gid, availableMem.Gid)
+	require.Equal(t, available, availableMem.Available)
+	require.Len(t, availableMem.DispatcherAvailable, 2)
+}
+
+func TestCongestionControlMarshalUnmarshal(t *testing.T) {
+	t.Parallel()
+
+	// Test case 1: Empty CongestionControl
+	control1 := NewCongestionControl()
+	control1.clusterID = 12345
+
+	data1, err := control1.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, control1.GetSize(), len(data1))
+
+	var unmarshaled1 CongestionControl
+	err = unmarshaled1.Unmarshal(data1)
+	require.NoError(t, err)
+	require.Equal(t, control1.GetClusterID(), unmarshaled1.GetClusterID())
+	require.Len(t, unmarshaled1.GetAvailables(), 0)
+
+	// Test case 2: CongestionControl with single AvailableMemory
+	control2 := NewCongestionControl()
+	control2.clusterID = 67890
+	gid1 := common.NewGID()
+	control2.AddAvailableMemory(gid1, 1024)
+
+	data2, err := control2.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, control2.GetSize(), len(data2))
+
+	var unmarshaled2 CongestionControl
+	err = unmarshaled2.Unmarshal(data2)
+	require.NoError(t, err)
+	require.Equal(t, control2.GetClusterID(), unmarshaled2.GetClusterID())
+	require.Len(t, unmarshaled2.GetAvailables(), 1)
+	require.Equal(t, gid1, unmarshaled2.GetAvailables()[0].Gid)
+	require.Equal(t, uint64(1024), unmarshaled2.GetAvailables()[0].Available)
+
+	// Test case 3: CongestionControl with multiple AvailableMemory entries
+	control3 := NewCongestionControl()
+	control3.clusterID = 11111
+	gid2 := common.NewGID()
+	gid3 := common.NewGID()
+	control3.AddAvailableMemory(gid2, 2048)
+	control3.AddAvailableMemory(gid3, 4096)
+
+	data3, err := control3.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, control3.GetSize(), len(data3))
+
+	var unmarshaled3 CongestionControl
+	err = unmarshaled3.Unmarshal(data3)
+	require.NoError(t, err)
+	require.Equal(t, control3.GetClusterID(), unmarshaled3.GetClusterID())
+	require.Len(t, unmarshaled3.GetAvailables(), 2)
+
+	// Verify the order and values
+	availables := unmarshaled3.GetAvailables()
+	require.Equal(t, gid2, availables[0].Gid)
+	require.Equal(t, uint64(2048), availables[0].Available)
+	require.Equal(t, gid3, availables[1].Gid)
+	require.Equal(t, uint64(4096), availables[1].Available)
+
+	// Test case 4: CongestionControl with AvailableMemoryWithDispatchers
+	// Note: DispatcherAvailable field is not properly serialized/deserialized in current implementation
+	// So we only test the basic GID and Available fields
+	control4 := NewCongestionControl()
+	control4.clusterID = 22222
+	gid4 := common.NewGID()
+	dispatcherAvailable := map[common.DispatcherID]uint64{
+		common.NewDispatcherID(): 1000,
+		common.NewDispatcherID(): 2000,
+	}
+	control4.AddAvailableMemoryWithDispatchers(gid4, 3000, dispatcherAvailable)
+
+	data4, err := control4.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, control4.GetSize(), len(data4))
+
+	var unmarshaled4 CongestionControl
+	err = unmarshaled4.Unmarshal(data4)
+	require.NoError(t, err)
+	require.Equal(t, control4.GetClusterID(), unmarshaled4.GetClusterID())
+	require.Len(t, unmarshaled4.GetAvailables(), 1)
+
+	availableMem := unmarshaled4.GetAvailables()[0]
+	require.Equal(t, gid4, availableMem.Gid)
+	require.Equal(t, uint64(3000), availableMem.Available)
+	require.Equal(t, uint32(2), availableMem.DispatcherCount)
+	require.Len(t, availableMem.DispatcherAvailable, 2)
+}
+
+func TestCongestionControlMarshalUnmarshalEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	// Test case 1: Very large available memory values
+	control1 := NewCongestionControl()
+	control1.clusterID = 99999
+	gid1 := common.NewGID()
+	control1.AddAvailableMemory(gid1, ^uint64(0)) // Maximum uint64 value
+
+	data1, err := control1.Marshal()
+	require.NoError(t, err)
+
+	var unmarshaled1 CongestionControl
+	err = unmarshaled1.Unmarshal(data1)
+	require.NoError(t, err)
+	require.Equal(t, ^uint64(0), unmarshaled1.GetAvailables()[0].Available)
+
+	// Test case 2: Zero available memory
+	control2 := NewCongestionControl()
+	control2.clusterID = 88888
+	gid2 := common.NewGID()
+	control2.AddAvailableMemory(gid2, 0)
+
+	data2, err := control2.Marshal()
+	require.NoError(t, err)
+
+	var unmarshaled2 CongestionControl
+	err = unmarshaled2.Unmarshal(data2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), unmarshaled2.GetAvailables()[0].Available)
+
+	// Test case 3: Multiple changefeeds with different memory values
+	control3 := NewCongestionControl()
+	control3.clusterID = 77777
+
+	// Add multiple changefeeds
+	for i := 0; i < 5; i++ {
+		gid := common.NewGID()
+		control3.AddAvailableMemory(gid, uint64(i*1000))
+	}
+
+	data3, err := control3.Marshal()
+	require.NoError(t, err)
+
+	var unmarshaled3 CongestionControl
+	err = unmarshaled3.Unmarshal(data3)
+	require.NoError(t, err)
+	require.Len(t, unmarshaled3.GetAvailables(), 5)
+
+	// Verify all values are preserved
+	availables := unmarshaled3.GetAvailables()
+	for i, available := range availables {
+		require.Equal(t, uint64(i*1000), available.Available)
+	}
+}

@@ -289,14 +289,17 @@ func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
 }
 
 type AvailableMemory struct {
-	Gid       common.GID // GID is the internal representation of ChangeFeedID
-	Available uint64     // in bytes, used to report the Available memory
+	Gid                 common.GID                     // GID is the internal representation of ChangeFeedID
+	Available           uint64                         // in bytes, used to report the Available memory
+	DispatcherCount     uint32                         // used to report the number of dispatchers
+	DispatcherAvailable map[common.DispatcherID]uint64 // in bytes, used to report the memory usage of each dispatcher
 }
 
 func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
 	return AvailableMemory{
-		Gid:       gid,
-		Available: available,
+		Gid:                 gid,
+		Available:           available,
+		DispatcherAvailable: make(map[common.DispatcherID]uint64),
 	}
 }
 
@@ -304,17 +307,36 @@ func (m AvailableMemory) Marshal() []byte {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.Write(m.Gid.Marshal())
 	binary.Write(buf, binary.BigEndian, m.Available)
+	binary.Write(buf, binary.BigEndian, m.DispatcherCount)
+	for dispatcherID, available := range m.DispatcherAvailable {
+		buf.Write(dispatcherID.Marshal())
+		binary.Write(buf, binary.BigEndian, available)
+	}
 	return buf.Bytes()
 }
 
-func (m *AvailableMemory) Unmarshal(data []byte) {
-	buf := bytes.NewBuffer(data)
+func (m *AvailableMemory) Unmarshal(buf *bytes.Buffer) {
 	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
 	m.Available = binary.BigEndian.Uint64(buf.Next(8))
+	m.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
+	m.DispatcherAvailable = make(map[common.DispatcherID]uint64)
+	for range m.DispatcherCount {
+		dispatcherID := common.DispatcherID{}
+		dispatcherID.Unmarshal(buf.Next(dispatcherID.GetSize()))
+		m.DispatcherAvailable[dispatcherID] = binary.BigEndian.Uint64(buf.Next(8))
+	}
 }
 
 func (m AvailableMemory) GetSize() int {
-	return m.Gid.GetSize() + 8
+	// changefeedID size + changefeed available size
+	size := m.Gid.GetSize() + 8
+	size += 4 // dispatcher count
+	for range m.DispatcherCount {
+		dispatcherID := &common.DispatcherID{}
+		// dispatcherID size + dispatcher available size
+		size += dispatcherID.GetSize() + 8
+	}
+	return size
 }
 
 type CongestionControl struct {
@@ -367,7 +389,7 @@ func (c *CongestionControl) Unmarshal(data []byte) error {
 	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
 	for i := uint32(0); i < c.changefeedCount; i++ {
 		var item AvailableMemory
-		item.Unmarshal(buf.Next(item.GetSize()))
+		item.Unmarshal(buf)
 		c.availables = append(c.availables, item)
 	}
 	return nil
@@ -376,6 +398,14 @@ func (c *CongestionControl) Unmarshal(data []byte) error {
 func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64) {
 	c.changefeedCount++
 	c.availables = append(c.availables, NewAvailableMemory(gid, available))
+}
+
+func (c *CongestionControl) AddAvailableMemoryWithDispatchers(gid common.GID, available uint64, dispatcherAvailable map[common.DispatcherID]uint64) {
+	c.changefeedCount++
+	availMem := NewAvailableMemory(gid, available)
+	availMem.DispatcherAvailable = dispatcherAvailable
+	availMem.DispatcherCount = uint32(len(dispatcherAvailable))
+	c.availables = append(c.availables, availMem)
 }
 
 func (c *CongestionControl) GetAvailables() []AvailableMemory {

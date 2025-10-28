@@ -424,7 +424,7 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 				s.paused.Store(false)
 				s.cond.Broadcast()
 				log.Info("subscription client resume push region event")
-			case dynstream.PausePath, dynstream.ResumePath:
+			case dynstream.ReleasePath, dynstream.ResumePath:
 				// Ignore it, because it is no need to pause and resume a path in puller.
 			}
 		}

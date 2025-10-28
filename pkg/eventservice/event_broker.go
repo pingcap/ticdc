@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,8 @@ const (
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
 
 	maxReadyEventIntervalSeconds = 10
+	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
+	defaultSendResolvedTsInterval = time.Second * 2
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -247,6 +250,16 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Int64("EventTableID", e.TableID),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+}
+
+func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
+	// Can't send resolvedTs if there was a interrupted scan task happened before.
+	// d.lastScannedStartTs.Load() != 0 indicates that there was a interrupted scan task happened before.
+	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval || d.lastScannedStartTs.Load() != 0 {
+		return
+	}
+	watermark := d.sentResolvedTs.Load()
+	c.sendResolvedTs(d, watermark)
 }
 
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
@@ -490,11 +503,22 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 // thus to ensure the sync point event is in correct order for each dispatcher.
 // When a period of time, there is no other dml and ddls, we will batch multiple sync point commit ts in one sync point event to enhance the speed.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
+
+	if !d.enableSyncPoint {
+		return
+	}
+
 	commitTsList := make([]uint64, 0)
-	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
+	for ts > d.nextSyncPoint.Load() {
 		commitTsList = append(commitTsList, d.nextSyncPoint.Load())
+
+		d.lastSyncPointTs.Store(d.nextSyncPoint.Load())
+
 		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint.Load()).Add(d.syncPointInterval)))
 	}
+
+	d.changefeedStat.updateDispatchersMinSyncpointTs()
+
 	for len(commitTsList) > 0 {
 		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
 		newCommitTsList := commitTsList
@@ -555,6 +579,34 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
+	// Syncpoint coordination: ensure strict alignment across all dispatchers
+	// The idea: once a dispatcher emits a syncpoint, it should wait until all other
+	// dispatchers also emit that syncpoint before proceeding to scan data that would
+	// trigger the next syncpoint.
+	if task.enableSyncPoint {
+		task.changefeedStat.updateDispatchersMinSyncpointTs()
+		dispatchersMinSyncpointTs := task.changefeedStat.dispatchersMinSyncpointTs.Load()
+
+		// Only check if some dispatcher has emitted syncpoint (dispatchersMinSyncpointTs != MaxUint64)
+		if dispatchersMinSyncpointTs != math.MaxUint64 {
+			lastSyncPointTs := task.lastSyncPointTs.Load()
+			nextSyncPoint := task.nextSyncPoint.Load()
+			initialSyncPoint := task.info.GetSyncPointTs()
+
+			// Only apply the check if this dispatcher has emitted at least one syncpoint
+			if nextSyncPoint > initialSyncPoint && lastSyncPointTs > dispatchersMinSyncpointTs {
+				c.sendSignalResolvedTs(task)
+				// This dispatcher has moved ahead. Wait for slowest dispatcher to catch up.
+				log.Debug("skip scan to wait for other dispatchers to align at syncpoint",
+					zap.Stringer("dispatcher", task.id),
+					zap.Uint64("lastSyncPointTs", lastSyncPointTs),
+					zap.Uint64("nextSyncPoint", nextSyncPoint),
+					zap.Uint64("dispatchersMinSyncpointTs", dispatchersMinSyncpointTs))
+				return
+			}
+		}
+	}
+
 	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
 	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
 	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
@@ -589,11 +641,18 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
-		log.Debug("not enough memory quota, skip scan",
+		log.Debug("changefeed available memory quota is not enough, skip scan",
 			zap.String("changefeed", changefeedID.String()),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
+		c.sendSignalResolvedTs(task)
+		return
+	}
+
+	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
+		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
+		c.sendSignalResolvedTs(task)
 		return
 	}
 
@@ -1122,20 +1181,32 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
+	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
+		for dispatcherID, available := range item.DispatcherAvailable {
+			dispatcherAvailable[dispatcherID] = available
+		}
 	}
 
 	c.changefeedMap.Range(func(k, v interface{}) bool {
 		changefeedID := k.(common.ChangeFeedID)
 		changefeed := v.(*changefeedStatus)
-
 		available, ok := holder[changefeedID.ID()]
-		if !ok {
-			return true
+		if ok {
+			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		}
-		changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		return true
+	})
+
+	c.dispatchers.Range(func(k, v interface{}) bool {
+		dispatcherID := k.(common.DispatcherID)
+		dispatcher := v.(*atomic.Pointer[dispatcherStat]).Load()
+		available, ok := dispatcherAvailable[dispatcherID]
+		if ok {
+			dispatcher.availableMemoryQuota.Store(available)
+		}
 		return true
 	})
 }

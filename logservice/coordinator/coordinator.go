@@ -198,9 +198,7 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 
 			c.changefeedStates.Lock()
 			for _, state := range c.changefeedStates.m {
-				if _, exists := state.nodeStates[id]; exists {
-					delete(state.nodeStates, id)
-				}
+				delete(state.nodeStates, id)
 			}
 			c.changefeedStates.Unlock()
 		}

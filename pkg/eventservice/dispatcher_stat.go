@@ -14,6 +14,7 @@
 package eventservice
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -33,7 +34,7 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 3600
 
-	minScanLimitInBytes     = 1024 * 128  // 128KB
+	minScanLimitInBytes     = 1024        // 1KB
 	maxScanLimitInBytes     = 1024 * 1024 // 1MB
 	updateScanLimitInterval = time.Second * 10
 )
@@ -69,6 +70,7 @@ type dispatcherStat struct {
 	enableSyncPoint   bool
 	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
+	lastSyncPointTs   atomic.Uint64
 
 	// =============================================================================
 	// ================== below are fields need copied when reset ==================
@@ -90,6 +92,7 @@ type dispatcherStat struct {
 	maxScanLimitInBytes     atomic.Int64
 	lastUpdateScanLimitTime atomic.Time
 	lastScanBytes           atomic.Int64
+	availableMemoryQuota    atomic.Uint64
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
@@ -149,12 +152,14 @@ func newDispatcherStat(
 	}
 
 	// A small value to avoid too many scan tasks at the first place.
-	dispStat.lastScanBytes.Store(1024)
+	dispStat.lastScanBytes.Store(minScanLimitInBytes)
+	dispStat.availableMemoryQuota.Store(minScanLimitInBytes)
 
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
 		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
+		dispStat.lastSyncPointTs.Store(info.GetSyncPointTs())
 	}
 	startTs := info.GetStartTs()
 	dispStat.receivedResolvedTs.Store(startTs)
@@ -411,18 +416,76 @@ func (c *resolvedTsCache) reset() {
 	c.len = 0
 }
 
+const updateDispatchersMinSyncpointTsInterval = time.Millisecond * 50
+
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
+
+	// This lock is used to protect the dispatchersMinSyncpointTs.
+	mu                                      sync.Mutex
+	dispatchersMinSyncpointTs               atomic.Uint64
+	lastUpdateDispatchersMinSyncpointTsTime atomic.Time
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	return &changefeedStatus{
+	res := &changefeedStatus{
 		changefeedID: changefeedID,
 	}
+	res.dispatchersMinSyncpointTs.Store(math.MaxUint64)
+	res.lastUpdateDispatchersMinSyncpointTsTime.Store(time.Now())
+	return res
+}
+
+func (c *changefeedStatus) updateDispatchersMinSyncpointTs() {
+	now := time.Now()
+
+	if now.Sub(c.lastUpdateDispatchersMinSyncpointTsTime.Load()) < updateDispatchersMinSyncpointTsInterval {
+		return
+	}
+
+	minTs := uint64(math.MaxUint64)
+	hasValidDispatcher := false
+
+	c.dispatchers.Range(func(key, value any) bool {
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+
+		if !dispatcher.enableSyncPoint {
+			// For non-syncpoint dispatchers, always allow them to scan freely
+			return true
+		}
+
+		// For syncpoint dispatchers, use lastSyncPointTs
+		ts := dispatcher.lastSyncPointTs.Load()
+		nextSyncPoint := dispatcher.nextSyncPoint.Load()
+		initialSyncPoint := dispatcher.info.GetSyncPointTs()
+
+		// Only consider this dispatcher if it has emitted at least one syncpoint
+		// (i.e., nextSyncPoint has moved forward from the initial value)
+		if nextSyncPoint > initialSyncPoint {
+			hasValidDispatcher = true
+			if ts < minTs {
+				minTs = ts
+			}
+		}
+		return true
+	})
+
+	// If no dispatcher has emitted any syncpoint yet, keep it as MaxUint64
+	// This allows all dispatchers to scan freely until they emit their first syncpoint
+	if !hasValidDispatcher {
+		return
+	}
+
+	c.lastUpdateDispatchersMinSyncpointTsTime.Store(now)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dispatchersMinSyncpointTs.Store(minTs)
+
 }
 
 func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {
