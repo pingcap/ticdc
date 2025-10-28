@@ -595,6 +595,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 			// Only apply the check if this dispatcher has emitted at least one syncpoint
 			if nextSyncPoint > initialSyncPoint && lastSyncPointTs > dispatchersMinSyncpointTs {
+				c.sendSignalResolvedTs(task)
 				// This dispatcher has moved ahead. Wait for slowest dispatcher to catch up.
 				log.Debug("skip scan to wait for other dispatchers to align at syncpoint",
 					zap.Stringer("dispatcher", task.id),
