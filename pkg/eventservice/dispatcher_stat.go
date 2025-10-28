@@ -449,6 +449,7 @@ func (c *changefeedStatus) updateDispatchersMinSyncpointTs() {
 	}
 
 	minTs := uint64(math.MaxUint64)
+
 	c.dispatchers.Range(func(key, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		ts := dispatcher.lastSyncPointTs.Load()
@@ -464,15 +465,9 @@ func (c *changefeedStatus) updateDispatchersMinSyncpointTs() {
 
 	c.lastUpdateDispatchersMinSyncpointTsTime.Store(now)
 
-	if minTs > c.dispatchersMinSyncpointTs.Load() {
-		return
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if minTs < c.dispatchersMinSyncpointTs.Load() {
-		c.dispatchersMinSyncpointTs.Store(minTs)
-	}
+	c.dispatchersMinSyncpointTs.Store(minTs)
 
 }
 

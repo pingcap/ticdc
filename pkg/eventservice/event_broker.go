@@ -505,10 +505,12 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	commitTsList := make([]uint64, 0)
 	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
 		commitTsList = append(commitTsList, d.nextSyncPoint.Load())
+
 		d.lastSyncPointTs.Store(d.nextSyncPoint.Load())
 
 		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint.Load()).Add(d.syncPointInterval)))
 	}
+
 	d.changefeedStat.updateDispatchersMinSyncpointTs()
 
 	for len(commitTsList) > 0 {
