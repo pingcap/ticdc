@@ -687,7 +687,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
 		status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
-		log.Info("hyy get dispatcher status", zap.Any("status", status), zap.Any("cleanMap", cleanMap), zap.Any("watermark", watermark), zap.Any("dispatcherID", id))
+		//log.Info("hyy get dispatcher status", zap.Any("status", status), zap.Any("cleanMap", cleanMap), zap.Any("watermark", watermark), zap.Any("dispatcherID", id))
 		if status != nil {
 			message.Statuses = append(message.Statuses, status)
 		}
@@ -747,7 +747,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
 
-	log.Info("hyy aggregate dispatcher heartbeats", zap.Any("message", message))
+	//log.Info("hyy aggregate dispatcher heartbeats", zap.Any("message", message))
 	return &message
 }
 
