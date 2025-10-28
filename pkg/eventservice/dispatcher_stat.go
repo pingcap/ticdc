@@ -70,8 +70,7 @@ type dispatcherStat struct {
 	enableSyncPoint   bool
 	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
-
-	lastSyncPointTs atomic.Uint64
+	lastSyncPointTs   atomic.Uint64
 
 	// =============================================================================
 	// ================== below are fields need copied when reset ==================

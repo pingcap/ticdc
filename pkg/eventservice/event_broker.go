@@ -579,10 +579,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	// Syncpoint coordination: prevent fast dispatchers from scanning too far ahead
+	// Syncpoint coordination: ensure strict alignment across all dispatchers
+	// The idea: once a dispatcher emits a syncpoint, it should wait until all other
+	// dispatchers also emit that syncpoint before proceeding to scan data that would
+	// trigger the next syncpoint.
 	if task.enableSyncPoint {
 		task.changefeedStat.updateDispatchersMinSyncpointTs()
 		dispatchersMinSyncpointTs := task.changefeedStat.dispatchersMinSyncpointTs.Load()
+
 		// Only check if some dispatcher has emitted syncpoint (dispatchersMinSyncpointTs != MaxUint64)
 		if dispatchersMinSyncpointTs != math.MaxUint64 {
 			lastSyncPointTs := task.lastSyncPointTs.Load()
@@ -591,19 +595,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 			// Only apply the check if this dispatcher has emitted at least one syncpoint
 			if nextSyncPoint > initialSyncPoint && lastSyncPointTs > dispatchersMinSyncpointTs {
-				// Calculate the time gap between this dispatcher's last syncpoint and the slowest one
-				//gap := oracle.GetTimeFromTS(lastSyncPointTs).Sub(oracle.GetTimeFromTS(dispatchersMinSyncpointTs))
-				// Allow scanning up to one syncpoint interval ahead of the slowest dispatcher
-				// This gives slow dispatchers time to catch up while allowing reasonable progress
-				//if gap > task.syncPointInterval {
-				// log.Debug("skip scan because dispatcher is too far ahead of others",
-				// 	zap.Stringer("dispatcher", task.id),
-				// 	zap.Uint64("lastSyncPointTs", lastSyncPointTs),
-				// 	zap.Uint64("dispatchersMinSyncpointTs", dispatchersMinSyncpointTs),
-				// 	zap.Duration("gap", gap),
-				// 	zap.Duration("syncPointInterval", task.syncPointInterval))
+				// This dispatcher has moved ahead. Wait for slowest dispatcher to catch up.
+				log.Debug("skip scan to wait for other dispatchers to align at syncpoint",
+					zap.Stringer("dispatcher", task.id),
+					zap.Uint64("lastSyncPointTs", lastSyncPointTs),
+					zap.Uint64("nextSyncPoint", nextSyncPoint),
+					zap.Uint64("dispatchersMinSyncpointTs", dispatchersMinSyncpointTs))
 				return
-				//}
 			}
 		}
 	}
