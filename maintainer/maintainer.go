@@ -693,6 +693,8 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
 	// TODO:add comment and test to ensure the operator will get first before calculate checkpointTs
 	m.controller.HandleStatus(msg.From, req.Statuses)
+
+	time.Sleep(50 * time.Millisecond)
 	if req.Watermark != nil {
 		old, ok := m.checkpointTsByCapture.Get(msg.From)
 		if !ok || (req.Watermark.Seq >= old.Seq && req.Watermark.CheckpointTs >= old.CheckpointTs) {
