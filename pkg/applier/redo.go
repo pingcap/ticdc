@@ -318,15 +318,18 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	if err != nil {
 		return errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
+	query := sinkURI.Query()
+	query.Set("batch-dml-enable", "false")
 	if ra.rd.GetVersion() != misc.Version {
-		query := sinkURI.Query()
 		query.Set("enable-ddl-ts", "false")
-		sinkURI.RawQuery = query.Encode()
 		log.Warn("The redo log version is different the current version, enable-ddl-ts will be set to false", zap.Any("logVersion", ra.rd.GetVersion()), zap.Any("currentVersion", misc.Version))
 	}
+	sinkURI.RawQuery = query.Encode()
 	replicaConfig := &config.ChangefeedConfig{
 		SinkURI:    sinkURI.String(),
-		SinkConfig: &config.SinkConfig{},
+		SinkConfig: &config.SinkConfig{
+			// SafeMode: util.AddressOf(false),
+		},
 	}
 	ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
 	if err != nil {
