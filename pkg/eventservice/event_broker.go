@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -578,9 +579,32 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if task.enableSyncPoint && task.lastScannedCommitTs.Load() > task.changefeedStat.dispatchersMinSyncpointTs.Load() {
-		log.Debug("skip scan because the last scanned commit ts is greater than the dispatchers min syncpoint ts", zap.Stringer("dispatcher", task.id), zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("dispatchersMinSyncpointTs", task.changefeedStat.dispatchersMinSyncpointTs.Load()))
-		return
+	// Syncpoint coordination: prevent fast dispatchers from scanning too far ahead
+	if task.enableSyncPoint {
+		dispatchersMinSyncpointTs := task.changefeedStat.dispatchersMinSyncpointTs.Load()
+		// Only check if some dispatcher has emitted syncpoint (dispatchersMinSyncpointTs != MaxUint64)
+		if dispatchersMinSyncpointTs != math.MaxUint64 {
+			lastSyncPointTs := task.lastSyncPointTs.Load()
+			nextSyncPoint := task.nextSyncPoint.Load()
+			initialSyncPoint := task.info.GetSyncPointTs()
+
+			// Only apply the check if this dispatcher has emitted at least one syncpoint
+			if nextSyncPoint > initialSyncPoint && lastSyncPointTs > dispatchersMinSyncpointTs {
+				// Calculate the time gap between this dispatcher's last syncpoint and the slowest one
+				//gap := oracle.GetTimeFromTS(lastSyncPointTs).Sub(oracle.GetTimeFromTS(dispatchersMinSyncpointTs))
+				// Allow scanning up to one syncpoint interval ahead of the slowest dispatcher
+				// This gives slow dispatchers time to catch up while allowing reasonable progress
+				//if gap > task.syncPointInterval {
+				// log.Debug("skip scan because dispatcher is too far ahead of others",
+				// 	zap.Stringer("dispatcher", task.id),
+				// 	zap.Uint64("lastSyncPointTs", lastSyncPointTs),
+				// 	zap.Uint64("dispatchersMinSyncpointTs", dispatchersMinSyncpointTs),
+				// 	zap.Duration("gap", gap),
+				// 	zap.Duration("syncPointInterval", task.syncPointInterval))
+				return
+				//}
+			}
+		}
 	}
 
 	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.

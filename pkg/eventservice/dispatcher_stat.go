@@ -449,18 +449,25 @@ func (c *changefeedStatus) updateDispatchersMinSyncpointTs() {
 	}
 
 	minTs := uint64(math.MaxUint64)
+	hasValidDispatcher := false
 
 	c.dispatchers.Range(func(key, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+
+		if !dispatcher.enableSyncPoint {
+			// For non-syncpoint dispatchers, always allow them to scan freely
+			return true
+		}
+
 		// For syncpoint dispatchers, use lastSyncPointTs
-		// Note: lastSyncPointTs starts with the initial syncpoint ts,
-		// but we use nextSyncPoint to determine if any syncpoint has been emitted yet
 		ts := dispatcher.lastSyncPointTs.Load()
 		nextSyncPoint := dispatcher.nextSyncPoint.Load()
 		initialSyncPoint := dispatcher.info.GetSyncPointTs()
+
 		// Only consider this dispatcher if it has emitted at least one syncpoint
 		// (i.e., nextSyncPoint has moved forward from the initial value)
 		if nextSyncPoint > initialSyncPoint {
+			hasValidDispatcher = true
 			if ts < minTs {
 				minTs = ts
 			}
@@ -468,7 +475,9 @@ func (c *changefeedStatus) updateDispatchersMinSyncpointTs() {
 		return true
 	})
 
-	if minTs == uint64(math.MaxUint64) {
+	// If no dispatcher has emitted any syncpoint yet, keep it as MaxUint64
+	// This allows all dispatchers to scan freely until they emit their first syncpoint
+	if !hasValidDispatcher {
 		return
 	}
 
