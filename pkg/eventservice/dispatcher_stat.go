@@ -160,6 +160,7 @@ func newDispatcherStat(
 		dispStat.enableSyncPoint = true
 		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
+		dispStat.lastSyncPointTs.Store(info.GetSyncPointTs())
 	}
 	startTs := info.GetStartTs()
 	dispStat.receivedResolvedTs.Store(startTs)
