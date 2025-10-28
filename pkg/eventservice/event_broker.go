@@ -581,6 +581,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	// Syncpoint coordination: prevent fast dispatchers from scanning too far ahead
 	if task.enableSyncPoint {
+		task.changefeedStat.updateDispatchersMinSyncpointTs()
 		dispatchersMinSyncpointTs := task.changefeedStat.dispatchersMinSyncpointTs.Load()
 		// Only check if some dispatcher has emitted syncpoint (dispatchersMinSyncpointTs != MaxUint64)
 		if dispatchersMinSyncpointTs != math.MaxUint64 {
