@@ -100,6 +100,62 @@ function run() {
 	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml
 }
 
+function execute_ddl_for_normal_tables() {
+	while true; do
+		table_num=$((RANDOM % 5 + 1))
+		table_name="table_$table_num"
+
+		case $((RANDOM % 3)) in
+		0)
+			echo "DDL: Dropping and recreating $table_name..."
+			run_sql "DROP TABLE IF EXISTS test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			sleep 0.5
+			run_sql "CREATE TABLE IF NOT EXISTS test.$table_name (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		1)
+			echo "DDL: Dropping and recovering $table_name..."
+			run_sql "DROP TABLE IF EXISTS test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			sleep 0.5
+			run_sql "RECOVER TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		2)
+			echo "DDL: Truncating $table_name..."
+			run_sql "TRUNCATE TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		esac
+
+		sleep 1
+	done
+}
+
+function kill_server() {
+	for count in {1..10}; do
+		case $((RANDOM % 2)) in
+		0)
+			cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+			if [ -z "$cdc_pid_1" ]; then
+				continue
+			fi
+			kill_cdc_pid $cdc_pid_1
+
+			sleep 15
+			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
+			;;
+		1)
+			cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+			if [ -z "$cdc_pid_2" ]; then
+				continue
+			fi
+			kill_cdc_pid $cdc_pid_2
+
+			sleep 15
+			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
+			;;
+		esac
+		sleep 15
+	done
+}
+
 trap stop EXIT
 run $*
 check_logs $WORK_DIR
