@@ -504,6 +504,9 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
 	commitTsList := make([]uint64, 0)
 	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
+
+		d.changefeedStat.updateDispatchersMinSyncpointTs(d.nextSyncPoint.Load())
+
 		commitTsList = append(commitTsList, d.nextSyncPoint.Load())
 		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint.Load()).Add(d.syncPointInterval)))
 	}
@@ -564,6 +567,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	needScan, dataRange := c.getScanTaskDataRange(task)
 	if !needScan {
+		return
+	}
+
+	if dataRange.CommitTsStart > task.changefeedStat.dispatchersMinSyncpointTs.Load() {
 		return
 	}
 

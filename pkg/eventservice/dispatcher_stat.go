@@ -14,6 +14,7 @@
 package eventservice
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -419,11 +420,32 @@ type changefeedStatus struct {
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
+
+	// This lock is used to protect the dispatchersMinSyncpointTs.
+	mu                        sync.Mutex
+	dispatchersMinSyncpointTs atomic.Uint64
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	return &changefeedStatus{
+	res := &changefeedStatus{
 		changefeedID: changefeedID,
+	}
+	res.dispatchersMinSyncpointTs.Store(math.MaxUint64)
+	return res
+}
+
+func (c *changefeedStatus) updateDispatchersMinSyncpointTs(ts uint64) {
+	if ts == 0 {
+		return
+	}
+	if ts > c.dispatchersMinSyncpointTs.Load() {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ts < c.dispatchersMinSyncpointTs.Load() {
+		c.dispatchersMinSyncpointTs.Store(ts)
 	}
 }
 
