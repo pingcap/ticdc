@@ -502,8 +502,13 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 // thus to ensure the sync point event is in correct order for each dispatcher.
 // When a period of time, there is no other dml and ddls, we will batch multiple sync point commit ts in one sync point event to enhance the speed.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
+
+	if !d.enableSyncPoint {
+		return
+	}
+
 	commitTsList := make([]uint64, 0)
-	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
+	for ts > d.nextSyncPoint.Load() {
 		commitTsList = append(commitTsList, d.nextSyncPoint.Load())
 
 		d.lastSyncPointTs.Store(d.nextSyncPoint.Load())
@@ -573,7 +578,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if task.lastScannedCommitTs.Load() > task.changefeedStat.dispatchersMinSyncpointTs.Load() {
+	if task.enableSyncPoint && task.lastScannedCommitTs.Load() > task.changefeedStat.dispatchersMinSyncpointTs.Load() {
 		log.Debug("skip scan because the last scanned commit ts is greater than the dispatchers min syncpoint ts", zap.Stringer("dispatcher", task.id), zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()), zap.Uint64("dispatchersMinSyncpointTs", task.changefeedStat.dispatchersMinSyncpointTs.Load()))
 		return
 	}

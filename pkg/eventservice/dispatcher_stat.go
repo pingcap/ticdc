@@ -452,9 +452,18 @@ func (c *changefeedStatus) updateDispatchersMinSyncpointTs() {
 
 	c.dispatchers.Range(func(key, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		// For syncpoint dispatchers, use lastSyncPointTs
+		// Note: lastSyncPointTs starts with the initial syncpoint ts,
+		// but we use nextSyncPoint to determine if any syncpoint has been emitted yet
 		ts := dispatcher.lastSyncPointTs.Load()
-		if ts < minTs {
-			minTs = ts
+		nextSyncPoint := dispatcher.nextSyncPoint.Load()
+		initialSyncPoint := dispatcher.info.GetSyncPointTs()
+		// Only consider this dispatcher if it has emitted at least one syncpoint
+		// (i.e., nextSyncPoint has moved forward from the initial value)
+		if nextSyncPoint > initialSyncPoint {
+			if ts < minTs {
+				minTs = ts
+			}
 		}
 		return true
 	})
