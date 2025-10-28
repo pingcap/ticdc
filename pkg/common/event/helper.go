@@ -23,6 +23,7 @@ import (
 )
 
 //go:generate msgp
+//msgp:maps autoshim
 
 // TableSchemaStore is store some schema info for dispatchers.
 // It is responsible for
@@ -35,15 +36,15 @@ import (
 type TableSchemaStore struct {
 	sinkType       commonType.SinkType `msg:"-"`
 	tableNameStore *TableNameStore     `msg:"-"`
-	tableIDStore   *TableIDStore       `msg:"table-id-store"`
+	TableIDStore   *TableIDStore       `msg:"table_id_store"`
 }
 
 func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonType.SinkType) *TableSchemaStore {
 	tableSchemaStore := &TableSchemaStore{
 		sinkType: sinkType,
-		tableIDStore: &TableIDStore{
-			schemaIDToTableIDs: make(map[int64]map[int64]interface{}),
-			tableIDToSchemaID:  make(map[int64]int64),
+		TableIDStore: &TableIDStore{
+			SchemaIDToTableIDs: make(map[int64]map[int64]interface{}),
+			TableIDToSchemaID:  make(map[int64]int64),
 		},
 	}
 	switch sinkType {
@@ -52,7 +53,7 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 			schemaID := schema.SchemaID
 			for _, table := range schema.Tables {
 				tableID := table.TableID
-				tableSchemaStore.tableIDStore.Add(schemaID, tableID)
+				tableSchemaStore.TableIDStore.Add(schemaID, tableID)
 			}
 		}
 	default:
@@ -67,7 +68,7 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 				tableName := table.TableName
 				tableSchemaStore.tableNameStore.Add(schemaName, tableName)
 				tableID := table.TableID
-				tableSchemaStore.tableIDStore.Add(schemaID, tableID)
+				tableSchemaStore.TableIDStore.Add(schemaID, tableID)
 			}
 		}
 	}
@@ -80,14 +81,14 @@ func (s *TableSchemaStore) Clear() {
 
 func (s *TableSchemaStore) AddEvent(event *DDLEvent) {
 	if s.sinkType == commonType.MysqlSinkType {
-		s.tableIDStore.AddEvent(event)
+		s.TableIDStore.AddEvent(event)
 	} else {
 		s.tableNameStore.AddEvent(event)
 	}
 }
 
 func (s *TableSchemaStore) initialized() bool {
-	if s == nil || (s.tableIDStore == nil && s.tableNameStore == nil) {
+	if s == nil || (s.TableIDStore == nil && s.tableNameStore == nil) {
 		log.Panic("TableSchemaStore is not initialized", zap.Any("tableSchemaStore", s))
 		return false
 	}
@@ -98,7 +99,7 @@ func (s *TableSchemaStore) GetTableIdsByDB(schemaID int64) []int64 {
 	if !s.initialized() {
 		return nil
 	}
-	return s.tableIDStore.GetTableIdsByDB(schemaID)
+	return s.TableIDStore.GetTableIdsByDB(schemaID)
 }
 
 // GetNormalTableIdsByDB will not return table id = 0 , this is the only different between GetTableIdsByDB and GetNormalTableIdsByDB
@@ -106,14 +107,14 @@ func (s *TableSchemaStore) GetNormalTableIdsByDB(schemaID int64) []int64 {
 	if !s.initialized() {
 		return nil
 	}
-	return s.tableIDStore.GetNormalTableIdsByDB(schemaID)
+	return s.TableIDStore.GetNormalTableIdsByDB(schemaID)
 }
 
 func (s *TableSchemaStore) GetAllTableIds() []int64 {
 	if !s.initialized() {
 		return nil
 	}
-	return s.tableIDStore.GetAllTableIds()
+	return s.TableIDStore.GetAllTableIds()
 }
 
 // GetAllNormalTableIds will not return table id = 0 , this is the only different between GetAllNormalTableIds and GetAllTableIds
@@ -121,7 +122,7 @@ func (s *TableSchemaStore) GetAllNormalTableIds() []int64 {
 	if !s.initialized() {
 		return nil
 	}
-	return s.tableIDStore.GetAllNormalTableIds()
+	return s.TableIDStore.GetAllNormalTableIds()
 }
 
 // GetAllTableNames only will be called when maintainer send message to ask dispatcher to write checkpointTs to downstream.
@@ -133,6 +134,7 @@ func (s *TableSchemaStore) GetAllTableNames(ts uint64) []*SchemaTableName {
 	return s.tableNameStore.GetAllTableNames(ts)
 }
 
+//msgp:ignore LatestTableNameChanges
 type LatestTableNameChanges struct {
 	mutex sync.Mutex
 	m     map[uint64]*TableNameChange
@@ -214,19 +216,19 @@ func (s *TableNameStore) GetAllTableNames(ts uint64) []*SchemaTableName {
 
 type TableIDStore struct {
 	mutex              sync.Mutex
-	schemaIDToTableIDs map[int64]map[int64]interface{} // schemaID -> tableIDs
-	tableIDToSchemaID  map[int64]int64                 // tableID -> schemaID
+	SchemaIDToTableIDs map[int64]map[int64]interface{} `msg:"schema_to_tables"` // schemaID -> tableIDs
+	TableIDToSchemaID  map[int64]int64                 `msg:"table_to_schema"`  // tableID -> schemaID
 }
 
 func (s *TableIDStore) Add(schemaID int64, tableID int64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.schemaIDToTableIDs[schemaID] == nil {
-		s.schemaIDToTableIDs[schemaID] = make(map[int64]interface{})
+	if s.SchemaIDToTableIDs[schemaID] == nil {
+		s.SchemaIDToTableIDs[schemaID] = make(map[int64]interface{})
 	}
-	s.schemaIDToTableIDs[schemaID][tableID] = nil
-	s.tableIDToSchemaID[tableID] = schemaID
+	s.SchemaIDToTableIDs[schemaID][tableID] = nil
+	s.TableIDToSchemaID[tableID] = schemaID
 }
 
 func (s *TableIDStore) AddEvent(event *DDLEvent) {
@@ -235,11 +237,11 @@ func (s *TableIDStore) AddEvent(event *DDLEvent) {
 
 	if len(event.NeedAddedTables) != 0 {
 		for _, table := range event.NeedAddedTables {
-			if s.schemaIDToTableIDs[table.SchemaID] == nil {
-				s.schemaIDToTableIDs[table.SchemaID] = make(map[int64]interface{})
+			if s.SchemaIDToTableIDs[table.SchemaID] == nil {
+				s.SchemaIDToTableIDs[table.SchemaID] = make(map[int64]interface{})
 			}
-			s.schemaIDToTableIDs[table.SchemaID][table.TableID] = nil
-			s.tableIDToSchemaID[table.TableID] = table.SchemaID
+			s.SchemaIDToTableIDs[table.SchemaID][table.TableID] = nil
+			s.TableIDToSchemaID[table.TableID] = table.SchemaID
 		}
 	}
 
@@ -247,19 +249,19 @@ func (s *TableIDStore) AddEvent(event *DDLEvent) {
 		switch event.NeedDroppedTables.InfluenceType {
 		case InfluenceTypeNormal:
 			for _, tableID := range event.NeedDroppedTables.TableIDs {
-				schemaId := s.tableIDToSchemaID[tableID]
-				delete(s.schemaIDToTableIDs[schemaId], tableID)
-				if len(s.schemaIDToTableIDs[schemaId]) == 0 {
-					delete(s.schemaIDToTableIDs, schemaId)
+				schemaId := s.TableIDToSchemaID[tableID]
+				delete(s.SchemaIDToTableIDs[schemaId], tableID)
+				if len(s.SchemaIDToTableIDs[schemaId]) == 0 {
+					delete(s.SchemaIDToTableIDs, schemaId)
 				}
-				delete(s.tableIDToSchemaID, tableID)
+				delete(s.TableIDToSchemaID, tableID)
 			}
 		case InfluenceTypeDB:
-			tables := s.schemaIDToTableIDs[event.NeedDroppedTables.SchemaID]
+			tables := s.SchemaIDToTableIDs[event.NeedDroppedTables.SchemaID]
 			for tableID := range tables {
-				delete(s.tableIDToSchemaID, tableID)
+				delete(s.TableIDToSchemaID, tableID)
 			}
-			delete(s.schemaIDToTableIDs, event.NeedDroppedTables.SchemaID)
+			delete(s.SchemaIDToTableIDs, event.NeedDroppedTables.SchemaID)
 		case InfluenceTypeAll:
 			log.Error("Should not reach here, InfluenceTypeAll is should not be used in NeedDroppedTables")
 		default:
@@ -269,16 +271,16 @@ func (s *TableIDStore) AddEvent(event *DDLEvent) {
 
 	if event.UpdatedSchemas != nil {
 		for _, schemaIDChange := range event.UpdatedSchemas {
-			delete(s.schemaIDToTableIDs[schemaIDChange.OldSchemaID], schemaIDChange.TableID)
-			if len(s.schemaIDToTableIDs[schemaIDChange.OldSchemaID]) == 0 {
-				delete(s.schemaIDToTableIDs, schemaIDChange.OldSchemaID)
+			delete(s.SchemaIDToTableIDs[schemaIDChange.OldSchemaID], schemaIDChange.TableID)
+			if len(s.SchemaIDToTableIDs[schemaIDChange.OldSchemaID]) == 0 {
+				delete(s.SchemaIDToTableIDs, schemaIDChange.OldSchemaID)
 			}
 
-			if s.schemaIDToTableIDs[schemaIDChange.NewSchemaID] == nil {
-				s.schemaIDToTableIDs[schemaIDChange.NewSchemaID] = make(map[int64]interface{})
+			if s.SchemaIDToTableIDs[schemaIDChange.NewSchemaID] == nil {
+				s.SchemaIDToTableIDs[schemaIDChange.NewSchemaID] = make(map[int64]interface{})
 			}
-			s.schemaIDToTableIDs[schemaIDChange.NewSchemaID][schemaIDChange.TableID] = nil
-			s.tableIDToSchemaID[schemaIDChange.TableID] = schemaIDChange.NewSchemaID
+			s.SchemaIDToTableIDs[schemaIDChange.NewSchemaID][schemaIDChange.TableID] = nil
+			s.TableIDToSchemaID[schemaIDChange.TableID] = schemaIDChange.NewSchemaID
 		}
 	}
 }
@@ -287,7 +289,7 @@ func (s *TableIDStore) GetNormalTableIdsByDB(schemaID int64) []int64 {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	tables := s.schemaIDToTableIDs[schemaID]
+	tables := s.SchemaIDToTableIDs[schemaID]
 	tableIds := make([]int64, 0, len(tables))
 	for tableID := range tables {
 		tableIds = append(tableIds, tableID)
@@ -306,8 +308,8 @@ func (s *TableIDStore) GetTableIdsByDB(schemaID int64) []int64 {
 func (s *TableIDStore) GetAllNormalTableIds() []int64 {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	tableIds := make([]int64, 0, len(s.tableIDToSchemaID))
-	for tableID := range s.tableIDToSchemaID {
+	tableIds := make([]int64, 0, len(s.TableIDToSchemaID))
+	for tableID := range s.TableIDToSchemaID {
 		tableIds = append(tableIds, tableID)
 	}
 	return tableIds

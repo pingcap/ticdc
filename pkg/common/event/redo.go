@@ -358,7 +358,7 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 }
 
 func (r *RedoDDLEvent) SetTableSchemaStore(tableSchemaStore *TableSchemaStore) {
-	if r.DDL.BlockTables.InfluenceType != InfluenceTypeNormal {
+	if r.DDL.BlockTables != nil && r.DDL.BlockTables.InfluenceType != InfluenceTypeNormal {
 		r.TableSchemaStore = tableSchemaStore
 	}
 }
