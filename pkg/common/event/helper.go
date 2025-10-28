@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package event
 
 import (
 	"sync"
@@ -19,9 +19,10 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"go.uber.org/zap"
 )
+
+//go:generate msgp
 
 // TableSchemaStore is store some schema info for dispatchers.
 // It is responsible for
@@ -32,9 +33,9 @@ import (
 // which means each changefeed only has one TableSchemaStore.
 // for mysql sink, tableSchemaStore only need the id-class infos; otherwise, it only need name-class infos.
 type TableSchemaStore struct {
-	sinkType       commonType.SinkType
-	tableNameStore *TableNameStore
-	tableIDStore   *TableIDStore
+	sinkType       commonType.SinkType `msg:"-"`
+	tableNameStore *TableNameStore     `msg:"-"`
+	tableIDStore   *TableIDStore       `msg:"table-id-store"`
 }
 
 func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonType.SinkType) *TableSchemaStore {
@@ -56,8 +57,8 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 		}
 	default:
 		tableSchemaStore.tableNameStore = &TableNameStore{
-			existingTables:         make(map[string]map[string]*commonEvent.SchemaTableName),
-			latestTableNameChanges: &LatestTableNameChanges{m: make(map[uint64]*commonEvent.TableNameChange)},
+			existingTables:         make(map[string]map[string]*SchemaTableName),
+			latestTableNameChanges: &LatestTableNameChanges{m: make(map[uint64]*TableNameChange)},
 		}
 		for _, schema := range schemaInfo {
 			schemaName := schema.SchemaName
@@ -77,7 +78,7 @@ func (s *TableSchemaStore) Clear() {
 	s = nil
 }
 
-func (s *TableSchemaStore) AddEvent(event *commonEvent.DDLEvent) {
+func (s *TableSchemaStore) AddEvent(event *DDLEvent) {
 	if s.sinkType == commonType.MysqlSinkType {
 		s.tableIDStore.AddEvent(event)
 	} else {
@@ -125,7 +126,7 @@ func (s *TableSchemaStore) GetAllNormalTableIds() []int64 {
 
 // GetAllTableNames only will be called when maintainer send message to ask dispatcher to write checkpointTs to downstream.
 // So the ts must be <= the latest received event ts of table trigger event dispatcher.
-func (s *TableSchemaStore) GetAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
+func (s *TableSchemaStore) GetAllTableNames(ts uint64) []*SchemaTableName {
 	if !s.initialized() {
 		return nil
 	}
@@ -134,33 +135,34 @@ func (s *TableSchemaStore) GetAllTableNames(ts uint64) []*commonEvent.SchemaTabl
 
 type LatestTableNameChanges struct {
 	mutex sync.Mutex
-	m     map[uint64]*commonEvent.TableNameChange
+	m     map[uint64]*TableNameChange
 }
 
-func (l *LatestTableNameChanges) Add(ddlEvent *commonEvent.DDLEvent) {
+func (l *LatestTableNameChanges) Add(ddlEvent *DDLEvent) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	l.m[ddlEvent.GetCommitTs()] = ddlEvent.TableNameChange
 }
 
+//msgp:ignore TableNameStore
 type TableNameStore struct {
 	// store all the existing table which existed at the latest query ts
-	existingTables map[string]map[string]*commonEvent.SchemaTableName // databaseName -> {tableName -> SchemaTableName}
+	existingTables map[string]map[string]*SchemaTableName // databaseName -> {tableName -> SchemaTableName}
 	// store the change of table name from the latest query ts to now(latest event)
 	latestTableNameChanges *LatestTableNameChanges
 }
 
 func (s *TableNameStore) Add(databaseName string, tableName string) {
 	if s.existingTables[databaseName] == nil {
-		s.existingTables[databaseName] = make(map[string]*commonEvent.SchemaTableName, 0)
+		s.existingTables[databaseName] = make(map[string]*SchemaTableName, 0)
 	}
-	s.existingTables[databaseName][tableName] = &commonEvent.SchemaTableName{
+	s.existingTables[databaseName][tableName] = &SchemaTableName{
 		SchemaName: databaseName,
 		TableName:  tableName,
 	}
 }
 
-func (s *TableNameStore) AddEvent(event *commonEvent.DDLEvent) {
+func (s *TableNameStore) AddEvent(event *DDLEvent) {
 	if event.TableNameChange != nil {
 		s.latestTableNameChanges.Add(event)
 	}
@@ -168,23 +170,23 @@ func (s *TableNameStore) AddEvent(event *commonEvent.DDLEvent) {
 
 // GetAllTableNames only will be called when maintainer send message to ask dispatcher to write checkpointTs to downstream.
 // So the ts must be <= the latest received event ts of table trigger event dispatcher.
-func (s *TableNameStore) GetAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
+func (s *TableNameStore) GetAllTableNames(ts uint64) []*SchemaTableName {
 	// we have to send checkpointTs to the drop schema/tables so that consumer can know the schema/table is dropped.
-	tableNames := make([]*commonEvent.SchemaTableName, 0)
+	tableNames := make([]*SchemaTableName, 0)
 	s.latestTableNameChanges.mutex.Lock()
 	if len(s.latestTableNameChanges.m) > 0 {
 		// update the existingTables with the latest table changes <= ts
 		for commitTs, tableNameChange := range s.latestTableNameChanges.m {
 			if commitTs <= ts {
 				if tableNameChange.DropDatabaseName != "" {
-					tableNames = append(tableNames, &commonEvent.SchemaTableName{
+					tableNames = append(tableNames, &SchemaTableName{
 						SchemaName: tableNameChange.DropDatabaseName,
 					})
 					delete(s.existingTables, tableNameChange.DropDatabaseName)
 				} else {
 					for _, addName := range tableNameChange.AddName {
 						if s.existingTables[addName.SchemaName] == nil {
-							s.existingTables[addName.SchemaName] = make(map[string]*commonEvent.SchemaTableName, 0)
+							s.existingTables[addName.SchemaName] = make(map[string]*SchemaTableName, 0)
 						}
 						s.existingTables[addName.SchemaName][addName.TableName] = &addName
 					}
@@ -227,7 +229,7 @@ func (s *TableIDStore) Add(schemaID int64, tableID int64) {
 	s.tableIDToSchemaID[tableID] = schemaID
 }
 
-func (s *TableIDStore) AddEvent(event *commonEvent.DDLEvent) {
+func (s *TableIDStore) AddEvent(event *DDLEvent) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -243,7 +245,7 @@ func (s *TableIDStore) AddEvent(event *commonEvent.DDLEvent) {
 
 	if event.NeedDroppedTables != nil {
 		switch event.NeedDroppedTables.InfluenceType {
-		case commonEvent.InfluenceTypeNormal:
+		case InfluenceTypeNormal:
 			for _, tableID := range event.NeedDroppedTables.TableIDs {
 				schemaId := s.tableIDToSchemaID[tableID]
 				delete(s.schemaIDToTableIDs[schemaId], tableID)
@@ -252,13 +254,13 @@ func (s *TableIDStore) AddEvent(event *commonEvent.DDLEvent) {
 				}
 				delete(s.tableIDToSchemaID, tableID)
 			}
-		case commonEvent.InfluenceTypeDB:
+		case InfluenceTypeDB:
 			tables := s.schemaIDToTableIDs[event.NeedDroppedTables.SchemaID]
 			for tableID := range tables {
 				delete(s.tableIDToSchemaID, tableID)
 			}
 			delete(s.schemaIDToTableIDs, event.NeedDroppedTables.SchemaID)
-		case commonEvent.InfluenceTypeAll:
+		case InfluenceTypeAll:
 			log.Error("Should not reach here, InfluenceTypeAll is should not be used in NeedDroppedTables")
 		default:
 			log.Error("Unknown InfluenceType")

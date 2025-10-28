@@ -39,10 +39,16 @@ function run() {
 	run_sql "CREATE TABLE consistent_replicate_ddl.usertable2 like consistent_replicate_ddl.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE consistent_replicate_ddl.usertable3 like consistent_replicate_ddl.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE consistent_replicate_ddl.usertable_bak like consistent_replicate_ddl.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	for i in {1..100}; do
+		run_sql "CREATE TABLE IF NOT EXISTS consistent_replicate_ddl.table_$i (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	done
 	check_table_exists "consistent_replicate_ddl.usertable1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "consistent_replicate_ddl.usertable2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_replicate_ddl.usertable3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_replicate_ddl.usertable_bak" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
+	for i in {1..100}; do
+		check_table_exists "consistent_replicate_ddl.table_$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
+	done
 	sleep 5
 	cleanup_process $CDC_BINARY
 	# Inject the failpoint to prevent sink execution, but the global resolved can be moved forward.
@@ -77,6 +83,14 @@ function run() {
 	run_sql "RENAME TABLE consistent_replicate_ddl.usertable2 to consistent_replicate_ddl.usertable2_1, consistent_replicate_ddl.usertable3 TO consistent_replicate_ddl.usertable3_1" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "ALTER TABLE consistent_replicate_ddl.usertable3_1 MODIFY COLUMN FIELD1 varchar(100)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO consistent_replicate_ddl.usertable3_1 SELECT * FROM consistent_replicate_ddl.usertable limit 31" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+
+	# case 4:
+	# rename multiple tables
+	for i in {1..100}; do
+		run_sql "INSERT INTO consistent_replicate_ddl.table_$i (data) VALUES ('insert_$(date +%s)_${RANDOM}'"
+		new_table_name="table_$(($i + 500))"
+		run_sql "RENAME TABLE consistent_replicate_ddl.table_$i TO consistent_replicate_ddl.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	done
 
 	run_sql "CREATE table consistent_replicate_ddl.check1(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

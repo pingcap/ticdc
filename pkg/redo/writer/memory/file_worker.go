@@ -101,6 +101,7 @@ type fileWorkerGroup struct {
 
 	metricWriteBytes       prometheus.Gauge
 	metricFlushAllDuration prometheus.Observer
+	tableSchemaStore       *event.TableSchemaStore
 }
 
 // newFileWorkerGroup create a fileWorkerGroup
@@ -271,6 +272,7 @@ func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event writer.RedoEven
 	if err != nil {
 		return err
 	}
+	rl.RedoDDL.SetTableSchemaStore(f.tableSchemaStore)
 	file := f.newFileCache(data, rl.GetCommitTs())
 	f.syncWriteFile(egCtx, file)
 	// flush

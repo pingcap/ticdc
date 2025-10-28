@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -59,6 +60,10 @@ func NewLogWriter(
 		return nil, err
 	}
 	return
+}
+
+func (l *logWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore) {
+	l.backendWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
 func (l *logWriter) Run(ctx context.Context) error {

@@ -214,6 +214,7 @@ func (ra *RedoApplier) applyDDL(
 			return err
 		}
 	}
+	ra.mysqlSink.SetTableSchemaStore(ddl.TableSchemaStore)
 	if err := ra.mysqlSink.WriteBlockEvent(ddl.ToDDLEvent()); err != nil {
 		return err
 	}

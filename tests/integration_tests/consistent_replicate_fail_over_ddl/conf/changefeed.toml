@@ -1,3 +1,0 @@
-[consistent]
-level = "eventual"
-storage = "file:///tmp/tidb_cdc_test/consistent_replicate_fail_over_ddl/redo"

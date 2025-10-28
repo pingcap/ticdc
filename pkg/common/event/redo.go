@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -50,9 +51,10 @@ type RedoDMLEvent struct {
 
 // RedoDDLEvent represents DDL event used in redo log persistent
 type RedoDDLEvent struct {
-	DDL       *DDLEventInRedoLog   `msg:"ddl"`
-	Type      byte                 `msg:"type"`
-	TableName commonType.TableName `msg:"table-name"`
+	DDL              *DDLEventInRedoLog   `msg:"ddl"`
+	Type             byte                 `msg:"type"`
+	TableName        commonType.TableName `msg:"table-name"`
+	TableSchemaStore *TableSchemaStore    `msg:"table-schema-store"`
 }
 
 // DMLEventInRedoLog is used to store DMLEvent in redo log v2 format
@@ -352,6 +354,12 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		TableName:     r.TableName.Table,
 		FinishedTs:    r.DDL.CommitTs,
 		BlockedTables: r.DDL.BlockTables,
+	}
+}
+
+func (r *RedoDDLEvent) SetTableSchemaStore(tableSchemaStore *TableSchemaStore) {
+	if r.DDL.BlockTables.InfluenceType != InfluenceTypeNormal {
+		r.TableSchemaStore = tableSchemaStore
 	}
 }
 

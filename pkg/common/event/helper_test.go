@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package event
 
 import (
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,9 +55,9 @@ func TestTableSchemaStoreWhenMysqlSink(t *testing.T) {
 	require.Equal(t, 3, len(tableIds))
 
 	// add table event
-	event1 := &commonEvent.DDLEvent{
+	event1 := &DDLEvent{
 		FinishedTs: 3,
-		NeedAddedTables: []commonEvent.Table{
+		NeedAddedTables: []Table{
 			{
 				SchemaID: 1,
 				TableID:  5,
@@ -80,10 +79,10 @@ func TestTableSchemaStoreWhenMysqlSink(t *testing.T) {
 	require.Equal(t, 4, len(tableIds))
 
 	// drop databases
-	event2 := &commonEvent.DDLEvent{
+	event2 := &DDLEvent{
 		FinishedTs: 5,
-		NeedDroppedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeDB,
+		NeedDroppedTables: &InfluencedTables{
+			InfluenceType: InfluenceTypeDB,
 			SchemaID:      1,
 		},
 	}
@@ -96,9 +95,9 @@ func TestTableSchemaStoreWhenMysqlSink(t *testing.T) {
 	require.Equal(t, 4, len(tableIds))
 
 	// rename
-	event3 := &commonEvent.DDLEvent{
+	event3 := &DDLEvent{
 		FinishedTs: 7,
-		UpdatedSchemas: []commonEvent.SchemaIDChange{
+		UpdatedSchemas: []SchemaIDChange{
 			{
 				TableID:     6,
 				OldSchemaID: 2,
@@ -145,10 +144,10 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 	require.Equal(t, 4, len(tableNames))
 
 	// add table event
-	event1 := &commonEvent.DDLEvent{
+	event1 := &DDLEvent{
 		FinishedTs: 3,
-		TableNameChange: &commonEvent.TableNameChange{
-			AddName: []commonEvent.SchemaTableName{
+		TableNameChange: &TableNameChange{
+			AddName: []SchemaTableName{
 				{
 					SchemaName: "test1",
 					TableName:  "table5",
@@ -169,9 +168,9 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 	require.Equal(t, 6, len(tableNames))
 
 	// drop databases
-	event2 := &commonEvent.DDLEvent{
+	event2 := &DDLEvent{
 		FinishedTs: 5,
-		TableNameChange: &commonEvent.TableNameChange{
+		TableNameChange: &TableNameChange{
 			DropDatabaseName: "test1",
 		},
 	}
@@ -181,16 +180,16 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 	require.Equal(t, 4, len(tableNames))
 
 	// rename
-	event3 := &commonEvent.DDLEvent{
+	event3 := &DDLEvent{
 		FinishedTs: 7,
-		TableNameChange: &commonEvent.TableNameChange{
-			AddName: []commonEvent.SchemaTableName{
+		TableNameChange: &TableNameChange{
+			AddName: []SchemaTableName{
 				{
 					SchemaName: "test3",
 					TableName:  "table7",
 				},
 			},
-			DropName: []commonEvent.SchemaTableName{
+			DropName: []SchemaTableName{
 				{
 					SchemaName: "test2",
 					TableName:  "table6",

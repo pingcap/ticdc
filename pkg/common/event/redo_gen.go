@@ -1122,6 +1122,24 @@ func (z *RedoDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "TableName")
 				return
 			}
+		case "table-schema-store":
+			if dc.IsNil() {
+				err = dc.ReadNil()
+				if err != nil {
+					err = msgp.WrapError(err, "TableSchemaStore")
+					return
+				}
+				z.TableSchemaStore = nil
+			} else {
+				if z.TableSchemaStore == nil {
+					z.TableSchemaStore = new(TableSchemaStore)
+				}
+				err = z.TableSchemaStore.DecodeMsg(dc)
+				if err != nil {
+					err = msgp.WrapError(err, "TableSchemaStore")
+					return
+				}
+			}
 		default:
 			err = dc.Skip()
 			if err != nil {
@@ -1135,9 +1153,9 @@ func (z *RedoDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *RedoDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 3
+	// map header, size 4
 	// write "ddl"
-	err = en.Append(0x83, 0xa3, 0x64, 0x64, 0x6c)
+	err = en.Append(0x84, 0xa3, 0x64, 0x64, 0x6c)
 	if err != nil {
 		return
 	}
@@ -1173,15 +1191,32 @@ func (z *RedoDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 		err = msgp.WrapError(err, "TableName")
 		return
 	}
+	// write "table-schema-store"
+	err = en.Append(0xb2, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x2d, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x2d, 0x73, 0x74, 0x6f, 0x72, 0x65)
+	if err != nil {
+		return
+	}
+	if z.TableSchemaStore == nil {
+		err = en.WriteNil()
+		if err != nil {
+			return
+		}
+	} else {
+		err = z.TableSchemaStore.EncodeMsg(en)
+		if err != nil {
+			err = msgp.WrapError(err, "TableSchemaStore")
+			return
+		}
+	}
 	return
 }
 
 // MarshalMsg implements msgp.Marshaler
 func (z *RedoDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 3
+	// map header, size 4
 	// string "ddl"
-	o = append(o, 0x83, 0xa3, 0x64, 0x64, 0x6c)
+	o = append(o, 0x84, 0xa3, 0x64, 0x64, 0x6c)
 	if z.DDL == nil {
 		o = msgp.AppendNil(o)
 	} else {
@@ -1200,6 +1235,17 @@ func (z *RedoDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	if err != nil {
 		err = msgp.WrapError(err, "TableName")
 		return
+	}
+	// string "table-schema-store"
+	o = append(o, 0xb2, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x2d, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x2d, 0x73, 0x74, 0x6f, 0x72, 0x65)
+	if z.TableSchemaStore == nil {
+		o = msgp.AppendNil(o)
+	} else {
+		o, err = z.TableSchemaStore.MarshalMsg(o)
+		if err != nil {
+			err = msgp.WrapError(err, "TableSchemaStore")
+			return
+		}
 	}
 	return
 }
@@ -1251,6 +1297,23 @@ func (z *RedoDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				err = msgp.WrapError(err, "TableName")
 				return
 			}
+		case "table-schema-store":
+			if msgp.IsNil(bts) {
+				bts, err = msgp.ReadNilBytes(bts)
+				if err != nil {
+					return
+				}
+				z.TableSchemaStore = nil
+			} else {
+				if z.TableSchemaStore == nil {
+					z.TableSchemaStore = new(TableSchemaStore)
+				}
+				bts, err = z.TableSchemaStore.UnmarshalMsg(bts)
+				if err != nil {
+					err = msgp.WrapError(err, "TableSchemaStore")
+					return
+				}
+			}
 		default:
 			bts, err = msgp.Skip(bts)
 			if err != nil {
@@ -1271,7 +1334,12 @@ func (z *RedoDDLEvent) Msgsize() (s int) {
 	} else {
 		s += z.DDL.Msgsize()
 	}
-	s += 5 + msgp.ByteSize + 11 + z.TableName.Msgsize()
+	s += 5 + msgp.ByteSize + 11 + z.TableName.Msgsize() + 19
+	if z.TableSchemaStore == nil {
+		s += msgp.NilSize
+	} else {
+		s += z.TableSchemaStore.Msgsize()
+	}
 	return
 }
 

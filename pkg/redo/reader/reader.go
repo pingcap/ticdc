@@ -24,7 +24,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
@@ -47,9 +47,9 @@ type RedoLogReader interface {
 	// Run read and decode redo logs in background.
 	Run(ctx context.Context) error
 	// ReadNextRow read one row event from redo logs.
-	ReadNextRow(ctx context.Context) (*pevent.RedoDMLEvent, error)
+	ReadNextRow(ctx context.Context) (*commonEvent.RedoDMLEvent, error)
 	// ReadNextDDL read one ddl event from redo logs.
-	ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEvent, error)
+	ReadNextDDL(ctx context.Context) (*commonEvent.RedoDDLEvent, error)
 	// ReadMeta reads meta from redo logs and returns the latest checkpointTs and resolvedTs
 	ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error)
 	GetChangefeedID() commonType.ChangeFeedID
@@ -90,8 +90,8 @@ type LogReaderConfig struct {
 type LogReader struct {
 	cfg          *LogReaderConfig
 	meta         *misc.LogMeta
-	rowCh        chan *pevent.RedoDMLEvent
-	ddlCh        chan *pevent.RedoDDLEvent
+	rowCh        chan *commonEvent.RedoDMLEvent
+	ddlCh        chan *commonEvent.RedoDDLEvent
 	changefeedID commonType.ChangeFeedID
 }
 
@@ -110,8 +110,8 @@ func newLogReader(ctx context.Context, cfg *LogReaderConfig) (*LogReader, error)
 
 	logReader := &LogReader{
 		cfg:   cfg,
-		rowCh: make(chan *pevent.RedoDMLEvent, defaultReaderChanSize),
-		ddlCh: make(chan *pevent.RedoDDLEvent, defaultReaderChanSize),
+		rowCh: make(chan *commonEvent.RedoDMLEvent, defaultReaderChanSize),
+		ddlCh: make(chan *commonEvent.RedoDDLEvent, defaultReaderChanSize),
 	}
 	// remove logs in local dir first, if have logs left belongs to previous changefeed with the same name may have error when apply logs
 	if err := os.RemoveAll(cfg.Dir); err != nil {
@@ -241,7 +241,7 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 }
 
 // ReadNextRow implement the `RedoLogReader` interface.
-func (l *LogReader) ReadNextRow(ctx context.Context) (row *pevent.RedoDMLEvent, err error) {
+func (l *LogReader) ReadNextRow(ctx context.Context) (row *commonEvent.RedoDMLEvent, err error) {
 	select {
 	case <-ctx.Done():
 		err = errors.Trace(ctx.Err())
@@ -251,7 +251,7 @@ func (l *LogReader) ReadNextRow(ctx context.Context) (row *pevent.RedoDMLEvent, 
 }
 
 // ReadNextDDL implement the `RedoLogReader` interface.
-func (l *LogReader) ReadNextDDL(ctx context.Context) (ddl *pevent.RedoDDLEvent, err error) {
+func (l *LogReader) ReadNextDDL(ctx context.Context) (ddl *commonEvent.RedoDDLEvent, err error) {
 	select {
 	case <-ctx.Done():
 		err = errors.Trace(ctx.Err())
@@ -330,7 +330,7 @@ func (l *LogReader) GetVersion() int {
 
 type logWithIdx struct {
 	idx  int
-	data *pevent.RedoLog
+	data *commonEvent.RedoLog
 }
 
 type logHeap []*logWithIdx
@@ -362,7 +362,7 @@ func (h logHeap) Len() int {
 
 func (h logHeap) Less(i, j int) bool {
 	// we separate ddl and dml, so we only need to compare dml with dml, and ddl with ddl.
-	if h[i].data.Type == pevent.RedoLogTypeDDL {
+	if h[i].data.Type == commonEvent.RedoLogTypeDDL {
 		if h[i].data.RedoDDL.DDL == nil {
 			return true
 		}
