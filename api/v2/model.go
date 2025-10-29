@@ -1056,23 +1056,23 @@ type ChangefeedSchedulerConfig struct {
 	// RegionThreshold is the region count threshold of splitting a table.
 	RegionThreshold int `toml:"region_threshold" json:"region_threshold"`
 	// RegionCountPerSpan is the maximax region count for each span when first splitted by RegionCountSpliiter
-	RegionCountPerSpan int `toml:"region-count-per-span" json:"region-count-per-span"`
+	RegionCountPerSpan int `toml:"region_count_per_span" json:"region_count_per_span"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write_key_threshold" json:"write_key_threshold"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
-	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
+	SchedulingTaskCountPerNode int `toml:"scheduling_task_count_per_node" json:"scheduling_task_count_per_node"`
 	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
 	// For MySQL downstream, this is always set to true for data consistency.
-	EnableSplittableCheck bool `toml:"enable-splittable-check" json:"enable-splittable-check"`
+	EnableSplittableCheck bool `toml:"enable_splittable_check" json:"enable_splittable_check"`
 	// These config is used for adjust the frequency of balancing traffic.
 	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
-	BalanceScoreThreshold int `toml:"balance-score-threshold" json:"balance-score-threshold"`
+	BalanceScoreThreshold int `toml:"balance_score_threshold" json:"balance_score_threshold"`
 	// MinTrafficPercentage is the minimum traffic percentage for balancing traffic. Larger value means less frequent balancing.
-	MinTrafficPercentage float64 `toml:"min-traffic-percentage" json:"min-traffic-percentage"`
+	MinTrafficPercentage float64 `toml:"min_traffic_percentage" json:"min_traffic_percentage"`
 	// MaxTrafficPercentage is the maximum traffic percentage for balancing traffic. Less value means less frequent balancing.
-	MaxTrafficPercentage float64 `toml:"max-traffic-percentage" json:"max-traffic-percentage"`
+	MaxTrafficPercentage float64 `toml:"max_traffic_percentage" json:"max_traffic_percentage"`
 }
 
 // IntegrityConfig is the config for integrity check
