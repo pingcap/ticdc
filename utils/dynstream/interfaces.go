@@ -182,8 +182,7 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	RemovePath(path P) error
 
 	// ReleasePath releases all the events of the path.
-	// After this call return, future events with the path will be dropped, including events which are already in the stream.
-	// If the path doesn't exist, it will return ErrorTypeNotExist.
+	// After this call return, events in the path will be dropped.
 	Release(path P)
 
 	// SetAreaSettings sets the settings of the area. An area uses the default settings if it is not set.

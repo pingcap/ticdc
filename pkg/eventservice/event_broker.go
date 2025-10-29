@@ -593,7 +593,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 	available := item.(*atomic.Uint64)
-
 	if available.Load() < c.scanLimitInBytes {
 		task.resetScanLimit()
 	}
