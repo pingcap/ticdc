@@ -176,10 +176,9 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// Return ErrorTypeDuplicate if the path already exists.
 	AddPath(path P, dest D, area ...AreaSettings) error
 
-	// RemovePath removes the path from the dynamic stream.
+	// RemovePath make sure the path is not in the dynamic stream.
 	// After this call return, future events with the path will be dropped, including events which are already in the stream.
-	// If the path doesn't exist, it will return ErrorTypeNotExist.
-	RemovePath(path P) error
+	RemovePath(path P)
 
 	// SetAreaSettings sets the settings of the area. An area uses the default settings if it is not set.
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.

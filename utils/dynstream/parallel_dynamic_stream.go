@@ -195,13 +195,13 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	return nil
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
+func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) {
 	s.pathMap.Lock()
 
 	pi, ok := s.pathMap.m[path]
 	if !ok {
 		s.pathMap.Unlock()
-		return NewAppErrorS(ErrorTypeNotExist)
+		return
 	}
 
 	pi.removed.Store(true)
@@ -213,7 +213,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	s.pathMap.Unlock()
 	pi.stream.addEvent(eventWrap[A, P, T, D, H]{pathInfo: pi})
 	s._statRemovePathCount.Add(1)
-	return nil
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings AreaSettings) {

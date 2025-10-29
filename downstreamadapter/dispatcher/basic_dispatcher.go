@@ -839,16 +839,7 @@ func (d *BasicDispatcher) removeDispatcher() {
 		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDS.RemovePath(d.id)
-	if err != nil {
-		log.Error("remove dispatcher from dynamic stream failed",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
-			zap.Stringer("dispatcher", d.id),
-			zap.String("table", common.FormatTableSpan(d.tableSpan)),
-			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
-			zap.Uint64("resolvedTs", d.GetResolvedTs()),
-			zap.Error(err))
-	}
+	dispatcherStatusDS.RemovePath(d.id)
 
 	// remove unfinished resend task
 	identifiers := d.resendTaskMap.Keys()

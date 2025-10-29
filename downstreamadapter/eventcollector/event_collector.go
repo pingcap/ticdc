@@ -285,10 +285,7 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 	stat.remove()
 
 	ds := c.getDynamicStream(target.GetMode())
-	err := ds.RemovePath(target.GetId())
-	if err != nil {
-		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
-	}
+	ds.RemovePath(target.GetId())
 	c.dispatcherMap.Delete(target.GetId())
 }
 

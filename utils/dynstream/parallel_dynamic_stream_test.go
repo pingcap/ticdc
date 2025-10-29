@@ -39,14 +39,6 @@ func TestParallelDynamicStreamBasic(t *testing.T) {
 		err = stream.AddPath("path1", "dest1")
 		require.Error(t, err)
 	})
-
-	t.Run("remove path", func(t *testing.T) {
-		err := stream.RemovePath("path1")
-		require.NoError(t, err)
-		// Test non-existent path
-		err = stream.RemovePath("path1")
-		require.Error(t, err)
-	})
 }
 
 func TestParallelDynamicStreamPush(t *testing.T) {
@@ -87,8 +79,7 @@ func TestParallelDynamicStreamMetrics(t *testing.T) {
 	require.NoError(t, err)
 
 	// Remove one path
-	err = stream.RemovePath("path1")
-	require.NoError(t, err)
+	stream.RemovePath("path1")
 
 	metrics := stream.GetMetrics()
 	require.Equal(t, 2, metrics.AddPath)

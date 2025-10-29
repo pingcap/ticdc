@@ -83,8 +83,6 @@ var subscriptionIDGen atomic.Uint64
 // The same table span has the same subscriptionID.
 type SubscriptionID uint64
 
-const InvalidSubscriptionID SubscriptionID = 0
-
 type resolveLockTask struct {
 	keyspaceID uint32
 	regionID   uint64
@@ -466,6 +464,7 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Then send a special singleRegionInfo to regionRouter to deregister the table
 	// from all TiKV instances.
 	if rt.stopped.CompareAndSwap(false, true) {
+		// regionInfo's lockedRangeState is not set so it's nil, indicates stop the table.
 		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt}, s.pdClock.CurrentTS()))
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
@@ -477,12 +476,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
-	err := s.ds.RemovePath(rt.subID)
-	if err != nil {
-		log.Warn("subscription client remove path failed",
-			zap.Uint64("subscriptionID", uint64(rt.subID)),
-			zap.Error(err))
-	}
+	s.ds.RemovePath(rt.subID)
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
 	delete(s.totalSpans.spanMap, rt.subID)

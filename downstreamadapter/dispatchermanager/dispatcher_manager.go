@@ -828,15 +828,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	log.Info("closed all event dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID))
 
-	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(e.changefeedID)
-	if err != nil {
-		log.Error("remove event dispatcher manager from heartbeat collector failed",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Error(err),
-		)
-		return
-	}
-
+	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(e.changefeedID)
 	// heartbeatTask only will be generated when create new dispatchers.
 	// We check heartBeatTask after we remove the stream in heartbeat collector,
 	// so we won't get add dispatcher messages to create heartbeatTask.
@@ -871,8 +863,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 
 	e.closed.Store(true)
-	log.Info("event dispatcher manager closed",
-		zap.Stringer("changefeedID", e.changefeedID))
+	log.Info("event dispatcher manager closed", zap.Stringer("changefeedID", e.changefeedID))
 }
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.

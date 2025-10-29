@@ -863,14 +863,6 @@ type AppError struct {
 	Reason string
 }
 
-// NewAppErrorS creates a new AppError with only type
-func NewAppErrorS(t ErrorType) *AppError {
-	return &AppError{
-		Type:   t,
-		Reason: "",
-	}
-}
-
 // NewAppError creates a new AppError with type and reason
 func NewAppError(t ErrorType, reason string) *AppError {
 	return &AppError{

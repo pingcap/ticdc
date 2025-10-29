@@ -89,7 +89,7 @@ type rangeLockEntry struct {
 	lockedRangeState LockedRangeState
 	// waiterSignalChs is a list of channels that are used to
 	// notify the waiter of this lock entry that the lock is released.
-	waiterSignalChs []chan<- interface{}
+	waiterSignalChs []chan<- any
 }
 
 func rangeLockEntryWithKey(key []byte) *rangeLockEntry {
@@ -118,6 +118,7 @@ func (e *rangeLockEntry) String() string {
 // Note(dongmen): A table has one RangeLock, and within that RangeLock, there are multiple regionLocks for each region.
 type RangeLock struct {
 	// ID to identify different RangeLock instances, so logs of different instances can be distinguished.
+	// it's identical to the subscriptionID.
 	id uint64
 	// totalSpan is the total range of the table, totalSpan = unlockedRanges + lockedRanges
 	totalSpan heartbeatpb.TableSpan
@@ -379,9 +380,10 @@ func (l *RangeLock) Stop() (drained bool) {
 }
 
 func (l *RangeLock) getOverlappedLockEntries(startKey, endKey []byte, regionID uint64) []*rangeLockEntry {
-	regionIDFound := false
-
-	overlappedLocks := make([]*rangeLockEntry, 0)
+	var (
+		regionIDFound   bool
+		overlappedLocks = make([]*rangeLockEntry, 0)
+	)
 	l.lockedRanges.DescendLessOrEqual(rangeLockEntryWithKey(startKey),
 		func(entry *rangeLockEntry) bool {
 			if bytes.Compare(entry.startKey, startKey) < 0 &&
@@ -444,7 +446,7 @@ func (l *RangeLock) GetHeapMinTs() uint64 {
 //   - If the current region's version is stale, it will return LockRangeStatusStale and the overlapping ranges to the caller.
 //   - If the current region's version is not stale, it will return LockRangeStatusWait and the overlapping ranges to the caller,
 //     and the caller should wait for the overlapping ranges to be released and retry to lock the rest of the range.
-func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersion uint64) (LockRangeResult, []<-chan interface{}) {
+func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersion uint64) (LockRangeResult, []<-chan any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.stopped {
@@ -535,10 +537,10 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		}, nil
 	}
 
-	var lockReleaseSignalChs []<-chan interface{}
+	var lockReleaseSignalChs []<-chan any
 
 	for _, r := range overlappedRangeLocks {
-		ch := make(chan interface{}, 1)
+		ch := make(chan any, 1)
 		lockReleaseSignalChs = append(lockReleaseSignalChs, ch)
 		r.waiterSignalChs = append(r.waiterSignalChs, ch)
 	}

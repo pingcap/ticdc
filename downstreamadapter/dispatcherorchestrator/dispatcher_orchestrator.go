@@ -154,13 +154,12 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				from,
 				req.IsNewChangefeed,
 			)
-			// Fast return the error to maintainer.
+		// Fast return the error to maintainer.
 		if err != nil {
 			log.Error("failed to create new dispatcher manager",
 				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
 
 			appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(cfId)
-
 			response := &heartbeatpb.MaintainerBootstrapResponse{
 				ChangefeedID: req.ChangefeedID,
 				Err: &heartbeatpb.RunningError{

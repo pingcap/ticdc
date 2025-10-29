@@ -240,13 +240,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 
 		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
 		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
-			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
-			if err != nil {
-				log.Error("remove checkpointTs message failed",
-					zap.Stringer("changefeedID", changefeedID),
-					zap.Error(err),
-				)
-			}
+			appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 		}
 
 		// Submit async remove task to thread pool
@@ -287,13 +281,7 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
 		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
-			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
-			if err != nil {
-				log.Error("remove checkpointTs message failed",
-					zap.Stringer("changefeedID", changefeedID),
-					zap.Error(err),
-				)
-			}
+			appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 		}
 		dispatcherItem.TryClose()
 		dispatcherItem.Remove()

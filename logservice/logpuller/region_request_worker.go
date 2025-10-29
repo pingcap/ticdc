@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
@@ -117,7 +116,7 @@ func newRegionRequestWorker(
 					regionErr = &sendRequestToStoreErr{}
 				}
 			} else {
-				if canceled := worker.run(ctx, client.credential); canceled {
+				if canceled := worker.run(ctx); canceled {
 					return nil
 				}
 				regionErr = &sendRequestToStoreErr{}
@@ -149,7 +148,7 @@ func newRegionRequestWorker(
 	return worker
 }
 
-func (s *regionRequestWorker) run(ctx context.Context, credential *security.Credential) (canceled bool) {
+func (s *regionRequestWorker) run(ctx context.Context) (canceled bool) {
 	isCanceled := func() bool {
 		select {
 		case <-ctx.Done():
@@ -171,7 +170,7 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	}()
 
 	g, gctx := errgroup.WithContext(ctx)
-	conn, err := Connect(gctx, credential, s.store.storeAddr)
+	conn, err := Connect(gctx, s.client.credential, s.store.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
@@ -383,7 +382,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 				}
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
-
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping

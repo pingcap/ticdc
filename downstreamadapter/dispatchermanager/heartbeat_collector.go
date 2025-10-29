@@ -147,48 +147,35 @@ func (c *HeartBeatCollector) RegisterRedoMessageDs(m *DispatcherManager) error {
 	return errors.Trace(err)
 }
 
-func (c *HeartBeatCollector) RemoveDispatcherManager(id common.ChangeFeedID) error {
+func (c *HeartBeatCollector) RemoveDispatcherManager(id common.ChangeFeedID) {
 	if c.isClosed.Load() {
-		return nil
+		return
 	}
-
-	err := c.heartBeatResponseDynamicStream.RemovePath(id.Id)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	err = c.schedulerDispatcherRequestDynamicStream.RemovePath(id.Id)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	err = c.mergeDispatcherRequestDynamicStream.RemovePath(id.Id)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	return nil
+	c.heartBeatResponseDynamicStream.RemovePath(id.Id)
+	c.schedulerDispatcherRequestDynamicStream.RemovePath(id.Id)
+	c.mergeDispatcherRequestDynamicStream.RemovePath(id.Id)
 }
 
-func (c *HeartBeatCollector) RemoveCheckpointTsMessage(changefeedID common.ChangeFeedID) error {
+func (c *HeartBeatCollector) RemoveCheckpointTsMessage(changefeedID common.ChangeFeedID) {
 	if c.isClosed.Load() {
-		return nil
+		return
 	}
 
 	if c.checkpointTsMessageDynamicStream == nil {
-		return nil
+		return
 	}
-	err := c.checkpointTsMessageDynamicStream.RemovePath(changefeedID.Id)
-	return errors.Trace(err)
+	c.checkpointTsMessageDynamicStream.RemovePath(changefeedID.Id)
 }
 
-func (c *HeartBeatCollector) RemoveRedoMessage(changefeedID common.ChangeFeedID) error {
+func (c *HeartBeatCollector) RemoveRedoMessage(changefeedID common.ChangeFeedID) {
 	if c.isClosed.Load() {
-		return nil
+		return
 	}
 
 	if c.redoMessageDynamicStream == nil {
-		return nil
+		return
 	}
-	err := c.redoMessageDynamicStream.RemovePath(changefeedID.Id)
-	return errors.Trace(err)
+	c.redoMessageDynamicStream.RemovePath(changefeedID.Id)
 }
 
 func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
