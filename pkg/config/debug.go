@@ -96,12 +96,16 @@ func NewDefaultEventStoreConfig() *EventStoreConfig {
 // SchemaStoreConfig represents config for schema store
 type SchemaStoreConfig struct {
 	EnableGC bool `toml:"enable-gc" json:"enable-gc"`
+
+	// IgnoreDDLCommitTs is a list of commit ts of ddl jobs to be ignored by schema store.
+	IgnoreDDLCommitTs []uint64 `toml:"ignore-ddl-commit-ts" json:"ignore-ddl-commit-ts"`
 }
 
 // NewDefaultSchemaStoreConfig return the default schema store configuration
 func NewDefaultSchemaStoreConfig() *SchemaStoreConfig {
 	return &SchemaStoreConfig{
-		EnableGC: false,
+		EnableGC:          false,
+		IgnoreDDLCommitTs: []uint64{},
 	}
 }
 
