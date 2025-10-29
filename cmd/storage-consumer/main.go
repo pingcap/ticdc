@@ -28,8 +28,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.uber.org/atomic"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
@@ -46,6 +44,7 @@ import (
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
