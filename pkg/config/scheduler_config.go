@@ -72,7 +72,7 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	}
 
 	// Validate and adjust WriteKeyThreshold if it's too small
-	if c.WriteKeyThreshold > 0 && c.WriteKeyThreshold <= MinWriteKeyThreshold {
+	if c.WriteKeyThreshold > 0 && c.WriteKeyThreshold < MinWriteKeyThreshold {
 		log.Warn("WriteKeyThreshold is set too small, adjusting to minimum recommended value",
 			zap.Int("configuredValue", c.WriteKeyThreshold),
 			zap.Int("adjustedValue", MinWriteKeyThreshold),
