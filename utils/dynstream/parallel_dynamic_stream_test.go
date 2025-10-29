@@ -33,11 +33,25 @@ func TestParallelDynamicStreamBasic(t *testing.T) {
 	defer stream.Close()
 
 	t.Run("add path", func(t *testing.T) {
-		err := stream.AddPath("path1", "dest1")
-		require.NoError(t, err)
+		stream.AddPath("path1", "dest1")
+		metrics := stream.GetMetrics()
+		require.Equal(t, 1, metrics.AddPath)
+
 		// Test duplicate path
-		err = stream.AddPath("path1", "dest1")
-		require.Error(t, err)
+		stream.AddPath("path1", "dest1")
+		metrics = stream.GetMetrics()
+		require.Equal(t, 1, metrics.AddPath)
+	})
+
+	t.Run("remove path", func(t *testing.T) {
+		stream.RemovePath("path1")
+		metrics := stream.GetMetrics()
+		require.Equal(t, 1, metrics.RemovePath)
+
+		// Test non-existent path
+		stream.RemovePath("path1")
+		metrics = stream.GetMetrics()
+		require.Equal(t, 1, metrics.RemovePath)
 	})
 }
 
@@ -57,8 +71,10 @@ func TestParallelDynamicStreamPush(t *testing.T) {
 
 	// case 2: push to existing path
 	path := "test/path"
-	err := stream.AddPath(path, "dest1")
-	require.NoError(t, err)
+	stream.AddPath(path, "dest1")
+	metrics := stream.GetMetrics()
+	require.Equal(t, 1, metrics.AddPath)
+
 	event = mockEvent{id: 1, path: path, value: 10, sleep: 10 * time.Millisecond}
 	stream.Push(path, &event)
 	require.Equal(t, 0, len(handler.droppedEvents))
@@ -73,10 +89,8 @@ func TestParallelDynamicStreamMetrics(t *testing.T) {
 	defer stream.Close()
 
 	// Add some paths
-	err := stream.AddPath("path1", "dest1")
-	require.NoError(t, err)
-	err = stream.AddPath("path2", "dest2")
-	require.NoError(t, err)
+	stream.AddPath("path1", "dest1")
+	stream.AddPath("path2", "dest2")
 
 	// Remove one path
 	stream.RemovePath("path1")
@@ -101,7 +115,7 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	require.NotNil(t, stream.memControl)
 	require.NotNil(t, stream.feedbackChan)
 	settings := AreaSettings{maxPendingSize: 1024, feedbackInterval: 10 * time.Millisecond}
-	// The path is belong to area 0
+	// The path belong to area 0
 	stream.AddPath("path1", "dest1", settings)
 	stream.pathMap.RLock()
 	require.Equal(t, 1, len(stream.pathMap.m))
