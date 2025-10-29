@@ -31,7 +31,7 @@ while ! curl -o /dev/null -v -s "http://$S3_ENDPOINT/"; do
 done
 
 stop_minio() {
-	kill -2 $MINIO_PID
+	kill -2 $MINIO_PID || true
 }
 
 stop() {
@@ -72,13 +72,13 @@ function run() {
 	case $SINK_TYPE in
 	"kafka")
 		SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME_1?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
-		cdc cli changefeed create -c=$cf_normal --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/normal.toml"
+		cdc_cli_changefeed create -c=$cf_normal --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/normal.toml"
 
 		SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME_2?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
-		cdc cli changefeed create -c=$cf_err1 --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/error-1.toml"
+		cdc_cli_changefeed create -c=$cf_err1 --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/error-1.toml"
 
 		SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME_3?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
-		cdc cli changefeed create -c=$cf_err2 --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/error-2.toml"
+		cdc_cli_changefeed create -c=$cf_err2 --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/error-2.toml"
 
 		run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME_1?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760"
 		run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME_2?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760"
@@ -86,9 +86,9 @@ function run() {
 		;;
 	*)
 		SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
-		cdc cli changefeed create -c=$cf_normal --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/normal.toml"
-		cdc cli changefeed create -c=$cf_err1 --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/error-1.toml"
-		cdc cli changefeed create -c=$cf_err2 --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/error-2.toml"
+		cdc_cli_changefeed create -c=$cf_normal --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/normal.toml"
+		cdc_cli_changefeed create -c=$cf_err1 --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/error-1.toml"
+		cdc_cli_changefeed create -c=$cf_err2 --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/error-2.toml"
 		;;
 	esac
 
