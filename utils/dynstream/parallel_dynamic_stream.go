@@ -167,12 +167,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Feedback() <-chan Feedback[A, P, 
 	return s.feedbackChan
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...AreaSettings) error {
+func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...AreaSettings) {
 	s.pathMap.Lock()
 	_, ok := s.pathMap.m[path]
 	if ok {
 		s.pathMap.Unlock()
-		return NewAppError(ErrorTypeDuplicate, fmt.Sprintf("path %v already exists", path))
+		return
 	}
 
 	area := s.handler.GetArea(path, dest)

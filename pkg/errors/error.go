@@ -864,8 +864,8 @@ type AppError struct {
 }
 
 // NewAppError creates a new AppError with type and reason
-func NewAppError(t ErrorType, reason string) *AppError {
-	return &AppError{
+func NewAppError(t ErrorType, reason string) AppError {
+	return AppError{
 		Type:   t,
 		Reason: reason,
 	}
