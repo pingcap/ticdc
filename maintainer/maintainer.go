@@ -541,10 +541,10 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 			updateCheckpointTs := true
 
 			newWatermark := heartbeatpb.NewMaxWatermark()
-// Calculate operator and barrier constraints first to ensure atomicity.
-// This prevents a race condition where checkpointTsByCapture contains old heartbeat data
-// while operators have completed based on newer heartbeat processing.
-// For more detailed comments, please refer to `calculateNewCheckpointTs`.
+			// Calculate operator and barrier constraints first to ensure atomicity.
+			// This prevents a race condition where checkpointTsByCapture contains old heartbeat data
+			// while operators have completed based on newer heartbeat processing.
+			// For more detailed comments, please refer to `calculateNewCheckpointTs`.
 			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
 			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
 
