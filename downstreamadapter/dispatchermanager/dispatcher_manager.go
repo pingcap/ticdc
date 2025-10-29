@@ -335,32 +335,19 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	if e.tableTriggerEventDispatcher == nil {
 		return nil
 	}
+	needAddDispatcher, err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if !needAddDispatcher {
+		return nil
+	}
 	// before bootstrap finished, cannot send any event.
 	success := e.tableTriggerEventDispatcher.EmitBootstrap()
 	if !success {
 		return errors.ErrDispatcherFailed.GenWithStackByArgs()
 	}
 
-	needAddDispatcher, err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	if !needAddDispatcher {
-		return nil
-	}
-
-	// redo
-	if e.RedoEnable {
-		needAddDispatcher, err = e.redoTableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		if !needAddDispatcher {
-			return nil
-		}
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota)
-	}
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.sinkQuota)
 
