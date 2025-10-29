@@ -1052,27 +1052,27 @@ type ConsistentMemoryUsage struct {
 type ChangefeedSchedulerConfig struct {
 	// EnableTableAcrossNodes set true to split one table to multiple spans and
 	// distribute to multiple TiCDC nodes.
-	EnableTableAcrossNodes bool `toml:"enable_table_across_nodes" json:"enable_table_across_nodes"`
+	EnableTableAcrossNodes bool `json:"enable_table_across_nodes"`
 	// RegionThreshold is the region count threshold of splitting a table.
-	RegionThreshold int `toml:"region_threshold" json:"region_threshold"`
+	RegionThreshold int `json:"region_threshold"`
 	// RegionCountPerSpan is the maximax region count for each span when first splitted by RegionCountSpliiter
-	RegionCountPerSpan int `toml:"region_count_per_span" json:"region_count_per_span"`
+	RegionCountPerSpan int `json:"region_count_per_span"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
-	WriteKeyThreshold int `toml:"write_key_threshold" json:"write_key_threshold"`
+	WriteKeyThreshold int `json:"write_key_threshold"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
-	SchedulingTaskCountPerNode int `toml:"scheduling_task_count_per_node" json:"scheduling_task_count_per_node"`
+	SchedulingTaskCountPerNode int `json:"scheduling_task_count_per_node"`
 	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
 	// For MySQL downstream, this is always set to true for data consistency.
-	EnableSplittableCheck bool `toml:"enable_splittable_check" json:"enable_splittable_check"`
+	EnableSplittableCheck bool `json:"enable_splittable_check"`
 	// These config is used for adjust the frequency of balancing traffic.
 	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
-	BalanceScoreThreshold int `toml:"balance_score_threshold" json:"balance_score_threshold"`
+	BalanceScoreThreshold int `json:"balance_score_threshold"`
 	// MinTrafficPercentage is the minimum traffic percentage for balancing traffic. Larger value means less frequent balancing.
-	MinTrafficPercentage float64 `toml:"min_traffic_percentage" json:"min_traffic_percentage"`
+	MinTrafficPercentage float64 `json:"min_traffic_percentage"`
 	// MaxTrafficPercentage is the maximum traffic percentage for balancing traffic. Less value means less frequent balancing.
-	MaxTrafficPercentage float64 `toml:"max_traffic_percentage" json:"max_traffic_percentage"`
+	MaxTrafficPercentage float64 `json:"max_traffic_percentage"`
 }
 
 // IntegrityConfig is the config for integrity check
