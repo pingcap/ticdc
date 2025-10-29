@@ -15,6 +15,7 @@ package schemastore
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -364,13 +365,14 @@ func (s *schemaStore) FetchTableDDLEvents(
 
 	currentResolvedTs := store.resolvedTs.Load()
 	if end > currentResolvedTs {
-		log.Panic("end should not be greater than current resolved ts",
+		log.Warn("end should not be greater than current resolved ts",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", tableID),
 			zap.Uint64("start", start),
 			zap.Uint64("end", end),
 			zap.Uint64("currentResolvedTs", currentResolvedTs))
+		return nil, errors.New(fmt.Sprintf("end %d should not be greater than current resolved ts %d", end, currentResolvedTs))
 	}
 	events, err := store.dataStorage.fetchTableDDLEvents(dispatcherID, tableID, tableFilter, start, end)
 	if err != nil {
@@ -444,7 +446,10 @@ func (s *schemaStore) RegisterKeyspace(
 		return err
 	}
 
-	storage := newPersistentStorage(ctx, s.root, keyspaceID, s.pdCli, kvStorage)
+	storage, err := newPersistentStorage(ctx, s.root, keyspaceID, s.pdCli, kvStorage)
+	if err != nil {
+		return err
+	}
 	store := &keyspaceSchemaStore{
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
