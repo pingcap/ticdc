@@ -25,32 +25,27 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
+
+	"go.uber.org/atomic"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/logger"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
-	ddlfactory "github.com/pingcap/tiflow/cdc/sink/ddlsink/factory"
-	dmlfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
-	"github.com/pingcap/tiflow/cdc/sink/tablesink"
-	sinkutil "github.com/pingcap/tiflow/cdc/sink/util"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/logutil"
-	"github.com/pingcap/tiflow/pkg/quotes"
-	psink "github.com/pingcap/tiflow/pkg/sink"
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
-	"github.com/pingcap/tiflow/pkg/sink/codec"
-	"github.com/pingcap/tiflow/pkg/sink/codec/canal"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/sink/codec/csv"
-	"github.com/pingcap/tiflow/pkg/spanz"
 	"go.uber.org/zap"
 )
 
@@ -69,7 +64,6 @@ var (
 
 const (
 	defaultChangefeedName         = "storage-consumer"
-	defaultFlushWaitDuration      = 1 * time.Millisecond
 	defaultLogInterval            = 5 * time.Second
 	fakePartitionNumForSchemaFile = -1
 )
@@ -88,7 +82,7 @@ func init() {
 	flag.StringVar(&timezone, "tz", "System", "Specify time zone of storage consumer")
 	flag.Parse()
 
-	err := logutil.InitLogger(&logutil.Config{
+	err := logger.InitLogger(&logger.Config{
 		Level: logLevel,
 		File:  logFile,
 	})
@@ -104,7 +98,7 @@ func init() {
 	}
 	upstreamURI = uri
 	scheme := strings.ToLower(upstreamURI.Scheme)
-	if !psink.IsStorageScheme(scheme) {
+	if !config.IsStorageScheme(scheme) {
 		log.Error("invalid storage scheme, the scheme of upstream-uri must be file/s3/azblob/gcs")
 		os.Exit(1)
 	}
@@ -117,20 +111,17 @@ type fileIndexRange struct {
 }
 
 type consumer struct {
-	sinkFactory     *dmlfactory.SinkFactory
-	ddlSink         ddlsink.Sink
 	replicationCfg  *config.ReplicaConfig
 	codecCfg        *common.Config
 	externalStorage storage.ExternalStorage
 	fileExtension   string
+	sink            sink.Sink
 	// tableDMLIdxMap maintains a map of <dmlPathKey, max file index>
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]uint64
 	// tableTsMap maintains a map of <TableID, max commit ts>
-	tableTsMap map[model.TableID]model.ResolvedTs
+	tableTsMap map[int64]uint64
 	// tableDefMap maintains a map of <`schema`.`table`, tableDef slice sorted by TableVersion>
-	tableDefMap map[string]map[uint64]*cloudstorage.TableDefinition
-	// tableSinkMap maintains a map of <TableID, TableSink>
-	tableSinkMap     map[model.TableID]tablesink.TableSink
+	tableDefMap      map[string]map[uint64]*cloudstorage.TableDefinition
 	tableIDGenerator *fakeTableIDGenerator
 	errCh            chan error
 
@@ -176,12 +167,12 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	}
 
 	codecConfig := common.NewConfig(protocol)
-	err = codecConfig.Apply(upstreamURI, replicaConfig)
+	err = codecConfig.Apply(upstreamURI, replicaConfig.Sink)
 	if err != nil {
 		return nil, err
 	}
 
-	extension := sinkutil.GetFileExtension(protocol)
+	extension := helper.GetFileExtension(protocol)
 
 	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, upstreamURIStr)
 	if err != nil {
@@ -191,38 +182,31 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 
 	errCh := make(chan error, 1)
 	stdCtx := ctx
-	sinkFactory, err := dmlfactory.New(
-		stdCtx,
-		model.DefaultChangeFeedID(defaultChangefeedName),
-		downstreamURIStr,
-		replicaConfig,
-		errCh,
-		nil,
-	)
+
+	cfg := &config.ChangefeedConfig{
+		SinkURI:    downstreamURIStr,
+		SinkConfig: replicaConfig.Sink,
+	}
+	mysqlSink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspace))
 	if err != nil {
 		log.Error("failed to create event sink factory", zap.Error(err))
 		return nil, err
 	}
-
-	ddlSink, err := ddlfactory.New(ctx, model.DefaultChangeFeedID(defaultChangefeedName),
-		downstreamURIStr, replicaConfig)
 	if err != nil {
 		log.Error("failed to create ddl sink", zap.Error(err))
 		return nil, err
 	}
 
 	return &consumer{
-		sinkFactory:     sinkFactory,
-		ddlSink:         ddlSink,
 		replicationCfg:  replicaConfig,
 		codecCfg:        codecConfig,
 		externalStorage: storage,
 		fileExtension:   extension,
+		sink:            mysqlSink,
 		errCh:           errCh,
 		tableDMLIdxMap:  make(map[cloudstorage.DmlPathKey]uint64),
-		tableTsMap:      make(map[model.TableID]model.ResolvedTs),
+		tableTsMap:      make(map[int64]uint64),
 		tableDefMap:     make(map[string]map[uint64]*cloudstorage.TableDefinition),
-		tableSinkMap:    make(map[model.TableID]tablesink.TableSink),
 		tableIDGenerator: &fakeTableIDGenerator{
 			tableIDs: make(map[string]int64),
 		},
@@ -297,76 +281,64 @@ func (c *consumer) emitDMLEvents(
 	tableDetail cloudstorage.TableDefinition,
 	pathKey cloudstorage.DmlPathKey,
 	content []byte,
-) error {
+) ([]*event.DMLEvent, error) {
 	var (
-		decoder codec.RowEventDecoder
+		decoder common.Decoder
 		err     error
 	)
 
 	tableInfo, err := tableDetail.ToTableInfo()
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 
 	switch c.codecCfg.Protocol {
 	case config.ProtocolCsv:
-		decoder, err = csv.NewBatchDecoder(ctx, c.codecCfg, tableInfo, content)
+		decoder, err = csv.NewDecoder(ctx, c.codecCfg, tableInfo, content)
 		if err != nil {
-			return errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 	case config.ProtocolCanalJSON:
 		// Always enable tidb extension for canal-json protocol
 		// because we need to get the commit ts from the extension field.
 		c.codecCfg.EnableTiDBExtension = true
-		decoder = canal.NewCanalJSONTxnEventDecoder(c.codecCfg)
-		err = decoder.AddKeyValue(nil, content)
+		decoder, err = canal.NewDecoder(ctx, c.codecCfg, nil)
 		if err != nil {
-			return errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
+		decoder.AddKeyValue(nil, content)
 	}
 
 	cnt := 0
 	filteredCnt := 0
+	events := make([]*event.DMLEvent, 0)
 	for {
-		tp, hasNext, err := decoder.HasNext()
+		tp, hasNext := decoder.HasNext()
 		if err != nil {
 			log.Error("failed to decode message", zap.Error(err))
-			return err
+			return nil, err
 		}
 		if !hasNext {
 			break
 		}
 		cnt++
 
-		if tp == model.MessageTypeRow {
+		if tp == common.MessageTypeRow {
 			c.dmlCount.Add(1)
 
-			row, err := decoder.NextRowChangedEvent()
+			row := decoder.NextDMLEvent()
 			if err != nil {
-				log.Error("failed to get next row changed event", zap.Error(err))
-				return errors.Trace(err)
+				log.Error("failed to get next dml event", zap.Error(err))
+				return nil, errors.Trace(err)
 			}
 
-			log.Debug("next row changed event", zap.Any("rowCommitTs", row.CommitTs), zap.Any("rowStartTs", row.StartTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("rowTableID", tableID), zap.Any("column", row.Columns), zap.Any("preColumn", row.PreColumns))
-
-			if _, ok := c.tableSinkMap[tableID]; !ok {
-				c.tableSinkMap[tableID] = c.sinkFactory.CreateTableSinkForConsumer(
-					model.DefaultChangeFeedID(defaultChangefeedName),
-					spanz.TableIDToComparableSpan(tableID),
-					row.CommitTs)
-			}
+			log.Debug("next dml event", zap.Any("commitTs", row.CommitTs), zap.Any("startTs", row.StartTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("tableID", tableID))
 
 			_, ok := c.tableTsMap[tableID]
-			if !ok || row.CommitTs > c.tableTsMap[tableID].Ts {
-				c.tableTsMap[tableID] = model.ResolvedTs{
-					Mode:    model.BatchResolvedMode,
-					Ts:      row.CommitTs,
-					BatchID: 1,
-				}
-			} else if row.CommitTs == c.tableTsMap[tableID].Ts {
-				c.tableTsMap[tableID] = c.tableTsMap[tableID].AdvanceBatch()
-			} else {
-				log.Warn("row changed event commit ts fallback, ignore",
+			if !ok || row.CommitTs > c.tableTsMap[tableID] {
+				c.tableTsMap[tableID] = row.CommitTs
+			} else if row.CommitTs < c.tableTsMap[tableID] {
+				log.Warn("dml event commit ts fallback, ignore",
 					zap.Uint64("commitTs", row.CommitTs),
 					zap.Any("tableMaxCommitTs", c.tableTsMap[tableID]),
 					zap.Any("row", row),
@@ -374,7 +346,7 @@ func (c *consumer) emitDMLEvents(
 				continue
 			}
 			row.PhysicalTableID = tableID
-			c.tableSinkMap[tableID].AppendRowChangedEvents(row)
+			events = append(events, row)
 			filteredCnt++
 		}
 	}
@@ -384,33 +356,7 @@ func (c *consumer) emitDMLEvents(
 		zap.Int("decodeRowsCnt", cnt),
 		zap.Int("filteredRowsCnt", filteredCnt))
 
-	return err
-}
-
-func (c *consumer) waitTableFlushComplete(ctx context.Context, tableID model.TableID) error {
-	ticker := time.NewTicker(defaultFlushWaitDuration)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-c.errCh:
-			return err
-		case <-ticker.C:
-		}
-
-		resolvedTs := c.tableTsMap[tableID]
-		err := c.tableSinkMap[tableID].UpdateResolvedTs(resolvedTs)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		// wait until the checkpoint ts is equal to the resolved ts
-		checkpoint := c.tableSinkMap[tableID].GetCheckpointTs()
-		if checkpoint.Equal(resolvedTs) {
-			c.tableTsMap[tableID] = resolvedTs.AdvanceBatch()
-			return nil
-		}
-	}
+	return events, err
 }
 
 func (c *consumer) syncExecDMLEvents(
@@ -427,22 +373,40 @@ func (c *consumer) syncExecDMLEvents(
 	}
 	tableID := c.tableIDGenerator.generateFakeTableID(
 		key.Schema, key.Table, key.PartitionNum)
-	err = c.emitDMLEvents(ctx, tableID, tableDef, key, content)
+	events, err := c.emitDMLEvents(ctx, tableID, tableDef, key, content)
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	resolvedTs := c.tableTsMap[tableID]
-	err = c.tableSinkMap[tableID].UpdateResolvedTs(resolvedTs)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	err = c.waitTableFlushComplete(ctx, tableID)
-	if err != nil {
-		return errors.Trace(err)
+	total := len(events)
+	var flushed atomic.Int64
+	done := make(chan struct{})
+	for _, e := range events {
+		e.AddPostFlushFunc(func() {
+			if flushed.Inc() == int64(total) {
+				close(done)
+			}
+		})
+		c.sink.AddDMLEvent(e)
 	}
 
-	return nil
+	// Make sure all events are flushed to downstream.
+	start := time.Now()
+	ticker := time.NewTicker(defaultLogInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-done:
+			log.Info("flush DML events done",
+				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+			return nil
+		case <-ticker.C:
+			log.Warn("DML events cannot be flushed in time",
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+		}
+	}
 }
 
 func (c *consumer) parseDMLFilePath(_ context.Context, path string) error {
@@ -583,7 +547,7 @@ func (c *consumer) handleNewFiles(
 			if err != nil {
 				return err
 			}
-			if err := c.ddlSink.WriteDDLEvent(ctx, ddlEvent); err != nil {
+			if err := c.sink.WriteBlockEvent(ddlEvent); err != nil {
 				return errors.Trace(err)
 			}
 			// TODO: need to cleanup tableDefMap in the future.
@@ -635,7 +599,6 @@ func (c *consumer) run(ctx context.Context) error {
 	}
 }
 
-// copied from kafka-consumer
 type fakeTableIDGenerator struct {
 	tableIDs       map[string]int64
 	currentTableID int64
@@ -645,7 +608,7 @@ type fakeTableIDGenerator struct {
 func (g *fakeTableIDGenerator) generateFakeTableID(schema, table string, partition int64) int64 {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	key := quotes.QuoteSchema(schema, table)
+	key := commonType.QuoteSchema(schema, table)
 	if partition != 0 {
 		key = fmt.Sprintf("%s.`%d`", key, partition)
 	}
@@ -678,7 +641,7 @@ func main() {
 	deferFunc := func() int {
 		stop()
 		if consumer != nil {
-			consumer.sinkFactory.Close()
+			consumer.sink.Close(false)
 		}
 		if err != nil && err != context.Canceled {
 			return 1
