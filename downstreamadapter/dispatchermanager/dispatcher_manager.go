@@ -248,11 +248,7 @@ func NewDispatcherManager(
 
 	// Register Event Dispatcher Manager in HeartBeatCollector,
 	// which is responsible for communication with the maintainer.
-	err = appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterDispatcherManager(manager)
-	if err != nil {
-		return nil, 0, errors.Trace(err)
-	}
-
+	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterDispatcherManager(manager)
 	var tableTriggerStartTs uint64 = 0
 	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
 	if tableTriggerEventDispatcherID != nil {

@@ -18,7 +18,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -107,44 +106,30 @@ func (c *HeartBeatCollector) Run(ctx context.Context) {
 	}()
 }
 
-func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) error {
+func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) {
 	if c.isClosed.Load() {
-		return nil
+		return
 	}
 
 	m.SetHeartbeatRequestQueue(c.heartBeatReqQueue)
 	m.SetBlockStatusRequestQueue(c.blockStatusReqQueue)
-	err := c.heartBeatResponseDynamicStream.AddPath(m.changefeedID.Id, m)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	err = c.schedulerDispatcherRequestDynamicStream.AddPath(m.changefeedID.Id, m)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	err = c.mergeDispatcherRequestDynamicStream.AddPath(m.changefeedID.Id, m)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	return nil
+	c.heartBeatResponseDynamicStream.AddPath(m.changefeedID.Id, m)
+	c.schedulerDispatcherRequestDynamicStream.AddPath(m.changefeedID.Id, m)
+	c.mergeDispatcherRequestDynamicStream.AddPath(m.changefeedID.Id, m)
 }
 
-func (c *HeartBeatCollector) RegisterCheckpointTsMessageDs(m *DispatcherManager) error {
+func (c *HeartBeatCollector) RegisterCheckpointTsMessageDs(m *DispatcherManager) {
 	if c.isClosed.Load() {
-		return nil
+		return
 	}
-
-	err := c.checkpointTsMessageDynamicStream.AddPath(m.changefeedID.Id, m)
-	return errors.Trace(err)
+	c.checkpointTsMessageDynamicStream.AddPath(m.changefeedID.Id, m)
 }
 
-func (c *HeartBeatCollector) RegisterRedoMessageDs(m *DispatcherManager) error {
+func (c *HeartBeatCollector) RegisterRedoMessageDs(m *DispatcherManager) {
 	if c.isClosed.Load() {
-		return nil
+		return
 	}
-
-	err := c.redoMessageDynamicStream.AddPath(m.changefeedID.Id, m)
-	return errors.Trace(err)
+	c.redoMessageDynamicStream.AddPath(m.changefeedID.Id, m)
 }
 
 func (c *HeartBeatCollector) RemoveDispatcherManager(id common.ChangeFeedID) {

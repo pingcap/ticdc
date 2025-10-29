@@ -249,10 +249,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 	ds := c.getDynamicStream(target.GetMode())
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
-	err := ds.AddPath(target.GetId(), stat, areaSetting)
-	if err != nil {
-		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
-	}
+	ds.AddPath(target.GetId(), stat, areaSetting)
 	stat.run()
 }
 

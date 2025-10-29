@@ -14,7 +14,6 @@
 package dynstream
 
 import (
-	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -22,7 +21,6 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/log"
-	. "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // Use a hasher to select target stream for the path.
@@ -188,11 +186,10 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	s.setMemControl(pi, as...)
 
 	if pi.stream.closed.Load() {
-		return nil
+		return
 	}
 
 	pi.stream.addPath(pi)
-	return nil
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) {
