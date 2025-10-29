@@ -217,10 +217,13 @@ func (t *TableDefinition) ToDDLEvent() (*commonEvent.DDLEvent, error) {
 		return nil, err
 	}
 	return &commonEvent.DDLEvent{
-		TableInfo:  tableInfo,
-		FinishedTs: t.TableVersion,
-		Type:       t.Type,
-		Query:      t.Query,
+		TableInfo:     tableInfo,
+		FinishedTs:    t.TableVersion,
+		Type:          t.Type,
+		Query:         t.Query,
+		SchemaName:    t.Schema,
+		TableName:     t.Table,
+		BlockedTables: &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeAll}, // FIXME: correct BlockedTables
 	}, nil
 }
 
