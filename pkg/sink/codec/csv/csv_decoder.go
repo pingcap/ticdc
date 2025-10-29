@@ -220,7 +220,7 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 
 	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
 	e.AddPostFlushFunc(func() {
-		chk.Destroy(1, tableInfo.GetFieldSlice())
+		chk.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
 	})
 	columns := tableInfo.GetColumns()
 	data, err := formatAllColumnsValue(csvConfig, csvMsg.columns, columns)

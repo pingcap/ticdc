@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/api"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/keyspace"
@@ -71,11 +72,8 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		return errors.ErrUnauthorized.GenWithStackByArgs(username, errMsg)
 	}
 
-<<<<<<< HEAD
-=======
 	ks := ctx.Query(api.APIOpVarKeyspace)
 
->>>>>>> 46b9b9cf6 (next-gen: Refactor authenticate middleware to verify tidb topology (#2727))
 	// verifyTiDBUser verify whether the username and password are valid in TiDB. It does the validation via
 	// the successfully build of a connection with upstream TiDB with the username and password.
 	tidbs, err := fetchTiDBTopology(ctx, etcdCli, ks)

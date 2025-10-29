@@ -14,14 +14,17 @@
 package v2
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	"go.uber.org/zap"
 )
 
 // CDCMetaData returns all etcd key values used by cdc
@@ -52,14 +55,27 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 	keyspaceName := GetKeyspaceValueWithDefault(c)
 
 	keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
-	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), keyspaceName)
+	// The ctx's lifecycle is the same as the HTTP request.
+	// The schema store may use the context to fetch database information asynchronously.
+	// Therefore, we cannot use the context of the HTTP request.
+	// We create a new context here.
+	schemaCxt := context.Background()
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(schemaCxt, keyspaceName)
 	if err != nil {
+		log.Error("LoadKeyspace failed", zap.String("keyspaceName", keyspaceName), zap.Error(err))
 		_ = c.Error(err)
 		return
 	}
 
 	txnResolver := txnutil.NewLockerResolver()
-	if err := txnResolver.Resolve(c, keyspaceMeta.Id, resolveLockReq.RegionID, resolveLockReq.Ts); err != nil {
+	if err := txnResolver.Resolve(schemaCxt, keyspaceMeta.Id, resolveLockReq.RegionID, resolveLockReq.Ts); err != nil {
+		log.Error(
+			"resolve lock failed",
+			zap.Uint32("keyspaceID", keyspaceMeta.Id),
+			zap.Uint64("regionID", resolveLockReq.RegionID),
+			zap.Uint64("resolveLockTs", resolveLockReq.Ts),
+			zap.Error(err),
+		)
 		_ = c.Error(err)
 		return
 	}
