@@ -50,15 +50,12 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 
 	// 2. Set the config to ignore a specific commit ts.
 	ignoreCommitTs := uint64(1020)
-	serverConfig := config.GetGlobalServerConfig()
-	serverConfig.Debug.SchemaStore.IgnoreDDLCommitTs = []uint64{ignoreCommitTs}
-	config.StoreGlobalServerConfig(serverConfig)
-	defer func() {
-		// Restore global config
-		serverConfig := config.GetGlobalServerConfig()
-		serverConfig.Debug.SchemaStore.IgnoreDDLCommitTs = []uint64{}
-		config.StoreGlobalServerConfig(serverConfig)
-	}()
+
+	originalConfig := config.GetGlobalServerConfig()
+	cfg := originalConfig.Clone()
+	cfg.Debug.SchemaStore.IgnoreDDLCommitTs = []uint64{ignoreCommitTs}
+	config.StoreGlobalServerConfig(cfg)
+	defer config.StoreGlobalServerConfig(originalConfig)
 
 	// 3. Prepare DDL jobs.
 	ddlJobs := []DDLJobWithCommitTs{
