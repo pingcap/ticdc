@@ -51,7 +51,7 @@ type RedoLogReader interface {
 	// ReadNextDDL read one ddl event from redo logs.
 	ReadNextDDL(ctx context.Context) (*commonEvent.RedoDDLEvent, error)
 	// ReadMeta reads meta from redo logs and returns the latest checkpointTs and resolvedTs
-	ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error)
+	ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, version int, err error)
 	GetChangefeedID() commonType.ChangeFeedID
 	GetVersion() int
 }
@@ -311,11 +311,11 @@ func (l *LogReader) initMeta(ctx context.Context) error {
 }
 
 // ReadMeta implement ReadMeta interface
-func (l *LogReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error) {
+func (l *LogReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, version int, err error) {
 	if l.meta == nil {
-		return 0, 0, errors.Trace(errors.ErrRedoMetaFileNotFound.GenWithStackByArgs(l.cfg.Dir))
+		return 0, 0, 0, errors.Trace(errors.ErrRedoMetaFileNotFound.GenWithStackByArgs(l.cfg.Dir))
 	}
-	return l.meta.CheckpointTs, l.meta.ResolvedTs, nil
+	return l.meta.CheckpointTs, l.meta.ResolvedTs, l.meta.Version, nil
 }
 
 // GetChangefeedID implement the `RedoLogReader` interface.

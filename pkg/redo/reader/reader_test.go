@@ -234,7 +234,7 @@ func TestNewLogReaderAndReadMeta(t *testing.T) {
 			require.Regexp(t, tt.wantErr, err, tt.name)
 		} else {
 			require.Nil(t, err, tt.name)
-			cts, rts, err := l.ReadMeta(ctx)
+			cts, rts, _, err := l.ReadMeta(ctx)
 			require.Nil(t, err, tt.name)
 			require.Equal(t, tt.wantCheckpointTs, cts, tt.name)
 			require.Equal(t, tt.wantResolvedTs, rts, tt.name)

@@ -88,8 +88,8 @@ func (br *MockReader) ReadNextDDL(ctx context.Context) (ddl *commonEvent.RedoDDL
 }
 
 // ReadMeta implements LogReader.ReadMeta
-func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error) {
-	return br.checkpointTs, br.resolvedTs, nil
+func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, version int, err error) {
+	return br.checkpointTs, br.resolvedTs, misc.Version, nil
 }
 
 // GetChangefeedID implements LogReader.GetChangefeedID

@@ -120,13 +120,14 @@ func (ra *RedoApplier) getTableDDLTs(tableID commonType.TableID, checkpointTs in
 }
 
 func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
-	checkpointTs, resolvedTs, err := ra.rd.ReadMeta(ctx)
+	checkpointTs, resolvedTs, version, err := ra.rd.ReadMeta(ctx)
 	if err != nil {
 		return err
 	}
 	log.Info("apply redo log starts",
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.Uint64("resolvedTs", resolvedTs))
+		zap.Uint64("resolvedTs", resolvedTs),
+		zap.Int("version", version))
 
 	shouldApplyDDL := func(row *commonEvent.RedoDMLEvent, ddl *commonEvent.RedoDDLEvent) bool {
 		if ddl == nil {
@@ -306,10 +307,10 @@ func createRedoReaderImpl(ctx context.Context, cfg *RedoApplierConfig) (reader.R
 }
 
 // ReadMeta creates a new redo applier and read meta from reader
-func (ra *RedoApplier) ReadMeta(ctx context.Context) (checkpointTs uint64, resolvedTs uint64, err error) {
+func (ra *RedoApplier) ReadMeta(ctx context.Context) (checkpointTs uint64, resolvedTs uint64, version int, err error) {
 	rd, err := createRedoReader(ctx, ra.cfg)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	return rd.ReadMeta(ctx)
 }

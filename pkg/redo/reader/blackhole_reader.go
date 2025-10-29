@@ -45,8 +45,8 @@ func (br *BlackHoleReader) ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEven
 }
 
 // ReadMeta implements LogReader.ReadMeta
-func (br *BlackHoleReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error) {
-	return 0, 1, nil
+func (br *BlackHoleReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, version int, err error) {
+	return 0, 1, misc.Version, nil
 }
 
 // GetChangefeedID implements LogReader.GetChangefeedID
