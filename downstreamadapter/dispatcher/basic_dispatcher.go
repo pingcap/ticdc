@@ -478,12 +478,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 					return block
 				}
 			}
-			failpoint.Inject("EventDispatcherExecDDLFailed", func() {
-				if common.IsDefaultMode(d.GetMode()) {
-					d.HandleError(errors.ErrExecDDLFailed.FastGenByArgs(ddl.Query))
-					failpoint.Return(block)
-				}
-			})
 
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),

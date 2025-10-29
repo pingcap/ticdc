@@ -48,7 +48,7 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 		},
 	}
 	switch sinkType {
-	case commonType.MysqlSinkType:
+	case commonType.MysqlSinkType, commonType.RedoSinkType:
 		for _, schema := range schemaInfo {
 			schemaID := schema.SchemaID
 			for _, table := range schema.Tables {
@@ -80,9 +80,10 @@ func (s *TableSchemaStore) Clear() {
 }
 
 func (s *TableSchemaStore) AddEvent(event *DDLEvent) {
-	if s.sinkType == commonType.MysqlSinkType {
+	switch s.sinkType {
+	case commonType.MysqlSinkType, commonType.RedoSinkType:
 		s.TableIDStore.AddEvent(event)
-	} else {
+	default:
 		s.tableNameStore.AddEvent(event)
 	}
 }
