@@ -33,7 +33,7 @@ type ChangefeedSchedulerConfig struct {
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write-key-threshold" json:"write-key-threshold"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
-	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
+	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-count-per-node"`
 	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
