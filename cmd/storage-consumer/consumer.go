@@ -86,7 +86,8 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 			return nil, err
 		}
 	}
-
+	// the TiDB source ID should never be set to 0
+	replicaConfig.Sink.TiDBSourceID = 1
 	err = replicaConfig.ValidateAndAdjust(upstreamURI)
 	if err != nil {
 		log.Error("failed to validate replica config", zap.Error(err))
