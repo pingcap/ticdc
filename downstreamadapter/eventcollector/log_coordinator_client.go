@@ -54,7 +54,7 @@ func newLogCoordinatorClient(eventCollector *EventCollector) *LogCoordinatorClie
 	return client
 }
 
-func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
+func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) {
 	for _, msg := range targetMessage.Message {
 		switch msg := msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
@@ -69,7 +69,6 @@ func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMes
 			log.Panic("invalid message type", zap.Any("msg", msg))
 		}
 	}
-	return nil
 }
 
 func (l *LogCoordinatorClient) run(ctx context.Context) error {

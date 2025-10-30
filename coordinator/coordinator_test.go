@@ -125,7 +125,7 @@ func (m *mockMaintainerManager) sendMessages(msg *heartbeatpb.MaintainerHeartbea
 	}
 }
 
-func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
+func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	// receive message from coordinator
 	case messaging.TypeAddMaintainerRequest, messaging.TypeRemoveMaintainerRequest:
@@ -133,14 +133,12 @@ func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging
 	case messaging.TypeCoordinatorBootstrapRequest:
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return
 		case m.msgCh <- msg:
 		}
-		return nil
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))
 	}
-	return nil
 }
 
 func (m *mockMaintainerManager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {

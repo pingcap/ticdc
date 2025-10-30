@@ -149,7 +149,7 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 	}
 }
 
-func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
+func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) {
 	for _, msg := range targetMessage.Message {
 		switch msg := msg.(type) {
 		case *logservicepb.EventStoreState:
@@ -167,7 +167,6 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 			log.Panic("invalid message type", zap.Any("msg", msg))
 		}
 	}
-	return nil
 }
 
 func (c *logCoordinator) sendResolvedTsToCoordinator(id node.ID, changefeedID common.ChangeFeedID) {

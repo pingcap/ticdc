@@ -1219,7 +1219,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	return iter.rowCount, err
 }
 
-func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
+func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) {
 	for _, msg := range targetMessage.Message {
 		switch msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
@@ -1228,7 +1228,6 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 			log.Panic("invalid message type", zap.Any("msg", msg))
 		}
 	}
-	return nil
 }
 
 type SubscriptionChangeType int

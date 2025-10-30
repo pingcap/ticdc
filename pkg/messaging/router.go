@@ -23,7 +23,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type MessageHandler func(ctx context.Context, msg *TargetMessage) error
+type MessageHandler func(ctx context.Context, msg *TargetMessage)
 
 type router struct {
 	mu       sync.RWMutex

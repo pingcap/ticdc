@@ -239,7 +239,7 @@ func (c *HeartBeatCollector) sendBlockStatusMessages(ctx context.Context) error 
 	}
 }
 
-func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.TargetMessage) error {
+func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeHeartBeatResponse:
 		// TODO: Change a more appropriate name for HeartBeatResponse. It should be BlockStatusResponse or something else.
@@ -272,7 +272,6 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))
 	}
-	return nil
 }
 
 func (c *HeartBeatCollector) Close() {

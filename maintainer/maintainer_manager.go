@@ -72,15 +72,15 @@ func NewMaintainerManager(
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
 	mc.RegisterHandler(messaging.MaintainerTopic,
-		func(ctx context.Context, msg *messaging.TargetMessage) error {
+		func(ctx context.Context, msg *messaging.TargetMessage) {
 			req := msg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
-			return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
+			m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 		})
 	return m
 }
 
 // recvMessages is the message handler for maintainer manager
-func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
+func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	// Coordinator related messages
 	case messaging.TypeAddMaintainerRequest,
@@ -88,31 +88,30 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 		messaging.TypeCoordinatorBootstrapRequest:
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return
 		case m.msgCh <- msg:
 		}
-		return nil
+		return
 	// receive bootstrap response message from the dispatcher manager
 	case messaging.TypeMaintainerBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
-		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
+		m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeMaintainerPostBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
-		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
+		m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	// receive heartbeat message from dispatchers
 	case messaging.TypeHeartBeatRequest:
 		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
-		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
+		m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeBlockStatusRequest:
 		req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
-		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
+		m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
-		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
+		m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))
 	}
-	return nil
 }
 
 func (m *Manager) Name() string {
@@ -348,17 +347,17 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 
 func (m *Manager) dispatcherMaintainerMessage(
 	ctx context.Context, changefeed common.ChangeFeedID, msg *messaging.TargetMessage,
-) error {
+) {
 	c, ok := m.maintainers.Load(changefeed)
 	if !ok {
 		log.Warn("maintainer is not found",
 			zap.Stringer("changefeed", changefeed),
 			zap.String("message", msg.String()))
-		return nil
+		return
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return
 	default:
 		maintainer := c.(*Maintainer)
 		maintainer.pushEvent(&Event{
@@ -367,7 +366,6 @@ func (m *Manager) dispatcherMaintainerMessage(
 			message:      msg,
 		})
 	}
-	return nil
 }
 
 func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) (*Maintainer, bool) {

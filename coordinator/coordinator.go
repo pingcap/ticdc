@@ -145,9 +145,9 @@ func New(node *node.Info,
 	return c
 }
 
-func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
+func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMessage) {
 	if c.closed.Load() {
-		return nil
+		return
 	}
 
 	defer func() {
@@ -168,12 +168,10 @@ func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMes
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return
 	default:
 		c.eventCh.In() <- &Event{message: msg}
 	}
-
-	return nil
 }
 
 // Run spawns two goroutines to handle messages and run the coordinator.

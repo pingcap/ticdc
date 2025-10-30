@@ -78,15 +78,15 @@ func (m *DispatcherOrchestrator) Run(ctx context.Context) {
 func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	_ context.Context,
 	msg *messaging.TargetMessage,
-) error {
+) {
 	// Put message into channel for asynchronous processing by another goroutine
 	select {
 	case m.msgChan <- msg:
-		return nil
+		return
 	default:
 		// Channel is full, log warning and drop the message
 		log.Warn("message channel is full, dropping message", zap.Any("message", msg.Message))
-		return nil
+		return
 	}
 }
 

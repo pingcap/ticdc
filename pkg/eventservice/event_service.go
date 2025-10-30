@@ -140,14 +140,14 @@ func (s *eventService) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
+func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)
 		for _, info := range infos {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return
 			case s.dispatcherInfoChan <- info:
 			}
 		}
@@ -158,7 +158,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		heartbeat := msg.Message[0].(*event.DispatcherHeartbeat)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return
 		case s.dispatcherHeartbeat <- &DispatcherHeartBeatWithServerID{
 			serverID:  msg.From.String(),
 			heartbeat: heartbeat,
@@ -173,7 +173,6 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	default:
 		log.Panic("unknown message type", zap.String("type", msg.Type.String()), zap.Any("message", msg))
 	}
-	return nil
 }
 
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
