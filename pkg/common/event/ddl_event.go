@@ -27,13 +27,6 @@ import (
 
 const (
 	DDLEventVersion0 = 0
-
-	// Magic bytes for DDLEvent format validation
-	ddlEventMagicHi = 0xDA
-	ddlEventMagicLo = 0x7A
-
-	// Header layout: [MAGIC(2B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
-	ddlEventHeaderSize = 7
 )
 
 var _ Event = &DDLEvent{}
@@ -270,53 +263,35 @@ func (t *DDLEvent) Marshal() ([]byte, error) {
 		return nil, fmt.Errorf("unsupported DDLEvent version: %d", t.Version)
 	}
 
-	// 2. Construct header: [MAGIC(2B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
-	header := make([]byte, ddlEventHeaderSize)
-	header[0] = ddlEventMagicHi
-	header[1] = ddlEventMagicLo
-	header[2] = t.Version
-	binary.BigEndian.PutUint32(header[3:7], uint32(len(payload)))
-
-	// 3. Combine header and payload
-	result := make([]byte, 0, ddlEventHeaderSize+len(payload))
-	result = append(result, header...)
-	result = append(result, payload...)
-
-	return result, nil
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeDDLEvent, t.Version, payload)
 }
 
 func (t *DDLEvent) Unmarshal(data []byte) error {
-	// 1. Validate minimum header size
-	if len(data) < ddlEventHeaderSize {
-		return fmt.Errorf("data too short: need at least %d bytes for header, got %d", ddlEventHeaderSize, len(data))
+	// 1. Parse unified header
+	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	if err != nil {
+		return err
 	}
 
-	// 2. Validate magic bytes
-	if data[0] != ddlEventMagicHi || data[1] != ddlEventMagicLo {
-		return fmt.Errorf("invalid magic bytes: expected [0x%02X, 0x%02X], got [0x%02X, 0x%02X]",
-			ddlEventMagicHi, ddlEventMagicLo, data[0], data[1])
+	// 2. Validate event type
+	if eventType != TypeDDLEvent {
+		return fmt.Errorf("expected DDLEvent (type %d), got type %d (%s)",
+			TypeDDLEvent, eventType, TypeToString(eventType))
 	}
 
-	// 3. Extract version and payload length
-	version := data[2]
-	payloadLen := int(binary.BigEndian.Uint32(data[3:7]))
-
-	// 4. Validate payload length
-	if payloadLen < 0 {
-		return fmt.Errorf("invalid payload length: %d", payloadLen)
-	}
-
-	// 5. Validate total data length
-	expectedLen := ddlEventHeaderSize + payloadLen
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := headerSize + payloadLen
 	if len(data) < expectedLen {
 		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
-			expectedLen, ddlEventHeaderSize, payloadLen, len(data))
+			expectedLen, headerSize, payloadLen, len(data))
 	}
 
-	// 6. Extract payload
-	payload := data[ddlEventHeaderSize : ddlEventHeaderSize+payloadLen]
+	// 4. Extract payload
+	payload := data[headerSize : headerSize+payloadLen]
 
-	// 7. Decode based on version
+	// 5. Decode based on version
 	switch version {
 	case DDLEventVersion0:
 		return t.decodeV0(payload)
@@ -373,8 +348,8 @@ func (t DDLEvent) encodeV0() ([]byte, error) {
 
 func (t *DDLEvent) decodeV0(data []byte) error {
 	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
-	// Note: header (magic + version + length) has already been read and removed from data
-	t.eventSize = int64(len(data)) + ddlEventHeaderSize // +7 for the header
+	// Note: header (magic + event type + version + length) has already been read and removed from data
+	t.eventSize = int64(len(data)) + int64(GetEventHeaderSize()) // +8 for the header
 	end := len(data)
 	multipletableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	for i := 0; i < int(multipletableInfosDataSize); i++ {

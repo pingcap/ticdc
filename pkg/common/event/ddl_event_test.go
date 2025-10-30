@@ -48,12 +48,13 @@ func TestDDLEvent(t *testing.T) {
 	// Test normal marshal/unmarshal
 	data, err := ddlEvent.Marshal()
 	require.Nil(t, err)
-	require.Greater(t, len(data), 7, "data should include header")
+	require.Greater(t, len(data), 8, "data should include header")
 
-	// Verify header format: [MAGIC(2B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
+	// Verify header format: [MAGIC(2B)][EVENT_TYPE(1B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
 	require.Equal(t, byte(0xDA), data[0], "magic high byte")
 	require.Equal(t, byte(0x7A), data[1], "magic low byte")
-	require.Equal(t, byte(DDLEventVersion0), data[2], "version byte")
+	require.Equal(t, byte(TypeDDLEvent), data[2], "event type")
+	require.Equal(t, byte(DDLEventVersion0), data[3], "version byte")
 
 	data2 := make([]byte, len(data))
 	copy(data2, data)
@@ -84,7 +85,7 @@ func TestDDLEvent(t *testing.T) {
 	require.Contains(t, err.Error(), "unsupported DDLEvent version")
 
 	// Test unsupported version in Unmarshal
-	data2[2] = mockDDLVersion1 // version is at index 2 now
+	data2[3] = mockDDLVersion1 // version is at index 3 now
 	err = reverseEvent.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported DDLEvent version")
@@ -102,15 +103,16 @@ func TestDDLEvent(t *testing.T) {
 	require.Contains(t, err.Error(), "data too short")
 
 	// Test incomplete payload
-	incompleteData := make([]byte, 7)
+	incompleteData := make([]byte, 8)
 	incompleteData[0] = 0xDA
 	incompleteData[1] = 0x7A
-	incompleteData[2] = DDLEventVersion0
+	incompleteData[2] = TypeDDLEvent
+	incompleteData[3] = DDLEventVersion0
 	// Set payload length to 100 but don't provide that much data
-	incompleteData[3] = 0
 	incompleteData[4] = 0
 	incompleteData[5] = 0
-	incompleteData[6] = 100
+	incompleteData[6] = 0
+	incompleteData[7] = 100
 	err = reverseEvent.Unmarshal(incompleteData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incomplete data")
