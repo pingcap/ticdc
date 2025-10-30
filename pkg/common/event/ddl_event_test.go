@@ -31,7 +31,7 @@ func TestDDLEvent(t *testing.T) {
 	require.NotNil(t, ddlJob)
 
 	ddlEvent := &DDLEvent{
-		Version:      DDLEventVersion,
+		Version:      DDLEventVersion0,
 		DispatcherID: common.NewDispatcherID(),
 		Type:         byte(ddlJob.Type),
 		SchemaID:     ddlJob.SchemaID,
@@ -45,8 +45,18 @@ func TestDDLEvent(t *testing.T) {
 	}
 	ddlEvent.TableInfo.InitPrivateFields()
 
+	// Test normal marshal/unmarshal
 	data, err := ddlEvent.Marshal()
 	require.Nil(t, err)
+	require.Greater(t, len(data), 7, "data should include header")
+
+	// Verify header format: [MAGIC(2B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
+	require.Equal(t, byte(0xDA), data[0], "magic high byte")
+	require.Equal(t, byte(0x7A), data[1], "magic low byte")
+	require.Equal(t, byte(DDLEventVersion0), data[2], "version byte")
+
+	data2 := make([]byte, len(data))
+	copy(data2, data)
 
 	reverseEvent := &DDLEvent{}
 	err = reverseEvent.Unmarshal(data)
@@ -65,6 +75,45 @@ func TestDDLEvent(t *testing.T) {
 	require.Equal(t, ddlEvent.TableInfo, reverseEvent.TableInfo)
 	require.Equal(t, ddlEvent.FinishedTs, reverseEvent.FinishedTs)
 	require.Equal(t, ddlEvent.Err, reverseEvent.Err)
+
+	// Test unsupported version in Marshal
+	mockDDLVersion1 := byte(1)
+	ddlEvent.Version = mockDDLVersion1
+	_, err = ddlEvent.Marshal()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported DDLEvent version")
+
+	// Test unsupported version in Unmarshal
+	data2[2] = mockDDLVersion1 // version is at index 2 now
+	err = reverseEvent.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported DDLEvent version")
+
+	// Test invalid magic bytes
+	data2[0] = 0xFF
+	err = reverseEvent.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid magic bytes")
+
+	// Test data too short (less than header size)
+	shortData := []byte{0xDA, 0x7A, 0x00}
+	err = reverseEvent.Unmarshal(shortData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "data too short")
+
+	// Test incomplete payload
+	incompleteData := make([]byte, 7)
+	incompleteData[0] = 0xDA
+	incompleteData[1] = 0x7A
+	incompleteData[2] = DDLEventVersion0
+	// Set payload length to 100 but don't provide that much data
+	incompleteData[3] = 0
+	incompleteData[4] = 0
+	incompleteData[5] = 0
+	incompleteData[6] = 100
+	err = reverseEvent.Unmarshal(incompleteData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "incomplete data")
 }
 
 // TestSplitQueries tests the SplitQueries function
