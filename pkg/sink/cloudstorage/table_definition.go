@@ -47,6 +47,7 @@ type TableCol struct {
 	Scale     string      `json:"ColumnScale,omitempty"`
 	Nullable  string      `json:"ColumnNullable,omitempty"`
 	IsPK      string      `json:"ColumnIsPk,omitempty"`
+	Elems     []string    `json:"ColumnElems,omitempty"`
 }
 
 // FromTiColumnInfo converts from TiDB ColumnInfo to TableCol.
@@ -99,6 +100,8 @@ func (t *TableCol) FromTiColumnInfo(col *timodel.ColumnInfo, outputColumnID bool
 		t.Precision = strconv.Itoa(displayFlen)
 	case mysql.TypeYear:
 		t.Precision = strconv.Itoa(displayFlen)
+	case mysql.TypeEnum, mysql.TypeSet:
+		t.Elems = col.GetElems()
 	}
 }
 
@@ -175,6 +178,8 @@ func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
+	case mysql.TypeEnum, mysql.TypeSet:
+		col.SetElems(t.Elems)
 	}
 
 	return col, nil
