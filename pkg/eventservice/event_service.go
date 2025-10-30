@@ -89,7 +89,7 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		dispatcherInfoChan:  make(chan DispatcherInfo, 32),
 		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 32),
 	}
-	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
+	es.mc.RegisterHandler(messaging.EventServiceTopic, es.recvMessage)
 	return es
 }
 
@@ -140,7 +140,7 @@ func (s *eventService) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) {
+func (s *eventService) recvMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)

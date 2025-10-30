@@ -50,11 +50,11 @@ func newLogCoordinatorClient(eventCollector *EventCollector) *LogCoordinatorClie
 		logCoordinatorRequestChan: chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
 		enableRemoteEventService:  config.GetGlobalServerConfig().Debug.EventService.EnableRemoteEventService,
 	}
-	client.mc.RegisterHandler(logCoordinatorClientTopic, client.MessageCenterHandler)
+	client.mc.RegisterHandler(logCoordinatorClientTopic, client.recvMessage)
 	return client
 }
 
-func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) {
+func (l *LogCoordinatorClient) recvMessage(_ context.Context, targetMessage *messaging.TargetMessage) {
 	for _, msg := range targetMessage.Message {
 		switch msg := msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:

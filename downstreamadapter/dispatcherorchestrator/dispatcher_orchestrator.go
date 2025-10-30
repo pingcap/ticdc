@@ -52,7 +52,7 @@ func New() *DispatcherOrchestrator {
 		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
 		msgChan:            make(chan *messaging.TargetMessage, 1024), // buffer size 1024
 	}
-	m.mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.RecvMaintainerRequest)
+	m.mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.recvMessage)
 	return m
 }
 
@@ -73,9 +73,9 @@ func (m *DispatcherOrchestrator) Run(ctx context.Context) {
 	}()
 }
 
-// RecvMaintainerRequest is the handler for the maintainer request message.
+// recvMessage is the handler for the maintainer request message.
 // It puts the message into a channel for asynchronous processing to avoid blocking the message center.
-func (m *DispatcherOrchestrator) RecvMaintainerRequest(
+func (m *DispatcherOrchestrator) recvMessage(
 	_ context.Context,
 	msg *messaging.TargetMessage,
 ) {

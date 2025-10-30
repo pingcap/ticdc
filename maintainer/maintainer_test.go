@@ -62,8 +62,8 @@ func MockDispatcherManager(mc messaging.MessageCenter, self node.ID) *mockDispat
 		dispatchersMap: make(map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus, 2000001),
 		self:           self,
 	}
-	mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.recvMessages)
-	mc.RegisterHandler(messaging.HeartbeatCollectorTopic, m.recvMessages)
+	mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.recvMessage)
+	mc.RegisterHandler(messaging.HeartbeatCollectorTopic, m.recvMessage)
 	return m
 }
 
@@ -108,7 +108,7 @@ func (m *mockDispatcherManager) sendMessages(msg *heartbeatpb.HeartBeatRequest) 
 	}
 }
 
-func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) {
+func (m *mockDispatcherManager) recvMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	// receive message from maintainer
 	case messaging.TypeScheduleDispatcherRequest,
@@ -336,7 +336,6 @@ func TestMaintainerSchedule(t *testing.T) {
 				eventType:    EventMessage,
 				message:      msg,
 			}
-			return
 		})
 
 	// send bootstrap message

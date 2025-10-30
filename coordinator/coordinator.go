@@ -118,7 +118,7 @@ func New(node *node.Info,
 		backend:            backend,
 	}
 	// handle messages from message center
-	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
+	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessage)
 	c.controller = NewController(
 		c.version,
 		c.nodeInfo,
@@ -145,7 +145,7 @@ func New(node *node.Info,
 	return c
 }
 
-func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMessage) {
+func (c *coordinator) recvMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	if c.closed.Load() {
 		return
 	}

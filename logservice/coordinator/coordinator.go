@@ -97,7 +97,7 @@ func New() LogCoordinator {
 	c.changefeedStates.m = make(map[common.GID]*changefeedState)
 
 	// recv and handle messages
-	messageCenter.RegisterHandler(logCoordinatorTopic, c.handleMessage)
+	messageCenter.RegisterHandler(logCoordinatorTopic, c.recvMessage)
 	// watch node changes
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodes := nodeManager.GetAliveNodes()
@@ -149,7 +149,7 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 	}
 }
 
-func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) {
+func (c *logCoordinator) recvMessage(_ context.Context, targetMessage *messaging.TargetMessage) {
 	for _, msg := range targetMessage.Message {
 		switch msg := msg.(type) {
 		case *logservicepb.EventStoreState:

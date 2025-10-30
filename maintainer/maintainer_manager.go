@@ -70,7 +70,7 @@ func NewMaintainerManager(
 		taskScheduler: threadpool.NewThreadPoolDefault(),
 	}
 
-	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
+	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessage)
 	mc.RegisterHandler(messaging.MaintainerTopic,
 		func(ctx context.Context, msg *messaging.TargetMessage) {
 			req := msg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
@@ -79,8 +79,8 @@ func NewMaintainerManager(
 	return m
 }
 
-// recvMessages is the message handler for maintainer manager
-func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) {
+// recvMessage is the message handler for maintainer manager
+func (m *Manager) recvMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	// Coordinator related messages
 	case messaging.TypeAddMaintainerRequest,

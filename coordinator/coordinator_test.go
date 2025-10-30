@@ -73,7 +73,7 @@ func NewMaintainerManager(mc messaging.MessageCenter) *mockMaintainerManager {
 		maintainerMap: make(map[common.ChangeFeedID]*heartbeatpb.MaintainerStatus, 1000000),
 		msgCh:         make(chan *messaging.TargetMessage, 1024),
 	}
-	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
+	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessage)
 	return m
 }
 
@@ -125,7 +125,7 @@ func (m *mockMaintainerManager) sendMessages(msg *heartbeatpb.MaintainerHeartbea
 	}
 }
 
-func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) {
+func (m *mockMaintainerManager) recvMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	// receive message from coordinator
 	case messaging.TypeAddMaintainerRequest, messaging.TypeRemoveMaintainerRequest:
@@ -576,11 +576,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 				}
 
 				// Use recvMessages to send event to channel
-				err := co.recvMessages(ctx, msg)
-				if err != nil && err != context.Canceled {
-					t.Logf("Failed to send event in goroutine %d: %v", id, err)
-				}
-
+				co.recvMessage(ctx, msg)
 				// Small sleep to increase chance of race conditions
 				time.Sleep(time.Millisecond)
 			}
@@ -623,8 +619,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 		Type:  messaging.TypeMaintainerHeartbeatRequest,
 	}
 
-	err := co.recvMessages(ctx, msg)
-	require.NoError(t, err)
+	co.recvMessage(ctx, msg)
 	require.True(t, co.closed.Load())
 }
 

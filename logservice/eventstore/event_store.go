@@ -280,7 +280,7 @@ func New(
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
 	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
 
-	store.messageCenter.RegisterHandler(messaging.EventStoreTopic, store.handleMessage)
+	store.messageCenter.RegisterHandler(messaging.EventStoreTopic, store.recvMessage)
 	return store
 }
 
@@ -1219,7 +1219,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	return iter.rowCount, err
 }
 
-func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) {
+func (e *eventStore) recvMessage(_ context.Context, targetMessage *messaging.TargetMessage) {
 	for _, msg := range targetMessage.Message {
 		switch msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
