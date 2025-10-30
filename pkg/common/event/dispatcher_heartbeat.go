@@ -26,8 +26,6 @@ const (
 	DispatcherHeartbeatVersion0         = 0
 	DispatcherHeartbeatResponseVersion0 = 0
 	DispatcherStateVersion0             = 0
-
-	CongestionControlVersion0 = 0
 )
 
 // DispatcherProgress is used to report the progress of a dispatcher to the EventService

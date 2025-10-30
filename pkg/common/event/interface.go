@@ -75,6 +75,8 @@ const (
 	TypeNotReusableEvent
 	// TypeDropEvent is the event type to indicate an event has been dropped.
 	TypeDropEvent
+	// TypeCongestionControl is the event type for congestion control messages.
+	TypeCongestionControl
 )
 
 func TypeToString(t int) string {
@@ -99,6 +101,8 @@ func TypeToString(t int) string {
 		return "NotReusableEvent"
 	case TypeDropEvent:
 		return "DropEvent"
+	case TypeCongestionControl:
+		return "CongestionControl"
 	default:
 		return "unknown"
 	}

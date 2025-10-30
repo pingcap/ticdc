@@ -28,6 +28,13 @@ func TestCongestionControl(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, len(bytes), control.GetSize())
 
+	// Verify header format: [MAGIC(2B)][EVENT_TYPE(1B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
+	require.Greater(t, len(bytes), 8, "data should include header")
+	require.Equal(t, byte(0xDA), bytes[0], "magic high byte")
+	require.Equal(t, byte(0x7A), bytes[1], "magic low byte")
+	require.Equal(t, byte(TypeCongestionControl), bytes[2], "event type")
+	require.Equal(t, byte(CongestionControlVersion0), bytes[3], "version byte")
+
 	var decoded CongestionControl
 	err = decoded.Unmarshal(bytes)
 	require.NoError(t, err)
@@ -214,4 +221,88 @@ func TestCongestionControlMarshalUnmarshalEdgeCases(t *testing.T) {
 	for i, available := range availables {
 		require.Equal(t, uint64(i*1000), available.Available)
 	}
+}
+
+func TestCongestionControlHeaderValidation(t *testing.T) {
+	t.Parallel()
+
+	control := NewCongestionControl()
+	control.clusterID = 12345
+	control.AddAvailableMemory(common.NewGID(), 1024)
+
+	data, err := control.Marshal()
+	require.NoError(t, err)
+
+	// Make a copy for manipulation
+	data2 := make([]byte, len(data))
+	copy(data2, data)
+
+	// Test 1: Invalid magic bytes
+	data2[0] = 0xFF
+	var decoded CongestionControl
+	err = decoded.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid magic bytes")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 2: Wrong event type
+	data2[2] = byte(TypeDDLEvent)
+	err = decoded.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected CongestionControl")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 3: Unsupported version
+	mockVersion := byte(99)
+	data2[3] = mockVersion
+	err = decoded.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported CongestionControl version")
+
+	// Test 4: Data too short
+	shortData := []byte{0xDA, 0x7A, 0x00}
+	err = decoded.Unmarshal(shortData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "data too short")
+
+	// Test 5: Incomplete payload
+	incompleteData := make([]byte, 8)
+	incompleteData[0] = 0xDA
+	incompleteData[1] = 0x7A
+	incompleteData[2] = TypeCongestionControl
+	incompleteData[3] = CongestionControlVersion0
+	// Set payload length to 100 but don't provide that much data
+	incompleteData[4] = 0
+	incompleteData[5] = 0
+	incompleteData[6] = 0
+	incompleteData[7] = 100
+	err = decoded.Unmarshal(incompleteData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "incomplete data")
+}
+
+func TestCongestionControlVersionCompatibility(t *testing.T) {
+	t.Parallel()
+
+	// Test that we can successfully marshal and unmarshal with Version0
+	control := NewCongestionControl()
+	control.clusterID = 54321
+	gid := common.NewGID()
+	control.AddAvailableMemory(gid, 2048)
+
+	data, err := control.Marshal()
+	require.NoError(t, err)
+
+	var decoded CongestionControl
+	err = decoded.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, byte(CongestionControlVersion0), decoded.version)
+	require.Equal(t, control.clusterID, decoded.clusterID)
+	require.Len(t, decoded.availables, 1)
+	require.Equal(t, gid, decoded.availables[0].Gid)
+	require.Equal(t, uint64(2048), decoded.availables[0].Available)
 }
