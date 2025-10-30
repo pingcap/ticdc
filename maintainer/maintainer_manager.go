@@ -91,7 +91,6 @@ func (m *Manager) recvMessage(ctx context.Context, msg *messaging.TargetMessage)
 			return
 		case m.msgCh <- msg:
 		}
-		return
 	// receive bootstrap response message from the dispatcher manager
 	case messaging.TypeMaintainerBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
