@@ -74,6 +74,32 @@ func (d *DispatcherMessage) decrAndCheckRetry() bool {
 	return d.RetryQuota > 0
 }
 
+type changefeedStat struct {
+	changefeedID common.ChangeFeedID
+	// Prometheus metrics
+	metricMemoryUsageMax      prometheus.Gauge
+	metricMemoryUsageUsed     prometheus.Gauge
+	metricMemoryUsageMaxRedo  prometheus.Gauge
+	metricMemoryUsageUsedRedo prometheus.Gauge
+}
+
+func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
+	return &changefeedStat{
+		changefeedID:              changefeedID,
+		metricMemoryUsageMax:      metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "max", changefeedID.String()),
+		metricMemoryUsageUsed:     metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used", changefeedID.String()),
+		metricMemoryUsageMaxRedo:  metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.String()),
+		metricMemoryUsageUsedRedo: metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.String()),
+	}
+}
+
+func (c *changefeedStat) removeMetrics() {
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "max", c.changefeedID.String())
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "used", c.changefeedID.String())
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.String())
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.String())
+}
+
 /*
 EventCollector is the relay between EventService and DispatcherManager, responsible for:
 1. Send dispatcher request to EventService.
@@ -81,9 +107,9 @@ EventCollector is the relay between EventService and DispatcherManager, responsi
 EventCollector is an instance-level component.
 */
 type EventCollector struct {
-	serverId        node.ID
-	dispatcherMap   sync.Map // key: dispatcherID, value: dispatcherStat
-	changefeedIDMap sync.Map // key: changefeedID.GID, value: changefeedID
+	serverId      node.ID
+	dispatcherMap sync.Map // key: dispatcherID, value: dispatcherStat
+	changefeedMap sync.Map // key: changefeedID.GID, value: *changefeedStat
 
 	mc messaging.MessageCenter
 
@@ -111,6 +137,11 @@ type EventCollector struct {
 
 	metricRedoDispatcherReceivedKVEventCount         prometheus.Counter
 	metricRedoDispatcherReceivedResolvedTsEventCount prometheus.Counter
+
+	metricDSEventChanSize     prometheus.Gauge
+	metricDSPendingQueue      prometheus.Gauge
+	metricDSEventChanSizeRedo prometheus.Gauge
+	metricDSPendingQueueRedo  prometheus.Gauge
 }
 
 func New(serverId node.ID) *EventCollector {
@@ -133,7 +164,13 @@ func New(serverId node.ID) *EventCollector {
 
 		metricRedoDispatcherReceivedKVEventCount:         metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent", "redoDispatcher"),
 		metricRedoDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "redoDispatcher"),
+
+		metricDSEventChanSize:     metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector"),
+		metricDSPendingQueue:      metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector"),
+		metricDSEventChanSizeRedo: metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector-redo"),
+		metricDSPendingQueueRedo:  metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector-redo"),
 	}
+
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
 	eventCollector.ds = NewEventDynamicStream(eventCollector)
 	eventCollector.redoDs = NewEventDynamicStream(eventCollector)
@@ -190,36 +227,6 @@ func (c *EventCollector) Close() {
 	_ = c.g.Wait()
 	c.redoDs.Close()
 	c.ds.Close()
-	c.changefeedIDMap.Range(func(key, value any) bool {
-		cfID := value.(common.ChangeFeedID)
-		// Remove metrics for the changefeed.
-		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-			"event-collector",
-			"max",
-			cfID.String(),
-			common.StringMode(common.DefaultMode),
-		)
-		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-			"event-collector",
-			"used",
-			cfID.String(),
-			common.StringMode(common.DefaultMode),
-		)
-		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-			"event-collector",
-			"max",
-			cfID.String(),
-			common.StringMode(common.RedoMode),
-		)
-		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-			"event-collector",
-			"used",
-			cfID.String(),
-			common.StringMode(common.RedoMode),
-		)
-		return true
-	})
-
 	log.Info("event collector is closed")
 }
 
@@ -245,7 +252,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 	stat := newDispatcherStat(target, c, readyCallback)
 	c.dispatcherMap.Store(target.GetId(), stat)
-	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
+	c.changefeedMap.Store(target.GetChangefeedID().ID(), newChangefeedStat(target.GetChangefeedID()))
 
 	ds := c.getDynamicStream(target.GetMode())
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
@@ -554,11 +561,11 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	// collect from main dynamic stream
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
-		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
+		statValue, ok := c.changefeedMap.Load(quota.Area())
 		if !ok {
 			continue
 		}
-		cfID := changefeedID.(common.ChangeFeedID)
+		cfID := statValue.(changefeedStat).changefeedID
 		if changefeedPathMemory[cfID] == nil {
 			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
 		}
@@ -572,11 +579,11 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	// collect from redo dynamic stream and take minimum
 	for _, quota := range c.redoDs.GetMetrics().MemoryControl.AreaMemoryMetrics {
-		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
+		statValue, ok := c.changefeedMap.Load(quota.Area())
 		if !ok {
 			continue
 		}
-		cfID := changefeedID.(common.ChangeFeedID)
+		cfID := statValue.(changefeedStat).changefeedID
 		if changefeedPathMemory[cfID] == nil {
 			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
 		}
@@ -662,27 +669,26 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	updateMetric := func(mode int64) {
 		ds := c.getDynamicStream(mode)
 		dsMetrics := ds.GetMetrics()
-		label := common.StringMode(mode)
-		metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector", label).Set(float64(dsMetrics.EventChanSize))
-		metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector", label).Set(float64(dsMetrics.PendingQueueLen))
+		if common.IsRedoMode(mode) {
+			c.metricDSEventChanSizeRedo.Set(float64(dsMetrics.EventChanSize))
+			c.metricDSPendingQueueRedo.Set(float64(dsMetrics.PendingQueueLen))
+		} else {
+			c.metricDSEventChanSize.Set(float64(dsMetrics.EventChanSize))
+			c.metricDSPendingQueue.Set(float64(dsMetrics.PendingQueueLen))
+		}
 		for _, areaMetric := range dsMetrics.MemoryControl.AreaMemoryMetrics {
-			cfID, ok := c.changefeedIDMap.Load(areaMetric.Area())
+			statValue, ok := c.changefeedMap.Load(areaMetric.Area())
 			if !ok {
 				continue
 			}
-			changefeedID := cfID.(common.ChangeFeedID)
-			metrics.DynamicStreamMemoryUsage.WithLabelValues(
-				"event-collector",
-				"max",
-				changefeedID.String(),
-				label,
-			).Set(float64(areaMetric.MaxMemory()))
-			metrics.DynamicStreamMemoryUsage.WithLabelValues(
-				"event-collector",
-				"used",
-				changefeedID.String(),
-				label,
-			).Set(float64(areaMetric.MemoryUsage()))
+			stat := statValue.(*changefeedStat)
+			if common.IsRedoMode(mode) {
+				stat.metricMemoryUsageMaxRedo.Set(float64(areaMetric.MaxMemory()))
+				stat.metricMemoryUsageUsedRedo.Set(float64(areaMetric.MemoryUsage()))
+			} else {
+				stat.metricMemoryUsageMax.Set(float64(areaMetric.MaxMemory()))
+				stat.metricMemoryUsageUsed.Set(float64(areaMetric.MemoryUsage()))
+			}
 		}
 	}
 	for {

@@ -894,33 +894,6 @@ func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaI
 }
 
 func (e *DispatcherManager) cleanMetrics() {
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-		"event-collector",
-		"max",
-		e.changefeedID.String(),
-		common.StringMode(common.DefaultMode),
-	)
-
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-		"event-collector",
-		"used",
-		e.changefeedID.String(),
-		common.StringMode(common.DefaultMode),
-	)
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-		"event-collector",
-		"max",
-		e.changefeedID.String(),
-		common.StringMode(common.RedoMode),
-	)
-
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
-		"event-collector",
-		"used",
-		e.changefeedID.String(),
-		common.StringMode(common.RedoMode),
-	)
-
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
 	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
