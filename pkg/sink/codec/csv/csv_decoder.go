@@ -207,7 +207,6 @@ func fromCsvValToColValue(csvConfig *common.Config, csvVal any, ft types.FieldTy
 }
 
 func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableInfo *commonType.TableInfo) (*commonEvent.DMLEvent, error) {
-	var err error
 	if len(csvMsg.columns) != len(tableInfo.GetColumns()) {
 		return nil, errors.WrapError(errors.ErrCSVDecodeFailed,
 			fmt.Errorf("the column length of csv message %d doesn't equal to that of tableInfo %d",
@@ -216,6 +215,7 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 
 	e := new(commonEvent.DMLEvent)
 	e.CommitTs = csvMsg.commitTs
+	e.StartTs = csvMsg.commitTs
 	e.TableInfo = tableInfo
 
 	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
@@ -229,12 +229,14 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 	}
 	common.AppendRow2Chunk(data, columns, chk)
 	switch csvMsg.opType {
-	case operationInsert, operationUpdate:
-		e.RowTypes = append(e.RowTypes, commonType.RowTypeInsert)
 	case operationDelete:
 		e.RowTypes = append(e.RowTypes, commonType.RowTypeDelete)
+	default:
+		e.RowTypes = append(e.RowTypes, commonType.RowTypeInsert)
 	}
+	e.Rows = chk
 	e.Length += 1
+	e.PhysicalTableID = tableInfo.TableName.TableID
 	return e, nil
 }
 

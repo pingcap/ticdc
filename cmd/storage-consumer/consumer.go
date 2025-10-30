@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -239,10 +240,7 @@ func (c *consumer) emitDMLEvents(
 		// Always enable tidb extension for canal-json protocol
 		// because we need to get the commit ts from the extension field.
 		c.codecCfg.EnableTiDBExtension = true
-		decoder, err = canal.NewDecoder(ctx, c.codecCfg, nil)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
+		decoder = canal.NewTxnDecoder(c.codecCfg)
 		decoder.AddKeyValue(nil, content)
 	}
 
@@ -264,12 +262,8 @@ func (c *consumer) emitDMLEvents(
 			c.dmlCount.Add(1)
 
 			row := decoder.NextDMLEvent()
-			if err != nil {
-				log.Error("failed to get next dml event", zap.Error(err))
-				return nil, errors.Trace(err)
-			}
 
-			log.Debug("next dml event", zap.Any("commitTs", row.CommitTs), zap.Any("startTs", row.StartTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("tableID", tableID))
+			log.Debug("next dml event", zap.Any("commitTs", row.CommitTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("tableID", tableID))
 
 			_, ok := c.tableTsMap[tableID]
 			if !ok || row.CommitTs > c.tableTsMap[tableID] {
@@ -503,7 +497,7 @@ func (c *consumer) handleNewFiles(
 	return nil
 }
 
-func (c *consumer) run(ctx context.Context) error {
+func (c *consumer) handle(ctx context.Context) error {
 	ticker := time.NewTicker(flushInterval)
 	logTicker := time.NewTicker(defaultLogInterval)
 	lastDMLCount := int64(0)
@@ -514,7 +508,6 @@ func (c *consumer) run(ctx context.Context) error {
 		case err := <-c.errCh:
 			return err
 		case <-logTicker.C:
-
 			dmlDelta := c.dmlCount.Load() - lastDMLCount
 			flushSpeed := dmlDelta / int64(defaultLogInterval.Seconds())
 			lastDMLCount = c.dmlCount.Load()
@@ -534,4 +527,15 @@ func (c *consumer) run(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 	}
+}
+
+func (c *consumer) run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return c.sink.Run(ctx)
+	})
+	g.Go(func() error {
+		return c.handle(ctx)
+	})
+	return g.Wait()
 }
