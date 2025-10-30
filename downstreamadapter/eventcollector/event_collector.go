@@ -264,7 +264,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
-func (c *EventCollector) CommitAddDispatcher(target dispatcher.Dispatcher, startTs uint64) {
+func (c *EventCollector) CommitAddDispatcher(target dispatcher.DispatcherService, startTs uint64) {
 	log.Info("commit add dispatcher", zap.Stringer("dispatcherID", target.GetId()),
 		zap.Int64("tableID", target.GetTableSpan().GetTableID()), zap.Uint64("startTs", startTs))
 	value, ok := c.dispatcherMap.Load(target.GetId())
@@ -278,7 +278,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.Dispatcher, start
 	stat.commitReady(c.getLocalServerID())
 }
 
-func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
+func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
 	log.Info("remove dispatcher", zap.Stringer("dispatcherID", target.GetId()))
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcherID", target.GetId()),
@@ -297,6 +297,26 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.Dispatcher) {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 	}
 	c.dispatcherMap.Delete(target.GetId())
+
+	// Check if it is the last dispatcher of the changefeed.
+	// If so, remove the changefeed stat.
+	isLastDispatcher := true
+	c.dispatcherMap.Range(func(key, value interface{}) bool {
+		stat := value.(*dispatcherStat)
+		if stat.target.GetChangefeedID() == target.GetChangefeedID() {
+			isLastDispatcher = false
+			return false // stop iteration
+		}
+		return true
+	})
+
+	if isLastDispatcher {
+		if v, ok := c.changefeedMap.LoadAndDelete(target.GetChangefeedID().ID()); ok {
+			stat := v.(*changefeedStat)
+			stat.removeMetrics()
+			log.Info("last dispatcher removed, clean up changefeed stat", zap.Stringer("changefeedID", target.GetChangefeedID()))
+		}
+	}
 }
 
 // isRepeatedMsgType returns true when the message is heartbeat like message.
