@@ -31,11 +31,11 @@ type DebugConfig struct {
 	// Puller is the configuration of the puller.
 	Puller *PullerConfig `toml:"puller" json:"puller"`
 
-	EventStore *EventStoreConfig `toml:"event-store" json:"event-store"`
+	EventStore *EventStoreConfig `toml:"event-store" json:"event_store"`
 
-	SchemaStore *SchemaStoreConfig `toml:"schema-store" json:"schema-store"`
+	SchemaStore *SchemaStoreConfig `toml:"schema-store" json:"schema_store"`
 
-	EventService *EventServiceConfig `toml:"event-service" json:"event-service"`
+	EventService *EventServiceConfig `toml:"event-service" json:"event_service"`
 }
 
 // ValidateAndAdjust validates and adjusts the debug configuration
@@ -59,17 +59,17 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 // PullerConfig represents config for puller
 type PullerConfig struct {
 	// EnableResolvedTsStuckDetection is used to enable resolved ts stuck detection.
-	EnableResolvedTsStuckDetection bool `toml:"enable-resolved-ts-stuck-detection" json:"enable-resolved-ts-stuck-detection"`
+	EnableResolvedTsStuckDetection bool `toml:"enable-resolved-ts-stuck-detection" json:"enable_resolved_ts_stuck_detection"`
 	// ResolvedTsStuckInterval is the interval of checking resolved ts stuck.
-	ResolvedTsStuckInterval TomlDuration `toml:"resolved-ts-stuck-interval" json:"resolved-ts-stuck-interval"`
+	ResolvedTsStuckInterval TomlDuration `toml:"resolved-ts-stuck-interval" json:"resolved_ts_stuck_interval"`
 	// LogRegionDetails determines whether logs Region details or not in puller and kv-client.
-	LogRegionDetails bool `toml:"log-region-details" json:"log-region-details"`
+	LogRegionDetails bool `toml:"log-region-details" json:"log_region_details"`
 
 	// PendingRegionRequestQueueSize is the total size of the pending region request queue shared across
 	// all puller workers connecting to a single TiKV store. This size is divided equally among all workers.
 	// For example, if PendingRegionRequestQueueSize is 256 and there are 8 workers connecting to the same store,
 	// each worker's queue size will be 256 / 8 = 32.
-	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending-region-request-queue-size"`
+	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
@@ -83,7 +83,7 @@ func NewDefaultPullerConfig() *PullerConfig {
 }
 
 type EventStoreConfig struct {
-	CompressionThreshold int `toml:"compression-threshold" json:"compression-threshold"`
+	CompressionThreshold int `toml:"compression-threshold" json:"compression_threshold"`
 }
 
 // NewDefaultEventStoreConfig returns the default event store configuration.
@@ -95,26 +95,30 @@ func NewDefaultEventStoreConfig() *EventStoreConfig {
 
 // SchemaStoreConfig represents config for schema store
 type SchemaStoreConfig struct {
-	EnableGC bool `toml:"enable-gc" json:"enable-gc"`
+	EnableGC bool `toml:"enable-gc" json:"enable_gc"`
+
+	// IgnoreDDLCommitTs is a list of commit ts of ddl jobs to be ignored by schema store.
+	IgnoreDDLCommitTs []uint64 `toml:"ignore-ddl-commit-ts" json:"ignore_ddl_commit_ts"`
 }
 
 // NewDefaultSchemaStoreConfig return the default schema store configuration
 func NewDefaultSchemaStoreConfig() *SchemaStoreConfig {
 	return &SchemaStoreConfig{
-		EnableGC: false,
+		EnableGC:          false,
+		IgnoreDDLCommitTs: []uint64{},
 	}
 }
 
 // EventServiceConfig represents config for event service
 type EventServiceConfig struct {
-	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan-task-queue-size"`
-	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan-limit-in-bytes"`
+	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan_task_queue_size"`
+	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan_limit_in_bytes"`
 
 	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.
 	// So we add this config to be able to disable remote event service in such scenario.
 	// TODO: Remove this config after we find a proper way to fix the OOM issue.
 	// Ref: https://github.com/pingcap/ticdc/issues/1784
-	EnableRemoteEventService bool `toml:"enable-remote-event-service" json:"enable-remote-event-service"`
+	EnableRemoteEventService bool `toml:"enable-remote-event-service" json:"enable_remote_event_service"`
 }
 
 // NewDefaultEventServiceConfig return the default event service configuration

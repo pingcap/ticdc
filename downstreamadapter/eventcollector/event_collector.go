@@ -379,9 +379,16 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case <-c.ds.Feedback():
-			// ignore feedback
-		case <-c.redoDs.Feedback():
+		case feedback := <-c.ds.Feedback():
+			if feedback.FeedbackType == dynstream.ReleasePath {
+				log.Info("release dispatcher memory in DS", zap.Any("dispatcherID", feedback.Path))
+				c.ds.Release(feedback.Path)
+			}
+		case feedback := <-c.redoDs.Feedback():
+			if feedback.FeedbackType == dynstream.ReleasePath {
+				log.Info("release dispatcher memory in redo DS", zap.Any("dispatcherID", feedback.Path))
+				c.redoDs.Release(feedback.Path)
+			}
 		}
 	}
 }
@@ -541,31 +548,61 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 }
 
 func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
-	// collect all changefeeds' available memory quota
-	availables := make(map[common.ChangeFeedID]uint64)
+	// collect path-level available memory and total available memory for each changefeed
+	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
+	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
+
+	// collect from main dynamic stream
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
 		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
 		if !ok {
 			continue
 		}
-		availables[changefeedID.(common.ChangeFeedID)] = uint64(quota.AvailableMemory())
+		cfID := changefeedID.(common.ChangeFeedID)
+		if changefeedPathMemory[cfID] == nil {
+			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
+		}
+		// merge path-level available memory
+		for dispatcherID, available := range quota.PathMetrics() {
+			changefeedPathMemory[cfID][dispatcherID] = uint64(available)
+		}
+		// store total available memory from AreaMemoryMetric
+		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
 	}
 
+	// collect from redo dynamic stream and take minimum
 	for _, quota := range c.redoDs.GetMetrics().MemoryControl.AreaMemoryMetrics {
 		changefeedID, ok := c.changefeedIDMap.Load(quota.Area())
 		if !ok {
 			continue
 		}
-		availables[changefeedID.(common.ChangeFeedID)] = min(availables[changefeedID.(common.ChangeFeedID)], uint64(quota.AvailableMemory()))
+		cfID := changefeedID.(common.ChangeFeedID)
+		if changefeedPathMemory[cfID] == nil {
+			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
+		}
+		// take minimum between main and redo streams
+		for dispatcherID, available := range quota.PathMetrics() {
+			if existing, exists := changefeedPathMemory[cfID][dispatcherID]; exists {
+				changefeedPathMemory[cfID][dispatcherID] = min(existing, uint64(available))
+			} else {
+				changefeedPathMemory[cfID][dispatcherID] = uint64(available)
+			}
+		}
+		// take minimum total available memory between main and redo streams
+		if existing, exists := changefeedTotalMemory[cfID]; exists {
+			changefeedTotalMemory[cfID] = min(existing, uint64(quota.AvailableMemory()))
+		} else {
+			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+		}
 	}
-	if len(availables) == 0 {
+
+	if len(changefeedPathMemory) == 0 {
 		return nil
 	}
 
-	// calculate each changefeed's available memory quota for each node
-	// by the proportion of the dispatcher on each node.
-	// this is not accurate, we should also consider each node's workload distribution.
-	proportions := make(map[common.ChangeFeedID]map[node.ID]uint64)
+	// group dispatchers by node and calculate node-level available memory
+	nodeDispatcherMemory := make(map[node.ID]map[common.ChangeFeedID]map[common.DispatcherID]uint64)
+
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
 		eventServiceID := stat.connState.getEventServiceID()
@@ -573,40 +610,49 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			return true
 		}
 
+		dispatcherID := stat.target.GetId()
 		changefeedID := stat.target.GetChangefeedID()
-		holder, ok := proportions[changefeedID]
-		if !ok {
-			holder = make(map[node.ID]uint64)
-			proportions[changefeedID] = holder
+
+		if nodeDispatcherMemory[eventServiceID] == nil {
+			nodeDispatcherMemory[eventServiceID] = make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
 		}
-		holder[eventServiceID]++
+		if nodeDispatcherMemory[eventServiceID][changefeedID] == nil {
+			nodeDispatcherMemory[eventServiceID][changefeedID] = make(map[common.DispatcherID]uint64)
+		}
+
+		// get available memory for this dispatcher
+		if pathMemory, exists := changefeedPathMemory[changefeedID][dispatcherID]; exists {
+			nodeDispatcherMemory[eventServiceID][changefeedID][dispatcherID] = uint64(pathMemory)
+		}
 		return true
 	})
 
-	// group the available memory quota by nodeID
+	// build congestion control messages for each node
 	result := make(map[node.ID]*event.CongestionControl)
-	for changefeedID, total := range availables {
-		proportion := proportions[changefeedID]
-		var sum uint64
-		for _, portion := range proportion {
-			sum += portion
-		}
-		if sum == 0 {
-			continue
-		}
+	for nodeID, changefeedDispatchers := range nodeDispatcherMemory {
+		congestionControl := event.NewCongestionControl()
 
-		for nodeID, portion := range proportion {
-			ratio := float64(portion) / float64(sum)
-			quota := uint64(float64(total) * ratio)
-
-			m, ok := result[nodeID]
-			if !ok {
-				m = event.NewCongestionControl()
-				result[nodeID] = m
+		for changefeedID, dispatcherMemory := range changefeedDispatchers {
+			if len(dispatcherMemory) == 0 {
+				continue
 			}
-			m.AddAvailableMemory(changefeedID.ID(), quota)
+
+			// get total available memory directly from AreaMemoryMetric
+			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
+			if totalAvailable > 0 {
+				congestionControl.AddAvailableMemoryWithDispatchers(
+					changefeedID.ID(),
+					totalAvailable,
+					dispatcherMemory,
+				)
+			}
+		}
+
+		if len(congestionControl.GetAvailables()) > 0 {
+			result[nodeID] = congestionControl
 		}
 	}
+
 	return result
 }
 

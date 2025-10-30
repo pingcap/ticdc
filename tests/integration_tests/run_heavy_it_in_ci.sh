@@ -36,7 +36,7 @@ mysql_groups=(
 	# G02
 	'availability ddl_for_split_tables_with_failover'
 	# G03
-	'cdc move_table'
+	'cdc move_table checkpoint_race_ddl_crash'
 	# G04
 	'syncpoint syncpoint_check_ts'
 	# G05
@@ -76,7 +76,7 @@ kafka_groups=(
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
 	# G05
-	'move_table drop_many_tables'
+	'move_table drop_many_tables checkpoint_race_ddl_crash'
 	# G06
 	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
 	# G07
@@ -112,7 +112,7 @@ pulsar_groups=(
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only'
 	# G05
-	'move_table drop_many_tables'
+	'move_table drop_many_tables checkpoint_race_ddl_crash'
 	# G06
 	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
 	# G07
@@ -147,7 +147,7 @@ storage_groups=(
 	# G04
 	'ddl_for_split_tables_with_random_move_table'
 	# G05
-	'move_table drop_many_tables'
+	'move_table drop_many_tables checkpoint_race_ddl_crash'
 	# G06
 	'cdc default_value'
 	# G07

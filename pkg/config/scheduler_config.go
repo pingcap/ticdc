@@ -18,7 +18,14 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
+)
+
+const (
+	// MinWriteKeyThreshold is the minimum allowed value for WriteKeyThreshold
+	MinWriteKeyThreshold = 10485760 // 10MB
 )
 
 // ChangefeedSchedulerConfig is per changefeed scheduler settings.
@@ -33,7 +40,7 @@ type ChangefeedSchedulerConfig struct {
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write-key-threshold" json:"write-key-threshold"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
-	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
+	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-count-per-node"`
 	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
@@ -62,6 +69,15 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	}
 	if c.WriteKeyThreshold < 0 {
 		return errors.New("write-key-threshold must be larger than 0")
+	}
+
+	// Validate and adjust WriteKeyThreshold if it's too small
+	if c.WriteKeyThreshold > 0 && c.WriteKeyThreshold < MinWriteKeyThreshold {
+		log.Warn("WriteKeyThreshold is set too small, adjusting to minimum recommended value",
+			zap.Int("configuredValue", c.WriteKeyThreshold),
+			zap.Int("adjustedValue", MinWriteKeyThreshold),
+			zap.String("reason", "small values may cause performance issues and frequent table splitting"))
+		c.WriteKeyThreshold = MinWriteKeyThreshold
 	}
 	if c.SchedulingTaskCountPerNode < 0 {
 		return errors.New("scheduling-task-count-per-node must be larger than 0")

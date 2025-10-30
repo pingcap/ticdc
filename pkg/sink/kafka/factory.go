@@ -136,7 +136,7 @@ func (p *saramaSyncProducer) Heartbeat() {
 	}
 	brokers := p.client.Brokers()
 	for _, b := range brokers {
-		_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
+		_, _ = b.ApiVersions(&sarama.ApiVersionsRequest{})
 	}
 }
 
@@ -267,7 +267,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 func (p *saramaAsyncProducer) Heartbeat() {
 	brokers := p.client.Brokers()
 	for _, b := range brokers {
-		_, _ = b.Heartbeat(&sarama.HeartbeatRequest{})
+		_, _ = b.ApiVersions(&sarama.ApiVersionsRequest{})
 	}
 }
 

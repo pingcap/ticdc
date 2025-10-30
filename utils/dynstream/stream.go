@@ -204,6 +204,8 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 			s.eventQueue.wakePath(e.pathInfo)
 		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
+		case e.release:
+			s.eventQueue.releasePath(e.pathInfo)
 		case e.pathInfo.removed.Load():
 			// The path is removed, so we don't need to handle its events.
 			return
@@ -285,10 +287,15 @@ Loop:
 					cleanUpEventBuf()
 					continue Loop
 				}
-				path.blocking = s.handler.Handle(path.dest, eventBuf...)
-				if path.blocking {
+
+				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
+
+				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
+
+				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
+
 				cleanUpEventBuf()
 			}
 		}
@@ -316,7 +323,7 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// guaranteed to see the memory change of this field.
 	removed atomic.Bool
 	// The path is blocked by the handler.
-	blocking bool
+	blocking atomic.Bool
 
 	// The pending events of the path.
 	pendingQueue *deque.Deque[eventWrap[A, P, T, D, H]]
@@ -324,20 +331,18 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
-	pendingSize          atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
-	paused               atomic.Bool  // The path is paused to send events.
-	lastSendFeedbackTime atomic.Value
+	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
+
+	lastHandleEventTs atomic.Uint64
 }
 
 func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
-		area:                 area,
-		path:                 path,
-		dest:                 dest,
-		pendingQueue:         deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
-		lastSendFeedbackTime: atomic.Value{},
+		area:         area,
+		path:         path,
+		dest:         dest,
+		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
 	}
-	pi.lastSendFeedbackTime.Store(time.Unix(0, 0))
 	return pi
 }
 
@@ -376,10 +381,13 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	if !ok {
 		return eventWrap[A, P, T, D, H]{}, false
 	}
-	pi.updatePendingSize(int64(-e.eventSize))
 
+	pi.updatePendingSize(int64(-e.eventSize))
 	if pi.areaMemStat != nil {
 		pi.areaMemStat.decPendingSize(pi, int64(e.eventSize))
+		if e.eventType.Property != PeriodicSignal {
+			pi.areaMemStat.lastSizeDecreaseTime.Store(time.Now())
+		}
 	}
 	return e, true
 }
@@ -398,6 +406,7 @@ type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	event   T
 	wake    bool
 	newPath bool
+	release bool
 
 	pathInfo *pathInfo[A, P, T, D, H]
 
