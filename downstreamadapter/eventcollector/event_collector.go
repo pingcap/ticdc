@@ -565,7 +565,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		if !ok {
 			continue
 		}
-		cfID := statValue.(changefeedStat).changefeedID
+		cfID := statValue.(*changefeedStat).changefeedID
 		if changefeedPathMemory[cfID] == nil {
 			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
 		}
@@ -583,7 +583,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		if !ok {
 			continue
 		}
-		cfID := statValue.(changefeedStat).changefeedID
+		cfID := statValue.(*changefeedStat).changefeedID
 		if changefeedPathMemory[cfID] == nil {
 			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
 		}
