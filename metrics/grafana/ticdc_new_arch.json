@@ -1048,9 +1048,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster_id=~\"$tidb_cluster\", area=~\"$namespace/$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector.*\"}) by (area, instance, module, type)",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster_id=~\"$tidb_cluster\", namespace=~\"$namespace\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector.*\"}) by (namespace, area, instance, module, type)",
               "interval": "",
-              "legendFormat": "{{area}}-{{instance}}-{{module}}-{{type}}",
+              "legendFormat": "{{namespace}}-{{area}}-{{instance}}-{{module}}-{{type}}",
               "refId": "A"
             }
           ],
@@ -7276,9 +7276,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component=~\"log-puller\", instance=~\"$ticdc_instance\"}",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster_id=~\"$tidb_cluster\", instance=~\"$ticdc_instance\", module=~\"log-puller\"}) by (instance, module, type)",
               "interval": "",
-              "legendFormat": "{{area}}-{{instance}}-memory-{{component}}-{{type}}",
+              "legendFormat": "{{instance}}-{{type}}",
               "refId": "A"
             }
           ],
