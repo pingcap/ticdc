@@ -86,18 +86,18 @@ type changefeedStat struct {
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
 	return &changefeedStat{
 		changefeedID:              changefeedID,
-		metricMemoryUsageMax:      metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "max", changefeedID.String()),
-		metricMemoryUsageUsed:     metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used", changefeedID.String()),
-		metricMemoryUsageMaxRedo:  metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.String()),
-		metricMemoryUsageUsedRedo: metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.String()),
+		metricMemoryUsageMax:      metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "max", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageUsed:     metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageMaxRedo:  metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageUsedRedo: metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.Keyspace(), changefeedID.Name()),
 	}
 }
 
 func (c *changefeedStat) removeMetrics() {
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "max", c.changefeedID.String())
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "used", c.changefeedID.String())
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.String())
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.String())
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
 
 /*

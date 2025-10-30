@@ -21,7 +21,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "memory_usage",
-		}, []string{"module", "type", "area"})
+		}, []string{"module", "type", getKeyspaceLabel(), "area"})
 	DynamicStreamEventChanSize = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
