@@ -15,6 +15,7 @@ package schemastore
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
@@ -107,8 +109,18 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	}
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
 	for _, event := range resolvedEvents {
-		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs ||
-			event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
+		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
+			log.Info("skip ddl job with empty SchemaVersion",
+				zap.Any("type", event.Job.Type),
+				zap.String("job", event.Job.Query),
+				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
+				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
+				zap.Uint64("jobCommitTs", event.CommitTs),
+				zap.Any("storeSchemaVersion", s.schemaVersion),
+				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
+			continue
+		}
+		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs {
 			log.Info("skip already applied ddl job",
 				zap.Any("type", event.Job.Type),
 				zap.String("job", event.Job.Query),
@@ -155,6 +167,16 @@ func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 		zap.Int64("tableID", ddlEvent.Job.TableID),
 		zap.Uint64("finishedTs", ddlEvent.Job.BinlogInfo.FinishedTS),
 		zap.String("query", ddlEvent.Job.Query))
+
+	serverConfig := config.GetGlobalServerConfig()
+	for _, ts := range serverConfig.Debug.SchemaStore.IgnoreDDLCommitTs {
+		if ts == ddlEvent.CommitTs {
+			log.Info("ignore ddl job by commit ts",
+				zap.Uint64("commitTs", ts),
+				zap.String("query", ddlEvent.Job.Query))
+			return
+		}
+	}
 
 	if !filter.IsSysSchema(ddlEvent.Job.SchemaName) {
 		s.unsortedCache.addDDLEvent(ddlEvent)
@@ -364,13 +386,14 @@ func (s *schemaStore) FetchTableDDLEvents(
 
 	currentResolvedTs := store.resolvedTs.Load()
 	if end > currentResolvedTs {
-		log.Panic("end should not be greater than current resolved ts",
+		log.Warn("end should not be greater than current resolved ts",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", tableID),
 			zap.Uint64("start", start),
 			zap.Uint64("end", end),
 			zap.Uint64("currentResolvedTs", currentResolvedTs))
+		return nil, errors.New(fmt.Sprintf("end %d should not be greater than current resolved ts %d", end, currentResolvedTs))
 	}
 	events, err := store.dataStorage.fetchTableDDLEvents(dispatcherID, tableID, tableFilter, start, end)
 	if err != nil {
@@ -444,7 +467,10 @@ func (s *schemaStore) RegisterKeyspace(
 		return err
 	}
 
-	storage := newPersistentStorage(ctx, s.root, keyspaceID, s.pdCli, kvStorage)
+	storage, err := newPersistentStorage(ctx, s.root, keyspaceID, s.pdCli, kvStorage)
+	if err != nil {
+		return err
+	}
 	store := &keyspaceSchemaStore{
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
