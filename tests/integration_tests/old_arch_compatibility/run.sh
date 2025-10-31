@@ -181,7 +181,7 @@ run() {
 		exit 0
 	fi
 
-	#run_basic_upgrade_case
+	run_basic_upgrade_case
 	run_scheduler_upgrade_case
 }
 
