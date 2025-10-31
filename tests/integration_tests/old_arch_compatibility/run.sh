@@ -34,7 +34,7 @@ prepare_sink() {
 		run_pulsar_consumer --upstream-uri "$SINK_URI"
 		;;
 	*)
-		SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
+		SINK_URI="mysql://root@127.0.0.1:3306/"
 		;;
 	esac
 }
