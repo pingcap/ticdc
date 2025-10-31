@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	DropEventVersion = 0
+	DropEventVersion0 = 0
 )
 
 var _ Event = &DropEvent{}
@@ -43,7 +43,7 @@ func NewDropEvent(
 	commitTs common.Ts,
 ) *DropEvent {
 	return &DropEvent{
-		Version:         DropEventVersion,
+		Version:         DropEventVersion0,
 		DispatcherID:    dispatcherID,
 		DroppedSeq:      seq,
 		DroppedCommitTs: commitTs,
@@ -82,7 +82,9 @@ func (e *DropEvent) GetStartTs() common.Ts {
 
 // GetSize returns the approximate size of the event in bytes
 func (e *DropEvent) GetSize() int64 {
-	return int64(1 + e.DispatcherID.GetSize() + 8 + 8) // version + dispatcherID + seq + commitTs
+	// payload: dispatcherID + seq + commitTs + epoch
+	payloadSize := int64(e.DispatcherID.GetSize() + 8 + 8 + 8)
+	return payloadSize
 }
 
 // IsPaused returns false as drop events are not pausable
@@ -97,41 +99,63 @@ func (e *DropEvent) Len() int32 {
 
 // Marshal encodes the DropEvent to bytes
 func (e *DropEvent) Marshal() ([]byte, error) {
-	return e.encode()
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch e.Version {
+	case DropEventVersion0:
+		payload, err = e.encodeV0()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported DropEvent version: %d", e.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeDropEvent, e.Version, payload)
 }
 
 // Unmarshal decodes the DropEvent from bytes
 func (e *DropEvent) Unmarshal(data []byte) error {
-	return e.decode(data)
-}
-
-func (e *DropEvent) encode() ([]byte, error) {
-	if e.Version != 0 {
-		return nil, fmt.Errorf("DropEvent.encode: unsupported version %d", e.Version)
-	}
-	return e.encodeV0()
-}
-
-func (e *DropEvent) decode(data []byte) error {
-	if len(data) != int(e.GetSize()) {
-		return fmt.Errorf("DropEvent.decode: invalid data length, expected %d, got %d", e.GetSize(), len(data))
+	// 1. Parse unified header
+	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	if err != nil {
+		return err
 	}
 
-	version := data[0]
-	if version != 0 {
-		return fmt.Errorf("DropEvent.decode: unsupported version %d", version)
+	// 2. Validate event type
+	if eventType != TypeDropEvent {
+		return fmt.Errorf("expected DropEvent (type %d), got type %d (%s)",
+			TypeDropEvent, eventType, TypeToString(eventType))
 	}
 
-	return e.decodeV0(data)
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := headerSize + payloadLen
+	if len(data) < expectedLen {
+		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
+			expectedLen, headerSize, payloadLen, len(data))
+	}
+
+	// 4. Extract payload
+	payload := data[headerSize : headerSize+payloadLen]
+
+	// 5. Decode based on version
+	switch version {
+	case DropEventVersion0:
+		return e.decodeV0(payload)
+	default:
+		return fmt.Errorf("unsupported DropEvent version: %d", version)
+	}
 }
 
 func (e *DropEvent) encodeV0() ([]byte, error) {
-	data := make([]byte, e.GetSize())
+	// Note: version is now handled in the header by Marshal(), not here
+	// payload: dispatcherID + seq + commitTs + epoch
+	payloadSize := e.DispatcherID.GetSize() + 8 + 8 + 8
+	data := make([]byte, payloadSize)
 	offset := 0
-
-	// Version
-	data[offset] = e.Version
-	offset += 1
 
 	// DispatcherID
 	copy(data[offset:], e.DispatcherID.Marshal())
@@ -145,15 +169,16 @@ func (e *DropEvent) encodeV0() ([]byte, error) {
 	binary.LittleEndian.PutUint64(data[offset:], uint64(e.DroppedCommitTs))
 	offset += 8
 
+	// DroppedEpoch
+	binary.LittleEndian.PutUint64(data[offset:], e.DroppedEpoch)
+	offset += 8
+
 	return data, nil
 }
 
 func (e *DropEvent) decodeV0(data []byte) error {
+	// Note: header (magic + event type + version + length) has already been read and removed from data
 	offset := 0
-
-	// Version
-	e.Version = data[offset]
-	offset += 1
 
 	// DispatcherID
 	dispatcherIDSize := e.DispatcherID.GetSize()
@@ -169,6 +194,10 @@ func (e *DropEvent) decodeV0(data []byte) error {
 
 	// DroppedCommitTs
 	e.DroppedCommitTs = common.Ts(binary.LittleEndian.Uint64(data[offset:]))
+	offset += 8
+
+	// DroppedEpoch
+	e.DroppedEpoch = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 
 	return nil

@@ -77,7 +77,7 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 	require.Equal(t, byte(0xDA), value[0], "magic high byte")
 	require.Equal(t, byte(0x7A), value[1], "magic low byte")
 	require.Equal(t, byte(TypeDMLEvent), value[2], "event type")
-	require.Equal(t, byte(DMLEventVersion), value[3], "version byte")
+	require.Equal(t, byte(DMLEventVersion0), value[3], "version byte")
 
 	reverseEvent := &DMLEvent{}
 	err = reverseEvent.Unmarshal(value)
@@ -99,10 +99,11 @@ func TestBatchDMLEvent(t *testing.T) {
 	require.NotNil(t, dmlEvent)
 
 	batchDMLEvent := &BatchDMLEvent{
-		Version:   BatchDMLEventVersion,
-		DMLEvents: []*DMLEvent{dmlEvent},
-		Rows:      dmlEvent.Rows,
-		TableInfo: dmlEvent.TableInfo,
+		Version:       BatchDMLEventVersion0,
+		DMLEventCount: 1,
+		DMLEvents:     []*DMLEvent{dmlEvent},
+		Rows:          dmlEvent.Rows,
+		TableInfo:     dmlEvent.TableInfo,
 	}
 	data, err := batchDMLEvent.Marshal()
 	require.NoError(t, err)
@@ -112,7 +113,7 @@ func TestBatchDMLEvent(t *testing.T) {
 	require.Equal(t, byte(0xDA), data[0], "magic high byte")
 	require.Equal(t, byte(0x7A), data[1], "magic low byte")
 	require.Equal(t, byte(TypeBatchDMLEvent), data[2], "event type")
-	require.Equal(t, byte(BatchDMLEventVersion), data[3], "version byte")
+	require.Equal(t, byte(BatchDMLEventVersion0), data[3], "version byte")
 
 	reverseEvents := &BatchDMLEvent{}
 	// Set the TableInfo before unmarshal, it is used in Unmarshal.
@@ -120,6 +121,7 @@ func TestBatchDMLEvent(t *testing.T) {
 	require.NoError(t, err)
 	reverseEvents.AssembleRows(batchDMLEvent.TableInfo)
 	require.Equal(t, len(reverseEvents.DMLEvents), 1)
+	require.Equal(t, reverseEvents.DMLEventCount, batchDMLEvent.DMLEventCount)
 	reverseEvent := reverseEvents.DMLEvents[0]
 	// Compare the content of the two event's rows.
 	require.Equal(t, dmlEvent.Rows.ToString(dmlEvent.TableInfo.GetFieldSlice()), reverseEvent.Rows.ToString(dmlEvent.TableInfo.GetFieldSlice()))
@@ -139,6 +141,12 @@ func TestBatchDMLEvent(t *testing.T) {
 	dmlEvent.TableInfo = nil
 	reverseEvent.TableInfo = nil
 	require.Equal(t, dmlEvent, reverseEvent)
+
+	// case 2: unsupported version
+	batchDMLEvent.Version = 100
+	data, err = batchDMLEvent.Marshal()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported BatchDMLEvent version")
 }
 
 func TestEncodeAndDecodeV0(t *testing.T) {
@@ -158,7 +166,7 @@ func TestEncodeAndDecodeV0(t *testing.T) {
 	require.NoError(t, err)
 
 	reverseEvent := &DMLEvent{
-		Version: DMLEventVersion,
+		Version: DMLEventVersion0,
 	}
 	// Set the TableInfo before decode, it is used in decode.
 	err = reverseEvent.decodeV0(data)
@@ -265,7 +273,7 @@ func TestDMLEventHeaderValidation(t *testing.T) {
 	incompleteData[0] = 0xDA
 	incompleteData[1] = 0x7A
 	incompleteData[2] = TypeDMLEvent
-	incompleteData[3] = DMLEventVersion
+	incompleteData[3] = DMLEventVersion0
 	incompleteData[4] = 0
 	incompleteData[5] = 0
 	incompleteData[6] = 0
@@ -286,7 +294,7 @@ func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	require.NotNil(t, dmlEvent)
 
 	batchDMLEvent := &BatchDMLEvent{
-		Version:   BatchDMLEventVersion,
+		Version:   BatchDMLEventVersion0,
 		DMLEvents: []*DMLEvent{dmlEvent},
 		Rows:      dmlEvent.Rows,
 		TableInfo: dmlEvent.TableInfo,
@@ -334,7 +342,7 @@ func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	incompleteData[0] = 0xDA
 	incompleteData[1] = 0x7A
 	incompleteData[2] = TypeBatchDMLEvent
-	incompleteData[3] = BatchDMLEventVersion
+	incompleteData[3] = BatchDMLEventVersion0
 	incompleteData[4] = 0
 	incompleteData[5] = 0
 	incompleteData[6] = 0

@@ -91,9 +91,8 @@ func NewCongestionControl() *CongestionControl {
 }
 
 func (c *CongestionControl) GetSize() int {
-	size := GetEventHeaderSize() // header: magic(2) + event_type(1) + version(1) + length(4)
-	size += 8                    // clusterID
-	size += 4                    // changefeed count
+	size := 8 // clusterID
+	size += 4 // changefeed count
 	for _, mem := range c.availables {
 		size += mem.GetSize()
 	}

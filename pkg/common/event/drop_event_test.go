@@ -154,7 +154,7 @@ func TestDropEventEncodeDecode(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Test encode
-			data, err := tc.event.encode()
+			data, err := tc.event.encodeV0()
 			if tc.wantError {
 				require.Error(t, err)
 				return
@@ -164,7 +164,7 @@ func TestDropEventEncodeDecode(t *testing.T) {
 
 			// Test decode
 			var e2 DropEvent
-			err = e2.decode(data)
+			err = e2.decodeV0(data)
 			require.NoError(t, err)
 			require.Equal(t, tc.event.Version, e2.Version)
 			require.Equal(t, tc.event.DispatcherID, e2.DispatcherID)

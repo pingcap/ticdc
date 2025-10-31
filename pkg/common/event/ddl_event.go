@@ -348,8 +348,8 @@ func (t DDLEvent) encodeV0() ([]byte, error) {
 
 func (t *DDLEvent) decodeV0(data []byte) error {
 	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
-	// Note: header (magic + event type + version + length) has already been read and removed from data
-	t.eventSize = int64(len(data)) + int64(GetEventHeaderSize()) // +8 for the header
+	t.eventSize = int64(len(data))
+
 	end := len(data)
 	multipletableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	for i := 0; i < int(multipletableInfosDataSize); i++ {

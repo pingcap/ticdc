@@ -45,7 +45,7 @@ func NewDispatcherProgress(dispatcherID common.DispatcherID, checkpointTs uint64
 }
 
 func (dp DispatcherProgress) GetSize() int {
-	return dp.DispatcherID.GetSize() + 8 + 1 // version
+	return dp.DispatcherID.GetSize() + 8 // dispatcherID size + checkpointTs size
 }
 
 func (dp DispatcherProgress) Marshal() ([]byte, error) {
@@ -102,9 +102,8 @@ func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
 }
 
 func (d *DispatcherHeartbeat) GetSize() int {
-	size := GetEventHeaderSize() // header: magic(2) + event_type(1) + version(1) + length(4)
-	size += 8                    // clusterID
-	size += 4                    // dispatcher count
+	size := 8 // clusterID
+	size += 4 // dispatcher count
 	for _, dp := range d.DispatcherProgresses {
 		size += dp.GetSize()
 	}
@@ -217,7 +216,7 @@ func NewDispatcherState(dispatcherID common.DispatcherID, state DSState) Dispatc
 }
 
 func (d *DispatcherState) GetSize() int {
-	return d.DispatcherID.GetSize() + 2 // version + state
+	return d.DispatcherID.GetSize() + 1 // + state
 }
 
 func (d DispatcherState) Marshal() ([]byte, error) {
@@ -276,9 +275,8 @@ func (d *DispatcherHeartbeatResponse) Append(ds DispatcherState) {
 }
 
 func (d *DispatcherHeartbeatResponse) GetSize() int {
-	size := GetEventHeaderSize() // header: magic(2) + event_type(1) + version(1) + length(4)
-	size += 8                    // clusterID
-	size += 4                    // dispatcher count
+	size := 8 // clusterID
+	size += 4 // dispatcher count
 	for _, ds := range d.DispatcherStates {
 		size += ds.GetSize()
 	}
