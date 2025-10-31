@@ -149,8 +149,8 @@ run_scheduler_upgrade_case() {
 	cdc_cli_changefeed resume -c $changefeedid
 
 	sleep 10
-	
-	changefeed_cfg=$(cdc_cli_changefeed query -c $changefeedid -s | grep -v "Command to ticdc")
+
+	changefeed_cfg=$(cdc_cli_changefeed query -c $changefeedid | grep -v "Command to ticdc")
 	region_count_per_span=$(echo "$changefeed_cfg" | jq -r '.config.scheduler.region_count_per_span')
 	if [ "$region_count_per_span" = "0" ] || [ "$region_count_per_span" = "null" ]; then
 		echo "region_count_per_span should be non-zero after upgrade but got $region_count_per_span"
