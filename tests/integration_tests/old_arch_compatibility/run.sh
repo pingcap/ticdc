@@ -127,7 +127,6 @@ run_scheduler_upgrade_case() {
 		--config="$CUR/conf/scheduler_changefeed.toml" \
 		-c $changefeedid
 
-
 	check_sync_diff "$WORK_DIR" "$CUR/conf/scheduler_diff_config.toml"
 
 	echo "Pausing changefeed before upgrade..."
