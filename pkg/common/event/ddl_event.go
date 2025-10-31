@@ -291,7 +291,10 @@ func (t *DDLEvent) Unmarshal(data []byte) error {
 	// 4. Extract payload
 	payload := data[headerSize : headerSize+payloadLen]
 
-	// 5. Decode based on version
+	// 5. Store version
+	t.Version = version
+
+	// 6. Decode based on version
 	switch version {
 	case DDLEventVersion0:
 		return t.decodeV0(payload)

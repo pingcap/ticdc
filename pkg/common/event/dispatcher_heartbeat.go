@@ -16,29 +16,25 @@ package event
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
 const (
-	DispatcherProgressVersion0          = 0
 	DispatcherHeartbeatVersion0         = 0
 	DispatcherHeartbeatResponseVersion0 = 0
-	DispatcherStateVersion0             = 0
 )
 
 // DispatcherProgress is used to report the progress of a dispatcher to the EventService
+// It is a part of DispatcherHeartbeat, so it has no version field.
 type DispatcherProgress struct {
-	Version      byte // 1 byte, it should be the same as DispatcherHeartbeatVersion
 	DispatcherID common.DispatcherID
 	CheckpointTs uint64 // 8 bytes
 }
 
 func NewDispatcherProgress(dispatcherID common.DispatcherID, checkpointTs uint64) DispatcherProgress {
 	return DispatcherProgress{
-		Version:      DispatcherProgressVersion0,
 		DispatcherID: dispatcherID,
 		CheckpointTs: checkpointTs,
 	}
@@ -57,11 +53,7 @@ func (dp *DispatcherProgress) Unmarshal(data []byte) error {
 }
 
 func (dp DispatcherProgress) encodeV0() ([]byte, error) {
-	if dp.Version != 0 {
-		return nil, errors.New("invalid version")
-	}
 	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(dp.Version)
 	buf.Write(dp.DispatcherID.Marshal())
 	binary.Write(buf, binary.BigEndian, dp.CheckpointTs)
 	return buf.Bytes(), nil
@@ -69,11 +61,6 @@ func (dp DispatcherProgress) encodeV0() ([]byte, error) {
 
 func (dp *DispatcherProgress) decodeV0(data []byte) error {
 	buf := bytes.NewBuffer(data)
-	var err error
-	dp.Version, err = buf.ReadByte()
-	if err != nil {
-		return err
-	}
 	dp.DispatcherID.Unmarshal(buf.Next(dp.DispatcherID.GetSize()))
 	dp.CheckpointTs = binary.BigEndian.Uint64(buf.Next(8))
 	return nil
@@ -201,15 +188,14 @@ const (
 	DSStateRemoved
 )
 
+// It is a part of DispatcherHeartbeatResponse, so it has no version field.
 type DispatcherState struct {
-	Version      byte // 1 byte, it should be the same as DispatcherHeartbeatResponseVersion
 	State        DSState
 	DispatcherID common.DispatcherID
 }
 
 func NewDispatcherState(dispatcherID common.DispatcherID, state DSState) DispatcherState {
 	return DispatcherState{
-		Version:      DispatcherStateVersion0,
 		State:        state,
 		DispatcherID: dispatcherID,
 	}
@@ -230,7 +216,6 @@ func (d *DispatcherState) Unmarshal(data []byte) error {
 func (d *DispatcherState) decodeV0(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	var err error
-	d.Version, err = buf.ReadByte()
 	if err != nil {
 		return err
 	}
@@ -245,7 +230,6 @@ func (d *DispatcherState) decodeV0(data []byte) error {
 
 func (d *DispatcherState) encodeV0() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(d.Version)
 	buf.Write(d.DispatcherID.Marshal())
 	buf.WriteByte(byte(d.State))
 	return buf.Bytes(), nil
@@ -296,7 +280,6 @@ func (d *DispatcherHeartbeatResponse) Marshal() ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unsupported DispatcherHeartbeatResponse version: %d", d.Version)
 	}
-
 	// 2. Use unified header format
 	return MarshalEventWithHeader(TypeDispatcherHeartbeatResponse, d.Version, payload)
 }
