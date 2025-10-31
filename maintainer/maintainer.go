@@ -538,6 +538,7 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 				break
 			}
 			needUpdate := false
+			updateCheckpointTs := true
 
 			newWatermark := heartbeatpb.NewMaxWatermark()
 			// Calculate operator and barrier constraints first to ensure atomicity.
@@ -556,6 +557,7 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 				// node level watermark reported, ignore this round
 				watermark, ok := m.redoTsByCapture.Get(id)
 				if !ok {
+					updateCheckpointTs = false
 					log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
 						zap.String("changefeed", m.id.Name()),
 						zap.Any("node", id))
@@ -567,7 +569,7 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
 			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
 
-			if m.redoTs.ResolvedTs < newWatermark.CheckpointTs {
+			if m.redoTs.ResolvedTs < newWatermark.CheckpointTs && updateCheckpointTs {
 				m.redoTs.ResolvedTs = newWatermark.CheckpointTs
 				needUpdate = true
 			}

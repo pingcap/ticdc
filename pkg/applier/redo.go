@@ -195,6 +195,7 @@ func (ra *RedoApplier) applyDDL(
 		}
 		ddlTs := ra.getTableDDLTs(ddl.TableName.TableID, int64(checkpointTs))
 		if ddlTs.ts >= int64(ddl.DDL.CommitTs) {
+			log.Warn("ignore DDL which commit ts is less than current ts", zap.Any("ddl", ddl), zap.Any("startTs", ddlTs.ts))
 			return true
 		}
 		// if ddl.DDL.CommitTs == max(uint64(ddlTs.ts), checkpointTs) {
@@ -254,7 +255,7 @@ func (ra *RedoApplier) applyRow(
 }
 
 func (ra *RedoApplier) waitTableFlush(
-	ctx context.Context, tableID commonType.TableID, rts commonType.Ts,
+	ctx context.Context, tableID commonType.TableID, rts uint64,
 ) error {
 	if ra.eventsGroup[tableID].highWatermark > rts {
 		log.Panic("resolved ts of redo log regressed",
