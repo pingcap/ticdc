@@ -16,6 +16,7 @@ package eventcollector
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -81,6 +82,7 @@ type changefeedStat struct {
 	metricMemoryUsageUsed     prometheus.Gauge
 	metricMemoryUsageMaxRedo  prometheus.Gauge
 	metricMemoryUsageUsedRedo prometheus.Gauge
+	dispatcherCount           atomic.Int32
 }
 
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
@@ -252,7 +254,11 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 	stat := newDispatcherStat(target, c, readyCallback)
 	c.dispatcherMap.Store(target.GetId(), stat)
-	c.changefeedMap.Store(target.GetChangefeedID().ID(), newChangefeedStat(target.GetChangefeedID()))
+
+	cfID := target.GetChangefeedID()
+	v, _ := c.changefeedMap.LoadOrStore(cfID.ID(), newChangefeedStat(cfID))
+	cfStat := v.(*changefeedStat)
+	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
@@ -298,20 +304,19 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
 	}
 	c.dispatcherMap.Delete(target.GetId())
 
-	// Check if it is the last dispatcher of the changefeed.
-	// If so, remove the changefeed stat.
-	isLastDispatcher := true
-	c.dispatcherMap.Range(func(key, value interface{}) bool {
-		stat := value.(*dispatcherStat)
-		if stat.target.GetChangefeedID() == target.GetChangefeedID() {
-			isLastDispatcher = false
-			return false // stop iteration
-		}
-		return true
-	})
-
-	if isLastDispatcher {
-		if v, ok := c.changefeedMap.LoadAndDelete(target.GetChangefeedID().ID()); ok {
+	cfID := target.GetChangefeedID()
+	v, ok := c.changefeedMap.Load(cfID.ID())
+	if !ok {
+		log.Warn("changefeed stat not found when removing dispatcher", zap.Stringer("changefeedID", cfID))
+		return
+	}
+	cfStat := v.(*changefeedStat)
+	remaining := cfStat.dispatcherCount.Add(-1)
+	log.Info("remove dispatcher from changefeed stat",
+		zap.Stringer("changefeedID", cfID),
+		zap.Int32("remaining", remaining))
+	if remaining == 0 {
+		if _, ok := c.changefeedMap.LoadAndDelete(cfID.ID()); ok {
 			stat := v.(*changefeedStat)
 			stat.removeMetrics()
 			log.Info("last dispatcher removed, clean up changefeed stat", zap.Stringer("changefeedID", target.GetChangefeedID()))
