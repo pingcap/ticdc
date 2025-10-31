@@ -422,9 +422,7 @@ func (info *ChangeFeedInfo) VerifyAndComplete() {
 	}
 
 	if info.Config.MemoryQuota == uint64(0) {
-		log.Info("Start fixing incompatible memory quota", zap.String("changefeed", info.String()))
 		info.fixMemoryQuota()
-		log.Info("Fix incompatible memory quota completed", zap.String("changefeed", info.String()))
 	}
 
 	if info.Config.Integrity == nil {
