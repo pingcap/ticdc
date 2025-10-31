@@ -311,6 +311,9 @@ func (c *consumer) syncExecDMLEvents(
 	}
 
 	total := len(events)
+	if total == 0 {
+		return nil
+	}
 	var flushed atomic.Int64
 	done := make(chan struct{})
 	for _, e := range events {
