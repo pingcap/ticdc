@@ -87,7 +87,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	require.Equal(t, progress2, heartbeat.DispatcherProgresses[1])
 
 	// Test GetSize
-	expectedSize := 1 + 4 + 8 + progress1.GetSize() + progress2.GetSize() // version(byte) + clusterID(uint64) + dispatcher count(uint32) + progress1 size + progress2 size
+	expectedSize := GetEventHeaderSize() + 4 + 8 + progress1.GetSize() + progress2.GetSize() // header + dispatcher count(uint32) + clusterID(uint64) + progress sizes
 	require.Equal(t, expectedSize, heartbeat.GetSize())
 
 	// Test Marshal and Unmarshal
@@ -95,6 +95,13 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	data, err := heartbeat.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, heartbeat.GetSize())
+
+	// Verify header format
+	require.Greater(t, len(data), 8, "data should include header")
+	require.Equal(t, byte(0xDA), data[0], "magic high byte")
+	require.Equal(t, byte(0x7A), data[1], "magic low byte")
+	require.Equal(t, byte(TypeDispatcherHeartbeat), data[2], "event type")
+	require.Equal(t, byte(DispatcherHeartbeatVersion0), data[3], "version byte")
 
 	var unmarshalledResponse DispatcherHeartbeat
 	err = unmarshalledResponse.Unmarshal(data)
@@ -208,7 +215,7 @@ func TestDispatcherHeartbeatResponse(t *testing.T) {
 	require.Equal(t, state2, response.DispatcherStates[1])
 
 	// Test GetSize
-	expectedSize := 1 + 4 + 8 + state1.GetSize() + state2.GetSize() // version(byte) + clusterID(uint64) + dispatcher count(uint32) + state1 size + state2 size
+	expectedSize := GetEventHeaderSize() + 4 + 8 + state1.GetSize() + state2.GetSize() // header + dispatcher count(uint32) + clusterID(uint64) + state sizes
 	require.Equal(t, expectedSize, response.GetSize())
 
 	// Test Marshal and Unmarshal
@@ -216,6 +223,13 @@ func TestDispatcherHeartbeatResponse(t *testing.T) {
 	data, err := response.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, response.GetSize())
+
+	// Verify header format
+	require.Greater(t, len(data), 8, "data should include header")
+	require.Equal(t, byte(0xDA), data[0], "magic high byte")
+	require.Equal(t, byte(0x7A), data[1], "magic low byte")
+	require.Equal(t, byte(TypeDispatcherHeartbeatResponse), data[2], "event type")
+	require.Equal(t, byte(DispatcherHeartbeatResponseVersion0), data[3], "version byte")
 
 	var unmarshalledResponse DispatcherHeartbeatResponse
 	err = unmarshalledResponse.Unmarshal(data)
@@ -269,4 +283,122 @@ func TestDispatcherHeartbeatResponseWithMultipleStates(t *testing.T) {
 		require.Equal(t, state.State, unmarshalledResponse.DispatcherStates[i].State)
 		require.Equal(t, state.DispatcherID, unmarshalledResponse.DispatcherStates[i].DispatcherID)
 	}
+}
+
+func TestDispatcherHeartbeatHeaderValidation(t *testing.T) {
+	t.Parallel()
+
+	heartbeat := NewDispatcherHeartbeat(1)
+	heartbeat.Append(NewDispatcherProgress(common.NewDispatcherID(), 100))
+
+	data, err := heartbeat.Marshal()
+	require.NoError(t, err)
+
+	// Make a copy for manipulation
+	data2 := make([]byte, len(data))
+	copy(data2, data)
+
+	// Test 1: Invalid magic bytes
+	data2[0] = 0xFF
+	var decoded DispatcherHeartbeat
+	err = decoded.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid magic bytes")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 2: Wrong event type
+	data2[2] = byte(TypeCongestionControl)
+	err = decoded.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected DispatcherHeartbeat")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 3: Unsupported version
+	data2[3] = 99
+	err = decoded.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported DispatcherHeartbeat version")
+
+	// Test 4: Data too short
+	shortData := []byte{0xDA, 0x7A, 0x00}
+	err = decoded.Unmarshal(shortData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "data too short")
+
+	// Test 5: Incomplete payload
+	incompleteData := make([]byte, 8)
+	incompleteData[0] = 0xDA
+	incompleteData[1] = 0x7A
+	incompleteData[2] = TypeDispatcherHeartbeat
+	incompleteData[3] = DispatcherHeartbeatVersion0
+	incompleteData[4] = 0
+	incompleteData[5] = 0
+	incompleteData[6] = 0
+	incompleteData[7] = 100 // Claim 100 bytes but don't provide them
+	err = decoded.Unmarshal(incompleteData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "incomplete data")
+}
+
+func TestDispatcherHeartbeatResponseHeaderValidation(t *testing.T) {
+	t.Parallel()
+
+	response := NewDispatcherHeartbeatResponse()
+	response.Append(NewDispatcherState(common.NewDispatcherID(), DSStateNormal))
+
+	data, err := response.Marshal()
+	require.NoError(t, err)
+
+	// Make a copy for manipulation
+	data2 := make([]byte, len(data))
+	copy(data2, data)
+
+	// Test 1: Invalid magic bytes
+	data2[0] = 0xFF
+	var decoded DispatcherHeartbeatResponse
+	err = decoded.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid magic bytes")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 2: Wrong event type
+	data2[2] = byte(TypeDispatcherHeartbeat)
+	err = decoded.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected DispatcherHeartbeatResponse")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 3: Unsupported version
+	data2[3] = 99
+	err = decoded.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported DispatcherHeartbeatResponse version")
+
+	// Test 4: Data too short
+	shortData := []byte{0xDA, 0x7A, 0x00}
+	err = decoded.Unmarshal(shortData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "data too short")
+
+	// Test 5: Incomplete payload
+	incompleteData := make([]byte, 8)
+	incompleteData[0] = 0xDA
+	incompleteData[1] = 0x7A
+	incompleteData[2] = TypeDispatcherHeartbeatResponse
+	incompleteData[3] = DispatcherHeartbeatResponseVersion0
+	incompleteData[4] = 0
+	incompleteData[5] = 0
+	incompleteData[6] = 0
+	incompleteData[7] = 100 // Claim 100 bytes but don't provide them
+	err = decoded.Unmarshal(incompleteData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "incomplete data")
 }

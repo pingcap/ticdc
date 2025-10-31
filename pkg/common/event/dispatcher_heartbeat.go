@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/common"
 )
@@ -101,9 +102,9 @@ func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
 }
 
 func (d *DispatcherHeartbeat) GetSize() int {
-	size := 1 // version
-	size += 8 // clusterID
-	size += 4 // dispatcher count
+	size := GetEventHeaderSize() // header: magic(2) + event_type(1) + version(1) + length(4)
+	size += 8                    // clusterID
+	size += 4                    // dispatcher count
 	for _, dp := range d.DispatcherProgresses {
 		size += dp.GetSize()
 	}
@@ -111,16 +112,61 @@ func (d *DispatcherHeartbeat) GetSize() int {
 }
 
 func (d *DispatcherHeartbeat) Marshal() ([]byte, error) {
-	return d.encodeV0()
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch d.Version {
+	case DispatcherHeartbeatVersion0:
+		payload, err = d.encodeV0()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported DispatcherHeartbeat version: %d", d.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeDispatcherHeartbeat, d.Version, payload)
 }
 
 func (d *DispatcherHeartbeat) Unmarshal(data []byte) error {
-	return d.decodeV0(data)
+	// 1. Parse unified header
+	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	if err != nil {
+		return err
+	}
+
+	// 2. Validate event type
+	if eventType != TypeDispatcherHeartbeat {
+		return fmt.Errorf("expected DispatcherHeartbeat (type %d), got type %d (%s)",
+			TypeDispatcherHeartbeat, eventType, TypeToString(eventType))
+	}
+
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := headerSize + payloadLen
+	if len(data) < expectedLen {
+		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
+			expectedLen, headerSize, payloadLen, len(data))
+	}
+
+	// 4. Extract payload
+	payload := data[headerSize : headerSize+payloadLen]
+
+	// 5. Store version
+	d.Version = version
+
+	// 6. Decode based on version
+	switch version {
+	case DispatcherHeartbeatVersion0:
+		return d.decodeV0(payload)
+	default:
+		return fmt.Errorf("unsupported DispatcherHeartbeat version: %d", version)
+	}
 }
 
 func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(d.Version)
 	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, dp := range d.DispatcherProgresses {
@@ -135,11 +181,6 @@ func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
 
 func (d *DispatcherHeartbeat) decodeV0(data []byte) error {
 	buf := bytes.NewBuffer(data)
-	var err error
-	d.Version, err = buf.ReadByte()
-	if err != nil {
-		return err
-	}
 	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	d.DispatcherProgresses = make([]DispatcherProgress, 0, d.DispatcherCount)
@@ -221,7 +262,7 @@ type DispatcherHeartbeatResponse struct {
 
 func NewDispatcherHeartbeatResponse() *DispatcherHeartbeatResponse {
 	return &DispatcherHeartbeatResponse{
-		Version: DispatcherHeartbeatVersion0,
+		Version: DispatcherHeartbeatResponseVersion0,
 		// TODO: Pass a real clusterID when we support 1 TiCDC cluster subscribe multiple TiDB clusters
 		ClusterID:        0,
 		DispatcherCount:  0,
@@ -235,47 +276,71 @@ func (d *DispatcherHeartbeatResponse) Append(ds DispatcherState) {
 }
 
 func (d *DispatcherHeartbeatResponse) GetSize() int {
-	size := 1 // version
-	size += 8 // clusterID
-	size += 4 // dispatcher count
+	size := GetEventHeaderSize() // header: magic(2) + event_type(1) + version(1) + length(4)
+	size += 8                    // clusterID
+	size += 4                    // dispatcher count
 	for _, ds := range d.DispatcherStates {
 		size += ds.GetSize()
 	}
 	return size
 }
 
-func (d DispatcherHeartbeatResponse) Marshal() ([]byte, error) {
-	return d.encodeV0()
+func (d *DispatcherHeartbeatResponse) Marshal() ([]byte, error) {
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch d.Version {
+	case DispatcherHeartbeatResponseVersion0:
+		payload, err = d.encodeV0()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported DispatcherHeartbeatResponse version: %d", d.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeDispatcherHeartbeatResponse, d.Version, payload)
 }
 
 func (d *DispatcherHeartbeatResponse) Unmarshal(data []byte) error {
-	return d.decodeV0(data)
-}
-
-func (d *DispatcherHeartbeatResponse) decodeV0(data []byte) error {
-	buf := bytes.NewBuffer(data)
-	var err error
-	d.Version, err = buf.ReadByte()
+	// 1. Parse unified header
+	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
 	if err != nil {
 		return err
 	}
-	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
-	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
-	d.DispatcherStates = make([]DispatcherState, 0, d.DispatcherCount)
-	for range d.DispatcherCount {
-		var ds DispatcherState
-		dsData := buf.Next(ds.GetSize())
-		if err = ds.Unmarshal(dsData); err != nil {
-			return err
-		}
-		d.DispatcherStates = append(d.DispatcherStates, ds)
+
+	// 2. Validate event type
+	if eventType != TypeDispatcherHeartbeatResponse {
+		return fmt.Errorf("expected DispatcherHeartbeatResponse (type %d), got type %d (%s)",
+			TypeDispatcherHeartbeatResponse, eventType, TypeToString(eventType))
 	}
-	return nil
+
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := headerSize + payloadLen
+	if len(data) < expectedLen {
+		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
+			expectedLen, headerSize, payloadLen, len(data))
+	}
+
+	// 4. Extract payload
+	payload := data[headerSize : headerSize+payloadLen]
+
+	// 5. Store version
+	d.Version = version
+
+	// 6. Decode based on version
+	switch version {
+	case DispatcherHeartbeatResponseVersion0:
+		return d.decodeV0(payload)
+	default:
+		return fmt.Errorf("unsupported DispatcherHeartbeatResponse version: %d", version)
+	}
 }
 
 func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(d.Version)
 	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, ds := range d.DispatcherStates {
@@ -286,4 +351,20 @@ func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
 		buf.Write(dsData)
 	}
 	return buf.Bytes(), nil
+}
+
+func (d *DispatcherHeartbeatResponse) decodeV0(data []byte) error {
+	buf := bytes.NewBuffer(data)
+	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
+	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
+	d.DispatcherStates = make([]DispatcherState, 0, d.DispatcherCount)
+	for range d.DispatcherCount {
+		var ds DispatcherState
+		dsData := buf.Next(ds.GetSize())
+		if err := ds.Unmarshal(dsData); err != nil {
+			return err
+		}
+		d.DispatcherStates = append(d.DispatcherStates, ds)
+	}
+	return nil
 }
