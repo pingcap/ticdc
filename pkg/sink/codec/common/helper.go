@@ -14,6 +14,7 @@
 package common
 
 import (
+	"github.com/pingcap/ticdc/pkg/redact"
 	"context"
 	"database/sql"
 	"fmt"
@@ -279,7 +280,7 @@ func queryRowChecksumAux(
 		}
 
 		log.Error("set snapshot read failed",
-			zap.String("query", query),
+			zap.String("query", redact.SQL(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 		return result
@@ -303,7 +304,7 @@ func queryRowChecksumAux(
 	err = conn.QueryRowContext(ctx, query).Scan(&result)
 	if err != nil {
 		log.Panic("scan row failed",
-			zap.String("query", query),
+			zap.String("query", redact.SQL(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -335,7 +336,7 @@ func MustSnapshotQuery(
 		}
 
 		log.Panic("set snapshot read failed",
-			zap.String("query", query),
+			zap.String("query", redact.SQL(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -354,7 +355,7 @@ func MustSnapshotQuery(
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		log.Panic("query row failed",
-			zap.String("query", query),
+			zap.String("query", redact.SQL(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -363,7 +364,7 @@ func MustSnapshotQuery(
 	holder, err := newColumnHolder(rows)
 	if err != nil {
 		log.Panic("obtain the columns holder failed",
-			zap.String("query", query),
+			zap.String("query", redact.SQL(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -371,7 +372,7 @@ func MustSnapshotQuery(
 		err = rows.Scan(holder.ValuePointers...)
 		if err != nil {
 			log.Panic("scan row failed",
-				zap.String("query", query),
+				zap.String("query", redact.SQL(query)),
 				zap.String("schema", schema), zap.String("table", table),
 				zap.Uint64("commitTs", commitTs), zap.Error(err))
 		}

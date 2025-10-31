@@ -50,7 +50,7 @@ func (d *txnDecoder) AddKeyValue(_, value []byte) {
 	if err != nil {
 		log.Panic("decompress data failed",
 			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value),
+			zap.Any("value", value), // skip-redaction: compressed binary data, not human-readable
 			zap.Error(err))
 	}
 	d.data = value

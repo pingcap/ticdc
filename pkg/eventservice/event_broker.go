@@ -14,6 +14,7 @@
 package eventservice
 
 import (
+	"github.com/pingcap/ticdc/pkg/redact"
 	"context"
 	"strings"
 	"sync"
@@ -245,7 +246,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
 		zap.Int64("EventTableID", e.TableID),
-		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
+		zap.String("query", redact.SQL(e.Query)), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
 

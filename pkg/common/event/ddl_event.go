@@ -14,6 +14,7 @@
 package event
 
 import (
+	"github.com/pingcap/ticdc/pkg/redact"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -165,7 +166,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 			log.Panic("split queries failed", zap.Error(err))
 		}
 		if len(queries) != len(d.MultipleTableInfos) {
-			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
+			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", redact.SQL(d.Query)), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
 
 		t := model.ActionCreateTable

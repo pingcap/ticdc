@@ -70,7 +70,7 @@ func ignoreColumns(tableInfo *model.TableInfo, columns []string) *model.TableInf
 			offset, ok := colMap[col.Name.O]
 			if !ok {
 				// this should never happened
-				log.Fatal("column not exists", zap.String("column", col.Name.O))
+				log.Fatal("column not exists", zap.String("column", col.Name.O)) // skip-redaction: column name only, not user data
 			}
 			col.Offset = offset
 		}

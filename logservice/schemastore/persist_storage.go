@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/redact"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -453,7 +454,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 				zap.Int64("tableID", tableID),
 				zap.Uint64("ts", ts),
 				zap.String("type", model.ActionType(rawEvent.Type).String()),
-				zap.String("query", rawEvent.Query))
+				zap.String("query", redact.SQL(rawEvent.Query)))
 		}
 	}
 	log.Debug("fetchTableDDLEvents",
@@ -715,7 +716,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
-		log.Error("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		log.Error("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", redact.SQL(job.Query)))
 		return nil
 	}
 
@@ -858,7 +859,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
-		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))
+		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", redact.SQL(rawEvent.Query)))
 	}
 	return handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
 }

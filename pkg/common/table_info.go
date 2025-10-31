@@ -273,7 +273,7 @@ func (ti *TableInfo) ForceGetColumnName(colID int64) string {
 func (ti *TableInfo) ForceGetColumnIDByName(name string) int64 {
 	colID, ok := ti.columnSchema.NameToColID[name]
 	if !ok {
-		log.Panic("invalid column name", zap.String("column", name))
+		log.Panic("invalid column name", zap.String("column", name)) // skip-redaction: column name only, not user data
 	}
 	return colID
 }

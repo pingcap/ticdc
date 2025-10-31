@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/util"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
@@ -587,7 +588,7 @@ func (c *consumer) handleNewFiles(
 				return errors.Trace(err)
 			}
 			// TODO: need to cleanup tableDefMap in the future.
-			log.Info("execute ddl event successfully", zap.String("query", tableDef.Query))
+			log.Info("execute ddl event successfully", zap.String("query", redact.SQL(tableDef.Query)))
 			continue
 		}
 

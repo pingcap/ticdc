@@ -156,7 +156,7 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 		s.Upstreams[k.UpstreamID] = &newUpstreamInfo
 	case etcd.CDCKeyTypeMetaVersion:
 	default:
-		log.Warn("receive an unexpected etcd event", zap.String("key", key.String()),
+		log.Warn("receive an unexpected etcd event", zap.String("key", key.String()), // skip-redaction: etcd key, infrastructure metadata
 			zap.ByteString("value", value), zap.String("role", s.Role))
 	}
 	return nil
@@ -429,7 +429,7 @@ func (s *ChangefeedReactorState) Update(key util.EtcdKey, value []byte, _ bool) 
 		return errors.Trace(err)
 	}
 	if err := s.UpdateCDCKey(k, value); err != nil {
-		log.Error("failed to update status", zap.String("key", key.String()), zap.ByteString("value", value))
+		log.Error("failed to update status", zap.String("key", key.String()), zap.ByteString("value", value)) // skip-redaction: etcd key, infrastructure metadata
 		return errors.Trace(err)
 	}
 	return nil

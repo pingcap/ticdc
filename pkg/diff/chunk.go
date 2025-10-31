@@ -268,7 +268,7 @@ func splitRangeByRandom(db *sql.DB, chunk *ChunkRange, count int,
 
 		log.Debug("get split values by random",
 			zap.Stringer("chunk", chunk),
-			zap.String("column", column.Name.O),
+			zap.String("column", column.Name.O), // skip-redaction: column name only, not data
 			zap.Int("randomValueNum", len(randomValues[i])))
 	}
 

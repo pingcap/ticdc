@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/ticdc/pkg/retry"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
@@ -31,7 +32,7 @@ import (
 
 func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
-		log.Info("Dry run DDL", zap.String("sql", event.GetDDLQuery()))
+		log.Info("Dry run DDL", zap.String("sql", redact.SQL(event.GetDDLQuery())))
 		// use RecordDDLExecution to record the metrics of execute ddl
 		w.statistics.RecordDDLExecution(func() error {
 			return nil
@@ -49,7 +50,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 			return nil
 		}
 		if flag {
-			log.Info("Skip Already Executed DDL", zap.String("sql", event.GetDDLQuery()))
+			log.Info("Skip Already Executed DDL", zap.String("sql", redact.SQL(event.GetDDLQuery())))
 			return nil
 		}
 	}
@@ -60,7 +61,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	// Convert vector type to string type for unsupport database
 	if w.needFormat {
 		if newQuery := formatQuery(event.Query); newQuery != event.Query {
-			log.Warn("format ddl query", zap.String("newQuery", newQuery), zap.String("query", event.Query))
+			log.Warn("format ddl query", zap.String("newQuery", redact.SQL(newQuery)), zap.String("query", redact.SQL(event.Query)))
 			event.Query = newQuery
 		}
 	}
@@ -92,9 +93,9 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	query := event.GetDDLQuery()
 	_, err = tx.ExecContext(ctx, query)
 	if err != nil {
-		log.Error("Fail to ExecContext", zap.Any("err", err), zap.Any("query", query))
+		log.Error("Fail to ExecContext", zap.Any("err", err), zap.String("query", redact.SQL(query)))
 		if rbErr := tx.Rollback(); rbErr != nil {
-			log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(err))
+			log.Error("Failed to rollback", zap.String("sql", redact.SQL(event.GetDDLQuery())), zap.Error(err))
 		}
 		return err
 	}
@@ -118,24 +119,24 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 			if errors.IsIgnorableMySQLDDLError(err) {
 				// NOTE: don't change the log, some tests depend on it.
 				log.Info("Execute DDL failed, but error can be ignored",
-					zap.String("ddl", event.Query),
+					zap.String("ddl", redact.SQL(event.Query)),
 					zap.Error(err))
 				// If the error is ignorable, we will ignore the error directly.
 				return nil
 			}
 			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Cause(err) == mysql.ErrInvalidConn {
-				log.Warn("Wait the asynchronous ddl to synchronize", zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
+				log.Warn("Wait the asynchronous ddl to synchronize", zap.String("ddl", redact.SQL(event.Query)), zap.String("ddlCreateTime", ddlCreateTime),
 					zap.String("readTimeout", w.cfg.ReadTimeout), zap.Error(err))
 				return w.waitDDLDone(w.ctx, event, ddlCreateTime)
 			}
 			log.Warn("Execute DDL with error, retry later",
-				zap.String("ddl", event.Query),
+				zap.String("ddl", redact.SQL(event.Query)),
 				zap.Error(err))
 			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", event.GetDDLQuery())))
 		}
 		log.Info("Execute DDL succeeded",
 			zap.String("changefeed", w.ChangefeedID.String()),
-			zap.Uint64("commitTs", event.GetCommitTs()), zap.String("query", event.GetDDLQuery()),
+			zap.Uint64("commitTs", event.GetCommitTs()), zap.String("query", redact.SQL(event.GetDDLQuery())),
 			zap.Any("ddl", event))
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
@@ -157,7 +158,7 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 		}
 		switch state {
 		case timodel.JobStateDone, timodel.JobStateSynced:
-			log.Info("DDL replicate success", zap.String("ddl", ddl.Query), zap.String("ddlCreateTime", ddlCreateTime))
+			log.Info("DDL replicate success", zap.String("ddl", redact.SQL(ddl.Query)), zap.String("ddlCreateTime", ddlCreateTime))
 			return nil
 		case timodel.JobStateCancelled, timodel.JobStateRollingback, timodel.JobStateRollbackDone, timodel.JobStateCancelling:
 			return errors.ErrExecDDLFailed.GenWithStackByArgs(ddl.Query)
@@ -165,11 +166,11 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 			switch ddl.GetDDLType() {
 			// returned immediately if not block dml
 			case timodel.ActionAddIndex:
-				log.Info("DDL is running downstream", zap.String("ddl", ddl.Query), zap.String("ddlCreateTime", ddlCreateTime), zap.Any("ddlState", state))
+				log.Info("DDL is running downstream", zap.String("ddl", redact.SQL(ddl.Query)), zap.String("ddlCreateTime", ddlCreateTime), zap.Any("ddlState", state))
 				return nil
 			}
 		default:
-			log.Warn("Unexpected DDL state, may not be found downstream", zap.String("ddl", ddl.Query), zap.String("ddlCreateTime", ddlCreateTime), zap.Any("ddlState", state))
+			log.Warn("Unexpected DDL state, may not be found downstream", zap.String("ddl", redact.SQL(ddl.Query)), zap.String("ddlCreateTime", ddlCreateTime), zap.Any("ddlState", state))
 			return errors.ErrDDLStateNotFound.GenWithStackByArgs(state)
 		}
 
@@ -178,7 +179,7 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 			return ctx.Err()
 		case <-ticker.C:
 		case <-ticker1.C:
-			log.Info("DDL is still running downstream, it blocks other DDL or DML events", zap.String("ddl", ddl.Query), zap.String("ddlCreateTime", ddlCreateTime))
+			log.Info("DDL is still running downstream, it blocks other DDL or DML events", zap.String("ddl", redact.SQL(ddl.Query)), zap.String("ddlCreateTime", ddlCreateTime))
 		}
 	}
 }
@@ -219,7 +220,7 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 func (w *Writer) doQueryAsyncDDL(tableID int64, query string) (bool, error) {
 	start := time.Now()
 	rows, err := w.db.QueryContext(w.ctx, query)
-	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.Any("query", query))
+	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.String("query", redact.SQL(query)))
 	if err != nil {
 		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
 	}

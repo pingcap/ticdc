@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/dumpling/export"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -506,7 +507,7 @@ func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime
 			zap.String("jobID", jobID),
 			zap.String("jobType", jobType),
 			zap.String("schemaState", schemaState),
-			zap.String("ddl", ddl),
+			zap.String("ddl", redact.SQL(ddl)),
 			zap.String("state", state),
 			zap.Any("jobsResults", jobsResults),
 		)

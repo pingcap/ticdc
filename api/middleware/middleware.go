@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/ticdc/pkg/server"
 	"go.uber.org/zap"
 )
@@ -88,7 +89,7 @@ func LogMiddleware() gin.HandlerFunc {
 			zap.Int("status", c.Writer.Status()),
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
-			zap.String("query", query),
+			zap.String("query", redact.String(query)),
 			zap.String("ip", c.ClientIP()),
 			zap.String("user-agent", c.Request.UserAgent()), zap.String("client-version", version),
 			zap.String("username", user),
