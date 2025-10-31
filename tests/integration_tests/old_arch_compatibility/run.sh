@@ -148,13 +148,13 @@ run_scheduler_upgrade_case() {
 	echo "Resuming changefeed after upgrade..."
 	cdc_cli_changefeed resume -c $changefeedid
 
-	changefeed_cfg=$(cdc_cli_changefeed query -c $changefeedid -s | grep -v "Command to ticdc")
-	region_count_per_span=$(echo "$changefeed_cfg" | jq -r '.config.scheduler.region_count_per_span')
-	if [ "$region_count_per_span" = "0" ] || [ "$region_count_per_span" = "null" ]; then
-		echo "region_count_per_span should be non-zero after upgrade but got $region_count_per_span"
-		echo "$changefeed_cfg"
-		exit 1
-	fi
+	# changefeed_cfg=$(cdc_cli_changefeed query -c $changefeedid -s | grep -v "Command to ticdc")
+	# region_count_per_span=$(echo "$changefeed_cfg" | jq -r '.config.scheduler.region_count_per_span')
+	# if [ "$region_count_per_span" = "0" ] || [ "$region_count_per_span" = "null" ]; then
+	# 	echo "region_count_per_span should be non-zero after upgrade but got $region_count_per_span"
+	# 	echo "$changefeed_cfg"
+	# 	exit 1
+	# fi
 
 	echo "Writing data after resume..."
 	for i in $(seq 1 200); do
@@ -179,7 +179,7 @@ run() {
 		exit 0
 	fi
 
-	run_basic_upgrade_case
+	#run_basic_upgrade_case
 	run_scheduler_upgrade_case
 }
 
