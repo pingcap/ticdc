@@ -15,12 +15,62 @@ package topicmanager
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 )
+
+// mockAdminClientForHeartbeat is used to count the calls to Heartbeat.
+type mockAdminClientForHeartbeat struct {
+	kafka.ClusterAdminClientMockImpl
+	heartbeatCount int
+	mu             sync.Mutex
+}
+
+func (m *mockAdminClientForHeartbeat) Heartbeat() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.heartbeatCount++
+}
+
+func (m *mockAdminClientForHeartbeat) GetHeartbeatCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.heartbeatCount
+}
+
+func TestKafkaTopicManagerHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	adminClient := &mockAdminClientForHeartbeat{}
+	cfg := &kafka.AutoCreateTopicConfig{AutoCreate: false}
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	heartbeatInterval := 5 * time.Second
+	manager := newKafkaTopicManager(ctx, "topic", changefeedID, adminClient, cfg)
+
+	// Ensure the context is canceled at the end of the test.
+	defer cancel()
+
+	// Wait for a sufficient amount of time to ensure the heartbeat ticker triggers several times.
+	// Waiting for 11 seconds to allow for at least two heartbeats.
+	// Use Eventually to avoid test flakiness.
+	require.Eventually(t, func() bool {
+		return adminClient.GetHeartbeatCount() >= 2
+	}, 11*time.Second, 150*time.Millisecond, "Heartbeat should be called periodically")
+
+	// Verify that closing the manager stops the heartbeat.
+	countBeforeClose := adminClient.GetHeartbeatCount()
+	manager.Close()
+	// Wait for a short period to ensure no new heartbeats occur.
+	time.Sleep(heartbeatInterval * 2)
+	require.Equal(t, countBeforeClose, adminClient.GetHeartbeatCount(), "Heartbeat should stop after manager is closed")
+}
 
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
