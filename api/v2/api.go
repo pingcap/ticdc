@@ -98,4 +98,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	unsafeGroup.GET("/metadata", api.CDCMetaData)
 	unsafeGroup.POST("/resolve_lock", keyspaceCheckerMiddleware, api.ResolveLock)
 	unsafeGroup.DELETE("/service_gc_safepoint", keyspaceCheckerMiddleware, api.DeleteServiceGcSafePoint)
+
+	// This API is not forwarded to the coordinator, it is handled by the node that receives the request.
+	v2.POST("/event_store/compact", authenticateMiddleware, api.CompactEventStore)
 }

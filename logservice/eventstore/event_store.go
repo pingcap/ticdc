@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -86,6 +87,9 @@ type EventStore interface {
 	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
 
 	GetLogCoordinatorNodeID() node.ID
+
+	// Compact triggers a manual compaction for all underlying pebble DBs.
+	Compact() error
 }
 
 type DMLEventState struct {
@@ -995,6 +999,19 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 			e.dispatcherMeta.Unlock()
 		}
 	}
+}
+
+// Compact triggers a manual compaction for all underlying pebble DBs.
+func (e *eventStore) Compact() error {
+	for i, db := range e.dbs {
+		log.Info("start to compact pebble db", zap.Int("dbIndex", i))
+		if err := db.Compact(nil, nil, false); err != nil {
+			log.Error("compact pebble db failed", zap.Int("dbIndex", i), zap.Error(err))
+			return errors.Trace(err)
+		}
+		log.Info("finish compacting pebble db", zap.Int("dbIndex", i))
+	}
+	return nil
 }
 
 func (e *eventStore) runMetricsCollector(ctx context.Context) error {
