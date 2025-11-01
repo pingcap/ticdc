@@ -36,6 +36,9 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				RegionCountPerSpan:         100,
 				WriteKeyThreshold:          1000,
 				SchedulingTaskCountPerNode: 20,
+				BalanceScoreThreshold:      20,
+				MinTrafficPercentage:       0.8,
+				MaxTrafficPercentage:       1.25,
 				EnableSplittableCheck:      false, // User sets to false
 			},
 			expectedValue: true, // Should be auto-adjusted to true
@@ -49,6 +52,9 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				RegionCountPerSpan:         100,
 				WriteKeyThreshold:          1000,
 				SchedulingTaskCountPerNode: 20,
+				BalanceScoreThreshold:      20,
+				MinTrafficPercentage:       0.8,
+				MaxTrafficPercentage:       1.25,
 				EnableSplittableCheck:      false, // User sets to false
 			},
 			expectedValue: true, // Should be auto-adjusted to true
@@ -62,6 +68,9 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				RegionCountPerSpan:         100,
 				WriteKeyThreshold:          1000,
 				SchedulingTaskCountPerNode: 20,
+				BalanceScoreThreshold:      20,
+				MinTrafficPercentage:       0.8,
+				MaxTrafficPercentage:       1.25,
 				EnableSplittableCheck:      false, // User sets to false
 			},
 			expectedValue: true, // Should be auto-adjusted to true
@@ -75,6 +84,9 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				RegionCountPerSpan:         100,
 				WriteKeyThreshold:          1000,
 				SchedulingTaskCountPerNode: 20,
+				BalanceScoreThreshold:      20,
+				MinTrafficPercentage:       0.8,
+				MaxTrafficPercentage:       1.25,
 				EnableSplittableCheck:      true, // User sets to true
 			},
 			expectedValue: true, // Should respect user config
@@ -88,6 +100,9 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				RegionCountPerSpan:         100,
 				WriteKeyThreshold:          1000,
 				SchedulingTaskCountPerNode: 20,
+				BalanceScoreThreshold:      20,
+				MinTrafficPercentage:       0.8,
+				MaxTrafficPercentage:       1.25,
 				EnableSplittableCheck:      false, // User sets to false
 			},
 			expectedValue: false, // Should respect user config
@@ -101,6 +116,9 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				RegionCountPerSpan:         100,
 				WriteKeyThreshold:          1000,
 				SchedulingTaskCountPerNode: 20,
+				BalanceScoreThreshold:      20,
+				MinTrafficPercentage:       0.8,
+				MaxTrafficPercentage:       1.25,
 				// EnableSplittableCheck not set, should use default
 			},
 			expectedValue: false, // Should use default value
@@ -115,6 +133,9 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				WriteKeyThreshold:          1000,
 				SchedulingTaskCountPerNode: 20,
 				EnableSplittableCheck:      true, // User sets to true
+				BalanceScoreThreshold:      20,
+				MinTrafficPercentage:       0.8,
+				MaxTrafficPercentage:       1.25,
 			},
 			expectedValue: true, // Should respect user config
 		},
@@ -128,6 +149,9 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				WriteKeyThreshold:          1000,
 				SchedulingTaskCountPerNode: 20,
 				EnableSplittableCheck:      false, // User sets to false
+				BalanceScoreThreshold:      20,
+				MinTrafficPercentage:       0.8,
+				MaxTrafficPercentage:       1.25,
 			},
 			expectedValue: false, // Should respect user config
 		},

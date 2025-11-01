@@ -59,6 +59,34 @@ type ChangefeedSchedulerConfig struct {
 	MaxTrafficPercentage float64 `toml:"max-traffic-percentage" json:"max-traffic-percentage"`
 }
 
+// FillMissingWithDefaults copies default values into invalid or zero fields.
+func (c *ChangefeedSchedulerConfig) FillMissingWithDefaults(defaultCfg *ChangefeedSchedulerConfig) {
+	if c == nil || defaultCfg == nil {
+		return
+	}
+	if c.RegionThreshold <= 0 {
+		c.RegionThreshold = defaultCfg.RegionThreshold
+	}
+	if c.RegionCountPerSpan <= 0 {
+		c.RegionCountPerSpan = defaultCfg.RegionCountPerSpan
+	}
+	if c.WriteKeyThreshold < 0 {
+		c.WriteKeyThreshold = defaultCfg.WriteKeyThreshold
+	}
+	if c.SchedulingTaskCountPerNode <= 0 {
+		c.SchedulingTaskCountPerNode = defaultCfg.SchedulingTaskCountPerNode
+	}
+	if c.BalanceScoreThreshold <= 0 {
+		c.BalanceScoreThreshold = defaultCfg.BalanceScoreThreshold
+	}
+	if c.MinTrafficPercentage <= 0 || c.MinTrafficPercentage >= 1 {
+		c.MinTrafficPercentage = defaultCfg.MinTrafficPercentage
+	}
+	if c.MaxTrafficPercentage <= 1 {
+		c.MaxTrafficPercentage = defaultCfg.MaxTrafficPercentage
+	}
+}
+
 // Validate validates the config.
 func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	if !c.EnableTableAcrossNodes {
