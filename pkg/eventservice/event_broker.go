@@ -243,10 +243,15 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
 		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
+
+	tableID := int64(0)
+	if e.TableInfo != nil {
+		tableID = e.TableInfo.TableName.TableID
+	}
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
-		zap.Int64("EventTableID", e.TableID),
+		zap.Int64("EventTableID", tableID),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }

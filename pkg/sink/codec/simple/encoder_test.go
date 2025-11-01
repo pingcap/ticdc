@@ -245,7 +245,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		decodedDDL := dec.NextDDLEvent()
 		require.NoError(t, err)
 		require.NotNil(t, decodedDDL)
-		require.Equal(t, decodedDDL.TableID, createPartitionTableDDL.TableID, format)
+		require.Equal(t, decodedDDL.TableInfo.TableName.TableID, createPartitionTableDDL.TableInfo.TableName.TableID, format)
 
 		physicalTableID := make([]int64, 0, len(events))
 		for _, e := range events {
@@ -1004,7 +1004,6 @@ func TestEncodeIntegerTypes(t *testing.T) {
 	job := helper.DDL2Job(createTableDDL)
 	ddlEvent := &commonEvent.DDLEvent{
 		SchemaID:   job.SchemaID,
-		TableID:    job.TableID,
 		Query:      job.Query,
 		TableInfo:  helper.GetTableInfo(job),
 		FinishedTs: job.BinlogInfo.FinishedTS,

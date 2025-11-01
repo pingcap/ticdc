@@ -235,7 +235,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 
 func (d *batchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
 	lock.Lock()
-	delete(columnFlagsCache, e.TableID)
+	delete(columnFlagsCache, e.TableInfo.TableName.TableID)
 	defer lock.Unlock()
 
 	key, value, err := encodeDDLEvent(e, d.config)

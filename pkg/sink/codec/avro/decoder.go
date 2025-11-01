@@ -461,10 +461,9 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.FinishedTs = baseDDLEvent.CommitTs
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
 
 	if d.idx == 0 {
-		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
+		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	}
 	return result

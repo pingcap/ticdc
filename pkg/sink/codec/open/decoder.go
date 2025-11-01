@@ -176,11 +176,10 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.FinishedTs = b.nextKey.Ts
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
-	result.TableID = tableIDAllocator.Allocate(result.SchemaName, result.TableName)
 
 	// only the DDL comes from the first partition will be processed.
 	if b.idx == 0 {
-		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
+		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	}
 
