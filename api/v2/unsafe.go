@@ -94,7 +94,7 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 // @Router /api/v2/event_store/compact [post]
 func (h *OpenAPIV2) CompactEventStore(c *gin.Context) {
 	eventStore := appcontext.GetService[eventstore.EventStore](appcontext.EventStore)
-	if err := eventStore.Compact(); err != nil {
+	if err := eventStore.ManualCompact(); err != nil {
 		_ = c.Error(err)
 		return
 	}

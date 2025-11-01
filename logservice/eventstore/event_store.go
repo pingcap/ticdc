@@ -88,8 +88,8 @@ type EventStore interface {
 
 	GetLogCoordinatorNodeID() node.ID
 
-	// Compact triggers a manual compaction for all underlying pebble DBs.
-	Compact() error
+	// ManualCompact triggers a manual compaction for all underlying pebble DBs.
+	ManualCompact() error
 }
 
 type DMLEventState struct {
@@ -1001,12 +1001,12 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 	}
 }
 
-// Compact triggers a manual compaction for all underlying pebble DBs.
-func (e *eventStore) Compact() error {
+// ManualCompact triggers a manual compaction for all underlying pebble DBs.
+func (e *eventStore) ManualCompact() error {
 	for i, db := range e.dbs {
 		log.Info("start to compact pebble db", zap.Int("dbIndex", i))
 		if err := db.Compact(nil, nil, false); err != nil {
-			log.Error("compact pebble db failed", zap.Int("dbIndex", i), zap.Error(err))
+			log.Warn("compact pebble db failed", zap.Int("dbIndex", i), zap.Error(err))
 			return errors.Trace(err)
 		}
 		log.Info("finish compacting pebble db", zap.Int("dbIndex", i))
