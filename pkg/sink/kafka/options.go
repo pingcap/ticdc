@@ -62,6 +62,10 @@ const (
 	// See: https://kafka.apache.org/documentation/#brokerconfigs_min.insync.replicas and
 	// https://kafka.apache.org/documentation/#topicconfigs_min.insync.replicas
 	MinInsyncReplicasConfigName = "min.insync.replicas"
+	// BrokerConnectionsMaxIdleMsConfigName specifies the maximum idle time of a connection to a broker.
+	// Broker will close the connection if it is idle for this long.
+	// See: https://kafka.apache.org/documentation/#brokerconfigs_connections.max.idle.ms
+	BrokerConnectionsMaxIdleMsConfigName = "connections.max.idle.ms"
 )
 
 const (
@@ -168,9 +172,10 @@ type options struct {
 	SASL               *security.SASL
 
 	// Timeout for network configurations, default to `10s`
-	DialTimeout  time.Duration
-	WriteTimeout time.Duration
-	ReadTimeout  time.Duration
+	DialTimeout           time.Duration
+	WriteTimeout          time.Duration
+	ReadTimeout           time.Duration
+	KeepConnAliveInterval time.Duration
 }
 
 // NewOptions returns a default Kafka configuration
