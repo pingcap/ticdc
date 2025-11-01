@@ -62,8 +62,8 @@ func MockDispatcherManager(mc messaging.MessageCenter, self node.ID) *mockDispat
 		dispatchersMap: make(map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus, 2000001),
 		self:           self,
 	}
-	mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.recvMessages)
-	mc.RegisterHandler(messaging.HeartbeatCollectorTopic, m.recvMessages)
+	mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.recvMessage)
+	mc.RegisterHandler(messaging.HeartbeatCollectorTopic, m.recvMessage)
 	return m
 }
 
@@ -108,7 +108,7 @@ func (m *mockDispatcherManager) sendMessages(msg *heartbeatpb.HeartBeatRequest) 
 	}
 }
 
-func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
+func (m *mockDispatcherManager) recvMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	// receive message from maintainer
 	case messaging.TypeScheduleDispatcherRequest,
@@ -117,14 +117,12 @@ func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging
 		messaging.TypeMaintainerCloseRequest:
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return
 		case m.msgCh <- msg:
 		}
-		return nil
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message), zap.Any("type", msg.Type))
 	}
-	return nil
 }
 
 func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage) {
@@ -332,13 +330,12 @@ func TestMaintainerSchedule(t *testing.T) {
 		}, n, taskScheduler, 10, true, common.DefaultKeyspaceID)
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
-		func(ctx context.Context, msg *messaging.TargetMessage) error {
+		func(ctx context.Context, msg *messaging.TargetMessage) {
 			maintainer.eventCh.In() <- &Event{
 				changefeedID: cfID,
 				eventType:    EventMessage,
 				message:      msg,
 			}
-			return nil
 		})
 
 	// send bootstrap message

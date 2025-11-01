@@ -90,9 +90,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
 	// Discard maintainer manager messages, cuz we don't need to handle them in this test
-	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
-		return nil
-	})
+	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) {})
 	schedulerConf := &config.SchedulerConfig{
 		AddTableBatchSize:    1000,
 		CheckBalanceInterval: 0,
@@ -316,9 +314,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
 	// discard maintainer manager messages
-	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
-		return nil
-	})
+	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) {})
 	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
@@ -452,9 +448,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
 	// discard maintainer manager messages
-	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
-		return nil
-	})
+	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) {})
 	schedulerConf := &config.SchedulerConfig{AddTableBatchSize: 1000}
 	manager := NewMaintainerManager(selfNode, schedulerConf)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,

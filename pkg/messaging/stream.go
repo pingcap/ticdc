@@ -14,8 +14,6 @@
 package messaging
 
 import (
-	"sync/atomic"
-
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 )
 
@@ -27,21 +25,10 @@ type grpcStream interface {
 	Recv() (*proto.Message, error)
 }
 
-var streamGenerator atomic.Uint64
-
 type streamWrapper struct {
 	grpcStream
 	id         uint64
 	streamType string
-}
-
-// newStreamWrapper creates a new stream wrapper.
-func newStreamWrapper(stream grpcStream, streamType string) *streamWrapper {
-	return &streamWrapper{
-		grpcStream: stream,
-		id:         streamGenerator.Add(1),
-		streamType: streamType,
-	}
 }
 
 func (s *streamWrapper) Send(msg *proto.Message) error {

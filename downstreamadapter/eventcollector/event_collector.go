@@ -176,8 +176,8 @@ func New(serverId node.ID) *EventCollector {
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
 	eventCollector.ds = NewEventDynamicStream(eventCollector)
 	eventCollector.redoDs = NewEventDynamicStream(eventCollector)
-	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)
-	eventCollector.mc.RegisterHandler(messaging.RedoEventCollectorTopic, eventCollector.RedoMessageCenterHandler)
+	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.recvMessage)
+	eventCollector.mc.RegisterHandler(messaging.RedoEventCollectorTopic, eventCollector.recvRedoMessage)
 
 	return eventCollector
 }
@@ -480,8 +480,8 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 	}
 }
 
-// MessageCenterHandler is the handler for the events message from EventService.
-func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
+// recvMessage is the handler for the events message from EventService.
+func (c *EventCollector) recvMessage(_ context.Context, targetMessage *messaging.TargetMessage) {
 	inflightDuration := time.Since(time.UnixMilli(targetMessage.CreateAt)).Seconds()
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
 
@@ -494,7 +494,7 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 	// corresponding channel to handle it in multi-thread.
 	if targetMessage.Type.IsLogServiceEvent() {
 		c.receiveChannels[targetMessage.GetGroup()%uint64(len(c.receiveChannels))] <- targetMessage
-		return nil
+		return
 	}
 
 	for _, msg := range targetMessage.Message {
@@ -505,19 +505,17 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 			log.Panic("invalid message type", zap.Any("msg", msg))
 		}
 	}
-	return nil
 }
 
-// RedoMessageCenterHandler is the handler for the redo events message from EventService.
-func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
+// recvRedoMessage is the handler for the redo events message from EventService.
+func (c *EventCollector) recvRedoMessage(_ context.Context, targetMessage *messaging.TargetMessage) {
 	// If the message is a log service event, we need to forward it to the
 	// corresponding channel to handle it in multi-thread.
 	if targetMessage.Type.IsLogServiceEvent() {
 		c.redoReceiveChannels[targetMessage.GetGroup()%uint64(len(c.redoReceiveChannels))] <- targetMessage
-		return nil
+		return
 	}
 	log.Panic("invalid message type", zap.Any("msg", targetMessage))
-	return nil
 }
 
 // runDispatchMessage dispatches messages from the input channel to the dynamic stream.
