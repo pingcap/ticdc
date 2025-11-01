@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -73,7 +72,7 @@ func (m *mockKafkaSink) AddCheckpointTs(ts uint64) {
 	}
 }
 
-func (m *mockKafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (m *mockKafkaSink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	// No-op for this test
 }
 

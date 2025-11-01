@@ -286,6 +286,14 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
+	if manager.RedoEnable {
+		err := manager.InitalizeRedoTableTriggerEventDispatcher(req.Schemas)
+		if err != nil {
+			log.Error("failed to initialize redo table trigger event dispatcher",
+				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			return m.handleDispatcherError(from, req.ChangefeedID, err)
+		}
+	}
 
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
 		ChangefeedID:                  req.ChangefeedID,

@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -171,7 +170,7 @@ type BasicDispatcher struct {
 	// tableSchemaStore only exist when the dispatcher is a table trigger event dispatcher
 	// tableSchemaStore store the schema infos for all the table in the event dispatcher manager
 	// it's used for sink to calculate the tableNames or TableIds
-	tableSchemaStore *util.TableSchemaStore
+	tableSchemaStore *commonEvent.TableSchemaStore
 
 	isRemoving atomic.Bool
 	// duringHandleEvents is used to indicate whether the dispatcher is currently handling events.
@@ -222,6 +221,28 @@ func NewBasicDispatcher(
 	}
 
 	return dispatcher
+}
+
+// InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
+// It returns true if the tableSchemaStore is initialized successfully, otherwise returns fals
+func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) (ok bool, err error) {
+	// Only the table trigger event dispatcher need to create a tableSchemaStore
+	// Because we only need to calculate the tableNames or TableIds in the sink
+	// when the event dispatcher manager have table trigger event dispatcher
+	if !d.tableSpan.Equal(common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID)) {
+		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
+		return false, errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
+	}
+
+	if d.tableSchemaStore != nil {
+		log.Info("tableSchemaStore has already been initialized", zap.Stringer("dispatcher", d.id))
+		return false, nil
+	}
+
+	d.tableSchemaStore = commonEvent.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
+	d.sink.SetTableSchemaStore(d.tableSchemaStore)
+	return true, nil
 }
 
 func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {

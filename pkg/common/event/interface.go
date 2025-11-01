@@ -20,6 +20,8 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 )
 
+//go:generate msgp
+
 type Event interface {
 	GetType() int
 	GetSeq() uint64
@@ -130,11 +132,11 @@ func (t InfluenceType) toPB() heartbeatpb.InfluenceType {
 }
 
 type InfluencedTables struct {
-	InfluenceType InfluenceType
+	InfluenceType InfluenceType `msg:"influence-type"`
 	// only exists when InfluenceType is InfluenceTypeNormal
-	TableIDs []int64
+	TableIDs []int64 `msg:"tables"`
 	// only exists when InfluenceType is InfluenceTypeDB
-	SchemaID int64
+	SchemaID int64 `msg:"schema"`
 }
 
 func (i *InfluencedTables) ToPB() *heartbeatpb.InfluencedTables {
@@ -160,6 +162,7 @@ func ToTablesPB(tables []Table) []*heartbeatpb.Table {
 	return res
 }
 
+//msgp:ignore Table
 type Table struct {
 	SchemaID  int64
 	TableID   int64
@@ -167,6 +170,7 @@ type Table struct {
 	*SchemaTableName
 }
 
+//msgp:ignore SchemaIDChange
 type SchemaIDChange struct {
 	TableID     int64
 	OldSchemaID int64
@@ -188,6 +192,7 @@ func ToSchemaIDChangePB(SchemaIDChange []SchemaIDChange) []*heartbeatpb.SchemaID
 	return res
 }
 
+//msgp:ignore Selector
 type Selector interface {
 	Select(colInfo *model.ColumnInfo) bool
 }

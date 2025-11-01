@@ -26,7 +26,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 )
 
@@ -88,28 +87,6 @@ func NewEventDispatcher(
 	}
 	dispatcher.cacheEvents.events = make(chan cacheEvents, 1)
 	return dispatcher
-}
-
-// InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
-// It returns true if the tableSchemaStore is initialized successfully, otherwise returns fals
-func (d *EventDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) (ok bool, err error) {
-	// Only the table trigger event dispatcher need to create a tableSchemaStore
-	// Because we only need to calculate the tableNames or TableIds in the sink
-	// when the event dispatcher manager have table trigger event dispatcher
-	if !d.tableSpan.Equal(common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID)) {
-		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
-		return false, errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
-			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
-	}
-
-	if d.tableSchemaStore != nil {
-		log.Info("tableSchemaStore has already been initialized", zap.Stringer("dispatcher", d.id))
-		return false, nil
-	}
-
-	d.tableSchemaStore = util.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
-	d.sink.SetTableSchemaStore(d.tableSchemaStore)
-	return true, nil
 }
 
 // HandleCacheEvents called when redoGlobalTs is updated

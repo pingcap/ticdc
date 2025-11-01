@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -154,7 +153,8 @@ func (s *Sink) SinkType() common.SinkType {
 	return common.RedoSinkType
 }
 
-func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
+	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
 func (s *Sink) Close(_ bool) {
