@@ -69,11 +69,20 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 	e.TableInfo = nil
 	e.Rows = nil
 
-	value, err := e.encode()
+	value, err := e.Marshal()
 	require.Nil(t, err)
+
+	// Verify header format
+	require.Greater(t, len(value), 8, "data should include header")
+	require.Equal(t, byte(0xDA), value[0], "magic high byte")
+	require.Equal(t, byte(0x7A), value[1], "magic low byte")
+	require.Equal(t, byte(TypeDMLEvent), value[2], "event type")
+	require.Equal(t, byte(DMLEventVersion0), value[3], "version byte")
+
 	reverseEvent := &DMLEvent{}
-	err = reverseEvent.decode(value)
+	err = reverseEvent.Unmarshal(value)
 	require.Nil(t, err)
+	reverseEvent.eventSize = 0
 	require.Equal(t, e, reverseEvent)
 }
 
@@ -90,12 +99,21 @@ func TestBatchDMLEvent(t *testing.T) {
 	require.NotNil(t, dmlEvent)
 
 	batchDMLEvent := &BatchDMLEvent{
-		DMLEvents: []*DMLEvent{dmlEvent},
-		Rows:      dmlEvent.Rows,
-		TableInfo: dmlEvent.TableInfo,
+		Version:       BatchDMLEventVersion0,
+		DMLEventCount: 1,
+		DMLEvents:     []*DMLEvent{dmlEvent},
+		Rows:          dmlEvent.Rows,
+		TableInfo:     dmlEvent.TableInfo,
 	}
 	data, err := batchDMLEvent.Marshal()
 	require.NoError(t, err)
+
+	// Verify header format
+	require.Greater(t, len(data), 8, "data should include header")
+	require.Equal(t, byte(0xDA), data[0], "magic high byte")
+	require.Equal(t, byte(0x7A), data[1], "magic low byte")
+	require.Equal(t, byte(TypeBatchDMLEvent), data[2], "event type")
+	require.Equal(t, byte(BatchDMLEventVersion0), data[3], "version byte")
 
 	reverseEvents := &BatchDMLEvent{}
 	// Set the TableInfo before unmarshal, it is used in Unmarshal.
@@ -103,6 +121,7 @@ func TestBatchDMLEvent(t *testing.T) {
 	require.NoError(t, err)
 	reverseEvents.AssembleRows(batchDMLEvent.TableInfo)
 	require.Equal(t, len(reverseEvents.DMLEvents), 1)
+	require.Equal(t, reverseEvents.DMLEventCount, batchDMLEvent.DMLEventCount)
 	reverseEvent := reverseEvents.DMLEvents[0]
 	// Compare the content of the two event's rows.
 	require.Equal(t, dmlEvent.Rows.ToString(dmlEvent.TableInfo.GetFieldSlice()), reverseEvent.Rows.ToString(dmlEvent.TableInfo.GetFieldSlice()))
@@ -122,6 +141,12 @@ func TestBatchDMLEvent(t *testing.T) {
 	dmlEvent.TableInfo = nil
 	reverseEvent.TableInfo = nil
 	require.Equal(t, dmlEvent, reverseEvent)
+
+	// case 2: unsupported version
+	batchDMLEvent.Version = 100
+	data, err = batchDMLEvent.Marshal()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported BatchDMLEvent version")
 }
 
 func TestEncodeAndDecodeV0(t *testing.T) {
@@ -141,7 +166,7 @@ func TestEncodeAndDecodeV0(t *testing.T) {
 	require.NoError(t, err)
 
 	reverseEvent := &DMLEvent{
-		Version: DMLEventVersion,
+		Version: DMLEventVersion0,
 	}
 	// Set the TableInfo before decode, it is used in decode.
 	err = reverseEvent.decodeV0(data)
@@ -193,4 +218,136 @@ func TestBatchDMLEventAppendWithDifferentTableInfo(t *testing.T) {
 	require.Contains(t, err.Error(), "table info version mismatch")
 	require.Contains(t, err.Error(), "currentDMLEventTableInfoVersion")
 	require.Contains(t, err.Error(), "batchDMLTableInfoVersion")
+}
+
+func TestDMLEventHeaderValidation(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	helper.DDL2Job(createTableSQL)
+
+	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
+	require.NotNil(t, dmlEvent)
+
+	data, err := dmlEvent.Marshal()
+	require.NoError(t, err)
+
+	// Make a copy for manipulation
+	data2 := make([]byte, len(data))
+	copy(data2, data)
+
+	// Test 1: Invalid magic bytes
+	data2[0] = 0xFF
+	reverseEvent := &DMLEvent{}
+	err = reverseEvent.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid magic bytes")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 2: Wrong event type
+	data2[2] = byte(TypeBatchDMLEvent)
+	err = reverseEvent.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected DMLEvent")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 3: Unsupported version
+	data2[3] = 99
+	err = reverseEvent.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported DMLEvent version")
+
+	// Test 4: Data too short
+	shortData := []byte{0xDA, 0x7A, 0x00}
+	err = reverseEvent.Unmarshal(shortData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "data too short")
+
+	// Test 5: Incomplete payload
+	incompleteData := make([]byte, 8)
+	incompleteData[0] = 0xDA
+	incompleteData[1] = 0x7A
+	incompleteData[2] = TypeDMLEvent
+	incompleteData[3] = DMLEventVersion0
+	incompleteData[4] = 0
+	incompleteData[5] = 0
+	incompleteData[6] = 0
+	incompleteData[7] = 100 // Claim 100 bytes but don't provide them
+	err = reverseEvent.Unmarshal(incompleteData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "incomplete data")
+}
+
+func TestBatchDMLEventHeaderValidation(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	helper.DDL2Job(createTableSQL)
+
+	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
+	require.NotNil(t, dmlEvent)
+
+	batchDMLEvent := &BatchDMLEvent{
+		Version:   BatchDMLEventVersion0,
+		DMLEvents: []*DMLEvent{dmlEvent},
+		Rows:      dmlEvent.Rows,
+		TableInfo: dmlEvent.TableInfo,
+	}
+	data, err := batchDMLEvent.Marshal()
+	require.NoError(t, err)
+
+	// Make a copy for manipulation
+	data2 := make([]byte, len(data))
+	copy(data2, data)
+
+	// Test 1: Invalid magic bytes
+	data2[0] = 0xFF
+	reverseEvent := &BatchDMLEvent{}
+	err = reverseEvent.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid magic bytes")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 2: Wrong event type
+	data2[2] = byte(TypeDMLEvent)
+	err = reverseEvent.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected BatchDMLEvent")
+
+	// Restore for next test
+	copy(data2, data)
+
+	// Test 3: Unsupported version
+	data2[3] = 99
+	err = reverseEvent.Unmarshal(data2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported BatchDMLEvent version")
+
+	// Test 4: Data too short
+	shortData := []byte{0xDA, 0x7A, 0x00}
+	err = reverseEvent.Unmarshal(shortData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "data too short")
+
+	// Test 5: Incomplete payload
+	incompleteData := make([]byte, 8)
+	incompleteData[0] = 0xDA
+	incompleteData[1] = 0x7A
+	incompleteData[2] = TypeBatchDMLEvent
+	incompleteData[3] = BatchDMLEventVersion0
+	incompleteData[4] = 0
+	incompleteData[5] = 0
+	incompleteData[6] = 0
+	incompleteData[7] = 100 // Claim 100 bytes but don't provide them
+	err = reverseEvent.Unmarshal(incompleteData)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "incomplete data")
 }

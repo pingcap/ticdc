@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	DDLEventVersion = 0
+	DDLEventVersion0 = 0
 )
 
 var _ Event = &DDLEvent{}
@@ -249,12 +249,68 @@ func (e *DDLEvent) GetDDLType() model.ActionType {
 	return model.ActionType(e.Type)
 }
 
-func (t DDLEvent) Marshal() ([]byte, error) {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize |errorData | errorDataSize
+func (t *DDLEvent) Marshal() ([]byte, error) {
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch t.Version {
+	case DDLEventVersion0:
+		payload, err = t.encodeV0()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported DDLEvent version: %d", t.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeDDLEvent, t.Version, payload)
+}
+
+func (t *DDLEvent) Unmarshal(data []byte) error {
+	// 1. Parse unified header
+	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	if err != nil {
+		return err
+	}
+
+	// 2. Validate event type
+	if eventType != TypeDDLEvent {
+		return fmt.Errorf("expected DDLEvent (type %d), got type %d (%s)",
+			TypeDDLEvent, eventType, TypeToString(eventType))
+	}
+
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := headerSize + payloadLen
+	if len(data) < expectedLen {
+		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
+			expectedLen, headerSize, payloadLen, len(data))
+	}
+
+	// 4. Extract payload
+	payload := data[headerSize : headerSize+payloadLen]
+
+	// 5. Store version
+	t.Version = version
+
+	// 6. Decode based on version
+	switch version {
+	case DDLEventVersion0:
+		return t.decodeV0(payload)
+	default:
+		return fmt.Errorf("unsupported DDLEvent version: %d", version)
+	}
+}
+
+func (t DDLEvent) encodeV0() ([]byte, error) {
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
+	// Note: version is now handled in the header by Marshal(), not here
 	data, err := json.Marshal(t)
 	if err != nil {
 		return nil, err
 	}
+
 	dispatcherIDData := t.DispatcherID.Marshal()
 	dispatcherIDDataSize := make([]byte, 8)
 	binary.BigEndian.PutUint64(dispatcherIDDataSize, uint64(len(dispatcherIDData)))
@@ -293,9 +349,10 @@ func (t DDLEvent) Marshal() ([]byte, error) {
 	return data, nil
 }
 
-func (t *DDLEvent) Unmarshal(data []byte) error {
+func (t *DDLEvent) decodeV0(data []byte) error {
 	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
 	t.eventSize = int64(len(data))
+
 	end := len(data)
 	multipletableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	for i := 0; i < int(multipletableInfosDataSize); i++ {

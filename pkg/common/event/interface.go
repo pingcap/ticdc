@@ -56,25 +56,31 @@ type BlockEvent interface {
 
 const (
 	// DMLEvent is the event type of a transaction.
-	TypeDMLEvent = iota
+	TypeDMLEvent = 0
 	// BatchDMLEvent is the event type of a batch transactions.
-	TypeBatchDMLEvent
+	TypeBatchDMLEvent = 1
 	// DDLEvent is the event type of a DDL.
-	TypeDDLEvent
+	TypeDDLEvent = 2
 	// ResolvedEvent is the event type of a resolvedTs.
-	TypeResolvedEvent
+	TypeResolvedEvent = 3
 	// BatchResolvedTs is the event type of a batch resolvedTs.
-	TypeBatchResolvedEvent
+	TypeBatchResolvedEvent = 4
 	// SyncPointEvent is the event type of a sync point.
-	TypeSyncPointEvent
+	TypeSyncPointEvent = 5
 	// HandshakeEvent is the event type to indicate the start of a new event stream.
-	TypeHandshakeEvent
+	TypeHandshakeEvent = 7
 	// TypeReadyEvent is the event type to indicate the event service is ready to send events.
-	TypeReadyEvent
+	TypeReadyEvent = 6
 	// TypeNotReusableEvent is the event type to indicate the event service has no data for reuse.
-	TypeNotReusableEvent
+	TypeNotReusableEvent = 8
 	// TypeDropEvent is the event type to indicate an event has been dropped.
-	TypeDropEvent
+	TypeDropEvent = 9
+	// TypeCongestionControl is the event type for congestion control messages.
+	TypeCongestionControl = 10
+	// TypeDispatcherHeartbeat is the event type for dispatcher heartbeat messages.
+	TypeDispatcherHeartbeat = 11
+	// TypeDispatcherHeartbeatResponse is the event type for dispatcher heartbeat response messages.
+	TypeDispatcherHeartbeatResponse = 12
 )
 
 func TypeToString(t int) string {
@@ -99,6 +105,12 @@ func TypeToString(t int) string {
 		return "NotReusableEvent"
 	case TypeDropEvent:
 		return "DropEvent"
+	case TypeCongestionControl:
+		return "CongestionControl"
+	case TypeDispatcherHeartbeat:
+		return "DispatcherHeartbeat"
+	case TypeDispatcherHeartbeatResponse:
+		return "DispatcherHeartbeatResponse"
 	default:
 		return "unknown"
 	}
