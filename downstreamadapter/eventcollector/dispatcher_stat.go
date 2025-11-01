@@ -542,6 +542,9 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			oldEventServiceID := d.connState.getEventServiceID()
 			if oldEventServiceID != "" {
 				d.removeFrom(oldEventServiceID)
+				if d.connState.readyEventReceived.Load() {
+					metrics.EventCollectorRemoteReadCount.Dec()
+				}
 			}
 			log.Info("received ready signal from local event service, prepare to reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
@@ -566,6 +569,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.Stringer("eventServiceID", *event.From))
 			d.connState.readyEventReceived.Store(true)
+			metrics.EventCollectorRemoteReadCount.Inc()
 			d.commitReady(*event.From)
 		}
 	case commonEvent.TypeNotReusableEvent:
