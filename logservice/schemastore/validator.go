@@ -16,6 +16,7 @@ package schemastore
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -32,24 +33,38 @@ import (
 func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 	[]*common.TableInfo, []string, []string, error,
 ) {
+	start := time.Now()
 	meta := getSnapshotMeta(storage, startTs)
+	log.Info("get snapshot metadata completed", zap.Uint64("startTs", startTs), zap.Duration("duration", time.Since(start)))
+
 	dbinfos, err := meta.ListDatabases()
 	if err != nil {
 		return nil, nil, nil, cerror.WrapError(cerror.ErrMetaListDatabases, err)
 	}
-	tableInfos := make([]*common.TableInfo, 0)
-	ineligibleTables := make([]string, 0)
-	eligibleTables := make([]string, 0)
+	log.Info("list databases completed", zap.Uint64("startTs", startTs),
+		zap.Int("dbCount", len(dbinfos)), zap.Duration("duration", time.Since(start)))
+
+	var (
+		tableInfos       = make([]*common.TableInfo, 0)
+		ineligibleTables = make([]string, 0)
+		eligibleTables   = make([]string, 0)
+	)
 	for _, dbinfo := range dbinfos {
 		if f.ShouldIgnoreSchema(dbinfo.Name.O) {
 			log.Debug("ignore database", zap.Stringer("db", dbinfo.Name))
 			continue
 		}
 
+		start = time.Now()
 		rawTables, err := meta.GetMetasByDBID(dbinfo.ID)
 		if err != nil {
 			return nil, nil, nil, cerror.WrapError(cerror.ErrMetaListDatabases, err)
 		}
+		log.Info("list tables completed", zap.Uint64("startTs", startTs),
+			zap.String("db", dbinfo.Name.O),
+			zap.Int("tableCount", len(rawTables)),
+			zap.Duration("duration", time.Since(start)))
+
 		for _, r := range rawTables {
 			tableKey := string(r.Field)
 			if !strings.HasPrefix(tableKey, mTablePrefix) {
@@ -57,7 +72,7 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 			}
 
 			tbName := &timodel.TableNameInfo{}
-			err := json.Unmarshal(r.Value, tbName)
+			err = json.Unmarshal(r.Value, tbName)
 			if err != nil {
 				return nil, nil, nil, errors.Trace(err)
 			}
