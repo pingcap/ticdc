@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -330,7 +331,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
 							sql, values := w.generateNormalSQLs(events)
-							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+							log.Info("normal sql should be", zap.String("sql", redact.Any(sql)), zap.String("values", redact.Any(values)))
 							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
 						}
 					} else if nextRowType == common.RowTypeDelete {
@@ -369,7 +370,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
 							sql, values := w.generateNormalSQLs(events)
-							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+							log.Info("normal sql should be", zap.String("sql", redact.Any(sql)), zap.String("values", redact.Any(values)))
 							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
 						}
 					} else if nextRowType == common.RowTypeDelete {
@@ -519,7 +520,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			rowType := rowChanges[i].RowType
 			if rowType == prevType {
 				sql, values := w.generateNormalSQLs(events)
-				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+				log.Info("normal sql should be", zap.String("sql", redact.Any(sql)), zap.String("values", redact.Any(values)))
 				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
 					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
 					zap.Any("prevType", prevType), zap.Any("currentType", rowType))
@@ -674,7 +675,7 @@ func (w *Writer) sequenceExecute(
 ) error {
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
-		log.Debug("exec row", zap.String("sql", query), zap.Any("args", args))
+		log.Debug("exec row", zap.String("sql", redact.SQL(query)), zap.String("args", redact.Args(args)))
 		ctx, cancelFunc := context.WithTimeout(w.ctx, writeTimeout)
 
 		var prepStmt *sql.Stmt

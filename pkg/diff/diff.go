@@ -14,6 +14,8 @@
 package diff
 
 import (
+	"github.com/pingcap/ticdc/pkg/redact"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"container/heap"
 	"context"
 	"crypto/md5"
@@ -680,7 +682,7 @@ func (t *TableDiff) compareRows(ctx context.Context, chunk *ChunkRange) (bool, e
 			// don't have source data, so all the targetRows's data is redundant, should be deleted
 			for lastTargetData != nil {
 				sql := generateDML("delete", lastTargetData, t.TargetTable.info, t.TargetTable.Schema)
-				log.Info("[delete]", zap.String("sql", sql))
+				log.Info("[delete]", zap.String("sql", redact.SQL(sql)))
 
 				select {
 				case t.sqlCh <- sql:
@@ -701,7 +703,7 @@ func (t *TableDiff) compareRows(ctx context.Context, chunk *ChunkRange) (bool, e
 			// target lack some data, should insert the last source datas
 			for lastSourceData != nil {
 				sql := generateDML("replace", lastSourceData, t.TargetTable.info, t.TargetTable.Schema)
-				log.Info("[insert]", zap.String("sql", sql))
+				log.Info("[insert]", zap.String("sql", redact.SQL(sql)))
 
 				select {
 				case t.sqlCh <- sql:
@@ -735,17 +737,17 @@ func (t *TableDiff) compareRows(ctx context.Context, chunk *ChunkRange) (bool, e
 		case 1:
 			// delete
 			sql = generateDML("delete", lastTargetData, t.TargetTable.info, t.TargetTable.Schema)
-			log.Info("[delete]", zap.String("sql", sql))
+			log.Info("[delete]", zap.String("sql", redact.SQL(sql)))
 			lastTargetData = nil
 		case -1:
 			// insert
 			sql = generateDML("replace", lastSourceData, t.TargetTable.info, t.TargetTable.Schema)
-			log.Info("[insert]", zap.String("sql", sql))
+			log.Info("[insert]", zap.String("sql", redact.SQL(sql)))
 			lastSourceData = nil
 		case 0:
 			// update
 			sql = generateDML("replace", lastSourceData, t.TargetTable.info, t.TargetTable.Schema)
-			log.Info("[update]", zap.String("sql", sql))
+			log.Info("[update]", zap.String("sql", redact.SQL(sql)))
 			lastSourceData = nil
 			lastTargetData = nil
 		}
@@ -790,7 +792,7 @@ func (t *TableDiff) WriteSqls(ctx context.Context, writeFixSQL func(string) erro
 
 				err := writeFixSQL(fmt.Sprintf("%s\n", dml))
 				if err != nil {
-					log.Error("write sql failed", zap.String("sql", dml), zap.Error(err))
+					log.Error("write sql failed", zap.String("sql", redact.SQL(dml)), zap.Error(err))
 				}
 
 			case <-stopWriteCh:
@@ -934,12 +936,12 @@ func compareData(map1, map2 map[string]*dbutil.ColumnData, orderKeyCols []*model
 		}
 
 		if cmp == 0 {
-			log.Warn("find different row", zap.String("column", key),
+			log.Warn("find different row", zap.String("column", key), // skip-redaction: column name only, not data
 				zap.String("row1", rowToString(map1)), zap.String("row2", rowToString(map2)))
 		} else if cmp > 0 {
-			log.Warn("target had superfluous data", zap.String("row", rowToString(map2)))
+			log.Warn("target had superfluous data", zap.String("row", redact.Value(rowToString(map2))))
 		} else {
-			log.Warn("target lack data", zap.String("row", rowToString(map1)))
+			log.Warn("target lack data", zap.String("row", redact.Value(rowToString(map1))))
 		}
 	}()
 
@@ -1038,7 +1040,7 @@ func getChunkRows(ctx context.Context, db *sql.DB, schema, table string, tableIn
 	query := fmt.Sprintf("SELECT /*!40001 SQL_NO_CACHE */ %s FROM %s WHERE %s ORDER BY %s%s",
 		columns, dbutil.TableName(schema, table), where, strings.Join(orderKeys, ","), collation)
 
-	log.Debug("select data", zap.String("sql", query), zap.Reflect("args", args))
+	log.Debug("select data", zap.String("sql", redact.SQL(query)), zap.String("args", redact.Args(args)))
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, errors.Trace(err)

@@ -19,6 +19,7 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -97,7 +98,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (s
 	case mysql.TypeBit:
 		uintValue, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("failed to convert bit to int", zap.Any("data", d), zap.Error(err))
+			log.Panic("failed to convert bit to int", zap.String("data", redact.Any(d)), zap.Error(err))
 		}
 		value = strconv.FormatUint(uintValue, 10)
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob,

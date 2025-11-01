@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/redact"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
@@ -619,7 +620,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	event.TableName = event.TableInfo.Name.O
 	if len(args.job.InvolvingSchemaInfo) > 0 {
 		log.Info("buildPersistedDDLEvent for rename table",
-			zap.String("query", event.Query),
+			zap.String("query", redact.SQL(event.Query)),
 			zap.Int64("schemaID", event.SchemaID),
 			zap.String("SchemaName", event.SchemaName),
 			zap.String("tableName", event.TableName),
@@ -659,7 +660,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 					oldSchemaName = schemaName
 				}
 			default:
-				log.Error("unknown stmt type", zap.String("query", args.job.Query), zap.Any("stmt", stmt))
+				log.Error("unknown stmt type", zap.String("query", redact.SQL(args.job.Query)), zap.Any("stmt", stmt))
 			}
 		}
 		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
@@ -724,7 +725,7 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 	renameArgs, err := model.GetRenameTablesArgs(args.job)
 	if err != nil {
 		log.Panic("GetRenameTablesArgs failed",
-			zap.String("query", args.job.Query),
+			zap.String("query", redact.SQL(args.job.Query)),
 			zap.Error(err))
 	}
 	if len(renameArgs.RenameTableInfos) != len(args.job.BinlogInfo.MultipleTableInfos) {
@@ -1369,7 +1370,7 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 	}
 	log.Panic("should not reach here",
 		zap.Any("type", event.Type),
-		zap.String("query", event.Query),
+		zap.String("query", redact.SQL(event.Query)),
 		zap.Int64("tableID", tableID))
 	return nil, false
 }
@@ -1603,7 +1604,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 			zap.String("extraSchema", rawEvent.ExtraSchemaName),
 			zap.String("table", rawEvent.TableName),
 			zap.String("extraTable", rawEvent.ExtraTableName),
-			zap.String("query", rawEvent.Query),
+			zap.String("query", redact.SQL(rawEvent.Query)),
 			zap.Any("tableInfo", rawEvent.TableInfo),
 			zap.Any("ddlType", model.ActionType(rawEvent.Type)),
 			zap.Uint64("startTs", rawEvent.StartTs),
@@ -1615,7 +1616,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 			zap.String("extraSchema", rawEvent.ExtraSchemaName),
 			zap.String("table", rawEvent.TableName),
 			zap.String("extraTable", rawEvent.ExtraTableName),
-			zap.String("query", rawEvent.Query),
+			zap.String("query", redact.SQL(rawEvent.Query)),
 			zap.Any("tableInfo", rawEvent.TableInfo),
 			zap.Any("ddlType", model.ActionType(rawEvent.Type)),
 			zap.Uint64("startTs", rawEvent.StartTs),
@@ -2559,7 +2560,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		log.Panic("query count not match table count",
 			zap.Int("queryCount", len(querys)),
 			zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
-			zap.String("query", rawEvent.Query))
+			zap.String("query", redact.SQL(rawEvent.Query)))
 	}
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)

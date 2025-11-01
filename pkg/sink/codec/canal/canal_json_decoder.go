@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -131,11 +133,11 @@ func (d *decoder) AddKeyValue(_, value []byte) {
 	if err != nil {
 		log.Panic("decompress data failed",
 			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value),
+			zap.Any("value", value), // skip-redaction: compressed binary data, not human-readable
 			zap.Error(err))
 	}
 	if _, err = d.decoder.Write(value); err != nil {
-		log.Panic("add value to the decoder failed", zap.Any("value", value), zap.Error(err))
+		log.Panic("add value to the decoder failed", zap.Any("value", value), zap.Error(err)) // skip-redaction: raw encoded message bytes, not human-readable
 	}
 }
 
@@ -174,7 +176,7 @@ func (d *decoder) assembleClaimCheckDMLEvent(
 	if !d.config.LargeMessageHandle.ClaimCheckRawValue {
 		claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 		if err != nil {
-			log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
+			log.Panic("unmarshal claim check message failed", zap.String("data", redact.Any(data)), zap.Error(err))
 		}
 		data = claimCheckM.Value
 	}
@@ -183,12 +185,12 @@ func (d *decoder) assembleClaimCheckDMLEvent(
 	if err != nil {
 		log.Panic("decompress data failed",
 			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("data", data), zap.Error(err))
+			zap.String("data", redact.Any(data)), zap.Error(err))
 	}
 	message := &canalJSONMessageWithTiDBExtension{}
 	err = json.Unmarshal(value, message)
 	if err != nil {
-		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err))
+		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err)) // skip-redaction: raw encoded message bytes, not human-readable
 	}
 
 	d.msg = message
@@ -210,7 +212,7 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 		if common.IsBinaryMySQLType(mysqlType) {
 			rawValue, err := bytesDecoder.Bytes(rawValue)
 			if err != nil {
-				log.Panic("decode binary value failed", zap.Any("value", rawValue), zap.Error(err))
+				log.Panic("decode binary value failed", zap.String("value", redact.Value(fmt.Sprintf("%v", rawValue))), zap.Error(err))
 			}
 			value = string(rawValue)
 		} else if strings.Contains(mysqlType, "bit") || strings.Contains(mysqlType, "set") {

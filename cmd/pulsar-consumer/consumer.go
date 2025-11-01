@@ -69,7 +69,7 @@ func newConsumer(ctx context.Context, option *option) *consumer {
 		authentication = pulsar.NewAuthenticationTLS(option.mtlsAuthTLSCertificatePath, option.mtlsAuthTLSPrivateKeyPath)
 		log.Info("mtls authentication is enabled",
 			zap.String("cert", option.mtlsAuthTLSCertificatePath),
-			zap.String("key", option.mtlsAuthTLSPrivateKeyPath),
+			zap.String("key", option.mtlsAuthTLSPrivateKeyPath),  // skip-redaction: TLS private key file path, not the key content
 		)
 		clientOption.Authentication = authentication
 	}

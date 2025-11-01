@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -161,13 +162,13 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if err != nil {
 		log.Panic("decompress failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
+			zap.Any("value", value), zap.Error(err)) // skip-redaction: compressed binary data, not human-readable
 	}
 
 	var m messageDDL
 	err = json.Unmarshal(value, &m)
 	if err != nil {
-		log.Panic("decode message DDL failed", zap.Any("data", value), zap.Error(err))
+		log.Panic("decode message DDL failed", zap.String("data", redact.Any(value)), zap.Error(err))
 	}
 
 	result := new(commonEvent.DDLEvent)
@@ -203,7 +204,7 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if err != nil {
 		log.Panic("decompress failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
+			zap.Any("value", value), zap.Error(err)) // skip-redaction: compressed binary data, not human-readable
 	}
 
 	nextRow := new(messageRow)
@@ -294,7 +295,7 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 	}
 	claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 	if err != nil {
-		log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
+		log.Panic("unmarshal claim check message failed", zap.String("data", redact.Any(data)), zap.Error(err))
 	}
 
 	version := binary.BigEndian.Uint64(claimCheckM.Key[:8])
@@ -314,7 +315,7 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 	if err != nil {
 		log.Panic("decompress large message failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
+			zap.Any("value", value), zap.Error(err)) // skip-redaction: compressed binary data, not human-readable
 	}
 
 	rowMsg := new(messageRow)

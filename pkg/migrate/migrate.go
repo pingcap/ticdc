@@ -231,7 +231,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 				err = info.Unmarshal(v.Value)
 				if err != nil {
 					log.Error("unmarshal changefeed failed",
-						zap.String("value", string(v.Value)),
+						zap.String("value", string(v.Value)), // skip-redaction: etcd key value, infrastructure metadata only
 						zap.Error(err))
 					return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
 				}
@@ -301,17 +301,17 @@ func cleanOldData(ctx context.Context, client etcd.Client) {
 			// 0 is the backup version. For now, we only support version 0
 			newKey := etcd.MigrateBackupKey(0, key)
 			log.Info("renaming old etcd data",
-				zap.String("key", key),
+				zap.String("key", key),  // skip-redaction: etcd key, infrastructure metadata
 				zap.String("newKey", newKey),
-				zap.String("value", value))
+				zap.String("value", value)) // skip-redaction: etcd value, infrastructure metadata
 			if _, err := client.Put(ctx, newKey,
 				string(kvPair.Value)); err != nil {
-				log.Info("put new key failed", zap.String("key", key),
+				log.Info("put new key failed", zap.String("key", key),  // skip-redaction: etcd key, infrastructure metadata
 					zap.Error(err))
 			}
 			if _, err := client.Delete(ctx, key); err != nil {
 				log.Warn("failed to delete old data",
-					zap.String("key", key),
+					zap.String("key", key),  // skip-redaction: etcd key, infrastructure metadata
 					zap.Error(err))
 			}
 		}

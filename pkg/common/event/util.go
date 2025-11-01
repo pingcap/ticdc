@@ -218,7 +218,7 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 
 func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *BatchDMLEvent {
 	key := toTableInfosKey(schema, table)
-	log.Info("dml2batchEvent", zap.String("key", key))
+	log.Info("dml2batchEvent", zap.String("key", key))  // skip-redaction: table key (schema/table name), not user data
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	batchDMLEvent := NewBatchDMLEvent()
@@ -263,7 +263,7 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 // 3. You must set the preRow of the DMLEvent by yourself, since we can not get it from TiDB.
 func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEvent {
 	key := toTableInfosKey(schema, table)
-	log.Info("dml2event", zap.String("key", key))
+	log.Info("dml2event", zap.String("key", key))  // skip-redaction: table key (schema/table name), not user data
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
@@ -331,7 +331,7 @@ func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, dele
 	}
 
 	key := toTableInfosKey(schema, table)
-	log.Info("dml2event", zap.String("key", key))
+	log.Info("dml2event", zap.String("key", key))  // skip-redaction: table key (schema/table name), not user data
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()

@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -87,7 +89,7 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 		return common.MessageTypeRow, true
 	}
 	if len(d.value) < 1 {
-		log.Panic("avro invalid data, the length of value is less than 1", zap.Any("data", d.value))
+		log.Panic("avro invalid data, the length of value is less than 1", zap.String("data", redact.Any(d.value)))
 	}
 	switch d.value[0] {
 	case magicByte:
@@ -169,8 +171,8 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 				zap.Any("type", col.GetType()),
 				zap.Any("charset", col.GetCharset()),
 				zap.Any("flag", col.GetFlag()),
-				zap.Any("value", valueMap[col.Name.O]),
-				zap.Any("default", col.GetDefaultValue()))
+				zap.String("value", redact.Value(fmt.Sprintf("%v", valueMap[col.Name.O]))),
+				zap.String("default", redact.Value(fmt.Sprintf("%v", col.GetDefaultValue()))))
 		}
 	}
 	if found {
@@ -443,14 +445,14 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		log.Panic("value is empty, cannot found the ddl event")
 	}
 	if d.value[0] != ddlByte {
-		log.Panic("avro invalid data, the first byte is not ddl byte", zap.Any("value", d.value))
+		log.Panic("avro invalid data, the first byte is not ddl byte", zap.Any("value", d.value)) // skip-redaction: raw avro-encoded bytes, not human-readable
 	}
 
 	data := d.value[1:]
 	var baseDDLEvent ddlEvent
 	err := json.Unmarshal(data, &baseDDLEvent)
 	if err != nil {
-		log.Panic("unmarshal ddl event failed", zap.Any("value", d.value), zap.Error(err))
+		log.Panic("unmarshal ddl event failed", zap.Any("value", d.value), zap.Error(err)) // skip-redaction: raw avro-encoded bytes, not human-readable
 	}
 	d.value = nil
 

@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -419,7 +420,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		if message == nil {
 			log.Info("Skip ddl event", zap.Uint64("commitTs", e.GetCommitTs()),
-				zap.String("query", e.Query),
+				zap.String("query", redact.SQL(e.Query)),
 				zap.Stringer("changefeed", s.changefeedID))
 			continue
 		}

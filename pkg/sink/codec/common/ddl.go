@@ -14,6 +14,7 @@
 package common
 
 import (
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -30,7 +31,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
-		log.Panic("parse ddl query failed", zap.String("query", query), zap.Error(err))
+		log.Panic("parse ddl query failed", zap.String("query", redact.SQL(query)), zap.Error(err))
 		return timodel.ActionNone
 	}
 	switch s := stmt.(type) {
@@ -147,7 +148,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionTruncateTable
 	}
 
-	log.Panic("unsupport ddl type", zap.String("query", query))
+	log.Panic("unsupport ddl type", zap.String("query", redact.SQL(query)))
 	return timodel.ActionNone
 }
 

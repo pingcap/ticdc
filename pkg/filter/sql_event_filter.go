@@ -14,6 +14,7 @@
 package filter
 
 import (
+	"github.com/pingcap/ticdc/pkg/redact"
 	"fmt"
 
 	"github.com/pingcap/errors"
@@ -144,7 +145,7 @@ func (f *sqlEventFilter) shouldSkipDDL(schema, table, query string, ddlType mode
 	if evenType == bf.NullEvent {
 		log.Warn("sql event filter unsupported ddl type, do nothing",
 			zap.String("type", ddlType.String()),
-			zap.String("query", query))
+			zap.String("query", redact.SQL(query)))
 		return false, nil
 	}
 

@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/redact"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap/zapcore"
 )
@@ -62,7 +63,7 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 			args = d.values[i]
 		}
 
-		// Format the arguments as a string
+		// Format the arguments as a string with redaction
 		argsStr := "("
 		for j, arg := range args {
 			if j > 0 {
@@ -71,15 +72,15 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 			if arg == nil {
 				argsStr += "NULL"
 			} else if str, ok := arg.(string); ok {
-				argsStr += fmt.Sprintf(`"%s"`, str)
+				argsStr += fmt.Sprintf(`"%s"`, redact.Value(str))
 			} else {
-				argsStr += fmt.Sprintf("%v", arg)
+				argsStr += redact.Value(fmt.Sprintf("%v", arg))
 			}
 		}
 		argsStr += ")"
 
-		// Add formatted SQL and args to log content
-		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, sql))
+		// Add formatted SQL and args to log content with redaction
+		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, redact.SQL(sql)))
 		logBuilder.WriteString(fmt.Sprintf("      Args: %s,", argsStr))
 	}
 
@@ -100,7 +101,9 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 }
 
 func (d *preparedDMLs) String() string {
-	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.fmtSqls(), d.values, d.rowCount, d.approximateSize, d.tsPairs)
+	// Redact SQL statements and values to avoid leaking sensitive data in logs
+	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v",
+		redact.SQL(d.fmtSqls()), redact.Value(fmt.Sprintf("%v", d.values)), d.rowCount, d.approximateSize, d.tsPairs)
 }
 
 func (d *preparedDMLs) fmtSqls() string {

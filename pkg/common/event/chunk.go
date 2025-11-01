@@ -56,7 +56,7 @@ func newChunkDecoderV2(tableInfo *common.TableInfo, tz *time.Location) *rowcodec
 		}
 		if warn != "" {
 			log.Warn(warn, zap.String("table", tableInfo.TableName.String()),
-				zap.String("column", ci.Name.String()))
+				zap.String("column", ci.Name.String())) // skip-redaction: column name only, not user data
 		}
 		chk.AppendDatum(i, &colDatum)
 		return nil
