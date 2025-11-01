@@ -771,3 +771,48 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestEventStoreManualCompact(t *testing.T) {
+	dir := t.TempDir()
+	_, store := newEventStoreForTest(dir)
+	es := store.(*eventStore)
+	defer es.Close(context.Background())
+
+	// Use one of the DBs for the test.
+	db := es.dbs[0]
+
+	// 1. Write a significant amount of data to create SST files.
+	batch := db.NewBatch()
+	for i := 0; i < 10000; i++ {
+		key := []byte(fmt.Sprintf("key-%05d", i))
+		value := bytes.Repeat([]byte("value"), 10) // 50 bytes value
+		err := batch.Set(key, value, pebble.NoSync)
+		require.NoError(t, err)
+	}
+	require.NoError(t, batch.Commit(pebble.NoSync))
+	require.NoError(t, db.Flush())
+
+	// 2. Get disk usage after writing data.
+	metricsBeforeDelete := db.Metrics().DiskSpaceUsage()
+	require.Greater(t, metricsBeforeDelete, uint64(0), "Disk usage should be greater than 0 after writing data")
+
+	// 3. Delete the data range, which creates tombstones.
+	startKey := []byte("key-00000")
+	endKey := []byte("key-10000")
+	err := db.DeleteRange(startKey, endKey, pebble.NoSync)
+	require.NoError(t, err)
+	require.NoError(t, db.Flush())
+
+	// 4. Get disk usage after deletion. Space is not reclaimed yet.
+	metricsAfterDelete := db.Metrics().DiskSpaceUsage()
+	require.GreaterOrEqual(t, metricsAfterDelete, metricsBeforeDelete, "Disk usage should not decrease after range deletion")
+
+	// 5. Trigger manual compaction.
+	err = es.ManualCompact()
+	require.NoError(t, err)
+
+	// 6. Verify that disk space has been reclaimed.
+	metricsAfterCompact := db.Metrics().DiskSpaceUsage()
+	// After compaction, the size should be much smaller than before.
+	require.Less(t, metricsAfterCompact, metricsBeforeDelete, "Disk usage should be significantly less after compaction")
+}

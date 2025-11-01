@@ -879,6 +879,27 @@ func (e *eventStore) GetLogCoordinatorNodeID() node.ID {
 	return e.getCoordinatorInfo()
 }
 
+// ManualCompact triggers a manual compaction for all underlying pebble DBs.
+func (e *eventStore) ManualCompact() error {
+	// To compact the entire database, we need to specify a key range that covers
+	// all possible keys. The event store key format is:
+	// uniqueID (8) | tableID (8) | CRTs (8) | startTs (8) | ...
+	// All are encoded in big-endian format.
+	// A minKey with all zeros and a maxKey with all 0xff will cover all keys.
+	minKey := bytes.Repeat([]byte{0x00}, 8)
+	// A nil end key is treated as infinity by Pebble.
+	maxKey := bytes.Repeat([]byte{0xff}, 8)
+	for i, db := range e.dbs {
+		log.Info("start to compact pebble db", zap.Int("dbIndex", i))
+		if err := db.Compact(minKey, maxKey, false); err != nil {
+			log.Warn("compact pebble db failed", zap.Int("dbIndex", i), zap.Error(err))
+			return errors.Trace(err)
+		}
+		log.Info("finish compacting pebble db", zap.Int("dbIndex", i))
+	}
+	return nil
+}
+
 func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {
 	if subStat == nil {
 		return
@@ -999,19 +1020,6 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 			e.dispatcherMeta.Unlock()
 		}
 	}
-}
-
-// ManualCompact triggers a manual compaction for all underlying pebble DBs.
-func (e *eventStore) ManualCompact() error {
-	for i, db := range e.dbs {
-		log.Info("start to compact pebble db", zap.Int("dbIndex", i))
-		if err := db.Compact(nil, nil, false); err != nil {
-			log.Warn("compact pebble db failed", zap.Int("dbIndex", i), zap.Error(err))
-			return errors.Trace(err)
-		}
-		log.Info("finish compacting pebble db", zap.Int("dbIndex", i))
-	}
-	return nil
 }
 
 func (e *eventStore) runMetricsCollector(ctx context.Context) error {
