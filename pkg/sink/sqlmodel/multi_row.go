@@ -260,6 +260,7 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 		columnNum++
 		buf.WriteString(common.QuoteName(col.Name.O))
 	}
+
 	buf.WriteString(") VALUES ")
 	holder := valuesHolder(columnNum)
 	for i := range changes {
@@ -302,6 +303,146 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 				continue
 			}
 			args = append(args, val)
+		}
+	}
+	return buf.String(), args
+}
+
+// GenInsertSQLWithCommitTs generates the INSERT SQL and its arguments with commitTs logic for txnSink.
+// This function is specifically designed for txnSink to handle _tidb_origin_ts column.
+// Input `changes` should have same target table and same modifiable columns,
+// otherwise the behaviour is undefined.
+// If commitTs is greater than 0, the _tidb_origin_ts column will be handled specially.
+func GenInsertSQLWithCommitTs(tp DMLType, startTs uint64, commitTs uint64, changes ...*RowChange) (string, []interface{}) {
+	if len(changes) == 0 {
+		log.L().DPanic("row changes is empty")
+		return "", nil
+	}
+
+	first := changes[0]
+
+	var buf strings.Builder
+	buf.Grow(1024)
+	if tp == DMLReplace {
+		buf.WriteString("REPLACE INTO ")
+	} else {
+		buf.WriteString("INSERT INTO ")
+	}
+	buf.WriteString(first.targetTable.QuoteString())
+	buf.WriteString(" (")
+	columnNum := 0
+	var skipColIdx []int
+
+	// build generated columns lower name set to accelerate the following check
+	generatedColumns := generatedColumnsNameSet(first.targetTableInfo.GetColumns())
+	for i, col := range first.sourceTableInfo.GetColumns() {
+		if _, ok := generatedColumns[col.Name.L]; ok {
+			skipColIdx = append(skipColIdx, i)
+			continue
+		}
+
+		if columnNum != 0 {
+			buf.WriteByte(',')
+		}
+		columnNum++
+		buf.WriteString(common.QuoteName(col.Name.O))
+	}
+
+	// Add _tidb_origin_ts column if it doesn't exist and commitTs is provided
+	hasOriginTsColumn := false
+	for _, col := range first.sourceTableInfo.GetColumns() {
+		if col.Name.L == "_tidb_origin_ts" {
+			hasOriginTsColumn = true
+			break
+		}
+	}
+
+	if commitTs > 0 && !hasOriginTsColumn {
+		if columnNum != 0 {
+			buf.WriteByte(',')
+		}
+		columnNum++
+		buf.WriteString(common.QuoteName("_tidb_origin_ts"))
+	}
+
+	buf.WriteString(") VALUES ")
+	holder := valuesHolder(columnNum)
+	for i := range changes {
+		if i > 0 {
+			buf.WriteString(",")
+		}
+		buf.WriteString(holder)
+	}
+	if tp == DMLInsertOnDuplicateUpdate {
+		buf.WriteString(" ON DUPLICATE KEY UPDATE ")
+		i := 0 // used as index of skipColIdx
+		writtenFirstCol := false
+
+		for j, col := range first.sourceTableInfo.GetColumns() {
+			if i < len(skipColIdx) && skipColIdx[i] == j {
+				i++
+				continue
+			}
+
+			if writtenFirstCol {
+				buf.WriteByte(',')
+			}
+			writtenFirstCol = true
+
+			colName := common.QuoteName(col.Name.O)
+			tableName := first.targetTable.QuoteString()
+
+			// For all columns, use _tidb_origin_ts as comparison basis
+			buf.WriteString(colName + "=IF(((IFNULL(" + tableName + "._tidb_origin_ts, " + tableName + "._tidb_commit_ts) <= VALUES(" + common.QuoteName("_tidb_origin_ts") + "))),VALUES(" + colName + "), " + tableName + "." + colName + ")")
+		}
+
+		// Add _tidb_origin_ts to ON DUPLICATE KEY UPDATE if it doesn't exist in source but we're adding it
+		if commitTs > 0 && !hasOriginTsColumn {
+			if writtenFirstCol {
+				buf.WriteByte(',')
+			}
+			tableName := first.targetTable.QuoteString()
+			buf.WriteString(common.QuoteName("_tidb_origin_ts") + "=IF(((IFNULL(" + tableName + "._tidb_origin_ts, " + tableName + "._tidb_commit_ts) <= VALUES(" + common.QuoteName("_tidb_origin_ts") + "))),VALUES(" + common.QuoteName("_tidb_origin_ts") + "), " + tableName + "._tidb_origin_ts)")
+		}
+	}
+
+	args := make([]interface{}, 0, len(changes)*(len(first.sourceTableInfo.GetColumns())-len(skipColIdx)+1)) // +1 for potential _tidb_origin_ts column
+
+	// Find the origin_ts column index
+	originTsColIndex := -1
+	for i, col := range first.sourceTableInfo.GetColumns() {
+		if col.Name.L == "_tidb_origin_ts" {
+			originTsColIndex = i
+			break
+		}
+	}
+
+	for _, change := range changes {
+		i := 0        // used as index of skipColIdx
+		colIndex := 0 // used to track the actual column index
+		for j, val := range change.postValues {
+			if i < len(skipColIdx) && skipColIdx[i] == j {
+				i++
+				continue
+			}
+
+			// If this is the origin_ts column and commitTs is provided, replace NULL with commitTs
+			if commitTs > 0 && j == originTsColIndex {
+				// This is the origin_ts column, replace NULL with commitTs
+				if val == nil {
+					args = append(args, commitTs)
+				} else {
+					args = append(args, val)
+				}
+			} else {
+				args = append(args, val)
+			}
+			colIndex++
+		}
+
+		// Add _tidb_origin_ts value if the column doesn't exist in source but we're adding it
+		if commitTs > 0 && originTsColIndex == -1 {
+			args = append(args, commitTs)
 		}
 	}
 	return buf.String(), args
