@@ -1034,11 +1034,27 @@ func (e *eventStore) runMetricsCollector(ctx context.Context) error {
 	}
 }
 
+func diskSpaceUsage(m *pebble.Metrics) uint64 {
+	var usageBytes uint64
+	usageBytes += m.WAL.PhysicalSize
+	usageBytes += m.WAL.ObsoletePhysicalSize
+	for _, lm := range m.Levels {
+		if lm.Size < 0 {
+			continue
+		}
+		usageBytes += uint64(lm.Size)
+	}
+	usageBytes += m.Table.ObsoleteSize
+	usageBytes += m.Table.ZombieSize
+	usageBytes += uint64(m.Compact.InProgressBytes)
+	return usageBytes
+}
+
 func (e *eventStore) collectAndReportStoreMetrics() {
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)
-		metrics.EventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(stats.DiskSpaceUsage()))
+		metrics.EventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(diskSpaceUsage(stats)))
 		memorySize := stats.MemTable.Size
 		if stats.BlockCache.Size > 0 {
 			memorySize += uint64(stats.BlockCache.Size)
