@@ -303,6 +303,84 @@ func TestDropEventV1(t *testing.T) {
 
 The new architecture is **NOT compatible** with the previous encoding format. This is a one-time breaking change to establish a solid foundation for future compatibility.
 
+**Impact on Old Code (Master Branch)**:
+
+When old code (master branch) receives new format data:
+1. It reads the first byte (`0xDA` from magic) as version
+2. Version check fails: expects `0`, gets `218` (`0xDA`)
+3. **Different behaviors by event type**:
+   - `HandshakeEvent`, `ReadyEvent`, `NotReusableEvent`: **PANIC** 💥
+   - `ResolvedEvent`, `SyncPointEvent`: Return error ⚠️
+   - `DMLEvent`, `DDLEvent`: Return error ⚠️
+
+**Example Panic Stack**:
+```
+panic: HandshakeEvent: invalid version, expect 0, got 218
+```
+
+**Why You Might Not See Panics in Testing**:
+
+1. **Direction of Communication**:
+   - If old EventService → new Dispatcher: No panic (new code handles gracefully)
+   - If new EventService → old Dispatcher: PANIC on HandshakeEvent/ReadyEvent
+   
+2. **Event Frequency**:
+   - `HandshakeEvent`: Only sent once per dispatcher at startup
+   - `ReadyEvent`: Only sent when dispatcher epoch=0
+   - `NotReusableEvent`: Rare - only when event store data is unavailable
+   - If these events aren't triggered during your test, you won't see panics
+
+3. **Test Isolation**:
+   - If new/old versions don't actually communicate (local testing)
+   - Or if event flow is unidirectional in your test scenario
+
+**Detailed Incompatibility Flow**:
+```
+┌──────────────────┐                              ┌──────────────────┐
+│  New EventService│                              │ Old Dispatcher   │
+│  (With Header)   │                              │ (Master Branch)  │
+└────────┬─────────┘                              └────────┬─────────┘
+         │                                                 │
+         │ 1. Send HandshakeEvent                         │
+         │    [0xDA 0x7A 0x07 0x00 ...]                   │
+         │    (New format with header)                    │
+         ├────────────────────────────────────────────────>│
+         │                                                 │
+         │                                                 │ 2. Unmarshal()
+         │                                                 │    version = data[0]
+         │                                                 │    version = 0xDA (218)
+         │                                                 │
+         │                                                 │ 3. Version Check
+         │                                                 │    if version != 0 {
+         │                                                 │      log.Panic(...)
+         │                                                 │    }
+         │                                                 │
+         │                                                 │ 💥 PANIC! 💥
+         │                                                 X
+         │
+         
+┌──────────────────┐                              ┌──────────────────┐
+│ Old EventService │                              │  New Dispatcher  │
+│ (Master Branch)  │                              │  (With Header)   │
+└────────┬─────────┘                              └────────┬─────────┘
+         │                                                 │
+         │ 1. Send HandshakeEvent                         │
+         │    [0x00 <dispatcherID> <ts> ...]              │
+         │    (Old format, starts with version=0)         │
+         ├────────────────────────────────────────────────>│
+         │                                                 │
+         │                                                 │ 2. UnmarshalEventHeader()
+         │                                                 │    magic = [0x00 ?]
+         │                                                 │    magic != [0xDA 0x7A]
+         │                                                 │
+         │                                                 │ 3. Magic Check Failed
+         │                                                 │    return error:
+         │                                                 │    "invalid magic bytes"
+         │                                                 │
+         │                                                 │ ⚠️ Error (No Panic)
+         │                                                 │
+```
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        Compatibility Timeline                           │
@@ -414,12 +492,64 @@ Once this PR is merged, all future versions **within the same event type** will 
 
 ## Migration Strategy
 
+### Critical Warning
+
+⚠️ **DO NOT mix old and new versions in production!** ⚠️
+
+**What happens if you do**:
+- New EventService → Old Dispatcher: **PANIC** 💥 on HandshakeEvent/ReadyEvent/NotReusableEvent
+- Old EventService → New Dispatcher: Error ⚠️ on all events (invalid magic bytes)
+- System will be **unstable** and **data loss** may occur
+
+**Event-specific behaviors when old code receives new format**:
+
+| Event Type          | Old Code Behavior | Reason                          |
+|---------------------|-------------------|---------------------------------|
+| HandshakeEvent      | **PANIC** 💥      | `log.Panic()` on version check  |
+| ReadyEvent          | **PANIC** 💥      | `log.Panic()` on version check  |
+| NotReusableEvent    | **PANIC** 💥      | `log.Panic()` on version check  |
+| ResolvedEvent       | Error ⚠️          | Returns error on version check  |
+| SyncPointEvent      | Error ⚠️          | Returns error on version check  |
+| DMLEvent            | Error ⚠️          | Returns error on version check  |
+| DDLEvent            | Error ⚠️          | Returns error on version check  |
+
 ### For This PR (One-time Migration)
 
+**Safe deployment requires**:
+
 1. **Stop all TiCDC instances** - This is a breaking change
+   ```bash
+   # Stop all instances in the cluster
+   systemctl stop ticdc-*
+   
+   # Verify no processes running
+   ps aux | grep ticdc
+   ```
+
 2. **Deploy new version** with unified header format
+   ```bash
+   # Deploy new binaries
+   ./deploy-new-version.sh
+   ```
+
 3. **Restart all instances** - Old data in transit will be lost
+   ```bash
+   # Start all instances with new version
+   systemctl start ticdc-*
+   ```
+
 4. **Monitor logs** for any parsing errors
+   ```bash
+   # Watch for errors (should be none if all instances are new)
+   tail -f /var/log/ticdc/*.log | grep -E "invalid magic|unmarshal.*fail|panic"
+   ```
+
+**Why you might not see panics during testing**:
+- HandshakeEvent: Only sent once at dispatcher startup (epoch transition)
+- ReadyEvent: Only sent when dispatcher has epoch=0 (initial state)
+- NotReusableEvent: Rare - only when event store data is unavailable
+- If your test doesn't trigger these specific events, no panic occurs
+- But mixing versions is still **DANGEROUS** and **NOT SUPPORTED**
 
 ### For Future Version Changes (After This PR)
 

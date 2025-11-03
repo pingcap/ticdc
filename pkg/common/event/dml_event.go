@@ -59,7 +59,6 @@ type BatchDMLEvent struct {
 
 // NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
 func NewBatchDMLEvent() *BatchDMLEvent {
-
 	res := &BatchDMLEvent{
 		Version:   BatchDMLEventVersion0,
 		DMLEvents: make([]*DMLEvent, 0),
