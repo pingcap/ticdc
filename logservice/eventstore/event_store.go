@@ -1010,6 +1010,8 @@ func (e *eventStore) runMetricsCollector(ctx context.Context) error {
 	}
 }
 
+// Copied and modified from https://github.com/cockroachdb/pebble/blob/53918335bb8c71a6420644e86d66f4f4a3ccf38f/metrics.go#L325
+// The original implementation has some unknown bugs which may return a extremely large size.
 func diskSpaceUsage(m *pebble.Metrics) uint64 {
 	var usageBytes uint64
 	usageBytes += m.WAL.PhysicalSize
