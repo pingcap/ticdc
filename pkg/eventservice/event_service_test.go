@@ -506,7 +506,6 @@ func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) 
 	return commonEvent.DDLEvent{
 		Version:    commonEvent.DDLEventVersion,
 		FinishedTs: job.BinlogInfo.FinishedTS,
-		TableID:    job.BinlogInfo.TableInfo.ID,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		Query:      ddl,

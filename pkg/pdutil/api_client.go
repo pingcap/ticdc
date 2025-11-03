@@ -93,7 +93,7 @@ const (
 )
 
 const (
-	defaultMaxRetry       = 3
+	defaultMaxRetry       = 5
 	defaultRequestTimeout = 5 * time.Second
 )
 
@@ -172,13 +172,16 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 
 		log.Info("Succeed to add meta region label to PD")
 		return nil
-	}, retry.WithMaxTries(defaultMaxRetry), retry.WithIsRetryableErr(func(err error) bool {
-		switch errors.Cause(err) {
-		case context.Canceled:
-			return false
-		}
-		return true
-	}))
+	}, retry.WithMaxTries(defaultMaxRetry),
+		retry.WithBackoffBaseDelay(200),
+		retry.WithBackoffMaxDelay(4000),
+		retry.WithIsRetryableErr(func(err error) bool {
+			switch errors.Cause(err) {
+			case context.Canceled:
+				return false
+			}
+			return true
+		}))
 	return err
 }
 

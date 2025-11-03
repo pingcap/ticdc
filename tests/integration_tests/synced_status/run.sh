@@ -255,6 +255,9 @@ function run_case_with_failpoint() {
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
+	run_sql "USE TEST;Create table t1(a int primary key, b int);insert into t1 values(1,2);insert into t1 values(2,3);"
+	check_table_exists "test.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
 	sleep 20 # wait enough time for pass checkpoint-check-interval
 	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')

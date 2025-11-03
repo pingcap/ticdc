@@ -34,9 +34,10 @@ import (
 var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
-	id        common.DispatcherID
-	tableSpan *heartbeatpb.TableSpan
-	handle    func(commonEvent.Event)
+	id           common.DispatcherID
+	tableSpan    *heartbeatpb.TableSpan
+	handle       func(commonEvent.Event)
+	changefeedID common.ChangeFeedID
 }
 
 func (m *mockEventDispatcher) GetId() common.DispatcherID {
@@ -56,7 +57,7 @@ func (m *mockEventDispatcher) GetBDRMode() bool {
 }
 
 func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
-	return common.NewChangefeedID(common.DefaultKeyspace)
+	return m.changefeedID
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
@@ -184,4 +185,46 @@ func TestProcessMessage(t *testing.T) {
 	case <-ctx1.Done():
 		require.Fail(t, "timeout")
 	}
+}
+
+func TestRemoveLastDispatcher(t *testing.T) {
+	ctx := context.Background()
+	nodeInfo := node.NewInfo("127.0.0.1:18300", "")
+	mc := messaging.NewMessageCenter(ctx, nodeInfo.ID, config.NewDefaultMessageCenterConfig(nodeInfo.AdvertiseAddr), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	c := New(nodeInfo.ID)
+	c.Run(ctx)
+	defer c.Close()
+
+	cfID1 := common.NewChangefeedID(common.DefaultKeyspace)
+	cfID2 := common.NewChangefeedID(common.DefaultKeyspace)
+
+	d1 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 1}, changefeedID: cfID1}
+	d2 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 2}, changefeedID: cfID1}
+	d3 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 3}, changefeedID: cfID2}
+
+	// Add dispatchers
+	c.AddDispatcher(d1, 1024)
+	c.AddDispatcher(d2, 1024)
+	c.AddDispatcher(d3, 1024)
+
+	// Check that changefeed stats are created
+	_, ok := c.changefeedMap.Load(cfID1.ID())
+	require.True(t, ok, "changefeedStat for cfID1 should exist")
+	_, ok = c.changefeedMap.Load(cfID2.ID())
+	require.True(t, ok, "changefeedStat for cfID2 should exist")
+
+	// Remove one dispatcher from cfID1, stat should still exist
+	c.RemoveDispatcher(d1)
+	_, ok = c.changefeedMap.Load(cfID1.ID())
+	require.True(t, ok, "changefeedStat for cfID1 should still exist after removing one dispatcher")
+
+	// Remove the last dispatcher from cfID1, stat should be removed
+	c.RemoveDispatcher(d2)
+	_, ok = c.changefeedMap.Load(cfID1.ID())
+	require.False(t, ok, "changefeedStat for cfID1 should be removed after removing the last dispatcher")
+	_, ok = c.changefeedMap.Load(cfID2.ID())
+	require.True(t, ok, "changefeedStat for cfID2 should not be affected")
 }

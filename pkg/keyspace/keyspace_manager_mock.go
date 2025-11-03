@@ -64,18 +64,18 @@ func (mr *MockManagerMockRecorder) GetKeyspaceByID(ctx, keyspaceID interface{}) 
 }
 
 // GetStorage mocks base method.
-func (m *MockManager) GetStorage(keyspace string) (kv.Storage, error) {
+func (m *MockManager) GetStorage(ctx context.Context, keyspace string) (kv.Storage, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetStorage", keyspace)
+	ret := m.ctrl.Call(m, "GetStorage", ctx, keyspace)
 	ret0, _ := ret[0].(kv.Storage)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetStorage indicates an expected call of GetStorage.
-func (mr *MockManagerMockRecorder) GetStorage(keyspace interface{}) *gomock.Call {
+func (mr *MockManagerMockRecorder) GetStorage(ctx, keyspace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStorage", reflect.TypeOf((*MockManager)(nil).GetStorage), keyspace)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStorage", reflect.TypeOf((*MockManager)(nil).GetStorage), ctx, keyspace)
 }
 
 // LoadKeyspace mocks base method.

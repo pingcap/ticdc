@@ -139,13 +139,17 @@ func doVerify(dsnStr string) error {
 		}
 	}()
 
-	var name, value string
-	err = rows.Scan(&name, &value)
-	if err != nil {
-		log.Warn("failed to get ssl cipher", zap.Error(err),
-			zap.String("username", dsn.User))
+	if rows.Next() {
+		var name, value string
+		err = rows.Scan(&name, &value)
+		if err != nil {
+			log.Warn("failed to get ssl cipher", zap.Error(err),
+				zap.String("username", dsn.User))
+		}
+		log.Info("verify tidb user successfully", zap.String("username", dsn.User),
+			zap.String("sslCipherName", name), zap.String("sslCipherValue", value))
+	} else {
+		log.Warn("no ssl cipher found", zap.String("username", dsn.User))
 	}
-	log.Info("verify tidb user successfully", zap.String("username", dsn.User),
-		zap.String("sslCipherName", name), zap.String("sslCipherValue", value))
 	return nil
 }

@@ -205,6 +205,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
+		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
 		FinishedTs: 1,
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -220,6 +221,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
+		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
 		FinishedTs: 4,
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,

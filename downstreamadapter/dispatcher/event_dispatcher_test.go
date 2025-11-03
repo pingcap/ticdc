@@ -826,7 +826,6 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		},
 		TableInfo: commonTableInfo,
 		Query:     "ALTER TABLE t ADD COLUMN new_col INT",
-		TableID:   1,
 	}
 
 	// Create dispatcher event
