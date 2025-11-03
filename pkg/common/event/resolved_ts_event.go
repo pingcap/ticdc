@@ -17,17 +17,26 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"go.uber.org/zap"
 )
 
 var _ Event = &BatchResolvedEvent{}
+
+const (
+	BatchResolvedEventVersion0 = 0
+)
 
 type BatchResolvedEvent struct {
 	// Version is the version of the BatchResolvedEvent struct.
 	Version byte
 	Events  []ResolvedEvent
+}
+
+func NewBatchResolvedEvent(events []ResolvedEvent) *BatchResolvedEvent {
+	return &BatchResolvedEvent{
+		Version: BatchResolvedEventVersion0,
+		Events:  events,
+	}
 }
 
 func (b BatchResolvedEvent) GetType() int {
@@ -81,16 +90,37 @@ func (b *BatchResolvedEvent) Marshal() ([]byte, error) {
 }
 
 func (b *BatchResolvedEvent) Unmarshal(data []byte) error {
-	fakeEvent := ResolvedEvent{}
-	eSize := int(fakeEvent.GetSize())
-	b.Events = make([]ResolvedEvent, 0, len(data)/eSize)
-	for i := 0; i < len(data); i += eSize {
-		var e ResolvedEvent
-		if err := e.Unmarshal(data[i : i+eSize]); err != nil {
-			return err
+	// Now each ResolvedEvent has a header, so we need to parse them one by one
+	b.Events = make([]ResolvedEvent, 0)
+	offset := 0
+
+	for offset < len(data) {
+		// Parse the header to get the payload length
+		if offset+GetEventHeaderSize() > len(data) {
+			return fmt.Errorf("BatchResolvedEvent.Unmarshal: incomplete header at offset %d", offset)
 		}
+
+		_, _, payloadLen, err := UnmarshalEventHeader(data[offset:])
+		if err != nil {
+			return fmt.Errorf("BatchResolvedEvent.Unmarshal: failed to parse header at offset %d: %w", offset, err)
+		}
+
+		// Calculate total event size (header + payload)
+		eventSize := GetEventHeaderSize() + payloadLen
+		if offset+eventSize > len(data) {
+			return fmt.Errorf("BatchResolvedEvent.Unmarshal: incomplete event at offset %d", offset)
+		}
+
+		// Unmarshal the event
+		var e ResolvedEvent
+		if err := e.Unmarshal(data[offset : offset+eventSize]); err != nil {
+			return fmt.Errorf("BatchResolvedEvent.Unmarshal: failed to unmarshal event at offset %d: %w", offset, err)
+		}
+
 		b.Events = append(b.Events, e)
+		offset += eventSize
 	}
+
 	return nil
 }
 
@@ -105,16 +135,16 @@ func (b *BatchResolvedEvent) IsPaused() bool {
 }
 
 const (
-	ResolvedEventVersion = 1
+	ResolvedEventVersion0 = 1
 )
 
 var _ Event = &ResolvedEvent{}
 
 // ResolvedEvent represents a resolvedTs event of a dispatcher.
 type ResolvedEvent struct {
+	Version      byte
 	DispatcherID common.DispatcherID
 	ResolvedTs   common.Ts
-	Version      byte
 	Epoch        uint64
 	// It's the last concrete data event's (eg. dml/ddl/handshake) seq.
 	// Use it to check if there is a missing
@@ -129,7 +159,7 @@ func NewResolvedEvent(
 	return ResolvedEvent{
 		DispatcherID: dispatcherID,
 		ResolvedTs:   resolvedTs,
-		Version:      ResolvedEventVersion,
+		Version:      ResolvedEventVersion0,
 		Epoch:        epoch,
 	}
 }
@@ -163,70 +193,118 @@ func (e ResolvedEvent) Len() int32 {
 }
 
 func (e ResolvedEvent) Marshal() ([]byte, error) {
-	return e.encode()
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch e.Version {
+	case ResolvedEventVersion0:
+		payload, err = e.encodeV0()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported ResolvedEvent version: %d", e.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeResolvedEvent, e.Version, payload)
 }
 
 func (e *ResolvedEvent) Unmarshal(data []byte) error {
-	return e.decode(data)
-}
+	// 1. Parse unified header
+	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	if err != nil {
+		return err
+	}
 
-func (e ResolvedEvent) encode() ([]byte, error) {
-	if e.Version != ResolvedEventVersion {
-		log.Panic("ResolvedEvent: invalid version",
-			zap.Uint64("expected", ResolvedEventVersion), zap.Uint8("received", e.Version))
+	// 2. Validate event type
+	if eventType != TypeResolvedEvent {
+		return fmt.Errorf("expected ResolvedEvent (type %d), got type %d (%s)",
+			TypeResolvedEvent, eventType, TypeToString(eventType))
 	}
-	return e.encodeV0()
-}
 
-func (e *ResolvedEvent) decode(data []byte) error {
-	if len(data) == 0 {
-		return fmt.Errorf("ResolvedEvent.decode: empty data")
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := headerSize + payloadLen
+	if len(data) < expectedLen {
+		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
+			expectedLen, headerSize, payloadLen, len(data))
 	}
-	e.Version = data[0]
-	if e.Version != ResolvedEventVersion {
-		return fmt.Errorf("ResolvedEvent: invalid version, expect %d, got %d", ResolvedEventVersion, e.Version)
+
+	// 4. Extract payload
+	payload := data[headerSize : headerSize+payloadLen]
+
+	// 5. Store version
+	e.Version = version
+
+	// 6. Decode based on version
+	switch version {
+	case ResolvedEventVersion0:
+		return e.decodeV0(payload)
+	default:
+		return fmt.Errorf("unsupported ResolvedEvent version: %d", version)
 	}
-	return e.decodeV0(data)
 }
 
 func (e ResolvedEvent) encodeV0() ([]byte, error) {
-	data := make([]byte, e.GetSize())
+	// Note: version is now handled in the header by Marshal(), not here
+	// payload: ResolvedTs + Epoch + Seq + DispatcherID
+	payloadSize := 8 + 8 + 8 + e.DispatcherID.GetSize()
+	data := make([]byte, payloadSize)
 	offset := 0
-	data[offset] = e.Version
-	offset += 1
+
+	// ResolvedTs
 	binary.BigEndian.PutUint64(data[offset:], uint64(e.ResolvedTs))
 	offset += 8
+
+	// Epoch
 	binary.BigEndian.PutUint64(data[offset:], e.Epoch)
 	offset += 8
+
+	// Seq
 	binary.BigEndian.PutUint64(data[offset:], e.Seq)
 	offset += 8
+
+	// DispatcherID
 	copy(data[offset:], e.DispatcherID.Marshal())
 
 	return data, nil
 }
 
 func (e *ResolvedEvent) decodeV0(data []byte) error {
-	if len(data) != int(e.GetSize()) {
-		return fmt.Errorf("ResolvedEvent.decodeV0: invalid data length, expected %d, got %d", e.GetSize(), len(data))
-	}
-	offset := 1 // Skip version byte
+	// Note: header (magic + event type + version + length) has already been read and removed from data
+	offset := 0
+
+	// ResolvedTs
 	e.ResolvedTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
+
+	// Epoch
 	e.Epoch = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
+
+	// Seq
 	e.Seq = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	return e.DispatcherID.Unmarshal(data[offset:])
+
+	// DispatcherID
+	err := e.DispatcherID.Unmarshal(data[offset:])
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (e ResolvedEvent) String() string {
 	return fmt.Sprintf("ResolvedEvent{DispatcherID: %s, ResolvedTs: %d, Epoch: %d, Seq: %d}", e.DispatcherID.String(), e.ResolvedTs, e.Epoch, e.Seq)
 }
 
-// Update GetSize method to reflect the new structure
+// GetSize returns the approximate size of the event in bytes
 func (e ResolvedEvent) GetSize() int64 {
-	// Version(1) + ResolvedTs(8) + Epoch(8) + Seq(8) + DispatcherID(16)
-	return int64(1 + 8 + 8 + 8 + e.DispatcherID.GetSize())
+	// Size does not include header or version (those are only for serialization)
+	// Only business data: ResolvedTs(8) + Epoch(8) + Seq(8) + DispatcherID
+	return int64(8 + 8 + 8 + e.DispatcherID.GetSize())
 }
 
 func (e ResolvedEvent) IsPaused() bool {

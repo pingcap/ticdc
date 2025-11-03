@@ -81,7 +81,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	heartbeat.DispatcherCount = uint32(len(heartbeat.DispatcherProgresses))
 	data, err := heartbeat.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, heartbeat.GetSize())
+	require.Len(t, data, heartbeat.GetSize()+GetEventHeaderSize())
 
 	// Verify header format
 	require.Greater(t, len(data), 8, "data should include header")
@@ -198,7 +198,7 @@ func TestDispatcherHeartbeatResponse(t *testing.T) {
 	response.DispatcherCount = uint32(len(response.DispatcherStates))
 	data, err := response.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, response.GetSize())
+	require.Len(t, data, response.GetSize()+GetEventHeaderSize())
 
 	// Verify header format
 	require.Greater(t, len(data), 8, "data should include header")

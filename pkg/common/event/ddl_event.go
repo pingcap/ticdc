@@ -35,7 +35,8 @@ type DDLEvent struct {
 	// Version is the version of the DDLEvent struct.
 	Version      byte                `json:"version"`
 	DispatcherID common.DispatcherID `json:"-"`
-	Type         byte                `json:"type"`
+	// Type is the type of the DDL.
+	Type byte `json:"type"`
 	// SchemaID is from upstream job.SchemaID
 	SchemaID int64 `json:"schema_id"`
 	// TableID is from upstream job.TableID
@@ -342,20 +343,20 @@ func (t DDLEvent) encodeV0() ([]byte, error) {
 		data = append(data, tableInfoData...)
 		data = append(data, tableInfoDataSize...)
 	}
-	multipletableInfosDataSize := make([]byte, 8)
-	binary.BigEndian.PutUint64(multipletableInfosDataSize, uint64(len(t.MultipleTableInfos)))
-	data = append(data, multipletableInfosDataSize...)
+	multipleTableInfosDataSize := make([]byte, 8)
+	binary.BigEndian.PutUint64(multipleTableInfosDataSize, uint64(len(t.MultipleTableInfos)))
+	data = append(data, multipleTableInfosDataSize...)
 
 	return data, nil
 }
 
 func (t *DDLEvent) decodeV0(data []byte) error {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipleTableInfosDataSize
 	t.eventSize = int64(len(data))
 
 	end := len(data)
-	multipletableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
-	for i := 0; i < int(multipletableInfosDataSize); i++ {
+	multipleTableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	for i := 0; i < int(multipleTableInfosDataSize); i++ {
 		tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
 		info, err := common.UnmarshalJSONToTableInfo(tableInfoData)
@@ -365,7 +366,7 @@ func (t *DDLEvent) decodeV0(data []byte) error {
 		t.MultipleTableInfos = append(t.MultipleTableInfos, info)
 		end -= 8 + int(tableInfoDataSize)
 	}
-	end -= 8 + int(multipletableInfosDataSize)
+	end -= 8 + int(multipleTableInfosDataSize)
 	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	var err error
 	if tableInfoDataSize > 0 {

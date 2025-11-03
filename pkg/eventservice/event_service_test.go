@@ -504,7 +504,7 @@ func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) 
 	job := helper.DDL2Job(ddl)
 	kvEvents := helper.DML2RawKv(job.TableID, job.BinlogInfo.FinishedTS, dmls...)
 	return commonEvent.DDLEvent{
-		Version:    commonEvent.DDLEventVersion,
+		Version:    commonEvent.DDLEventVersion0,
 		FinishedTs: job.BinlogInfo.FinishedTS,
 		TableID:    job.BinlogInfo.TableInfo.ID,
 		SchemaName: job.SchemaName,

@@ -350,7 +350,6 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 			DispatcherCount: 1,
 			DispatcherProgresses: []event.DispatcherProgress{
 				{
-					Version:      event.DispatcherHeartbeatVersion0,
 					DispatcherID: dispInfo.GetID(),
 					CheckpointTs: 100,
 				},
@@ -383,7 +382,6 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 			DispatcherCount: 1,
 			DispatcherProgresses: []event.DispatcherProgress{
 				{
-					Version:      event.DispatcherHeartbeatVersion0,
 					DispatcherID: dispInfo.GetID(), // Same dispatcher ID but it's removed
 					CheckpointTs: 200,
 				},

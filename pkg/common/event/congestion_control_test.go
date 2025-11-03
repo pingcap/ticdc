@@ -26,7 +26,7 @@ func TestCongestionControl(t *testing.T) {
 	control := NewCongestionControl()
 	bytes, err := control.Marshal()
 	require.NoError(t, err)
-	require.Equal(t, len(bytes), control.GetSize())
+	require.Len(t, bytes, control.GetSize()+GetEventHeaderSize())
 
 	// Verify header format: [MAGIC(2B)][EVENT_TYPE(1B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
 	require.Greater(t, len(bytes), 8, "data should include header")
@@ -44,7 +44,7 @@ func TestCongestionControl(t *testing.T) {
 	control.AddAvailableMemory(common.NewGID(), 1024)
 	bytes, err = control.Marshal()
 	require.NoError(t, err)
-	require.Equal(t, len(bytes), control.GetSize())
+	require.Len(t, bytes, control.GetSize()+GetEventHeaderSize())
 
 	err = decoded.Unmarshal(bytes)
 	require.NoError(t, err)
@@ -87,7 +87,7 @@ func TestCongestionControlMarshalUnmarshal(t *testing.T) {
 
 	data1, err := control1.Marshal()
 	require.NoError(t, err)
-	require.Equal(t, control1.GetSize(), len(data1))
+	require.Len(t, data1, control1.GetSize()+GetEventHeaderSize())
 
 	var unmarshaled1 CongestionControl
 	err = unmarshaled1.Unmarshal(data1)
@@ -103,7 +103,7 @@ func TestCongestionControlMarshalUnmarshal(t *testing.T) {
 
 	data2, err := control2.Marshal()
 	require.NoError(t, err)
-	require.Equal(t, control2.GetSize(), len(data2))
+	require.Len(t, data2, control2.GetSize()+GetEventHeaderSize())
 
 	var unmarshaled2 CongestionControl
 	err = unmarshaled2.Unmarshal(data2)
@@ -123,7 +123,7 @@ func TestCongestionControlMarshalUnmarshal(t *testing.T) {
 
 	data3, err := control3.Marshal()
 	require.NoError(t, err)
-	require.Equal(t, control3.GetSize(), len(data3))
+	require.Len(t, data3, control3.GetSize()+GetEventHeaderSize())
 
 	var unmarshaled3 CongestionControl
 	err = unmarshaled3.Unmarshal(data3)
@@ -152,7 +152,7 @@ func TestCongestionControlMarshalUnmarshal(t *testing.T) {
 
 	data4, err := control4.Marshal()
 	require.NoError(t, err)
-	require.Equal(t, control4.GetSize(), len(data4))
+	require.Len(t, data4, control4.GetSize()+GetEventHeaderSize())
 
 	var unmarshaled4 CongestionControl
 	err = unmarshaled4.Unmarshal(data4)

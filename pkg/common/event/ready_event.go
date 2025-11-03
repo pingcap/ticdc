@@ -16,13 +16,11 @@ package event
 import (
 	"fmt"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"go.uber.org/zap"
 )
 
 const (
-	ReadyEventVersion = 1
+	ReadyEventVersion0 = 0
 )
 
 var _ Event = &ReadyEvent{}
@@ -34,7 +32,7 @@ type ReadyEvent struct {
 
 func NewReadyEvent(dispatcherID common.DispatcherID) ReadyEvent {
 	return ReadyEvent{
-		Version:      ReadyEventVersion,
+		Version:      ReadyEventVersion0,
 		DispatcherID: dispatcherID,
 	}
 }
@@ -78,7 +76,9 @@ func (e *ReadyEvent) GetStartTs() common.Ts {
 
 // GetSize returns the approximate size of the event in bytes
 func (e *ReadyEvent) GetSize() int64 {
-	return int64(1 + e.DispatcherID.GetSize())
+	// Size does not include header or version (those are only for serialization)
+	// Only business data: dispatcherID
+	return int64(e.DispatcherID.GetSize())
 }
 
 func (e *ReadyEvent) IsPaused() bool {
@@ -91,42 +91,81 @@ func (e *ReadyEvent) Len() int32 {
 }
 
 func (e ReadyEvent) Marshal() ([]byte, error) {
-	return e.encode()
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch e.Version {
+	case ReadyEventVersion0:
+		payload, err = e.encodeV0()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported ReadyEvent version: %d", e.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeReadyEvent, e.Version, payload)
 }
 
 func (e *ReadyEvent) Unmarshal(data []byte) error {
-	return e.decode(data)
-}
-
-func (e ReadyEvent) encode() ([]byte, error) {
-	if e.Version != ReadyEventVersion {
-		log.Panic("ReadyEvent: invalid version", zap.Uint8("expected", ReadyEventVersion), zap.Uint8("version", e.Version))
+	// 1. Parse unified header
+	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	if err != nil {
+		return err
 	}
-	return e.encodeV0()
-}
 
-func (e *ReadyEvent) decode(data []byte) error {
-	version := data[0]
-	if version != ReadyEventVersion {
-		log.Panic("ReadyEvent: invalid version", zap.Uint8("expected", ReadyEventVersion), zap.Uint8("version", e.Version))
+	// 2. Validate event type
+	if eventType != TypeReadyEvent {
+		return fmt.Errorf("expected ReadyEvent (type %d), got type %d (%s)",
+			TypeReadyEvent, eventType, TypeToString(eventType))
 	}
-	return e.decodeV0(data)
+
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := headerSize + payloadLen
+	if len(data) < expectedLen {
+		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
+			expectedLen, headerSize, payloadLen, len(data))
+	}
+
+	// 4. Extract payload
+	payload := data[headerSize : headerSize+payloadLen]
+
+	// 5. Store version
+	e.Version = version
+
+	// 6. Decode based on version
+	switch version {
+	case ReadyEventVersion0:
+		return e.decodeV0(payload)
+	default:
+		return fmt.Errorf("unsupported ReadyEvent version: %d", version)
+	}
 }
 
 func (e ReadyEvent) encodeV0() ([]byte, error) {
-	data := make([]byte, e.GetSize())
+	// Note: version is now handled in the header by Marshal(), not here
+	// payload: dispatcherID
+	payloadSize := e.DispatcherID.GetSize()
+	data := make([]byte, payloadSize)
 	offset := 0
-	data[offset] = e.Version
-	offset += 1
+
+	// DispatcherID
 	copy(data[offset:], e.DispatcherID.Marshal())
-	offset += e.DispatcherID.GetSize()
+
 	return data, nil
 }
 
 func (e *ReadyEvent) decodeV0(data []byte) error {
+	// Note: header (magic + event type + version + length) has already been read and removed from data
 	offset := 0
-	e.Version = data[offset]
-	offset += 1
-	dispatcherIDData := data[offset:]
-	return e.DispatcherID.Unmarshal(dispatcherIDData)
+
+	// DispatcherID
+	err := e.DispatcherID.Unmarshal(data[offset:])
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
