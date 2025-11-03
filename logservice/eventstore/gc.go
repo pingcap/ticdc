@@ -24,6 +24,9 @@ import (
 	"go.uber.org/zap"
 )
 
+type deleteDataRangeFunc func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error
+type compactDataRangeFunc func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error
+
 type gcRangeItem struct {
 	dbIndex     int
 	uniqueKeyID uint64
@@ -50,12 +53,21 @@ type gcManager struct {
 	dbs           []*pebble.DB
 	ranges        []gcRangeItem
 	compactRanges map[compactItemKey]*compactState
+
+	deleteDataRange  deleteDataRangeFunc
+	compactDataRange compactDataRangeFunc
 }
 
-func newGCManager(dbs []*pebble.DB) *gcManager {
+func newGCManager(
+	dbs []*pebble.DB,
+	deleteDataRange deleteDataRangeFunc,
+	compactDataRange compactDataRangeFunc,
+) *gcManager {
 	return &gcManager{
-		dbs:           dbs,
-		compactRanges: make(map[compactItemKey]*compactState),
+		dbs:              dbs,
+		compactRanges:    make(map[compactItemKey]*compactState),
+		deleteDataRange:  deleteDataRange,
+		compactDataRange: compactDataRange,
 	}
 }
 
@@ -81,7 +93,7 @@ func (d *gcManager) fetchAllGCItems() []gcRangeItem {
 }
 
 func (d *gcManager) run(ctx context.Context) error {
-	deleteTicker := time.NewTicker(20 * time.Millisecond)
+	deleteTicker := time.NewTicker(50 * time.Millisecond)
 	defer deleteTicker.Stop()
 	compactTicker := time.NewTicker(10 * time.Minute)
 	defer compactTicker.Stop()
@@ -95,50 +107,61 @@ func (d *gcManager) run(ctx context.Context) error {
 			if len(ranges) == 0 {
 				continue
 			}
-			for _, r := range ranges {
-				db := d.dbs[r.dbIndex]
-				if err := deleteDataRange(db, r.uniqueKeyID, r.tableID, r.startTs, r.endTs); err != nil {
-					log.Warn("gc manager failed to delete data range", zap.Error(err))
-				}
-			}
-
-			d.mu.Lock()
-			for _, r := range ranges {
-				key := compactItemKey{dbIndex: r.dbIndex, uniqueKeyID: r.uniqueKeyID, tableID: r.tableID}
-				state, ok := d.compactRanges[key]
-				if !ok {
-					state = &compactState{}
-					d.compactRanges[key] = state
-				}
-				if state.endTs < r.endTs {
-					state.endTs = r.endTs
-					state.compacted = false
-				}
-			}
-			d.mu.Unlock()
+			d.doGCJob(ranges)
+			d.updateCompactRanges(ranges)
 			metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
 		case <-compactTicker.C:
-			toCompact := make(map[compactItemKey]uint64)
-			d.mu.Lock()
-			for key, state := range d.compactRanges {
-				if !state.compacted {
-					toCompact[key] = state.endTs
-					state.compacted = true
-				}
-			}
-			d.mu.Unlock()
+			d.doCompaction()
+		}
+	}
+}
 
-			for key, endTs := range toCompact {
-				db := d.dbs[key.dbIndex]
-				if err := compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTs); err != nil {
-					log.Warn("gc manager failed to compact data range",
-						zap.Int("dbIndex", key.dbIndex),
-						zap.Uint64("uniqueKeyID", key.uniqueKeyID),
-						zap.Int64("tableID", key.tableID),
-						zap.Uint64("endTs", endTs),
-						zap.Error(err))
-				}
-			}
+func (d *gcManager) doGCJob(ranges []gcRangeItem) {
+	for _, r := range ranges {
+		db := d.dbs[r.dbIndex]
+		if err := d.deleteDataRange(db, r.uniqueKeyID, r.tableID, r.startTs, r.endTs); err != nil {
+			log.Warn("gc manager failed to delete data range", zap.Error(err))
+		}
+	}
+}
+
+func (d *gcManager) updateCompactRanges(ranges []gcRangeItem) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, r := range ranges {
+		key := compactItemKey{dbIndex: r.dbIndex, uniqueKeyID: r.uniqueKeyID, tableID: r.tableID}
+		state, ok := d.compactRanges[key]
+		if !ok {
+			state = &compactState{}
+			d.compactRanges[key] = state
+		}
+		if state.endTs < r.endTs {
+			state.endTs = r.endTs
+			state.compacted = false
+		}
+	}
+}
+
+func (d *gcManager) doCompaction() {
+	toCompact := make(map[compactItemKey]uint64)
+	d.mu.Lock()
+	for key, state := range d.compactRanges {
+		if !state.compacted {
+			toCompact[key] = state.endTs
+			state.compacted = true
+		}
+	}
+	d.mu.Unlock()
+
+	for key, endTs := range toCompact {
+		db := d.dbs[key.dbIndex]
+		if err := d.compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTs); err != nil {
+			log.Warn("gc manager failed to compact data range",
+				zap.Int("dbIndex", key.dbIndex),
+				zap.Uint64("uniqueKeyID", key.uniqueKeyID),
+				zap.Int64("tableID", key.tableID),
+				zap.Uint64("endTs", endTs),
+				zap.Error(err))
 		}
 	}
 }

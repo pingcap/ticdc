@@ -269,14 +269,13 @@ func New(
 		},
 		compressionThreshold: config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
 	}
+	store.gcManager = newGCManager(store.dbs, deleteDataRange, compactDataRange)
 
 	// create a write task pool per db instance
 	for i := 0; i < dbCount; i++ {
 		store.chs = append(store.chs, chann.NewUnlimitedChannel[eventWithCallback, uint64](nil, eventWithCallbackSizer))
 		store.writeTaskPools = append(store.writeTaskPools, newWriteTaskPool(store, store.dbs[i], i, store.chs[i], writeWorkerNumPerDB))
 	}
-	store.gcManager = newGCManager(store.dbs)
-
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
 	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
 
