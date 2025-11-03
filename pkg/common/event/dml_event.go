@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -58,10 +59,17 @@ type BatchDMLEvent struct {
 
 // NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
 func NewBatchDMLEvent() *BatchDMLEvent {
-	return &BatchDMLEvent{
-		Version:   0,
+
+	res := &BatchDMLEvent{
+		Version:   BatchDMLEventVersion0,
 		DMLEvents: make([]*DMLEvent, 0),
 	}
+
+	failpoint.Inject("InjectBatchDMLEventVersion", func() {
+		res.Version = byte(127)
+	})
+
+	return res
 }
 
 func (b *BatchDMLEvent) String() string {
