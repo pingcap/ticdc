@@ -130,7 +130,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		SinkURI:    downstreamURIStr,
 		SinkConfig: replicaConfig.Sink,
 	}
-	mysqlSink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspace))
+	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspace))
 	if err != nil {
 		log.Error("failed to create sink", zap.Error(err))
 		return nil, err
@@ -141,7 +141,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		codecCfg:        codecConfig,
 		externalStorage: storage,
 		fileExtension:   extension,
-		sink:            mysqlSink,
+		sink:            sink,
 		errCh:           errCh,
 		tableDMLIdxMap:  make(map[cloudstorage.DmlPathKey]uint64),
 		tableTsMap:      make(map[int64]uint64),
