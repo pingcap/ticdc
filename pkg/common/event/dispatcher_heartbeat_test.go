@@ -42,7 +42,6 @@ func TestDispatcherProgress(t *testing.T) {
 
 	require.Equal(t, progress.CheckpointTs, unmarshalledProgress.CheckpointTs)
 	require.Equal(t, progress.DispatcherID, unmarshalledProgress.DispatcherID)
-
 }
 
 func TestDispatcherHeartbeat(t *testing.T) {
