@@ -1210,7 +1210,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between maintainer resolved ts and the PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -3983,7 +3983,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between changefeed checkpoint ts and the PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -4086,7 +4086,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between changefeed resolved ts and the PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -4212,7 +4212,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between changefeed checkpoint ts and the PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -4309,7 +4309,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between changefeed resolved ts and the PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -6379,7 +6379,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between maintainer checkpoint ts and the PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -6482,7 +6482,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between maintainer resolved ts and the PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
