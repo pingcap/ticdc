@@ -111,6 +111,8 @@ func (d *gcManager) run(ctx context.Context) error {
 			d.updateCompactRanges(ranges)
 			metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
 		case <-compactTicker.C:
+			// it seems pebble doesn't compact cold range(no data write),
+			// so we do a manual compaction periodically.
 			d.doCompaction()
 		}
 	}
