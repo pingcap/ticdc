@@ -348,7 +348,9 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 
 func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 	return &DDLEvent{
-		TableID:           r.TableName.TableID,
+		TableInfo: &commonType.TableInfo{
+			TableName: r.TableName,
+		},
 		Query:             r.DDL.Query,
 		Type:              r.Type,
 		SchemaName:        r.TableName.Schema,
