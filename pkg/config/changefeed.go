@@ -503,7 +503,6 @@ func (info *ChangeFeedInfo) rmDBOnlyFields() {
 	info.Config.BDRMode = nil
 	info.Config.SyncPointInterval = nil
 	info.Config.SyncPointRetention = nil
-	info.Config.Consistent = nil
 	info.Config.Sink.SafeMode = nil
 	info.Config.Sink.MySQLConfig = nil
 }
