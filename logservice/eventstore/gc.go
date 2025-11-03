@@ -24,8 +24,10 @@ import (
 	"go.uber.org/zap"
 )
 
-type deleteDataRangeFunc func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error
-type compactDataRangeFunc func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error
+type (
+	deleteDataRangeFunc  func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error
+	compactDataRangeFunc func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error
+)
 
 type gcRangeItem struct {
 	dbIndex     int
