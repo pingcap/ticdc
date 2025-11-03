@@ -176,11 +176,11 @@ func (e DropEvent) encodeV1() ([]byte, error) {
     // V0 fields
     copy(data[offset:], e.DispatcherID.Marshal())
     offset += e.DispatcherID.GetSize()
-    binary.LittleEndian.PutUint64(data[offset:], e.DroppedSeq)
+    binary.BigEndian.PutUint64(data[offset:], e.DroppedSeq)
     offset += 8
-    binary.LittleEndian.PutUint64(data[offset:], uint64(e.DroppedCommitTs))
+    binary.BigEndian.PutUint64(data[offset:], uint64(e.DroppedCommitTs))
     offset += 8
-    binary.LittleEndian.PutUint64(data[offset:], e.DroppedEpoch)
+    binary.BigEndian.PutUint64(data[offset:], e.DroppedEpoch)
     offset += 8
 
     // V1 new fields
