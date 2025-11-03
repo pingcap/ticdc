@@ -404,7 +404,8 @@ func (c *resolvedTsCache) isFull() bool {
 }
 
 func (c *resolvedTsCache) getAll() []pevent.ResolvedEvent {
-	res := c.cache[:c.len]
+	res := make([]pevent.ResolvedEvent, c.len)
+	copy(res, c.cache[:c.len]) // must explicitly copy the slice to avoid data being covered by the next add operation
 	c.reset()
 	return res
 }
