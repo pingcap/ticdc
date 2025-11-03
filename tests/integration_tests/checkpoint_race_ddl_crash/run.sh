@@ -184,7 +184,7 @@ function run() {
 
 	echo "All workloads completed"
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 
 	echo "=== Checkpoint race condition test completed successfully ==="
 }

@@ -735,8 +735,12 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// Update checkpointTsByCapture BEFORE processing operator status to ensure atomicity
 	// This works together with calCheckpointTs to prevent incorrect checkpoint advancement
 	if req.Watermark != nil {
+		// The sequence increases when a dispatcher status changes, so accept the new watermark
+		// even if the reported checkpoint regresses (new dispatcher might replay from
+		// an earlier startTs). For the same sequence we still keep checkpoint monotonic
+		// to ignore reordered or duplicated heartbeats.
 		old, ok := m.checkpointTsByCapture.Get(msg.From)
-		if !ok || (req.Watermark.Seq >= old.Seq && req.Watermark.CheckpointTs >= old.CheckpointTs) {
+		if !ok || req.Watermark.Seq > old.Seq || (req.Watermark.Seq == old.Seq && req.Watermark.CheckpointTs > old.CheckpointTs) {
 			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
 		}
 		// Update last synced ts from all dispatchers.
@@ -750,8 +754,10 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	}
 
 	if req.RedoWatermark != nil {
+		// Apply the same rule for redo checkpoint: newer sequence wins even if checkpoint
+		// moves backwards, while identical sequence updates must be strictly forward only.
 		old, ok := m.redoTsByCapture.Get(msg.From)
-		if !ok || (req.RedoWatermark.Seq >= old.Seq && req.RedoWatermark.CheckpointTs >= old.CheckpointTs) {
+		if !ok || req.RedoWatermark.Seq > old.Seq || (req.RedoWatermark.Seq == old.Seq && req.RedoWatermark.CheckpointTs > old.CheckpointTs) {
 			m.redoTsByCapture.Set(msg.From, *req.RedoWatermark)
 		}
 	}
