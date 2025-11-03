@@ -61,6 +61,24 @@ func (z *DDLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 					return
 				}
 			}
+		case "need-dropped-tables":
+			if dc.IsNil() {
+				err = dc.ReadNil()
+				if err != nil {
+					err = msgp.WrapError(err, "NeedDroppedTables")
+					return
+				}
+				z.NeedDroppedTables = nil
+			} else {
+				if z.NeedDroppedTables == nil {
+					z.NeedDroppedTables = new(InfluencedTables)
+				}
+				err = z.NeedDroppedTables.DecodeMsg(dc)
+				if err != nil {
+					err = msgp.WrapError(err, "NeedDroppedTables")
+					return
+				}
+			}
 		default:
 			err = dc.Skip()
 			if err != nil {
@@ -74,9 +92,9 @@ func (z *DDLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *DDLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 4
+	// map header, size 5
 	// write "start-ts"
-	err = en.Append(0x84, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
+	err = en.Append(0x85, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
 	if err != nil {
 		return
 	}
@@ -122,15 +140,32 @@ func (z *DDLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
 			return
 		}
 	}
+	// write "need-dropped-tables"
+	err = en.Append(0xb3, 0x6e, 0x65, 0x65, 0x64, 0x2d, 0x64, 0x72, 0x6f, 0x70, 0x70, 0x65, 0x64, 0x2d, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x73)
+	if err != nil {
+		return
+	}
+	if z.NeedDroppedTables == nil {
+		err = en.WriteNil()
+		if err != nil {
+			return
+		}
+	} else {
+		err = z.NeedDroppedTables.EncodeMsg(en)
+		if err != nil {
+			err = msgp.WrapError(err, "NeedDroppedTables")
+			return
+		}
+	}
 	return
 }
 
 // MarshalMsg implements msgp.Marshaler
 func (z *DDLEventInRedoLog) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 4
+	// map header, size 5
 	// string "start-ts"
-	o = append(o, 0x84, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
+	o = append(o, 0x85, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
 	o = msgp.AppendUint64(o, z.StartTs)
 	// string "commit-ts"
 	o = append(o, 0xa9, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2d, 0x74, 0x73)
@@ -146,6 +181,17 @@ func (z *DDLEventInRedoLog) MarshalMsg(b []byte) (o []byte, err error) {
 		o, err = z.BlockTables.MarshalMsg(o)
 		if err != nil {
 			err = msgp.WrapError(err, "BlockTables")
+			return
+		}
+	}
+	// string "need-dropped-tables"
+	o = append(o, 0xb3, 0x6e, 0x65, 0x65, 0x64, 0x2d, 0x64, 0x72, 0x6f, 0x70, 0x70, 0x65, 0x64, 0x2d, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x73)
+	if z.NeedDroppedTables == nil {
+		o = msgp.AppendNil(o)
+	} else {
+		o, err = z.NeedDroppedTables.MarshalMsg(o)
+		if err != nil {
+			err = msgp.WrapError(err, "NeedDroppedTables")
 			return
 		}
 	}
@@ -205,6 +251,23 @@ func (z *DDLEventInRedoLog) UnmarshalMsg(bts []byte) (o []byte, err error) {
 					return
 				}
 			}
+		case "need-dropped-tables":
+			if msgp.IsNil(bts) {
+				bts, err = msgp.ReadNilBytes(bts)
+				if err != nil {
+					return
+				}
+				z.NeedDroppedTables = nil
+			} else {
+				if z.NeedDroppedTables == nil {
+					z.NeedDroppedTables = new(InfluencedTables)
+				}
+				bts, err = z.NeedDroppedTables.UnmarshalMsg(bts)
+				if err != nil {
+					err = msgp.WrapError(err, "NeedDroppedTables")
+					return
+				}
+			}
 		default:
 			bts, err = msgp.Skip(bts)
 			if err != nil {
@@ -224,6 +287,12 @@ func (z *DDLEventInRedoLog) Msgsize() (s int) {
 		s += msgp.NilSize
 	} else {
 		s += z.BlockTables.Msgsize()
+	}
+	s += 20
+	if z.NeedDroppedTables == nil {
+		s += msgp.NilSize
+	} else {
+		s += z.NeedDroppedTables.Msgsize()
 	}
 	return
 }

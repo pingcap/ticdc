@@ -157,6 +157,11 @@ func (g *eventsGroup) getEvents() []*commonEvent.DMLEvent {
 	return result
 }
 
+// getEvents will clear all events.
+func (g *eventsGroup) clear() {
+	g.events = nil
+}
+
 type ddlTs struct {
 	ts      int64
 	skipDML bool

@@ -73,10 +73,11 @@ type DMLEventInRedoLog struct {
 
 // DDLEventInRedoLog is used to store DDLEvent in redo log v2 format
 type DDLEventInRedoLog struct {
-	StartTs     uint64            `msg:"start-ts"`
-	CommitTs    uint64            `msg:"commit-ts"`
-	Query       string            `msg:"query"`
-	BlockTables *InfluencedTables `msg:"block-tables"`
+	StartTs           uint64            `msg:"start-ts"`
+	CommitTs          uint64            `msg:"commit-ts"`
+	Query             string            `msg:"query"`
+	BlockTables       *InfluencedTables `msg:"block-tables"`
+	NeedDroppedTables *InfluencedTables `msg:"need-dropped-tables"`
 }
 
 // RedoColumn is for column meta
@@ -196,10 +197,11 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 	redoLog := &RedoLog{
 		RedoDDL: &RedoDDLEvent{
 			DDL: &DDLEventInRedoLog{
-				StartTs:     d.GetStartTs(),
-				CommitTs:    d.GetCommitTs(),
-				Query:       d.Query,
-				BlockTables: d.BlockedTables,
+				StartTs:           d.GetStartTs(),
+				CommitTs:          d.GetCommitTs(),
+				Query:             d.Query,
+				BlockTables:       d.BlockedTables,
+				NeedDroppedTables: d.NeedDroppedTables,
 			},
 			Type: d.Type,
 		},
@@ -346,13 +348,14 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 
 func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 	return &DDLEvent{
-		TableID:       r.TableName.TableID,
-		Query:         r.DDL.Query,
-		Type:          r.Type,
-		SchemaName:    r.TableName.Schema,
-		TableName:     r.TableName.Table,
-		FinishedTs:    r.DDL.CommitTs,
-		BlockedTables: r.DDL.BlockTables,
+		TableID:           r.TableName.TableID,
+		Query:             r.DDL.Query,
+		Type:              r.Type,
+		SchemaName:        r.TableName.Schema,
+		TableName:         r.TableName.Table,
+		FinishedTs:        r.DDL.CommitTs,
+		BlockedTables:     r.DDL.BlockTables,
+		NeedDroppedTables: r.DDL.NeedDroppedTables,
 	}
 }
 

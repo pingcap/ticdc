@@ -193,6 +193,27 @@ func (ra *RedoApplier) applyDDL(
 			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
 			return true
 		}
+
+		// Ignore the previous dml events, because we can't get the right ddlTs from these ddls
+		// and these dml events are not neccessary to replicate
+		if ddl.DDL.NeedDroppedTables != nil {
+			dropTableIds := make([]int64, 0)
+			switch ddl.DDL.NeedDroppedTables.InfluenceType {
+			case commonEvent.InfluenceTypeNormal:
+				dropTableIds = append(dropTableIds, ddl.DDL.NeedDroppedTables.TableIDs...)
+			case commonEvent.InfluenceTypeDB:
+				ids := ddl.TableSchemaStore.GetNormalTableIdsByDB(ddl.DDL.NeedDroppedTables.SchemaID)
+				dropTableIds = append(dropTableIds, ids...)
+			case commonEvent.InfluenceTypeAll:
+				ids := ddl.TableSchemaStore.GetAllNormalTableIds()
+				dropTableIds = append(dropTableIds, ids...)
+			}
+			for _, dropTableId := range dropTableIds {
+				if group, ok := ra.eventsGroup[dropTableId]; ok {
+					group.clear()
+				}
+			}
+		}
 		ddlTs := ra.getTableDDLTs(ddl.TableName.TableID, int64(checkpointTs))
 		if ddlTs.ts >= int64(ddl.DDL.CommitTs) {
 			log.Warn("ignore DDL which commit ts is less than current ts", zap.Any("ddl", ddl), zap.Any("startTs", ddlTs.ts))
