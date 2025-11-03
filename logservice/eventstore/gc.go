@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"go.uber.org/zap"
 )
 
 type gcRangeItem struct {
@@ -95,7 +97,9 @@ func (d *gcManager) run(ctx context.Context) error {
 			}
 			for _, r := range ranges {
 				db := d.dbs[r.dbIndex]
-				deleteDataRange(db, r.uniqueKeyID, r.tableID, r.startTs, r.endTs)
+				if err := deleteDataRange(db, r.uniqueKeyID, r.tableID, r.startTs, r.endTs); err != nil {
+					log.Warn("gc manager failed to delete data range", zap.Error(err))
+				}
 			}
 
 			d.mu.Lock()
@@ -126,7 +130,14 @@ func (d *gcManager) run(ctx context.Context) error {
 
 			for key, endTs := range toCompact {
 				db := d.dbs[key.dbIndex]
-				compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTs)
+				if err := compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTs); err != nil {
+					log.Warn("gc manager failed to compact data range",
+						zap.Int("dbIndex", key.dbIndex),
+						zap.Uint64("uniqueKeyID", key.uniqueKeyID),
+						zap.Int64("tableID", key.tableID),
+						zap.Uint64("endTs", endTs),
+						zap.Error(err))
+				}
 			}
 		}
 	}
