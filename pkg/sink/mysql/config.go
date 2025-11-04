@@ -209,6 +209,12 @@ func (c *Config) Apply(
 	if err = getMultiStmtEnable(query, &c.MultiStmtEnable); err != nil {
 		return err
 	}
+	if err = getHasVectorType(query, &c.HasVectorType); err != nil {
+		return err
+	}
+	if err = getCachePrepStmts(query, &c.CachePrepStmts); err != nil {
+		return err
+	}
 	if err = getEnableDDLTs(query, &c.EnableDDLTs); err != nil {
 		return err
 	}
@@ -227,7 +233,6 @@ func (c *Config) Apply(
 		c.SourceID = cfg.SinkConfig.TiDBSourceID
 		log.Info("TiDB source ID is set", zap.Uint64("sourceID", c.SourceID))
 	}
-
 	return nil
 }
 
@@ -251,6 +256,8 @@ func NewMysqlConfigAndDB(
 	if err != nil {
 		return nil, nil, err
 	}
+
+	cfg.HasVectorType = ShouldFormatVectorType(db, cfg)
 
 	// By default, cache-prep-stmts=true, an LRU cache is used for prepared statements,
 	// two connections are required to process a transaction.
@@ -569,6 +576,30 @@ func getMultiStmtEnable(values url.Values, multiStmtEnable *bool) error {
 			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
 		}
 		*multiStmtEnable = enable
+	}
+	return nil
+}
+
+func getHasVectorType(values url.Values, hasVectorType *bool) error {
+	s := values.Get("has-vector-type")
+	if len(s) > 0 {
+		enable, err := strconv.ParseBool(s)
+		if err != nil {
+			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		}
+		*hasVectorType = enable
+	}
+	return nil
+}
+
+func getCachePrepStmts(values url.Values, cachePrepStmts *bool) error {
+	s := values.Get("cache-prep-stmts")
+	if len(s) > 0 {
+		enable, err := strconv.ParseBool(s)
+		if err != nil {
+			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		}
+		*cachePrepStmts = enable
 	}
 	return nil
 }

@@ -42,7 +42,7 @@ func newTestMysqlWriterForDDLTs(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock
 	}
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, db, cfg, changefeedID, statistics, false)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
 
 	// Initialize table schema store
 	writer.tableSchemaStore = util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
@@ -64,7 +64,7 @@ func newTestMysqlWriterForDDLTsTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sql
 	}
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, db, cfg, changefeedID, statistics, false)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
 
 	// Initialize table schema store
 	writer.tableSchemaStore = util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
