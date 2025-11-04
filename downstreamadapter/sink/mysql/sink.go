@@ -112,7 +112,6 @@ func newMySQLSink(
 		maxTxnRows: cfg.MaxTxnRow,
 		bdrMode:    bdrMode,
 	}
-	// formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
 	}
