@@ -304,25 +304,27 @@ func (c *consumer) emitDMLEvents(
 	return events, err
 }
 
-func (c *consumer) syncExecDMLEvents(
+func (c *consumer) prepareDMLEvents(
 	ctx context.Context,
 	tableDef cloudstorage.TableDefinition,
 	key cloudstorage.DmlPathKey,
 	fileIdx uint64,
-) error {
+) ([]*event.DMLEvent, error) {
 	filePath := key.GenerateDMLFilePath(fileIdx, c.fileExtension, fileIndexWidth)
 	log.Debug("read from dml file path", zap.String("path", filePath))
 	content, err := c.externalStorage.ReadFile(ctx, filePath)
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	tableID := c.tableIDGenerator.generateFakeTableID(
 		key.Schema, key.Table, key.PartitionNum)
-	events, err := c.emitDMLEvents(ctx, tableID, tableDef, key, content)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	return c.emitDMLEvents(ctx, tableID, tableDef, key, content)
+}
 
+func (c *consumer) syncExecDMLEvents(
+	ctx context.Context,
+	events []*event.DMLEvent,
+) error {
 	total := len(events)
 	if total == 0 {
 		return nil
@@ -504,11 +506,15 @@ func (c *consumer) handleNewFiles(
 		}
 
 		fileRange := dmlFileMap[key]
+		dmlEvents := make([]*event.DMLEvent, 0)
 		for i := fileRange.start; i <= fileRange.end; i++ {
-			if err := c.syncExecDMLEvents(ctx, tableDef, key, i); err != nil {
+			events, err := c.prepareDMLEvents(ctx, tableDef, key, i)
+			if err != nil {
 				return err
 			}
+			dmlEvents = append(dmlEvents, events...)
 		}
+		c.syncExecDMLEvents(ctx, dmlEvents)
 	}
 
 	return nil
