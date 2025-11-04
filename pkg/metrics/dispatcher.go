@@ -125,6 +125,12 @@ var (
 		Name:      "dropped_event_count",
 		Help:      "The number of events dropped by the event collector",
 	})
+	EventCollectorRemoteReadCount = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_collector",
+		Name:      "remote_read_count",
+		Help:      "The number of remote reads",
+	})
 )
 
 func initDispatcherMetrics(registry *prometheus.Registry) {
@@ -142,4 +148,5 @@ func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorHandleEventDuration)
 	registry.MustRegister(EventCollectorDroppedEventCount)
+	registry.MustRegister(EventCollectorRemoteReadCount)
 }
