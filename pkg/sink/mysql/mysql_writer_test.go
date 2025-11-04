@@ -22,6 +22,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -42,16 +43,19 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	db, mock := newTestMockDB(t)
 
 	ctx := context.Background()
-	cfg := &Config{
-		MaxAllowedPacket:   int64(vardef.DefMaxAllowedPacket),
-		SyncPointRetention: 100 * time.Second,
-		MaxTxnRow:          256,
-		BatchDMLEnable:     true,
-		EnableDDLTs:        defaultEnableDDLTs,
-	}
+	cfg := New()
+	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.SyncPointRetention = 100 * time.Second
+	cfg.MaxTxnRow = 256
+	cfg.BatchDMLEnable = true
+	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+	// assign a no-op stmt cache to bypass actual DB operations in unit tests
+	cache, err := lru.New(prepStmtCacheSize)
+	require.NoError(t, err)
+	writer.stmtCache = cache
 
 	return writer, db, mock
 }
@@ -60,12 +64,11 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	db, mock := newTestMockDB(t)
 
 	ctx := context.Background()
-	cfg := &Config{
-		MaxAllowedPacket:   int64(vardef.DefMaxAllowedPacket),
-		SyncPointRetention: 100 * time.Second,
-		IsTiDB:             true,
-		EnableDDLTs:        defaultEnableDDLTs,
-	}
+	cfg := New()
+	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.SyncPointRetention = 100 * time.Second
+	cfg.IsTiDB = true
+	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)

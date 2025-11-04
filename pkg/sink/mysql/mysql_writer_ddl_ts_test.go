@@ -32,14 +32,13 @@ func newTestMysqlWriterForDDLTs(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock
 	db, mock := newTestMockDBForDDLTs(t)
 
 	ctx := context.Background()
-	cfg := &Config{
-		MaxAllowedPacket:   int64(67108864), // 64MB
-		SyncPointRetention: 100 * time.Second,
-		MaxTxnRow:          256,
-		BatchDMLEnable:     true,
-		EnableDDLTs:        true,
-		IsTiDB:             false, // Default to non-TiDB
-	}
+	cfg := New()
+	cfg.MaxAllowedPacket = int64(67108864) // 64MB
+	cfg.SyncPointRetention = 100 * time.Second
+	cfg.MaxTxnRow = 256
+	cfg.BatchDMLEnable = true
+	cfg.EnableDDLTs = true
+	cfg.IsTiDB = false // Default to non-TiDB
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
@@ -54,14 +53,13 @@ func newTestMysqlWriterForDDLTsTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sql
 	db, mock := newTestMockDBForDDLTs(t)
 
 	ctx := context.Background()
-	cfg := &Config{
-		MaxAllowedPacket:   int64(67108864), // 64MB
-		SyncPointRetention: 100 * time.Second,
-		MaxTxnRow:          256,
-		BatchDMLEnable:     true,
-		EnableDDLTs:        true,
-		IsTiDB:             true, // TiDB downstream
-	}
+	cfg := New()
+	cfg.MaxAllowedPacket = int64(67108864) // 64MB
+	cfg.SyncPointRetention = 100 * time.Second
+	cfg.MaxTxnRow = 256
+	cfg.BatchDMLEnable = true
+	cfg.EnableDDLTs = true
+	cfg.IsTiDB = true // TiDB downstream
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
