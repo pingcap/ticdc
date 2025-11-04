@@ -278,7 +278,20 @@ func (c *consumer) emitDMLEvents(
 				continue
 			}
 			row.PhysicalTableID = tableID
-			events = append(events, row)
+			var lastDMLEvent *event.DMLEvent
+			if len(events) > 0 {
+				lastDMLEvent = events[len(events)-1]
+			}
+			if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
+				events = append(events, row)
+			} else if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
+				lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
+				lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
+				lastDMLEvent.Length += row.Length
+				lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
+			} else {
+				log.Error("the current event commitTs is bigger than last event", zap.Any("event", row), zap.Any("lastEvent", lastDMLEvent))
+			}
 			filteredCnt++
 		}
 	}
