@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -48,13 +49,12 @@ func TestDDLEvent(t *testing.T) {
 	// Test normal marshal/unmarshal
 	data, err := ddlEvent.Marshal()
 	require.Nil(t, err)
-	require.Greater(t, len(data), 8, "data should include header")
+	require.Greater(t, len(data), 16, "data should include header")
 
-	// Verify header format: [MAGIC(2B)][EVENT_TYPE(1B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
-	require.Equal(t, byte(0xDA), data[0], "magic high byte")
-	require.Equal(t, byte(0x7A), data[1], "magic low byte")
-	require.Equal(t, byte(TypeDDLEvent), data[2], "event type")
-	require.Equal(t, byte(DDLEventVersion1), data[3], "version byte")
+	// Verify header format: [MAGIC(4B)][EVENT_TYPE(2B)][VERSION(2B)][PAYLOAD_LENGTH(8B)]
+	require.Equal(t, uint32(0xDA7A6A6A), binary.BigEndian.Uint32(data[0:4]), "magic bytes")
+	require.Equal(t, uint16(TypeDDLEvent), binary.BigEndian.Uint16(data[4:6]), "event type")
+	require.Equal(t, uint16(DDLEventVersion1), binary.BigEndian.Uint16(data[6:8]), "version")
 
 	data2 := make([]byte, len(data))
 	copy(data2, data)
@@ -78,14 +78,14 @@ func TestDDLEvent(t *testing.T) {
 	require.Equal(t, ddlEvent.Err, reverseEvent.Err)
 
 	// Test unsupported version in Marshal
-	mockDDLVersion1 := 1
+	mockDDLVersion1 := 99
 	ddlEvent.Version = mockDDLVersion1
 	_, err = ddlEvent.Marshal()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported DDLEvent version")
 
 	// Test unsupported version in Unmarshal
-	data2[3] = byte(mockDDLVersion1) // version is at index 3 now
+	binary.BigEndian.PutUint16(data2[6:8], uint16(mockDDLVersion1)) // version is at bytes 6-7 in new format
 	err = reverseEvent.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported DDLEvent version")
@@ -97,22 +97,21 @@ func TestDDLEvent(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid magic bytes")
 
 	// Test data too short (less than header size)
-	shortData := []byte{0xDA, 0x7A, 0x00}
+	shortData := []byte{0xDA, 0x7A, 0x6A}
 	err = reverseEvent.Unmarshal(shortData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "data too short")
 
 	// Test incomplete payload
-	incompleteData := make([]byte, 8)
-	incompleteData[0] = 0xDA
-	incompleteData[1] = 0x7A
-	incompleteData[2] = TypeDDLEvent
-	incompleteData[3] = DDLEventVersion1
+	incompleteData := make([]byte, 16)
+	// Set magic bytes
+	binary.BigEndian.PutUint32(incompleteData[0:4], 0xDA7A6A6A)
+	// Set event type
+	binary.BigEndian.PutUint16(incompleteData[4:6], uint16(TypeDDLEvent))
+	// Set version
+	binary.BigEndian.PutUint16(incompleteData[6:8], uint16(DDLEventVersion1))
 	// Set payload length to 100 but don't provide that much data
-	incompleteData[4] = 0
-	incompleteData[5] = 0
-	incompleteData[6] = 0
-	incompleteData[7] = 100
+	binary.BigEndian.PutUint64(incompleteData[8:16], 100)
 	err = reverseEvent.Unmarshal(incompleteData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incomplete data")
