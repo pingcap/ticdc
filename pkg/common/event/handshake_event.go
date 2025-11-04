@@ -28,7 +28,7 @@ var _ Event = &HandshakeEvent{}
 
 type HandshakeEvent struct {
 	// Version is the version of the HandshakeEvent struct.
-	Version      byte                `json:"version"`
+	Version      int                 `json:"version"`
 	ResolvedTs   uint64              `json:"resolved_ts"`
 	Seq          uint64              `json:"seq"`
 	Epoch        uint64              `json:"epoch"`
@@ -110,7 +110,7 @@ func (e HandshakeEvent) Marshal() ([]byte, error) {
 	var err error
 	switch e.Version {
 	case HandshakeEventVersion:
-		payload, err = e.encodeV0()
+		payload, err = e.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -137,14 +137,14 @@ func (e *HandshakeEvent) Unmarshal(data []byte) error {
 
 	// 3. Validate total data length
 	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
 		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
 			expectedLen, headerSize, payloadLen, len(data))
 	}
 
 	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
+	payload := data[headerSize:expectedLen]
 
 	// 5. Store version
 	e.Version = version
@@ -152,13 +152,13 @@ func (e *HandshakeEvent) Unmarshal(data []byte) error {
 	// 6. Decode based on version
 	switch version {
 	case HandshakeEventVersion:
-		return e.decodeV0(payload)
+		return e.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported HandshakeEvent version: %d", version)
 	}
 }
 
-func (e HandshakeEvent) encodeV0() ([]byte, error) {
+func (e HandshakeEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
 	// payload: resolvedTs + seq + epoch + dispatcherID + tableInfo
 	tableInfoData, err := e.TableInfo.Marshal()
@@ -193,7 +193,7 @@ func (e HandshakeEvent) encodeV0() ([]byte, error) {
 	return data, nil
 }
 
-func (e *HandshakeEvent) decodeV0(data []byte) error {
+func (e *HandshakeEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
 	offset := 0
 

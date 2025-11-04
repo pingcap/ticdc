@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
-const CongestionControlVersion0 = 0
+const CongestionControlVersion1 = 1
 
 type AvailableMemory struct {
 	Version             byte                           // 1 byte, it should be the same as CongestionControlVersion
@@ -33,7 +33,7 @@ type AvailableMemory struct {
 
 func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
 	return AvailableMemory{
-		Version:             CongestionControlVersion0,
+		Version:             CongestionControlVersion1,
 		Gid:                 gid,
 		Available:           available,
 		DispatcherAvailable: make(map[common.DispatcherID]uint64),
@@ -77,7 +77,7 @@ func (m AvailableMemory) GetSize() int {
 }
 
 type CongestionControl struct {
-	version   byte
+	version   int
 	clusterID uint64
 
 	changefeedCount uint32
@@ -86,7 +86,7 @@ type CongestionControl struct {
 
 func NewCongestionControl() *CongestionControl {
 	return &CongestionControl{
-		version: CongestionControlVersion0,
+		version: CongestionControlVersion1,
 	}
 }
 
@@ -104,8 +104,8 @@ func (c *CongestionControl) Marshal() ([]byte, error) {
 	var payload []byte
 	var err error
 	switch c.version {
-	case CongestionControlVersion0:
-		payload, err = c.encodeV0()
+	case CongestionControlVersion1:
+		payload, err = c.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +117,7 @@ func (c *CongestionControl) Marshal() ([]byte, error) {
 	return MarshalEventWithHeader(TypeCongestionControl, c.version, payload)
 }
 
-func (c *CongestionControl) encodeV0() ([]byte, error) {
+func (c *CongestionControl) encodeV1() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	_ = binary.Write(buf, binary.BigEndian, c.clusterID)
 	_ = binary.Write(buf, binary.BigEndian, c.changefeedCount)
@@ -144,28 +144,28 @@ func (c *CongestionControl) Unmarshal(data []byte) error {
 
 	// 3. Validate total data length
 	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
 		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
 			expectedLen, headerSize, payloadLen, len(data))
 	}
 
 	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
+	payload := data[headerSize:expectedLen]
 
 	// 5. Store version
 	c.version = version
 
 	// 6. Decode based on version
 	switch version {
-	case CongestionControlVersion0:
-		return c.decodeV0(payload)
+	case CongestionControlVersion1:
+		return c.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported CongestionControl version: %d", version)
 	}
 }
 
-func (c *CongestionControl) decodeV0(data []byte) error {
+func (c *CongestionControl) decodeV1(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	c.clusterID = binary.BigEndian.Uint64(buf.Next(8))
 	c.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))

@@ -21,14 +21,14 @@ import (
 )
 
 const (
-	DropEventVersion0 = 0
+	DropEventVersion1 = 1
 )
 
 var _ Event = &DropEvent{}
 
 // DropEvent represents an event that has been dropped due to memory pressure
 type DropEvent struct {
-	Version         byte
+	Version         int
 	DispatcherID    common.DispatcherID
 	DroppedSeq      uint64
 	DroppedCommitTs common.Ts
@@ -43,7 +43,7 @@ func NewDropEvent(
 	commitTs common.Ts,
 ) *DropEvent {
 	return &DropEvent{
-		Version:         DropEventVersion0,
+		Version:         DropEventVersion1,
 		DispatcherID:    dispatcherID,
 		DroppedSeq:      seq,
 		DroppedCommitTs: commitTs,
@@ -103,8 +103,8 @@ func (e *DropEvent) Marshal() ([]byte, error) {
 	var payload []byte
 	var err error
 	switch e.Version {
-	case DropEventVersion0:
-		payload, err = e.encodeV0()
+	case DropEventVersion1:
+		payload, err = e.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -132,25 +132,25 @@ func (e *DropEvent) Unmarshal(data []byte) error {
 
 	// 3. Validate total data length
 	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
 		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
 			expectedLen, headerSize, payloadLen, len(data))
 	}
 
 	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
+	payload := data[headerSize:expectedLen]
 
 	// 5. Decode based on version
 	switch version {
-	case DropEventVersion0:
-		return e.decodeV0(payload)
+	case DropEventVersion1:
+		return e.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported DropEvent version: %d", version)
 	}
 }
 
-func (e *DropEvent) encodeV0() ([]byte, error) {
+func (e *DropEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
 	// payload: dispatcherID + seq + commitTs + epoch
 	payloadSize := e.DispatcherID.GetSize() + 8 + 8 + 8
@@ -176,7 +176,7 @@ func (e *DropEvent) encodeV0() ([]byte, error) {
 	return data, nil
 }
 
-func (e *DropEvent) decodeV0(data []byte) error {
+func (e *DropEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
 	offset := 0
 

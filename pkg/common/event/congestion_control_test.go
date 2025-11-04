@@ -33,7 +33,7 @@ func TestCongestionControl(t *testing.T) {
 	require.Equal(t, byte(0xDA), bytes[0], "magic high byte")
 	require.Equal(t, byte(0x7A), bytes[1], "magic low byte")
 	require.Equal(t, byte(TypeCongestionControl), bytes[2], "event type")
-	require.Equal(t, byte(CongestionControlVersion0), bytes[3], "version byte")
+	require.Equal(t, byte(CongestionControlVersion1), bytes[3], "version byte")
 
 	var decoded CongestionControl
 	err = decoded.Unmarshal(bytes)
@@ -274,7 +274,7 @@ func TestCongestionControlHeaderValidation(t *testing.T) {
 	incompleteData[0] = 0xDA
 	incompleteData[1] = 0x7A
 	incompleteData[2] = TypeCongestionControl
-	incompleteData[3] = CongestionControlVersion0
+	incompleteData[3] = CongestionControlVersion1
 	// Set payload length to 100 but don't provide that much data
 	incompleteData[4] = 0
 	incompleteData[5] = 0
@@ -288,7 +288,7 @@ func TestCongestionControlHeaderValidation(t *testing.T) {
 func TestCongestionControlVersionCompatibility(t *testing.T) {
 	t.Parallel()
 
-	// Test that we can successfully marshal and unmarshal with Version0
+	// Test that we can successfully marshal and unmarshal with Version1
 	control := NewCongestionControl()
 	control.clusterID = 54321
 	gid := common.NewGID()
@@ -300,7 +300,7 @@ func TestCongestionControlVersionCompatibility(t *testing.T) {
 	var decoded CongestionControl
 	err = decoded.Unmarshal(data)
 	require.NoError(t, err)
-	require.Equal(t, byte(CongestionControlVersion0), decoded.version)
+	require.Equal(t, byte(CongestionControlVersion1), decoded.version)
 	require.Equal(t, control.clusterID, decoded.clusterID)
 	require.Len(t, decoded.availables, 1)
 	require.Equal(t, gid, decoded.availables[0].Gid)

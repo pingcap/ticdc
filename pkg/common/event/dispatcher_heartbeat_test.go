@@ -49,7 +49,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	// Test NewDispatcherHeartbeat
 	dispatcherCount := 3
 	heartbeat := NewDispatcherHeartbeat(dispatcherCount)
-	require.Equal(t, byte(DispatcherHeartbeatVersion0), heartbeat.Version)
+	require.Equal(t, byte(DispatcherHeartbeatVersion1), heartbeat.Version)
 	require.Empty(t, heartbeat.DispatcherProgresses)
 	require.Equal(t, dispatcherCount, cap(heartbeat.DispatcherProgresses))
 
@@ -87,7 +87,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	require.Equal(t, byte(0xDA), data[0], "magic high byte")
 	require.Equal(t, byte(0x7A), data[1], "magic low byte")
 	require.Equal(t, byte(TypeDispatcherHeartbeat), data[2], "event type")
-	require.Equal(t, byte(DispatcherHeartbeatVersion0), data[3], "version byte")
+	require.Equal(t, byte(DispatcherHeartbeatVersion1), data[3], "version byte")
 
 	var unmarshalledResponse DispatcherHeartbeat
 	err = unmarshalledResponse.Unmarshal(data)
@@ -170,7 +170,7 @@ func TestDispatcherHeartbeatResponse(t *testing.T) {
 	// Test constructor function
 	response := NewDispatcherHeartbeatResponse()
 
-	require.Equal(t, byte(DispatcherHeartbeatVersion0), response.Version)
+	require.Equal(t, byte(DispatcherHeartbeatVersion1), response.Version)
 	require.Equal(t, response.DispatcherCount, uint32(0))
 	require.Empty(t, response.DispatcherStates)
 
@@ -204,7 +204,7 @@ func TestDispatcherHeartbeatResponse(t *testing.T) {
 	require.Equal(t, byte(0xDA), data[0], "magic high byte")
 	require.Equal(t, byte(0x7A), data[1], "magic low byte")
 	require.Equal(t, byte(TypeDispatcherHeartbeatResponse), data[2], "event type")
-	require.Equal(t, byte(DispatcherHeartbeatResponseVersion0), data[3], "version byte")
+	require.Equal(t, byte(DispatcherHeartbeatResponseVersion1), data[3], "version byte")
 
 	var unmarshalledResponse DispatcherHeartbeatResponse
 	err = unmarshalledResponse.Unmarshal(data)
@@ -307,7 +307,7 @@ func TestDispatcherHeartbeatHeaderValidation(t *testing.T) {
 	incompleteData[0] = 0xDA
 	incompleteData[1] = 0x7A
 	incompleteData[2] = TypeDispatcherHeartbeat
-	incompleteData[3] = DispatcherHeartbeatVersion0
+	incompleteData[3] = DispatcherHeartbeatVersion1
 	incompleteData[4] = 0
 	incompleteData[5] = 0
 	incompleteData[6] = 0
@@ -366,7 +366,7 @@ func TestDispatcherHeartbeatResponseHeaderValidation(t *testing.T) {
 	incompleteData[0] = 0xDA
 	incompleteData[1] = 0x7A
 	incompleteData[2] = TypeDispatcherHeartbeatResponse
-	incompleteData[3] = DispatcherHeartbeatResponseVersion0
+	incompleteData[3] = DispatcherHeartbeatResponseVersion1
 	incompleteData[4] = 0
 	incompleteData[5] = 0
 	incompleteData[6] = 0

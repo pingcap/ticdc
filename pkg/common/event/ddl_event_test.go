@@ -31,7 +31,7 @@ func TestDDLEvent(t *testing.T) {
 	require.NotNil(t, ddlJob)
 
 	ddlEvent := &DDLEvent{
-		Version:      DDLEventVersion0,
+		Version:      DDLEventVersion1,
 		DispatcherID: common.NewDispatcherID(),
 		Type:         byte(ddlJob.Type),
 		SchemaID:     ddlJob.SchemaID,
@@ -54,7 +54,7 @@ func TestDDLEvent(t *testing.T) {
 	require.Equal(t, byte(0xDA), data[0], "magic high byte")
 	require.Equal(t, byte(0x7A), data[1], "magic low byte")
 	require.Equal(t, byte(TypeDDLEvent), data[2], "event type")
-	require.Equal(t, byte(DDLEventVersion0), data[3], "version byte")
+	require.Equal(t, byte(DDLEventVersion1), data[3], "version byte")
 
 	data2 := make([]byte, len(data))
 	copy(data2, data)
@@ -78,14 +78,14 @@ func TestDDLEvent(t *testing.T) {
 	require.Equal(t, ddlEvent.Err, reverseEvent.Err)
 
 	// Test unsupported version in Marshal
-	mockDDLVersion1 := byte(1)
+	mockDDLVersion1 := 1
 	ddlEvent.Version = mockDDLVersion1
 	_, err = ddlEvent.Marshal()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported DDLEvent version")
 
 	// Test unsupported version in Unmarshal
-	data2[3] = mockDDLVersion1 // version is at index 3 now
+	data2[3] = byte(mockDDLVersion1) // version is at index 3 now
 	err = reverseEvent.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported DDLEvent version")
@@ -107,7 +107,7 @@ func TestDDLEvent(t *testing.T) {
 	incompleteData[0] = 0xDA
 	incompleteData[1] = 0x7A
 	incompleteData[2] = TypeDDLEvent
-	incompleteData[3] = DDLEventVersion0
+	incompleteData[3] = DDLEventVersion1
 	// Set payload length to 100 but don't provide that much data
 	incompleteData[4] = 0
 	incompleteData[5] = 0

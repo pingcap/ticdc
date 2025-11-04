@@ -23,7 +23,7 @@ import (
 var _ Event = &BatchResolvedEvent{}
 
 const (
-	BatchResolvedEventVersion0 = 0
+	BatchResolvedEventVersion1 = 1
 )
 
 type BatchResolvedEvent struct {
@@ -34,7 +34,7 @@ type BatchResolvedEvent struct {
 
 func NewBatchResolvedEvent(events []ResolvedEvent) *BatchResolvedEvent {
 	return &BatchResolvedEvent{
-		Version: BatchResolvedEventVersion0,
+		Version: BatchResolvedEventVersion1,
 		Events:  events,
 	}
 }
@@ -135,7 +135,7 @@ func (b *BatchResolvedEvent) IsPaused() bool {
 }
 
 const (
-	ResolvedEventVersion0 = 1
+	ResolvedEventVersion1 = 1
 )
 
 var _ Event = &ResolvedEvent{}
@@ -159,7 +159,7 @@ func NewResolvedEvent(
 	return ResolvedEvent{
 		DispatcherID: dispatcherID,
 		ResolvedTs:   resolvedTs,
-		Version:      ResolvedEventVersion0,
+		Version:      ResolvedEventVersion1,
 		Epoch:        epoch,
 	}
 }
@@ -197,8 +197,8 @@ func (e ResolvedEvent) Marshal() ([]byte, error) {
 	var payload []byte
 	var err error
 	switch e.Version {
-	case ResolvedEventVersion0:
-		payload, err = e.encodeV0()
+	case ResolvedEventVersion1:
+		payload, err = e.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -239,14 +239,14 @@ func (e *ResolvedEvent) Unmarshal(data []byte) error {
 
 	// 6. Decode based on version
 	switch version {
-	case ResolvedEventVersion0:
-		return e.decodeV0(payload)
+	case ResolvedEventVersion1:
+		return e.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported ResolvedEvent version: %d", version)
 	}
 }
 
-func (e ResolvedEvent) encodeV0() ([]byte, error) {
+func (e ResolvedEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
 	// payload: ResolvedTs + Epoch + Seq + DispatcherID
 	payloadSize := 8 + 8 + 8 + e.DispatcherID.GetSize()
@@ -271,7 +271,7 @@ func (e ResolvedEvent) encodeV0() ([]byte, error) {
 	return data, nil
 }
 
-func (e *ResolvedEvent) decodeV0(data []byte) error {
+func (e *ResolvedEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
 	offset := 0
 

@@ -32,10 +32,10 @@ import (
 const (
 	// defaultRowCount is the start row count of a transaction.
 	defaultRowCount = 1
-	// DMLEventVersion0 is the version of the DMLEvent struct.
-	DMLEventVersion0 = 0
-	// BatchDMLEventVersion0 is the version of the BatchDMLEvent struct.
-	BatchDMLEventVersion0 = 0
+	// DMLEventVersion1 is the version of the DMLEvent struct.
+	DMLEventVersion1 = 1
+	// BatchDMLEventVersion1 is the version of the BatchDMLEvent struct.
+	BatchDMLEventVersion1 = 1
 )
 
 var _ Event = &BatchDMLEvent{}
@@ -44,7 +44,7 @@ var _ Event = &BatchDMLEvent{}
 // the Rows is shared by the BatchDMLEvent and DMLEvents.
 type BatchDMLEvent struct {
 	// Version is the version of the BatchDMLEvent struct.
-	Version       byte        `json:"version"`
+	Version       int         `json:"version"`
 	DMLEventCount int32       `json:"dml_event_count"`
 	DMLEvents     []*DMLEvent `json:"dml_events"`
 	// Rows is the rows of the transactions.
@@ -60,12 +60,12 @@ type BatchDMLEvent struct {
 // NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
 func NewBatchDMLEvent() *BatchDMLEvent {
 	res := &BatchDMLEvent{
-		Version:   BatchDMLEventVersion0,
+		Version:   BatchDMLEventVersion1,
 		DMLEvents: make([]*DMLEvent, 0),
 	}
 
 	failpoint.Inject("InjectBatchDMLEventVersion", func() {
-		res.Version = byte(127)
+		res.Version = 127
 	})
 
 	return res
@@ -140,35 +140,35 @@ func (b *BatchDMLEvent) Unmarshal(data []byte) error {
 
 	// 3. Validate total data length
 	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
 		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
 			expectedLen, headerSize, payloadLen, len(data))
 	}
 
 	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
+	payload := data[headerSize:expectedLen]
 
 	// 5. Store version
 	b.Version = version
 
 	// 6. Decode based on version
 	switch version {
-	case BatchDMLEventVersion0:
-		return b.decodeV0(payload)
+	case BatchDMLEventVersion1:
+		return b.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported BatchDMLEvent version: %d", version)
 	}
 }
 
-func (b *BatchDMLEvent) decodeV0(data []byte) error {
+func (b *BatchDMLEvent) decodeV1(data []byte) error {
 	// Minimum payload: DMLEventCount(8B)
 	// Even with 0 events, we still need to read the count field
 	if len(data) < 8 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
-	if b.Version != BatchDMLEventVersion0 {
-		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
+	if b.Version != BatchDMLEventVersion1 {
+		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Int("version", b.Version))
 		return nil
 	}
 	offset := 0
@@ -202,8 +202,8 @@ func (b *BatchDMLEvent) Marshal() ([]byte, error) {
 	var payload []byte
 	var err error
 	switch b.Version {
-	case BatchDMLEventVersion0:
-		payload, err = b.encodeV0()
+	case BatchDMLEventVersion1:
+		payload, err = b.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -215,9 +215,9 @@ func (b *BatchDMLEvent) Marshal() ([]byte, error) {
 	return MarshalEventWithHeader(TypeBatchDMLEvent, b.Version, payload)
 }
 
-func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
-	if b.Version != BatchDMLEventVersion0 {
-		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
+func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
+	if b.Version != BatchDMLEventVersion1 {
+		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Int("version", b.Version))
 		return nil, nil
 	}
 
@@ -337,7 +337,7 @@ func (b *BatchDMLEvent) DMLCount() int {
 // DMLEvent represent a batch of DMLs of a whole or partial of a transaction.
 type DMLEvent struct {
 	// Version is the version of the DMLEvent struct.
-	Version         byte                `json:"version"`
+	Version         int                 `json:"version"`
 	DispatcherID    common.DispatcherID `json:"dispatcher_id"`
 	PhysicalTableID int64               `json:"physical_table_id"`
 	StartTs         uint64              `json:"start_ts"`
@@ -398,7 +398,7 @@ func NewDMLEvent(
 	tableInfo *common.TableInfo,
 ) *DMLEvent {
 	return &DMLEvent{
-		Version:         DMLEventVersion0,
+		Version:         DMLEventVersion1,
 		DispatcherID:    dispatcherID,
 		PhysicalTableID: tableID,
 		StartTs:         startTs,
@@ -699,8 +699,8 @@ func (t *DMLEvent) Marshal() ([]byte, error) {
 	var payload []byte
 	var err error
 	switch t.Version {
-	case DMLEventVersion0:
-		payload, err = t.encodeV0()
+	case DMLEventVersion1:
+		payload, err = t.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -732,22 +732,22 @@ func (t *DMLEvent) Unmarshal(data []byte) error {
 
 	// 3. Validate total data length
 	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
 		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
 			expectedLen, headerSize, payloadLen, len(data))
 	}
 
 	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
+	payload := data[headerSize:expectedLen]
 
 	// 5. Store version
 	t.Version = version
 
 	// 6. Decode based on version
 	switch version {
-	case DMLEventVersion0:
-		return t.decodeV0(payload)
+	case DMLEventVersion1:
+		return t.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported DMLEvent version: %d", version)
 	}
@@ -764,9 +764,9 @@ func (t *DMLEvent) IsPaused() bool {
 	return false
 }
 
-func (t *DMLEvent) encodeV0() ([]byte, error) {
-	if t.Version != DMLEventVersion0 {
-		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion0), zap.Uint8("version", t.Version))
+func (t *DMLEvent) encodeV1() ([]byte, error) {
+	if t.Version != DMLEventVersion1 {
+		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion1), zap.Int("version", t.Version))
 		return nil, nil
 	}
 	// DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
@@ -831,7 +831,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	return buf, nil
 }
 
-func (t *DMLEvent) decodeV0(data []byte) error {
+func (t *DMLEvent) decodeV1(data []byte) error {
 	// Minimum payload size calculation:
 	// DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
 	// Seq(8) + Epoch(8) + Length(4) + ApproximateSize(8) + PreviousTotalOffset(4)
@@ -841,8 +841,8 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	if len(data) < minPayloadSize {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
-	if t.Version != DMLEventVersion0 {
-		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion0), zap.Uint8("version", t.Version))
+	if t.Version != DMLEventVersion1 {
+		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion1), zap.Int("version", t.Version))
 		return nil
 	}
 	offset := 0

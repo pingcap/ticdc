@@ -345,7 +345,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	heartbeat := &DispatcherHeartBeatWithServerID{
 		serverID: "test-server-1",
 		heartbeat: &event.DispatcherHeartbeat{
-			Version:         event.DispatcherHeartbeatVersion0,
+			Version:         event.DispatcherHeartbeatVersion1,
 			ClusterID:       0,
 			DispatcherCount: 1,
 			DispatcherProgresses: []event.DispatcherProgress{
@@ -377,7 +377,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	heartbeatForInactiveDispatcher := &DispatcherHeartBeatWithServerID{
 		serverID: "test-server-1",
 		heartbeat: &event.DispatcherHeartbeat{
-			Version:         event.DispatcherHeartbeatVersion0,
+			Version:         event.DispatcherHeartbeatVersion1,
 			ClusterID:       0,
 			DispatcherCount: 1,
 			DispatcherProgresses: []event.DispatcherProgress{

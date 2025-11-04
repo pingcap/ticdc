@@ -128,7 +128,7 @@ func TestNotReusableEventHeader(t *testing.T) {
 
 	// Verify total size
 	headerSize := GetEventHeaderSize()
-	require.Equal(t, headerSize+payloadLen, len(data))
+	require.Equal(t, headerSize+int(payloadLen), len(data))
 }
 
 // TestNotReusableEventUnmarshalErrors tests error handling in Unmarshal

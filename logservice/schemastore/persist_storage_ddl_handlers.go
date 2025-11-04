@@ -1627,7 +1627,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	}
 
 	return commonEvent.DDLEvent{
-		Version: commonEvent.DDLEventVersion0, // Must set version explicitly
+		Version: commonEvent.DDLEventVersion1, // Must set version explicitly
 		Type:    rawEvent.Type,
 		// TODO: whether the following four fields are needed
 		SchemaID:   rawEvent.SchemaID,

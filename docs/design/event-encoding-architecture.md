@@ -131,8 +131,8 @@ Suppose we want to add a new field `DroppedReason string` to `DropEvent`:
 
 ```go
 const (
-    DropEventVersion0 = 0
-    DropEventVersion1 = 1  // New version
+    DropEventVersion1 = 1
+    DropEventVersion2 = 2  // New version
 )
 ```
 
@@ -224,13 +224,13 @@ func (e DropEvent) Marshal() ([]byte, error) {
     var payload []byte
     var err error
     switch e.Version {
-    case DropEventVersion0:
-        payload, err = e.encodeV0()
+    case DropEventVersion1:
+        payload, err = e.encodeV1()
         if err != nil {
             return nil, err
         }
-    case DropEventVersion1:  // New case
-        payload, err = e.encodeV1()
+    case DropEventVersion2:  // New case
+        payload, err = e.encodeV2()
         if err != nil {
             return nil, err
         }
@@ -245,10 +245,10 @@ func (e *DropEvent) Unmarshal(data []byte) error {
     // ... header parsing ...
 
     switch version {
-    case DropEventVersion0:
-        return e.decodeV0(payload)
-    case DropEventVersion1:  // New case
+    case DropEventVersion1:
         return e.decodeV1(payload)
+    case DropEventVersion2:  // New case
+        return e.decodeV2(payload)
     default:
         return fmt.Errorf("unsupported DropEvent version: %d", version)
     }

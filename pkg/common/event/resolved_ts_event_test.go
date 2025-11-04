@@ -23,7 +23,7 @@ import (
 func TestResolvedEvent(t *testing.T) {
 	did := common.NewDispatcherID()
 	e := ResolvedEvent{
-		Version:      ResolvedEventVersion0,
+		Version:      ResolvedEventVersion1,
 		DispatcherID: did,
 		ResolvedTs:   123,
 		Epoch:        10,
@@ -77,7 +77,7 @@ func TestResolvedEventMarshalUnmarshal(t *testing.T) {
 		{
 			name: "normal case",
 			event: ResolvedEvent{
-				Version:      ResolvedEventVersion0,
+				Version:      ResolvedEventVersion1,
 				DispatcherID: common.NewDispatcherID(),
 				ResolvedTs:   123,
 				Epoch:        10,
@@ -88,7 +88,7 @@ func TestResolvedEventMarshalUnmarshal(t *testing.T) {
 		{
 			name: "zero values",
 			event: ResolvedEvent{
-				Version:      ResolvedEventVersion0,
+				Version:      ResolvedEventVersion1,
 				DispatcherID: common.DispatcherID{},
 				ResolvedTs:   0,
 				Epoch:        0,
@@ -137,7 +137,7 @@ func TestResolvedEventHeader(t *testing.T) {
 	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
 	require.NoError(t, err)
 	require.Equal(t, TypeResolvedEvent, eventType)
-	require.Equal(t, byte(ResolvedEventVersion0), version)
+	require.Equal(t, byte(ResolvedEventVersion1), version)
 	require.Equal(t, int(e.GetSize()), payloadLen)
 
 	// Verify total size
@@ -222,13 +222,13 @@ func TestBatchResolvedTs(t *testing.T) {
 	did := common.NewDispatcherID()
 	did2 := common.NewDispatcherID()
 	e := ResolvedEvent{
-		Version:      ResolvedEventVersion0,
+		Version:      ResolvedEventVersion1,
 		DispatcherID: did,
 		ResolvedTs:   123,
 		Epoch:        10,
 	}
 	e2 := ResolvedEvent{
-		Version:      ResolvedEventVersion0,
+		Version:      ResolvedEventVersion1,
 		DispatcherID: did2,
 		ResolvedTs:   456,
 		Epoch:        11,
@@ -308,7 +308,7 @@ func TestBatchResolvedEventUnmarshalErrors(t *testing.T) {
 				header[0] = 0xDA
 				header[1] = 0x7A
 				header[2] = byte(TypeResolvedEvent)
-				header[3] = byte(ResolvedEventVersion0)
+				header[3] = byte(ResolvedEventVersion1)
 				header[4] = 0
 				header[5] = 0
 				header[6] = 0

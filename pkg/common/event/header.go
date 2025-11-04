@@ -21,30 +21,27 @@ import (
 const (
 	// Magic bytes for event format validation
 	// All event types share the same magic number to identify them as valid events
-	eventMagicHi = 0xDA
-	eventMagicLo = 0x7A
-
-	// Header layout: [MAGIC(2B)][EVENT_TYPE(1B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
+	eventMagic = 0xDA7A6A6A
+	// Header layout: [MAGIC(4B)][EVENT_TYPE(2B)][VERSION(2B)][PAYLOAD_LENGTH(8B)]
 	// Total header size: 8 bytes
-	eventHeaderSize = 8
+	eventHeaderSize = 16
 )
 
 // MarshalEventWithHeader wraps a payload with a standard event header.
 // The header contains:
-// - Magic bytes (2B): for format validation
-// - Event type (1B): identifies the specific event type (DDL, DML, etc.)
-// - Version (1B): version of the event payload format
-// - Payload length (4B): length of the payload in bytes
+// - Magic bytes (4B): for format validation
+// - Event type (2B): identifies the specific event type (DDL, DML, etc.)
+// - Version (2B): version of the event payload format
+// - Payload length (8B): length of the payload in bytes
 //
 // This function does not enforce a maximum payload size, as the upper layer
 // (protobuf) will handle size constraints.
-func MarshalEventWithHeader(eventType int, version byte, payload []byte) ([]byte, error) {
+func MarshalEventWithHeader(eventType int, version int, payload []byte) ([]byte, error) {
 	header := make([]byte, eventHeaderSize)
-	header[0] = eventMagicHi
-	header[1] = eventMagicLo
-	header[2] = byte(eventType)
-	header[3] = version
-	binary.BigEndian.PutUint32(header[4:8], uint32(len(payload)))
+	binary.BigEndian.PutUint32(header[0:4], eventMagic)
+	binary.BigEndian.PutUint16(header[4:6], uint16(eventType))
+	binary.BigEndian.PutUint16(header[6:8], uint16(version))
+	binary.BigEndian.PutUint64(header[8:16], uint64(len(payload)))
 
 	result := make([]byte, 0, eventHeaderSize+len(payload))
 	result = append(result, header...)
@@ -63,7 +60,7 @@ func MarshalEventWithHeader(eventType int, version byte, payload []byte) ([]byte
 // This function validates:
 // - Minimum data length (at least header size)
 // - Magic bytes correctness
-func UnmarshalEventHeader(data []byte) (eventType int, version byte, payloadLen int, err error) {
+func UnmarshalEventHeader(data []byte) (eventType int, version int, payloadLen uint64, err error) {
 	// 1. Validate minimum header size
 	if len(data) < eventHeaderSize {
 		return 0, 0, 0, fmt.Errorf("data too short: need at least %d bytes for header, got %d",
@@ -71,15 +68,15 @@ func UnmarshalEventHeader(data []byte) (eventType int, version byte, payloadLen 
 	}
 
 	// 2. Validate magic bytes
-	if data[0] != eventMagicHi || data[1] != eventMagicLo {
-		return 0, 0, 0, fmt.Errorf("invalid magic bytes: expected [0x%02X, 0x%02X], got [0x%02X, 0x%02X]",
-			eventMagicHi, eventMagicLo, data[0], data[1])
+	if binary.BigEndian.Uint32(data[0:4]) != eventMagic {
+		return 0, 0, 0, fmt.Errorf("invalid magic bytes: expected [0x%08X], got [0x%08X]",
+			eventMagic, binary.BigEndian.Uint32(data[0:4]))
 	}
 
 	// 3. Extract header fields
-	eventType = int(data[2])
-	version = data[3]
-	payloadLen = int(binary.BigEndian.Uint32(data[4:8]))
+	eventType = int(binary.BigEndian.Uint16(data[4:6]))
+	version = int(binary.BigEndian.Uint16(data[6:8]))
+	payloadLen = binary.BigEndian.Uint64(data[8:16])
 
 	// 4. Validate payload length is non-negative
 	if payloadLen < 0 {

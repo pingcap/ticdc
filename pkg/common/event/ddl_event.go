@@ -26,14 +26,14 @@ import (
 )
 
 const (
-	DDLEventVersion0 = 0
+	DDLEventVersion1 = 1
 )
 
 var _ Event = &DDLEvent{}
 
 type DDLEvent struct {
 	// Version is the version of the DDLEvent struct.
-	Version      byte                `json:"version"`
+	Version      int                 `json:"version"`
 	DispatcherID common.DispatcherID `json:"-"`
 	// Type is the type of the DDL.
 	Type byte `json:"type"`
@@ -255,8 +255,8 @@ func (t *DDLEvent) Marshal() ([]byte, error) {
 	var payload []byte
 	var err error
 	switch t.Version {
-	case DDLEventVersion0:
-		payload, err = t.encodeV0()
+	case DDLEventVersion1:
+		payload, err = t.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -283,28 +283,28 @@ func (t *DDLEvent) Unmarshal(data []byte) error {
 
 	// 3. Validate total data length
 	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
 		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
 			expectedLen, headerSize, payloadLen, len(data))
 	}
 
 	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
+	payload := data[headerSize:expectedLen]
 
 	// 5. Store version
 	t.Version = version
 
 	// 6. Decode based on version
 	switch version {
-	case DDLEventVersion0:
-		return t.decodeV0(payload)
+	case DDLEventVersion1:
+		return t.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported DDLEvent version: %d", version)
 	}
 }
 
-func (t DDLEvent) encodeV0() ([]byte, error) {
+func (t DDLEvent) encodeV1() ([]byte, error) {
 	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
 	// Note: version is now handled in the header by Marshal(), not here
 	data, err := json.Marshal(t)
@@ -350,7 +350,7 @@ func (t DDLEvent) encodeV0() ([]byte, error) {
 	return data, nil
 }
 
-func (t *DDLEvent) decodeV0(data []byte) error {
+func (t *DDLEvent) decodeV1(data []byte) error {
 	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipleTableInfosDataSize
 	t.eventSize = int64(len(data))
 

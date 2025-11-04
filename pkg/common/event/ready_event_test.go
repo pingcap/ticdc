@@ -123,12 +123,12 @@ func TestReadyEventHeader(t *testing.T) {
 	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
 	require.NoError(t, err)
 	require.Equal(t, TypeReadyEvent, eventType)
-	require.Equal(t, byte(ReadyEventVersion0), version)
+	require.Equal(t, byte(ReadyEventVersion1), version)
 	require.Equal(t, int(e.GetSize()), payloadLen)
 
 	// Verify total size
 	headerSize := GetEventHeaderSize()
-	require.Equal(t, headerSize+payloadLen, len(data))
+	require.Equal(t, headerSize+int(payloadLen), len(data))
 }
 
 // TestReadyEventUnmarshalErrors tests error handling in Unmarshal

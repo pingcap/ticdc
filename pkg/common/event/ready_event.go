@@ -20,19 +20,19 @@ import (
 )
 
 const (
-	ReadyEventVersion0 = 0
+	ReadyEventVersion1 = 1
 )
 
 var _ Event = &ReadyEvent{}
 
 type ReadyEvent struct {
-	Version      byte
+	Version      int
 	DispatcherID common.DispatcherID
 }
 
 func NewReadyEvent(dispatcherID common.DispatcherID) ReadyEvent {
 	return ReadyEvent{
-		Version:      ReadyEventVersion0,
+		Version:      ReadyEventVersion1,
 		DispatcherID: dispatcherID,
 	}
 }
@@ -95,8 +95,8 @@ func (e ReadyEvent) Marshal() ([]byte, error) {
 	var payload []byte
 	var err error
 	switch e.Version {
-	case ReadyEventVersion0:
-		payload, err = e.encodeV0()
+	case ReadyEventVersion1:
+		payload, err = e.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -123,28 +123,28 @@ func (e *ReadyEvent) Unmarshal(data []byte) error {
 
 	// 3. Validate total data length
 	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
 		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
 			expectedLen, headerSize, payloadLen, len(data))
 	}
 
 	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
+	payload := data[headerSize:expectedLen]
 
 	// 5. Store version
 	e.Version = version
 
 	// 6. Decode based on version
 	switch version {
-	case ReadyEventVersion0:
-		return e.decodeV0(payload)
+	case ReadyEventVersion1:
+		return e.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported ReadyEvent version: %d", version)
 	}
 }
 
-func (e ReadyEvent) encodeV0() ([]byte, error) {
+func (e ReadyEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
 	// payload: dispatcherID
 	payloadSize := e.DispatcherID.GetSize()
@@ -157,7 +157,7 @@ func (e ReadyEvent) encodeV0() ([]byte, error) {
 	return data, nil
 }
 
-func (e *ReadyEvent) decodeV0(data []byte) error {
+func (e *ReadyEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
 	offset := 0
 

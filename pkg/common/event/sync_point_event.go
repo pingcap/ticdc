@@ -23,7 +23,7 @@ import (
 var _ Event = &SyncPointEvent{}
 
 const (
-	SyncPointEventVersion0 = 0
+	SyncPointEventVersion1 = 1
 )
 
 // Implement Event / FlushEvent / BlockEvent interface
@@ -47,7 +47,7 @@ func NewSyncPointEvent(id common.DispatcherID, commitTsList []uint64, seq uint64
 		CommitTsList: commitTsList,
 		Seq:          seq,
 		Epoch:        epoch,
-		Version:      SyncPointEventVersion0,
+		Version:      SyncPointEventVersion1,
 	}
 }
 
@@ -134,8 +134,8 @@ func (e SyncPointEvent) Marshal() ([]byte, error) {
 	var payload []byte
 	var err error
 	switch e.Version {
-	case SyncPointEventVersion0:
-		payload, err = e.encodeV0()
+	case SyncPointEventVersion1:
+		payload, err = e.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -176,14 +176,14 @@ func (e *SyncPointEvent) Unmarshal(data []byte) error {
 
 	// 6. Decode based on version
 	switch version {
-	case SyncPointEventVersion0:
-		return e.decodeV0(payload)
+	case SyncPointEventVersion1:
+		return e.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported SyncPointEvent version: %d", version)
 	}
 }
 
-func (e SyncPointEvent) encodeV0() ([]byte, error) {
+func (e SyncPointEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
 	// payload: Seq + Epoch + len(CommitTsList) + CommitTsList + DispatcherID
 	payloadSize := 8 + 8 + 4 + 8*len(e.CommitTsList) + e.DispatcherID.GetSize()
@@ -214,7 +214,7 @@ func (e SyncPointEvent) encodeV0() ([]byte, error) {
 	return data, nil
 }
 
-func (e *SyncPointEvent) decodeV0(data []byte) error {
+func (e *SyncPointEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
 	offset := 0
 

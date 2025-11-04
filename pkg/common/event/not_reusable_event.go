@@ -26,7 +26,7 @@ const (
 var _ Event = &NotReusableEvent{}
 
 type NotReusableEvent struct {
-	Version      byte
+	Version      int
 	DispatcherID common.DispatcherID
 }
 
@@ -96,7 +96,7 @@ func (e NotReusableEvent) Marshal() ([]byte, error) {
 	var err error
 	switch e.Version {
 	case NotReusableEventVersion:
-		payload, err = e.encodeV0()
+		payload, err = e.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -123,14 +123,14 @@ func (e *NotReusableEvent) Unmarshal(data []byte) error {
 
 	// 3. Validate total data length
 	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
 		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
 			expectedLen, headerSize, payloadLen, len(data))
 	}
 
 	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
+	payload := data[headerSize:expectedLen]
 
 	// 5. Store version
 	e.Version = version
@@ -138,13 +138,13 @@ func (e *NotReusableEvent) Unmarshal(data []byte) error {
 	// 6. Decode based on version
 	switch version {
 	case NotReusableEventVersion:
-		return e.decodeV0(payload)
+		return e.decodeV1(payload)
 	default:
 		return fmt.Errorf("unsupported NotReusableEvent version: %d", version)
 	}
 }
 
-func (e NotReusableEvent) encodeV0() ([]byte, error) {
+func (e NotReusableEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
 	// payload: dispatcherID
 	payloadSize := e.DispatcherID.GetSize()
@@ -157,7 +157,7 @@ func (e NotReusableEvent) encodeV0() ([]byte, error) {
 	return data, nil
 }
 
-func (e *NotReusableEvent) decodeV0(data []byte) error {
+func (e *NotReusableEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
 	offset := 0
 

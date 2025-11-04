@@ -159,7 +159,7 @@ func TestSyncPointEventHeader(t *testing.T) {
 	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
 	require.NoError(t, err)
 	require.Equal(t, TypeSyncPointEvent, eventType)
-	require.Equal(t, byte(SyncPointEventVersion0), version)
+	require.Equal(t, byte(SyncPointEventVersion1), version)
 	require.Equal(t, int(e.GetSize()), payloadLen)
 
 	// Verify total size
