@@ -162,15 +162,15 @@ func (e *DropEvent) encodeV0() ([]byte, error) {
 	offset += e.DispatcherID.GetSize()
 
 	// DroppedSeq
-	binary.LittleEndian.PutUint64(data[offset:], e.DroppedSeq)
+	binary.BigEndian.PutUint64(data[offset:], e.DroppedSeq)
 	offset += 8
 
 	// DroppedCommitTs
-	binary.LittleEndian.PutUint64(data[offset:], uint64(e.DroppedCommitTs))
+	binary.BigEndian.PutUint64(data[offset:], uint64(e.DroppedCommitTs))
 	offset += 8
 
 	// DroppedEpoch
-	binary.LittleEndian.PutUint64(data[offset:], e.DroppedEpoch)
+	binary.BigEndian.PutUint64(data[offset:], e.DroppedEpoch)
 	offset += 8
 
 	return data, nil
@@ -189,15 +189,15 @@ func (e *DropEvent) decodeV0(data []byte) error {
 	offset += dispatcherIDSize
 
 	// DroppedSeq
-	e.DroppedSeq = binary.LittleEndian.Uint64(data[offset:])
+	e.DroppedSeq = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
 
 	// DroppedCommitTs
-	e.DroppedCommitTs = common.Ts(binary.LittleEndian.Uint64(data[offset:]))
+	e.DroppedCommitTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
 
 	// DroppedEpoch
-	e.DroppedEpoch = binary.LittleEndian.Uint64(data[offset:])
+	e.DroppedEpoch = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
 
 	return nil

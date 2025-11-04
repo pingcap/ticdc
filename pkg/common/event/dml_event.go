@@ -174,7 +174,7 @@ func (b *BatchDMLEvent) decodeV0(data []byte) error {
 	offset := 0
 
 	// Read DMLEventCount
-	dmlEventCount := int32(binary.LittleEndian.Uint64(data[offset:]))
+	dmlEventCount := int32(binary.BigEndian.Uint64(data[offset:]))
 	b.DMLEventCount = dmlEventCount
 	offset += 8
 
@@ -230,7 +230,7 @@ func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 	// Encode all fields (note: version is now in header, not here)
 	// 1. Write DMLEventCount
 	dmlEventCountBytes := make([]byte, 8)
-	binary.LittleEndian.PutUint64(dmlEventCountBytes, uint64(b.DMLEventCount))
+	binary.BigEndian.PutUint64(dmlEventCountBytes, uint64(b.DMLEventCount))
 	data = append(data, dmlEventCountBytes...)
 
 	// 2. Write each DML event with its size
@@ -789,41 +789,41 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	offset += len(dispatcherIDBytes)
 
 	// PhysicalTableID
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(t.PhysicalTableID))
+	binary.BigEndian.PutUint64(buf[offset:], uint64(t.PhysicalTableID))
 	offset += 8
 	// StartTs
-	binary.LittleEndian.PutUint64(buf[offset:], t.StartTs)
+	binary.BigEndian.PutUint64(buf[offset:], t.StartTs)
 	offset += 8
 	// CommitTs
-	binary.LittleEndian.PutUint64(buf[offset:], t.CommitTs)
+	binary.BigEndian.PutUint64(buf[offset:], t.CommitTs)
 	offset += 8
 	// Seq
-	binary.LittleEndian.PutUint64(buf[offset:], t.Seq)
+	binary.BigEndian.PutUint64(buf[offset:], t.Seq)
 	offset += 8
 	// Epoch
-	binary.LittleEndian.PutUint64(buf[offset:], t.Epoch)
+	binary.BigEndian.PutUint64(buf[offset:], t.Epoch)
 	offset += 8
 	// Length
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.Length))
+	binary.BigEndian.PutUint32(buf[offset:], uint32(t.Length))
 	offset += 4
 	// ApproximateSize
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(t.ApproximateSize))
+	binary.BigEndian.PutUint64(buf[offset:], uint64(t.ApproximateSize))
 	offset += 8
 	// PreviousTotalOffset
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.PreviousTotalOffset))
+	binary.BigEndian.PutUint32(buf[offset:], uint32(t.PreviousTotalOffset))
 	offset += 4
 	// RowTypes
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(t.RowTypes)))
+	binary.BigEndian.PutUint32(buf[offset:], uint32(len(t.RowTypes)))
 	offset += 4
 	for _, rowType := range t.RowTypes {
 		buf[offset] = byte(rowType)
 		offset++
 	}
 	// RowKeys
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(t.RowKeys)))
+	binary.BigEndian.PutUint32(buf[offset:], uint32(len(t.RowKeys)))
 	offset += 4
 	for _, rowKey := range t.RowKeys {
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(rowKey)))
+		binary.BigEndian.PutUint32(buf[offset:], uint32(len(rowKey)))
 		offset += 4
 		copy(buf[offset:], rowKey)
 		offset += len(rowKey)
@@ -851,34 +851,34 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 		return errors.Trace(err)
 	}
 	offset += t.DispatcherID.GetSize()
-	t.PhysicalTableID = int64(binary.LittleEndian.Uint64(data[offset:]))
+	t.PhysicalTableID = int64(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
-	t.StartTs = binary.LittleEndian.Uint64(data[offset:])
+	t.StartTs = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	t.CommitTs = binary.LittleEndian.Uint64(data[offset:])
+	t.CommitTs = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	t.Seq = binary.LittleEndian.Uint64(data[offset:])
+	t.Seq = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	t.Epoch = binary.LittleEndian.Uint64(data[offset:])
+	t.Epoch = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	t.Length = int32(binary.LittleEndian.Uint32(data[offset:]))
+	t.Length = int32(binary.BigEndian.Uint32(data[offset:]))
 	offset += 4
-	t.ApproximateSize = int64(binary.LittleEndian.Uint64(data[offset:]))
+	t.ApproximateSize = int64(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
-	t.PreviousTotalOffset = int(binary.LittleEndian.Uint32(data[offset:]))
+	t.PreviousTotalOffset = int(binary.BigEndian.Uint32(data[offset:]))
 	offset += 4
-	length := int32(binary.LittleEndian.Uint32(data[offset:]))
+	length := int32(binary.BigEndian.Uint32(data[offset:]))
 	offset += 4
 	t.RowTypes = make([]common.RowType, length)
 	for i := 0; i < int(length); i++ {
 		t.RowTypes[i] = common.RowType(data[offset])
 		offset++
 	}
-	rowKeysLen := int32(binary.LittleEndian.Uint32(data[offset:]))
+	rowKeysLen := int32(binary.BigEndian.Uint32(data[offset:]))
 	offset += 4
 	t.RowKeys = make([][]byte, rowKeysLen)
 	for i := 0; i < int(rowKeysLen); i++ {
-		len := int32(binary.LittleEndian.Uint32(data[offset:]))
+		len := int32(binary.BigEndian.Uint32(data[offset:]))
 		offset += 4
 		t.RowKeys[i] = make([]byte, len)
 		copy(t.RowKeys[i], data[offset:offset+int(len)])

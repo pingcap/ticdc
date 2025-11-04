@@ -5,7 +5,7 @@
 
 ## Overview
 
-This document describes the unified event encoding/decoding architecture for all event types in TiGate. The new architecture introduces a standardized wire format with a unified header, enabling forward and backward compatibility for future protocol evolution.
+This document describes the unified event encoding/decoding architecture for all event types in TiCDC. The new architecture introduces a standardized wire format with a unified header, enabling forward and backward compatibility for future protocol evolution.
 
 ## Motivation
 
@@ -201,11 +201,11 @@ func (e *DropEvent) decodeV1(data []byte) error {
         return err
     }
     offset += dispatcherIDSize
-    e.DroppedSeq = binary.LittleEndian.Uint64(data[offset:])
+    e.DroppedSeq = binary.BigEndian.Uint64(data[offset:])
     offset += 8
-    e.DroppedCommitTs = common.Ts(binary.LittleEndian.Uint64(data[offset:]))
+    e.DroppedCommitTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
     offset += 8
-    e.DroppedEpoch = binary.LittleEndian.Uint64(data[offset:])
+    e.DroppedEpoch = binary.BigEndian.Uint64(data[offset:])
     offset += 8
 
     // V1 new fields
