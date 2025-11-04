@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -78,7 +79,7 @@ func TestReadyEventMarshalUnmarshal(t *testing.T) {
 		{
 			name: "zero values",
 			event: &ReadyEvent{
-				Version:      0,
+				Version:      ReadyEventVersion1,
 				DispatcherID: common.DispatcherID{},
 			},
 			wantError: false,
@@ -86,7 +87,7 @@ func TestReadyEventMarshalUnmarshal(t *testing.T) {
 		{
 			name: "invalid version",
 			event: &ReadyEvent{
-				Version:      1,
+				Version:      0,
 				DispatcherID: common.NewDispatcherID(),
 			},
 			wantError: true,
@@ -123,12 +124,12 @@ func TestReadyEventHeader(t *testing.T) {
 	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
 	require.NoError(t, err)
 	require.Equal(t, TypeReadyEvent, eventType)
-	require.Equal(t, byte(ReadyEventVersion1), version)
-	require.Equal(t, int(e.GetSize()), payloadLen)
+	require.Equal(t, ReadyEventVersion1, version)
+	require.Equal(t, uint64(e.GetSize()), payloadLen)
 
 	// Verify total size
 	headerSize := GetEventHeaderSize()
-	require.Equal(t, headerSize+int(payloadLen), len(data))
+	require.Equal(t, uint64(headerSize)+payloadLen, uint64(len(data)))
 }
 
 // TestReadyEventUnmarshalErrors tests error handling in Unmarshal
@@ -144,37 +145,40 @@ func TestReadyEventUnmarshalErrors(t *testing.T) {
 			wantError: "data too short",
 		},
 		{
-			name:      "invalid magic bytes",
-			data:      []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			name: "invalid magic bytes",
+			data: func() []byte {
+				// Create a 16-byte header with invalid magic
+				header := make([]byte, 16)
+				binary.BigEndian.PutUint32(header[0:4], 0x00000000) // invalid magic
+				binary.BigEndian.PutUint16(header[4:6], uint16(TypeReadyEvent))
+				binary.BigEndian.PutUint16(header[6:8], uint16(ReadyEventVersion1))
+				binary.BigEndian.PutUint64(header[8:16], 0)
+				return header
+			}(),
 			wantError: "invalid magic bytes",
 		},
 		{
 			name: "wrong event type",
 			data: func() []byte {
 				// Create a valid header but with wrong event type
-				header := make([]byte, 8)
-				header[0] = 0xDA
-				header[1] = 0x7A
-				header[2] = byte(TypeDMLEvent) // wrong type
-				header[3] = 0
+				header := make([]byte, 16)
+				binary.BigEndian.PutUint32(header[0:4], 0xDA7A6A6A)           // valid magic
+				binary.BigEndian.PutUint16(header[4:6], uint16(TypeDMLEvent)) // wrong type
+				binary.BigEndian.PutUint16(header[6:8], uint16(ReadyEventVersion1))
+				binary.BigEndian.PutUint64(header[8:16], 0)
 				return header
 			}(),
-			wantError: "expected ReadyEvent",
+			wantError: "ReadyEvent",
 		},
 		{
 			name: "incomplete data",
 			data: func() []byte {
 				// Create a header claiming more data than provided
-				header := make([]byte, 8)
-				header[0] = 0xDA
-				header[1] = 0x7A
-				header[2] = byte(TypeReadyEvent)
-				header[3] = 0
-				// Set payload length to 100 but don't provide data
-				header[4] = 0
-				header[5] = 0
-				header[6] = 0
-				header[7] = 100
+				header := make([]byte, 16)
+				binary.BigEndian.PutUint32(header[0:4], 0xDA7A6A6A) // valid magic
+				binary.BigEndian.PutUint16(header[4:6], uint16(TypeReadyEvent))
+				binary.BigEndian.PutUint16(header[6:8], uint16(ReadyEventVersion1))
+				binary.BigEndian.PutUint64(header[8:16], 100) // claim 100 bytes but don't provide
 				return header
 			}(),
 			wantError: "incomplete data",

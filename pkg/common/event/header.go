@@ -78,11 +78,6 @@ func UnmarshalEventHeader(data []byte) (eventType int, version int, payloadLen u
 	version = int(binary.BigEndian.Uint16(data[6:8]))
 	payloadLen = binary.BigEndian.Uint64(data[8:16])
 
-	// 4. Validate payload length is non-negative
-	if payloadLen < 0 {
-		return 0, 0, 0, fmt.Errorf("invalid payload length: %d", payloadLen)
-	}
-
 	return eventType, version, payloadLen, nil
 }
 
