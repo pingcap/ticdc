@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -49,7 +50,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	// Test NewDispatcherHeartbeat
 	dispatcherCount := 3
 	heartbeat := NewDispatcherHeartbeat(dispatcherCount)
-	require.Equal(t, byte(DispatcherHeartbeatVersion1), heartbeat.Version)
+	require.Equal(t, DispatcherHeartbeatVersion1, heartbeat.Version)
 	require.Empty(t, heartbeat.DispatcherProgresses)
 	require.Equal(t, dispatcherCount, cap(heartbeat.DispatcherProgresses))
 
@@ -82,12 +83,14 @@ func TestDispatcherHeartbeat(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, data, heartbeat.GetSize()+GetEventHeaderSize())
 
-	// Verify header format
-	require.Greater(t, len(data), 8, "data should include header")
-	require.Equal(t, byte(0xDA), data[0], "magic high byte")
-	require.Equal(t, byte(0x7A), data[1], "magic low byte")
-	require.Equal(t, byte(TypeDispatcherHeartbeat), data[2], "event type")
-	require.Equal(t, byte(DispatcherHeartbeatVersion1), data[3], "version byte")
+	// Verify header format: [MAGIC(4B)][EVENT_TYPE(2B)][VERSION(2B)][PAYLOAD_LENGTH(8B)]
+	require.Greater(t, len(data), 16, "data should include header")
+	// Magic (4 bytes)
+	require.Equal(t, uint32(0xDA7A6A6A), binary.BigEndian.Uint32(data[0:4]), "magic bytes")
+	// Event type (2 bytes)
+	require.Equal(t, uint16(TypeDispatcherHeartbeat), binary.BigEndian.Uint16(data[4:6]), "event type")
+	// Version (2 bytes)
+	require.Equal(t, uint16(DispatcherHeartbeatVersion1), binary.BigEndian.Uint16(data[6:8]), "version")
 
 	var unmarshalledResponse DispatcherHeartbeat
 	err = unmarshalledResponse.Unmarshal(data)
@@ -170,7 +173,7 @@ func TestDispatcherHeartbeatResponse(t *testing.T) {
 	// Test constructor function
 	response := NewDispatcherHeartbeatResponse()
 
-	require.Equal(t, byte(DispatcherHeartbeatVersion1), response.Version)
+	require.Equal(t, DispatcherHeartbeatVersion1, response.Version)
 	require.Equal(t, response.DispatcherCount, uint32(0))
 	require.Empty(t, response.DispatcherStates)
 
@@ -199,12 +202,14 @@ func TestDispatcherHeartbeatResponse(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, data, response.GetSize()+GetEventHeaderSize())
 
-	// Verify header format
-	require.Greater(t, len(data), 8, "data should include header")
-	require.Equal(t, byte(0xDA), data[0], "magic high byte")
-	require.Equal(t, byte(0x7A), data[1], "magic low byte")
-	require.Equal(t, byte(TypeDispatcherHeartbeatResponse), data[2], "event type")
-	require.Equal(t, byte(DispatcherHeartbeatResponseVersion1), data[3], "version byte")
+	// Verify header format: [MAGIC(4B)][EVENT_TYPE(2B)][VERSION(2B)][PAYLOAD_LENGTH(8B)]
+	require.Greater(t, len(data), 16, "data should include header")
+	// Magic (4 bytes)
+	require.Equal(t, uint32(0xDA7A6A6A), binary.BigEndian.Uint32(data[0:4]), "magic bytes")
+	// Event type (2 bytes)
+	require.Equal(t, uint16(TypeDispatcherHeartbeatResponse), binary.BigEndian.Uint16(data[4:6]), "event type")
+	// Version (2 bytes)
+	require.Equal(t, uint16(DispatcherHeartbeatResponseVersion1), binary.BigEndian.Uint16(data[6:8]), "version")
 
 	var unmarshalledResponse DispatcherHeartbeatResponse
 	err = unmarshalledResponse.Unmarshal(data)
@@ -281,17 +286,17 @@ func TestDispatcherHeartbeatHeaderValidation(t *testing.T) {
 	// Restore for next test
 	copy(data2, data)
 
-	// Test 2: Wrong event type
-	data2[2] = byte(TypeCongestionControl)
+	// Test 2: Wrong event type (bytes 4-5 in new format)
+	binary.BigEndian.PutUint16(data2[4:6], uint16(TypeCongestionControl))
 	err = decoded.Unmarshal(data2)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "expected DispatcherHeartbeat")
+	require.Contains(t, err.Error(), "DispatcherHeartbeat")
 
 	// Restore for next test
 	copy(data2, data)
 
-	// Test 3: Unsupported version
-	data2[3] = 99
+	// Test 3: Unsupported version (bytes 6-7 in new format)
+	binary.BigEndian.PutUint16(data2[6:8], 99)
 	err = decoded.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported DispatcherHeartbeat version")
@@ -314,7 +319,7 @@ func TestDispatcherHeartbeatHeaderValidation(t *testing.T) {
 	incompleteData[7] = 100 // Claim 100 bytes but don't provide them
 	err = decoded.Unmarshal(incompleteData)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "incomplete data")
+	require.Contains(t, err.Error(), "data too short")
 }
 
 func TestDispatcherHeartbeatResponseHeaderValidation(t *testing.T) {
@@ -340,17 +345,17 @@ func TestDispatcherHeartbeatResponseHeaderValidation(t *testing.T) {
 	// Restore for next test
 	copy(data2, data)
 
-	// Test 2: Wrong event type
-	data2[2] = byte(TypeDispatcherHeartbeat)
+	// Test 2: Wrong event type (bytes 4-5 in new format)
+	binary.BigEndian.PutUint16(data2[4:6], uint16(TypeDispatcherHeartbeat))
 	err = decoded.Unmarshal(data2)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "expected DispatcherHeartbeatResponse")
+	require.Contains(t, err.Error(), "DispatcherHeartbeatResponse")
 
 	// Restore for next test
 	copy(data2, data)
 
-	// Test 3: Unsupported version
-	data2[3] = 99
+	// Test 3: Unsupported version (bytes 6-7 in new format)
+	binary.BigEndian.PutUint16(data2[6:8], 99)
 	err = decoded.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported DispatcherHeartbeatResponse version")
@@ -373,5 +378,5 @@ func TestDispatcherHeartbeatResponseHeaderValidation(t *testing.T) {
 	incompleteData[7] = 100 // Claim 100 bytes but don't provide them
 	err = decoded.Unmarshal(incompleteData)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "incomplete data")
+	require.Contains(t, err.Error(), "data too short")
 }

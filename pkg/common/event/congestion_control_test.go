@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,12 +29,14 @@ func TestCongestionControl(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bytes, control.GetSize()+GetEventHeaderSize())
 
-	// Verify header format: [MAGIC(2B)][EVENT_TYPE(1B)][VERSION(1B)][PAYLOAD_LENGTH(4B)]
-	require.Greater(t, len(bytes), 8, "data should include header")
-	require.Equal(t, byte(0xDA), bytes[0], "magic high byte")
-	require.Equal(t, byte(0x7A), bytes[1], "magic low byte")
-	require.Equal(t, byte(TypeCongestionControl), bytes[2], "event type")
-	require.Equal(t, byte(CongestionControlVersion1), bytes[3], "version byte")
+	// Verify header format: [MAGIC(4B)][EVENT_TYPE(2B)][VERSION(2B)][PAYLOAD_LENGTH(8B)]
+	require.Greater(t, len(bytes), 16, "data should include header")
+	// Magic (4 bytes)
+	require.Equal(t, uint32(0xDA7A6A6A), binary.BigEndian.Uint32(bytes[0:4]), "magic bytes")
+	// Event type (2 bytes)
+	require.Equal(t, uint16(TypeCongestionControl), binary.BigEndian.Uint16(bytes[4:6]), "event type")
+	// Version (2 bytes)
+	require.Equal(t, uint16(CongestionControlVersion1), binary.BigEndian.Uint16(bytes[6:8]), "version")
 
 	var decoded CongestionControl
 	err = decoded.Unmarshal(bytes)
@@ -247,18 +250,18 @@ func TestCongestionControlHeaderValidation(t *testing.T) {
 	// Restore for next test
 	copy(data2, data)
 
-	// Test 2: Wrong event type
-	data2[2] = byte(TypeDDLEvent)
+	// Test 2: Wrong event type (bytes 4-5 in new format)
+	binary.BigEndian.PutUint16(data2[4:6], uint16(TypeDDLEvent))
 	err = decoded.Unmarshal(data2)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "expected CongestionControl")
+	require.Contains(t, err.Error(), "CongestionControl")
 
 	// Restore for next test
 	copy(data2, data)
 
-	// Test 3: Unsupported version
-	mockVersion := byte(99)
-	data2[3] = mockVersion
+	// Test 3: Unsupported version (bytes 6-7 in new format)
+	mockVersion := uint16(99)
+	binary.BigEndian.PutUint16(data2[6:8], mockVersion)
 	err = decoded.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported CongestionControl version")
@@ -282,7 +285,7 @@ func TestCongestionControlHeaderValidation(t *testing.T) {
 	incompleteData[7] = 100
 	err = decoded.Unmarshal(incompleteData)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "incomplete data")
+	require.Contains(t, err.Error(), "data too short")
 }
 
 func TestCongestionControlVersionCompatibility(t *testing.T) {
@@ -300,7 +303,7 @@ func TestCongestionControlVersionCompatibility(t *testing.T) {
 	var decoded CongestionControl
 	err = decoded.Unmarshal(data)
 	require.NoError(t, err)
-	require.Equal(t, byte(CongestionControlVersion1), decoded.version)
+	require.Equal(t, CongestionControlVersion1, decoded.version)
 	require.Equal(t, control.clusterID, decoded.clusterID)
 	require.Len(t, decoded.availables, 1)
 	require.Equal(t, gid, decoded.availables[0].Gid)

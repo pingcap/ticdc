@@ -90,3 +90,41 @@ func UnmarshalEventHeader(data []byte) (eventType int, version int, payloadLen u
 func GetEventHeaderSize() int {
 	return eventHeaderSize
 }
+
+// ValidateAndExtractPayload validates the event header and extracts the payload.
+// It performs the following steps:
+// 1. Parse the unified header
+// 2. Validate the event type matches the expected type
+// 3. Validate the total data length
+// 4. Extract and return the payload
+//
+// Returns:
+// - payload: the extracted payload bytes
+// - version: the version of the event
+// - err: any error encountered during validation
+func ValidateAndExtractPayload(data []byte, expectedType int) (payload []byte, version int, err error) {
+	// 1. Parse unified header
+	eventType, ver, payloadLen, err := UnmarshalEventHeader(data)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 2. Validate event type
+	if eventType != expectedType {
+		return nil, 0, fmt.Errorf("expected %s (type %d), got type %d (%s)",
+			TypeToString(expectedType), expectedType, eventType, TypeToString(eventType))
+	}
+
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
+		return nil, 0, fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
+			expectedLen, headerSize, payloadLen, len(data))
+	}
+
+	// 4. Extract payload
+	payload = data[headerSize:expectedLen]
+
+	return payload, ver, nil
+}

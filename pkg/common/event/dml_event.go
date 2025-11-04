@@ -126,33 +126,16 @@ func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) error {
 }
 
 func (b *BatchDMLEvent) Unmarshal(data []byte) error {
-	// 1. Parse unified header
-	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeBatchDMLEvent)
 	if err != nil {
 		return err
 	}
 
-	// 2. Validate event type
-	if eventType != TypeBatchDMLEvent {
-		return fmt.Errorf("expected BatchDMLEvent (type %d), got type %d (%s)",
-			TypeBatchDMLEvent, eventType, TypeToString(eventType))
-	}
-
-	// 3. Validate total data length
-	headerSize := GetEventHeaderSize()
-	expectedLen := uint64(headerSize) + payloadLen
-	if uint64(len(data)) < expectedLen {
-		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
-			expectedLen, headerSize, payloadLen, len(data))
-	}
-
-	// 4. Extract payload
-	payload := data[headerSize:expectedLen]
-
-	// 5. Store version
+	// 2. Store version
 	b.Version = version
 
-	// 6. Decode based on version
+	// 3. Decode based on version
 	switch version {
 	case BatchDMLEventVersion1:
 		return b.decodeV1(payload)

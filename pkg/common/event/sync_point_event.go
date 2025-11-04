@@ -144,37 +144,20 @@ func (e SyncPointEvent) Marshal() ([]byte, error) {
 	}
 
 	// 2. Use unified header format
-	return MarshalEventWithHeader(TypeSyncPointEvent, e.Version, payload)
+	return MarshalEventWithHeader(TypeSyncPointEvent, int(e.Version), payload)
 }
 
 func (e *SyncPointEvent) Unmarshal(data []byte) error {
-	// 1. Parse unified header
-	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeSyncPointEvent)
 	if err != nil {
 		return err
 	}
 
-	// 2. Validate event type
-	if eventType != TypeSyncPointEvent {
-		return fmt.Errorf("expected SyncPointEvent (type %d), got type %d (%s)",
-			TypeSyncPointEvent, eventType, TypeToString(eventType))
-	}
+	// 2. Store version
+	e.Version = byte(version)
 
-	// 3. Validate total data length
-	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
-		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
-			expectedLen, headerSize, payloadLen, len(data))
-	}
-
-	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
-
-	// 5. Store version
-	e.Version = version
-
-	// 6. Decode based on version
+	// 3. Decode based on version
 	switch version {
 	case SyncPointEventVersion1:
 		return e.decodeV1(payload)

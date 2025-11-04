@@ -130,33 +130,16 @@ func (c *CongestionControl) encodeV1() ([]byte, error) {
 }
 
 func (c *CongestionControl) Unmarshal(data []byte) error {
-	// 1. Parse unified header
-	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeCongestionControl)
 	if err != nil {
 		return err
 	}
 
-	// 2. Validate event type
-	if eventType != TypeCongestionControl {
-		return fmt.Errorf("expected CongestionControl (type %d), got type %d (%s)",
-			TypeCongestionControl, eventType, TypeToString(eventType))
-	}
-
-	// 3. Validate total data length
-	headerSize := GetEventHeaderSize()
-	expectedLen := uint64(headerSize) + payloadLen
-	if uint64(len(data)) < expectedLen {
-		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
-			expectedLen, headerSize, payloadLen, len(data))
-	}
-
-	// 4. Extract payload
-	payload := data[headerSize:expectedLen]
-
-	// 5. Store version
+	// 2. Store version
 	c.version = version
 
-	// 6. Decode based on version
+	// 3. Decode based on version
 	switch version {
 	case CongestionControlVersion1:
 		return c.decodeV1(payload)

@@ -142,7 +142,7 @@ func TestResolvedEventHeader(t *testing.T) {
 
 	// Verify total size
 	headerSize := GetEventHeaderSize()
-	require.Equal(t, headerSize+payloadLen, len(data))
+	require.Equal(t, uint64(headerSize)+payloadLen, uint64(len(data)))
 }
 
 // TestResolvedEventUnmarshalErrors tests error handling in Unmarshal

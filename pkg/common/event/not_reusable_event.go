@@ -109,33 +109,16 @@ func (e NotReusableEvent) Marshal() ([]byte, error) {
 }
 
 func (e *NotReusableEvent) Unmarshal(data []byte) error {
-	// 1. Parse unified header
-	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeNotReusableEvent)
 	if err != nil {
 		return err
 	}
 
-	// 2. Validate event type
-	if eventType != TypeNotReusableEvent {
-		return fmt.Errorf("expected NotReusableEvent (type %d), got type %d (%s)",
-			TypeNotReusableEvent, eventType, TypeToString(eventType))
-	}
-
-	// 3. Validate total data length
-	headerSize := GetEventHeaderSize()
-	expectedLen := uint64(headerSize) + payloadLen
-	if uint64(len(data)) < expectedLen {
-		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
-			expectedLen, headerSize, payloadLen, len(data))
-	}
-
-	// 4. Extract payload
-	payload := data[headerSize:expectedLen]
-
-	// 5. Store version
+	// 2. Store version
 	e.Version = version
 
-	// 6. Decode based on version
+	// 3. Decode based on version
 	switch version {
 	case NotReusableEventVersion:
 		return e.decodeV1(payload)

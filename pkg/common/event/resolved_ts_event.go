@@ -106,19 +106,19 @@ func (b *BatchResolvedEvent) Unmarshal(data []byte) error {
 		}
 
 		// Calculate total event size (header + payload)
-		eventSize := GetEventHeaderSize() + payloadLen
-		if offset+eventSize > len(data) {
+		eventSize := uint64(GetEventHeaderSize()) + payloadLen
+		if uint64(offset)+eventSize > uint64(len(data)) {
 			return fmt.Errorf("BatchResolvedEvent.Unmarshal: incomplete event at offset %d", offset)
 		}
 
 		// Unmarshal the event
 		var e ResolvedEvent
-		if err := e.Unmarshal(data[offset : offset+eventSize]); err != nil {
+		if err := e.Unmarshal(data[offset : uint64(offset)+eventSize]); err != nil {
 			return fmt.Errorf("BatchResolvedEvent.Unmarshal: failed to unmarshal event at offset %d: %w", offset, err)
 		}
 
 		b.Events = append(b.Events, e)
-		offset += eventSize
+		offset += int(eventSize)
 	}
 
 	return nil
@@ -207,37 +207,20 @@ func (e ResolvedEvent) Marshal() ([]byte, error) {
 	}
 
 	// 2. Use unified header format
-	return MarshalEventWithHeader(TypeResolvedEvent, e.Version, payload)
+	return MarshalEventWithHeader(TypeResolvedEvent, int(e.Version), payload)
 }
 
 func (e *ResolvedEvent) Unmarshal(data []byte) error {
-	// 1. Parse unified header
-	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeResolvedEvent)
 	if err != nil {
 		return err
 	}
 
-	// 2. Validate event type
-	if eventType != TypeResolvedEvent {
-		return fmt.Errorf("expected ResolvedEvent (type %d), got type %d (%s)",
-			TypeResolvedEvent, eventType, TypeToString(eventType))
-	}
+	// 2. Store version
+	e.Version = byte(version)
 
-	// 3. Validate total data length
-	headerSize := GetEventHeaderSize()
-	expectedLen := headerSize + payloadLen
-	if len(data) < expectedLen {
-		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
-			expectedLen, headerSize, payloadLen, len(data))
-	}
-
-	// 4. Extract payload
-	payload := data[headerSize : headerSize+payloadLen]
-
-	// 5. Store version
-	e.Version = version
-
-	// 6. Decode based on version
+	// 3. Decode based on version
 	switch version {
 	case ResolvedEventVersion1:
 		return e.decodeV1(payload)
