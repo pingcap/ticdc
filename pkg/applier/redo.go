@@ -97,23 +97,45 @@ func (rac *RedoApplierConfig) toLogReaderConfig() (string, *reader.LogReaderConf
 	return uri.Scheme, cfg, nil
 }
 
-func (ra *RedoApplier) getTableDDLTs(tableID commonType.TableID, checkpointTs int64) ddlTs {
+func (ra *RedoApplier) getBlockTableIDs(blockTables *commonEvent.InfluencedTables) map[int64]struct{} {
+	tableIDs := make(map[int64]struct{})
+	switch blockTables.InfluenceType {
+	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
+		for tableID := range ra.eventsGroup {
+			tableIDs[tableID] = struct{}{}
+		}
+	case commonEvent.InfluenceTypeNormal:
+		for _, item := range blockTables.TableIDs {
+			if item != 0 {
+				tableIDs[item] = struct{}{}
+			}
+		}
+	default:
+		log.Panic("unsupported influence type", zap.Any("influenceType", blockTables.InfluenceType))
+	}
+	return tableIDs
+}
+
+func (ra *RedoApplier) getTableDDLTs(tableID commonType.TableID) ddlTs {
 	// we have to refactor redo apply to tolerate DDL execution errors.
 	// Besides, we have to query ddl_ts to get the correct checkpointTs to avoid inconsistency.
 	ts, ok := ra.tableDDLTs[tableID]
 	if !ok {
-		newStartTsList, _, skipDMLAsStartTsList, err := ra.mysqlSink.GetTableRecoveryInfo([]int64{tableID}, []int64{checkpointTs}, false)
+		newStartTsList, _, skipDMLAsStartTsList, err := ra.mysqlSink.GetTableRecoveryInfo([]int64{tableID}, []int64{-1}, false)
 		if err != nil || len(newStartTsList) != 1 {
 			log.Panic("get startTs list failed", zap.Any("tableID", tableID), zap.Any("newStartTsList", newStartTsList), zap.Error(err))
 		}
 		ra.tableDDLTs[tableID] = ddlTs{
 			ts:      newStartTsList[0],
 			skipDML: skipDMLAsStartTsList[0],
+			ignore:  newStartTsList[0] == 0,
 		}
 		log.Info("calculate real startTs for redo apply",
 			zap.Stringer("changefeedID", ra.rd.GetChangefeedID()),
 			zap.Int64("tableID", tableID),
-			zap.Any("realStartTs", newStartTsList))
+			zap.Any("realStartTs", newStartTsList[0]),
+			zap.Any("skipDML", skipDMLAsStartTsList[0]),
+		)
 		return ra.tableDDLTs[tableID]
 	}
 	return ts
@@ -194,29 +216,40 @@ func (ra *RedoApplier) applyDDL(
 			return true
 		}
 
-		// Ignore the previous dml events, because we can't get the right ddlTs from these ddls
-		// and these dml events are not neccessary to replicate
-		if ddl.DDL.NeedDroppedTables != nil {
-			dropTableIds := make([]int64, 0)
-			switch ddl.DDL.NeedDroppedTables.InfluenceType {
-			case commonEvent.InfluenceTypeNormal:
-				dropTableIds = append(dropTableIds, ddl.DDL.NeedDroppedTables.TableIDs...)
-			case commonEvent.InfluenceTypeDB:
-				ids := ddl.TableSchemaStore.GetNormalTableIdsByDB(ddl.DDL.NeedDroppedTables.SchemaID)
-				dropTableIds = append(dropTableIds, ids...)
-			case commonEvent.InfluenceTypeAll:
-				ids := ddl.TableSchemaStore.GetAllNormalTableIds()
-				dropTableIds = append(dropTableIds, ids...)
-			}
-			for _, dropTableId := range dropTableIds {
-				if group, ok := ra.eventsGroup[dropTableId]; ok {
-					group.clear()
-				}
-			}
-		}
-		ddlTs := ra.getTableDDLTs(ddl.TableName.TableID, int64(checkpointTs))
-		if ddlTs.ts >= int64(ddl.DDL.CommitTs) {
+		// create table filter
+		// drop table 不能被过滤，因为 recover table 存在
+		// ddl table
+		// 实现 drop table 的时候删除 不行
+		// create table 也会存在问题，create table 之后的数据无法写入导致报错，后面可能还存在 drop table 没有被写入
+		// 那这里只把相关的 table 的数据写入
+
+		// 1. dml + drop table + recover table(ts) -> ignore dmls
+		// 2. drop table + create table -> if create table filter，it lead the table drop
+		// 3. dml + (drop table) + create table -> table has drop previouslly
+		// 4. truncate table = drop table + create table
+		// 只写相关表
+		// 4. create table + dml + othere table ddl + drop table
+		ddlTs := ra.getTableDDLTs(ddl.TableName.TableID)
+		if ddlTs.ignore || ddlTs.ts >= int64(ddl.DDL.CommitTs) {
 			log.Warn("ignore DDL which commit ts is less than current ts", zap.Any("ddl", ddl), zap.Any("startTs", ddlTs.ts))
+			// Ignore the previous dml events, because the drop ddl has replicated the downstream
+			if ddl.DDL.NeedDroppedTables != nil {
+				dropTableIds := make([]int64, 0)
+				switch ddl.DDL.NeedDroppedTables.InfluenceType {
+				case commonEvent.InfluenceTypeNormal:
+					dropTableIds = append(dropTableIds, ddl.DDL.NeedDroppedTables.TableIDs...)
+				case commonEvent.InfluenceTypeDB:
+					ids := ddl.TableSchemaStore.GetNormalTableIdsByDB(ddl.DDL.NeedDroppedTables.SchemaID)
+					dropTableIds = append(dropTableIds, ids...)
+				case commonEvent.InfluenceTypeAll:
+					ids := ddl.TableSchemaStore.GetAllNormalTableIds()
+					dropTableIds = append(dropTableIds, ids...)
+				}
+				for _, dropTableId := range dropTableIds {
+					delete(ra.eventsGroup, dropTableId)
+				}
+				log.Warn("drop table dml events", zap.Any("dropTableIds", dropTableIds))
+			}
 			return true
 		}
 		// if ddl.DDL.CommitTs == max(uint64(ddlTs.ts), checkpointTs) {
@@ -231,8 +264,9 @@ func (ra *RedoApplier) applyDDL(
 		return nil
 	}
 	log.Warn("apply DDL", zap.Any("ddl", ddl))
-	// Wait all tables to flush data before applying DDL.
-	for tableID := range ra.eventsGroup {
+	// Wait block tables to flush data before applying DDL.
+	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockTables)
+	for tableID := range tableIDs {
 		if err := ra.waitTableFlush(ctx, tableID, ddl.DDL.CommitTs); err != nil {
 			return err
 		}
@@ -260,7 +294,7 @@ func (ra *RedoApplier) applyRow(
 			zap.Any("resolvedTs", ra.eventsGroup[tableID].highWatermark))
 	}
 
-	ddlTs := ra.getTableDDLTs(tableID, int64(checkpointTs))
+	ddlTs := ra.getTableDDLTs(tableID)
 	if ddlTs.ts >= int64(row.Row.CommitTs) {
 		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", ddlTs.ts), zap.Any("row", row))
 		return nil

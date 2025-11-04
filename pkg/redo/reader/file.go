@@ -282,11 +282,13 @@ func sortAndWriteFile(
 			// If the commitTs is greater than endTs, we should stop sorting
 			// and ignore the rest of the logs.
 			log.Info("ignore logs which commitTs is greater than resolvedTs",
-				zap.Any("filename", fileName), zap.Uint64("endTs", cfg.endTs))
+				zap.Any("filename", fileName), zap.Uint64("endTs", cfg.endTs), zap.Any("itemCommitTs", item.GetCommitTs()))
 			break
 		}
 		if item.GetCommitTs() <= cfg.startTs {
 			// If the commitTs is equal or less than startTs, we should skip this log.
+			log.Info("ignore logs which commitTs is less than startTs",
+				zap.Any("filename", fileName), zap.Uint64("endTs", cfg.startTs), zap.Any("itemCommitTs", item.GetCommitTs()))
 			continue
 		}
 		data, err := codec.MarshalRedoLog(item, nil)
