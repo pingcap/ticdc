@@ -23,7 +23,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type MessageHandler func(ctx context.Context, msg *TargetMessage) error
+type MessageHandler func(ctx context.Context, msg *TargetMessage)
 
 type router struct {
 	mu       sync.RWMutex
@@ -64,7 +64,7 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 				continue
 			}
 			start := time.Now()
-			err := handler(ctx, msg)
+			handler(ctx, msg)
 			now := time.Now()
 			if now.Sub(start) > 100*time.Millisecond {
 				// Rate limit logging: only log once every 10 seconds
@@ -79,9 +79,6 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 
 				// Always increment metrics counter for slow message handling
 				metrics.MessagingSlowHandleCounter.WithLabelValues(msg.Type.String()).Inc()
-			}
-			if err != nil {
-				log.Error("Handle message failed", zap.Error(err), zap.Any("msg", msg))
 			}
 		}
 	}

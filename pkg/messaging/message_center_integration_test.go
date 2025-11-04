@@ -52,10 +52,9 @@ func setupMessageCenters(t *testing.T) (*messageCenter, *messageCenter, *message
 
 func registerHandler(mc *messageCenter, topic string) chan *TargetMessage {
 	ch := make(chan *TargetMessage, 1)
-	mc.RegisterHandler(topic, func(ctx context.Context, msg *TargetMessage) error {
+	mc.RegisterHandler(topic, func(ctx context.Context, msg *TargetMessage) {
 		ch <- msg
 		log.Info(fmt.Sprintf("%s received message", mc.id), zap.Any("msg", msg))
-		return nil
 	})
 	return ch
 }
@@ -83,9 +82,8 @@ func waitForTargetsReady(mc *messageCenter) {
 func sendAndReceiveMessage(t *testing.T, sender *messageCenter, receiver *messageCenter, topic string, event *commonEvent.BatchDMLEvent) {
 	targetMsg := NewSingleTargetMessage(receiver.id, topic, event)
 	ch := make(chan *TargetMessage, 1)
-	receiver.RegisterHandler(topic, func(ctx context.Context, msg *TargetMessage) error {
+	receiver.RegisterHandler(topic, func(ctx context.Context, msg *TargetMessage) {
 		ch <- msg
-		return nil
 	})
 
 	timeoutCh := time.After(30 * time.Second)

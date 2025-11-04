@@ -15,7 +15,6 @@ package messaging
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -28,7 +27,7 @@ func TestRegisterAndDeRegisterHandler(t *testing.T) {
 	r := newRouter()
 	testTopic := "test-topic"
 
-	handler := func(ctx context.Context, msg *TargetMessage) error { return nil }
+	handler := func(ctx context.Context, msg *TargetMessage) {}
 	r.registerHandler(testTopic, handler)
 
 	assert.Len(t, r.handlers, 1)
@@ -60,9 +59,8 @@ func TestRunDispatchSuccessful(t *testing.T) {
 	t.Parallel()
 	handledMsg := make([]*TargetMessage, 0)
 	r := newRouter()
-	r.registerHandler("topic1", func(ctx context.Context, msg *TargetMessage) error {
+	r.registerHandler("topic1", func(ctx context.Context, msg *TargetMessage) {
 		handledMsg = append(handledMsg, msg)
-		return nil
 	})
 
 	msgChan := make(chan *TargetMessage, 1)
@@ -75,22 +73,6 @@ func TestRunDispatchSuccessful(t *testing.T) {
 
 	assert.Len(t, handledMsg, 1)
 	assert.Equal(t, "topic1", handledMsg[0].Topic)
-}
-
-func TestRunDispatchWithError(t *testing.T) {
-	t.Parallel()
-	r := newRouter()
-	r.registerHandler("topic1", func(ctx context.Context, msg *TargetMessage) error {
-		return errors.New("handler error")
-	})
-
-	msgChan := make(chan *TargetMessage, 1)
-	msgChan <- &TargetMessage{Topic: "topic1", Message: newMockIOTypeT([]byte("test"))}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	r.runDispatch(ctx, msgChan)
 }
 
 func TestRunDispatchNoHandler(t *testing.T) {
@@ -115,7 +97,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			handler := func(ctx context.Context, msg *TargetMessage) error { return nil }
+			handler := func(ctx context.Context, msg *TargetMessage) {}
 			r.registerHandler(topic, handler)
 		}()
 
