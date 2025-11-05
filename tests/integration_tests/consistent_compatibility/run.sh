@@ -92,7 +92,7 @@ function run() {
 		new_table_name="table_$(($i + 500))"
 		run_sql "RENAME TABLE consistent_replicate_ddl.table_$i TO consistent_replicate_ddl.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
-	
+
 	run_sql "CREATE table consistent_compatibility.check1(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# to ensure row changed events have been replicated to TiCDC
