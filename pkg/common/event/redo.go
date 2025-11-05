@@ -100,11 +100,12 @@ type RedoColumnValue struct {
 
 //msgp:ignore RedoRowEvent
 type RedoRowEvent struct {
-	StartTs   uint64
-	CommitTs  uint64
-	TableInfo *commonType.TableInfo
-	Event     RowChange
-	Callback  func()
+	StartTs         uint64
+	CommitTs        uint64
+	PhysicalTableID int64
+	TableInfo       *commonType.TableInfo
+	Event           RowChange
+	Callback        func()
 }
 
 const (
@@ -139,7 +140,12 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeRow,
 	}
 	if r.TableInfo != nil {
-		redoLog.RedoRow.Row.Table = &r.TableInfo.TableName
+		redoLog.RedoRow.Row.Table = &commonType.TableName{
+			Schema:      r.TableInfo.TableName.Schema,
+			Table:       r.TableInfo.TableName.Table,
+			TableID:     r.PhysicalTableID,
+			IsPartition: r.TableInfo.TableName.IsPartition,
+		}
 		redoLog.RedoRow.Row.IndexColumns = getIndexColumns(r.TableInfo)
 
 		columnCount := len(r.TableInfo.GetColumns())

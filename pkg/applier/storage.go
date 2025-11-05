@@ -122,11 +122,12 @@ func (t *tempTxnInsertEventStorage) writeEventsToFile(events ...*commonEvent.Red
 				break
 			}
 			redoRowEvent := &commonEvent.RedoRowEvent{
-				StartTs:   event.StartTs,
-				CommitTs:  event.CommitTs,
-				Event:     row,
-				TableInfo: event.TableInfo,
-				Callback:  event.PostFlush,
+				StartTs:         event.StartTs,
+				CommitTs:        event.CommitTs,
+				Event:           row,
+				PhysicalTableID: event.PhysicalTableID,
+				TableInfo:       event.TableInfo,
+				Callback:        event.PostFlush,
 			}
 			redoLog := redoRowEvent.ToRedoLog()
 			data, err := codec.MarshalRedoLog(redoLog, nil)
