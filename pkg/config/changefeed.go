@@ -417,6 +417,12 @@ func (info *ChangeFeedInfo) VerifyAndComplete() {
 	}
 	if info.Config.Scheduler == nil {
 		info.Config.Scheduler = defaultConfig.Scheduler
+	} else {
+		info.Config.Scheduler.FillMissingWithDefaults(defaultConfig.Scheduler)
+	}
+
+	if info.Config.MemoryQuota == uint64(0) {
+		info.fixMemoryQuota()
 	}
 
 	if info.Config.Integrity == nil {
@@ -497,7 +503,6 @@ func (info *ChangeFeedInfo) rmDBOnlyFields() {
 	info.Config.BDRMode = nil
 	info.Config.SyncPointInterval = nil
 	info.Config.SyncPointRetention = nil
-	info.Config.Consistent = nil
 	info.Config.Sink.SafeMode = nil
 	info.Config.Sink.MySQLConfig = nil
 }
