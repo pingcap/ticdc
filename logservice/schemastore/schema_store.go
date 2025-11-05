@@ -505,7 +505,7 @@ func (s *schemaStore) RegisterKeyspace(
 	if err != nil {
 		return err
 	}
-	store.dataStorage.run(ctx)
+	store.dataStorage.run()
 
 	go func(ctx context.Context, schemaStore *keyspaceSchemaStore) {
 		ticker := time.NewTicker(50 * time.Millisecond)
