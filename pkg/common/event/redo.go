@@ -319,6 +319,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	event := &DMLEvent{
 		TableInfo:       commonType.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo),
 		CommitTs:        r.Row.CommitTs,
+		StartTs:         r.Row.StartTs,
 		Length:          1,
 		PhysicalTableID: r.Row.Table.TableID,
 	}

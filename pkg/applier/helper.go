@@ -147,7 +147,21 @@ func newEventsGroup(tableID int64) *eventsGroup {
 // append will append an event to event groups.
 func (g *eventsGroup) append(row *commonEvent.DMLEvent) {
 	g.highWatermark = row.CommitTs
-	g.events = append(g.events, row)
+	var lastDMLEvent *commonEvent.DMLEvent
+	if len(g.events) > 0 {
+		lastDMLEvent = g.events[len(g.events)-1]
+	}
+	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
+		g.events = append(g.events, row)
+		return
+	}
+
+	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
+		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
+		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
+		lastDMLEvent.Length += row.Length
+		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
+	}
 }
 
 // getEvents will get all events.
@@ -160,5 +174,4 @@ func (g *eventsGroup) getEvents() []*commonEvent.DMLEvent {
 type ddlTs struct {
 	ts      int64
 	skipDML bool
-	ignore  bool
 }

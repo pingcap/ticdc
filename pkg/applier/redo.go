@@ -128,7 +128,6 @@ func (ra *RedoApplier) getTableDDLTs(tableID commonType.TableID) ddlTs {
 		ra.tableDDLTs[tableID] = ddlTs{
 			ts:      newStartTsList[0],
 			skipDML: skipDMLAsStartTsList[0],
-			ignore:  newStartTsList[0] == 0,
 		}
 		log.Info("calculate real startTs for redo apply",
 			zap.Stringer("changefeedID", ra.rd.GetChangefeedID()),
@@ -216,23 +215,18 @@ func (ra *RedoApplier) applyDDL(
 			return true
 		}
 
-		// create table filter
-		// drop table 不能被过滤，因为 recover table 存在
-		// ddl table
-		// 实现 drop table 的时候删除 不行
-		// create table 也会存在问题，create table 之后的数据无法写入导致报错，后面可能还存在 drop table 没有被写入
-		// 那这里只把相关的 table 的数据写入
-
-		// 1. dml + drop table + recover table(ts) -> ignore dmls
-		// 2. drop table + create table -> if create table filter，it lead the table drop
-		// 3. dml + (drop table) + create table -> table has drop previouslly
-		// 4. truncate table = drop table + create table
-		// 只写相关表
-		// 4. create table + dml + othere table ddl + drop table
 		ddlTs := ra.getTableDDLTs(ddl.TableName.TableID)
-		if ddlTs.ignore || ddlTs.ts >= int64(ddl.DDL.CommitTs) {
+		ignore := false
+		// some ddls may delete record from ddl-ts table and the ddlTs is 0 which means the ddl has replicated the downstream
+		// we need to ignore these ddls
+		switch timodel.ActionType(ddl.Type) {
+		case timodel.ActionDropTable, timodel.ActionDropTablePartition:
+			ignore = ddlTs.ts == 0
+		}
+		if ignore || ddlTs.ts >= int64(ddl.DDL.CommitTs) {
 			log.Warn("ignore DDL which commit ts is less than current ts", zap.Any("ddl", ddl), zap.Any("startTs", ddlTs.ts))
 			// Ignore the previous dml events, because the drop ddl has replicated the downstream
+			// DML + Drop Table: If the drop table ddl is ignored and the previous dmls should be replicated the downstream in the past.
 			if ddl.DDL.NeedDroppedTables != nil {
 				dropTableIds := make([]int64, 0)
 				switch ddl.DDL.NeedDroppedTables.InfluenceType {
