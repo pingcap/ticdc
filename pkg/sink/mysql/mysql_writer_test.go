@@ -125,6 +125,9 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
+	writer.cfg.CachePrepStmts = false
+	writer.cfg.DMLMaxRetry = 0
+
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
