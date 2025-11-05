@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -48,6 +49,8 @@ func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBo
 		tableRegisteredCount:   make(map[int64]int),
 	}
 	p.initializeFromDisk()
+	ctx := context.Background()
+	p.ctx, p.cancel = context.WithCancel(ctx)
 	return p
 }
 
