@@ -471,6 +471,7 @@ func (s *schemaStore) RegisterKeyspace(
 	if err != nil {
 		return err
 	}
+
 	store := &keyspaceSchemaStore{
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
@@ -505,9 +506,8 @@ func (s *schemaStore) RegisterKeyspace(
 	if err != nil {
 		return err
 	}
+	store.dataStorage.run(ctx)
 
-	go storage.gc(ctx)
-	go storage.persistUpperBoundPeriodically(ctx)
 	go func(ctx context.Context, schemaStore *keyspaceSchemaStore) {
 		ticker := time.NewTicker(50 * time.Millisecond)
 		for {
