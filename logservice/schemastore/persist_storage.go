@@ -296,7 +296,9 @@ func (p *persistentStorage) initializeFromDisk() {
 }
 
 func (p *persistentStorage) run(ctx context.Context) error {
+	p.mu.Lock()
 	ctx, p.cancel = context.WithCancel(ctx)
+	p.mu.Unlock()
 	p.wg.Add(2)
 	go p.gc(ctx)                            // gc goroutine will exit when ctx is done.
 	go p.persistUpperBoundPeriodically(ctx) // this goroutine will exit when ctx is done.
@@ -304,14 +306,15 @@ func (p *persistentStorage) run(ctx context.Context) error {
 }
 
 func (p *persistentStorage) close() error {
-	if p.cancel != nil {
-		p.cancel()
-	}
-	p.wg.Wait()
-
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	cancel := p.cancel
 	p.cancel = nil
+	p.mu.Unlock()
+	if cancel == nil {
+		return nil
+	}
+	cancel()
+	p.wg.Wait()
 	return p.db.Close()
 }
 
