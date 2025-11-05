@@ -48,6 +48,8 @@ func (t IOType) IsLogServiceEvent() bool {
 	return slices.Contains(LogServiceEventTypes, t)
 }
 
+// Please do not modify the value of the constants in this section.
+// When you need to add new type, please chose a new value for the constant.
 const (
 	TypeInvalid IOType = 0
 	// LogService related
@@ -96,7 +98,7 @@ const (
 	TypeMessageHandShake IOType = 36
 
 	// used to upload changefeed metrics from event store to log coordinator
-	TypeLogCoordinatorChangefeedStates = 37
+	TypeLogCoordinatorChangefeedStates IOType = 37
 )
 
 func (t IOType) String() string {
