@@ -15,7 +15,6 @@ package applier
 
 import (
 	"context"
-	"math"
 	"net/url"
 	"time"
 
@@ -117,35 +116,29 @@ func (ra *RedoApplier) getBlockTableIDs(blockTables *commonEvent.InfluencedTable
 	return tableIDs
 }
 
-func (ra *RedoApplier) getTableDDLTs(tableIDs ...int64) ddlTs {
+func (ra *RedoApplier) getTableDDLTs(tableID int64) ddlTs {
 	// we have to refactor redo apply to tolerate DDL execution errors.
 	// Besides, we have to query ddl_ts to get the correct checkpointTs to avoid inconsistency.
-	minTs := ddlTs{ts: math.MaxInt64}
-	for _, tableID := range tableIDs {
-		currentTs, ok := ra.tableDDLTs[tableID]
-		if !ok {
-			newStartTsList, _, skipDMLAsStartTsList, err := ra.mysqlSink.GetTableRecoveryInfo([]int64{tableID}, []int64{-1}, false)
-			if err != nil || len(newStartTsList) < 1 {
-				log.Panic("get startTs list failed", zap.Any("tableID", tableID), zap.Any("newStartTsList", newStartTsList), zap.Error(err))
-			}
-			currentTs = ddlTs{
-				ts:      newStartTsList[0],
-				skipDML: skipDMLAsStartTsList[0],
-			}
-			log.Info("calculate real startTs for redo apply",
-				zap.Stringer("changefeedID", ra.rd.GetChangefeedID()),
-				zap.Int64("tableID", tableID),
-				zap.Any("realStartTs", newStartTsList[0]),
-				zap.Any("skipDML", skipDMLAsStartTsList[0]),
-			)
-			ra.tableDDLTs[tableID] = currentTs
+	currentTs, ok := ra.tableDDLTs[tableID]
+	if !ok {
+		newStartTsList, _, skipDMLAsStartTsList, err := ra.mysqlSink.GetTableRecoveryInfo([]int64{tableID}, []int64{-1}, false)
+		if err != nil || len(newStartTsList) < 1 {
+			log.Panic("get startTs list failed", zap.Any("tableID", tableID), zap.Any("newStartTsList", newStartTsList), zap.Error(err))
 		}
-		if minTs.ts > currentTs.ts {
-			minTs = currentTs
+		currentTs = ddlTs{
+			ts:      newStartTsList[0],
+			skipDML: skipDMLAsStartTsList[0],
 		}
+		log.Info("calculate real startTs for redo apply",
+			zap.Stringer("changefeedID", ra.rd.GetChangefeedID()),
+			zap.Int64("tableID", tableID),
+			zap.Any("realStartTs", newStartTsList[0]),
+			zap.Any("skipDML", skipDMLAsStartTsList[0]),
+		)
+		ra.tableDDLTs[tableID] = currentTs
 	}
 
-	return minTs
+	return currentTs
 }
 
 func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
@@ -223,7 +216,7 @@ func (ra *RedoApplier) applyDDL(
 			return true
 		}
 
-		ddlTs := ra.getTableDDLTs(ddl.DDL.BlockTables.TableIDs...)
+		ddlTs := ra.getTableDDLTs(ddl.TableName.TableID)
 		ignore := false
 		// some ddls may delete record from ddl-ts table and the ddlTs is 0 which means the ddl has replicated the downstream
 		// we need to ignore these ddls
