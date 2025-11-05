@@ -127,7 +127,11 @@ func (e *DropEvent) Unmarshal(data []byte) error {
 	// 2. Decode based on version
 	switch version {
 	case DropEventVersion1:
-		return e.decodeV1(payload)
+		if err := e.decodeV1(payload); err != nil {
+			return err
+		}
+		e.Version = version
+		return nil
 	default:
 		return fmt.Errorf("unsupported DropEvent version: %d", version)
 	}

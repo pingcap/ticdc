@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -72,12 +73,11 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 	value, err := e.Marshal()
 	require.Nil(t, err)
 
-	// Verify header format
-	require.Greater(t, len(value), 8, "data should include header")
-	require.Equal(t, byte(0xDA), value[0], "magic high byte")
-	require.Equal(t, byte(0x7A), value[1], "magic low byte")
-	require.Equal(t, byte(TypeDMLEvent), value[2], "event type")
-	require.Equal(t, byte(DMLEventVersion1), value[3], "version byte")
+	// Verify header format: [MAGIC(4B)][EVENT_TYPE(2B)][VERSION(2B)][PAYLOAD_LENGTH(8B)]
+	require.Greater(t, len(value), 16, "data should include header")
+	require.Equal(t, uint32(0xDA7A6A6A), binary.BigEndian.Uint32(value[0:4]), "magic bytes")
+	require.Equal(t, uint16(TypeDMLEvent), binary.BigEndian.Uint16(value[4:6]), "event type")
+	require.Equal(t, uint16(DMLEventVersion1), binary.BigEndian.Uint16(value[6:8]), "version")
 
 	reverseEvent := &DMLEvent{}
 	err = reverseEvent.Unmarshal(value)
@@ -108,12 +108,11 @@ func TestBatchDMLEvent(t *testing.T) {
 	data, err := batchDMLEvent.Marshal()
 	require.NoError(t, err)
 
-	// Verify header format
-	require.Greater(t, len(data), 8, "data should include header")
-	require.Equal(t, byte(0xDA), data[0], "magic high byte")
-	require.Equal(t, byte(0x7A), data[1], "magic low byte")
-	require.Equal(t, byte(TypeBatchDMLEvent), data[2], "event type")
-	require.Equal(t, byte(BatchDMLEventVersion1), data[3], "version byte")
+	// Verify header format: [MAGIC(4B)][EVENT_TYPE(2B)][VERSION(2B)][PAYLOAD_LENGTH(8B)]
+	require.Greater(t, len(data), 16, "data should include header")
+	require.Equal(t, uint32(0xDA7A6A6A), binary.BigEndian.Uint32(data[0:4]), "magic bytes")
+	require.Equal(t, uint16(TypeBatchDMLEvent), binary.BigEndian.Uint16(data[4:6]), "event type")
+	require.Equal(t, uint16(BatchDMLEventVersion1), binary.BigEndian.Uint16(data[6:8]), "version")
 
 	reverseEvents := &BatchDMLEvent{}
 	// Set the TableInfo before unmarshal, it is used in Unmarshal.
@@ -248,7 +247,7 @@ func TestDMLEventHeaderValidation(t *testing.T) {
 	copy(data2, data)
 
 	// Test 2: Wrong event type
-	data2[2] = byte(TypeBatchDMLEvent)
+	binary.BigEndian.PutUint16(data2[4:6], uint16(TypeBatchDMLEvent))
 	err = reverseEvent.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expected DMLEvent")
@@ -257,27 +256,23 @@ func TestDMLEventHeaderValidation(t *testing.T) {
 	copy(data2, data)
 
 	// Test 3: Unsupported version
-	data2[3] = 99
+	binary.BigEndian.PutUint16(data2[6:8], 99)
 	err = reverseEvent.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported DMLEvent version")
 
 	// Test 4: Data too short
-	shortData := []byte{0xDA, 0x7A, 0x00}
+	shortData := []byte{0xDA, 0x7A, 0x6A}
 	err = reverseEvent.Unmarshal(shortData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "data too short")
 
 	// Test 5: Incomplete payload
-	incompleteData := make([]byte, 8)
-	incompleteData[0] = 0xDA
-	incompleteData[1] = 0x7A
-	incompleteData[2] = TypeDMLEvent
-	incompleteData[3] = DMLEventVersion1
-	incompleteData[4] = 0
-	incompleteData[5] = 0
-	incompleteData[6] = 0
-	incompleteData[7] = 100 // Claim 100 bytes but don't provide them
+	incompleteData := make([]byte, 16)
+	binary.BigEndian.PutUint32(incompleteData[0:4], 0xDA7A6A6A)
+	binary.BigEndian.PutUint16(incompleteData[4:6], uint16(TypeDMLEvent))
+	binary.BigEndian.PutUint16(incompleteData[6:8], uint16(DMLEventVersion1))
+	binary.BigEndian.PutUint64(incompleteData[8:16], 100) // Claim 100 bytes but don't provide them
 	err = reverseEvent.Unmarshal(incompleteData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incomplete data")
@@ -317,7 +312,7 @@ func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	copy(data2, data)
 
 	// Test 2: Wrong event type
-	data2[2] = byte(TypeDMLEvent)
+	binary.BigEndian.PutUint16(data2[4:6], uint16(TypeDMLEvent))
 	err = reverseEvent.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expected BatchDMLEvent")
@@ -326,27 +321,23 @@ func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	copy(data2, data)
 
 	// Test 3: Unsupported version
-	data2[3] = 99
+	binary.BigEndian.PutUint16(data2[6:8], 99)
 	err = reverseEvent.Unmarshal(data2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported BatchDMLEvent version")
 
 	// Test 4: Data too short
-	shortData := []byte{0xDA, 0x7A, 0x00}
+	shortData := []byte{0xDA, 0x7A, 0x6A}
 	err = reverseEvent.Unmarshal(shortData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "data too short")
 
 	// Test 5: Incomplete payload
-	incompleteData := make([]byte, 8)
-	incompleteData[0] = 0xDA
-	incompleteData[1] = 0x7A
-	incompleteData[2] = TypeBatchDMLEvent
-	incompleteData[3] = BatchDMLEventVersion1
-	incompleteData[4] = 0
-	incompleteData[5] = 0
-	incompleteData[6] = 0
-	incompleteData[7] = 100 // Claim 100 bytes but don't provide them
+	incompleteData := make([]byte, 16)
+	binary.BigEndian.PutUint32(incompleteData[0:4], 0xDA7A6A6A)
+	binary.BigEndian.PutUint16(incompleteData[4:6], uint16(TypeBatchDMLEvent))
+	binary.BigEndian.PutUint16(incompleteData[6:8], uint16(BatchDMLEventVersion1))
+	binary.BigEndian.PutUint64(incompleteData[8:16], 100) // Claim 100 bytes but don't provide them
 	err = reverseEvent.Unmarshal(incompleteData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incomplete data")

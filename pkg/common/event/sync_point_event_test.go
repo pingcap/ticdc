@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -159,8 +160,8 @@ func TestSyncPointEventHeader(t *testing.T) {
 	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
 	require.NoError(t, err)
 	require.Equal(t, TypeSyncPointEvent, eventType)
-	require.Equal(t, byte(SyncPointEventVersion1), version)
-	require.Equal(t, int(e.GetSize()), payloadLen)
+	require.Equal(t, SyncPointEventVersion1, version)
+	require.Equal(t, uint64(e.GetSize()), payloadLen)
 
 	// Verify total size
 	headerSize := GetEventHeaderSize()
@@ -181,17 +182,17 @@ func TestSyncPointEventUnmarshalErrors(t *testing.T) {
 		},
 		{
 			name:      "invalid magic bytes",
-			data:      []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			data:      []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 			wantError: "invalid magic bytes",
 		},
 		{
 			name: "wrong event type",
 			data: func() []byte {
-				header := make([]byte, 8)
-				header[0] = 0xDA
-				header[1] = 0x7A
-				header[2] = byte(TypeDMLEvent) // wrong type
-				header[3] = 0
+				header := make([]byte, 16)
+				binary.BigEndian.PutUint32(header[0:4], 0xDA7A6A6A)
+				binary.BigEndian.PutUint16(header[4:6], uint16(TypeDMLEvent)) // wrong type
+				binary.BigEndian.PutUint16(header[6:8], uint16(SyncPointEventVersion1))
+				binary.BigEndian.PutUint64(header[8:16], 0)
 				return header
 			}(),
 			wantError: "expected SyncPointEvent",
@@ -199,16 +200,11 @@ func TestSyncPointEventUnmarshalErrors(t *testing.T) {
 		{
 			name: "incomplete data",
 			data: func() []byte {
-				header := make([]byte, 8)
-				header[0] = 0xDA
-				header[1] = 0x7A
-				header[2] = byte(TypeSyncPointEvent)
-				header[3] = 0
-				// Set payload length to 100 but don't provide data
-				header[4] = 0
-				header[5] = 0
-				header[6] = 0
-				header[7] = 100
+				header := make([]byte, 16)
+				binary.BigEndian.PutUint32(header[0:4], 0xDA7A6A6A)
+				binary.BigEndian.PutUint16(header[4:6], uint16(TypeSyncPointEvent))
+				binary.BigEndian.PutUint16(header[6:8], uint16(SyncPointEventVersion1))
+				binary.BigEndian.PutUint64(header[8:16], 100) // Set payload length to 100 but don't provide data
 				return header
 			}(),
 			wantError: "incomplete data",

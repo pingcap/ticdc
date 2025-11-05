@@ -81,7 +81,7 @@ func TestDropEventMarshalUnmarshal(t *testing.T) {
 		{
 			name: "zero values",
 			event: &DropEvent{
-				Version:         0,
+				Version:         DropEventVersion1,
 				DispatcherID:    common.DispatcherID{},
 				DroppedSeq:      0,
 				DroppedCommitTs: 0,
@@ -91,7 +91,7 @@ func TestDropEventMarshalUnmarshal(t *testing.T) {
 		{
 			name: "invalid version",
 			event: &DropEvent{
-				Version:         1,
+				Version:         99,
 				DispatcherID:    common.NewDispatcherID(),
 				DroppedSeq:      0,
 				DroppedCommitTs: 0,
