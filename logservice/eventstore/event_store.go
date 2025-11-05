@@ -255,8 +255,6 @@ func New(
 		chs:            make([]*chann.UnlimitedChannel[eventWithCallback, uint64], 0, dbCount),
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
-		gcManager: newGCManager(),
-
 		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
 		messageCenter:        appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 
@@ -271,6 +269,7 @@ func New(
 		},
 		compressionThreshold: config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
 	}
+	store.gcManager = newGCManager(store.dbs, deleteDataRange, compactDataRange)
 
 	// create a write task pool per db instance
 	for i := 0; i < dbCount; i++ {
@@ -374,7 +373,7 @@ func (e *eventStore) Run(ctx context.Context) error {
 
 	// TODO: manage gcManager exit
 	eg.Go(func() error {
-		return e.gcManager.run(ctx, e.deleteEvents)
+		return e.gcManager.run(ctx)
 	})
 
 	// Delay the remove of subscription which has no dispatchers depend on it to a separate goroutine.
@@ -976,7 +975,8 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 							zap.Int("dbIndex", subStat.dbIndex),
 							zap.Int64("tableID", subStat.tableSpan.TableID))
 						e.subClient.Unsubscribe(subID)
-						if err := e.deleteEvents(subStat.dbIndex, uint64(subID), subStat.tableSpan.TableID, 0, math.MaxUint64); err != nil {
+						db := e.dbs[subStat.dbIndex]
+						if err := deleteDataRange(db, uint64(subID), subStat.tableSpan.TableID, 0, math.MaxUint64); err != nil {
 							log.Warn("fail to delete events", zap.Error(err))
 						}
 						delete(subStats, subID)
@@ -1009,11 +1009,29 @@ func (e *eventStore) runMetricsCollector(ctx context.Context) error {
 	}
 }
 
+// Copied and modified from https://github.com/cockroachdb/pebble/blob/53918335bb8c71a6420644e86d66f4f4a3ccf38f/metrics.go#L325
+// The original implementation has some unknown bugs which may return a extremely large size.
+func diskSpaceUsage(m *pebble.Metrics) uint64 {
+	var usageBytes uint64
+	usageBytes += m.WAL.PhysicalSize
+	usageBytes += m.WAL.ObsoletePhysicalSize
+	for _, lm := range m.Levels {
+		if lm.Size < 0 {
+			continue
+		}
+		usageBytes += uint64(lm.Size)
+	}
+	usageBytes += m.Table.ObsoleteSize
+	usageBytes += m.Table.ZombieSize
+	usageBytes += uint64(m.Compact.InProgressBytes)
+	return usageBytes
+}
+
 func (e *eventStore) collectAndReportStoreMetrics() {
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)
-		metrics.EventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(stats.DiskSpaceUsage()))
+		metrics.EventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(diskSpaceUsage(stats)))
 		memorySize := stats.MemTable.Size
 		if stats.BlockCache.Size > 0 {
 			memorySize += uint64(stats.BlockCache.Size)
@@ -1115,14 +1133,6 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(float64(time.Since(start).Milliseconds()) / 1000)
 	return err
-}
-
-func (e *eventStore) deleteEvents(dbIndex int, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-	db := e.dbs[dbIndex]
-	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
-	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
-
-	return db.DeleteRange(start, end, pebble.NoSync)
 }
 
 type eventStoreIter struct {

@@ -272,7 +272,11 @@ tikv-server \
 	>"$OUT_DIR/log/downstream/tikv/tikv-stdout.log" \
 	2>"$OUT_DIR/log/downstream/tikv/tikv-stderr.log" &
 
-check_port_available "$UP_TIKV_HOST_1" "$UP_TIKV_PORT_1" "Upstream TiKV is not ready yet"
+for idx in $(seq 1 3); do
+	host="UP_TIKV_HOST_$idx"
+	port="UP_TIKV_PORT_$idx"
+	check_port_available "${!host}" "${!port}" "Upstream TiKV is not ready yet"
+done
 check_port_available "$DOWN_TIKV_HOST" "$DOWN_TIKV_PORT" "Downstream TiKV is not ready yet"
 
 ####################start Tikv-Worker####################
@@ -329,11 +333,6 @@ tikv-worker --addr "$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT" \
 check_port_available "$UP_TIKV_WORKER_HOST" "$UP_TIKV_WORKER_PORT" "Upstream TiKV-Worker is not ready yet"
 check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstream TiKV-Worker is not ready yet"
 
-# BUG tenfyzhong 2025-10-14 16:07:22 There maybe a bug when deploying upstream
-# system tidb immediately after the deployment of tikv and pd. When tidb inserts into
-# `mysql.bind_info`, an error occurs: Unknown database 'mysql'
-sleep 1
-
 ####################start TiDB####################
 touch "$OUT_DIR/upstream-tidb-system.toml"
 if [ -f "$tidb_config" ]; then
@@ -344,7 +343,6 @@ cat >>"$OUT_DIR/upstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
 enable-telemetry = false
 mem-quota-query = 671088640
-new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
@@ -374,7 +372,6 @@ cat >>"$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
 enable-telemetry = false
 mem-quota-query = 671088640
-new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
@@ -404,7 +401,6 @@ cat >>"$OUT_DIR/downstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
 enable-telemetry = false
 mem-quota-query = 671088640
-new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true
@@ -434,7 +430,6 @@ cat >>"$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
 enable-telemetry = false
 mem-quota-query = 671088640
-new_collations_enabled_on_first_bootstrap = true
 run-auto-analyze = false
 server-memory-quota = 2684354560
 analyze-always-skip-wide-columns = true

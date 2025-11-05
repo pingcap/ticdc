@@ -149,9 +149,9 @@ storage_groups=(
 	# G04
 	'ddl_for_split_tables_with_random_move_table'
 	# G05
-	'move_table drop_many_tables checkpoint_race_ddl_crash'
+	'move_table drop_many_tables'
 	# G06
-	'cdc default_value'
+	'cdc default_value checkpoint_race_ddl_crash'
 	# G07
 	'merge_table resolve_lock force_replicate_table'
 	# G08

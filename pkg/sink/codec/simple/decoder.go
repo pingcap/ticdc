@@ -507,8 +507,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.FinishedTs = msg.CommitTs
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
-	result.TableID = tableInfo.TableName.TableID
-	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, result.TableID)
+	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableInfo.TableName.TableID)
 
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()

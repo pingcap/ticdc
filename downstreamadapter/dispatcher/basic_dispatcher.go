@@ -262,8 +262,13 @@ func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
 	if d.componentStatus.Get() == heartbeatpb.ComponentState_Initializing {
 		switch event.GetType() {
-		case commonEvent.TypeResolvedEvent, commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent, commonEvent.TypeSyncPointEvent:
+		case commonEvent.TypeResolvedEvent, commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent:
 			if event.GetCommitTs() > d.startTs {
+				return true
+			}
+		// the first syncpoint event can be same as startTs
+		case commonEvent.TypeSyncPointEvent:
+			if event.GetCommitTs() >= d.startTs {
 				return true
 			}
 		}
@@ -458,10 +463,14 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 			}
 
+			tableID := int64(0)
+			if ddl.TableInfo != nil {
+				tableID = ddl.TableInfo.TableName.TableID
+			}
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
-				zap.Int64("table", ddl.TableID),
+				zap.Int64("table", tableID),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			ddl.AddPostFlushFunc(func() {

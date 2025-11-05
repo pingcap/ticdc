@@ -16,6 +16,7 @@ package eventstore
 import (
 	"encoding/binary"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"go.uber.org/zap"
@@ -120,4 +121,18 @@ func getDMLOrder(rowKV *common.RawKVEntry) DMLOrder {
 		return DMLOrderUpdate
 	}
 	return DMLOrderInsert
+}
+
+func deleteDataRange(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
+	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
+	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+
+	return db.DeleteRange(start, end, pebble.NoSync)
+}
+
+func compactDataRange(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
+	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
+	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+
+	return db.Compact(start, end, false)
 }

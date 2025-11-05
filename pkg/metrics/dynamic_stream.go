@@ -21,40 +21,33 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "memory_usage",
-		}, []string{"component", "type", "area", "mode"})
+		}, []string{"module", "type", getKeyspaceLabel(), "area"})
 	DynamicStreamEventChanSize = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "event_chan_size",
-		}, []string{"component", "mode"})
+		}, []string{"module"})
 	DynamicStreamPendingQueueLen = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "pending_queue_len",
-		}, []string{"component", "mode"})
+		}, []string{"module"})
 	DynamicStreamAddPathNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "add_path_num",
 			Help:      "The number of add path command",
-		}, []string{"component"})
+		}, []string{"module"})
 	DynamicStreamRemovePathNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "remove_path_num",
 			Help:      "The number of remove path command",
-		}, []string{"component"})
-	DynamicStreamArrangeStreamNum = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "dynamic_stream",
-			Name:      "arrange_stream_num",
-			Help:      "The number of arrange stream command",
-		}, []string{"component", "type"})
+		}, []string{"module"})
 )
 
 func initDynamicStreamMetrics(registry *prometheus.Registry) {
@@ -63,5 +56,4 @@ func initDynamicStreamMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DynamicStreamPendingQueueLen)
 	registry.MustRegister(DynamicStreamAddPathNum)
 	registry.MustRegister(DynamicStreamRemovePathNum)
-	registry.MustRegister(DynamicStreamArrangeStreamNum)
 }

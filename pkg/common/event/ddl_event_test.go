@@ -35,7 +35,6 @@ func TestDDLEvent(t *testing.T) {
 		DispatcherID: common.NewDispatcherID(),
 		Type:         byte(ddlJob.Type),
 		SchemaID:     ddlJob.SchemaID,
-		TableID:      ddlJob.TableID,
 		SchemaName:   ddlJob.SchemaName,
 		TableName:    ddlJob.TableName,
 		Query:        ddlJob.Query,
@@ -58,7 +57,6 @@ func TestDDLEvent(t *testing.T) {
 	require.Equal(t, ddlEvent.DispatcherID, reverseEvent.DispatcherID)
 	require.Equal(t, ddlEvent.Type, reverseEvent.Type)
 	require.Equal(t, ddlEvent.SchemaID, reverseEvent.SchemaID)
-	require.Equal(t, ddlEvent.TableID, reverseEvent.TableID)
 	require.Equal(t, ddlEvent.SchemaName, reverseEvent.SchemaName)
 	require.Equal(t, ddlEvent.TableName, reverseEvent.TableName)
 	require.Equal(t, ddlEvent.Query, reverseEvent.Query)

@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonTable "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -621,6 +622,7 @@ func TestCreateTableDDL(t *testing.T) {
 		Type:       byte(job.Type),
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
+		TableInfo:  commonTable.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
 		FinishedTs: 1,
 	}
 

@@ -15,3 +15,5 @@ while ! nc -z "$host" "$port"; do
 		exit 1
 	fi
 done
+
+echo "check $host:$port available pass"
