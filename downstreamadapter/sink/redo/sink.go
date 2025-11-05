@@ -134,11 +134,12 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				break
 			}
 			s.logBuffer.Push(&commonEvent.RedoRowEvent{
-				StartTs:   event.StartTs,
-				CommitTs:  event.CommitTs,
-				Event:     row,
-				TableInfo: event.TableInfo,
-				Callback:  event.PostFlush,
+				StartTs:         event.StartTs,
+				CommitTs:        event.CommitTs,
+				Event:           row,
+				PhysicalTableID: event.PhysicalTableID,
+				TableInfo:       event.TableInfo,
+				Callback:        event.PostFlush,
 			})
 		}
 		return int(event.Len()), event.GetSize(), nil
