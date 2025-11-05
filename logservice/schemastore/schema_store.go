@@ -471,7 +471,6 @@ func (s *schemaStore) RegisterKeyspace(
 	if err != nil {
 		return err
 	}
-
 	store := &keyspaceSchemaStore{
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
