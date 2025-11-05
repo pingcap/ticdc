@@ -79,6 +79,25 @@ func (z *DDLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 					return
 				}
 			}
+		case "need_added_tables":
+			var zb0002 uint32
+			zb0002, err = dc.ReadArrayHeader()
+			if err != nil {
+				err = msgp.WrapError(err, "NeedAddedTables")
+				return
+			}
+			if cap(z.NeedAddedTables) >= int(zb0002) {
+				z.NeedAddedTables = (z.NeedAddedTables)[:zb0002]
+			} else {
+				z.NeedAddedTables = make([]int64, zb0002)
+			}
+			for za0001 := range z.NeedAddedTables {
+				z.NeedAddedTables[za0001], err = dc.ReadInt64()
+				if err != nil {
+					err = msgp.WrapError(err, "NeedAddedTables", za0001)
+					return
+				}
+			}
 		default:
 			err = dc.Skip()
 			if err != nil {
@@ -92,9 +111,9 @@ func (z *DDLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *DDLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 5
+	// map header, size 6
 	// write "start-ts"
-	err = en.Append(0x85, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
+	err = en.Append(0x86, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
 	if err != nil {
 		return
 	}
@@ -157,15 +176,32 @@ func (z *DDLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
 			return
 		}
 	}
+	// write "need_added_tables"
+	err = en.Append(0xb1, 0x6e, 0x65, 0x65, 0x64, 0x5f, 0x61, 0x64, 0x64, 0x65, 0x64, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x73)
+	if err != nil {
+		return
+	}
+	err = en.WriteArrayHeader(uint32(len(z.NeedAddedTables)))
+	if err != nil {
+		err = msgp.WrapError(err, "NeedAddedTables")
+		return
+	}
+	for za0001 := range z.NeedAddedTables {
+		err = en.WriteInt64(z.NeedAddedTables[za0001])
+		if err != nil {
+			err = msgp.WrapError(err, "NeedAddedTables", za0001)
+			return
+		}
+	}
 	return
 }
 
 // MarshalMsg implements msgp.Marshaler
 func (z *DDLEventInRedoLog) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 5
+	// map header, size 6
 	// string "start-ts"
-	o = append(o, 0x85, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
+	o = append(o, 0x86, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
 	o = msgp.AppendUint64(o, z.StartTs)
 	// string "commit-ts"
 	o = append(o, 0xa9, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2d, 0x74, 0x73)
@@ -194,6 +230,12 @@ func (z *DDLEventInRedoLog) MarshalMsg(b []byte) (o []byte, err error) {
 			err = msgp.WrapError(err, "NeedDroppedTables")
 			return
 		}
+	}
+	// string "need_added_tables"
+	o = append(o, 0xb1, 0x6e, 0x65, 0x65, 0x64, 0x5f, 0x61, 0x64, 0x64, 0x65, 0x64, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x73)
+	o = msgp.AppendArrayHeader(o, uint32(len(z.NeedAddedTables)))
+	for za0001 := range z.NeedAddedTables {
+		o = msgp.AppendInt64(o, z.NeedAddedTables[za0001])
 	}
 	return
 }
@@ -268,6 +310,25 @@ func (z *DDLEventInRedoLog) UnmarshalMsg(bts []byte) (o []byte, err error) {
 					return
 				}
 			}
+		case "need_added_tables":
+			var zb0002 uint32
+			zb0002, bts, err = msgp.ReadArrayHeaderBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "NeedAddedTables")
+				return
+			}
+			if cap(z.NeedAddedTables) >= int(zb0002) {
+				z.NeedAddedTables = (z.NeedAddedTables)[:zb0002]
+			} else {
+				z.NeedAddedTables = make([]int64, zb0002)
+			}
+			for za0001 := range z.NeedAddedTables {
+				z.NeedAddedTables[za0001], bts, err = msgp.ReadInt64Bytes(bts)
+				if err != nil {
+					err = msgp.WrapError(err, "NeedAddedTables", za0001)
+					return
+				}
+			}
 		default:
 			bts, err = msgp.Skip(bts)
 			if err != nil {
@@ -294,6 +355,7 @@ func (z *DDLEventInRedoLog) Msgsize() (s int) {
 	} else {
 		s += z.NeedDroppedTables.Msgsize()
 	}
+	s += 18 + msgp.ArrayHeaderSize + (len(z.NeedAddedTables) * (msgp.Int64Size))
 	return
 }
 

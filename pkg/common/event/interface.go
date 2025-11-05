@@ -162,12 +162,11 @@ func ToTablesPB(tables []Table) []*heartbeatpb.Table {
 	return res
 }
 
-//msgp:ignore Table
 type Table struct {
-	SchemaID  int64
-	TableID   int64
-	Splitable bool // whether the table is eligible for split
-	*SchemaTableName
+	SchemaID         int64 `msg:"-"`
+	TableID          int64 `msg:"table"`
+	Splitable        bool  `msg:"-"` // whether the table is eligible for split
+	*SchemaTableName `msg:"-"`
 }
 
 //msgp:ignore SchemaIDChange

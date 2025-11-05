@@ -78,6 +78,7 @@ type DDLEventInRedoLog struct {
 	Query             string            `msg:"query"`
 	BlockTables       *InfluencedTables `msg:"block-tables"`
 	NeedDroppedTables *InfluencedTables `msg:"need-dropped-tables"`
+	NeedAddedTables   []int64           `msg:"need_added_tables"`
 }
 
 // RedoColumn is for column meta
@@ -194,6 +195,10 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
+	needAddedTables := make([]int64, 0)
+	for _, table := range d.NeedAddedTables {
+		needAddedTables = append(needAddedTables, table.TableID)
+	}
 	redoLog := &RedoLog{
 		RedoDDL: &RedoDDLEvent{
 			DDL: &DDLEventInRedoLog{
@@ -202,6 +207,7 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 				Query:             d.Query,
 				BlockTables:       d.BlockedTables,
 				NeedDroppedTables: d.NeedDroppedTables,
+				NeedAddedTables:   needAddedTables,
 			},
 			Type: d.Type,
 		},

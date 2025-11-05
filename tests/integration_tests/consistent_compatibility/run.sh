@@ -47,6 +47,9 @@ function run() {
 	check_table_exists "consistent_compatibility.usertable2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_compatibility.usertable3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_compatibility.usertable_bak" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
+	for i in {1..100}; do
+		check_table_exists "consistent_replicate_ddl.table_$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
+	done
 	sleep 5
 	cleanup_process $CDC_BINARY
 	# Inject the failpoint to prevent sink execution, but the global resolved can be moved forward.
@@ -82,6 +85,14 @@ function run() {
 	run_sql "ALTER TABLE consistent_compatibility.usertable3_1 MODIFY COLUMN FIELD1 varchar(100)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO consistent_compatibility.usertable3_1 SELECT * FROM consistent_compatibility.usertable limit 31" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
+	# case 4:
+	# rename multiple tables
+	for i in {1..100}; do
+		run_sql "INSERT INTO consistent_replicate_ddl.table_$i (data) VALUES ('insert_$(date +%s)_${RANDOM}'"
+		new_table_name="table_$(($i + 500))"
+		run_sql "RENAME TABLE consistent_replicate_ddl.table_$i TO consistent_replicate_ddl.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	done
+	
 	run_sql "CREATE table consistent_compatibility.check1(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# to ensure row changed events have been replicated to TiCDC

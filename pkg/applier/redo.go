@@ -15,6 +15,7 @@ package applier
 
 import (
 	"context"
+	"math"
 	"net/url"
 	"time"
 
@@ -66,16 +67,18 @@ type RedoApplier struct {
 	tableDDLTs      map[commonType.TableID]ddlTs
 	appliedLogCount uint64
 
-	errCh chan error
+	errCh            chan error
+	needRecoveryInfo bool
 }
 
 // NewRedoApplier creates a new RedoApplier instance
 func NewRedoApplier(cfg *RedoApplierConfig) *RedoApplier {
 	return &RedoApplier{
-		cfg:         cfg,
-		errCh:       make(chan error, 1024),
-		tableDDLTs:  make(map[commonType.TableID]ddlTs),
-		eventsGroup: make(map[commonType.TableID]*eventsGroup),
+		cfg:              cfg,
+		errCh:            make(chan error, 1024),
+		tableDDLTs:       make(map[commonType.TableID]ddlTs),
+		eventsGroup:      make(map[commonType.TableID]*eventsGroup),
+		needRecoveryInfo: true,
 	}
 }
 
@@ -99,6 +102,12 @@ func (rac *RedoApplierConfig) toLogReaderConfig() (string, *reader.LogReaderConf
 
 func (ra *RedoApplier) getBlockTableIDs(blockTables *commonEvent.InfluencedTables) map[int64]struct{} {
 	tableIDs := make(map[int64]struct{})
+	if blockTables == nil {
+		for tableID := range ra.eventsGroup {
+			tableIDs[tableID] = struct{}{}
+		}
+		return tableIDs
+	}
 	switch blockTables.InfluenceType {
 	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
 		for tableID := range ra.eventsGroup {
@@ -116,29 +125,40 @@ func (ra *RedoApplier) getBlockTableIDs(blockTables *commonEvent.InfluencedTable
 	return tableIDs
 }
 
-func (ra *RedoApplier) getTableDDLTs(tableID int64) ddlTs {
+func (ra *RedoApplier) getTableDDLTs(checkpointTs uint64, tableIDs ...int64) ddlTs {
+	if !ra.needRecoveryInfo {
+		return ddlTs{ts: int64(checkpointTs)}
+	}
 	// we have to refactor redo apply to tolerate DDL execution errors.
 	// Besides, we have to query ddl_ts to get the correct checkpointTs to avoid inconsistency.
-	currentTs, ok := ra.tableDDLTs[tableID]
-	if !ok {
-		newStartTsList, _, skipDMLAsStartTsList, err := ra.mysqlSink.GetTableRecoveryInfo([]int64{tableID}, []int64{-1}, false)
-		if err != nil || len(newStartTsList) < 1 {
-			log.Panic("get startTs list failed", zap.Any("tableID", tableID), zap.Any("newStartTsList", newStartTsList), zap.Error(err))
+	minTs := ddlTs{ts: math.MaxInt64}
+	for _, tableID := range tableIDs {
+		if tableID == 0 {
+			continue
 		}
-		currentTs = ddlTs{
-			ts:      newStartTsList[0],
-			skipDML: skipDMLAsStartTsList[0],
+		currentTs, ok := ra.tableDDLTs[tableID]
+		if !ok {
+			newStartTsList, _, skipDMLAsStartTsList, err := ra.mysqlSink.GetTableRecoveryInfo([]int64{tableID}, []int64{-1}, false)
+			if err != nil || len(newStartTsList) < 1 {
+				log.Panic("get startTs list failed", zap.Any("tableID", tableID), zap.Any("newStartTsList", newStartTsList), zap.Error(err))
+			}
+			currentTs = ddlTs{
+				ts:      newStartTsList[0],
+				skipDML: skipDMLAsStartTsList[0],
+			}
+			log.Info("calculate real startTs for redo apply",
+				zap.Stringer("changefeedID", ra.rd.GetChangefeedID()),
+				zap.Int64("tableID", tableID),
+				zap.Any("realStartTs", newStartTsList[0]),
+				zap.Any("skipDML", skipDMLAsStartTsList[0]),
+			)
+			ra.tableDDLTs[tableID] = currentTs
 		}
-		log.Info("calculate real startTs for redo apply",
-			zap.Stringer("changefeedID", ra.rd.GetChangefeedID()),
-			zap.Int64("tableID", tableID),
-			zap.Any("realStartTs", newStartTsList[0]),
-			zap.Any("skipDML", skipDMLAsStartTsList[0]),
-		)
-		ra.tableDDLTs[tableID] = currentTs
+		if minTs.ts > currentTs.ts {
+			minTs = currentTs
+		}
 	}
-
-	return currentTs
+	return minTs
 }
 
 func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
@@ -216,7 +236,11 @@ func (ra *RedoApplier) applyDDL(
 			return true
 		}
 
-		ddlTs := ra.getTableDDLTs(ddl.TableName.TableID)
+		var tableIDs []int64
+		if ddl.DDL.BlockTables != nil {
+			tableIDs = append(ddl.DDL.BlockTables.TableIDs, ddl.DDL.NeedAddedTables...)
+		}
+		ddlTs := ra.getTableDDLTs(checkpointTs, tableIDs...)
 		ignore := false
 		// some ddls may delete record from ddl-ts table and the ddlTs is 0 which means the ddl has replicated the downstream
 		// we need to ignore these ddls
@@ -247,7 +271,7 @@ func (ra *RedoApplier) applyDDL(
 			}
 			return true
 		}
-		// if ddl.DDL.CommitTs == max(uint64(ddlTs.ts), checkpointTs) {
+		// if ddl.DDL.CommitTs == uint64(ddlTs.ts) {
 		// 	if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
 		// 		log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
 		// 		return true
@@ -275,7 +299,7 @@ func (ra *RedoApplier) applyDDL(
 }
 
 func (ra *RedoApplier) applyRow(
-	row *commonEvent.RedoDMLEvent, checkpointTs commonType.Ts,
+	row *commonEvent.RedoDMLEvent, checkpointTs uint64,
 ) error {
 	tableID := row.Row.Table.TableID
 	if _, ok := ra.eventsGroup[tableID]; !ok {
@@ -289,7 +313,7 @@ func (ra *RedoApplier) applyRow(
 			zap.Any("resolvedTs", ra.eventsGroup[tableID].highWatermark))
 	}
 
-	ddlTs := ra.getTableDDLTs(tableID)
+	ddlTs := ra.getTableDDLTs(checkpointTs, tableID)
 	if ddlTs.ts >= int64(row.Row.CommitTs) {
 		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", ddlTs.ts), zap.Any("row", row))
 		return nil
@@ -385,6 +409,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	query := sinkURI.Query()
 	query.Set("batch-dml-enable", "false")
 	if ra.rd.GetVersion() != misc.Version {
+		ra.needRecoveryInfo = false
 		query.Set("enable-ddl-ts", "false")
 		log.Warn("The redo log version is different the current version, enable-ddl-ts will be set to false", zap.Any("logVersion", ra.rd.GetVersion()), zap.Any("currentVersion", misc.Version))
 	}

@@ -42,9 +42,9 @@ mysql_groups=(
 	# G05
 	'ddl_for_split_tables_with_merge_and_split random_drop_message'
 	# G06
-	'ddl_for_split_tables_with_random_merge_and_split'
+	'complex_transaction ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'complex_transaction consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
+	'consistent_compatibility consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
 	# G08
 	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
 	# G09
