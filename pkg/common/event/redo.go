@@ -78,7 +78,7 @@ type DDLEventInRedoLog struct {
 	Query             string            `msg:"query"`
 	BlockTables       *InfluencedTables `msg:"block-tables"`
 	NeedDroppedTables *InfluencedTables `msg:"need-dropped-tables"`
-	NeedAddedTables   []int64           `msg:"need_added_tables"`
+	NeedAddedTables   []Table           `msg:"need_added_tables"`
 }
 
 // RedoColumn is for column meta
@@ -100,11 +100,12 @@ type RedoColumnValue struct {
 
 //msgp:ignore RedoRowEvent
 type RedoRowEvent struct {
-	StartTs   uint64
-	CommitTs  uint64
-	TableInfo *commonType.TableInfo
-	Event     RowChange
-	Callback  func()
+	StartTs         uint64
+	CommitTs        uint64
+	PhysicalTableID int64
+	TableInfo       *commonType.TableInfo
+	Event           RowChange
+	Callback        func()
 }
 
 const (
@@ -139,7 +140,12 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeRow,
 	}
 	if r.TableInfo != nil {
-		redoLog.RedoRow.Row.Table = &r.TableInfo.TableName
+		redoLog.RedoRow.Row.Table = &commonType.TableName{
+			Schema:      r.TableInfo.TableName.Schema,
+			Table:       r.TableInfo.TableName.Table,
+			TableID:     r.PhysicalTableID,
+			IsPartition: r.TableInfo.TableName.IsPartition,
+		}
 		redoLog.RedoRow.Row.IndexColumns = getIndexColumns(r.TableInfo)
 
 		columnCount := len(r.TableInfo.GetColumns())
@@ -195,10 +201,6 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
-	needAddedTables := make([]int64, 0)
-	for _, table := range d.NeedAddedTables {
-		needAddedTables = append(needAddedTables, table.TableID)
-	}
 	redoLog := &RedoLog{
 		RedoDDL: &RedoDDLEvent{
 			DDL: &DDLEventInRedoLog{
@@ -207,7 +209,7 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 				Query:             d.Query,
 				BlockTables:       d.BlockedTables,
 				NeedDroppedTables: d.NeedDroppedTables,
-				NeedAddedTables:   needAddedTables,
+				NeedAddedTables:   d.NeedAddedTables,
 			},
 			Type: d.Type,
 		},

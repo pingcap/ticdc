@@ -238,7 +238,10 @@ func (ra *RedoApplier) applyDDL(
 
 		var tableIDs []int64
 		if ddl.DDL.BlockTables != nil {
-			tableIDs = append(ddl.DDL.BlockTables.TableIDs, ddl.DDL.NeedAddedTables...)
+			tableIDs = ddl.DDL.BlockTables.TableIDs
+			for _, table := range ddl.DDL.NeedAddedTables {
+				tableIDs = append(tableIDs, table.TableID)
+			}
 		}
 		ddlTs := ra.getTableDDLTs(checkpointTs, tableIDs...)
 		ignore := false
@@ -252,6 +255,7 @@ func (ra *RedoApplier) applyDDL(
 			log.Warn("ignore DDL which commit ts is less than current ts", zap.Any("ddl", ddl), zap.Any("startTs", ddlTs.ts))
 			// Ignore the previous dml events, because the drop ddl has replicated the downstream
 			// DML + Drop Table: If the drop table ddl is ignored and the previous dmls should be replicated the downstream in the past.
+			// Truncate table + Drop table: if the drop table is not executed,
 			if ddl.DDL.NeedDroppedTables != nil {
 				dropTableIds := make([]int64, 0)
 				switch ddl.DDL.NeedDroppedTables.InfluenceType {

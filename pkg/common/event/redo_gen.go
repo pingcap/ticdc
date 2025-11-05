@@ -89,10 +89,10 @@ func (z *DDLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 			if cap(z.NeedAddedTables) >= int(zb0002) {
 				z.NeedAddedTables = (z.NeedAddedTables)[:zb0002]
 			} else {
-				z.NeedAddedTables = make([]int64, zb0002)
+				z.NeedAddedTables = make([]Table, zb0002)
 			}
 			for za0001 := range z.NeedAddedTables {
-				z.NeedAddedTables[za0001], err = dc.ReadInt64()
+				err = z.NeedAddedTables[za0001].DecodeMsg(dc)
 				if err != nil {
 					err = msgp.WrapError(err, "NeedAddedTables", za0001)
 					return
@@ -187,7 +187,7 @@ func (z *DDLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
 		return
 	}
 	for za0001 := range z.NeedAddedTables {
-		err = en.WriteInt64(z.NeedAddedTables[za0001])
+		err = z.NeedAddedTables[za0001].EncodeMsg(en)
 		if err != nil {
 			err = msgp.WrapError(err, "NeedAddedTables", za0001)
 			return
@@ -235,7 +235,11 @@ func (z *DDLEventInRedoLog) MarshalMsg(b []byte) (o []byte, err error) {
 	o = append(o, 0xb1, 0x6e, 0x65, 0x65, 0x64, 0x5f, 0x61, 0x64, 0x64, 0x65, 0x64, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x73)
 	o = msgp.AppendArrayHeader(o, uint32(len(z.NeedAddedTables)))
 	for za0001 := range z.NeedAddedTables {
-		o = msgp.AppendInt64(o, z.NeedAddedTables[za0001])
+		o, err = z.NeedAddedTables[za0001].MarshalMsg(o)
+		if err != nil {
+			err = msgp.WrapError(err, "NeedAddedTables", za0001)
+			return
+		}
 	}
 	return
 }
@@ -320,10 +324,10 @@ func (z *DDLEventInRedoLog) UnmarshalMsg(bts []byte) (o []byte, err error) {
 			if cap(z.NeedAddedTables) >= int(zb0002) {
 				z.NeedAddedTables = (z.NeedAddedTables)[:zb0002]
 			} else {
-				z.NeedAddedTables = make([]int64, zb0002)
+				z.NeedAddedTables = make([]Table, zb0002)
 			}
 			for za0001 := range z.NeedAddedTables {
-				z.NeedAddedTables[za0001], bts, err = msgp.ReadInt64Bytes(bts)
+				bts, err = z.NeedAddedTables[za0001].UnmarshalMsg(bts)
 				if err != nil {
 					err = msgp.WrapError(err, "NeedAddedTables", za0001)
 					return
@@ -355,7 +359,10 @@ func (z *DDLEventInRedoLog) Msgsize() (s int) {
 	} else {
 		s += z.NeedDroppedTables.Msgsize()
 	}
-	s += 18 + msgp.ArrayHeaderSize + (len(z.NeedAddedTables) * (msgp.Int64Size))
+	s += 18 + msgp.ArrayHeaderSize
+	for za0001 := range z.NeedAddedTables {
+		s += z.NeedAddedTables[za0001].Msgsize()
+	}
 	return
 }
 
