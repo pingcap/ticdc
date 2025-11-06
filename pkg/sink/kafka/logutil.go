@@ -14,6 +14,10 @@
 package kafka
 
 import (
+	"encoding/json"
+	"strconv"
+	"strings"
+
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
@@ -113,4 +117,44 @@ func BuildEventLogFields(keyspace, changefeed string, info *common.MessageLogInf
 	fields = append(fields, BuildDDLLogFields(info)...)
 	fields = append(fields, BuildCheckpointLogFields(info)...)
 	return fields
+}
+
+// BuildEventLogContext builds a textual representation of event info.
+func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogInfo) string {
+	var sb strings.Builder
+	sb.WriteString("keyspace=")
+	sb.WriteString(keyspace)
+	sb.WriteString(", changefeed=")
+	sb.WriteString(changefeed)
+	sb.WriteString(", eventType=")
+	sb.WriteString(DetermineEventType(info))
+
+	if info == nil {
+		return sb.String()
+	}
+
+	if len(info.Rows) > 0 {
+		if data, err := json.Marshal(info.Rows); err == nil {
+			sb.WriteString(", dmlInfo=")
+			sb.Write(data)
+		}
+	}
+
+	if info.DDL != nil {
+		if info.DDL.Query != "" {
+			sb.WriteString(", ddlQuery=")
+			sb.WriteString(strconv.Quote(info.DDL.Query))
+		}
+		if info.DDL.CommitTs != 0 {
+			sb.WriteString(", ddlCommitTs=")
+			sb.WriteString(strconv.FormatUint(info.DDL.CommitTs, 10))
+		}
+	}
+
+	if info.Checkpoint != nil && info.Checkpoint.CommitTs != 0 {
+		sb.WriteString(", checkpointTs=")
+		sb.WriteString(strconv.FormatUint(info.Checkpoint.CommitTs, 10))
+	}
+
+	return sb.String()
 }
