@@ -464,7 +464,8 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("changefeed", m.id.Name()),
-			zap.String("messageType", msg.Type.String()))
+			zap.String("messageType", msg.Type.String()),
+			zap.Any("message", msg.Message))
 	}
 }
 
