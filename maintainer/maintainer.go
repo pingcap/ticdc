@@ -462,7 +462,7 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		m.onCheckpointTsPersisted(req)
 	default:
-		log.Panic("unexpected message type",
+		log.Warn("unexpected message type, ignore it",
 			zap.String("changefeed", m.id.Name()),
 			zap.String("messageType", msg.Type.String()))
 	}
