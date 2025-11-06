@@ -126,16 +126,10 @@ func (ra *RedoApplier) getBlockTableIDs(blockTables *commonEvent.InfluencedTable
 }
 
 func (ra *RedoApplier) getTableDDLTs(checkpointTs uint64, tableIDs ...int64) ddlTs {
-	if !ra.needRecoveryInfo {
-		return ddlTs{ts: int64(checkpointTs)}
-	}
 	// we have to refactor redo apply to tolerate DDL execution errors.
 	// Besides, we have to query ddl_ts to get the correct checkpointTs to avoid inconsistency.
 	minTs := ddlTs{ts: math.MaxInt64}
 	for _, tableID := range tableIDs {
-		if tableID == 0 {
-			continue
-		}
 		currentTs, ok := ra.tableDDLTs[tableID]
 		if !ok {
 			newStartTsList, _, skipDMLAsStartTsList, err := ra.mysqlSink.GetTableRecoveryInfo([]int64{tableID}, []int64{-1}, false)
@@ -236,26 +230,47 @@ func (ra *RedoApplier) applyDDL(
 			return true
 		}
 
-		var tableIDs []int64
-		if ddl.DDL.BlockTables != nil {
-			tableIDs = ddl.DDL.BlockTables.TableIDs
-			for _, table := range ddl.DDL.NeedAddedTables {
-				tableIDs = append(tableIDs, table.TableID)
+		var tableDDLTs ddlTs
+		if !ra.needRecoveryInfo {
+			tableDDLTs = ddlTs{ts: int64(checkpointTs)}
+		} else {
+			// we get start-ts from different table id according the ddl type
+			switch timodel.ActionType(ddl.Type) {
+			case timodel.ActionAddColumn, timodel.ActionDropColumn,
+				timodel.ActionAddIndex, timodel.ActionDropIndex,
+				timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
+				timodel.ActionModifyColumn, timodel.ActionRebaseAutoID, timodel.ActionSetDefaultValue,
+				timodel.ActionShardRowID, timodel.ActionModifyTableComment, timodel.ActionRenameIndex,
+				timodel.ActionModifyTableCharsetAndCollate, timodel.ActionLockTable, timodel.ActionUnlockTable,
+				timodel.ActionRepairTable, timodel.ActionSetTiFlashReplica, timodel.ActionUpdateTiFlashReplicaStatus,
+				timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
+				timodel.ActionAddColumns, timodel.ActionDropColumns,
+				timodel.ActionModifyTableAutoIDCache, timodel.ActionRebaseAutoRandomBase, timodel.ActionAlterIndexVisibility,
+				timodel.ActionAddCheckConstraint, timodel.ActionDropCheckConstraint, timodel.ActionAlterCheckConstraint,
+				timodel.ActionAlterTableAttributes, timodel.ActionAlterCacheTable, timodel.ActionAlterNoCacheTable,
+				timodel.ActionMultiSchemaChange, timodel.ActionAlterTTLInfo, timodel.ActionAlterTTLRemove:
+				tableDDLTs = ra.getTableDDLTs(checkpointTs, ddl.DDL.BlockTables.TableIDs...)
+			case timodel.ActionExchangeTablePartition, timodel.ActionReorganizePartition,
+				timodel.ActionAddTablePartition, timodel.ActionDropTablePartition, timodel.ActionTruncateTablePartition,
+				timodel.ActionAlterTablePartitionAttributes, timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning,
+				timodel.ActionCreateView, timodel.ActionDropView,
+				timodel.ActionFlashbackCluster, timodel.ActionModifySchemaCharsetAndCollate,
+				timodel.ActionCreatePlacementPolicy, timodel.ActionAlterPlacementPolicy, timodel.ActionDropPlacementPolicy,
+				timodel.ActionCreateSchema, timodel.ActionDropSchema,
+				timodel.ActionCreateTable, timodel.ActionDropTable, timodel.ActionTruncateTable,
+				timodel.ActionRecoverTable, timodel.ActionAlterTablePlacement, timodel.ActionModifySchemaDefaultPlacement,
+				timodel.ActionCreateTables, timodel.ActionRenameTables, timodel.ActionRenameTable,
+				timodel.ActionAlterTablePartitionPlacement, timodel.ActionRecoverSchema:
+				tableDDLTs = ra.getTableDDLTs(checkpointTs, commonType.DDLSpanTableID)
+			default:
+				log.Warn("ignore unsupport DDL", zap.Any("ddl", ddl), zap.Any("type", ddl.Type))
+				return true
 			}
 		}
-		ddlTs := ra.getTableDDLTs(checkpointTs, tableIDs...)
-		ignore := false
-		// some ddls may delete record from ddl-ts table and the ddlTs is 0 which means the ddl has replicated the downstream
-		// we need to ignore these ddls
-		switch timodel.ActionType(ddl.Type) {
-		case timodel.ActionDropTable, timodel.ActionDropTablePartition:
-			ignore = ddlTs.ts == 0
-		}
-		if ignore || ddlTs.ts >= int64(ddl.DDL.CommitTs) {
-			log.Warn("ignore DDL which commit ts is less than current ts", zap.Any("ddl", ddl), zap.Any("startTs", ddlTs.ts))
+		if tableDDLTs.ts >= int64(ddl.DDL.CommitTs) {
+			log.Warn("ignore DDL which commit ts is less than current ts", zap.Any("ddl", ddl), zap.Any("startTs", tableDDLTs.ts))
 			// Ignore the previous dml events, because the drop ddl has replicated the downstream
 			// DML + Drop Table: If the drop table ddl is ignored and the previous dmls should be replicated the downstream in the past.
-			// Truncate table + Drop table: if the drop table is not executed,
 			if ddl.DDL.NeedDroppedTables != nil {
 				dropTableIds := make([]int64, 0)
 				switch ddl.DDL.NeedDroppedTables.InfluenceType {
@@ -275,12 +290,12 @@ func (ra *RedoApplier) applyDDL(
 			}
 			return true
 		}
-		// if ddl.DDL.CommitTs == uint64(ddlTs.ts) {
-		// 	if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
-		// 		log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
-		// 		return true
-		// 	}
-		// }
+		if ddl.DDL.CommitTs == uint64(tableDDLTs.ts) {
+			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
+				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
+				return true
+			}
+		}
 		return false
 	}
 	if shouldSkip() {
