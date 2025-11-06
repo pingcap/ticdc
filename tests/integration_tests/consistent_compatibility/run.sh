@@ -91,9 +91,9 @@ function run() {
 	# case 4:
 	# rename multiple tables
 	for i in {1..100}; do
-		run_sql "INSERT INTO consistent_replicate_ddl.table_$i (data) VALUES ('insert_$(date +%s)_${RANDOM}'"
+		run_sql "INSERT INTO consistent_compatibility.table_$i (data) VALUES ('insert_$(date +%s)_${RANDOM}'"
 		new_table_name="table_$(($i + 500))"
-		run_sql "RENAME TABLE consistent_replicate_ddl.table_$i TO consistent_replicate_ddl.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		run_sql "RENAME TABLE consistent_compatibility.table_$i TO consistent_compatibility.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
 
 	run_sql "CREATE table consistent_compatibility.check1(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
