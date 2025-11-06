@@ -44,14 +44,14 @@ function run() {
 	run_sql "CREATE TABLE consistent_compatibility.usertable3 like consistent_compatibility.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE consistent_compatibility.usertable_bak like consistent_compatibility.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	for i in {1..100}; do
-		run_sql "CREATE TABLE IF NOT EXISTS consistent_replicate_ddl.table_$i (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		run_sql "CREATE TABLE IF NOT EXISTS consistent_compatibility.table_$i (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
 	check_table_exists "consistent_compatibility.usertable1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "consistent_compatibility.usertable2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_compatibility.usertable3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_compatibility.usertable_bak" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	for i in {1..100}; do
-		check_table_exists "consistent_replicate_ddl.table_$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
+		check_table_exists "consistent_compatibility.table_$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	done
 	sleep 5
 	cleanup_process $CDC_BINARY

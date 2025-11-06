@@ -13,7 +13,7 @@ check-struct-only = false
 
     target-instance = "mysql"
 
-    target-check-tables = ["consistent_compatibility.usertable*","consistent_compatibility.check*","consistent_replicate_ddl.table*"]
+    target-check-tables = ["consistent_compatibility.usertable*","consistent_compatibility.check*","consistent_compatibility.table*"]
 
 [data-sources]
 [data-sources.tidb]
