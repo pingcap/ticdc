@@ -339,6 +339,7 @@ func (ra *RedoApplier) applyRow(
 	}
 	if ddlTs.skipDML && int64(row.Row.CommitTs)-1 == ddlTs.ts {
 		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", ddlTs.ts), zap.Any("row", row))
+		return nil
 	}
 
 	ra.eventsGroup[tableID].append(row.ToDMLEvent())
