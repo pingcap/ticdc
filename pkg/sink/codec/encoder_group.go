@@ -235,3 +235,7 @@ func (p *future) Ready(ctx context.Context) error {
 	}
 	return nil
 }
+
+func (p *future) Events() []*commonEvent.RowEvent {
+	return p.events
+}

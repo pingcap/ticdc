@@ -385,6 +385,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			if err = future.Ready(ctx); err != nil {
 				return err
 			}
+			attachMessageLogInfo(future.Messages, future.Events())
 			for _, message := range future.Messages {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
@@ -395,10 +396,13 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						future.Key.Topic,
 						future.Key.Partition,
 						message); err != nil {
-						log.Error("kafka sink send message failed",
+						fields := []zap.Field{
 							zap.String("keyspace", s.changefeedID.Keyspace()),
 							zap.String("changefeed", s.changefeedID.Name()),
-							zap.Error(err))
+						}
+						fields = append(fields, kafka.BuildDMLLogFields(message.LogInfo)...)
+						fields = append(fields, zap.Error(err))
+						log.Error("kafka sink send message failed", fields...)
 						return 0, 0, err
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil

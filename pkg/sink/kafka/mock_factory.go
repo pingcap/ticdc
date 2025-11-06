@@ -133,9 +133,15 @@ func (p *MockSaramaAsyncProducer) AsyncRunCallback(
 			return errors.Trace(err)
 		case ack := <-p.AsyncProducer.Successes():
 			if ack != nil {
-				callback := ack.Metadata.(func())
-				if callback != nil {
-					callback()
+				switch meta := ack.Metadata.(type) {
+				case *messageMetadata:
+					if meta != nil && meta.callback != nil {
+						meta.callback()
+					}
+				case func():
+					if meta != nil {
+						meta()
+					}
 				}
 			}
 		case err := <-p.AsyncProducer.Errors():
@@ -154,12 +160,16 @@ func (p *MockSaramaAsyncProducer) AsyncRunCallback(
 
 // AsyncSend implement the AsyncProducer interface.
 func (p *MockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
+	meta := &messageMetadata{
+		callback: message.Callback,
+		message:  message,
+	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,
 		Key:       sarama.StringEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
-		Metadata:  message.Callback,
+		Metadata:  meta,
 	}
 	select {
 	case <-ctx.Done():

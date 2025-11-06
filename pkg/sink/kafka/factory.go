@@ -127,6 +127,44 @@ func (p *saramaSyncProducer) SendMessages(
 		}
 	}
 	err := p.producer.SendMessages(msgs)
+	if err != nil {
+		if prodErrs, ok := err.(sarama.ProducerErrors); ok {
+			for _, pErr := range prodErrs {
+				keyBytes, valueBytes, keyErr, valueErr := encodeProducerMessageKV(pErr.Msg)
+				if keyErr != nil {
+					log.Warn("failed to decode kafka batch message key from producer error",
+						zap.String("changefeed", p.id.Name()),
+						zap.String("keyspace", p.id.Keyspace()),
+						zap.Error(keyErr))
+				}
+				if valueErr != nil {
+					log.Warn("failed to decode kafka batch message value from producer error",
+						zap.String("changefeed", p.id.Name()),
+						zap.String("keyspace", p.id.Keyspace()),
+						zap.Error(valueErr))
+				}
+				fields := []zap.Field{
+					zap.String("keyspace", p.id.Keyspace()),
+					zap.String("changefeed", p.id.Name()),
+					zap.ByteString("key", keyBytes),
+					zap.ByteString("value", valueBytes),
+				}
+				fields = append(fields, BuildDMLLogFields(extractLogInfo(pErr.Msg))...)
+				fields = append(fields, zap.Error(pErr.Err))
+				log.Error("failed to send kafka messages in batch", fields...)
+			}
+		} else {
+			fields := []zap.Field{
+				zap.String("keyspace", p.id.Keyspace()),
+				zap.String("changefeed", p.id.Name()),
+				zap.ByteString("key", message.Key),
+				zap.ByteString("value", message.Value),
+			}
+			fields = append(fields, BuildDMLLogFields(message.LogInfo)...)
+			fields = append(fields, zap.Error(err))
+			log.Error("failed to send kafka messages in batch", fields...)
+		}
+	}
 	return cerror.WrapError(cerror.ErrKafkaSendMessage, err)
 }
 
@@ -173,6 +211,11 @@ type saramaAsyncProducer struct {
 
 	closed      *atomic.Bool
 	failpointCh chan error
+}
+
+type messageMetadata struct {
+	callback func()
+	message  *common.Message
 }
 
 func (p *saramaAsyncProducer) Close() {
@@ -245,9 +288,15 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			return errors.Trace(err)
 		case ack := <-p.producer.Successes():
 			if ack != nil {
-				callback := ack.Metadata.(func())
-				if callback != nil {
-					callback()
+				switch meta := ack.Metadata.(type) {
+				case *messageMetadata:
+					if meta != nil && meta.callback != nil {
+						meta.callback()
+					}
+				case func():
+					if meta != nil {
+						meta()
+					}
 				}
 			}
 		case err := <-p.producer.Errors():
@@ -259,6 +308,28 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
+			keyBytes, valueBytes, keyErr, valueErr := encodeProducerMessageKV(err.Msg)
+			if keyErr != nil {
+				log.Warn("failed to decode kafka message key from producer error",
+					zap.String("keyspace", p.changefeedID.Keyspace()),
+					zap.String("changefeed", p.changefeedID.Name()),
+					zap.Error(keyErr))
+			}
+			if valueErr != nil {
+				log.Warn("failed to decode kafka message value from producer error",
+					zap.String("keyspace", p.changefeedID.Keyspace()),
+					zap.String("changefeed", p.changefeedID.Name()),
+					zap.Error(valueErr))
+			}
+			fields := []zap.Field{
+				zap.String("keyspace", p.changefeedID.Keyspace()),
+				zap.String("changefeed", p.changefeedID.Name()),
+				zap.ByteString("key", keyBytes),
+				zap.ByteString("value", valueBytes),
+			}
+			fields = append(fields, BuildDMLLogFields(extractLogInfo(err.Msg))...)
+			fields = append(fields, zap.Error(err.Err))
+			log.Info("kafka async producer send error", fields...)
 			return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
 		}
 	}
@@ -287,12 +358,16 @@ func (p *saramaAsyncProducer) AsyncSend(
 		p.failpointCh <- errors.New("kafka sink injected error")
 		failpoint.Return(nil)
 	})
+	meta := &messageMetadata{
+		callback: message.Callback,
+		message:  message,
+	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,
 		Key:       sarama.StringEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
-		Metadata:  message.Callback,
+		Metadata:  meta,
 	}
 	select {
 	case <-ctx.Done():
@@ -300,4 +375,28 @@ func (p *saramaAsyncProducer) AsyncSend(
 	case p.producer.Input() <- msg:
 	}
 	return nil
+}
+
+func encodeProducerMessageKV(msg *sarama.ProducerMessage) (keyBytes []byte, valueBytes []byte, keyErr error, valueErr error) {
+	if msg == nil {
+		return nil, nil, nil, nil
+	}
+	if msg.Key != nil {
+		keyBytes, keyErr = msg.Key.Encode()
+	}
+	if msg.Value != nil {
+		valueBytes, valueErr = msg.Value.Encode()
+	}
+	return
+}
+
+func extractLogInfo(msg *sarama.ProducerMessage) *common.MessageLogInfo {
+	if msg == nil {
+		return nil
+	}
+	meta, ok := msg.Metadata.(*messageMetadata)
+	if !ok || meta == nil || meta.message == nil {
+		return nil
+	}
+	return meta.message.LogInfo
 }
