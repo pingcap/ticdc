@@ -54,7 +54,9 @@ type Message struct {
 
 // MessageLogInfo captures diagnostic context of a sink message.
 type MessageLogInfo struct {
-	Rows []RowLogInfo
+	Rows       []RowLogInfo
+	DDL        *DDLLogInfo
+	Checkpoint *CheckpointLogInfo
 }
 
 // RowLogInfo represents the information of a single row in a sink message.
@@ -70,6 +72,17 @@ type RowLogInfo struct {
 type ColumnLogInfo struct {
 	Name  string
 	Value interface{}
+}
+
+// DDLLogInfo stores diagnostic information for DDL messages.
+type DDLLogInfo struct {
+	Query    string
+	CommitTs uint64
+}
+
+// CheckpointLogInfo stores diagnostic information for checkpoint messages.
+type CheckpointLogInfo struct {
+	CommitTs uint64
 }
 
 // Length returns the expected size of the Kafka message

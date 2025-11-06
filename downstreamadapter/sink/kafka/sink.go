@@ -396,11 +396,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						future.Key.Topic,
 						future.Key.Partition,
 						message); err != nil {
-						fields := []zap.Field{
-							zap.String("keyspace", s.changefeedID.Keyspace()),
-							zap.String("changefeed", s.changefeedID.Name()),
-						}
-						fields = append(fields, kafka.BuildDMLLogFields(message.LogInfo)...)
+						fields := kafka.BuildEventLogFields(s.changefeedID.Keyspace(), s.changefeedID.Name(), message.LogInfo)
 						fields = append(fields, zap.Error(err))
 						log.Error("kafka sink send message failed", fields...)
 						return 0, 0, err
@@ -427,6 +423,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 				zap.Stringer("changefeed", s.changefeedID))
 			continue
 		}
+		setDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
@@ -504,6 +501,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			if msg == nil {
 				continue
 			}
+			setCheckpointMessageLogInfo(msg, ts)
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,

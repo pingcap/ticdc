@@ -130,37 +130,13 @@ func (p *saramaSyncProducer) SendMessages(
 	if err != nil {
 		if prodErrs, ok := err.(sarama.ProducerErrors); ok {
 			for _, pErr := range prodErrs {
-				keyBytes, valueBytes, keyErr, valueErr := encodeProducerMessageKV(pErr.Msg)
-				if keyErr != nil {
-					log.Warn("failed to decode kafka batch message key from producer error",
-						zap.String("changefeed", p.id.Name()),
-						zap.String("keyspace", p.id.Keyspace()),
-						zap.Error(keyErr))
-				}
-				if valueErr != nil {
-					log.Warn("failed to decode kafka batch message value from producer error",
-						zap.String("changefeed", p.id.Name()),
-						zap.String("keyspace", p.id.Keyspace()),
-						zap.Error(valueErr))
-				}
-				fields := []zap.Field{
-					zap.String("keyspace", p.id.Keyspace()),
-					zap.String("changefeed", p.id.Name()),
-					zap.ByteString("key", keyBytes),
-					zap.ByteString("value", valueBytes),
-				}
-				fields = append(fields, BuildDMLLogFields(extractLogInfo(pErr.Msg))...)
+				logInfo := extractLogInfo(pErr.Msg)
+				fields := BuildEventLogFields(p.id.Keyspace(), p.id.Name(), logInfo)
 				fields = append(fields, zap.Error(pErr.Err))
 				log.Error("failed to send kafka messages in batch", fields...)
 			}
 		} else {
-			fields := []zap.Field{
-				zap.String("keyspace", p.id.Keyspace()),
-				zap.String("changefeed", p.id.Name()),
-				zap.ByteString("key", message.Key),
-				zap.ByteString("value", message.Value),
-			}
-			fields = append(fields, BuildDMLLogFields(message.LogInfo)...)
+			fields := BuildEventLogFields(p.id.Keyspace(), p.id.Name(), message.LogInfo)
 			fields = append(fields, zap.Error(err))
 			log.Error("failed to send kafka messages in batch", fields...)
 		}
@@ -308,26 +284,8 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
-			keyBytes, valueBytes, keyErr, valueErr := encodeProducerMessageKV(err.Msg)
-			if keyErr != nil {
-				log.Warn("failed to decode kafka message key from producer error",
-					zap.String("keyspace", p.changefeedID.Keyspace()),
-					zap.String("changefeed", p.changefeedID.Name()),
-					zap.Error(keyErr))
-			}
-			if valueErr != nil {
-				log.Warn("failed to decode kafka message value from producer error",
-					zap.String("keyspace", p.changefeedID.Keyspace()),
-					zap.String("changefeed", p.changefeedID.Name()),
-					zap.Error(valueErr))
-			}
-			fields := []zap.Field{
-				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()),
-				zap.ByteString("key", keyBytes),
-				zap.ByteString("value", valueBytes),
-			}
-			fields = append(fields, BuildDMLLogFields(extractLogInfo(err.Msg))...)
+			logInfo := extractLogInfo(err.Msg)
+			fields := BuildEventLogFields(p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)
 			fields = append(fields, zap.Error(err.Err))
 			log.Info("kafka async producer send error", fields...)
 			return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
@@ -375,19 +333,6 @@ func (p *saramaAsyncProducer) AsyncSend(
 	case p.producer.Input() <- msg:
 	}
 	return nil
-}
-
-func encodeProducerMessageKV(msg *sarama.ProducerMessage) (keyBytes []byte, valueBytes []byte, keyErr error, valueErr error) {
-	if msg == nil {
-		return nil, nil, nil, nil
-	}
-	if msg.Key != nil {
-		keyBytes, keyErr = msg.Key.Encode()
-	}
-	if msg.Value != nil {
-		valueBytes, valueErr = msg.Value.Encode()
-	}
-	return
 }
 
 func extractLogInfo(msg *sarama.ProducerMessage) *common.MessageLogInfo {

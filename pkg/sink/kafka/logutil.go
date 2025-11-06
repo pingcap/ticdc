@@ -54,3 +54,63 @@ func BuildDMLLogFields(info *common.MessageLogInfo) []zap.Field {
 	}
 	return []zap.Field{zap.Any("dmlInfo", rows)}
 }
+
+// BuildDDLLogFields converts DDL log info into zap fields.
+func BuildDDLLogFields(info *common.MessageLogInfo) []zap.Field {
+	if info == nil || info.DDL == nil {
+		return nil
+	}
+
+	ddlInfo := map[string]interface{}{}
+	if info.DDL.Query != "" {
+		ddlInfo["query"] = info.DDL.Query
+	}
+	if info.DDL.CommitTs != 0 {
+		ddlInfo["commitTs"] = info.DDL.CommitTs
+	}
+	if len(ddlInfo) == 0 {
+		return nil
+	}
+	return []zap.Field{zap.Any("ddlInfo", ddlInfo)}
+}
+
+// BuildCheckpointLogFields converts checkpoint log info into zap fields.
+func BuildCheckpointLogFields(info *common.MessageLogInfo) []zap.Field {
+	if info == nil || info.Checkpoint == nil {
+		return nil
+	}
+	if info.Checkpoint.CommitTs == 0 {
+		return nil
+	}
+	return []zap.Field{zap.Uint64("checkpointTs", info.Checkpoint.CommitTs)}
+}
+
+// DetermineEventType infers the event type based on MessageLogInfo content.
+func DetermineEventType(info *common.MessageLogInfo) string {
+	if info == nil {
+		return "unknown"
+	}
+	if info.DDL != nil {
+		return "ddl"
+	}
+	if info.Checkpoint != nil {
+		return "checkpoint"
+	}
+	if len(info.Rows) > 0 {
+		return "dml"
+	}
+	return "unknown"
+}
+
+// BuildEventLogFields builds zap fields for an event, including keyspace/changefeed/eventType and details.
+func BuildEventLogFields(keyspace, changefeed string, info *common.MessageLogInfo) []zap.Field {
+	fields := []zap.Field{
+		zap.String("keyspace", keyspace),
+		zap.String("changefeed", changefeed),
+		zap.String("eventType", DetermineEventType(info)),
+	}
+	fields = append(fields, BuildDMLLogFields(info)...)
+	fields = append(fields, BuildDDLLogFields(info)...)
+	fields = append(fields, BuildCheckpointLogFields(info)...)
+	return fields
+}

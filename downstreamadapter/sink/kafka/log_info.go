@@ -112,3 +112,32 @@ func extractPrimaryKeys(event *commonEvent.RowEvent) []common.ColumnLogInfo {
 	}
 	return values
 }
+
+func setDDLMessageLogInfo(msg *common.Message, event *commonEvent.DDLEvent) {
+	if msg == nil || event == nil {
+		return
+	}
+	logInfo := msg.LogInfo
+	if logInfo == nil {
+		logInfo = &common.MessageLogInfo{}
+	}
+	logInfo.DDL = &common.DDLLogInfo{
+		Query:    event.Query,
+		CommitTs: event.GetCommitTs(),
+	}
+	msg.LogInfo = logInfo
+}
+
+func setCheckpointMessageLogInfo(msg *common.Message, commitTs uint64) {
+	if msg == nil {
+		return
+	}
+	logInfo := msg.LogInfo
+	if logInfo == nil {
+		logInfo = &common.MessageLogInfo{}
+	}
+	logInfo.Checkpoint = &common.CheckpointLogInfo{
+		CommitTs: commitTs,
+	}
+	msg.LogInfo = logInfo
+}
