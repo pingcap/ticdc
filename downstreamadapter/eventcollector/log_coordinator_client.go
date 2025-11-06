@@ -66,7 +66,7 @@ func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMes
 				dispatcher.setRemoteCandidates(msg.Nodes)
 			}
 		default:
-			log.Panic("invalid message type", zap.Any("msg", msg))
+			log.Warn("invalid message type, ignore it", zap.Any("msg", msg))
 		}
 	}
 	return nil

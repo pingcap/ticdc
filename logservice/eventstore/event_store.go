@@ -1235,7 +1235,7 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 		case *common.LogCoordinatorBroadcastRequest:
 			e.setCoordinatorInfo(targetMessage.From)
 		default:
-			log.Panic("invalid message type", zap.Any("msg", msg))
+			log.Warn("invalid message type, ignore it", zap.Any("msg", msg))
 		}
 	}
 	return nil

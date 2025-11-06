@@ -270,7 +270,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 			common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID),
 			NewMergeDispatcherRequest(mergeDispatcherRequest))
 	default:
-		log.Panic("unknown message type", zap.Any("message", msg.Message))
+		log.Warn("unknown message type, ignore it", zap.Any("message", msg.Message))
 	}
 	return nil
 }
